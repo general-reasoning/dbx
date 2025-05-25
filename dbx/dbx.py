@@ -63,8 +63,6 @@ class Logger:
         pass
 
 
-
-
 def make_download_url(path):
     if not path.startswith("gs://"):
         return None
@@ -123,29 +121,15 @@ def get_named_term(name):
     return term
 
 
-def makefs(path):
-    """
-    #TODO: #REMOVE
-    protoi = path.find("://")
-    if protoi != -1:
-        proto = path[:protoi]
-    else:
-        proto = "file"
-    fs = fsspec.filesystem(proto)
-    """
-    fs = fsspec.url_to_fs(path)[0]
-    return fs
-
-
 def write_json(data, path, *, log=Logger(), debug: bool = False):
-    fs = makefs(path)
+    fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "w") as f:
         json.dump(data, f)
         log.info(f"WROTE {path}")
 
 
 def read_json(data, path, *, log=Logger(), debug: bool = False):
-    fs = makefs(path)
+    fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "r") as f:
         data = json.load(f)
         log.info(f"READ {path}")
@@ -215,10 +199,10 @@ class Datablock:
 
     def __init__(
         self,
-        root: str|None = None,
+        root: str = None,
         verbose: bool = False,
         debug: bool = False,
-        version: str | None = None,
+        version: str  = None,
         *,
         cfg: dict,
     ):
@@ -233,7 +217,7 @@ class Datablock:
             verbose=verbose,
         )
         self.cfg = cfg
-        self.config = self._inject_config(cfg)
+        self.config = self._inject_cfg(cfg)
         self.__post_init__()
 
     def __post_init__(self):
@@ -290,8 +274,17 @@ class Datablock:
         result = all(results)
         return result
 
-    def build(self, tag:str|None = None):
+    def build(self, tag:str = None):
+        return self.__pre_build__(tag).__build__(tag).__post_build__(tag)
+
+    def __pre_build__(self, tag: str = None):
         self._write_scope()
+        return self
+
+    def __build__(self, tag: str = None):
+        return self
+
+    def __post_build__(self, tag:str = None):
         self._write_journal_entry(event="build", tag=tag)
         return self
 
@@ -318,7 +311,8 @@ class Datablock:
                     for blob in blobs:
                         blob.delete()
                 else:
-                    fs = makefs(dirpath)
+                    # fs = makefs(dirpath) # TODO: REMOVE
+                    fs, _ = fsspec.url_to_fs(dirpath)
                     fs.rm(dirpath, recursive=True)
             except Exception as e:
                 self.log.warning(f"Error when trying to remove {dirpath}")
@@ -334,6 +328,7 @@ class Datablock:
         return self
     
     def hash(self): 
+        #TODO: self.config -> self.cfg?
         def _fieldval_(field):
             val = repr(getattr(self.config, field.name))
             return val 
@@ -347,12 +342,12 @@ class Datablock:
             
     def scope(self):
         versionpath = self.Versionpath(self.root, self.hash())
-        vfs = fsspec.url_to_fs(versionpath)
+        vfs, _ = fsspec.url_to_fs(versionpath)
         with vfs.open(versionpath, 'r') as vf:
             version = vf.read()
         #
         jconfigpath = self.Configpath(self.root, self.hash(), 'json')
-        jcfs = fsspec.url_to_fs(jconfigpath)
+        jcfs, _ = fsspec.url_to_fs(jconfigpath)
         with jcfs.open(jconfigpath, 'r') as jcf:
             cfg = json.load(jcf)
         return version, cfg
@@ -360,7 +355,7 @@ class Datablock:
     @staticmethod
     def Scopes(cls, root):
         scopeanchorpath = cls._scopeanchorpath(root)
-        fs = fsspec.url_to_fs(scopeanchorpath)[0]
+        fs, _ = fsspec.url_to_fs(scopeanchorpath)
         paths = list(fs.ls(scopeanchorpath))
         hashes = [f.removeprefix(scopeanchorpath).removeprefix('/') for f in paths]
         cfgfiles = [os.path.join(path, 'config.parquet') for path in paths]
@@ -370,7 +365,8 @@ class Datablock:
         verfiles = [os.path.join(path, 'version') for path in paths]
         versions = []
         for verfile in verfiles:
-            verfs = makefs(scopeanchorpath)
+            #verfs = makefs(scopeanchorpath) # TODO: REMOVE
+            verfs, _ = fsspec.url_to_fs(scopeanchorpath)
             with verfs.open(verfile, 'r') as verf:
                 version = verf.read()
                 versions.append(version)
@@ -389,7 +385,8 @@ class Datablock:
     @staticmethod
     def Journal(cls, root):
         journaldirpath = cls._journalanchorpath(root)
-        fs = makefs(journaldirpath)
+        #fs = makefs(journaldirpath) #TODO: REMOVE
+        fs, _ = fsspec.url_to_fs(journaldirpath)
         ds = pq.ParquetDataset(list(fs.ls(journaldirpath)), filesystem=fs)
         df = ds.read().to_pandas()
         return df
@@ -425,11 +422,11 @@ class Datablock:
         return os.path.join(cls._scopepath(root, hash), 'version')
     
     @classmethod
-    def _configpath(cls, root, hash, kind):
+    def _cfgpath(cls, root, hash, kind):
         if kind == 'json':
-            return os.path.join(cls._scopepath(root, hash), 'config.json')
+            return os.path.join(cls._scopepath(root, hash), 'cfg.json')
         elif kind == 'parquet':
-            return os.path.join(cls._scopepath(root, hash), 'config.parquet')
+            return os.path.join(cls._scopepath(root, hash), 'cfg.parquet')
         else:
             raise ValueError(f"Unknown configpath kind: {kind}")
 
@@ -470,20 +467,20 @@ class Datablock:
 
     def _write_scope(self):
         versionpath = self._versionpath(self.root, self.hash())
-        vfs = fsspec.url_to_fs(versionpath)[0]
+        vfs, _ = fsspec.url_to_fs(versionpath)
         with vfs.open(versionpath, 'w') as vf:
             vf.write(str(self.version))
         #
-        jconfigpath = self._configpath(self.root, self.hash(), 'json')
-        jcfs = fsspec.url_to_fs(jconfigpath)[0]
+        jconfigpath = self._cfgpath(self.root, self.hash(), 'json')
+        jcfs, _ = fsspec.url_to_fs(jconfigpath)
         with jcfs.open(jconfigpath, 'w') as jcf:
             json.dump(self.cfg, jcf)
-        pconfigpath = self._configpath(self.root, self.hash(), 'parquet')
+        pconfigpath = self._cfgpath(self.root, self.hash(), 'parquet')
         cfgdf = pd.DataFrame.from_records([self.cfg])
         cfgdf.to_parquet(pconfigpath)
         self.log.verbose(f"Wrote SCOPE: versionpath: {versionpath} and configpaths: {jconfigpath} and {pconfigpath}")
     
-    def _write_journal_entry(self, event:str, tag:str|None=None):
+    def _write_journal_entry(self, event:str, tag:str=None):
         hash = self.hash()
         dt = str(datetime.datetime.now()).replace(' ', '-')
         path = os.path.join(self._journalanchorpath(self.root), f"{hash}-{dt}.parquet")
@@ -491,7 +488,7 @@ class Datablock:
         self.log.verbose(f"Wrote JOURNAL entry for event {repr(event)} with tag {repr(tag)} to path {path}")
         df.to_parquet(path)
     
-    def _inject_config(self, cfg):
+    def _inject_cfg(self, cfg):
         config = self.CONFIG(**cfg)
         for field in fields(config):
             setattr(self, field.name, get_named_term(getattr(config, field.name)))
@@ -501,11 +498,11 @@ class Datablock:
 def datablock_build(
     *,
     datablock_cls,
-    root: str|None,
+    root: str = None,
     verbose: bool = False,
     debug: bool = False,
-    version: str | None = None,
-    tag: str | None = None,
+    version: str  = None,
+    tag: str  = None,
     cfg: dict,
 ):
     datablock_cls = get_named_term(datablock_cls)
@@ -529,11 +526,11 @@ class Databatch(Datablock):
 
     def __init__(
         self,
-        root: str|None = None,
+        root: str = None,
         verbose: bool = False,
         debug: bool = False,
-        version: str | None = None,
-        runner: BatchRunner|None = None,
+        version: str  = None,
+        runner: BatchRunner = None,
         *,
         cfg: dict,
     ):

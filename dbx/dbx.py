@@ -328,12 +328,8 @@ class Datablock:
         return self
     
     def hash(self): 
-        #TODO: self.config -> self.cfg?
-        def _fieldval_(field):
-            val = repr(getattr(self.config, field.name))
-            return val 
         hivehandle = os.path.join(
-            *[f"{field.name}={_fieldval_(field)}" for field in fields(self.config)]
+            *[f"{key}={val}" for key, val in self.cfg.items()]
         )
         sha = hashlib.sha256()
         sha.update(hivehandle.encode())

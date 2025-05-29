@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, asdict
 import datetime
 import hashlib
 import importlib
@@ -7,6 +7,9 @@ import inspect
 import json
 import os
 import typing
+from typing import Union, Optional
+
+import tqdm
 
 import fsspec
 
@@ -128,7 +131,7 @@ def write_json(data, path, *, log=Logger(), debug: bool = False):
         log.info(f"WROTE {path}")
 
 
-def read_json(data, path, *, log=Logger(), debug: bool = False):
+def read_json(path, *, log=Logger(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "r") as f:
         data = json.load(f)
@@ -191,7 +194,8 @@ def make_halton_sampling_kwargs_sequence(N, range_kwargs, *, seed=123, precision
 
 class Datablock:
     """
-        TOPICS = {'topic', 'file.csv'} | TOPIC = 'file.csv'
+    TOPICS = {'topic', 'file.csv'} | TOPIC = 'file.csv'
+    ROOT = None
     """
     @dataclass
     class CONFIG:
@@ -204,11 +208,15 @@ class Datablock:
         debug: bool = False,
         version: str  = None,
         *,
-        cfg: dict,
+        cfg: Optional[Union[str,dict]] = None,
+        unmoored: bool = False,
     ):
         self.root = root
         if self.root is None:
-            self.root = os.environ.get('DATALAKE', None)
+            if hasattr(self, 'ROOT'):
+                self.root = self.ROOT
+            else:
+                self.root = os.environ.get('DATALAKE')
         self.verbose = verbose
         self.debug = debug
         self.version = version
@@ -216,9 +224,17 @@ class Datablock:
             debug=debug,
             verbose=verbose,
         )
+
         self.cfg = cfg
-        self.config = self._inject_cfg(cfg)
+        if isinstance(cfg, str):
+            self.cfg = read_json(cfg, debug=debug)
+        if self.cfg is None:
+            self.cfg = asdict(self.CONFIG())
+        self.config = self._inject_cfg(self.cfg)
+        self.unmoored = unmoored
+        self.tag = None
         self.__post_init__()
+
 
     def __post_init__(self):
         ...
@@ -237,12 +253,14 @@ class Datablock:
         topic=None,
     ):
         if topic is None:
-            path = os.path.join(
-                self._dirpath(),
-                self.TOPIC,
+            path_ = os.path.join(
+                self.dirpath(),
             )
+            topicfile = self.TOPIC
         else:
-            path = os.path.join(self._dirpath(topic), self.TOPICS[topic])
+            path_ = self.dirpath(topic)
+            topicfile = self.TOPICS[topic]
+        path = os.path.join(path_, topicfile) if topicfile is not None else path_        
         return path
 
     def url(self, topic=None, *, redirect=None):
@@ -258,7 +276,8 @@ class Datablock:
             elif path.startswith("gs://"): #TODO: generalize to other filesystems
                 result = fsspec.filesystem("gcs").exists(path)
             else:
-                result = os.path.exists(path)
+                result = os.path.exists(path) #TODO: Why not handle this using fsspec? 
+            self.log.debug(f"checking: {path}: {result}") 
             return result
 
         results = []
@@ -267,25 +286,33 @@ class Datablock:
             results += [
                 validpath(self.path(topic))
                 for topic in self.TOPICS
-                if self.TOPICS[topic] is not None
             ]
         else:
             results += [validpath(self.path())]
         result = all(results)
         return result
 
-    def build(self, tag:str = None):
-        return self.__pre_build__(tag).__build__(tag).__post_build__(tag)
+    def build(self, tag:str = None, *, overwrite: bool = False):
+        if overwrite or not self.valid():
+            self.__pre_build__(tag).__build__().__post_build__(tag)
+        else:
+            self.log.info(f"Skipping existing datablock: {self.dirpath()}")
+        return self
 
     def __pre_build__(self, tag: str = None):
         self._write_scope()
+        self._write_journal_entry(event="build:start", tag=tag)
+        self.tag = tag
         return self
 
-    def __build__(self, tag: str = None):
+    def __build__(self):
         return self
 
-    def __post_build__(self, tag:str = None):
-        self._write_journal_entry(event="build", tag=tag)
+    def __post_build__(self, tag: str = None):
+        if tag is not None:
+            assert tag == self.tag, f"Tag mismatch: {tag=} != {self.tag=}"
+        self.tag = None
+        self._write_journal_entry(event="build:end", tag=tag)
         return self
 
     def read(self, topic=None):
@@ -321,11 +348,27 @@ class Datablock:
                     raise (e)
         if hasattr(self, "TOPICS"):
             for topic in self.TOPICS:
-                clear_dirpath(self._dirpath(topic))
+                clear_dirpath(self.dirpath(topic))
         else:
-            clear_dirpath(self._dirpath())
+            clear_dirpath(self.dirpath())
         self._write_journal_entry(event="UNSAFE_clear")
         return self
+    
+    def anchor(self):
+        anchor = (
+            self.__module__
+            + "."
+            + self.__class__.__name__
+            + "/#"
+        )
+        return anchor
+    
+    def anchorpath(self):
+        anchorpath = os.path.join(
+            self.root,
+            self.anchor(),
+        )
+        return anchorpath
     
     def hash(self): 
         hivehandle = os.path.join(
@@ -342,7 +385,7 @@ class Datablock:
         with vfs.open(versionpath, 'r') as vf:
             version = vf.read()
         #
-        jconfigpath = self.Configpath(self.root, self.hash(), 'json')
+        jconfigpath = self.Cfgpath(self.root, self.hash(), 'json')
         jcfs, _ = fsspec.url_to_fs(jconfigpath)
         with jcfs.open(jconfigpath, 'r') as jcf:
             cfg = json.load(jcf)
@@ -381,10 +424,9 @@ class Datablock:
     @staticmethod
     def Journal(cls, root):
         journaldirpath = cls._journalanchorpath(root)
-        #fs = makefs(journaldirpath) #TODO: REMOVE
         fs, _ = fsspec.url_to_fs(journaldirpath)
         ds = pq.ParquetDataset(list(fs.ls(journaldirpath)), filesystem=fs)
-        df = ds.read().to_pandas()
+        df = ds.read().to_pandas().sort_values('datetime', ascending=False)
         return df
 
     @classmethod
@@ -405,29 +447,32 @@ class Datablock:
         return scopeanchorpath
 
     @classmethod
-    def _scopepath(cls, root, hash):
+    def _scopepath(cls, root, hash, *, ensure: bool = True):
         scopeanchorpath = cls._scopeanchorpath(root)
         scopepath = os.path.join(
             scopeanchorpath,
             hash,
         )
+        if ensure:
+            fs, _ = fsspec.url_to_fs(scopepath)
+            fs.makedirs(scopepath, exist_ok=True)
         return scopepath
 
     @classmethod
-    def _versionpath(cls, root, hash):
-        return os.path.join(cls._scopepath(root, hash), 'version')
+    def Versionpath(cls, root, hash, *, ensure: bool = True):
+        return os.path.join(cls._scopepath(root, hash, ensure=ensure), 'version')
     
     @classmethod
-    def _cfgpath(cls, root, hash, kind):
+    def Cfgpath(cls, root, hash, kind, *, ensure: bool = True):
         if kind == 'json':
-            return os.path.join(cls._scopepath(root, hash), 'cfg.json')
+            return os.path.join(cls._scopepath(root, hash, ensure=ensure), 'cfg.json')
         elif kind == 'parquet':
-            return os.path.join(cls._scopepath(root, hash), 'cfg.parquet')
+            return os.path.join(cls._scopepath(root, hash, ensure=ensure), 'cfg.parquet')
         else:
             raise ValueError(f"Unknown configpath kind: {kind}")
 
     @classmethod
-    def _journalanchorpath(cls, root):
+    def _journalanchorpath(cls, root, *, ensure: bool = True):
         journalanchor = os.path.join(
             cls.__module__
             + "."
@@ -437,44 +482,45 @@ class Datablock:
         journalanchorpath = os.path.join(
             root,
             journalanchor,
+            '#',
         )
+        if ensure:
+            fs, _ = fsspec.url_to_fs(journalanchorpath)
+            fs.makedirs(journalanchorpath, exist_ok=True)
         return journalanchorpath
-    
-    def _dirpath(
+
+    def dirpath(
         self,
         topic=None,
-    ):
-        anchor = (
-            self.__module__
-            + "."
-            + self.__class__.__name__
-            + "/#"
-        )
-        anchorpath = os.path.join(
-            self.root,
-            anchor,
-        )
-        if topic is not None:
-            assert topic in self.TOPICS, f"Topic {topic} not in {self.TOPICS}"
-            dirpath = os.path.join(anchorpath, self.hash(), topic)
+    ):  
+        if self.unmoored:
+            if topic is None:
+                dirpath = self.root
+            else:
+                dirpath = os.path.join(self.root, topic)
         else:
-            dirpath = os.path.join(anchorpath, self.hash())
+            anchorpath = self.anchorpath()
+            if topic is not None:
+                assert topic in self.TOPICS, f"Topic {topic} not in {self.TOPICS}"
+                dirpath = os.path.join(anchorpath, self.hash(), topic)
+            else:
+                dirpath = os.path.join(anchorpath, self.hash())
         return dirpath
 
     def _write_scope(self):
-        versionpath = self._versionpath(self.root, self.hash())
+        versionpath = self.Versionpath(self.root, self.hash())
         vfs, _ = fsspec.url_to_fs(versionpath)
         with vfs.open(versionpath, 'w') as vf:
             vf.write(str(self.version))
         #
-        jconfigpath = self._cfgpath(self.root, self.hash(), 'json')
+        jconfigpath = self.Cfgpath(self.root, self.hash(), 'json')
         jcfs, _ = fsspec.url_to_fs(jconfigpath)
         with jcfs.open(jconfigpath, 'w') as jcf:
             json.dump(self.cfg, jcf)
-        pconfigpath = self._cfgpath(self.root, self.hash(), 'parquet')
+        pconfigpath = self.Cfgpath(self.root, self.hash(), 'parquet')
         cfgdf = pd.DataFrame.from_records([self.cfg])
         cfgdf.to_parquet(pconfigpath)
-        self.log.verbose(f"Wrote SCOPE: versionpath: {versionpath} and configpaths: {jconfigpath} and {pconfigpath}")
+        self.log.verbose(f"wrote SCOPE: versionpath: {versionpath} and configpaths: {jconfigpath} and {pconfigpath}")
     
     def _write_journal_entry(self, event:str, tag:str=None):
         hash = self.hash()
@@ -528,7 +574,7 @@ class Databatch(Datablock):
         version: str  = None,
         runner: BatchRunner = None,
         *,
-        cfg: dict,
+        cfg: Optional[Union[str,dict]] = None,
     ):
         super().__init__(root, verbose, debug, version, cfg=cfg)
         self.runner = runner
@@ -538,23 +584,26 @@ class Databatch(Datablock):
         return self
 
     def submit(self):
-        kwargslist = [
-            dict(
-                datablock_cls=self.DATABLOCK,
-                tag=self.runner.tag,
-                **datablock.kwargs(),
-            )
-            for datablock in self.datablocks()
-        ]
+        
         if self.runner is None:
-            for datablock in self.datablocks():
-                datablock.build(tag="submit")
+            if self.verbose or self.debug:
+                iterator = enumerate(self.datablocks())
+            else:
+                iterator = tqdm.tqdm(enumerate(self.datablocks()))
+            for i, datablock in iterator:
+                self.log.verbose(f"Building {i}-th datablock")
+                datablock.build(tag=f"submit:{self.hash}")
         else:
+            kwargslist = [
+                dict(
+                    datablock_cls=self.DATABLOCK,
+                    tag=self.runner.tag,
+                    **datablock.kwargs(),
+                )
+                for datablock in self.datablocks()
+            ]
             self.runner(datablock_build, kwargslist)
         return self
-    
-    def summary(self, tag=None):
-        return self.build(tag)
 
     def datablock_scopes(self):
         return self.Scopes(self.DATABLOCK, self.root)

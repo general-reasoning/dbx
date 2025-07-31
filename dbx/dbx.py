@@ -117,10 +117,13 @@ def get_named_term(name):
     if isinstance(name, Iterable) and not isinstance(name, str):
         term = [get_named_term(item) for item in name]
     elif isinstance(name, str):
-        if not name.startswith("[") or not name.endswith("]"):
+        if not name.startswith("[") or not name.endswith("]") or not name.startswith("@"):
             term = name
         else:
-            _name_ = name[1:-1]
+            if name.startswith("@"):
+                _name_ = name[1:]
+            else:
+                _name_ = name[1:-1]
             funcstr, argkwargstr = get_named_funcstr_and_argkwargstr(_name_)
             if funcstr is None:
                 term, _ = get_named_const_and_cxt(_name_)
@@ -217,6 +220,7 @@ class Datablock:
         version: str  = None,
         *,
         cfg: Optional[Union[str,dict]] = None,
+        hash: Optional[str] = None,
         unmoored: bool = False,
     ):
         self.root = root
@@ -240,6 +244,7 @@ class Datablock:
         if self.cfg is None:
             self.cfg = asdict(self.CONFIG())
         self.config = self._inject_cfg(self.cfg)
+        self._hash = hash
         self.unmoored = unmoored
         self.tag = None
 
@@ -261,6 +266,8 @@ class Datablock:
     def path(
         self,
         topic=None,
+        *,
+        ensure: bool = False,
     ):
         if topic is None:
             path_ = os.path.join(
@@ -270,8 +277,15 @@ class Datablock:
         else:
             path_ = self.dirpath(topic)
             topicfile = self.TOPICS[topic]
-        path = os.path.join(path_, topicfile) if topicfile is not None else path_        
+        path = os.path.join(path_, topicfile) if topicfile is not None else path_  
+        if ensure:
+            self.ensure_path(path)      
         return path
+
+    def ensure_path(self, path):
+        fs, _ = fsspec.url_to_fs(path)
+        fs.makedirs(path, exist_ok=True)
+        return self
 
     def url(self, topic=None, *, redirect=None):
         path = self.path(topic)
@@ -281,13 +295,15 @@ class Datablock:
         self,
     ):
         def validpath(path):
-            if path.endswith("None"): #TODO: clarify
-                return True
-            elif path.startswith("gs://"): #TODO: generalize to other filesystems
-                result = fsspec.filesystem("gcs").exists(path)
+            if path.endswith("None"): #If topic filename ends with 'None', it is considered to be valid by default
+                result = True
             else:
-                result = os.path.exists(path) #TODO: Why not handle this using fsspec? 
-            self.log.debug(f"checking: {path}: {result}") 
+                fs, _ = fsspec.url_to_fs(path)
+                if 'file' not in fs.protocol:
+                    result = fsspec.filesystem("gcs").exists(path)
+                else:
+                    result = os.path.exists(path) #TODO: Why not handle this case using fsspec? 
+            self.log.debug(f"path {path} valid: {result}") 
             return result
 
         results = []
@@ -323,6 +339,16 @@ class Datablock:
             assert tag == self.tag, f"Tag mismatch: {tag=} != {self.tag=}"
         self.tag = None
         self._write_journal_entry(event="build:end", tag=tag)
+        return self
+
+    def leave_breadcrumbs(self):
+        if hasattr(self, "TOPICS"):
+            for topic in self.TOPICS:
+                self.dirpath(topic, ensure=True)
+                self._leave_breadcrumbs_at_path(self.path(topic))
+        else:
+            self.dirpath(ensure=True)
+            self._leave_breadcrumbs_at_path(self.path())
         return self
 
     def read(self, topic=None):
@@ -380,14 +406,15 @@ class Datablock:
         )
         return anchorpath
     
-    def hash(self): 
-        hivehandle = os.path.join(
-            *[f"{key}={val}" for key, val in self.cfg.items()]
-        )
-        sha = hashlib.sha256()
-        sha.update(hivehandle.encode())
-        hash = sha.hexdigest()
-        return hash
+    def hash(self):
+        if self._hash is None:
+            hivehandle = os.path.join(
+                *[f"{key}={val}" for key, val in self.cfg.items()]
+            )
+            sha = hashlib.sha256()
+            sha.update(hivehandle.encode())
+            self._hash = sha.hexdigest()
+        return self._hash
             
     def scope(self):
         versionpath = self.Versionpath(self.root, self.hash())
@@ -425,12 +452,6 @@ class Datablock:
         df = df.reset_index(drop=True)
         return df
 
-    def scopes(self):
-        return self.Scopes(self.__class__, self.root)
-
-    def journal(self):
-        return self.Journal(self.__class__, self.root)
-    
     @staticmethod
     def Journal(cls, root):
         journaldirpath = cls._journalanchorpath(root)
@@ -438,6 +459,12 @@ class Datablock:
         ds = pq.ParquetDataset(list(fs.ls(journaldirpath)), filesystem=fs)
         df = ds.read().to_pandas().sort_values('datetime', ascending=False)
         return df
+
+    def scopes(self):
+        return self.Scopes(self.__class__, self.root)
+
+    def journal(self):
+        return self.Journal(self.__class__, self.root)
 
     @classmethod
     def _scopeanchorpath(cls, root):
@@ -502,6 +529,8 @@ class Datablock:
     def dirpath(
         self,
         topic=None,
+        *,
+        ensure: bool = False,
     ):  
         if self.unmoored:
             if topic is None:
@@ -515,6 +544,9 @@ class Datablock:
                 dirpath = os.path.join(anchorpath, self.hash(), topic)
             else:
                 dirpath = os.path.join(anchorpath, self.hash())
+        if ensure:
+            fs, _ = fsspec.url_to_fs(dirpath)
+            fs.makedirs(dirpath, exist_ok=True)
         return dirpath
 
     def _write_scope(self):
@@ -545,6 +577,11 @@ class Datablock:
         for field in fields(config):
             setattr(self, field.name, get_named_term(getattr(config, field.name)))
         return config
+
+    def _leave_breadcrumbs_at_path(self, path):
+        fs, _ = fsspec.url_to_fs(path)
+        with fs.open(path, "w") as f:
+            f.write("")
 
 
 def datablock_build(
@@ -594,15 +631,15 @@ class Databatch(Datablock):
         return self
 
     def submit(self):
-        
         if self.runner is None:
+            n_datablocks = len(self.datablocks())
             if self.verbose or self.debug:
                 iterator = enumerate(self.datablocks())
             else:
                 iterator = tqdm.tqdm(enumerate(self.datablocks()))
             for i, datablock in iterator:
-                self.log.verbose(f"Building {i}-th datablock")
-                datablock.build(tag=f"submit:{self.hash}")
+                self.log.verbose(f"Building {i}-th datablock out of {n_datablocks}")
+                datablock.build(tag=f"submit:{self.hash()}")
         else:
             kwargslist = [
                 dict(
@@ -614,6 +651,9 @@ class Databatch(Datablock):
             ]
             self.runner(datablock_build, kwargslist)
         return self
+
+    def __build__(self):
+        return self.submit()
 
     def datablock_scopes(self):
         return self.Scopes(self.DATABLOCK, self.root)

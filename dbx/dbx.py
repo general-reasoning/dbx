@@ -5,6 +5,7 @@ import hashlib
 import importlib
 import inspect
 import json
+import logging
 import os
 import sys
 import traceback as tb
@@ -160,7 +161,7 @@ def eval_term(name):
             term = name
         else:
             if name.startswith("@"):
-                _name_ = name[1:]
+                _name_ = name[1:-1] if name.endswith('#') else name[1:]
             else:
                 _name_ = name[1:-1]
             func, args, kwargs = get_named_func_args_kwargs(_name_)
@@ -282,8 +283,9 @@ class Datablock:
     # protocol://path --- module/class/# --- topic --- file 
     #        root           [anchor]        [topic]   [file]
     # root:       'protocol://path/to/root'
-    # anchorpath: '{root}/modpath/class/#'|'{root}' if not unmoored|else
-    # dirpath:    '{anchorpath}/topic'|{anchorpath}' if topic is not None|else
+    # anchorpath: '{root}/modpath/class'|'{root}' if not unmoored|else
+    # hashpath:   '{anchorpath}/#/{hash}|{anchorpath}/{hash}' if hash supplied through args|else
+    # dirpath:    '{hashpath}/topic'|{hashpath}' if topic is not None|else
     # path:       '{dirpath}/{FILE}'|'{dirpath}' if FILE is not None|else
     
     """
@@ -309,11 +311,12 @@ class Datablock:
         root: str = None,
         verbose: bool = False,
         debug: bool = False,
-        gitrepo: str  = None,
         *,
         cfg: Optional[Union[str, dict]] = None,
         hash: Optional[str] = None,
         unmoored: bool = False,
+        capture_build_output: bool = False,
+        gitrepo: str  = None,
     ):
         self.root = root
         if self.root is None:
@@ -336,6 +339,7 @@ class Datablock:
             verbose=verbose,
             name=self.anchor(),
         )
+        self.capture_build_output = capture_build_output
         self.gitrepo = gitrepo
         if self.gitrepo is None:
                 mod = importlib.import_module(self.__module__)
@@ -349,8 +353,9 @@ class Datablock:
             self.cfg = read_json(cfg, debug=debug)
         if self.cfg is None:
             self.cfg = asdict(self.CONFIG())
-        self.config = self._inject_cfg(self.cfg)
+        self.config = self._cfg_to_config(self.cfg)
         self._hash = hash
+        self._autohash = hash is None
         self.unmoored = unmoored
         self.tag = None
 
@@ -372,6 +377,10 @@ class Datablock:
             verbose=self.verbose,
             debug=self.debug,
             cfg=self.cfg,
+            hash=self.hash,
+            unmoored=self.unmoored,
+            capture_build_output=self.capture_build_output,
+            gitrepo=self.gitrepo,
         )
 
     def path(
@@ -429,10 +438,20 @@ class Datablock:
         return result
 
     def build(self, tag:str = None):
-        if not self.valid():
-            self.__pre_build__(tag).__build__().__post_build__(tag)
-        else:
-            self.log.verbose(f"Skipping existing datablock: {self.dirpath()}")
+        if self.capture_build_output:
+            stdout = sys.stdout
+            outfs, _ = fsspec.url_to_fs(self.capture_out)
+            captured_stdout_stream = outfs.open(self.logpath(), "w", encoding="utf-8")
+            sys.stdout = captured_stdout_stream
+        try:
+            if not self.valid():
+                self.__pre_build__(tag).__build__().__post_build__(tag)
+            else:
+                self.log.verbose(f"Skipping existing datablock: {self.dirpath()}")
+        finally:
+            if self.capture_build_output:
+                sys.stdout = stdout
+                captured_stdout_stream.close()
         return self
 
     def __pre_build__(self, tag: str = None):
@@ -519,14 +538,14 @@ class Datablock:
         anchorpath = os.path.join(
             self.root,
             self.anchor(),
-            '#',
-        )
+        ) if not self.unmoored else self.root
         return anchorpath
     
+    @property
     def hash(self):
         if self._hash is None:
             hivehandle = os.path.join(
-                *[f"{key}={val}" for key, val in self.cfg.items()]
+                *[f"{key}={val}" for key, val in self.cfg.items()] #TODO: scopecfg?
             )
             sha = hashlib.sha256()
             sha.update(hivehandle.encode())
@@ -534,12 +553,12 @@ class Datablock:
         return self._hash
             
     def scope(self):
-        versionpath = self.Versionpath(self.root, self.hash())
+        versionpath = self.Versionpath(self.root, self.hash)
         vfs, _ = fsspec.url_to_fs(versionpath)
         with vfs.open(versionpath, 'r') as vf:
             version = vf.read()
         #
-        jconfigpath = self.Cfgpath(self.root, self.hash(), 'json')
+        jconfigpath = self.Cfgpath(self.root, self.hash, 'json')
         jcfs, _ = fsspec.url_to_fs(jconfigpath)
         with jcfs.open(jconfigpath, 'r') as jcf:
             cfg = json.load(jcf)
@@ -632,6 +651,9 @@ class Datablock:
             return os.path.join(cls._scopepath(root, hash, ensure=ensure), 'cfg.parquet')
         else:
             raise ValueError(f"Unknown configpath kind: {kind}")
+        
+    def logpath(self, *, ensure: bool = True):
+        return os.path.join(self._scopepath(self.root, self.hash, ensure=ensure), 'log', f'{self.uuid}.log')
 
     @classmethod
     def _journalanchorpath(cls, root, *, ensure: bool = True):
@@ -651,59 +673,83 @@ class Datablock:
             fs.makedirs(journalanchorpath, exist_ok=True)
         return journalanchorpath
 
+    def hashpath(self, *, ensure: bool = True):
+        anchorpath = self.anchorpath()
+        if self._autohash:
+            hashpath = os.path.join(anchorpath, '#', self.hash)
+        else:
+            hashpath = os.path.join(anchorpath, self.hash)
+        if ensure:
+            fs, _ = fsspec.url_to_fs(hashpath)
+            fs.makedirs(hashpath, exist_ok=True)
+        return hashpath
+
     def dirpath(
         self,
         topic=None,
         *,
         ensure: bool = False,
     ):  
-        if self.unmoored:
-            if topic is None:
-                dirpath = self.root
-            else:
-                dirpath = os.path.join(self.root, topic)
+        
+        hashpath = self.hashpath()
+        if topic is not None:
+            assert topic in self.FILES, f"Topic {repr(topic)} not in {self.FILES}"
+            dirpath = os.path.join(hashpath, topic)
         else:
-            anchorpath = self.anchorpath()
-            if topic is not None:
-                assert topic in self.FILES, f"Topic {repr(topic)} not in {self.FILES}"
-                dirpath = os.path.join(anchorpath, self.hash(), topic)
-            else:
-                dirpath = os.path.join(anchorpath, self.hash())
+            dirpath = hashpath
         if ensure:
             fs, _ = fsspec.url_to_fs(dirpath)
             fs.makedirs(dirpath, exist_ok=True)
         return dirpath
 
+    def _make_scopecfg(self):
+        scopecfg = {}
+        for k, v in self.cfg.items():
+            value = getattr(self.config, k)
+            if isinstance(v, str) and v.endswith('#') and isinstance(value, Datablock):
+                scopecfg[k] = f"{v}#{value.hash()}"
+            else:
+                scopecfg[k] = v
+        return scopecfg
+
     def _write_scope(self, *, version):
-        versionpath = self.Versionpath(self.root, self.hash())
+        versionpath = self.Versionpath(self.root, self.hash)
         vfs, _ = fsspec.url_to_fs(versionpath)
         with vfs.open(versionpath, 'w') as vf:
             vf.write(str(version))
         assert vfs.exists(versionpath), f"Versionpath {versionpath} does not exist after writing"
         #
-        jconfigpath = self.Cfgpath(self.root, self.hash(), 'json')
+        scopecfg = self._make_scopecfg()
+        #
+        jconfigpath = self.Cfgpath(self.root, self.hash, 'json')
         jcfs, _ = fsspec.url_to_fs(jconfigpath)
         with jcfs.open(jconfigpath, 'w') as jcf:
-            json.dump(self.cfg, jcf)
+            json.dump(scopecfg, jcf)
         assert jcfs.exists(jconfigpath), f"Configpath {jconfigpath} does not exist after writing"
         #
-        pconfigpath = self.Cfgpath(self.root, self.hash(), 'parquet')
+        pconfigpath = self.Cfgpath(self.root, self.hash, 'parquet')
         pcfs, _ = fsspec.url_to_fs(pconfigpath)
-        cfgdf = pd.DataFrame.from_records([self.cfg])
+        cfgdf = pd.DataFrame.from_records([scopecfg])
         cfgdf.to_parquet(pconfigpath)
         assert pcfs.exists(pconfigpath), f"Configpath {pconfigpath} does not exist after writing"
         #
         self.log.verbose(f"wrote SCOPE: versionpath: {versionpath} and configpaths: {jconfigpath} and {pconfigpath}")
-    
+
     def _write_journal_entry(self, event:str, tag:str=None, *, version):
-        hash = self.hash()
+        hash = self.hash
         dt = str(datetime.datetime.now()).replace(' ', '-')
         path = os.path.join(self._journalanchorpath(self.root), f"{hash}-{dt}.parquet")
-        df = pd.DataFrame.from_records([{'hash': hash, 'uuid': self.uuid, 'version': version, 'event': event, 'tag': tag, 'datetime': dt}])
+        df = pd.DataFrame.from_records([{'hash': hash, 
+                                         'uuid': self.uuid, 
+                                         'version': version, 
+                                         'event': event, 
+                                         'tag': tag, 
+                                         'datetime': dt, 
+                                         'build_log': self.logpath()}])
         self.log.verbose(f"Wrote JOURNAL entry for event {repr(event)} with tag {repr(tag)} to path {path}")
         df.to_parquet(path)
     
-    def _inject_cfg(self, cfg):
+    def _cfg_to_config(self, cfg):
         config = self.CONFIG(**cfg)
         replacements = {}
         for field in fields(config):
@@ -712,7 +758,6 @@ class Datablock:
                 getter = Datablock.CONFIG.LazyGetter(term)
             else:
                 getter = eval_term(term)
-            setattr(self, field.name, getter)
             replacements[field.name] = getter
         config = replace(config, **replacements)
         return config
@@ -733,28 +778,16 @@ def datablock_method(
     cfg: dict,
     hash: Optional[str] = None,
     unmoored: bool = False,
+    capture_build_output: bool = False,
+    gitrepo: str  = None,
     **kwargs,
 ):
     datablock_cls = eval_term(datablock_cls)
-    datablock = datablock_cls(root=root, verbose=verbose, debug=debug, version=version, cfg=cfg, hash=hash, unmoored=unmoored)
+    datablock = datablock_cls(root=root, verbose=verbose, debug=debug, cfg=cfg, hash=hash, unmoored=unmoored, capture_build_output=capture_build_output, gitrepo=gitrepo)
     method = getattr(datablock, method_name)
     return method(**kwargs)
 
-#TODO: factor through datablock_method
-def datablock_build(
-    datablock_cls,
-    *,
-    root: str = None,
-    verbose: bool = False,
-    debug: bool = False,
-    tag: str  = None,
-    cfg: dict,
-):
-    datablock_cls = eval_term(datablock_cls)
-    datablock = datablock_cls(root=root, verbose=verbose, debug=debug, version=version, cfg=cfg)
-    return datablock.build(tag)
-
-
+    
 class BatchRunner:
     @property
     def tag(self):
@@ -778,13 +811,19 @@ class Databatch(Datablock):
         cfg: Optional[Union[str,dict]] = None,
     ):
         super().__init__(root, verbose, debug, cfg=cfg)
-        self.runner = runner
+        self._runner = runner
+
+    @property
+    def runner(self):
+        if isinstance(self._runner, str):
+            self._runner = eval_term(self._runner)
+        return self._runner
 
     def datablocks(self) -> typing.Iterable[Datablock]:
         raise NotImplementedError()
         return self
 
-    def run(self, tag: str = None):
+    def __build__(self,):
         if self.runner is None:
             n_datablocks = len(self.datablocks())
             if self.verbose or self.debug:
@@ -793,32 +832,30 @@ class Databatch(Datablock):
                 iterator = tqdm.tqdm(enumerate(self.datablocks()))
             for i, datablock in iterator:
                 self.log.verbose(f"Building {i}-th datablock out of {n_datablocks}")
-                tagi = f"run:{i}:{self.hash()}"
+                tagi = f"run:{i}:{self.hash}"
                 if tag is not None:
                     tagi = f"{tag}:{tagi}"
                 datablock.build(tag=tagi)
         else:
-            tag = tag or (self.runner.tag if hasattr(self.runner, 'tag') else None)
+            tag = self.tag or (self.runner.tag if hasattr(self.runner, 'tag') else None)
             kwargslist = []
             for i, datablock in enumerate(self.datablocks()):
-                tagi = f"run:{i}:{self.hash()}"
+                tagi = f"run:{i}:{self.hash}"
                 if tag is not None:
                     tagi = f"{tag}:{tagi}"
                 kwargs = dict(
                     datablock_cls=self.DATABLOCK,
+                    method_name="build",
                     tag=tagi,
                     **datablock.kwargs(),
                 )
                 kwargslist.append(kwargs)
-            self.runner(datablock_build, kwargslist)
+            self.runner(datablock_method, kwargslist)
         return self
 
-    def __build__(self):
-        return self.run(tag=self.tag)
+    def run(self):
+        return self.build(tag=self.tag)
     
-    def submit(self, tag: str = None):
-        return self.run(tag=tag)
-
     def datablock_scopes(self):
         return self.Scopes(self.DATABLOCK, self.root)
 

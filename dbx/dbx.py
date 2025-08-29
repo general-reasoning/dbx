@@ -789,8 +789,7 @@ class Datablock:
 
 def datablock_method(
     datablock_cls,
-    method_name,
-    method_kwargs={},
+    method,
     *,
     root: str = None,
     verbose: bool = False,
@@ -800,19 +799,20 @@ def datablock_method(
     unmoored: bool = False,
     capture_build_output: bool = False,
     gitrepo: str  = None,
+    kwargs: dict = dict(),
 ):
     datablock_cls = eval_term(datablock_cls)
     datablock = datablock_cls(root=root, verbose=verbose, debug=debug, cfg=cfg, hash=hash, unmoored=unmoored, capture_build_output=capture_build_output, gitrepo=gitrepo)
-    method = getattr(datablock, method_name)
-    return method(**method_kwargs)
+    method_callable = getattr(datablock, method)
+    return method_callable(**kwargs)
 
     
-class BatchRunner:
+class BatchBuilder:
     @property
     def tag(self):
         raise NotImplementedError()
     
-    def __call__(func, kwargslist):
+    def __call__(datablock_cls, kwargslist):
         raise NotImplementedError()
         
 
@@ -825,25 +825,25 @@ class Databatch(Datablock):
         root: str = None,
         verbose: bool = False,
         debug: bool = False,
-        runner: BatchRunner = None,
+        builder: BatchBuilder = None,
         *,
         cfg: Optional[Union[str,dict]] = None,
     ):
         super().__init__(root, verbose, debug, cfg=cfg)
-        self._runner = runner
+        self._builder = builder
 
     @property
-    def runner(self):
-        if isinstance(self._runner, str):
-            self._runner = eval_term(self._runner)
-        return self._runner
+    def builder(self):
+        if isinstance(self._builder, str):
+            self._builder = eval_term(self._builder)
+        return self._builder
 
     def datablocks(self) -> typing.Iterable[Datablock]:
         raise NotImplementedError()
         return self
 
     def __build__(self,):
-        if self.runner is None:
+        if self.builder is None:
             n_datablocks = len(self.datablocks())
             if self.verbose or self.debug:
                 iterator = enumerate(self.datablocks())
@@ -857,19 +857,17 @@ class Databatch(Datablock):
                 datablock.build(tag=tagi)
         else:
             tag = self.tag or (self.runner.tag if hasattr(self.runner, 'tag') else None)
-            kwargslist = []
+            dataset_method_build_kwargslist = []
             for i, datablock in enumerate(self.datablocks()):
                 tagi = f"run:{i}:{self.hash}"
                 if tag is not None:
                     tagi = f"{tag}:{tagi}"
-                kwargs = dict(
-                    datablock_cls=self.DATABLOCK,
-                    method_name="build",
-                    method_kwargs=dict(tag=tagi,),
+                dataset_method_build_kwargs = dict(
                     **datablock.kwargs(),
+                    **{'kwargs': dict(tag=tagi,),}
                 )
-                kwargslist.append(kwargs)
-            self.runner(datablock_method, kwargslist)
+                dataset_method_build_kwargslist.append(dataset_method_build_kwargs)
+            self.builder(self.DATABLOCK, dataset_method_build_kwargslist)
         return self
 
     def run(self):

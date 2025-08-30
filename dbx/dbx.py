@@ -129,30 +129,24 @@ def eval_term(name):
             for bit in bits:
                 if "=" in bit:
                     k, v = bit.split("=")
-                    val = eval_term(v)
+                    val = eval(v)
                     kwargs[k] = val
                 else:
-                    arg = eval_term(bit)
+                    arg = eval(bit)
                     args.append(arg)
         return args, kwargs
 
-    def get_named_func_args_kwargs(name):
+    def get_funcstr_argkwargstr(name):
         # TODO: replace with a regex
         lb = name.find("(")
         rb = name.rfind(")")
         if lb == -1 or rb == -1:
-            lb = name.find("[")
-            rb = name.find("]")
-        if lb == -1 or rb == -1:
-            func = None
-            args = None
-            kwargs = None
+            funcstr = None
+            argkwargstr = None
         else:
             funcstr = name[:lb]
-            func, _ = get_named_const_and_cxt(funcstr)
             argkwargstr = name[lb + 1 : rb]
-            args, kwargs = get_named_args_kwargs(argkwargstr)
-        return func, args, kwargs
+        return funcstr, argkwargstr
 
     if isinstance(name, Iterable) and not isinstance(name, str):
         term = [eval_term(item) for item in name]
@@ -164,11 +158,12 @@ def eval_term(name):
                 _name_ = name[1:-1] if name.endswith('#') else name[1:]
             else:
                 _name_ = name[1:-1]
-            func, args, kwargs = get_named_func_args_kwargs(_name_)
-            if func is None:
+            funcstr, _ = get_funcstr_argkwargstr(_name_)
+            if funcstr is None:
                 term, _ = get_named_const_and_cxt(_name_)
             else:
-                term = func(*args, **kwargs)
+                _, cxt = get_named_const_and_cxt(funcstr)
+                term = eval(_name_, cxt)
     else:
         term = name
     return term
@@ -283,7 +278,7 @@ class Datablock:
     # protocol://path --- module/class/# --- topic --- file 
     #        root           [anchor]        [topic]   [file]
     # root:       'protocol://path/to/root'
-    # anchorpath: '{root}/modpath/class'|'{root}' if not unmoored|else
+    # anchorpath: '{root}/modpath/class'|'{root}' if anchored|else
     # hashpath:   '{anchorpath}/#/{hash}|{anchorpath}/{hash}' if hash supplied through args|else
     # dirpath:    '{hashpath}/topic'|{hashpath}' if topic is not None|else
     # path:       '{dirpath}/{FILE}'|'{dirpath}' if FILE is not None|else
@@ -309,22 +304,22 @@ class Datablock:
     def __init__(
         self,
         root: str = None,
+        cfg: Optional[Union[str, dict]] = None,
+        *,
+        anchored: bool = True,
+        hash: Optional[str] = None,
         verbose: bool = False,
         debug: bool = False,
-        *,
-        cfg: Optional[Union[str, dict]] = None,
-        hash: Optional[str] = None,
-        unmoored: bool = False,
         capture_build_output: bool = False,
         gitrepo: str  = None,
     ):
         self.__setstate__(dict(
             root=root,
+            cfg=cfg,
+            anchored=anchored,
+            hash=hash,
             verbose=verbose,
             debug=debug,
-            cfg=cfg,
-            hash=hash,
-            unmoored=unmoored,
             capture_build_output=capture_build_output,
             gitrepo=gitrepo,
         ))
@@ -334,11 +329,12 @@ class Datablock:
         kwargs,
     ):
         self.root = kwargs.get('root')
+        self.cfg = kwargs.get('cfg')
+        self.anchored = kwargs.get('anchored')
+        self._hash = kwargs.get('hash')
+        #
         self.verbose = kwargs.get('verbose')
         self.debug = kwargs.get('debug')
-        self.cfg = kwargs.get('cfg')
-        self._hash = kwargs.get('hash')
-        self.unmoored = kwargs.get('unmoored')
         self.capture_build_output = kwargs.get('capture_build_output')
         self.gitrepo = kwargs.get('gitrepo')
 
@@ -384,6 +380,22 @@ class Datablock:
     def __post_init__(self):
         ...
 
+    def __repr__(self):
+        argstr = ', '.join((repr(self.root), repr(self.cfg)))
+        kwargslist = []
+        if not self.anchored:
+            kwargslist.append('anchored=False')
+        if not self._autohash:
+            kwargslist.append(f'hash={self._hash}')
+        if len(kwargslist) > 0:
+            kwargstr = ', '.join(kwargslist)
+            argskwargsrepr = argstr + ', ' + kwargstr
+        else:
+            argskwargsrepr = argstr
+        r = f"{self.anchor()}({argskwargsrepr})"
+        self.log.debug(f"{self.anchor()}: repr: {r}")
+        return r
+    
     @property
     def uuid(self):
         if not hasattr(self, '_uuid'):
@@ -393,11 +405,11 @@ class Datablock:
     def kwargs(self):
         return dict(
             root=self.root,
+            cfg=self.cfg,
             verbose=self.verbose,
             debug=self.debug,
-            cfg=self.cfg,
             hash=self._hash if not self._autohash else None,
-            unmoored=self.unmoored,
+            anchored=self.anchored,
             capture_build_output=self.capture_build_output,
             gitrepo=self.gitrepo,
         )
@@ -440,7 +452,7 @@ class Datablock:
                     result = fsspec.filesystem("gcs").exists(path)
                 else:
                     result = os.path.exists(path) #TODO: Why not handle this case using fsspec? 
-            self.log.debug(f"path {path} valid: {result}") 
+            self.log.debug(f"{self.anchor()}: path {path} valid: {result}") 
             return result
 
         results = []
@@ -453,7 +465,7 @@ class Datablock:
         else:
             results += [validpath(self.path())]
         result = all(results)
-        self.log.debug(f"{results=}")
+        self.log.debug(f"validation {results=}")
         return result
 
     def build(self, tag:str = None):
@@ -557,7 +569,7 @@ class Datablock:
         anchorpath = os.path.join(
             self.root,
             self.anchor(),
-        ) if not self.unmoored else self.root
+        ) if self.anchored else self.root
         return anchorpath
     
     @property
@@ -790,30 +802,40 @@ class Datablock:
 def datablock_method(
     datablock_cls,
     method,
+    method_kwargs,
     *,
     root: str = None,
+    cfg: Optional[Union[str,dict]] = None,
+    anchored: bool = True,
+    hash: Optional[str] = None,
     verbose: bool = False,
     debug: bool = False,
-    cfg: dict,
-    hash: Optional[str] = None,
-    unmoored: bool = False,
     capture_build_output: bool = False,
     gitrepo: str  = None,
     kwargs: dict = dict(),
 ):
     datablock_cls = eval_term(datablock_cls)
-    datablock = datablock_cls(root=root, verbose=verbose, debug=debug, cfg=cfg, hash=hash, unmoored=unmoored, capture_build_output=capture_build_output, gitrepo=gitrepo)
+    datablock = datablock_cls(root,
+                              cfg, 
+                              anchored=anchored, 
+                              hash=hash,
+                              verbose=verbose, 
+                              debug=debug, 
+                              capture_build_output=capture_build_output, 
+                              gitrepo=gitrepo,
+                              **kwargs)
     method_callable = getattr(datablock, method)
-    return method_callable(**kwargs)
+    return method_callable(**method_kwargs)
 
     
-class BatchBuilder:
+class DatabatchBuilder:
     @property
     def tag(self):
-        raise NotImplementedError()
+        return None
     
-    def __call__(datablock_cls, kwargslist):
-        raise NotImplementedError()
+    def __call__(self, datablock_method_args_kwargs_list):
+        for args, kwargs in datablock_method_args_kwargs_list:
+            datablock_method(*args, **kwargs)
         
 
 class Databatch(Datablock):
@@ -823,13 +845,24 @@ class Databatch(Datablock):
     def __init__(
         self,
         root: str = None,
+        cfg: Optional[Union[str,dict]] = None,
+        *,
+        anchored: bool = True,
+        hash: Optional[str] = None,
         verbose: bool = False,
         debug: bool = False,
-        builder: BatchBuilder = None,
-        *,
-        cfg: Optional[Union[str,dict]] = None,
+        capture_build_output: bool = False,
+        gitrepo: str  = None,
+        builder: DatabatchBuilder = None,
     ):
-        super().__init__(root, verbose, debug, cfg=cfg)
+        super().__init__(root,
+                         cfg,
+                         anchored=anchored,
+                         hash=hash,
+                         verbose=verbose,
+                         debug=debug,
+                         capture_build_output=capture_build_output, 
+                         gitrepo=gitrepo)
         self._builder = builder
 
     @property
@@ -851,23 +884,23 @@ class Databatch(Datablock):
                 iterator = tqdm.tqdm(enumerate(self.datablocks()))
             for i, datablock in iterator:
                 self.log.verbose(f"Building {i}-th datablock out of {n_datablocks}")
-                tagi = f"run:{i}:{self.hash}"
-                if tag is not None:
-                    tagi = f"{tag}:{tagi}"
-                datablock.build(tag=tagi)
+                dbktag = f"run:{i}:{self.hash}"
+                if self.tag is not None:
+                    dbktag = f"{self.tag}:{dbktag}"
+                datablock.build(tag=dbktag)
         else:
             tag = self.tag or (self.builder.tag if hasattr(self.builder, 'tag') else None)
-            dataset_method_build_kwargslist = []
+            datablock_method_args_kwargs_list = []
             for i, datablock in enumerate(self.datablocks()):
                 tagi = f"run:{i}:{self.hash}"
                 if tag is not None:
                     tagi = f"{tag}:{tagi}"
-                dataset_method_build_kwargs = dict(
-                    **datablock.kwargs(),
-                    **{'kwargs': dict(tag=tagi,),}
+                datablock_method_args_kwargs = (
+                    (self.DATABLOCK, 'build', dict(tag=tagi,)),
+                    datablock.kwargs(),
                 )
-                dataset_method_build_kwargslist.append(dataset_method_build_kwargs)
-            self.builder(self.DATABLOCK, dataset_method_build_kwargslist)
+                datablock_method_args_kwargs_list.append(datablock_method_args_kwargs)
+            self.builder(datablock_method_args_kwargs_list)
         return self
 
     def run(self):

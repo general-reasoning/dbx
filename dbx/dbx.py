@@ -854,8 +854,10 @@ class DatabatchBuilder:
     def tag(self):
         return None
     
-    def __call__(self, datablock_method_args_kwargs_list):
-        for args, kwargs in datablock_method_args_kwargs_list:
+    def __call__(self, datablock_build_method_args_kwargs_list):
+        N = len(datablock_build_method_args_kwargs_list)
+        for i, (args, kwargs) in enumerate(datablock_build_method_args_kwargs_list):
+            self.log.verbose(f"Building {i}-th datablock out of {N}")
             datablock_method(*args, **kwargs)
         
 

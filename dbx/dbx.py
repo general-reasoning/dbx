@@ -286,7 +286,7 @@ class Datablock:
     """
     @dataclass
     class CONFIG:
-        class LazyGetter:
+        class LazyAttribute:
             def __init__(self, term):
                 self.term = term
                 self.value = None
@@ -297,14 +297,14 @@ class Datablock:
 
         def __getattribute__(self, name):
             attr = super().__getattribute__(name)
-            if isinstance(attr, Datablock.CONFIG.LazyGetter):
+            if isinstance(attr, Datablock.CONFIG.LazyAttribute):
                 return attr()
             return attr
 
     def __init__(
         self,
         root: str = None,
-        cfg: Optional[Union[str, dict]] = None,
+        spec: Optional[Union[str, dict]] = None,
         *,
         anchored: bool = True,
         hash: Optional[str] = None,
@@ -315,7 +315,7 @@ class Datablock:
     ):
         self.__setstate__(dict(
             root=root,
-            cfg=cfg,
+            spec=spec,
             anchored=anchored,
             hash=hash,
             verbose=verbose,
@@ -329,7 +329,7 @@ class Datablock:
         kwargs,
     ):
         self.root = kwargs.get('root')
-        self.cfg = kwargs.get('cfg')
+        self.spec = kwargs.get('spec')
         self.anchored = kwargs.get('anchored')
         self._hash = kwargs.get('hash')
         #
@@ -363,25 +363,24 @@ class Datablock:
                     mod,
                     'DBKREPO',
                 )
-        if isinstance(self.cfg, str):
-            self.cfg = read_json(self.cfg, debug=self.debug)
-        if self.cfg is None:
-            self.cfg = asdict(self.CONFIG())
-        self.config = self._cfg_to_config(self.cfg)
+        if isinstance(self.spec, str):
+            self.spec = read_json(self.spec, debug=self.debug)
+        if self.spec is None:
+            self.spec = asdict(self.CONFIG())
+        self.config = self._spec_to_config(self.spec)
+        self._scopespec = None
         self._autohash = self._hash is None
         self.tag = None
         self.__post_init__()
 
-
     def __getstate__(self):
         return self.kwargs()
-
 
     def __post_init__(self):
         ...
 
     def __repr__(self):
-        argstr = ', '.join((repr(self.root), repr(self.cfg)))
+        argstr = ', '.join((repr(self.root), repr(self.spec)))
         kwargslist = []
         if not self.anchored:
             kwargslist.append('anchored=False')
@@ -405,7 +404,7 @@ class Datablock:
     def kwargs(self):
         return dict(
             root=self.root,
-            cfg=self.cfg,
+            spec=self.spec,
             verbose=self.verbose,
             debug=self.debug,
             hash=self._hash if not self._autohash else None,
@@ -467,6 +466,9 @@ class Datablock:
         result = all(results)
         self.log.debug(f"validation {results=}")
         return result
+    
+    def has_topics(self):
+        return hasattr(self, "FILES")
 
     def build(self, tag:str = None):
         if self.capture_build_output:
@@ -519,8 +521,14 @@ class Datablock:
         return self
 
     def read(self, topic=None):
+        if self.has_topics():
+            _ =  self.__read__(self, topic=None)
+        else:
+            _ = self.__read__()
+        return _
+    
+    def __read__(self, topic=None):
         raise NotImplementedError()
-        return self
     
     def UNSAFE_clear(self):
         def clear_dirpath(dirpath, *, throw=False):
@@ -576,7 +584,7 @@ class Datablock:
     def hash(self):
         if self._hash is None:
             hivehandle = os.path.join(
-                *[f"{key}={val}" for key, val in self.cfg.items()] #TODO: scopecfg?
+                *[f"{key}={val}" for key, val in self.scopespec.items()]
             )
             sha = hashlib.sha256()
             sha.update(hivehandle.encode())
@@ -589,11 +597,11 @@ class Datablock:
         with vfs.open(versionpath, 'r') as vf:
             version = vf.read()
         #
-        jconfigpath = self.Cfgpath(self.root, self.hash, 'json')
+        jconfigpath = self.Specpath(self.root, self.hash, 'json')
         jcfs, _ = fsspec.url_to_fs(jconfigpath)
         with jcfs.open(jconfigpath, 'r') as jcf:
-            cfg = json.load(jcf)
-        return version, cfg
+            spec = json.load(jcf)
+        return version, spec
     
     @staticmethod
     def Scopes(cls, root):
@@ -601,10 +609,10 @@ class Datablock:
         fs, _ = fsspec.url_to_fs(scopeanchorpath)
         paths = list(fs.ls(scopeanchorpath))
         hashes = [f.removeprefix(scopeanchorpath).removeprefix('/') for f in paths]
-        cfgfiles_ = [os.path.join(path, 'cfg.parquet') for path in paths]
-        cfgfiles = [f for f in cfgfiles_ if fs.exists(f)]
-        if len(cfgfiles) > 0:
-            ds = pq.ParquetDataset(cfgfiles, filesystem=fs)
+        specfiles_ = [os.path.join(path, 'cfg.parquet') for path in paths]
+        specfiles = [f for f in specfiles_ if fs.exists(f)]
+        if len(specfiles) > 0:
+            ds = pq.ParquetDataset(specfiles, filesystem=fs)
             df = ds.read().to_pandas()
             df.index = hashes
         else:
@@ -675,7 +683,7 @@ class Datablock:
         return os.path.join(cls._scopepath(root, hash, ensure=ensure), 'version')
     
     @classmethod
-    def Cfgpath(cls, root, hash, kind, *, ensure: bool = True):
+    def Specpath(cls, root, hash, kind, *, ensure: bool = True):
         if kind == 'json':
             return os.path.join(cls._scopepath(root, hash, ensure=ensure), 'cfg.json')
         elif kind == 'parquet':
@@ -733,15 +741,18 @@ class Datablock:
             fs.makedirs(dirpath, exist_ok=True)
         return dirpath
 
-    def _make_scopecfg(self):
-        scopecfg = {}
-        for k, v in self.cfg.items():
-            value = getattr(self.config, k)
-            if isinstance(v, str) and v.endswith('#') and isinstance(value, Datablock):
-                scopecfg[k] = f"{v}#{value.hash()}"
-            else:
-                scopecfg[k] = v
-        return scopecfg
+    @property
+    def scopespec(self):
+        if self._scopespec is None:
+            scopespec = {}
+            for k, v in self.spec.items():
+                value = getattr(self.config, k)
+                if isinstance(v, str) and v.endswith('#') and isinstance(value, Datablock):
+                    scopespec[k] = f"{repr(v)}#{value.hash()}"
+                else:
+                    scopespec[k] = v
+            self._scopespec = scopespec
+        return self._scopespec
 
     def _write_scope(self, *, version):
         versionpath = self.Versionpath(self.root, self.hash)
@@ -750,18 +761,17 @@ class Datablock:
             vf.write(str(version))
         assert vfs.exists(versionpath), f"Versionpath {versionpath} does not exist after writing"
         #
-        scopecfg = self._make_scopecfg()
         #
-        jconfigpath = self.Cfgpath(self.root, self.hash, 'json')
+        jconfigpath = self.Specpath(self.root, self.hash, 'json')
         jcfs, _ = fsspec.url_to_fs(jconfigpath)
         with jcfs.open(jconfigpath, 'w') as jcf:
-            json.dump(scopecfg, jcf)
+            json.dump(self.scopespec, jcf)
         assert jcfs.exists(jconfigpath), f"Configpath {jconfigpath} does not exist after writing"
         #
-        pconfigpath = self.Cfgpath(self.root, self.hash, 'parquet')
+        pconfigpath = self.Specpath(self.root, self.hash, 'parquet')
         pcfs, _ = fsspec.url_to_fs(pconfigpath)
-        cfgdf = pd.DataFrame.from_records([scopecfg])
-        cfgdf.to_parquet(pconfigpath)
+        specdf = pd.DataFrame.from_records([self.scopespec])
+        specdf.to_parquet(pconfigpath)
         assert pcfs.exists(pconfigpath), f"Configpath {pconfigpath} does not exist after writing"
         #
         self.log.verbose(f"wrote SCOPE: versionpath: {versionpath} and configpaths: {jconfigpath} and {pconfigpath}")
@@ -780,13 +790,13 @@ class Datablock:
         self.log.verbose(f"Wrote JOURNAL entry for event {repr(event)} with tag {repr(tag)} to path {path}")
         df.to_parquet(path)
     
-    def _cfg_to_config(self, cfg):
-        config = self.CONFIG(**cfg)
+    def _spec_to_config(self, spec):
+        config = self.CONFIG(**spec)
         replacements = {}
         for field in fields(config):
             term = getattr(config, field.name)
             if issubclass(self.CONFIG, Datablock.CONFIG):
-                getter = Datablock.CONFIG.LazyGetter(term)
+                getter = Datablock.CONFIG.LazyAttribute(term)
             else:
                 getter = eval_term(term)
             replacements[field.name] = getter
@@ -805,7 +815,7 @@ def datablock_method(
     method_kwargs,
     *,
     root: str = None,
-    cfg: Optional[Union[str,dict]] = None,
+    spec: Optional[Union[str,dict]] = None,
     anchored: bool = True,
     hash: Optional[str] = None,
     verbose: bool = False,
@@ -816,7 +826,7 @@ def datablock_method(
 ):
     datablock_cls = eval_term(datablock_cls)
     datablock = datablock_cls(root,
-                              cfg, 
+                              spec, 
                               anchored=anchored, 
                               hash=hash,
                               verbose=verbose, 
@@ -845,7 +855,7 @@ class Databatch(Datablock):
     def __init__(
         self,
         root: str = None,
-        cfg: Optional[Union[str,dict]] = None,
+        spec: Optional[Union[str,dict]] = None,
         *,
         anchored: bool = True,
         hash: Optional[str] = None,
@@ -856,7 +866,7 @@ class Databatch(Datablock):
         builder: DatabatchBuilder = None,
     ):
         super().__init__(root,
-                         cfg,
+                         spec,
                          anchored=anchored,
                          hash=hash,
                          verbose=verbose,

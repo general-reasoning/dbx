@@ -5,9 +5,11 @@ import hashlib
 import importlib
 import inspect
 import json
-import logging
+import multiprocessing as mp
 import os
 import sys
+import threading
+import time
 import traceback as tb
 import typing
 from typing import Union, Optional
@@ -16,6 +18,7 @@ import uuid
 import git
 
 import tqdm
+import rich
 
 import numpy as np
 
@@ -287,6 +290,14 @@ def make_halton_sampling_kwargs_sequence(N, range_kwargs, *, seed=123, precision
     return kwargs_list
 
 
+def quote(obj):
+    if isinstance(obj, str) and obj.startswith("@"):
+        quote = obj
+    else:
+        quote = f"@{repr(obj)}#"
+    return quote
+
+
 class Datablock:
     """
     ROOT = 'protocol://path/to/root'
@@ -347,6 +358,12 @@ class Datablock:
         kwargs,
     ):
         self.root = kwargs.get('root')
+        self._autoroot = False
+        if self.root is None:
+            self.root = os.environ.get('DBXROOT')
+            self._autoroot = True
+        if self.root is None:
+            raise ValueError(f"None root for {self.__class__.__name__}: maybe set DBXROOT?")
         self.spec = kwargs.get('spec')
         self.anchored = kwargs.get('anchored')
         self._hash = kwargs.get('hash')
@@ -368,7 +385,6 @@ class Datablock:
             verbose=self.verbose,
             name=self.anchor(),
         )
-
         if isinstance(self.spec, str):
             self.spec = read_json(self.spec, debug=self.debug)
         if self.spec is None:
@@ -393,7 +409,10 @@ class Datablock:
         return version
 
     def __repr__(self):
-        argstr = ', '.join((repr(self.root), repr(self.spec)))
+        if self._autoroot:
+            argstr = repr(self.spec)
+        else:
+            argstr = ', '.join((repr(self.root), repr(self.spec)))
         kwargslist = []
         if not self.anchored:
             kwargslist.append('anchored=False')
@@ -416,7 +435,7 @@ class Datablock:
 
     def kwargs(self):
         return dict(
-            root=self.root,
+            root=self.root if not self._autoroot else None,
             spec=self.spec,
             verbose=self.verbose,
             debug=self.debug,
@@ -500,15 +519,14 @@ class Datablock:
 
     def __pre_build__(self,):
         self._write_scope()
-        self._write_journal_entry(event="build:start", tag=self.tag)
+        self._write_journal_entry(event="build:start",)
         return self
 
     def __build__(self):
         return self
 
     def __post_build__(self,):
-        self.tag = None
-        self._write_journal_entry(event="build:end", tag=self.tag)
+        self._write_journal_entry(event="build:end",)
         return self
     
     @property
@@ -529,6 +547,8 @@ class Datablock:
 
     def read(self, topic=None):
         if self.has_topics():
+            if topic not in self.FILES:
+                raise ValueError(f"Topic {repr(topic)} not in {self.FILES}")
             _ =  self.__read__(topic)
         else:
             _ = self.__read__()
@@ -792,7 +812,7 @@ class Datablock:
         #
         self.log.verbose(f"wrote SCOPE: versionpath: {versionpath} and configpaths: {jconfigpath} and {pconfigpath}")
 
-    def _write_journal_entry(self, event:str, tag:str=None):
+    def _write_journal_entry(self, event:str):
         hash = self.hash
         dt = str(datetime.datetime.now()).replace(' ', '-')
         path = os.path.join(self._journalanchorpath(self.root), f"{hash}-{dt}.parquet")
@@ -800,12 +820,12 @@ class Datablock:
                                          'version': self.version,
                                          'revision': self.revision, 
                                          'hash': hash,
-                                         'tag': tag,  
+                                         'tag': self.tag,  
                                          'uuid': self.uuid, 
                                          'build_log': self.logpath(),
                                          'event': event,
         }])
-        self.log.verbose(f"Wrote JOURNAL entry for event {repr(event)} with tag {repr(tag)} to path {path}")
+        self.log.verbose(f"Wrote JOURNAL entry for event {repr(event)} with tag {repr(self.tag)} to path {path}")
         df.to_parquet(path)
     
     def _spec_to_config(self, spec):
@@ -923,7 +943,7 @@ class Databatch(Datablock):
             for i, datablock in enumerate(self.datablocks()):
                 tagi = f"run:{i}:{self.hash}"
                 datablock_method_args_kwargs = (
-                    (self.DATABLOCK, 'build'),
+                    (self.DATABLOCK, 'build', {}),
                     datablock.kwargs(),
                 )
                 datablock_method_args_kwargs_list.append(datablock_method_args_kwargs)
@@ -939,4 +959,88 @@ class Databatch(Datablock):
     def datablock_journal(self):
         return self.Journal(self.DATABLOCK, self.root)
 
-    
+
+class MultiprocessProgressTracker:
+	"""Wrapper for a rich.progress tracker that can be shared across processes."""
+
+	def __init__(self, tasks):
+		ctx = mp.get_context('spawn')
+		self.mp_values = {
+			task.id: ctx.Value('i', task.completed)
+			for task in tasks
+		}
+
+	def advance(self, id, amount):
+		with self.mp_values[id].get_lock():
+			self.mp_values[id].value += amount
+
+	def __getitem__(self, id):
+		return self.mp_values[id].value
+
+
+class MultiprocessProgress:
+	"""Wrapper for a rich.progress bar that can be shared across processes."""
+
+	def __init__(self, pb):
+		self.pb = pb
+		self.tracker = MultiprocessProgressTracker(self.pb.tasks)
+		self.should_stop = False
+
+	def _update_progress(self):
+		while not self.should_stop:
+			for task in self.pb.tasks:
+				self.pb.update(task.id, completed=self.tracker[task.id])
+			time.sleep(0.1)
+
+	def __enter__(self):
+		self._thread = threading.Thread(target=self._update_progress)
+		self._thread.start()
+		return self
+
+	def __exit__(self, *args):
+		self.should_stop = True
+		self._thread.join()
+
+
+def datablock_method_multiprocessing(
+		id,
+		datablock_method_args_kwargs_list,
+		progress_bar=None,
+		progress_task=None,
+):
+		args, kwargs = datablock_method_args_kwargs_list[id]
+		result = datablock_method(*args, **kwargs)
+		if progress_bar is not None and progress_task is not None:
+			progress_bar.advance(progress_task, 1)
+		return result
+	
+
+class TorchMultiprocessingDatabatchBuilder(DatabatchBuilder):
+	def __init__(self, *, num_gpus: int = 1):
+		self.num_gpus = num_gpus
+	
+	def __call__(self, datablock_method_args_kwargs_list):
+		N = len(datablock_method_args_kwargs_list)
+		pb = rich.progress.Progress() 
+		pb.add_task(
+			"Speed: ",
+			progress_type="speed",
+			total=None
+		)
+		slide_task = pb.add_task(
+			f"Building ...",
+			progress_type="slide_progress",
+			total=N,
+		)
+		pb.start()
+		with MultiprocessProgress(pb) as mp_pb:
+			torch.multiprocessing.spawn(
+				datablock_method_multiprocessing,
+				args=(datablock_method_args_kwargs_list,
+					  mp_pb.tracker,
+					  slide_task,
+				),       
+				nprocs=self.num_gpus,
+			)
+
+

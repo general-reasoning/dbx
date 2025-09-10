@@ -227,7 +227,7 @@ def write_npz(path, *, log=Logger(), debug: bool = False, **kwargs):
 
 def read_npz(path, *keys, log=Logger(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path)
-    with fs.open(path, "wb") as f:
+    with fs.open(path, "rb") as f:
         data = np.load(f)
         results = [data[k] for k in keys]
         log.info(f"READ {list(keys)} from {path}")
@@ -324,6 +324,7 @@ class Datablock:
         *,
         anchored: bool = True,
         hash: Optional[str] = None,
+        tag: Optional[str] = None,
         verbose: bool = False,
         debug: bool = False,
         capture_build_output: bool = False,
@@ -334,6 +335,7 @@ class Datablock:
             spec=spec,
             anchored=anchored,
             hash=hash,
+            tag=tag,
             verbose=verbose,
             debug=debug,
             capture_build_output=capture_build_output,
@@ -348,21 +350,15 @@ class Datablock:
         self.spec = kwargs.get('spec')
         self.anchored = kwargs.get('anchored')
         self._hash = kwargs.get('hash')
+        self.tag = kwargs.get('tag')
         #
-        self.verbose = kwargs.get('verbose')
-        self.debug = kwargs.get('debug')
-        self.capture_build_output = kwargs.get('capture_build_output')
-        self.gitrepo = kwargs.get('gitrepo')
+        self.verbose = bool(os.environ.get('DBXVERBOSE', kwargs.get('verbose')))
+        self.debug = bool(os.environ.get('DBXDEBUG', kwargs.get('debug')))
+        self.gitrepo = os.environ.get('DBXREPO', kwargs.get('gitrepo'))
+        self.capture_build_output = bool(kwargs.get('capture_build_output'))
 
         if self.root is None:
-            self.root = os.environ.get('DBKSPACE')
-            if self.root is None:
-                mod = importlib.import_module(self.__module__)
-                if hasattr(mod, 'DBKSPACE'):
-                    self.root = getattr(
-                    mod,
-                    'DBKSPACE',
-                )
+            self.root = os.environ.get('DBXSPACE')
             if self.root is None:
                 if hasattr(self, 'ROOT'):
                     self.root = self.ROOT
@@ -372,13 +368,7 @@ class Datablock:
             verbose=self.verbose,
             name=self.anchor(),
         )
-        if self.gitrepo is None:
-                mod = importlib.import_module(self.__module__)
-                if hasattr(mod, 'DBKREPO'):
-                    self.gitrepo = getattr(
-                    mod,
-                    'DBKREPO',
-                )
+
         if isinstance(self.spec, str):
             self.spec = read_json(self.spec, debug=self.debug)
         if self.spec is None:
@@ -386,7 +376,6 @@ class Datablock:
         self.config = self._spec_to_config(self.spec)
         self._scopespec = None
         self._autohash = self._hash is None
-        self.tag = None
         self.__post_init__()
 
     def __getstate__(self):
@@ -432,6 +421,7 @@ class Datablock:
             verbose=self.verbose,
             debug=self.debug,
             hash=self._hash if not self._autohash else None,
+            tag=self.tag,
             anchored=self.anchored,
             capture_build_output=self.capture_build_output,
             gitrepo=self.gitrepo,
@@ -491,7 +481,7 @@ class Datablock:
     def has_topics(self):
         return hasattr(self, "FILES")
 
-    def build(self, tag:str = None):
+    def build(self,):
         if self.capture_build_output:
             stdout = sys.stdout
             outfs, _ = fsspec.url_to_fs(self.capture_out)
@@ -499,7 +489,7 @@ class Datablock:
             sys.stdout = captured_stdout_stream
         try:
             if not self.valid():
-                self.__pre_build__(tag).__build__().__post_build__(tag)
+                self.__pre_build__().__build__().__post_build__()
             else:
                 self.log.verbose(f"Skipping existing datablock: {self.hashpath()}")
         finally:
@@ -508,20 +498,17 @@ class Datablock:
                 captured_stdout_stream.close()
         return self
 
-    def __pre_build__(self, tag: str = None):
+    def __pre_build__(self,):
         self._write_scope()
-        self._write_journal_entry(event="build:start", tag=tag)
-        self.tag = tag
+        self._write_journal_entry(event="build:start", tag=self.tag)
         return self
 
     def __build__(self):
         return self
 
-    def __post_build__(self, tag: str = None):
-        if tag is not None:
-            assert tag == self.tag, f"Tag mismatch: {tag=} != {self.tag=}"
+    def __post_build__(self,):
         self.tag = None
-        self._write_journal_entry(event="build:end", tag=tag)
+        self._write_journal_entry(event="build:end", tag=self.tag)
         return self
     
     @property
@@ -529,7 +516,6 @@ class Datablock:
         if not hasattr(self, '_revision'):
             self._revision = gitrevision(self.gitrepo, log=self.log) if self.gitrepo is not None else None
         return self._revision
-
 
     def leave_breadcrumbs(self):
         if hasattr(self, "FILES"):
@@ -621,11 +607,15 @@ class Datablock:
     def scope(self):
         versionpath = self.Versionpath(self.root, self.hash)
         vfs, _ = fsspec.url_to_fs(versionpath)
+        if not vfs.exists(versionpath):
+            return
         with vfs.open(versionpath, 'r') as vf:
             version = vf.read()
         #
         jconfigpath = self.Specpath(self.root, self.hash, 'json')
         jcfs, _ = fsspec.url_to_fs(jconfigpath)
+        if not jcfs.exists(jconfigpath):
+            return
         with jcfs.open(jconfigpath, 'r') as jcf:
             spec = json.load(jcf)
         return version, spec
@@ -634,19 +624,22 @@ class Datablock:
     def Scopes(cls, root):
         scopeanchorpath = cls._scopeanchorpath(root)
         fs, _ = fsspec.url_to_fs(scopeanchorpath)
-        paths = list(fs.ls(scopeanchorpath))
-        specfiles_ = [os.path.join(path, 'cfg.parquet') for path in paths]
-        specfiles = [f for f in specfiles_ if fs.exists(f)]
-        hashes = [os.path.dirname(f).removeprefix(scopeanchorpath).removeprefix('/') for f in specfiles]
-        if len(specfiles) > 0:
-            dfs = []
-            for specfile in specfiles:
-                _df = pd.read_parquet(specfile)
-                dfs.append(_df)
-            df = pd.concat(dfs)
-            df.index = hashes
+        if not fs.exists(scopeanchorpath):
+            df = None
         else:
-            df = pd.DataFrame(index=hashes)
+            paths = list(fs.ls(scopeanchorpath))
+            specfiles_ = [os.path.join(path, 'cfg.parquet') for path in paths]
+            specfiles = [f for f in specfiles_ if fs.exists(f)]
+            hashes = [os.path.dirname(f).removeprefix(scopeanchorpath).removeprefix('/') for f in specfiles]
+            if len(specfiles) > 0:
+                dfs = []
+                for specfile in specfiles:
+                    _df = pd.read_parquet(specfile)
+                    dfs.append(_df)
+                df = pd.concat(dfs)
+                df.index = hashes
+            else:
+                df = pd.DataFrame(index=hashes)
         return df
 
     @staticmethod
@@ -770,8 +763,9 @@ class Datablock:
             for k, v in self.spec.items():
                 value = getattr(self.config, k)
                 if isinstance(v, str) and v.endswith('#') and isinstance(value, Datablock):
-                    scopespec[k] = f"{v}#{value.anchor()}/{value.hash}"
+                    scopespec[k] = f"{v}{value.anchor()}/{value.hash}"
                 else:
+                    v = v.removesuffix('#') if isinstance(v, str) else v
                     scopespec[k] = v
             self._scopespec = scopespec
         return self._scopespec
@@ -842,6 +836,7 @@ def datablock_method(
     spec: Optional[Union[str,dict]] = None,
     anchored: bool = True,
     hash: Optional[str] = None,
+    tag: Optional[str] = None,
     verbose: bool = False,
     debug: bool = False,
     capture_build_output: bool = False,
@@ -853,6 +848,7 @@ def datablock_method(
                               spec, 
                               anchored=anchored, 
                               hash=hash,
+                              tag=tag,
                               verbose=verbose, 
                               debug=debug, 
                               capture_build_output=capture_build_output, 
@@ -868,10 +864,6 @@ class DatabatchBuilder:
         self.debug = debug
         self.log = Logger(verbose=verbose, debug=debug)
         
-    @property
-    def tag(self):
-        return None
-    
     def __call__(self, datablock_build_method_args_kwargs_list):
         N = len(datablock_build_method_args_kwargs_list)
         for i, (args, kwargs) in enumerate(datablock_build_method_args_kwargs_list):
@@ -925,19 +917,13 @@ class Databatch(Datablock):
                 iterator = tqdm.tqdm(enumerate(self.datablocks()))
             for i, datablock in iterator:
                 self.log.verbose(f"Building {i}-th datablock out of {n_datablocks}")
-                dbktag = f"run:{i}:{self.hash}"
-                if self.tag is not None:
-                    dbktag = f"{self.tag}:{dbktag}"
-                datablock.build(tag=dbktag)
+                datablock.build()
         else:
-            tag = self.tag or (self.builder.tag if hasattr(self.builder, 'tag') else None)
             datablock_method_args_kwargs_list = []
             for i, datablock in enumerate(self.datablocks()):
                 tagi = f"run:{i}:{self.hash}"
-                if tag is not None:
-                    tagi = f"{tag}:{tagi}"
                 datablock_method_args_kwargs = (
-                    (self.DATABLOCK, 'build', dict(tag=tagi,)),
+                    (self.DATABLOCK, 'build'),
                     datablock.kwargs(),
                 )
                 datablock_method_args_kwargs_list.append(datablock_method_args_kwargs)
@@ -945,7 +931,7 @@ class Databatch(Datablock):
         return self
 
     def run(self):
-        return self.build(tag=self.tag)
+        return self.build()
     
     def datablock_scopes(self):
         return self.Scopes(self.DATABLOCK, self.root)

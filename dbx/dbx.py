@@ -206,7 +206,7 @@ def write_yaml(data, path, *, log=Logger(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "w") as f:
         yaml.dump(data, f)
-        log.verbose(f"WROTE {path}")
+        log.debug(f"WROTE {path}")
 
 
 def read_yaml(path, *, log=Logger(), debug: bool = False):
@@ -221,14 +221,14 @@ def write_json(data, path, *, log=Logger(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "w") as f:
         json.dump(data, f)
-        log.verbose(f"WROTE {path}")
+        log.debug(f"WROTE {path}")
 
 
 def read_json(path, *, log=Logger(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "r") as f:
         data = json.load(f)
-        log.verbose(f"READ {path}")
+        log.debug(f"READ {path}")
     return data
 
 
@@ -237,13 +237,13 @@ def write_tensor(tensor, path, *, log=Logger(), debug: bool = False):
     array = tensor.numpy()
     with fs.open(path, "wb") as f:
         np.save(f, array)
-        log.verbose(f"WROTE {path}")
+        log.debug(f"WROTE {path}")
 
 def read_tensor(path, *, log=Logger(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "rb") as f:
         array = np.load(f)
-        log.verbose(f"READ {path}")
+        log.debug(f"READ {path}")
         tensor = torch.from_numpy(array)
     return tensor
 
@@ -252,7 +252,7 @@ def write_npz(path, *, log=Logger(), debug: bool = False, **kwargs):
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "wb") as f:
         np.savez(f, **kwargs)
-        log.verbose(f"WROTE {list(kwargs.keys())} to {path}")
+        log.debug(f"WROTE {list(kwargs.keys())} to {path}")
 
 
 def read_npz(path, *keys, log=Logger(), debug: bool = False):
@@ -260,7 +260,7 @@ def read_npz(path, *keys, log=Logger(), debug: bool = False):
     with fs.open(path, "rb") as f:
         data = np.load(f)
         results = [data[k] for k in keys]
-        log.verbose(f"READ {list(keys)} from {path}")
+        log.debug(f"READ {list(keys)} from {path}")
         return results
 
 

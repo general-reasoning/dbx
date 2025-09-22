@@ -240,6 +240,7 @@ def write_tensor(tensor, path, *, log=Logger(), debug: bool = False):
         np.save(f, array)
         log.debug(f"WROTE {path}")
 
+
 def read_tensor(path, *, log=Logger(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "rb") as f:
@@ -247,6 +248,16 @@ def read_tensor(path, *, log=Logger(), debug: bool = False):
         log.debug(f"READ {path}")
         tensor = torch.from_numpy(array)
     return tensor
+
+def write_tensors(path, *, log=Logger(), debug: bool = False, **tensors):
+    arrays = {k: v.numpy() for k, v in tensors.items()}
+    return write_npz(path, log=log, debug=debug, **arrays)
+
+
+def read_tensors(path, *keys, log=Logger(), debug: bool = False):
+    arrays = read_npz(path, *keys, log=log, debug=debug)
+    tensors = {k: torch.from_numpy(v) for k, v in arrays.items()}
+    return tensors
 
 
 def write_npz(path, *, log=Logger(), debug: bool = False, **kwargs):
@@ -506,6 +517,17 @@ class Datablock:
     def kwargs(self):
         return self.__getstate__()
 
+    def filepath(
+        self,
+        dirpath,
+        topicfile=None,
+    ):
+        if topicfile is None:
+            path = None
+        else:
+            path = os.path.join(dirpath, topicfile) if topicfile is not None else None     
+        return path
+    
     def path(
         self,
         topic=None,
@@ -514,13 +536,21 @@ class Datablock:
     ):
         if topic is None:
             dirpath = self.dirpath()
-            topicfile = self.FILE
+            topicfiles = self.FILE
         else:
             dirpath = self.dirpath(topic)
-            topicfile = self.FILES[topic]
-        path = os.path.join(dirpath, topicfile) if topicfile is not None else None
+            topicfiles = self.FILES[topic]
         if ensure_dirpath and dirpath is not None:
-            self.ensure_path(dirpath)      
+            self.ensure_path(dirpath)
+        if isinstance(topicfiles, dict): 
+            path = {topic: self.filepath(dirpath, topicfile) for topic, topicfile in topicfiles.items}
+        elif isinstance(topicfiles, list):
+            path = [self.filepath(dirpath, topicfile) for topicfile in topicfiles]
+        elif isinstance(topicfiles, str):
+            path = self.filepath(dirpath, topicfiles)
+        else:
+            path = None
+        self.log.detailed(f"{self.anchor()}: path: {path}")
         return path
 
     def ensure_path(self, path):

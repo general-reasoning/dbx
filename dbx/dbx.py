@@ -1,6 +1,8 @@
 from collections.abc import Iterable
+import copy
 from dataclasses import dataclass, fields, asdict, replace, is_dataclass
 import datetime
+import gc
 import hashlib
 import importlib
 import inspect
@@ -8,12 +10,13 @@ import json
 import multiprocessing as mp
 import os
 import pickle
+import queue
 import sys
 import threading
 import time
 import traceback as tb
 import typing
-from typing import Union, Optional
+from typing import Union, Optional, Sequence, Callable
 import uuid
 import yaml
 
@@ -48,18 +51,24 @@ class Logger:
         name: Optional[str] = None,
         stack_depth: int = 2,
     ):
+        self._warning = eval(os.environ.get('DBXWARNING', str(warning)))
+        self._info = eval(os.environ.get('DBXINFO', str(info)))
+        self._verbose = eval(os.environ.get('DBXVERBOSE', str(verbose)))
+        self._select = eval(os.environ.get('DBXSELECT', str(select)))
+        self._debug = eval(os.environ.get('DBXDEBUG', str(debug)))
+        self._detailed = eval(os.environ.get('DBXDETAILED', str(detailed)))
         self.allowed = []
-        if warning:
+        if self._warning:
             self.allowed.append("WARNING")
-        if info:
+        if self._info:
             self.allowed.append("INFO")
-        if debug:
+        if self._debug:
             self.allowed.append("DEBUG")
-        if verbose:
+        if self._verbose:
             self.allowed.append("VERBOSE")
-        if select:
+        if self._select:
             self.allowed.append("SELECT")
-        if detailed:
+        if self._detailed:
             self.allowed.append("DETAIL")
         self.stack_depth = stack_depth
         self.name = name
@@ -95,6 +104,14 @@ class Logger:
 
     def silent(self, mst):
         pass
+
+
+def journal(cls, root=None):
+    return Datablock.Journal(cls, root)
+
+
+def scopes(cls, root=None):
+    return Datablock.Scopes(cls, root)
 
 
 def gitrevision(repopath, *, log=Logger()):
@@ -193,7 +210,7 @@ def exec(s=None):
             raise ValueError(f"Too few args: {sys.argv}")
         s = sys.argv[1]
     lb = s.find("(")
-    rb = s.rfind(")")
+    lb = lb if lb != -1 else len(s)
     _, cxt = get_named_const_and_cxt(s[:lb])
     r = eval(s, globals(), cxt)
     return r
@@ -248,6 +265,7 @@ def read_tensor(path, *, log=Logger(), debug: bool = False):
         log.debug(f"READ {path}")
         tensor = torch.from_numpy(array)
     return tensor
+
 
 def write_tensors(path, *, log=Logger(), debug: bool = False, **tensors):
     arrays = {k: v.numpy() for k, v in tensors.items()}
@@ -349,17 +367,28 @@ def quote(obj):
     return quote
 
 
-class Datablock:
+class Datashard:
+    def build(self):
+          pass
+     
+    def __str__(self):
+        return repr(self)
+    
+    def to(self, device):
+        return self
+
+
+class Datablock(Datashard):
     """
     ROOT = 'protocol://path/to/root'
-    FILES = {'topic', 'file.csv'} | FILE = 'file.csv'
+    TOPICFILES = {'topic', 'file.csv'} | TOPICFILE = 'file.csv'
     # protocol://path --- module/class/ --- topic --- file 
     #        root           [anchor]        [topic]   [file]
     # root:       'protocol://path/to/root'
     # anchorpath: '{root}/modpath/class'|'{root}' if anchored|else
     # hashpath:   '{anchorpath}/{hash}|{anchorpath}/{hash}' if hash supplied through args|else
     # dirpath:    '{hashpath}/topic'|{hashpath}' if topic is not None|else
-    # path:       '{dirpath}/{FILE}'|'{dirpath}' if FILE is not None|else
+    # path:       '{dirpath}/{TOPICFILE}'|'{dirpath}' if TOPICFILE is not None|else
     
     """
     @dataclass
@@ -382,8 +411,8 @@ class Datablock:
     def __init__(
         self,
         root: str = None,
-        spec: Optional[Union[str, dict]] = None,
         *,
+        spec: Optional[Union[str, dict]] = None,
         anchored: bool = True,
         hash: Optional[str] = None,
         tag: Optional[str] = None,
@@ -484,9 +513,9 @@ class Datablock:
 
     def __repr__(self):
         if self._autoroot:
-            argstr = repr(self.spec)
+            argstr = f"spec={repr(self.spec)}"
         else:
-            argstr = ', '.join((repr(self.root), repr(self.spec)))
+            argstr = ', '.join((repr(self.root), f"spec={repr(self.spec)}"))
         kwargslist = []
         if not self.anchored:
             kwargslist.append('anchored=False')
@@ -500,6 +529,7 @@ class Datablock:
         r = f"{self.anchor()}({argskwargsrepr})"
         self.log.detailed(f"{self.anchor()}: repr: {r}")
         return r
+    
     @property
     def version(self):
         if hasattr(self, 'VERSION'):
@@ -536,14 +566,14 @@ class Datablock:
     ):
         if topic is None:
             dirpath = self.dirpath()
-            topicfiles = self.FILE
+            topicfiles = self.TOPICFILE
         else:
             dirpath = self.dirpath(topic)
-            topicfiles = self.FILES[topic]
+            topicfiles = self.TOPICFILES[topic]
         if ensure_dirpath and dirpath is not None:
             self.ensure_path(dirpath)
         if isinstance(topicfiles, dict): 
-            path = {topic: self.filepath(dirpath, topicfile) for topic, topicfile in topicfiles.items}
+            path = {topic: self.filepath(dirpath, topicfile) for topic, topicfile in topicfiles.items()}
         elif isinstance(topicfiles, list):
             path = [self.filepath(dirpath, topicfile) for topicfile in topicfiles]
         elif isinstance(topicfiles, str):
@@ -561,10 +591,23 @@ class Datablock:
     def url(self, topic=None, *, redirect=None):
         path = self.path(topic)
         return make_download_url(path)
+    
+    def paths(self):
+        if self.has_topics:
+            paths = {topic: self.path(topic) for topic in self.topics()}
+        else:
+            paths = self.path()
+        return paths
 
     def validpath(self, path):
+        if isinstance(path, dict):
+            return all([self.validpath(p) for p in path.values()])
+        elif isinstance(path, list):
+            return all([self.validpath(p) for p in path])
         if path is None or path.endswith("None"): #If topic filename ends with 'None', it is considered to be valid by default
             result = True
+        elif isinstance(path, dict):
+            result = all([self.validpath(p) for p in path.values()])
         else:
             fs, _ = fsspec.url_to_fs(path)
             if 'file' not in fs.protocol:
@@ -576,21 +619,24 @@ class Datablock:
     
     def valid(self,):
         results = []
-        if hasattr(self, "FILES"):
+        if hasattr(self, "TOPICFILES"):
             results += [
                 self.validpath(self.path(topic))
-                for topic in self.FILES
+                for topic in self.TOPICFILES
             ]
         else:
             results += [self.validpath(self.path())]
         result = all(results)
-        self.log.detailed(f"validation {results=}")
+        self.log.detailed(f"{self.anchor()}: {results=}")
         return result
     
-    def has_topics(self):
-        return hasattr(self, "FILES")
+    def topics(self):
+        return list(self.TOPICFILES.keys()) if self.has_topics() else []
 
-    def build(self,):
+    def has_topics(self):
+        return hasattr(self, "TOPICFILES")
+
+    def build(self, *args, **kwargs):
         if self.capture_build_output:
             stdout = sys.stdout
             outfs, _ = fsspec.url_to_fs(self.capture_out)
@@ -598,7 +644,7 @@ class Datablock:
             sys.stdout = captured_stdout_stream
         try:
             if not self.valid():
-                self.__pre_build__().__build__().__post_build__()
+                self.__pre_build__(*args, **kwargs).__build__(*args, **kwargs).__post_build__(*args, **kwargs)
             else:
                 self.log.verbose(f"Skipping existing datablock: {self.hashpath()}")
         finally:
@@ -607,15 +653,15 @@ class Datablock:
                 captured_stdout_stream.close()
         return self
 
-    def __pre_build__(self,):
+    def __pre_build__(self, *args, **kwargs):
         self._write_scope()
         self._write_journal_entry(event="build:start",)
         return self
 
-    def __build__(self):
+    def __build__(self, *args, **kwargs):
         return self
 
-    def __post_build__(self,):
+    def __post_build__(self, *args, **kwargs):
         self._write_journal_entry(event="build:end",)
         return self
     
@@ -626,8 +672,8 @@ class Datablock:
         return self._revision
 
     def leave_breadcrumbs(self):
-        if hasattr(self, "FILES"):
-            for topic in self.FILES:
+        if hasattr(self, "TOPICFILES"):
+            for topic in self.TOPICFILES:
                 self.dirpath(topic, ensure=True)
                 self.leave_breadcrumbs_at_path(self.path(topic))
         else:
@@ -637,8 +683,8 @@ class Datablock:
 
     def read(self, topic=None):
         if self.has_topics():
-            if topic not in self.FILES:
-                raise ValueError(f"Topic {repr(topic)} not in {self.FILES}")
+            if topic not in self.TOPICFILES:
+                raise ValueError(f"Topic {repr(topic)} not in {self.TOPICFILES}")
             _ =  self.__read__(topic)
         else:
             _ = self.__read__()
@@ -674,8 +720,8 @@ class Datablock:
                 self.log.warning(f"EXCEPTION: {e}")
                 if throw:
                     raise (e)
-        if hasattr(self, "FILES"):
-            for topic in self.FILES:
+        if hasattr(self, "TOPICFILES"):
+            for topic in self.TOPICFILES:
                 clear_dirpath(self.dirpath(topic))
         else:
             clear_dirpath(self.dirpath())
@@ -700,13 +746,13 @@ class Datablock:
     @property
     def hash(self):
         if self._hash is None:
-            if hasattr(self, "FILES"):
-                topics = [f"_topic_{topic}={file}" for topic, file in self.FILES.items()]
+            if hasattr(self, "TOPICFILES"):
+                topics = [f"_topic_{topic}={file}" for topic, file in self.TOPICFILES.items()]
             else:
                 topics = ["None"]
             hivehandle = os.path.join(
                 *topics,
-                *[f"{key}={val}" for key, val in self._scope_.items()]
+                *[f"{key}={repr(val)}" for key, val in self._scope_.items()]
             )
             sha = hashlib.sha256()
             sha.update(hivehandle.encode())
@@ -723,6 +769,9 @@ class Datablock:
     
     @staticmethod
     def Scopes(cls, root):
+        cls = eval_term(cls)
+        if root is None:
+            root = os.environ.get('DBXROOT')
         scopeanchorpath = cls._scopeanchorpath(root)
         fs, _ = fsspec.url_to_fs(scopeanchorpath)
         if not fs.exists(scopeanchorpath):
@@ -749,6 +798,9 @@ class Datablock:
 
     @staticmethod
     def Journal(cls, root):
+        cls = eval_term(cls)
+        if root is None:
+            root = os.environ.get('DBXROOT')
         journaldirpath = cls._journalanchorpath(root)
         fs, _ = fsspec.url_to_fs(journaldirpath)
         files = list(fs.ls(journaldirpath))
@@ -850,7 +902,7 @@ class Datablock:
         
         hashpath = self.hashpath()
         if topic is not None:
-            assert topic in self.FILES, f"Topic {repr(topic)} not in {self.FILES}"
+            assert topic in self.TOPICFILES, f"Topic {repr(topic)} not in {self.TOPICFILES}"
             dirpath = os.path.join(hashpath, topic)
         else:
             dirpath = hashpath
@@ -871,9 +923,9 @@ class Datablock:
                     v = v.removesuffix('#')
                     scope[k] = v
                 elif is_dataclass(v):
-                    scope[k] = asdict(v)
+                    scope[k] = asdict(v) #TODO: call to a TBD recursive _scope_ on the container?
                 else:
-                    scope[k] = v
+                    scope[k] = repr(v)
             scope['version'] = self.version
             self._scope = scope
         return self._scope
@@ -961,7 +1013,7 @@ def datablock_method(
 ):
     datablock_cls = eval_term(datablock_cls)
     datablock = datablock_cls(root,
-                              spec, 
+                              spec=spec, 
                               anchored=anchored, 
                               hash=hash,
                               tag=tag,
@@ -989,7 +1041,7 @@ class DatabatchBuilder:
 
 class Databatch(Datablock):
     DATABLOCK = None
-    FILE = "summary.csv"
+    TOPICFILE = "summary.csv"
 
     def __init__(
         self,
@@ -1005,7 +1057,7 @@ class Databatch(Datablock):
         builder: DatabatchBuilder = None,
     ):
         super().__init__(root,
-                         spec,
+                         spec=spec,
                          anchored=anchored,
                          hash=hash,
                          verbose=verbose,
@@ -1057,86 +1109,166 @@ class Databatch(Datablock):
 
 
 class MultiprocessProgressTracker:
-	"""Wrapper for a rich.progress tracker that can be shared across processes."""
+    """Wrapper for a rich.progress tracker that can be shared across processes."""
 
-	def __init__(self, tasks):
-		ctx = mp.get_context('spawn')
-		self.mp_values = {
-			task.id: ctx.Value('i', task.completed)
-			for task in tasks
-		}
+    def __init__(self, tasks):
+        ctx = mp.get_context('spawn')
+        self.mp_values = {
+            task.id: ctx.Value('i', task.completed)
+            for task in tasks
+        }
 
-	def advance(self, id, amount):
-		with self.mp_values[id].get_lock():
-			self.mp_values[id].value += amount
+    def advance(self, id, amount):
+        with self.mp_values[id].get_lock():
+            self.mp_values[id].value += amount
 
-	def __getitem__(self, id):
-		return self.mp_values[id].value
+    def __getitem__(self, id):
+        return self.mp_values[id].value
 
 
 class MultiprocessProgress:
-	"""Wrapper for a rich.progress bar that can be shared across processes."""
+    """Wrapper for a rich.progress bar that can be shared across processes."""
 
-	def __init__(self, pb):
-		self.pb = pb
-		self.tracker = MultiprocessProgressTracker(self.pb.tasks)
-		self.should_stop = False
+    def __init__(self, pb):
+        self.pb = pb
+        self.tracker = MultiprocessProgressTracker(self.pb.tasks)
+        self.should_stop = False
 
-	def _update_progress(self):
-		while not self.should_stop:
-			for task in self.pb.tasks:
-				self.pb.update(task.id, completed=self.tracker[task.id])
-			time.sleep(0.1)
+    def _update_progress(self):
+        while not self.should_stop:
+            for task in self.pb.tasks:
+                self.pb.update(task.id, completed=self.tracker[task.id])
+            time.sleep(0.1)
 
-	def __enter__(self):
-		self._thread = threading.Thread(target=self._update_progress)
-		self._thread.start()
-		return self
+    def __enter__(self):
+        self._thread = threading.Thread(target=self._update_progress)
+        self._thread.start()
+        return self
 
-	def __exit__(self, *args):
-		self.should_stop = True
-		self._thread.join()
+    def __exit__(self, *args):
+        self.should_stop = True
+        self._thread.join()
 
 
 def datablock_method_multiprocessing(
-		id,
-		datablock_method_args_kwargs_list,
-		progress_bar=None,
-		progress_task=None,
+        id,
+        datablock_method_args_kwargs_list,
+        progress_bar=None,
+        progress_task=None,
 ):
-		args, kwargs = datablock_method_args_kwargs_list[id]
-		result = datablock_method(*args, **kwargs)
-		if progress_bar is not None and progress_task is not None:
-			progress_bar.advance(progress_task, 1)
-		return result
-	
+        args, kwargs = datablock_method_args_kwargs_list[id]
+        result = datablock_method(*args, **kwargs)
+        if progress_bar is not None and progress_task is not None:
+            progress_bar.advance(progress_task, 1)
+        return result
+    
 
 class TorchMultiprocessingDatabatchBuilder(DatabatchBuilder):
-	def __init__(self, *, num_gpus: int = 1):
-		self.num_gpus = num_gpus
-	
-	def __call__(self, datablock_method_args_kwargs_list):
-		N = len(datablock_method_args_kwargs_list)
-		pb = rich.progress.Progress() 
-		pb.add_task(
-			"Speed: ",
-			progress_type="speed",
-			total=None
-		)
-		slide_task = pb.add_task(
-			f"Building ...",
-			progress_type="slide_progress",
-			total=N,
-		)
-		pb.start()
-		with MultiprocessProgress(pb) as mp_pb:
-			torch.multiprocessing.spawn(
-				datablock_method_multiprocessing,
-				args=(datablock_method_args_kwargs_list,
-					  mp_pb.tracker,
-					  slide_task,
-				),       
-				nprocs=self.num_gpus,
-			)
+    def __init__(self, *, num_gpus: int = 1):
+        self.num_gpus = num_gpus
+    
+    def __call__(self, datablock_method_args_kwargs_list):
+        N = len(datablock_method_args_kwargs_list)
+        pb = rich.progress.Progress() 
+        pb.add_task(
+            "Speed: ",
+            progress_type="speed",
+            total=None
+        )
+        slide_task = pb.add_task(
+            f"Building ...",
+            progress_type="slide_progress",
+            total=N,
+        )
+        pb.start()
+        with MultiprocessProgress(pb) as mp_pb:
+            torch.multiprocessing.spawn(
+                datablock_method_multiprocessing,
+                args=(datablock_method_args_kwargs_list,
+                      mp_pb.tracker,
+                      slide_task,
+                ),       
+                nprocs=self.num_gpus,
+            )
+
+
+class MultithreadingDatashardBuilder:
+    def __init__(self, *, devices: list[str] = 'cuda', log: Logger = Logger()):
+        if isinstance(devices, str):
+            devices = [devices]
+        self.devices = devices
+        self.log = log
+
+    def build_shards(self, shards: Sequence[Datashard], *ctx_args, **ctx_kwargs):
+        if len(shards) > 0:
+            result_queue = queue.Queue()
+            done_queue = queue.Queue()
+            abort_event = threading.Event()
+            progress_bar = tqdm.tqdm(total=len(shards))
+            shard_lists = np.array_split(shards, len(self.devices))
+            shard_offsets = np.cumsum([0] + [len(shard_list) for shard_list in shard_lists])
+            threads = [
+                threading.Thread(target=self.__build_shards__, args=(shard_list, ctx_args, ctx_kwargs, shard_offset, device, result_queue, done_queue, abort_event, progress_bar))
+                for shard_list, shard_offset, device in zip(shard_lists, shard_offsets, self.devices)
+            ]
+            done_idxs = []
+            for thread in threads:
+                thread.start()
+            while len(done_idxs) < len(shards):
+                success, idx, payload = result_queue.get()
+                if success:
+                    done_idxs.append(idx)
+                    e = None
+                else:
+                    e = payload
+                    self.log.info(f"Received error from shard with index {idx}: {shards[idx]}. Abandoning result_queue polling.")
+                    break
+            self.log.debug(f"Production loop done, feeding done_queue")
+            for _ in range(len(self.devices)):
+                done_queue.put(None)
+            self.log.debug(f"Joining threads")
+            for thread in threads:
+                thread.join()
+            if e is not None:
+                self.log.verbose("Raising exception")
+                raise e
+            self.log.debug("Threads successfully joined")
+        return shards
+    
+    def __build_shards__(self, shards: Sequence[Datashard], ctx_args, ctx_kwargs, offset: int, device: str, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
+        self.log.debug(f"Building {len(shards)} feature shards on device: {device}")
+        device_ctx_args, device_ctx_kwargs = self.__args_kwargs_to_device__(ctx_args, ctx_kwargs, device)
+        for i, shard in enumerate(shards):
+            exception = None
+            try:
+                if abort_event.is_set():
+                    break
+                shard.to(device).build(*device_ctx_args, **device_ctx_kwargs).to('cpu')
+            except Exception as e:
+                exception = e
+                self.log.info(f"ERROR building feature shard {shard} on device: {device}")
+            if exception is not None:
+                result_queue.put((False, offset+i, exception))
+                break
+            result_queue.put((True, offset+i, None))
+            progress_bar.update(1)
+        del device_ctx_args, device_ctx_kwargs
+        gc.collect()
+        if exception is None:
+            self.log.debug(f"Done building {len(shards)} feature shards on device: {device}")
+        else:
+            self.log.debug(f"Abandoning building {len(shards)} feature shards on device: {device} due to an exception")
+        self.log.debug(f"Waiting on the done_queue on device: {device}")
+        while True:
+            item = done_queue.get()
+            if item is None:
+                self.log.debug(f"Done message received on the done_queue on device: {device}")
+                break
+
+    def __args_kwargs_to_device__(self, args, kwargs, device):
+        device_args = [arg.to(device) if hasattr(arg, 'to') else arg for arg in args]
+        device_kwargs = {k: v.to(device) if hasattr(v, 'to') else v for k, v in kwargs.items()}
+        return device_args, device_kwargs
+    
 
 

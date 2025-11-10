@@ -14,17 +14,14 @@ import pickle
 import queue
 import sys
 import threading
-import time
 import traceback as tb
-import typing
-from typing import Union, Optional, Sequence, Callable
+from typing import Union, Optional, Sequence
 import uuid
 import yaml
 
 import git
 
 import tqdm
-import rich
 
 import numpy as np
 
@@ -33,10 +30,20 @@ import fsspec
 from scipy.stats import qmc
 
 import pandas as pd
-import pyarrow.parquet as pq
 import torch
 import torch.multiprocessing as mp
 
+
+def journal(cls, root=None):
+    return Datablock.Journal(eval_term(cls), root)
+
+
+def scopes(cls, root=None):
+    return Datablock.Scopes(eval_term(cls), root)
+
+
+def kwargs(cls, root=None):
+    return Datablock.Kwargs(eval_term(cls), root)
 
 
 class Logger:
@@ -55,13 +62,24 @@ class Logger:
         datetime: bool = True,
         stack_depth: int = 2,
     ):
-        self._warning = eval(os.environ.get('DBXWARNING', str(warning)))
-        self._info = eval(os.environ.get('DBXINFO', str(info)))
-        self._verbose = eval(os.environ.get('DBXVERBOSE', str(verbose)))
-        self._select = eval(os.environ.get('DBXSELECT', str(select)))
-        self._debug = eval(os.environ.get('DBXDEBUG', str(debug)))
-        self._detailed = eval(os.environ.get('DBXDETAILED', str(detailed)))
-        self.allowed = []
+        self._warning = eval(os.environ.get('DBXLOGWARNING', str(warning)))
+        self._info = eval(os.environ.get('DBXLOGINFO', str(info)))
+        self._verbose = eval(os.environ.get('DBXLOGVERBOSE', str(verbose)))
+        self._select = eval(os.environ.get('DBXLOGSELECT', str(select)))
+        self._debug = eval(os.environ.get('DBXLOGDEBUG', str(debug)))
+        self._detailed = eval(os.environ.get('DBXLOGDETAILED', str(detailed)))
+        '''
+        #DEBUG
+        print(f"DBXLOGWARNING: {os.environ.get('DBXLOGWARNING')}, "
+              f"DBXLOGINFO: {os.environ.get('DBXLOGINFO')}, "
+              f"DBXLOGVERBOSE: {os.environ.get('DBXLOGVERBOSE')}, "
+              f"DBXLOGSELECT: {os.environ.get('DBXLOGSELECT')}, "
+              f"DBXLOGDEBUG: {os.environ.get('DBXLOGDEBUG')}, "
+              f"DBXLOGDETAILED: {os.environ.get('DBXLOGDETAILED')}"
+        )
+        print(f"{self._warning=}, {self._info=}, {self._verbose=}, {self._select=}, {self._debug=}, {self._detailed=}")
+        '''
+        self.allowed = ["ERROR"]
         if self._warning:
             self.allowed.append("WARNING")
         if self._info:
@@ -90,6 +108,9 @@ class Logger:
             dt = f"{datetime.datetime.now().isoformat()}: " if self.datetime else ""
             print(f"{prefix}: {dt}{name}: {msg}")
 
+    def error(self, msg):
+        self._print("ERROR", msg)
+
     def warning(self, msg):
         self._print("WARNING", msg)
 
@@ -112,16 +133,23 @@ class Logger:
         pass
 
 
-def journal(cls, root=None):
-    return Datablock.Journal(cls, root)
+class JournalEntry(pd.Series):
+    def __init__(self, series: pd.Series):
+        super().__init__(series)
 
+    def _read(self, thing):
+        if hasattr(self, thing) and getattr(self, thing) is not None:
+            result = read_yaml(getattr(self, thing))
+        else:
+            result = None
+        return result
+    
+    def read_scope(self):
+        return self._read('kwargs')
+    
+    def read_kwargs(self):
+        return self._read('scope')
 
-def scopes(cls, root=None):
-    return Datablock.Scopes(cls, root)
-
-
-def kwargs(cls, root=None):
-    return Datablock.Kwargs(cls, root)
 
 
 def gitrevision(repopath, *, log=Logger()):
@@ -366,26 +394,7 @@ def make_halton_sampling_kwargs_sequence(N, range_kwargs, *, seed=123, precision
     return kwargs_list
 
 
-class Databag:
-    label = None
-
-
-class Datashard:
-    def __init__(self):
-        self.device = 'cpu'
-
-    def build(self):
-          pass
-     
-    def __str__(self):
-        return repr(self)
-    
-    def to(self, device):
-        self.device = device
-        return self
-
-
-class Datablock(Datashard):
+class Datablock:
     """
     ROOT = 'protocol://path/to/root'
     TOPICFILES = {'topic', 'file.csv'} | TOPICFILE = 'file.csv'
@@ -535,6 +544,10 @@ class Datablock(Datashard):
     
     def replace(self, **kwargs):
         return self.set(**kwargs)
+    
+    def to(self, device):
+        self.device = device
+        return self
 
     def __post_init__(self):
         ...
@@ -667,6 +680,9 @@ class Datablock(Datashard):
 
     def has_topics(self):
         return hasattr(self, "TOPICFILES")
+    
+    def has_topic(self):
+        return hasattr(self, "TOPICFILE")
 
     def build(self, *args, **kwargs):
         if self.capture_build_output:
@@ -715,6 +731,14 @@ class Datablock(Datashard):
             self.leave_breadcrumbs_at_path(self.path())
         return self
 
+    def build_tree(self, *args, **kwargs):
+        for s in self.spec.keys():
+            c = getattr(self.cfg, s)
+            if isinstance(c, Datablock):
+                self.log.verbose(f"------------------------ Building subtree at {s} --------------------------------")
+                c.build_tree(*args, **kwargs)   
+        return self.build(*args, **kwargs)
+    
     def read(self, topic=None):
         if self.has_topics():
             if topic not in self.TOPICFILES:
@@ -761,6 +785,32 @@ class Datablock(Datashard):
             clear_dirpath(self.dirpath())
         self._write_journal_entry(event="UNSAFE_clear")
         return self
+    
+    def UNSAFE_copy_from(self, anchorpath, hash: str = None, *, overwrite: bool = False):
+        if not overwrite:
+            assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
+        fs, _ = fsspec.url_to_fs(anchorpath)
+        if hash is None:
+            hash = self.hash
+        hashpath = os.path.join(anchorpath, hash) 
+        assert fs.isdir(hashpath), f"Nonexistent hashpath {hashpath}"
+        self.log.verbose(f"Copying files from {hashpath}: BEGIN")
+        if self.has_topics():
+            for topic in self.topics():
+                path = self.path(topic)
+                if path is not None:
+                    _path = os.path.join(hashpath, self.TOPICFILES[topic])
+                    self.log.verbose(f"Copying {_path} to {path}")
+                    fsspec.copy(_path, path)
+        elif self.has_topic():
+            path = self.path(topic)
+            if path is not None:
+                    _path = os.path.join(hashpath, self.TOPICFILES[topic])
+                    self.log.verbose(f"Copying {_path} to {path}")
+                    fsspec.copy(_path, path)
+        self.log.verbose(f"Copying files from {hashpath}: END")
+        assert self.valid(), f"Invalid Datablock after copy: {self}"
+
     
     def anchor(self):
         anchor = (
@@ -852,7 +902,7 @@ class Datablock(Datashard):
         return df
 
     @staticmethod
-    def Journal(cls, root=None):
+    def Journal(cls, entry: int = None, *, root=None):
         if root is None:
             root = os.environ.get('DBXROOT')
         journaldirpath = Datablock._journalanchorpath(eval_term(cls), root)
@@ -876,7 +926,11 @@ class Datablock(Datashard):
             df = df.rename(columns={'build_log': 'log'})
         else:
             df = None
-        return df
+        if entry is not None:
+            result = JournalEntry(df.loc[entry])
+        else:
+            result = df
+        return result
 
     def scopes(self):
         return self.Scopes(self.__class__, self.root)
@@ -884,8 +938,8 @@ class Datablock(Datashard):
     def kwargs(self):
         return self.Kwargs(self.__class__, self.root)
 
-    def journal(self):
-        return self.Journal(self.__class__, self.root)
+    def journal(self, entry: int = None):
+        return self.Journal(self.__class__, entry, root=self.root)
 
     @classmethod
     def _loganchorpath(cls, root):
@@ -964,19 +1018,22 @@ class Datablock(Datashard):
             raise ValueError(f"Unknown path kind: {kind}")
         return scopepath
     
-    def _kwargspath(self, kind, *, ensure: bool = True):
+    def _kwargshashpath(self):
         kwargsanchorpath = self._kwargsanchorpath(self.root)
-        kwargsdirpath = os.path.join(
+        return os.path.join(
             kwargsanchorpath,
             self.hash,
         )
+    
+    def _kwargspath(self, kind, *, ensure: bool = True):
+        kwargshashpath = self._kwargshashpath()
         if ensure:
-            fs, _ = fsspec.url_to_fs(kwargsdirpath)
-            fs.makedirs(kwargsdirpath, exist_ok=True)
+            fs, _ = fsspec.url_to_fs(kwargshashpath)
+            fs.makedirs(kwargshashpath, exist_ok=True)
         if kind == 'yaml':
-            kwargspath = os.path.join(kwargsdirpath, f'{self.dt}.yaml')
+            kwargspath = os.path.join(kwargshashpath, f'{self.dt}.yaml')
         elif kind == 'parquet':
-            kwargspath = os.path.join(kwargsdirpath, f'{self.dt}.parquet')
+            kwargspath = os.path.join(kwargshashpath, f'{self.dt}.parquet')
         else:
             raise ValueError(f"Unknown path kind: {kind}")
         return kwargspath
@@ -1096,13 +1153,14 @@ class Datablock(Datashard):
         kwargsdf = pd.DataFrame.from_records([{k: repr(v) for k, v in self._kwargs_.items()}])
         kwargsdf.to_parquet(pkwargspath)
         assert pfs.exists(pkwargspath), f"kwargspath {pkwargspath} does not exist after writing"
-
+    
     def _write_journal_entry(self, event:str):
         hash = self.hash
         dt = self.dt
         key = f"{hash}-{dt}"
 
         kwargs_path = self._kwargspath('yaml')
+        scope_path = self._scopepath('yaml')
         #
         logpath = self._logpath()
         if logpath is not None:
@@ -1120,10 +1178,12 @@ class Datablock(Datashard):
                                          'log': logpath if has_log else None,
                                          'event': event,
                                          'kwargs': kwargs_path,
+                                         'scope': scope_path,
         }])
         df.to_parquet(journal_path)
         
-        self.log.debug(f"Wrote JOURNAL entry for event {repr(event)} with tag {repr(self.tag)} "
+        tagstr = "with tag {repr(self.tag)} " if self.tag is not None else ""
+        self.log.debug(f"WROTE JOURNAL entry for event {repr(event)} {tagstr}"
                          f"to journal_path {journal_path} and kwargs_path {kwargs_path}")
     
     def _spec_to_config(self, spec):
@@ -1137,6 +1197,7 @@ class Datablock(Datashard):
                 getter = eval_term(term)
             replacements[field.name] = getter
         config = replace(config, **replacements)
+        self.log.detailed(f"Built {config=} from {spec=}")
         return config
 
     def leave_breadcrumbs_at_path(self, path):
@@ -1145,44 +1206,56 @@ class Datablock(Datashard):
             f.write("")
 
 
-def quote(obj, tag='$'):
-    if isinstance(obj, str) and (obj.startswith("@") or obj.startswith("#") or obj.startswith("$")):
-        quote = obj
+def quote(obj, *args, tag="$", **kwargs):
+    log = Logger()
+    if not callable(obj):
+        assert len(args) == 0, f"Nonempty args for a noncallable obj: {args}"
+        assert len(kwargs) == 0, f"Nonempty kwargs for a noncallable obj: {kwargs}"
+        if isinstance(obj, str) and (obj.startswith("@") or obj.startswith("#") or obj.startswith("$")):
+            quote = obj
+        else:
+            quote = f"{tag}{repr(obj)}"
+        log.detailed(f"Quoted {obj=} to {repr(quote)}")
     else:
-        quote = f"{tag}{repr(obj)}"
+        func = obj
+        argstrs = [repr(arg) for arg in args]
+        kwargstrs = [f"{k}={repr(v)}" for k, v in kwargs.items()]
+        argkwargstr = ','.join(argstrs+kwargstrs)
+        quote = f"{tag}{func.__module__}.{func.__qualname__}({argkwargstr})"
+        log.detailed(f"Quoted {func=}, {args=}, {kwargs=} to {repr(quote)}")
     return quote
 
 
-class TorchMultithreadingDatashardBatchBuilder:
+class TorchMultithreadingDatablocksBuilder:
     def __init__(self, *, devices: list[str] = 'cuda', log: Logger = Logger()):
         if isinstance(devices, str):
             devices = [devices]
         self.devices = devices
         self.log = log
 
-    def build_shards(self, shards: Sequence[Datashard], *ctx_args, **ctx_kwargs):
-        if len(shards) > 0:
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+        if len(blocks) > 0:
             result_queue = queue.Queue()
             done_queue = queue.Queue()
             abort_event = threading.Event()
-            progress_bar = tqdm.tqdm(total=len(shards))
-            shard_lists = np.array_split(shards, len(self.devices))
-            shard_offsets = np.cumsum([0] + [len(shard_list) for shard_list in shard_lists])
+            progress_bar = tqdm.tqdm(total=len(blocks))
+            block_lists = np.array_split(blocks, len(self.devices))
+            block_offsets = np.cumsum([0] + [len(block_list) for block_list in block_lists])
             threads = [
-                threading.Thread(target=self.__build_shards__, args=(shard_list, ctx_args, ctx_kwargs, shard_offset, device, result_queue, done_queue, abort_event, progress_bar))
-                for shard_list, shard_offset, device in zip(shard_lists, shard_offsets, self.devices)
+                threading.Thread(target=self.__build_blocks__, args=(block_list, ctx_args, ctx_kwargs, block_offset, device, result_queue, done_queue, abort_event, progress_bar))
+                for block_list, block_offset, device in zip(block_lists, block_offsets, self.devices)
             ]
             done_idxs = []
             for thread in threads:
                 thread.start()
-            while len(done_idxs) < len(shards):
+            while len(done_idxs) < len(blocks):
                 success, idx, payload = result_queue.get()
                 if success:
                     done_idxs.append(idx)
                     e = None
                 else:
                     e = payload
-                    self.log.info(f"Received error from shard with index {idx}: {shards[idx]}. Abandoning result_queue polling.")
+                    self.log.info(f"Received error from block with index {idx}: {blocks[idx]}. Abandoning result_queue polling.")
                     break
             self.log.debug(f"Production loop done, feeding done_queue")
             for _ in range(len(self.devices)):
@@ -1194,20 +1267,20 @@ class TorchMultithreadingDatashardBatchBuilder:
                 self.log.verbose("Raising exception")
                 raise e
             self.log.debug("Threads successfully joined")
-        return shards
+        return blocks
     
-    def __build_shards__(self, shards: Sequence[Datashard], ctx_args, ctx_kwargs, offset: int, device: str, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
-        self.log.debug(f"Building {len(shards)} feature shards on device: {device}")
+    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, device: str, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
+        self.log.debug(f"Building {len(blocks)} feature blocks on device: {device}")
         device_ctx_args, device_ctx_kwargs = self.__args_kwargs_to_device__(ctx_args, ctx_kwargs, device)
-        for i, shard in enumerate(shards):
+        for i, block in enumerate(blocks):
             exception = None
             try:
                 if abort_event.is_set():
                     break
-                shard.to(device).build(*device_ctx_args, **device_ctx_kwargs).to('cpu')
+                block.to(device).build(*device_ctx_args, **device_ctx_kwargs).to('cpu')
             except Exception as e:
                 exception = e
-                self.log.info(f"ERROR building feature shard {shard} on device: {device}")
+                self.log.info(f"ERROR building feature block {block} on device: {device}")
             if exception is not None:
                 result_queue.put((False, offset+i, exception))
                 break
@@ -1216,9 +1289,9 @@ class TorchMultithreadingDatashardBatchBuilder:
         del device_ctx_args, device_ctx_kwargs
         gc.collect()
         if exception is None:
-            self.log.debug(f"Done building {len(shards)} feature shards on device: {device}")
+            self.log.debug(f"Done building {len(blocks)} feature blocks on device: {device}")
         else:
-            self.log.debug(f"Abandoning building {len(shards)} feature shards on device: {device} due to an exception")
+            self.log.debug(f"Abandoning building {len(blocks)} feature blocks on device: {device} due to an exception")
         self.log.debug(f"Waiting on the done_queue on device: {device}")
         while True:
             item = done_queue.get()
@@ -1232,35 +1305,35 @@ class TorchMultithreadingDatashardBatchBuilder:
         return device_args, device_kwargs
     
 
-class TorchMultiprocessingDatashardBatchBuilder(TorchMultithreadingDatashardBatchBuilder):
+class TorchMultiprocessingDatablocksBuilder(TorchMultithreadingDatablocksBuilder):
     def __init__(self, *, devices: list[str] = None, log: Logger = Logger()):
         if isinstance(devices, str):
             devices = [devices]
         self.devices = devices
         self.log = log
 
-    def build_shards(self, shards: Sequence[Datashard], *ctx_args, **ctx_kwargs):
-        if len(shards) > 0:
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+        if len(blocks) > 0:
             result_queue = mp.Queue()
             done_queue = mp.Queue()
             abort_event = mp.Event()
-            progress_bar = tqdm.tqdm(total=len(shards))
-            shard_lists = np.array_split(shards, len(self.devices))
-            shard_offsets = np.cumsum([0] + [len(shard_list) for shard_list in shard_lists])
+            progress_bar = tqdm.tqdm(total=len(blocks))
+            block_lists = np.array_split(blocks, len(self.devices))
+            block_offsets = np.cumsum([0] + [len(block_list) for block_list in block_lists])
             processes = [
-                mp.Process(target=self.__build_shards__, args=(shard_list, ctx_args, ctx_kwargs, shard_offset, f"{i}", device, result_queue, done_queue, abort_event))
-                for i, (shard_list, shard_offset, device) in enumerate(zip(shard_lists, shard_offsets, self.devices))
+                mp.Process(target=self.__build_blocks__, args=(block_list, ctx_args, ctx_kwargs, block_offset, f"{i}", device, result_queue, done_queue, abort_event))
+                for i, (block_list, block_offset, device) in enumerate(zip(block_lists, block_offsets, self.devices))
             ]
-            self.log.verbose(f"Building {len(shards)} feature shards with {len(self.devices)} processes")
+            self.log.verbose(f"Building {len(blocks)} feature blocks with {len(self.devices)} processes")
             done_idxs = []
             exc = None
             try:
                 for process in processes:
                     process.start()
-                for shard in shards:
-                    del shard
+                for block in blocks:
+                    del block
                 gc.collect()
-                while len(done_idxs) < len(shards):
+                while len(done_idxs) < len(blocks):
                     pexc, ptbstr = None, None
                     success, proc, idx, payload = result_queue.get()
                     if success:
@@ -1268,7 +1341,7 @@ class TorchMultiprocessingDatashardBatchBuilder(TorchMultithreadingDatashardBatc
                         progress_bar.update(1)
                     else:
                         pexc, ptbstr = payload
-                        self.log.info(f"Received exception from process {proc}, shard with index {idx}: {shards[idx]}")
+                        self.log.info(f"Received exception from process {proc}, block with index {idx}: {blocks[idx]}")
                         self.log.info(f"Exception: {pexc}")
                         self.log.info(f"Traceback:\n{ptbstr}")
                         self.log.info(f"Abandoning result_queue polling.")
@@ -1289,31 +1362,31 @@ class TorchMultiprocessingDatashardBatchBuilder(TorchMultithreadingDatashardBatc
                     process.join()
                 self.log.debug("Processes successfully joined")
             if pexc is not None:
-                self.log.verbose(f"Reraising exception from process {proc}, shard {idx}: {shards[idx]}")
+                self.log.verbose(f"Reraising exception from process {proc}, block {idx}: {blocks[idx]}")
                 raise(pexc)
             if exc is not None:
                 self.log.verbose("Reraising production loop exception")
                 raise(exc)
-        return shards
+        return blocks
     
-    def __build_shards__(self, shards: Sequence[Datashard], ctx_args, ctx_kwargs, offset: int, process: str, device: str, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
-        self.log.debug(f"Building {len(shards)} feature shards on process: {process}, device: {device}")
+    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, process: str, device: str, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
+        self.log.debug(f"Building {len(blocks)} feature blocks on process: {process}, device: {device}")
         if device is not None:
             device_ctx_args, device_ctx_kwargs = self.__args_kwargs_to_device__(ctx_args, ctx_kwargs, device)
         else:
             device_ctx_args, device_ctx_kwargs = ctx_args, ctx_kwargs
         exception = None
-        for i, shard in enumerate(shards):
+        for i, block in enumerate(blocks):
             exception = None
             try:
                 if abort_event.is_set():
                     break
-                shard.to(device).build(*device_ctx_args, **device_ctx_kwargs).to('cpu')
+                block.to(device).build(*device_ctx_args, **device_ctx_kwargs).to('cpu')
             except Exception as e:
                 exception = e
-                self.log.info(f"ERROR building feature shard {shard} on process: {process}, device: {device}")
+                self.log.info(f"ERROR building feature block {block} on process: {process}, device: {device}")
             finally:
-                del shard
+                del block
                 gc.collect()
             if exception is not None:
                 tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
@@ -1323,9 +1396,9 @@ class TorchMultiprocessingDatashardBatchBuilder(TorchMultithreadingDatashardBatc
         del device_ctx_args, device_ctx_kwargs
         gc.collect()
         if exception is None:
-            self.log.debug(f"Done building {len(shards)} feature shards on process: {process}, device: {device}")
+            self.log.debug(f"Done building {len(blocks)} feature blocks on process: {process}, device: {device}")
         else:
-            self.log.debug(f"Abandoning building {len(shards)} feature shards on process: {process}, device: {device} due to an exception")
+            self.log.debug(f"Abandoning building {len(blocks)} feature blocks on process: {process}, device: {device} due to an exception")
         self.log.debug(f"Waiting on the done_queue on process: {process}, device: {device}")
         while True:
             item = done_queue.get()

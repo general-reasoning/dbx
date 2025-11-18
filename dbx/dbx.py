@@ -800,7 +800,7 @@ class Datablock:
     ):
         if topic is None:
             dirpath = self.dirpath()
-            topicfiles = self.TOPICFILE
+            topicfiles = self.TOPICFILE if hasattr(self, 'TOPICFILE') else None
         else:
             dirpath = self.dirpath(topic)
             topicfiles = self.TOPICFILES[topic]
@@ -1273,6 +1273,9 @@ class Datablock:
     ##REFACTOR: thru _write_journal_dict: END
 
     def _write_journal_dict(self, name, data):
+        data = copy.deep(data)
+        data['hash'] = self.hash
+        data['datetime'] = self.dt
         #
         ypath = self._xpath(name, 'yaml')
         yfs, _ = fsspec.url_to_fs(ypath)
@@ -1364,6 +1367,34 @@ class Datablock:
                 df = pd.DataFrame(index=hashes)
             df = df.reset_index().rename(columns={'index': 'hash'})
         return df
+    
+    @staticmethod
+    def Specs(cls, root):
+        cls = eval_term(cls)
+        if root is None:
+            root = os.environ.get('DBXROOT')
+        specanchorpath = cls._xanchorpath(root, 'spec')
+        fs, _ = fsspec.url_to_fs(specanchorpath)
+        if not fs.exists(specanchorpath):
+            df = None
+        else:
+            paths = list(fs.ls(specanchorpath))
+            specfiles_ = list(itertools.chain.from_iterable(
+                fs.ls(path) for path in paths
+            ))
+            specfiles = [f for f in specfiles_ if fs.exists(f) and f.endswith('.parquet')]
+            hashes = [os.path.dirname(f).removeprefix(specanchorpath).removeprefix('/') for f in specfiles]
+            if len(specfiles) > 0:
+                dfs = []
+                for specfile in specfiles:
+                    _df = pd.read_parquet(specfile)
+                    dfs.append(_df)
+                df = pd.concat(dfs)
+                df.index = hashes
+            else:
+                df = pd.DataFrame(index=hashes)
+            df = df.reset_index().rename(columns={'index': 'hash'})
+        return df
 
     @staticmethod
     def Kwargs(cls, root):
@@ -1426,6 +1457,9 @@ class Datablock:
 
     def scopes(self):
         return self.Scopes(self.__class__, self.root)
+    
+    def specs(self):
+        return self.Specs(self.__class__, self.root)
     
     def kwargs(self):
         return self.Kwargs(self.__class__, self.root)

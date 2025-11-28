@@ -93,16 +93,30 @@ class Logger:
         return getattr(self, "_"+key)
 
     def _print(self, prefix, msg):
-        if self.name is None:
-            stack = inspect.stack()
-            frame = stack[self.stack_depth-1]
-            func = frame.function
-            name = f"{func}"
+        """
+        #TODO: figure out why the next line causes things to hang sometimes
+        stack = inspect.stack() 
+        if self.stack_depth is None or self.stack_depth >= len(stack):
+            func = None
         else:
-            name = self.name
+            frame = stack[self.stack_depth]
+            func = frame.function
+        """
+        func = None
+        
+        if self.name is None:
+            if func is None:
+                tag = ""
+            else:
+                tag = f"{func}: "
+        else:
+            if func is None:
+                tag = f"{self.name}: "
+            else:
+                tag = f"{self.name}: {func}: "
         if prefix in self.allowed:
             dt = f"{datetime.datetime.now().isoformat()}: " if self.datetime else ""
-            print(f"{prefix}: {dt}{name}: {msg}")
+            print(f"{prefix}: {dt}{tag}{msg}")
 
     def error(self, msg):
         self._print("ERROR", msg)
@@ -516,11 +530,12 @@ class Datablock:
         processed.append('tag')
         #
         self.log = Logger(
-            name=f"{self.anchor()}",
+            f"{self.anchor()}",
             debug=kwargs.get('debug'),
             verbose=kwargs.get('verbose'),
             detailed=kwargs.get('detailed'),
             info=kwargs.get('info'),
+            stack_depth=None, #TODO: restore stack_depth default
         )
         self.info = self.log.get('info')
         self.verbose = self.log.get('verbose')
@@ -555,6 +570,7 @@ class Datablock:
             verbose=kwargs.get('verbose'),
             detailed=kwargs.get('detailed'),
             info=kwargs.get('info'),
+            stack_depth=None, #TODO: restore stack_depth default
         )
         self.log.detailed(f"======--------------> spec: {self.spec}")
         self.log.detailed(f"======--------------> _quote_: {self._quote_}")
@@ -564,8 +580,6 @@ class Datablock:
         self.log.detailed(f"======--------------> _hivehandle_: {self._hivehandle_}")
         self.log.detailed(f"======--------------> hash: {self.hash}")
         self.log.detailed(f"======--------------> __repr__(): {self.__repr__()}")
-        
-        
 
     def __getstate__(self):
         return dict(
@@ -1273,7 +1287,7 @@ class Datablock:
     ##REFACTOR: thru _write_journal_dict: END
 
     def _write_journal_dict(self, name, data):
-        data = copy.deep(data)
+        data = copy.deepcopy(data)
         data['hash'] = self.hash
         data['datetime'] = self.dt
         #

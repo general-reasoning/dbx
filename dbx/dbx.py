@@ -158,23 +158,25 @@ class Tee:
 
 
 class JournalEntry(pd.Series):
-    def __init__(self, series: pd.Series):
+    def __init__(self, series: pd.Series, *, log: Logger = Logger(name="JournalEntry")):
         super().__init__(series)
+        self.log = log
 
-    def read(self, *things):
+    def read(self, *things, raw: bool = False):
         def read_thing(thing):
             if hasattr(self, thing) and getattr(self, thing) is not None:
                 path = getattr(self, thing)
                 _, _ext = os.path.splitext(path)
                 ext = _ext[1:]
-                if ext == 'yaml':
-                    result = read_yaml(getattr(self, thing))
-                elif ext == 'txt' or ext == 'log':
+                if raw or ext == 'txt' or ext == 'log':
                     result = read_str(getattr(self, thing))
+                elif ext == 'yaml':
+                    result = read_yaml(getattr(self, thing))
                 else:
                     raise ValueError(f"Uknown journal entry field extention for {thing}: {ext}")
             else:
                 result = None
+            self.log.detailed(f"read: {thing}: >>\n{result}")
             return result
         if len(things) == 0:
             result = None
@@ -188,19 +190,27 @@ class JournalFrame(pd.DataFrame):
     def __init__(self, df: pd.DataFrame):
         super().__init__(df)
 
-    def list(self, thing, *, take: str = 'last', sortby: Optional[str] = None):
+    def list(self, thing, *, take: str = 'last', sortby: Optional[str] = None, raw: bool = False):
         if take == 'last':
             unique_rows = self.groupby('hash').last()
         elif take == 'first':
             unique_rows = self.groupby('hash').first()
-        else:
+        elif take == 'all':
             unique_rows = self.set_index('hash')
+        else:
+            raise ValueError(f"Unknown take value: {take}")
         hashes = []
         entries = []
         for hash, row in unique_rows.iterrows():
-            entries.append(JournalEntry(row).read(thing))
+            entries.append(JournalEntry(row).read(thing, raw=raw))
             hashes.append(hash)
-        thingsframe = pd.DataFrame.from_records(entries)
+        if raw:
+            thingsframe = pd.DataFrame.from_dict({hash: entry for hash, entry in zip(hashes, entries)}, orient='index')
+            thingsframe.columns = [thing]
+            thingsframe.index.name = 'hash'
+            thingsframe = thingsframe.reset_index()
+        else:
+            thingsframe = pd.DataFrame.from_records(entries)
         thingsframe['hash'] = hashes
         if sortby is not None and sortby in thingsframe.columns:
             thingsframe = thingsframe.sort_values(sortby).set_index(sortby).reset_index() # force sortby to be the first column

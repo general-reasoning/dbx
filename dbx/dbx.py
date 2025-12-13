@@ -38,15 +38,15 @@ import torch.multiprocessing as mp
 
 
 def journal(cls, root=None):
-    return Datablock.Journal(eval_term(cls), root)
+    return eval_term(cls).Journal(root)
 
-
+#TODO: DEPRECATE in favor of cls.Journal.list('scopes')
 def scopes(cls, root=None):
-    return Datablock.Scopes(eval_term(cls), root)
+    return eval_term(cls).Scopes(root)
 
-
+#TODO: DEPRECATE in favor of cls.Journal.list('scopes')?
 def kwargs(cls, root=None):
-    return Datablock.Kwargs(eval_term(cls), root)
+    return eval_term(cls).Kwargs(root)
 
 
 class Logger:
@@ -183,6 +183,28 @@ class JournalEntry(pd.Series):
         else:
             result = {thing: read_thing(thing) for thing in things}
         return result
+
+class JournalFrame(pd.DataFrame):
+    def __init__(self, df: pd.DataFrame):
+        super().__init__(df)
+
+    def list(self, thing, *, take: str = 'last', sortby: Optional[str] = None):
+        if take == 'last':
+            unique_rows = self.groupby('hash').last()
+        elif take == 'first':
+            unique_rows = self.groupby('hash').first()
+        else:
+            unique_rows = self.set_index('hash')
+        hashes = []
+        entries = []
+        for hash, row in unique_rows.iterrows():
+            entries.append(JournalEntry(row).read(thing))
+            hashes.append(hash)
+        thingsframe = pd.DataFrame.from_records(entries)
+        thingsframe['hash'] = hashes
+        if sortby is not None and sortby in thingsframe.columns:
+            thingsframe = thingsframe.sort_values(sortby).set_index(sortby).reset_index() # force sortby to be the first column
+        return thingsframe
 
     
 def gitrevision(repopath, *, log=Logger()):
@@ -669,7 +691,7 @@ class Datablock:
             sys.stdout = Tee(stdout, captured_stdout_stream)
         try:
             if not self.valid():
-                self.pre_build(*args, **kwargs).__build__(*args, **kwargs).post_build(*args, **kwargs)
+                self.__pre_build__(*args, **kwargs).__build__(*args, **kwargs).__post_build__(*args, **kwargs)
             else:
                 self.log.verbose(f"Skipping existing datablock: {self.hashpath()}")
         finally:
@@ -678,7 +700,7 @@ class Datablock:
                 captured_stdout_stream.close()
         return self
 
-    def pre_build(self, *args, **kwargs):
+    def __pre_build__(self, *args, **kwargs):
         self._write_kwargs()#TODO: REFACTOR thru _write_journal_dict
         self._write_journal_dict('spec', self.spec)
         self._write_scope() #TODO: REFACTOR thru _write_journal_dict
@@ -688,20 +710,12 @@ class Datablock:
         self._write_str('repr', self.__repr__())
 
         self._write_journal_entry(event="build:start",)
-        self.__pre_build__()
         return self
 
-    def post_build(self, *args, **kwargs):
-        self.__post_build__()
+    def __post_build__(self, *args, **kwargs):
         self._write_journal_entry(event="build:end",)
         return self
     
-    def __pre_build__(self, *args, **kwargs):
-        ...
-
-    def __post_build__(self, *args, **kwargs):
-        ...
-
     def __build__(self, *args, **kwargs):
         return self
 
@@ -1363,7 +1377,7 @@ class Datablock:
         self.log.debug(f"WROTE JOURNAL entry for event {repr(event)} {tagstr}"
                          f"to journal_path {journal_path} and kwargs_path {kwargs_path}")
 
-    @staticmethod
+    @classmethod
     def Scopes(cls, root):
         cls = eval_term(cls)
         if root is None:
@@ -1447,7 +1461,7 @@ class Datablock:
             df = df.reset_index().rename(columns={'index': 'hash'})
         return df
 
-    @staticmethod
+    @classmethod
     def Journal(cls, entry: int = None, *, root=None):
         if root is None:
             root = os.environ.get('DBXROOT')
@@ -1475,7 +1489,7 @@ class Datablock:
         if entry is not None:
             result = JournalEntry(df.loc[entry])
         else:
-            result = df
+            result = JournalFrame(df)
         return result
 
     def scopes(self):

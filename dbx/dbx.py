@@ -57,35 +57,35 @@ class Logger:
         datetime: bool = True,
         stack_depth: int = 2,
     ):
-        self._warning = eval(os.environ.get('DBXLOGWARNING', str(warning)))
-        self._info = eval(os.environ.get('DBXLOGINFO', str(info)))
-        self._verbose = eval(os.environ.get('DBXLOGVERBOSE', str(verbose)))
-        self._selected = eval(os.environ.get('DBXLOGSELECTED', str(selected)))
-        self._debug = eval(os.environ.get('DBXLOGDEBUG', str(debug)))
-        self._detailed = eval(os.environ.get('DBXLOGDETAILED', str(detailed)))
+        self._warning_ = eval(os.environ.get('DBXLOGWARNING', str(warning)))
+        self._info_ = eval(os.environ.get('DBXLOGINFO', str(info)))
+        self._verbose_ = eval(os.environ.get('DBXLOGVERBOSE', str(verbose)))
+        self._selected_ = eval(os.environ.get('DBXLOGSELECTED', str(selected)))
+        self._debug_ = eval(os.environ.get('DBXLOGDEBUG', str(debug)))
+        self._detailed_ = eval(os.environ.get('DBXLOGDETAILED', str(detailed)))
         
         self.allowed = ["ERROR"]
-        if self._warning:
+        if self._warning_:
             self.allowed.append("WARNING")
-        if self._info:
+        if self._info_:
             self.allowed.append("INFO")
-        if self._debug:
+        if self._debug_:
             self.allowed.append("DEBUG")
-        if self._verbose:
+        if self._verbose_:
             self.allowed.append("VERBOSE")
-        if self._selected:
+        if self._selected_:
             self.allowed.append("SELECTED")
-        if self._detailed:
+        if self._detailed_:
             self.allowed.append("DETAILED")
         self.stack_depth = stack_depth
         self.name = name
         self.datetime = datetime
 
     def get(self, key):
-        return getattr(self, "_"+key)
+        return getattr(self, f"_{key}_")
     
     def ist(self, key):
-        return getattr(self, "_"+key)
+        return getattr(self, f"_{key}_")
 
 
     def _print(self, prefix, msg):
@@ -187,11 +187,13 @@ class JournalEntry(pd.Series):
                 result = result.replace('\\', '')
         return result
     
-    def exec(self, thing, debug: bool = False):
+    def eval(self, thing, *, debug: bool = False, context={}, revision=None):
+        _eval_ = globals()['eval']
+        exc = None
         thingstr = self.read(thing, raw=True)
         r = None
         try:
-            r = exec(thingstr)
+            r = _eval_(thingstr, globals(), context)
         except Exception as e:
             if debug:
                 exc = e
@@ -508,13 +510,11 @@ class Datablock:
         hash: str
         version: str
         revision: str
-        alpha: str
-        beta: str
-        gamma: str
-        repr: str
-        hashstr: str
         kwargs: dict
         spec: dict
+        quote: str
+        repr: str
+        hashhandle: str
 
         def deslash(self, attr):
             a = getattr(self, attr)
@@ -543,8 +543,8 @@ class Datablock:
 
     def __init__(
         self,
-        root: str = None,
         *,
+        root: str = None,
         spec: Optional[Union[str, dict]] = None,
         anchored: bool = True,
         hash: Optional[str] = None,
@@ -556,6 +556,7 @@ class Datablock:
         capture_output: bool = False,
         revision: str = None,
         gitrepo: str  = None,
+        device: str = 'cpu',
         **kwargs,
     ):
         self.__setstate__(dict(
@@ -571,33 +572,42 @@ class Datablock:
             capture_output=capture_output,
             revision=revision,
             gitrepo=gitrepo,
+            device=device,
             **kwargs,
         ))
         
     def __setstate__(
         self,
-        kwargs,
+        *,
+        root: str = None,
+        spec: Optional[Union[str, dict]] = None,
+        anchored: bool = True,
+        hash: Optional[str] = None,
+        tag: Optional[str] = None,
+        info: bool = True,
+        verbose: bool = False,
+        debug: bool = False,
+        detailed: bool = False,
+        capture_output: bool = False,
+        revision: str = None,
+        gitrepo: str  = None,
+        device: str = 'cpu',
+        **kwargs,
     ):
-        processed = []
-        self.device = kwargs.get('device', 'cpu')
-        processed.append('device')
-        self.root = kwargs.get('root')
-        self._autoroot = False
-        if self.root is None:
+        """NB: signature must match __init__'s"""
+        self._root_ = root
+        if self._root_ is None:
             self.root = os.environ.get('DBXROOT')
-            self._autoroot = True
         if self.root is None:
             raise ValueError(f"None root for {self.__class__.__name__}: maybe set DBXROOT?")
-        processed.append('root')
-        self.spec = kwargs.get('spec')
-        processed.append('spec')
-        self.anchored = kwargs.get('anchored')
-        processed.append('anchored')
-        self._hash = kwargs.get('hash')
-        processed.append('hash')
-        self.tag = kwargs.get('tag')
-        processed.append('tag')
-        #
+        self._spec_ = spec
+        if self._spec_ is None:
+            self.spec = asdict(self.CONFIG())
+        else:
+            self.spec = self._spec_
+        self.anchored = anchored
+        self._hash_ = hash
+        self.tag = tag
         self.log = Logger(
             f"{self.anchor}",
             debug=kwargs.get('debug'),
@@ -606,64 +616,41 @@ class Datablock:
             info=kwargs.get('info'),
             stack_depth=None, #TODO: restore stack_depth default
         )
-        self.info = self.log.get('info')
-        self.verbose = self.log.get('verbose')
-        self.debug = self.log.get('debug')
-        self.detailed = self.log.get('detailed')
+        self._revision_ = revision
+        self.gitrepo = os.environ.get('DBXREPO', gitrepo)
+        self.capture_output = bool(capture_output)
+        self.device = device  
         #
-        self._revision_ = kwargs.get('revision')
-        self.gitrepo = os.environ.get('DBXREPO', kwargs.get('gitrepo'))
-        self.capture_output = bool(kwargs.get('capture_output'))
-        processed.extend(['verbose', 'debug', 'gitrepo', 'capture_output'])  
-        #
-        if isinstance(self.spec, str):
-            self.spec = read_json(self.spec, debug=self.debug)
-        if self.spec is None:
-            self.spec = asdict(self.CONFIG())
         self.cfg = self._spec_to_cfg(self.spec)
         self.config = self.cfg # alias
         #
-        self._spec = None
-        self._scope = None
-        self._autohash = self._hash is None
-
         for k, v in kwargs.items():
-            if k not in processed:
-                setattr(self, k, v)
-        self.parameters = list(kwargs.keys())
+            setattr(self, k, v)
+        #
+        self.parameters = [
+            'root', 'spec', 'anchored', 'hash', 'tag', 'info', 'verbose', 'debug',
+            'detailed', 'capture_output', 'revision', 'gitrepo', 'device'
+        ] + list(kwargs.keys())
+        #
         self.dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         self.build_dt = None
         self.__post_init__()
         # redefined the logger using self.hash, which is generally invalid before __post_init__ (e.g., TOPICFILES may be undefined)
         self.log = Logger(
             name=f"{self.anchor}/{self.hash}",
-            debug=kwargs.get('debug'),
-            verbose=kwargs.get('verbose'),
-            detailed=kwargs.get('detailed'),
-            info=kwargs.get('info'),
+            debug=debug,
+            verbose=verbose,
+            detailed=detailed,
+            info=info,
             stack_depth=None, #TODO: restore stack_depth default
         )
         self.log.detailed(f"======--------------> bid: {self.bid}")
 
     def __getstate__(self):
-        return dict(
-            device=self.device,
-            root=self.root if not self._autoroot else None,
-            spec=self.spec,
-            anchored=self.anchored,
-            hash=self.hash if not self._autohash else None,
-            tag=self.tag,
-            info=self.info,
-            verbose=self.verbose,
-            debug=self.debug,
-            detailed=self.detailed,
-            capture_output=self.capture_output,
-            revision=self._revision_,
-            gitrepo=self.gitrepo,
-            **{k: getattr(self, k) for k in self.parameters 
-             if k not in ('device', 'root', 'spec', 'anchored', 'hash', 'tag', 'info', 'verbose', 'debug', 'detailed', 'capture_output', '_revision_', 'revision', 'gitrepo')
-            }
-        )
+        return {
+            k: getattr(self, f"_{k}_") if hasattr(self, f"_{k}_") else getattr(self, k)
+            for k in self.parameters
+        }
     
     def set(self, **kwargs):
         _kwargs = copy.deepcopy(self.__getstate__())
@@ -686,13 +673,11 @@ class Datablock:
             hash=self.hash,
             version=self.version,
             revision=self.revision,
-            alpha=self.alpha,
-            beta=self.beta,
-            gamma=self.gamma,
-            repr=repr(self),
-            hashstr=self.hashstr,
-            kwargs=self.kwargs,
             spec=self.spec,
+            kwargs=self.kwargs,
+            quote=self.quote(),
+            repr=self.__repr__(),
+            hashhandle=self.hashhandle,
         )
     
     def validtopic(self, topic=None):
@@ -754,10 +739,6 @@ class Datablock:
     
     def has_topic(self):
         return hasattr(self, "TOPICFILE")
-    
-    @property
-    def autoroot(self):
-        return self._autoroot
 
     def build(self, *args, **kwargs):
         if self.capture_output:
@@ -788,13 +769,11 @@ class Datablock:
         return self
 
     def __pre_build__(self, *args, **kwargs):
-        self._write_journal_dict('kwargs', self.kwargs)#TODO: REFACTOR thru _write_journal_dict
         self._write_journal_dict('spec', self.spec)
-        self._write_str('alpha', self.alpha)
-        self._write_str('beta', self.beta)
-        self._write_str('gamma', self.gamma)
-        self._write_str('hashstr', self.hashstr)
+        self._write_journal_dict('kwargs', self.kwargs)
+        self._write_str('quote', self.quote())
         self._write_str('repr', self.__repr__())
+        self._write_str('hashhandle', self.hashhandle)
         self._write_journal_entry(event="build:start",)
         return self
 
@@ -1167,17 +1146,32 @@ class Datablock:
             fs.makedirs(journalanchorpath, exist_ok=True)
         return journalanchorpath
     ##REFACTOR: through _xanchorpath/_xpath: END
-
     #PATHS: END
+
+    #LOG LEVEL: BEGIN
+    @property
+    def info(self):
+        return self.log.ist('info')
+    
+    @property
+    def verbose(self):
+        return self.log.ist('verbose')
+    
+    @property
+    def debug(self):
+        return self.log.ist('debug')
+    
+    @property
+    def detailed(self):
+        return self.log.ist('detailed')
+    #LOG LEVEL: END
+
 
     #IDENTIFICATION: BEGIN
     #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
     # computed using the older version of these methods
     """
-    . spec:
-			. a specline is a str starting with '@', '$' or '#'
-			. a strline: a non-specline str
-			. an objline: a non-str object
+    
     """
     @staticmethod
     def is_specline(s):
@@ -1215,87 +1209,60 @@ class Datablock:
                 self._revision = self._revision_
         return self._revision
 
-    @functools.cached_property
-    def _scope_(self):
+    def __expand_spec__(self, expansion='full'):
         """
-        . PARTIALLY reduced spec+version:
-            . #-REDUCED speclines: 
-            . +strlines
-            . +repred objlines
-            . +version
-
-        """
-        _scope = {'version': self.version, 'dt': self.dt}
-        for k, v in self.spec.items():
-            value = getattr(self.cfg, k)
-            if self.is_specline(v):
-                if isinstance(value, Datablock):
-                    _scope[k] = f"#{value.anchor}/{value.hash}"
-                else:
-                    _scope[k] = v
-            else:
-                _scope[k] = repr(value)
-        return _scope
-    
-    def __rspec__(self, bid: str = 'beta'):
-        """
-            rspec depends on the specific Datablock id field: 
-                alpha, beta or gamma
-            alpha:
-                .ALPHA-REDUCED spec:
-                    . alpha-reduced Datablock speclines
-                    . unreduced non-Datablock speclines
-                    . strlines
-                    . +repred objlines
-            beta:
+            . expansion: 'repr'|'quote'
+            . spec lines
+                . a specline is a str starting with '@', '$' or '#'
+                . a strline: a non-specline str
+                . an objline: a non-str object
+            'repr':
+                . FULL reduction
+                    |specline: repr(eval_term(specline)) -- repr-reduction
+                    |strline:  strline
+                    |objline:  repr(objline)
+            'quote':
                 . UNREDUCED spec:
-                    . speclines
-                    . strlines
-                    . +quoted Datablock objlines
-                    . +repred non-Datablock objlines
-            
-            gamma:
-                .GAMMA-REDUCED spec:
-                    . alpha-reduced Datablock speclines
-                    . unreduced non-Datablock speclines
-                    . strlines
-                    . +repred objlines
+                    |specline: specline
+                    |strline: strline
+                    |Datablock objline: objline.quote()
+                    |non-Datablock objline: repr(objline)  
         """
         _spec = {}
-        if bid == 'beta':
+        if expansion == 'full':
+            #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+            # computed using the older version of these methods
             for k, v in self.spec.items():
                 value = getattr(self.cfg, k)
                 if isinstance(v, str):
-                    _spec[k] = v
-                elif isinstance(value, Datablock):
-                    _spec[k] = value.beta
+                    if self.is_specline(v):
+                        _spec[k] = repr(value)
+                    else: 
+                        _spec[k] = v
                 else:
                     _spec[k] = repr(v)
-        else:
-            #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
-            # computed using the older version of these methods
-            bidattr = f"{bid}"
+        elif expansion == 'quote':
             for k, v in self.spec.items():
                 value = getattr(self.cfg, k)
                 if isinstance(value, str):
-                    _spec[k] = value
-                elif isinstance(value, Datablock):
-                    _spec[k] = getattr(value, bidattr)
-                elif self.is_specline(v):
                     _spec[k] = v
+                elif isinstance(value, Datablock):
+                    _spec[k] = value.quote()
                 else:
                     _spec[k] = repr(value)
+        else:
+            raise ValueError(f"Unknown expansion: {expansion}")
         return _spec
     
     @functools.cached_property
     def _rootkwargs_(self):
         rootkwargs = {}
-        if not self._autoroot:
-            rootkwargs['root'] = self.root
+        if self._root_ is not None:
+            rootkwargs['root'] = self._root_
         if not self.anchored:
             rootkwargs['anchored'] = False
-        if not self._autohash:
-            rootkwargs['hash'] = self._hash
+        if self._hash_ is not None:
+            rootkwargs['hash'] = self._hash_
         return rootkwargs
     
     @functools.cached_property
@@ -1308,92 +1275,73 @@ class Datablock:
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
     
-    def __reprkwargs__(self, _kwargs):
+    def __repr_from_kwargs__(self, kwargs):
         def cite(x):
             return repr(x) if isinstance(x, str) else x
 
-        kwargstrs = [f"{k}={cite(v)}" for k, v in _kwargs.items()]
+        kwargstrs = [f"{k}={cite(v)}" for k, v in kwargs.items()]
         kwargsrepr = ', '.join(kwargstrs)
         return f"{self.anchor}({kwargsrepr})"
     
-    @property
-    def alpha(self):
+    def quote(self):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        rspec = self.__rspec__('alpha')
-        alpha = "$" + self.__reprkwargs__({
-            **{'spec': rspec},
+        expanded_spec = self.__expand_spec__('full')
+        quote = "$" + self.__repr_from_kwargs__({
+            **{'spec': expanded_spec},
         })
-        self.log.detailed(f"alpha: ------------> {rspec=}")
-        self.log.detailed(f"alpha: ------------> {alpha=}")
-        return alpha
-    
-    @property
-    def beta(self):
-        _r = self.__reprkwargs__({
-            **self._rootkwargs_,
-            **{'spec': self.__rspec__('beta')},
-        })
-        r = f"${_r}"
-        return r
-    
-    @property
-    def gamma(self):
-        rspec = self.__rspec__('gamma')
-        gamma = "$" + self.__reprkwargs__({
-            **self._rootkwargs_,
-            **{'spec': rspec},
-        })
-        self.log.detailed(f"gamma: ------------> {rspec=}")
-        self.log.detailed(f"gamma: ------------> {gamma}")
-        return gamma
+        self.log.detailed(f"quote: ------------> {expanded_spec=}")
+        self.log.detailed(f"quote: ------------> {quote=}")
+        return quote
     
     def __repr__(self):
-        rspec = self.__rspec__('gamma')
-        r = self.__reprkwargs__({
+        expanded_spec = self.__expand_spec__('repr')
+        r = self.__repr_from_kwargs__({
             **self._rootkwargs_,
-            **{'spec': rspec},
+            **{'spec': expanded_spec},
             **self._tailkwargs_,
         })
-        self.log.detailed(f"__repr__(): ------------> {rspec=}")
+        self.log.detailed(f"__repr__(): ------------> {expanded_spec=}")
+        self.log.detailed(f"__repr__(): ------------> __repr__={r}")
         return r
     
     def __str__(self):
-        r = self.__repr__()
-        r = r.replace('\\', '')
-        return r
+        s = self.quote()
+        s = s.replace('\\', '')
+        return s
     
     @property
     def kwargs(self):
         return self.__getstate__()
     
     @property
-    def hashstr(self):
+    def hashhandle(self):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if hasattr(self, "TOPICFILES"):
             topics = [f"topic:{topic}={file}" for topic, file in self.TOPICFILES.items()]
         else:
             topics = ["topics:None"]
-        _alphahandle_ = os.path.join(
-            self.alpha,
+        hashhandle = os.path.join(
+            self.__repr__(),
             f"version={self.version}",
             *topics,
         )
-        return _alphahandle_
+        return hashhandle
     
     @property
     def hash(self): 
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hash
         # computed with the older code.
-        if self._hash is None: 
-            sha = hashlib.sha256()
-            sha.update(self.hashstr.encode())
-            _hash = sha.hexdigest()
-            self.log.detailed(f"hash(): ---------===---------> {self.hashstr=} ---> hash: {self._hash}")
-        else:
-            _hash = self._hash
-        return _hash
+        if not hasattr(self, '_hash'): 
+            if self._hash_ is not None:
+                self._hash = self._hash_
+            else:
+                sha = hashlib.sha256()
+                sha.update(self.hashhandle.encode())
+                self._hash = sha.hexdigest()
+                self.log.detailed(f"hash: ---------===---------> {self.hashhandle=} ---> hash: {self._hash}")
+        return self._hash
     #IDENTIFICATION: END
 
     #JOURNAL: BEGIN
@@ -1431,10 +1379,8 @@ class Datablock:
 
         spec_path = self._xpath('spec', 'yaml')
         kwargs_path = self._xpath('kwargs', 'yaml')
-        alpha_path = self._xpath('alpha', 'txt')
-        beta_path = self._xpath('beta', 'txt')
-        gamma_path = self._xpath('gamma', 'txt')
-        hashstr_path = self._xpath('hashstr', 'txt')
+        quote_path = self._xpath('quote', 'txt')
+        hashhandle_path = self._xpath('hashhandle', 'txt')
         repr_path = self._xpath('repr', 'txt')
         #
         logpath = self._logpath()
@@ -1455,13 +1401,11 @@ class Datablock:
                                          'tag': self.tag, 
                                          'log': logpath if has_log else None,
                                          'event': event,
-                                         'kwargs': kwargs_path,
                                          'spec': spec_path,
-                                         'alpha': alpha_path,
-                                         'beta': beta_path,
-                                         'gamma': gamma_path,
-                                         'hashstr': hashstr_path,
+                                         'kwargs': kwargs_path,
+                                         'quote': quote_path,
                                          'repr': repr_path,
+                                         'hashhandle': hashhandle_path,
         }])
         df.to_parquet(journal_path)
         

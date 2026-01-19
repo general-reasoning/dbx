@@ -559,7 +559,7 @@ class Datablock:
         device: str = 'cpu',
         **kwargs,
     ):
-        self.__setstate__(dict(
+        self.__setstate__(
             root=root,
             spec=spec,
             anchored=anchored,
@@ -574,7 +574,7 @@ class Datablock:
             gitrepo=gitrepo,
             device=device,
             **kwargs,
-        ))
+        )
         
     def __setstate__(
         self,
@@ -1209,7 +1209,7 @@ class Datablock:
                 self._revision = self._revision_
         return self._revision
 
-    def __expand_spec__(self, expansion='full'):
+    def __expand_spec__(self, expansion='repr'):
         """
             . expansion: 'repr'|'quote'
             . spec lines
@@ -1229,7 +1229,7 @@ class Datablock:
                     |non-Datablock objline: repr(objline)  
         """
         _spec = {}
-        if expansion == 'full':
+        if expansion == 'repr':
             #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
             # computed using the older version of these methods
             for k, v in self.spec.items():

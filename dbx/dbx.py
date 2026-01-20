@@ -236,7 +236,7 @@ class JournalFrame(pd.DataFrame):
     def __call__(self, entry:int ):
         return JournalEntry(self.loc[entry].dropna())
 
-    def list(self, thing, *, take: str = 'last', sortby: Optional[str] = None, raw: bool = False):
+    def list(self, thing, *, take: str = 'last', sortby: Optional[str] = None, ascending: bool = False, raw: bool = False, dropna: bool = False):
         if take == 'last':
             unique_rows = self.groupby('hash').last()
         elif take == 'first':
@@ -246,9 +246,14 @@ class JournalFrame(pd.DataFrame):
         else:
             raise ValueError(f"Unknown take value: {take}")
         hashes = []
+        datetimes = []
         entries = []
         for hash, row in unique_rows.iterrows():
-            entries.append(JournalEntry(row).read(thing, raw=raw))
+            try:
+                entries.append(JournalEntry(row).read(thing, raw=raw))
+            except: 
+                entries.append(pd.Series())
+            datetimes.append(row.datetime if 'datetime' in row.index else None)
             hashes.append(hash)
         if raw:
             thingsframe = pd.DataFrame.from_dict({hash: entry for hash, entry in zip(hashes, entries)}, orient='index')
@@ -258,8 +263,11 @@ class JournalFrame(pd.DataFrame):
         else:
             thingsframe = pd.DataFrame.from_records(entries)
         thingsframe['hash'] = hashes
+        thingsframe['datetime'] = datetimes
+        if dropna:
+            thingsframe = thingsframe.dropna()
         if sortby is not None and sortby in thingsframe.columns:
-            thingsframe = thingsframe.sort_values(sortby).set_index(sortby).reset_index() # force sortby to be the first column
+            thingsframe = thingsframe.sort_values(sortby, ascending=ascending).set_index(sortby).reset_index() # force sortby to be the first column
         return thingsframe
 
     
@@ -1603,7 +1611,7 @@ class Datablock:
         parquet_files = [f for f in files if f.endswith('.parquet')]
 
         log = Logger()
-        log.debug(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
+        log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:
             dfs = []
             for file in parquet_files:

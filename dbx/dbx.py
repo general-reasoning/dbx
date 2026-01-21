@@ -162,7 +162,7 @@ class JournalEntry(pd.Series):
         super().__init__(series)
         self.logger = logger
 
-    def read(self, *things, raw: bool = False, deslash: bool = False):
+    def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
             if hasattr(self, thing) and getattr(self, thing) is not None:
                 path = getattr(self, thing)
@@ -171,7 +171,7 @@ class JournalEntry(pd.Series):
                 if raw or ext == 'txt' or ext == 'log':
                     result = read_str(getattr(self, thing))
                 elif ext == 'yaml':
-                    result = read_yaml(getattr(self, thing))
+                    result = read_yaml(getattr(self, thing), safe=safe)
                 else:
                     raise ValueError(f"Uknown journal entry field extention for {thing}: {ext}")
             else:
@@ -199,18 +199,18 @@ class JournalEntry(pd.Series):
         r = None
         if revision is not None:
             if gitrepo is None:
-                gitrepo = self.gitrepo    
-            tempdir = gitpackage(gitrepo, revision=revision)
-        else:
-            tempdir = None
+                gitrepo = self.gitrepo  
+            global EVALROOT
+            global EVALREPO
+            if EVALROOT is not None:
+                EVALROOT.cleanup()
+            EVALROOT, EVALREPO = gitsetupevalroot(gitrepo, revision=revision)
         try:
             if eval_term:
                 __eval_term__ = globals()['eval_term']
                 r = __eval_term__(thingstr)
             else:
                 r = __eval__(thingstr, globals(), context)
-            if isinstance(r, Datablock) and tempdir is not None:
-                r = r.set(tempdir=tempdir)
         except Exception as exc:
             if debug:
                 breakpoint()
@@ -219,24 +219,35 @@ class JournalEntry(pd.Series):
         return r
     
     def instantiate(self, gitrepo=None, revision=None):
-        if revision == 'self':
+        if revision == 'journal_entry':
             revision = self.revision
-        if gitrepo == 'self':
+        if gitrepo == 'journal_entry':
             gitrepo = self.gitrepo
         return self.eval('quote', eval_term=True, gitrepo=gitrepo, revision=revision)
 
-    def inst(self, gitrepo='self', revision='self'):
+    def inst(self, gitrepo=None, revision='journal_entry'):
+        if gitrepo is None:
+            gitrepo = os.environ.get('DBXREPO')
+        if gitrepo is None:
+            gitrepo = 'journal_entry'
         return self.instantiate(gitrepo=gitrepo, revision=revision)
     
 
 class JournalFrame(pd.DataFrame):
-    def __init__(self, df: pd.DataFrame):
+    def __init__(self, df: pd.DataFrame, *, logger: Logger = Logger()):
         super().__init__(df)
+        self.logger = logger
 
-    def __call__(self, entry:int ):
-        return JournalEntry(self.loc[entry].dropna())
+    def get(self, entry:int, *, dropna: bool = False):
+        entry = self.loc[entry]
+        if dropna:
+            entry = entry.dropna()
+        return JournalEntry(entry)
+    
+    def __call__(self, entry:int):
+        return self.get(entry, dropna=True)
 
-    def list(self, thing, *, take: str = 'last', sortby: Optional[str] = None, ascending: bool = False, raw: bool = False, dropna: bool = False):
+    def list(self, thing, *, take: str = 'last', sortby: Optional[str] = None, ascending: bool = False, raw: bool = False, safe: bool = False, dropna: bool = False):
         if take == 'last':
             unique_rows = self.groupby('hash').last()
         elif take == 'first':
@@ -250,8 +261,13 @@ class JournalFrame(pd.DataFrame):
         entries = []
         for hash, row in unique_rows.iterrows():
             try:
-                entries.append(JournalEntry(row).read(thing, raw=raw))
-            except: 
+                entry = None
+                entry = JournalEntry(row)
+                th = None
+                th = entry.read(thing, raw=raw, safe=safe)
+                entries.append(th)
+            except Exception as exc: 
+                self.logger.silent(f"JournalFrame: EXCEPTION when reading {thing}: {row=}, {entry=}, {th=}:\nEXCEPTION: {exc}")
                 entries.append(pd.Series())
             datetimes.append(row.datetime if 'datetime' in row.index else None)
             hashes.append(hash)
@@ -276,8 +292,7 @@ def gitrevision(repopath, *, log=Logger()):
         repo = git.Repo(repopath)
         if repo.is_dirty():
             raise ValueError(f"Dirty git repo: {repopath}: commit your changes")
-        branch = repo.active_branch.name
-        revision = f"{repo.rev_parse(branch).hexsha}"
+        revision = repo.head.commit.hexsha
         log.detailed(f"Obtained git revision for git repo {repopath}: {revision}")
     else:
         revision = None
@@ -295,15 +310,20 @@ def gitcheckout(repopath, revision):
     return repopath
 
 
-def gitpackage(repopath, *, revision):
-    tempdir = tempfile.TemporaryDirectory()
+def gitsetupevalroot(repopath=None, *, revision=None):
+    if repopath is None:
+        repopath = os.environ.get('DBXREPO')
+    print(f"DBX: SETTING UP TEMPORARY EVALROOT from {repopath=} with {revision=}")
+    EVALROOT = tempfile.TemporaryDirectory()
     package = os.path.basename(repopath)
-    pkgpath = os.path.join(tempdir.name, package)
-    _pkgpath = gitclone(repopath, pkgpath)
-    assert pkgpath == _pkgpath
-    gitcheckout(pkgpath, revision)
-    sys.path.insert(0, pkgpath)
-    return tempdir
+    EVALREPO = os.path.join(EVALROOT.name, package)
+    _pkgpath = gitclone(repopath, EVALREPO)
+    assert EVALREPO == _pkgpath
+    if revision is not None:
+        gitcheckout(EVALREPO, revision)
+    sys.path.insert(0, EVALREPO)
+    print(f"DBX: EVALROOT: {EVALROOT.name}, EVALREPO: {EVALREPO}")
+    return EVALROOT, EVALREPO
 
 
 def make_google_cloud_storage_download_url(path):
@@ -377,8 +397,13 @@ def eval_term(name):
         term = name
     return term
 
-
-def exec(s=None):
+EVALROOT = None
+EVALREPO = None
+def eval(s=None):
+    global EVALROOT
+    global EVALREPO
+    if os.environ.get('DBXEVALROOTMP', False):
+        EVALROOT, EVALREPO = gitsetupevalroot()
     if s is None:
         if len(sys.argv) > 2:
             raise ValueError(f"Too many args: {sys.argv}")
@@ -389,6 +414,11 @@ def exec(s=None):
     lb = lb if lb != -1 else len(s)
     _, cxt = get_named_const_and_cxt(s[:lb])
     r = __eval__(s, globals(), cxt)
+    
+    if EVALROOT is not None:
+        EVALROOT.cleanup()
+        EVALROOT = None
+        EVALREPO = None
     return r
 
 
@@ -396,8 +426,8 @@ def pprint(argstr=None):
     _pprint_.pprint(exec(argstr))
 
 
-def eval(s=None):
-    return exec(s)
+def exec(s=None):
+    return eval(s)
 
 
 def write_str(text, path, *, log=Logger(), debug: bool = False):
@@ -422,10 +452,10 @@ def write_yaml(data, path, *, log=Logger(), debug: bool = False):
         log.detailed(f"WROTE {path}")
 
 
-def read_yaml(path, *, log=Logger(), debug: bool = False):
+def read_yaml(path, *, log=Logger(), safe: bool = False, debug: bool = False):
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, "r") as f:
-        data = yaml.safe_load(f)
+        data = yaml.load(f, Loader=yaml.BaseLoader) if safe else yaml.load(f, Loader=yaml.UnsafeLoader)
         log.detailed(f"READ {path}")
     return data
 
@@ -684,7 +714,7 @@ class Datablock:
             stack_depth=None, #TODO: restore stack_depth default
         )
         self._revision_ = revision
-        self.gitrepo = os.environ.get('DBXREPO', gitrepo)
+        self.gitrepo = EVALREPO if EVALREPO is not None else os.environ.get('DBXREPO', gitrepo)
         self.tempdir = tempdir
         self.capture_output = bool(capture_output)
         self.device = device  
@@ -861,12 +891,6 @@ class Datablock:
         valid_cfg = self.valid_cfg()
         if not all(list(valid_cfg.values())):
             raise ValueError(f"Not all upstream Datablocks in cfg are valid: {valid_cfg=}")
-        self._write_journal_dict('spec', self.spec)
-        self._write_journal_dict('kwargs', self.kwargs)
-        self._write_str('quote', self.quote())
-        self._write_str('repr', self.__repr__())
-        self._write_str('handle', self.handle())
-        self._write_str('hashstr', self.hashstr)
         self._write_journal_entry(event="build:start",)
         return self
 
@@ -1500,6 +1524,13 @@ class Datablock:
         self.log.debug(f"WROTE: {name.upper()}: txt: {path}")
 
     def _write_journal_entry(self, event:str):
+        self._write_journal_dict('spec', self.spec)
+        self._write_journal_dict('kwargs', self.kwargs)
+        self._write_str('quote', self.quote())
+        self._write_str('repr', self.__repr__())
+        self._write_str('handle', self.handle())
+        self._write_str('hashstr', self.hashstr)
+        #
         hash = self.hash
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         key = f"{hash}-{dt}"
@@ -1536,70 +1567,13 @@ class Datablock:
                                          'repr': repr_path,
                                          'hashstr': hashstr_path,
                                          'gitrepo': self.gitrepo,
+                                         'evalroot': EVALROOT.name if EVALROOT is not None else None,
         }])
         df.to_parquet(journal_path)
         
         tagstr = "with tag {repr(self.tag)} " if self.tag is not None else ""
         self.log.debug(f"WROTE JOURNAL entry for event {repr(event)} {tagstr}"
                          f"to journal_path {journal_path}")
-
-    #TODO: REMOVE in favor of Journal().list('spec')
-    @staticmethod
-    def Specs(cls, root):
-        cls = eval_term(cls)
-        if root is None:
-            root = os.environ.get('DBXROOT')
-        specanchorpath = cls._xanchorpath(root, 'spec')
-        fs, _ = fsspec.url_to_fs(specanchorpath)
-        if not fs.exists(specanchorpath):
-            df = None
-        else:
-            paths = list(fs.ls(specanchorpath))
-            specfiles_ = list(itertools.chain.from_iterable(
-                fs.ls(path) for path in paths
-            ))
-            specfiles = [f for f in specfiles_ if fs.exists(f) and f.endswith('.parquet')]
-            hashes = [os.path.dirname(f).removeprefix(specanchorpath).removeprefix('/') for f in specfiles]
-            if len(specfiles) > 0:
-                dfs = []
-                for specfile in specfiles:
-                    _df = pd.read_parquet(specfile)
-                    dfs.append(_df)
-                df = pd.concat(dfs)
-                df.index = hashes
-            else:
-                df = pd.DataFrame(index=hashes)
-            df = df.reset_index().rename(columns={'index': 'hash'})
-        return df
-
-    #TODO: REMOVE in favor of Journal().list('kwargs')
-    @staticmethod
-    def Kwargs(cls, root):
-        cls = eval_term(cls)
-        if root is None:
-            root = os.environ.get('DBXROOT')
-        kwargsanchorpath = cls._kwargsanchorpath(root)
-        fs, _ = fsspec.url_to_fs(kwargsanchorpath)
-        if not fs.exists(kwargsanchorpath):
-            df = None
-        else:
-            paths = list(fs.ls(kwargsanchorpath))
-            kwargsfiles_ = list(itertools.chain.from_iterable(
-                fs.ls(path) for path in paths
-            ))
-            kwargsfiles = [f for f in kwargsfiles_ if fs.exists(f) and f.endswith('.parquet')]
-            hashes = [os.path.dirname(f).removeprefix(kwargsanchorpath).removeprefix('/') for f in kwargsfiles]
-            if len(kwargsfiles) > 0:
-                dfs = []
-                for kwargsfile in kwargsfiles:
-                    _df = pd.read_parquet(kwargsfile)
-                    dfs.append(_df)
-                df = pd.concat(dfs)
-                df.index = hashes
-            else:
-                df = pd.DataFrame(index=hashes)
-            df = df.reset_index().rename(columns={'index': 'hash'})
-        return df
 
     @staticmethod
     def Journal(cls, entry: int = None, *, root=None):

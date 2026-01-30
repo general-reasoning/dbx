@@ -6,6 +6,7 @@ import functools
 import gc
 import hashlib
 import importlib
+import inspect
 import itertools
 import json
 import multiprocessing as mp
@@ -39,6 +40,11 @@ import torch.multiprocessing as mp
 
 
 __eval__ = __builtins__['eval']
+
+
+DBXGITREPO = os.environ.get('DBXGITREPO')
+DBXWRKREPO = None
+DBXWRKROOT = None
 
 
 def journal(cls, root=None):
@@ -197,14 +203,8 @@ class JournalEntry(pd.Series):
         if deslash:
             thingstr = thingstr.replace('\\', '')
         r = None
-        if revision is not None:
-            if gitrepo is None:
-                gitrepo = self.gitrepo  
-            global EVALROOT
-            global EVALREPO
-            if EVALROOT is not None:
-                EVALROOT.cleanup()
-            EVALROOT, EVALREPO = gitsetupevalroot(gitrepo, revision=revision)
+        if revision is not None: 
+            gitwrkreposetup(revision=revision)
         try:
             if eval_term:
                 __eval_term__ = globals()['eval_term']
@@ -227,7 +227,7 @@ class JournalEntry(pd.Series):
 
     def inst(self, gitrepo=None, revision='journal_entry'):
         if gitrepo is None:
-            gitrepo = os.environ.get('DBXREPO')
+            gitrepo = DBXGITREPO
         if gitrepo is None:
             gitrepo = 'journal_entry'
         return self.instantiate(gitrepo=gitrepo, revision=revision)
@@ -310,20 +310,25 @@ def gitcheckout(repopath, revision):
     return repopath
 
 
-def gitsetupevalroot(repopath=None, *, revision=None):
-    if repopath is None:
-        repopath = os.environ.get('DBXREPO')
-    print(f"DBX: SETTING UP TEMPORARY EVALROOT from {repopath=} with {revision=}")
-    EVALROOT = tempfile.TemporaryDirectory()
-    package = os.path.basename(repopath)
-    EVALREPO = os.path.join(EVALROOT.name, package)
-    _pkgpath = gitclone(repopath, EVALREPO)
-    assert EVALREPO == _pkgpath
+def gitwrkreposetup(revision=None):
+    global DBXGITREPO
+    global DBXWRKREPO
+    global DBXWRKROOT
+    if DBXWRKREPO is None:
+        repopath = DBXGITREPO
+        print(f"DBX: SETTING UP TEMPORARY DBXWRKROOT from {repopath=}")
+        DBXWRKROOT = tempfile.TemporaryDirectory()
+        package = os.path.basename(repopath)
+        DBXWRKREPO = os.path.join(DBXWRKROOT.name, package)
+        _pkgpath = gitclone(repopath, DBXWRKREPO)
+        assert DBXWRKREPO == _pkgpath
+        sys.path.insert(0, DBXWRKREPO)
+        print(f"DBX: DBXWRKROOT: {DBXWRKROOT.name}, DBXWRKREPO: {DBXWRKREPO}")
+
     if revision is not None:
-        gitcheckout(EVALREPO, revision)
-    sys.path.insert(0, EVALREPO)
-    print(f"DBX: EVALROOT: {EVALROOT.name}, EVALREPO: {EVALREPO}")
-    return EVALROOT, EVALREPO
+        gitcheckout(DBXWRKREPO, revision)
+    
+    return DBXWRKREPO
 
 
 def make_google_cloud_storage_download_url(path):
@@ -397,13 +402,11 @@ def eval_term(name):
         term = name
     return term
 
-EVALROOT = None
-EVALREPO = None
+
 def eval(s=None):
-    global EVALROOT
-    global EVALREPO
-    if os.environ.get('DBXEVALROOTMP', False):
-        EVALROOT, EVALREPO = gitsetupevalroot()
+    global DBXWRKREPO
+    if os.environ.get('DBXWRKREPO', False):
+        gitwrkreposetup()
     if s is None:
         if len(sys.argv) > 2:
             raise ValueError(f"Too many args: {sys.argv}")
@@ -415,10 +418,6 @@ def eval(s=None):
     _, cxt = get_named_const_and_cxt(s[:lb])
     r = __eval__(s, globals(), cxt)
     
-    if EVALROOT is not None:
-        EVALROOT.cleanup()
-        EVALROOT = None
-        EVALREPO = None
     return r
 
 
@@ -648,7 +647,7 @@ class Datablock:
         detailed: bool = False,
         capture_output: bool = False,
         revision: str = None,
-        gitrepo: str  = None,
+        # gitrepo: str  = None, # DEPRECATED
         tempdir = None,
         device: str = 'cpu',
         **kwargs,
@@ -665,7 +664,7 @@ class Datablock:
             detailed=detailed,
             capture_output=capture_output,
             revision=revision,
-            gitrepo=gitrepo,
+            # gitrepo=gitrepo, # DEPRECATED
             tempdir=tempdir,
             device=device,
             **kwargs,
@@ -685,12 +684,13 @@ class Datablock:
         detailed: bool = False,
         capture_output: bool = False,
         revision: str = None,
-        gitrepo: str  = None,
+        # gitrepo: str  = None, # DEPRECATED
         tempdir = None,
         device: str = 'cpu',
         **kwargs,
     ):
         """NB: signature must match __init__'s"""
+        kwargs.pop('gitrepo', None)
         self._root_ = root
         self.root = self._root_
         if self.root is None:
@@ -714,7 +714,7 @@ class Datablock:
             stack_depth=None, #TODO: restore stack_depth default
         )
         self._revision_ = revision
-        self.gitrepo = EVALREPO if EVALREPO is not None else os.environ.get('DBXREPO', gitrepo)
+        # self.gitrepo = EVALREPO if EVALREPO is not None else os.environ.get('DBXREPO', gitrepo) # DEPRECATED
         self.tempdir = tempdir
         self.capture_output = bool(capture_output)
         self.device = device  
@@ -725,10 +725,13 @@ class Datablock:
         for k, v in kwargs.items():
             setattr(self, k, v)
         #
-        self.parameters = [
-            'root', 'spec', 'anchored', 'hash', 'tag', 'info', 'verbose', 'debug',
-            'detailed', 'capture_output', 'revision', 'gitrepo', 'device'
-        ] + list(kwargs.keys())
+        sig = inspect.signature(self.__init__)
+        # Filter out *args and **kwargs, get only explicit parameters
+        explicit_params = [
+            p.name for p in sig.parameters.values()
+            if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD) and p.name != 'self'
+        ]
+        self.parameters = explicit_params + list(kwargs.keys())
         #
         self.dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         self.build_dt = None
@@ -1328,8 +1331,9 @@ class Datablock:
             self.log.detailed(f"--------------> COMPUTING revision")
             if self._revision_ is None:
                 self.log.detailed(f"--------------> self._revision_ is None")
-                self._revision = gitrevision(self.gitrepo, log=self.log) if self.gitrepo is not None else None
-                self.log.detailed(f"--------------> self._revision_: from gitrevision({self.gitrepo}")
+                gitrepo = DBXWRKREPO if DBXWRKREPO is not None else DBXGITREPO
+                self._revision = gitrevision(gitrepo, log=self.log) if gitrepo is not None else None
+                self.log.detailed(f"--------------> self._revision_: from gitrevision({gitrepo}")
             else:
                 self.log.detailed(f"--------------> Using {self._revision_=}")
                 self._revision = self._revision_
@@ -1566,8 +1570,8 @@ class Datablock:
                                          'handle': handle_path,
                                          'repr': repr_path,
                                          'hashstr': hashstr_path,
-                                         'gitrepo': self.gitrepo,
-                                         'evalroot': EVALROOT.name if EVALROOT is not None else None,
+                                         'gitrepo': DBXGITREPO,
+                                         'wrkrepo': DBXWRKREPO,
         }])
         df.to_parquet(journal_path)
         
@@ -1931,6 +1935,7 @@ class MultithreadingDatablocksBuilder:
             self.log.debug("Threads successfully joined")
         return blocks
     
+
     def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
         self.log.debug(f"Building {len(blocks)} feature blocks on thread: {thread_idx}")
         for i, block in enumerate(blocks):
@@ -1958,4 +1963,110 @@ class MultithreadingDatablocksBuilder:
             if item is None:
                 self.log.debug(f"Done message received on the done_queue on thread: {thread_idx}")
                 break
+
+
+class MultiprocessingDatablockBuilder:
+    def __init__(self, *, n_processes: int = 1, log: Logger = Logger()):
+        self.n_processes = n_processes
+        self.log = log
+
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+        if len(blocks) > 0:
+            result_queue = mp.Queue()
+            done_queue = mp.Queue()
+            abort_event = mp.Event()
+            progress_bar = tqdm.tqdm(total=len(blocks))
+            block_lists = np.array_split(blocks, self.n_processes)
+            block_offsets = np.cumsum([0] + [len(block_list) for block_list in block_lists])
+            processes = [
+                mp.Process(target=self.__build_blocks__, args=(block_list, ctx_args, ctx_kwargs, block_offset, i, result_queue, done_queue, abort_event))
+                for i, (block_list, block_offset) in enumerate(zip(block_lists, block_offsets))
+            ]
+            self.log.verbose(f"Building {len(blocks)} feature blocks with {self.n_processes} processes")
+            done_idxs = []
+            exc = None
+            try:
+                for process in processes:
+                    process.start()
+                # Clear references to blocks in main process to save memory/allow pickling if needed (though copy happens on fork/spawn)
+                # In multiprocessing spawn (default on some OS, optional on Linux), blocks need to be pickled.
+                # Assuming linux fork by default but being safe.
+                for block in blocks:
+                    del block
+                gc.collect()
+
+                while len(done_idxs) < len(blocks):
+                    pexc, ptbstr = None, None
+                    success, proc, idx, payload = result_queue.get()
+                    if success:
+                        done_idxs.append(idx)
+                        progress_bar.update(1)
+                    else:
+                        pexc, ptbstr = payload
+                        self.log.info(f"Received exception from process {proc}, block with index {idx}")
+                        self.log.info(f"Exception: {pexc}")
+                        self.log.info(f"Traceback:\n{ptbstr}")
+                        self.log.info(f"Abandoning result_queue polling.")
+                        break
+                self.log.debug(f"Production loop done")
+            except Exception as e:
+                exc = e
+                self.log.info(f"Caught exception in production loop\nException: {e}")
+                tbstr = '\n'.join(tb.format_tb(e.__traceback__))
+                self.log.info(f"Traceback:\n{tbstr}")
+                abort_event.set()
+            finally:
+                self.log.debug(f"Feeding done_queue")
+                for _ in range(self.n_processes):
+                    done_queue.put(None)
+                self.log.debug(f"Joining processes")
+                for process in processes:
+                    process.join()
+                self.log.debug("Processes successfully joined")
+            
+            if pexc is not None:
+                self.log.verbose(f"Reraising exception from process {proc}, block {idx}")
+                raise(pexc)
+            if exc is not None:
+                self.log.verbose("Reraising production loop exception")
+                raise(exc)
+        return blocks
+
+    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, process_idx: int, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
+        self.log.debug(f"Building {len(blocks)} feature blocks on process: {process_idx}")
+        exception = None
+        for i, block in enumerate(blocks):
+            exception = None
+            try:
+                if abort_event.is_set():
+                    break
+                # Assuming .build() method exists and works in subprocess
+                block.build(*ctx_args, **ctx_kwargs)
+            except Exception as e:
+                exception = e
+                self.log.info(f"ERROR building datablock {block} on process: {process_idx}")
+            finally:
+                del block
+                gc.collect()
+            
+            if exception is not None:
+                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
+                result_queue.put((False, process_idx, offset+i, (exception, tbstr)))
+                break
+            result_queue.put((True, process_idx, offset+i, None))
+        
+        # Cleanup
+        gc.collect()
+        if exception is None:
+            self.log.debug(f"Done building {len(blocks)} datablocks on process: {process_idx}")
+        else:
+            self.log.debug(f"Abandoning building {len(blocks)} datablocks on process: {process_idx} due to an exception")
+        
+        self.log.debug(f"Waiting on the done_queue on process: {process_idx}")
+        while True:
+            item = done_queue.get()
+            if item is None:
+                self.log.debug(f"Done message received on the done_queue on process: {process_idx}")
+                break
+
     

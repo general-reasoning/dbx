@@ -647,111 +647,111 @@ class Datablock:
         detailed: bool = False,
         capture_output: bool = False,
         revision: str = None,
-        # gitrepo: str  = None, # DEPRECATED
-        tempdir = None,
         device: str = 'cpu',
         **kwargs,
     ):
-        self.__setstate__(
-            root=root,
-            spec=spec,
-            anchored=anchored,
-            hash=hash,
-            tag=tag,
-            info=info,
-            verbose=verbose,
-            debug=debug,
-            detailed=detailed,
-            capture_output=capture_output,
-            revision=revision,
-            # gitrepo=gitrepo, # DEPRECATED
-            tempdir=tempdir,
-            device=device,
-            **kwargs,
-        )
+        state = {
+            'root': root,
+            'spec': spec,
+            'anchored': anchored,
+            'hash': hash,
+            'tag': tag,
+            'info': info,
+            'verbose': verbose,
+            'debug': debug,
+            'detailed': detailed,
+            'capture_output': capture_output,
+            'revision': revision,
+            'device': device,
+            'kwargs': kwargs,
+        }
+        self.__setstate__(state)
         
-    def __setstate__(
-        self,
-        *,
-        root: str = None,
-        spec: Optional[Union[str, dict]] = None,
-        anchored: bool = True,
-        hash: Optional[str] = None,
-        tag: Optional[str] = None,
-        info: bool = True,
-        verbose: bool = False,
-        debug: bool = False,
-        detailed: bool = False,
-        capture_output: bool = False,
-        revision: str = None,
-        # gitrepo: str  = None, # DEPRECATED
-        tempdir = None,
-        device: str = 'cpu',
-        **kwargs,
-    ):
-        """NB: signature must match __init__'s"""
-        kwargs.pop('gitrepo', None)
-        self._root_ = root
+    def __setstate__(self, state):
+        """NB: state keys should match __init__'s keyword arguments, with extra args in 'kwargs' dict"""
+        state.pop('gitrepo', None)
+        
+        # Explicit parameters
+        self._root_ = state.get('root')
         self.root = self._root_
         if self.root is None:
             self.root = os.environ.get('DBXROOT')
         if self.root is None:
             raise ValueError(f"None root for {self.__class__.__name__}: maybe set DBXROOT?")
-        self._spec_ = spec
+        self._spec_ = state.get('spec')
         if self._spec_ is None:
             self.spec = asdict(self.CONFIG())
         else:
             self.spec = self._spec_
-        self.anchored = anchored
-        self._hash_ = hash
-        self.tag = tag
+        self.anchored = state.get('anchored', True)
+        self._hash_ = state.get('hash')
+        self.tag = state.get('tag')
+        
+        # Initialize early logger for __post_init__ if needed, though usually hash is needed
         self.log = Logger(
             f"{self.anchor}",
-            debug=kwargs.get('debug'),
-            verbose=kwargs.get('verbose'),
-            detailed=kwargs.get('detailed'),
-            info=kwargs.get('info'),
+            debug=state.get('debug', False),
+            verbose=state.get('verbose', False),
+            detailed=state.get('detailed', False),
+            info=state.get('info', True),
             stack_depth=None, #TODO: restore stack_depth default
         )
-        self._revision_ = revision
-        # self.gitrepo = EVALREPO if EVALREPO is not None else os.environ.get('DBXREPO', gitrepo) # DEPRECATED
-        self.tempdir = tempdir
-        self.capture_output = bool(capture_output)
-        self.device = device  
-        #
+        self._revision_ = state.get('revision')
+        self.capture_output = bool(state.get('capture_output', False))
+        self.device = state.get('device', 'cpu')  
+        
         self.cfg = self._spec_to_cfg(self.spec)
         self.config = self.cfg # alias
-        #
+        
+        # Handle kwargs (both nested and flat for compatibility)
+        kwargs = state.get('kwargs', {})
         for k, v in kwargs.items():
             setattr(self, k, v)
-        #
-        sig = inspect.signature(self.__init__)
-        # Filter out *args and **kwargs, get only explicit parameters
-        explicit_params = [
-            p.name for p in sig.parameters.values()
-            if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD) and p.name != 'self'
-        ]
-        self.parameters = explicit_params + list(kwargs.keys())
-        #
+            
+        handled_keys = set(self._explicit_params_) | {'kwargs'}
+        other_keys = [k for k in state if k not in handled_keys]
+        assert len(other_keys) == 0, f"Unknown keys in state: {other_keys}"
+            
+        # self.parameters used for state retrieval
+        self.parameters = self._explicit_params_ + list(kwargs_dict.keys())
+        
         self.dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         self.build_dt = None
         self.__post_init__()
-        # redefined the logger using self.hash, which is generally invalid before __post_init__ (e.g., TOPICFILES may be undefined)
+        
+        # Redefine logger with hash
         self.log = Logger(
             name=f"{self.anchor}/{self.hash}",
-            debug=debug,
-            verbose=verbose,
-            detailed=detailed,
-            info=info,
+            debug=state.get('debug', False),
+            verbose=state.get('verbose', False),
+            detailed=state.get('detailed', False),
+            info=state.get('info', True),
             stack_depth=None, #TODO: restore stack_depth default
         )
         self.log.detailed(f"======--------------> bid: {self.bid}")
 
     def __getstate__(self):
-        return {
-            k: getattr(self, f"_{k}_") if hasattr(self, f"_{k}_") else getattr(self, k)
-            for k in self.parameters
+        _state = {}
+        for k in self._explicit_params_:
+            if hasattr(self, f"_{k}_"):
+                _state[k] = getattr(self, f"_{k}_")
+            elif hasattr(self, k):
+                _state[k] = getattr(self, k)
+        
+        _kwargs = {
+            k: getattr(self, k)
+            for k in self.parameters if k not in explicit_params and hasattr(self, k)
         }
+        _state['kwargs'] = _kwargs
+        return _state
+
+    @functools.cached_property
+    def _explicit_params_(self):
+        sig = inspect.signature(self.__init__)
+        return [
+            p.name for p in sig.parameters.values()
+            if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD) and p.name != 'self'
+        ]
     
     def set(self, **kwargs):
         _kwargs = copy.deepcopy(self.__getstate__())
@@ -1405,11 +1405,14 @@ class Datablock:
     
     @functools.cached_property
     def _tailkwargs_(self):
+        state = self.__getstate__()
         tailkwargs = {
             k: v
-            for k, v in self.__getstate__().items()
-            if k not in ['root', 'anchored', 'hash', 'spec']          
+            for k, v in state.items()
+            if k not in ['root', 'anchored', 'hash', 'spec', 'kwargs']          
         }
+        if 'kwargs' in state:
+            tailkwargs.update(state['kwargs'])
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
     

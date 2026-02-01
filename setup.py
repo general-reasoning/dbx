@@ -20,7 +20,7 @@ setuptools.setup(
     author="Dmitry Karpeyev",
     author_email="dmitry.karpeyev@gmail.com",
     description="Data experiment management hub",
-    packages=setuptools.find_packages(exclude=("test,")),
+    packages=setuptools.find_packages(exclude=("tests",)),
     classifiers=[
         "Programming Language :: Python :: 3",
     ],

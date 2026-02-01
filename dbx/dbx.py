@@ -15,6 +15,7 @@ from pathlib import Path
 import pickle
 import pprint as _pprint_
 import queue
+import ray
 import sys
 import tempfile
 import threading
@@ -2073,3 +2074,254 @@ class MultiprocessingDatablockBuilder:
                 break
 
     
+
+class Remote:
+    """
+    A client-side proxy to a remote object running in a Ray Actor.
+    """
+    class RemoteObject:
+        """
+        Base class for remote proxies. Defined as a non-actor to support inheritance.
+        """
+        def __init__(self, obj):
+            self.obj = obj
+
+        def _wrap(self, val):
+            """
+            If val is a primitive (int, float, str, bool, None), return it directly.
+            Otherwise, wrap it in a RemoteObject actor and return its handle.
+            """
+            if val is None or isinstance(val, (int, float, str, bool, list, dict, tuple)):
+                return val
+            
+            # Module objects are often not stable when wrapped in new actors via Ray.
+            # We return them directly (by value/pickle) to avoid crashing the worker process.
+            import types
+            if isinstance(val, types.ModuleType):
+                return val
+            
+            # Universal proxying for all non-primitives.
+            # Expanded call site with nested class as requested.
+            # If actor creation fails (e.g. due to pickling issues), we fall back to returning by value.
+            try:
+                return ray.remote(Remote.RemoteObject).remote(val)
+            except Exception:
+                return val
+
+        def getattr(self, name):
+            val = getattr(self.obj, name)
+            return self._wrap(val)
+
+        def call(self, name, *args, **kwargs):
+            if hasattr(self, name) and name != 'obj': # Avoid recursion or direct access to internal state
+                attr = getattr(self, name)
+            else:
+                attr = getattr(self.obj, name)
+
+            if not callable(attr):
+                raise AttributeError(f"'{name}' is not callable")
+            res = attr(*args, **kwargs)
+            return self._wrap(res)
+
+        def info(self, name):
+            if hasattr(self, name):
+                attr = getattr(self, name)
+            else:
+                attr = getattr(self.obj, name)
+            is_call = callable(attr)
+            return is_call, (None if is_call else self._wrap(attr))
+
+        def environ(self, name):
+            """Helper for verification of remote environment."""
+            import os
+            return os.environ.get(name)
+
+    class RemoteDBX(RemoteObject):
+        """
+        Ray Actor that acts as a remote handle to the `dbx` module.
+        Inherits directly from RemoteObject.
+        """
+        def __init__(self, env=None, revision=None):
+            """
+            Initialize the remote dbx instance.
+            """
+            if env:
+                os.environ.update(env)
+            
+            # Import dbx after setting environment variables.
+            # We import the package to get the full namespace.
+            import dbx
+            
+            if revision:
+                dbx.gitwrkreposetup(revision)
+                
+            super().__init__(dbx)
+
+        def apply(self, func, *args, **kwargs):
+            res = func(*args, **kwargs)
+            return self._wrap(res)
+
+    def __init__(self, handle=None, *, env=None, revision=None):
+        """
+        Initialize the remote proxy.
+        """
+        if handle is not None:
+            if env is not None or revision is not None:
+                raise ValueError("Remote: Cannot provide both 'handle' and 'env'/'revision'")
+            self._handle = handle
+        else:
+            # Creation mode. env/revision can be None.
+            # Expanded call site with nested class as requested.
+            self._handle = ray.remote(Remote.RemoteDBX).remote(env=env, revision=revision)
+
+    def __getattr__(self, name):
+        """
+        Dispatch attribute access to the remote actor.
+        """
+        is_callable, value = ray.get(self._handle.info.remote(name))
+        
+        if is_callable:
+            def wrapper(*args, **kwargs):
+                res = ray.get(self._handle.call.remote(name, *args, **kwargs))
+                return self._unwrap_or_proxy(res)
+            return wrapper
+        else:
+            return self._unwrap_or_proxy(value)
+
+    def _unwrap_or_proxy(self, val):
+        if isinstance(val, ray.actor.ActorHandle):
+            return Remote(val) # Recursive wrapping
+        return val
+
+    def run(self, func, *args, **kwargs):
+        """
+        Execute a callable on the remote actor.
+        """
+        res = ray.get(self._handle.apply.remote(func, *args, **kwargs))
+        return self._unwrap_or_proxy(res)
+
+
+def remote(*, revision=None, env=None):
+    """
+    Instantiate a remote dbx interpreter and return a Remote handle to it.
+    """
+    combined_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
+    if env:
+        combined_env.update(env)
+    return Remote(env=combined_env, revision=revision)
+
+
+class RemoteCallableExecutor:
+    def __init__(self, *, n_threads, revision=None, env=None, log: Logger = Logger()):
+        self.n_threads = n_threads
+        self.log = log
+        self.workers = [remote(revision=revision, env=env) for _ in range(n_threads)]
+
+    def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
+
+    def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        if len(callables) > 0:
+            result_queue = queue.Queue()
+            done_queue = queue.Queue()
+            abort_event = threading.Event()
+            progress_bar = tqdm.tqdm(total=len(callables))
+            
+            # Split callables among workers
+            callable_lists = np.array_split(callables, self.n_threads)
+            callable_offsets = np.cumsum([0] + [len(callable_list) for callable_list in callable_lists])
+            
+            threads = [
+                threading.Thread(target=self.__exec_callables__, 
+                                 args=(worker, callable_list, ctx_args, ctx_kwargs, callable_offset, thread_idx, result_queue, done_queue, abort_event))
+                for thread_idx, (worker, callable_list, callable_offset) in enumerate(zip(self.workers, callable_lists, callable_offsets))
+            ]
+            
+            payloads = [[] for _ in range(len(callables))]
+            done_idxs = []
+            for thread in threads:
+                thread.start()
+                
+            e = None
+            while len(done_idxs) < len(callables):
+                success, worker_idx, callable_idx, payload = result_queue.get()
+                if success:
+                    done_idxs.append(callable_idx)
+                    e = None
+                    payloads[callable_idx].append(payload)
+                else:
+                    e = payload
+                    self.log.info(f"Received error from callable with {callable_idx=} on worker {worker_idx}. Abandoning result_queue polling.")
+                    break
+                progress_bar.update(1)
+                
+            self.log.debug(f"Production loop done, feeding done_queue")
+            for _ in range(self.n_threads):
+                done_queue.put(None)
+            self.log.debug(f"Joining threads")
+            for thread in threads:
+                thread.join()
+                
+            if e is not None:
+                self.log.verbose("Raising exception")
+                raise e
+            self.log.debug("Workers successfully joined")
+        return payloads
+
+    def __exec_callables__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
+        self.log.debug(f"Executing {len(callables)} callables on thread: {thread_idx}")
+        for i, callable in enumerate(callables):
+            self.log.detailed(f"EXECUTING callable {i+offset} on {thread_idx=}: {callable}")
+            exception = None
+            try:
+                if abort_event.is_set():
+                    break
+                payload = worker.run(callable, *ctx_args, **ctx_kwargs)
+                self.log.detailed(f"EXECUTED callable {i+offset}: result: {payload}")
+            except Exception as e:
+                exception = e
+                self.log.info(f"ERROR executing callable {callable} on {thread_idx=}")
+            
+            if exception is not None:
+                result_queue.put((False, thread_idx, offset+i, exception))
+                break
+            result_queue.put((True, thread_idx, offset+i, payload))
+        
+        gc.collect()
+        if exception is None:
+            self.log.debug(f"Done executing {len(callables)} callables on {thread_idx=}")
+        else:
+            self.log.debug(f"Abandoning executing {len(callables)} callables on {thread_idx=} due to an exception")
+        
+        self.log.debug(f"Waiting on the done_queue on {thread_idx}")
+        while True:
+            item = done_queue.get()
+            if item is None:
+                self.log.debug(f"Done message received on the done_queue on {thread_idx=}")
+                break
+
+
+class RemoteDatablocksBuilder:
+    def __init__(self, *, n_threads: int = 1, revision=None, env=None, log: Logger = Logger()):
+        self.n_threads = n_threads
+        self.log = log
+        self.executor = RemoteCallableExecutor(n_threads=n_threads, revision=revision, env=env, log=log)
+
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+        if len(blocks) > 0:
+            def build_block(block, *args, **kwargs):
+                return block.build(*args, **kwargs)
+
+            callables = [functools.partial(build_block, block) for block in blocks]
+            results = self.executor.execute(callables, *ctx_args, **ctx_kwargs)
+            
+            # Update local blocks with built state from remote workers
+            for block, result_list in zip(blocks, results):
+                if result_list:
+                    # RemoteCallableExecutor returns a list of lists: [[res]]
+                    # We expect one result per block.
+                    remote_block = result_list[0]
+                    # Update local block state from the remote result
+                    block.__setstate__(remote_block.__getstate__())
+
+        return blocks

@@ -2184,7 +2184,7 @@ class Remote:
             if hasattr(self, name) and name != 'obj': # Avoid recursion or direct access to internal state
                 attr = getattr(self, name)
             else:
-                attr = getattr(self.obj, name)
+                attr = getattr(self._obj, name)
 
             if not callable(attr):
                 raise AttributeError(f"'{name}' is not callable")
@@ -2209,12 +2209,10 @@ class Remote:
         Ray Actor that acts as a remote handle to the `dbx` module.
         Inherits directly from RemoteObject.
         """
-        def __init__(self, env=None, revision=None):
+        def __init__(self, revision=None):
             """
             Initialize the remote dbx instance.
             """
-            if env:
-                os.environ.update(env)
             
             # Import dbx after setting environment variables.
             # We import the package to get the full namespace.
@@ -2229,18 +2227,15 @@ class Remote:
             res = func(*args, **kwargs)
             return self._wrap(res)
 
-    def __init__(self, handle=None, *, env=None, revision=None):
+    def __init__(self, handle=None, *, revision=None):
         """
         Initialize the remote proxy.
         """
-        if handle is not None:
-            if env is not None or revision is not None:
-                raise ValueError("Remote: Cannot provide both 'handle' and 'env'/'revision'")
-            self._handle = handle
-        else:
-            # Creation mode. env/revision can be None.
-            # Expanded call site with nested class as requested.
-            self._handle = ray.remote(Remote.RemoteDBX).remote(env=env, revision=revision)
+        if handle is not None and revision is not None:
+            raise ValueError("Remote: Cannot provide both 'handle' and 'revision'")
+        self._handle = handle
+        if handle is None:
+            self._handle = ray.remote(Remote.RemoteDBX).remote(revision=revision)
 
     def __getattr__(self, name):
         """
@@ -2269,24 +2264,24 @@ class Remote:
         return self._unwrap_or_proxy(res)
 
 
-def remote(*, revision=None, env=None, log: Logger = Logger()):
+def remote(*, revision=None, log: Logger = Logger()):
     """
     Instantiate a remote dbx interpreter and return a Remote handle to it.
     """
-    combined_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
+    dbx_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
+    if not ray.is_initialized():
+        ray.init(runtime_env={'env_vars': dbx_env}, ignore_reinit_error=True)
     if DBXWRKREPO is not None:
-        combined_env['DBXGITREPO'] = DBXWRKREPO
-    if env:
-        combined_env.update(env)
-    log.verbose(f"INSTANTIATING Remote with env: {combined_env}, revision: {revision}")
-    return Remote(env=combined_env, revision=revision)
+        dbx_env['DBXGITREPO'] = DBXWRKREPO
+    log.verbose(f"INSTANTIATING Remote with env: {dbx_env}, revision: {revision}")
+    return Remote(revision=revision)
 
 
 class RemoteCallableExecutor:
-    def __init__(self, *, n_threads, revision=None, env=None, log: Logger = Logger()):
+    def __init__(self, *, n_threads, revision=None, log: Logger = Logger()):
         self.n_threads = n_threads
         self.log = log
-        self.workers = [remote(revision=revision, env=env) for _ in range(n_threads)]
+        self.workers = [remote(revision=revision) for _ in range(n_threads)]
 
     #ALIAS
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
@@ -2374,10 +2369,10 @@ class RemoteCallableExecutor:
 
 
 class RemoteDatablocksBuilder:
-    def __init__(self, *, n_threads: int = 1, revision=None, env=None, log: Logger = Logger()):
+    def __init__(self, *, n_threads: int = 1, revision=None, log: Logger = Logger()):
         self.n_threads = n_threads
         self.log = log
-        self.executor = RemoteCallableExecutor(n_threads=n_threads, revision=revision, env=env, log=log)
+        self.executor = RemoteCallableExecutor(n_threads=n_threads, revision=revision, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:

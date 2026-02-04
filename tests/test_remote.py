@@ -5,12 +5,11 @@ This module contains unit tests for the Ray-based RPC and distributed execution 
 in dbx. The tests verify:
 
 1. test_remote_instantiation: Basic connectivity and remote actor creation via `remote()`.
-2. test_environ_propagation: Correct propagation of environment variables to remote workers.
-3. test_remote_apply: Execution of arbitrary callables on remote actors using `run()`.
-4. test_remote_callable_executor: Parallel task execution across multiple workers using `RemoteCallableExecutor`.
-5. test_nested_proxying: Handling of objects returned by remote actors (proxies within proxies).
-6. test_remote_exception_handling: Correct propagation and reraising of exceptions from remote tasks.
-7. test_remote_datablocks_builder: Distributed building of Datablocks using `RemoteDatablocksBuilder`.
+2. test_remote_apply: Execution of arbitrary callables on remote actors using `run()`.
+3. test_remote_callable_executor: Parallel task execution across multiple workers using `RemoteCallableExecutor`.
+4. test_nested_proxying: Handling of objects returned by remote actors (proxies within proxies).
+5. test_remote_exception_handling: Correct propagation and reraising of exceptions from remote tasks.
+6. test_remote_datablocks_builder: Distributed building of Datablocks using `RemoteDatablocksBuilder`.
 
 Note: These tests require a clean git repository if DBXGITREPO is set.
 """
@@ -42,11 +41,6 @@ class TestRemote(unittest.TestCase):
         self.assertIsNotNone(r)
         # Verify we can access an attribute from the remote dbx module
         self.assertIsNotNone(r.Logger)
-
-    def test_environ_propagation(self):
-        """Verify that env-passed variables are available in the remote environment."""
-        r = remote(env={"TEST_KEY": "test_value"})
-        self.assertEqual(r.environ("TEST_KEY"), "test_value")
 
     def test_remote_apply(self):
         """Verify executing a local function on a remote actor via r.run()."""

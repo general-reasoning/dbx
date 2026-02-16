@@ -2462,7 +2462,8 @@ class RemoteCallableExecutor:
                 self.log.verbose("Raising exception")
                 raise e
             self.log.debug("Workers successfully joined")
-        return payloads
+        flat_payloads = [payload for sublist in payloads for payload in sublist]
+        return flat_payloads
 
     def __exec_callables__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
         self.log.debug(f"Executing {len(callables)} callables on worker {thread_idx}")

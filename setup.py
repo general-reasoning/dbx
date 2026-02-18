@@ -16,7 +16,7 @@ def get_requirements():
 
 setuptools.setup(
     name="dbx",
-    version="0.0.3",
+    version="0.1.0",
     author="Dmitry Karpeyev",
     author_email="dmitry.karpeyev@gmail.com",
     description="Data experiment management hub",
@@ -31,6 +31,6 @@ setuptools.setup(
         'dbx.print=dbx:pprint',
         'dbx.pprint=dbx:pprint',
     ]},
-    python_requires='>=3.7', 
+    python_requires='>=3.12', 
     install_requires=get_requirements(),
 )

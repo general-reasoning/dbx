@@ -670,6 +670,9 @@ class Datablock:
                 aa = a
             return aa
 
+        def fields(self):
+            return {f.name: f.type for f in fields(self)}
+
     @dataclass
     class CONFIG:
         class LazyLoader:

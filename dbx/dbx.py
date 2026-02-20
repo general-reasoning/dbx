@@ -1514,7 +1514,7 @@ class Datablock:
                 elif isinstance(value, str):
                     _spec_[k] = value
                 else:
-                    _spec_[k] = repr(value)
+                    _spec_[k] = value
         else:
             raise ValueError(f"Unknown expansion: {repr(expansion)}")
         return _spec_
@@ -1767,7 +1767,7 @@ class Datablock:
         }])
         df.to_parquet(journal_path)
         
-        tagstr = "with tag {repr(self.tag)} " if self.tag is not None else ""
+        tagstr = f"with tag {repr(self.tag)} " if self.tag is not None else ""
         self.log.debug(f"WROTE JOURNAL entry for event {repr(event)} {tagstr}"
                          f"to journal_path {journal_path}")
 
@@ -1825,8 +1825,10 @@ def quote(obj, *args, tag="$", **kwargs):
         assert len(kwargs) == 0, f"Nonempty kwargs for a noncallable obj: {kwargs}"
         if isinstance(obj, Datablock):
             _quote = obj.quote()
-        else:
+        elif isinstance(obj, str):
             _quote = repr(obj)
+        else:
+            _quote = obj
         log.detailed(f"===============> Quoted {obj=} to {repr(_quote)}")
     else:
         func = obj

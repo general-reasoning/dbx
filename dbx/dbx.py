@@ -202,6 +202,10 @@ class Tee:
         for f in self.files:
             f.flush()
 
+    def __getattr__(self, name):
+        """Proxy all missing attributes to the first file/stream."""
+        return getattr(self.files[0], name)
+
 
 class JournalEntry(pd.Series):
     def __init__(self, series: pd.Series, *, logger: Logger = Logger(name="JournalEntry")):
@@ -931,12 +935,14 @@ class Datablock:
 
     def build(self, *args, **kwargs):
         if self.capture_output:
-            self.log.verbose(f"-------------------- Capturing stdout to {self._logpath()} ------------------")
+            self.log.verbose(f"-------------------- Capturing stdout/stderr to {self._logpath()} ------------------")
             stdout = sys.stdout
+            stderr = sys.stderr
             logpath = self._logpath()
             outfs, _ = fsspec.url_to_fs(logpath)
-            captured_stdout_stream = outfs.open(logpath, "w", encoding="utf-8")
-            sys.stdout = Tee(stdout, captured_stdout_stream)
+            captured_stream = outfs.open(logpath, "w", encoding="utf-8")
+            sys.stdout = Tee(stdout, captured_stream)
+            sys.stderr = Tee(stderr, captured_stream)
         try:
             if not self.valid():
                 self.__pre_build__(*args, **kwargs)
@@ -954,7 +960,8 @@ class Datablock:
         finally:
             if self.capture_output:
                 sys.stdout = stdout
-                captured_stdout_stream.close()
+                sys.stderr = stderr
+                captured_stream.close()
         return self
 
     def __pre_build__(self, *args, **kwargs):

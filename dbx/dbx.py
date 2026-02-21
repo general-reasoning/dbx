@@ -817,9 +817,9 @@ class Datablock:
     def set(self, **kw):
         _kw = copy.deepcopy(self.__getstate__())
         kwargs = _kw.pop('kwargs', {})
-        kwargs.update(**kw)
-        kwargs.update(**_kw)
-        return self.__class__(**kwargs)
+        _kw.update(**kwargs) # Merge old explicit and indirect params
+        _kw.update(**kw)     # Update with NEW params (prioritized)
+        return self.__class__(**_kw)
     
     def replace(self, **kw):
         return self.set(**kw)

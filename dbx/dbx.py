@@ -16,13 +16,13 @@ import pickle
 import pprint as _pprint_
 import queue
 import ray
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 import traceback as tb
 from typing import Union, Optional, Sequence, Callable
-import uuid
-import yaml
 
 
 import git
@@ -2284,6 +2284,111 @@ class MultiprocessingDatablockBuilder:
 
     
 
+class SlurmRayCluster:
+    """
+    Manages a Ray cluster running inside a Slurm job.
+    """
+    def __init__(self, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log=Logger()):
+        self.log = log
+        self.job_id = None
+        self.ray_address = None
+        
+        # Create a temp dir for slurm logs and address file
+        self.tmpdir = tempfile.mkdtemp(prefix='dbx_slurm_')
+        addr_file = os.path.join(self.tmpdir, 'ray_address')
+        
+        partition_str = f"#SBATCH --partition={partition}" if partition else ""
+        gpu_str = f"#SBATCH --gres=gpu:{gpus}" if gpus > 0 else f"##SBATCH --gres=gpu:0" # Comment out if 0
+        
+        # We need to escape $ for the shell script when using f-strings
+        script = f"""#!/bin/bash
+#SBATCH --nodes={nodes}
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task={cpus}
+#SBATCH --mem={mem}
+#SBATCH --time={time}
+{partition_str}
+{gpu_str}
+#SBATCH --job-name=dbx-ray
+#SBATCH --output={self.tmpdir}/slurm-%j.out
+
+nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
+nodes_array=($nodes)
+head_node=${{nodes_array[0]}}
+# Try to get the IP address of the head node
+head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address | awk '{{print $1}}')
+port=6379
+
+echo "HEAD_NODE_IP: ${{head_node_ip}}"
+echo "${{head_node_ip}}:${{port}}" > {addr_file}
+
+# Start Ray head
+echo "Starting Ray head on ${{head_node}} (${{head_node_ip}})"
+srun --nodes=1 --ntasks=1 -w "$head_node" ray start --head --port=${{port}} --num-cpus={cpus} --num-gpus={gpus} --block &
+
+# Start Ray workers
+for ((i = 1; i < nodes; i++)); do
+    node_i=${{nodes_array[$i]}}
+    echo "Starting Ray worker on ${{node_i}}"
+    srun --nodes=1 --ntasks=1 -w "$node_i" ray start --address="${{head_node_ip}}:${{port}}" --num-cpus={cpus} --num-gpus={gpus} --block &
+done
+
+wait
+"""
+        script_file = os.path.join(self.tmpdir, 'slurm_script.sh')
+        with open(script_file, 'w') as f:
+            f.write(script)
+            
+        cmd = ["sbatch", script_file]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"Failed to submit Slurm job: {res.stderr}")
+            
+        # Example output: "Submitted batch job 123456"
+        self.job_id = res.stdout.strip().split()[-1]
+        self.log.info(f"Submitted Slurm job {self.job_id} for Ray cluster")
+        
+        self.log.info("Waiting for Ray cluster to start (this may take a minute)...")
+        start_time = time.time()
+        while time.time() - start_time < 600: # 10 minutes max
+            if os.path.exists(addr_file) and os.path.getsize(addr_file) > 0:
+                with open(addr_file, 'r') as f:
+                    self.ray_address = f.read().strip()
+                break
+            
+            # Check if job is still in queue or running
+            job_status_res = subprocess.run(["squeue", "-j", self.job_id, "-h", "-o", "%t"], capture_output=True, text=True)
+            job_status = job_status_res.stdout.strip()
+            if job_status_res.returncode == 0 and job_status:
+                if job_status in ['F', 'NF', 'TO', 'CA', 'CD']:
+                    raise RuntimeError(f"Slurm job {self.job_id} failed or was cancelled (status: {job_status})")
+            elif job_status_res.returncode != 0:
+                # squeue might fail if job is already finished and moved to history
+                pass
+            
+            time.sleep(2)
+            
+        if not self.ray_address:
+            # Cleanup on timeout
+            subprocess.run(["scancel", self.job_id])
+            raise RuntimeError("Timed out waiting for Ray cluster to start on Slurm")
+            
+        self.log.info(f"Ray cluster started at {self.ray_address}")
+
+    def cancel(self):
+        """Cancel the Slurm job and cleanup temporary files."""
+        if self.job_id:
+            self.log.info(f"Cancelling Slurm job {self.job_id}")
+            subprocess.run(["scancel", self.job_id])
+            self.job_id = None
+        
+        if hasattr(self, 'tmpdir') and os.path.exists(self.tmpdir):
+            try:
+                import shutil
+                shutil.rmtree(self.tmpdir)
+            except Exception as e:
+                self.log.debug(f"Failed to cleanup temp dir {self.tmpdir}: {e}")
+
 class Remote:
     """
     A client-side proxy to a remote object running in a Ray Actor.
@@ -2368,15 +2473,24 @@ class Remote:
             res = func(*args, **kwargs)
             return self._wrap(res)
 
-    def __init__(self, handle=None, *, revision=None):
+    def __init__(self, handle=None, *, revision=None, slurm=None):
         """
         Initialize the remote proxy.
         """
         if handle is not None and revision is not None:
             raise ValueError("Remote: Cannot provide both 'handle' and 'revision'")
         self._handle = handle
+        self._slurm = slurm
         if handle is None:
             self._handle = ray.remote(Remote.RemoteDBX).remote(revision=revision)
+
+    def __del__(self):
+        """
+        Ensure Slurm job is cancelled when the Remote instance is deleted.
+        """
+        if hasattr(self, '_slurm') and self._slurm:
+            self._slurm.cancel()
+            self._slurm = None
 
     def __getattr__(self, name):
         """
@@ -2405,17 +2519,33 @@ class Remote:
         return self._unwrap_or_proxy(res)
 
 
-def remote(*, revision=None, log: Logger = Logger()):
+def remote(*, revision=None, slurm=None, log: Logger = Logger()):
     """
     Instantiate a remote dbx interpreter and return a Remote handle to it.
     """
     dbx_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
-    if not ray.is_initialized():
+    
+    if slurm and slurm.ray_address:
+        if ray.is_initialized():
+            log.info("Re-initializing Ray to connect to Slurm Ray cluster...")
+            ray.shutdown()
+        ray.init(address=slurm.ray_address, runtime_env={'env_vars': dbx_env}, ignore_reinit_error=True)
+    elif not ray.is_initialized():
         ray.init(runtime_env={'env_vars': dbx_env}, ignore_reinit_error=True)
+        
     if DBXWRKREPO is not None:
         dbx_env['DBXGITREPO'] = DBXWRKREPO
-    log.verbose(f"INSTANTIATING Remote with env: {dbx_env}, revision: {revision}")
-    return Remote(revision=revision)
+    
+    log.verbose(f"INSTANTIATING Remote with env: {dbx_env}, revision: {revision}, slurm: {bool(slurm)}")
+    return Remote(revision=revision, slurm=slurm)
+
+
+def slurm(*, revision=None, log: Logger = Logger(), **kwargs):
+    """
+    Start a Slurm job with a Ray cluster and return a Remote handle to it.
+    """
+    cluster = SlurmRayCluster(log=log, **kwargs)
+    return remote(revision=revision, slurm=cluster, log=log)
 
 
 class RemoteCallableExecutor:

@@ -477,7 +477,7 @@ def eval(s=None):
     return r
 
 
-def slurm_eval(s=None, **kwargs):
+def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger(), **kwargs):
     if s is None:
         if len(sys.argv) < 2:
             raise ValueError(f"Too few args: {sys.argv}")
@@ -487,16 +487,25 @@ def slurm_eval(s=None, **kwargs):
                 k, v = arg.split("=", 1)
                 kwargs[k] = __eval__(v)
     
-    r = slurm_remote(**kwargs)
+    # Merge named args with kwargs (CLI overwrites programmatic defaults if passed)
+    slurm_params = {
+        'revision': revision, 'conda': conda, 'gpus': gpus, 'mem': mem,
+        'cpus': cpus, 'partition': partition, 'nodes': nodes, 'time': time, 'log': log
+    }
+    for k in slurm_params:
+        if k in kwargs:
+            slurm_params[k] = kwargs.pop(k)
+            
+    r = slurm_remote(**slurm_params)
     return r.run(eval, s)
 
 
-def slurm_exec(s=None, **kwargs):
-    return slurm_eval(s, **kwargs)
+def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger(), **kwargs):
+    return slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, time=time, log=log, **kwargs)
 
 
-def slurm_pprint(s=None, **kwargs):
-    _pprint_.pprint(slurm_eval(s, **kwargs))
+def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger(), **kwargs):
+    _pprint_.pprint(slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, time=time, log=log, **kwargs))
 
 
 def pprint(argstr=None):

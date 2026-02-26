@@ -1,3 +1,5 @@
+import atexit
+import collections
 from collections.abc import Iterable, Sequence
 import copy
 from dataclasses import dataclass, fields, asdict, replace, is_dataclass
@@ -17,6 +19,7 @@ import pprint as _pprint_
 import queue
 import ray
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -513,8 +516,16 @@ def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, p
         if k in kwargs:
             slurm_params[k] = kwargs.pop(k)
             
-    r = slurm_remote(**slurm_params)
-    return r.run(eval, s, **kwargs)
+    r = None
+    try:
+        r = slurm_remote(**slurm_params)
+        return r.run(eval, s, **kwargs)
+    finally:
+        if r is not None:
+             # Force cancellation if r goes out of scope or process exits
+             if hasattr(r, '_slurm') and r._slurm:
+                 r._slurm.cancel()
+                 r._slurm = None
 
 
 def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
@@ -2405,45 +2416,53 @@ wait
         self.job_id = res.stdout.strip().split()[-1]
         self.log.info(f"Submitted Slurm job {self.job_id} for Ray cluster")
         
+        # Register for automatic cleanup on exit
+        atexit.register(self.cancel)
+
         self.log.info("Waiting for Ray cluster to start (this may take a minute)...")
         start_time = time_module.time()
-        while time_module.time() - start_time < 600: # 10 minutes max
-            # Check if job is still in queue or running
-            job_status_res = subprocess.run(["squeue", "-j", self.job_id, "-h", "-o", "%t"], capture_output=True, text=True)
-            job_status = job_status_res.stdout.strip()
-            
-            if job_status == 'R':
-                # Job is running, try to get the head node (BatchHost)
-                batch_host_res = subprocess.run(["scontrol", "show", "job", self.job_id], capture_output=True, text=True)
-                match = re.search(r'BatchHost=(\S+)', batch_host_res.stdout)
-                if match:
-                    head_node = match.group(1)
-                    # Use the hostname directly (port is fixed at 6379 as per script)
-                    addr = f"{head_node}:6379"
-                    client_addr = f"ray://{head_node}:10001"
-                    
-                    # Check if port is open
-                    try:
-                        with socket.create_connection((head_node, 6379), timeout=1):
-                            self.ray_address = addr
-                            self.ray_client_address = client_addr
-                            self.log.info(f"Ray cluster started at {head_node}:6379 (Client: {head_node}:10001)")
-                            break
-                    except (socket.timeout, ConnectionRefusedError):
-                        pass
+        try:
+            while time_module.time() - start_time < 600: # 10 minutes max
+                # Check if job is still in queue or running
+                job_status_res = subprocess.run(["squeue", "-j", self.job_id, "-h", "-o", "%t"], capture_output=True, text=True)
+                job_status = job_status_res.stdout.strip()
+                
+                if job_status == 'R':
+                    # Job is running, try to get the head node (BatchHost)
+                    batch_host_res = subprocess.run(["scontrol", "show", "job", self.job_id], capture_output=True, text=True)
+                    match = re.search(r'BatchHost=(\S+)', batch_host_res.stdout)
+                    if match:
+                        head_node = match.group(1)
+                        # Use the hostname directly (port is fixed at 6379 as per script)
+                        addr = f"{head_node}:6379"
+                        client_addr = f"ray://{head_node}:10001"
+                        
+                        # Check if port is open
+                        try:
+                            with socket.create_connection((head_node, 6379), timeout=1):
+                                self.ray_address = addr
+                                self.ray_client_address = client_addr
+                                self.log.info(f"Ray cluster started at {head_node}:6379 (Client: {head_node}:10001)")
+                                break
+                        except (socket.timeout, ConnectionRefusedError):
+                            pass
 
-            if job_status_res.returncode == 0 and job_status:
-                if job_status in ['F', 'NF', 'TO', 'CA', 'CD']:
-                    raise RuntimeError(f"Slurm job {self.job_id} failed or was cancelled (status: {job_status})")
-            elif job_status_res.returncode != 0 and job_status_res.stderr:
-                # squeue might fail if job is already finished and moved to history
-                pass
-            
-            time_module.sleep(2)
-            
+                if job_status_res.returncode == 0 and job_status:
+                    if job_status in ['F', 'NF', 'TO', 'CA', 'CD']:
+                        raise RuntimeError(f"Slurm job {self.job_id} failed or was cancelled (status: {job_status})")
+                elif job_status_res.returncode != 0 and job_status_res.stderr:
+                    # squeue might fail if job is already finished and moved to history
+                    pass
+                
+                time_module.sleep(2)
+        except KeyboardInterrupt:
+            self.log.info(f"Interrupted while waiting for Ray cluster. Cancelling Slurm job {self.job_id}")
+            self.cancel()
+            raise
+
         if not self.ray_address:
             # Cleanup on timeout
-            subprocess.run(["scancel", self.job_id])
+            self.cancel()
             raise RuntimeError("Timed out waiting for Ray cluster to start on Slurm")
             
         # (Already logged cluster start in the loop)

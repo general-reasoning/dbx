@@ -20,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
+import time as time_module
 import traceback as tb
 from typing import Union, Optional, Sequence, Callable
 import uuid
@@ -123,7 +123,10 @@ class Logger:
                 env_key = f'DBXLOG{name.upper()}'
                 env_val = os.environ.get(env_key)
                 if env_val is not None:
-                    result = __eval__(env_val)
+                    try:
+                        result = __eval__(env_val)
+                    except (NameError, SyntaxError):
+                        result = env_val
                 else:
                     result = _defaults_[name]
             setattr(self, f'_{name}_', result)
@@ -400,8 +403,10 @@ def make_google_cloud_storage_download_url(path):
 def get_named_const_and_cxt(name):
     bits = name.split(".")
     modbits = bits[:-1]
-    prefix = None
     cxt = {}
+    if not modbits:
+        return None, cxt
+    prefix = None
     for modbit in modbits:
         if prefix is not None:
             modname = prefix + "." + modbit
@@ -462,16 +467,23 @@ def eval_term(name):
     return term
 
 
-def eval(s=None):
+def eval(s=None, **kwargs):
     if s is None:
-        if len(sys.argv) > 2:
-            raise ValueError(f"Too many args: {sys.argv}")
-        elif len(sys.argv) == 1:
+        if len(sys.argv) < 2:
             raise ValueError(f"Too few args: {sys.argv}")
         s = sys.argv[1]
+        for arg in sys.argv[2:]:
+            if "=" in arg:
+                k, v = arg.split("=", 1)
+                try:
+                    kwargs[k] = __eval__(v)
+                except (NameError, SyntaxError):
+                    kwargs[k] = v
+    
     lb = s.find("(")
     lb = lb if lb != -1 else len(s)
     _, cxt = get_named_const_and_cxt(s[:lb])
+    cxt.update(kwargs)
     r = __eval__(s, globals(), cxt)
     
     return r
@@ -485,7 +497,10 @@ def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, 
         for arg in sys.argv[2:]:
             if "=" in arg:
                 k, v = arg.split("=", 1)
-                kwargs[k] = __eval__(v)
+                try:
+                    kwargs[k] = __eval__(v)
+                except (NameError, SyntaxError):
+                    kwargs[k] = v
     
     # Merge named args with kwargs (CLI overwrites programmatic defaults if passed)
     slurm_params = {
@@ -497,7 +512,7 @@ def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, 
             slurm_params[k] = kwargs.pop(k)
             
     r = slurm_remote(**slurm_params)
-    return r.run(eval, s)
+    return r.run(eval, s, **kwargs)
 
 
 def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
@@ -508,12 +523,12 @@ def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1
     _pprint_.pprint(slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs))
 
 
-def pprint(argstr=None):
-    _pprint_.pprint(exec(argstr))
+def pprint(argstr=None, **kwargs):
+    _pprint_.pprint(exec(argstr, **kwargs))
 
 
-def exec(s=None):
-    return eval(s)
+def exec(s=None, **kwargs):
+    return eval(s, **kwargs)
 
 
 def write_str(text, path, *, log=Logger(), debug: bool = False):
@@ -2384,8 +2399,8 @@ wait
         self.log.info(f"Submitted Slurm job {self.job_id} for Ray cluster")
         
         self.log.info("Waiting for Ray cluster to start (this may take a minute)...")
-        start_time = time.time()
-        while time.time() - start_time < 600: # 10 minutes max
+        start_time = time_module.time()
+        while time_module.time() - start_time < 600: # 10 minutes max
             if os.path.exists(addr_file) and os.path.getsize(addr_file) > 0:
                 with open(addr_file, 'r') as f:
                     self.ray_address = f.read().strip()
@@ -2401,7 +2416,7 @@ wait
                 # squeue might fail if job is already finished and moved to history
                 pass
             
-            time.sleep(2)
+            time_module.sleep(2)
             
         if not self.ray_address:
             # Cleanup on timeout

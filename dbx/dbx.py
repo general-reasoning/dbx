@@ -2632,7 +2632,7 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
 
     # If we are using a remote cluster, any path in /tmp on the login node will be inaccessible to workers.
     # We revert to the original repository path (usually in /home) which is shared.
-    if slurm and dbx_env.get('DBXGITREPO', '').startswith('/tmp/'):
+    if slurm:
         dbx_env['DBXGITREPO'] = _DBXGITREPO_
 
     runtime_env = {'env_vars': dbx_env}

@@ -477,6 +477,28 @@ def eval(s=None):
     return r
 
 
+def slurm_eval(s=None, **kwargs):
+    if s is None:
+        if len(sys.argv) < 2:
+            raise ValueError(f"Too few args: {sys.argv}")
+        s = sys.argv[1]
+        for arg in sys.argv[2:]:
+            if "=" in arg:
+                k, v = arg.split("=", 1)
+                kwargs[k] = __eval__(v)
+    
+    r = slurm_remote(**kwargs)
+    return r.run(eval, s)
+
+
+def slurm_exec(s=None, **kwargs):
+    return slurm_eval(s, **kwargs)
+
+
+def slurm_pprint(s=None, **kwargs):
+    _pprint_.pprint(slurm_eval(s, **kwargs))
+
+
 def pprint(argstr=None):
     _pprint_.pprint(exec(argstr))
 
@@ -2546,7 +2568,7 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
     return Remote(revision=revision, slurm=slurm)
 
 
-def slurm(*, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger()):
+def slurm_remote(*, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger()):
     """
     Start a Slurm job with a Ray cluster and return a Remote handle to it.
     """
@@ -2715,14 +2737,12 @@ class UNSAFE_datablock_journal_puller:
         return dbk, copied
     
 
-def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, datablocks: Optional[Sequence[Datablock]] = None, n_workers: int = 0, throw: bool = False, clear: bool = False, log: Logger = Logger(), event="build:end", revision=None, date=None, **journal_kwargs):
+def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, n_workers: int = 0, throw: bool = False, clear: bool = False, log: Logger = Logger(), event="build:end", revision=None, date=None, **other_journal_kwargs):
     """
     Pull datablocks from the journal based on specified criteria.
 
     Args:
         datablock_classname (str): The name of the Datablock class to pull.
-        datablocks (Optional[Sequence[Datablock]]): An optional sequence of existing datablocks.
-            Used to check against handles to avoid redundant pulls.
         n_workers (int): Number of worker threads to use for pulling. 
             If 0, pulling is performed sequentially in the main thread.
         throw (bool): If True, exceptions encountered during pulling will be raised.
@@ -2732,7 +2752,7 @@ def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, datablocks: Opti
         event (str): The journal event to filter by (e.g., "build:end").
         revision (Optional[str]): The journal revision to filter by.
         date (Optional[str/datetime]): The journal date to filter by.
-        **journal_kwargs: Additional keyword arguments used to filter the journal query.
+        **other_journal_kwargs: Additional keyword arguments used to filter the journal query in addition to event, revision, and date.
 
     Returns:
         tuple[tuple[Datablock, ...], tuple[bool, ...]]: A tuple containing:
@@ -2740,6 +2760,7 @@ def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, datablocks: Opti
             - A tuple of booleans indicating if each datablock was successfully copied.
     """
     log.verbose(f"Pulling {datablock_classname} ...")
+    journal_kwargs = other_journal_kwargs.copy()
     if event is not None:
         journal_kwargs['event'] = event
     if revision is not None:

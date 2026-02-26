@@ -477,7 +477,7 @@ def eval(s=None):
     return r
 
 
-def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger(), **kwargs):
+def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
     if s is None:
         if len(sys.argv) < 2:
             raise ValueError(f"Too few args: {sys.argv}")
@@ -490,7 +490,7 @@ def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, 
     # Merge named args with kwargs (CLI overwrites programmatic defaults if passed)
     slurm_params = {
         'revision': revision, 'conda': conda, 'gpus': gpus, 'mem': mem,
-        'cpus': cpus, 'partition': partition, 'nodes': nodes, 'time': time, 'log': log
+        'cpus': cpus, 'partition': partition, 'nodes': nodes, 'nodelist': nodelist, 'time': time, 'log': log
     }
     for k in slurm_params:
         if k in kwargs:
@@ -500,12 +500,12 @@ def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, 
     return r.run(eval, s)
 
 
-def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger(), **kwargs):
-    return slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, time=time, log=log, **kwargs)
+def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
+    return slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs)
 
 
-def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger(), **kwargs):
-    _pprint_.pprint(slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, time=time, log=log, **kwargs))
+def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
+    _pprint_.pprint(slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs))
 
 
 def pprint(argstr=None):
@@ -2321,7 +2321,7 @@ class SlurmRayCluster:
     """
     Manages a Ray cluster running inside a Slurm job.
     """
-    def __init__(self, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log=Logger()):
+    def __init__(self, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log=Logger()):
         self.log = log
         self.job_id = None
         self.ray_address = None
@@ -2331,6 +2331,7 @@ class SlurmRayCluster:
         addr_file = os.path.join(self.tmpdir, 'ray_address')
         
         partition_str = f"#SBATCH --partition={partition}" if partition else ""
+        nodelist_str = f"#SBATCH --nodelist={nodelist}" if nodelist else ""
         gpu_str = f"#SBATCH --gres=gpu:{gpus}" if gpus > 0 else f"##SBATCH --gres=gpu:0" # Comment out if 0
         
         # We need to escape $ for the shell script when using f-strings
@@ -2341,6 +2342,7 @@ class SlurmRayCluster:
 #SBATCH --mem={mem}
 #SBATCH --time={time}
 {partition_str}
+{nodelist_str}
 {gpu_str}
 #SBATCH --job-name=dbx-ray
 #SBATCH --output={self.tmpdir}/slurm-%j.out
@@ -2577,11 +2579,11 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
     return Remote(revision=revision, slurm=slurm)
 
 
-def slurm_remote(*, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger()):
+def slurm_remote(*, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger()):
     """
     Start a Slurm job with a Ray cluster and return a Remote handle to it.
     """
-    cluster = SlurmRayCluster(gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, time=time, log=log)
+    cluster = SlurmRayCluster(gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log)
     return remote(revision=revision, slurm=cluster, conda=conda, log=log)
 
 

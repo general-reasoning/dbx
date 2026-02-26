@@ -2716,6 +2716,29 @@ class UNSAFE_datablock_journal_puller:
     
 
 def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, datablocks: Optional[Sequence[Datablock]] = None, n_workers: int = 0, throw: bool = False, clear: bool = False, log: Logger = Logger(), event="build:end", revision=None, date=None, **journal_kwargs):
+    """
+    Pull datablocks from the journal based on specified criteria.
+
+    Args:
+        datablock_classname (str): The name of the Datablock class to pull.
+        datablocks (Optional[Sequence[Datablock]]): An optional sequence of existing datablocks.
+            Used to check against handles to avoid redundant pulls.
+        n_workers (int): Number of worker threads to use for pulling. 
+            If 0, pulling is performed sequentially in the main thread.
+        throw (bool): If True, exceptions encountered during pulling will be raised.
+            If False, they will be logged as debug information.
+        clear (bool): If True, valid datablocks will be cleared after being instantiated.
+        log (Logger): Logger instance for status and debug messages.
+        event (str): The journal event to filter by (e.g., "build:end").
+        revision (Optional[str]): The journal revision to filter by.
+        date (Optional[str/datetime]): The journal date to filter by.
+        **journal_kwargs: Additional keyword arguments used to filter the journal query.
+
+    Returns:
+        tuple[tuple[Datablock, ...], tuple[bool, ...]]: A tuple containing:
+            - A tuple of instantiated Datablock objects.
+            - A tuple of booleans indicating if each datablock was successfully copied.
+    """
     log.verbose(f"Pulling {datablock_classname} ...")
     if event is not None:
         journal_kwargs['event'] = event

@@ -51,6 +51,14 @@ __eval__ = __builtins__['eval']
 
 
 DBXGITREPO = os.environ.get('DBXGITREPO')
+if DBXGITREPO is None:
+    try:
+        import git
+        _repo = git.Repo('.', search_parent_directories=True)
+        DBXGITREPO = _repo.working_tree_dir
+    except (ImportError, Exception):
+        pass
+_DBXGITREPO_ = DBXGITREPO
 DBXWRKREPO = None
 DBXWRKROOT = None
 
@@ -64,6 +72,8 @@ def gitwrkreposetup(revision=None, *, reason: str = "", log=None):
     global DBXWRKROOT
     use_dbxgitrepo = os.environ.get('DBXGITREPO') or revision is not None
     if use_dbxgitrepo and DBXWRKREPO is None:
+        if DBXGITREPO is None:
+            raise ValueError("DBXGITREPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
         log.info(f"SETTING UP TEMPORARY DBXWRKROOT from {DBXGITREPO=} {reason}")
         DBXWRKROOT = tempfile.TemporaryDirectory()
         package = os.path.basename(DBXGITREPO)
@@ -528,11 +538,11 @@ def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, p
                  r._slurm = None
 
 
-def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
+def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
     return slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs)
 
 
-def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
+def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
     _pprint_.pprint(slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs))
 
 
@@ -2349,7 +2359,7 @@ class SlurmRayCluster:
     """
     Manages a Ray cluster running inside a Slurm job.
     """
-    def __init__(self, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log=Logger()):
+    def __init__(self, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log=Logger()):
         self.log = log
         self.job_id = None
         self.ray_address = None
@@ -2617,6 +2627,14 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
     """
     dbx_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
     
+    if DBXWRKREPO is not None:
+        dbx_env['DBXGITREPO'] = DBXWRKREPO
+
+    # If we are using a remote cluster, any path in /tmp on the login node will be inaccessible to workers.
+    # We revert to the original repository path (usually in /home) which is shared.
+    if slurm and dbx_env.get('DBXGITREPO', '').startswith('/tmp/'):
+        dbx_env['DBXGITREPO'] = _DBXGITREPO_
+
     runtime_env = {'env_vars': dbx_env}
     if conda:
         runtime_env['conda'] = conda
@@ -2630,15 +2648,12 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
         ray.init(address=address, runtime_env=runtime_env, ignore_reinit_error=True)
     elif not ray.is_initialized():
         ray.init(runtime_env=runtime_env, ignore_reinit_error=True)
-        
-    if DBXWRKREPO is not None:
-        dbx_env['DBXGITREPO'] = DBXWRKREPO
     
     log.verbose(f"INSTANTIATING Remote with env: {dbx_env}, revision: {revision}, slurm: {bool(slurm)}, conda: {conda}")
     return Remote(revision=revision, slurm=slurm)
 
 
-def slurm_remote(*, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger()):
+def slurm_remote(*, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger()):
     """
     Start a Slurm job with a Ray cluster and return a Remote handle to it.
     """

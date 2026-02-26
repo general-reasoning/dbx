@@ -2521,40 +2521,44 @@ class Remote:
         return self._unwrap_or_proxy(res)
 
 
-def remote(*, revision=None, slurm=None, log: Logger = Logger()):
+def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
     """
     Instantiate a remote dbx interpreter and return a Remote handle to it.
     """
     dbx_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
     
+    runtime_env = {'env_vars': dbx_env}
+    if conda:
+        runtime_env['conda'] = conda
+
     if slurm and slurm.ray_address:
         if ray.is_initialized():
             log.info("Re-initializing Ray to connect to Slurm Ray cluster...")
             ray.shutdown()
-        ray.init(address=slurm.ray_address, runtime_env={'env_vars': dbx_env}, ignore_reinit_error=True)
+        ray.init(address=slurm.ray_address, runtime_env=runtime_env, ignore_reinit_error=True)
     elif not ray.is_initialized():
-        ray.init(runtime_env={'env_vars': dbx_env}, ignore_reinit_error=True)
+        ray.init(runtime_env=runtime_env, ignore_reinit_error=True)
         
     if DBXWRKREPO is not None:
         dbx_env['DBXGITREPO'] = DBXWRKREPO
     
-    log.verbose(f"INSTANTIATING Remote with env: {dbx_env}, revision: {revision}, slurm: {bool(slurm)}")
+    log.verbose(f"INSTANTIATING Remote with env: {dbx_env}, revision: {revision}, slurm: {bool(slurm)}, conda: {conda}")
     return Remote(revision=revision, slurm=slurm)
 
 
-def slurm(*, revision=None, log: Logger = Logger(), **kwargs):
+def slurm(*, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, time='01:00:00', log: Logger = Logger()):
     """
     Start a Slurm job with a Ray cluster and return a Remote handle to it.
     """
-    cluster = SlurmRayCluster(log=log, **kwargs)
-    return remote(revision=revision, slurm=cluster, log=log)
+    cluster = SlurmRayCluster(gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, time=time, log=log)
+    return remote(revision=revision, slurm=cluster, conda=conda, log=log)
 
 
 class RemoteCallableExecutor:
-    def __init__(self, *, n_workers, revision=None, log: Logger = Logger()):
+    def __init__(self, *, n_workers, revision=None, conda=None, log: Logger = Logger()):
         self.n_workers = n_workers
         self.log = log
-        self.workers = [remote(revision=revision) for _ in range(n_workers)]
+        self.workers = [remote(revision=revision, conda=conda) for _ in range(n_workers)]
 
     #ALIAS
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
@@ -2643,10 +2647,10 @@ class RemoteCallableExecutor:
 
 
 class RemoteDatablocksBuilder:
-    def __init__(self, *, n_workers: int = 1, revision=None, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int = 1, revision=None, conda=None, log: Logger = Logger()):
         self.n_workers = n_workers
         self.log = log
-        self.executor = RemoteCallableExecutor(n_workers=n_workers, revision=revision, log=log)
+        self.executor = RemoteCallableExecutor(n_workers=n_workers, revision=revision, conda=conda, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:

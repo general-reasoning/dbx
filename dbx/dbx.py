@@ -16,6 +16,8 @@ import pickle
 import pprint as _pprint_
 import queue
 import ray
+import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -489,7 +491,7 @@ def eval(s=None, **kwargs):
     return r
 
 
-def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='16G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
+def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
     if s is None:
         if len(sys.argv) < 2:
             raise ValueError(f"Too few args: {sys.argv}")
@@ -2340,16 +2342,22 @@ class SlurmRayCluster:
         self.log = log
         self.job_id = None
         self.ray_address = None
+        self.ray_client_address = None
         
-        # Create a temp dir for slurm logs and address file
-        self.tmpdir = tempfile.mkdtemp(prefix='dbx_slurm_')
-        addr_file = os.path.join(self.tmpdir, 'ray_address')
+        # Create a temp dir for slurm logs
+        dbx_slurm_home = os.path.expanduser('~/.dbx/slurm')
+        os.makedirs(dbx_slurm_home, exist_ok=True)
+        self.tmpdir = tempfile.mkdtemp(prefix='job_', dir=dbx_slurm_home)
         
         partition_str = f"#SBATCH --partition={partition}" if partition else ""
         nodelist_str = f"#SBATCH --nodelist={nodelist}" if nodelist else ""
-        gpu_str = f"#SBATCH --gres=gpu:{gpus}" if gpus > 0 else f"##SBATCH --gres=gpu:0" # Comment out if 0
+        if gpus is None:
+            gpu_str = "##SBATCH --gres=gpu:0"
+        elif isinstance(gpus, int):
+            gpu_str = f"#SBATCH --gres=gpu:{gpus}" if gpus > 0 else f"##SBATCH --gres=gpu:0"
+        else:
+            gpu_str = f"#SBATCH --gres=gpu:{gpus}"
         
-        # We need to escape $ for the shell script when using f-strings
         script = f"""#!/bin/bash
 #SBATCH --nodes={nodes}
 #SBATCH --ntasks-per-node=1
@@ -2370,7 +2378,6 @@ head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address |
 port=6379
 
 echo "HEAD_NODE_IP: ${{head_node_ip}}"
-echo "${{head_node_ip}}:${{port}}" > {addr_file}
 
 # Start Ray head
 echo "Starting Ray head on ${{head_node}} (${{head_node_ip}})"
@@ -2401,18 +2408,34 @@ wait
         self.log.info("Waiting for Ray cluster to start (this may take a minute)...")
         start_time = time_module.time()
         while time_module.time() - start_time < 600: # 10 minutes max
-            if os.path.exists(addr_file) and os.path.getsize(addr_file) > 0:
-                with open(addr_file, 'r') as f:
-                    self.ray_address = f.read().strip()
-                break
-            
             # Check if job is still in queue or running
             job_status_res = subprocess.run(["squeue", "-j", self.job_id, "-h", "-o", "%t"], capture_output=True, text=True)
             job_status = job_status_res.stdout.strip()
+            
+            if job_status == 'R':
+                # Job is running, try to get the head node (BatchHost)
+                batch_host_res = subprocess.run(["scontrol", "show", "job", self.job_id], capture_output=True, text=True)
+                match = re.search(r'BatchHost=(\S+)', batch_host_res.stdout)
+                if match:
+                    head_node = match.group(1)
+                    # Use the hostname directly (port is fixed at 6379 as per script)
+                    addr = f"{head_node}:6379"
+                    client_addr = f"ray://{head_node}:10001"
+                    
+                    # Check if port is open
+                    try:
+                        with socket.create_connection((head_node, 6379), timeout=1):
+                            self.ray_address = addr
+                            self.ray_client_address = client_addr
+                            self.log.info(f"Ray cluster started at {head_node}:6379 (Client: {head_node}:10001)")
+                            break
+                    except (socket.timeout, ConnectionRefusedError):
+                        pass
+
             if job_status_res.returncode == 0 and job_status:
                 if job_status in ['F', 'NF', 'TO', 'CA', 'CD']:
                     raise RuntimeError(f"Slurm job {self.job_id} failed or was cancelled (status: {job_status})")
-            elif job_status_res.returncode != 0:
+            elif job_status_res.returncode != 0 and job_status_res.stderr:
                 # squeue might fail if job is already finished and moved to history
                 pass
             
@@ -2423,7 +2446,7 @@ wait
             subprocess.run(["scancel", self.job_id])
             raise RuntimeError("Timed out waiting for Ray cluster to start on Slurm")
             
-        self.log.info(f"Ray cluster started at {self.ray_address}")
+        # (Already logged cluster start in the loop)
 
     def cancel(self):
         """Cancel the Slurm job and cleanup temporary files."""
@@ -2583,7 +2606,9 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
         if ray.is_initialized():
             log.info("Re-initializing Ray to connect to Slurm Ray cluster...")
             ray.shutdown()
-        ray.init(address=slurm.ray_address, runtime_env=runtime_env, ignore_reinit_error=True)
+        # Use ray:// protocol for remote clusters to avoid shared /tmp/ray filesystem requirements
+        address = getattr(slurm, 'ray_client_address', slurm.ray_address)
+        ray.init(address=address, runtime_env=runtime_env, ignore_reinit_error=True)
     elif not ray.is_initialized():
         ray.init(runtime_env=runtime_env, ignore_reinit_error=True)
         

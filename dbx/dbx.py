@@ -74,7 +74,7 @@ def gitwrkreposetup(revision=None, *, reason: str = "", log=None):
     if use_dbxgitrepo and DBXWRKREPO is None:
         if DBXGITREPO is None:
             raise ValueError("DBXGITREPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
-        log.info(f"SETTING UP TEMPORARY DBXWRKROOT from {DBXGITREPO=} {reason}")
+        log.info(f"SETTING UP TEMPORARY DBXWRKROOT from {DBXGITREPO=} {reason} with revision {revision}")
         DBXWRKROOT = tempfile.TemporaryDirectory()
         package = os.path.basename(DBXGITREPO)
         globals()['DBXWRKREPO'] = os.path.join(DBXWRKROOT.name, package)
@@ -89,6 +89,9 @@ def gitwrkreposetup(revision=None, *, reason: str = "", log=None):
         log.silent(f"os.environ['DBXGITREPO'] = {os.environ['DBXGITREPO']}, os.environ['DBXWRKREPO'] = {os.environ.get('DBXWRKREPO')}")
     if revision is not None:
         gitcheckout(globals()['DBXWRKREPO'], revision)
+        log.info(f"Checked out {globals()['DBXWRKREPO']} to revision {revision}")
+    else:
+        log.info(f"Using {globals()['DBXWRKREPO']} at HEAD")
 
 
 def journal(cls_or_df, root=None, **kwargs):
@@ -232,6 +235,9 @@ class JournalEntry(pd.Series):
         super().__init__(series)
         self.logger = logger
 
+    def __repr__(self):
+        return f"JournalEntry:{self.anchor}/{self.hash}"
+
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
             if hasattr(self, thing) and getattr(self, thing) is not None:
@@ -285,8 +291,14 @@ class JournalEntry(pd.Series):
     def instantiate(self, gitrepo=None, revision=None):
         if revision == 'journal_entry':
             revision = self.revision
+            self.logger.info(f"Instantiating {self} with revision from journal entry {revision}")
+        else:
+            self.logger.info(f"Instantiating {self} with revision {revision}")
         if gitrepo == 'journal_entry':
             gitrepo = self.gitrepo
+            self.logger.info(f"Instantiating {self} with gitrepo from journal entry {gitrepo}")
+        else:
+            self.logger.info(f"Instantiating {self} with gitrepo {gitrepo}")
         return self.eval('quote', eval_term=True, gitrepo=gitrepo, revision=revision)
 
     def inst(self, gitrepo=None, revision='journal_entry'):
@@ -712,7 +724,7 @@ class Datablock:
     """
     ROOT = 'protocol://path/to/root'
     TOPICFILES = {'topic', 'file.csv'} | TOPICFILE = 'file.csv'
-    # protocol://path --- module/class/ --- topic --- file 
+    # protocol://path --- module/class/ --- topic [--- file]
     #        root           [anchor]        [topic]   [file]
     # root:       'protocol://path/to/root'
     # anchorpath: '{root}/modpath/class'|'{root}' if anchored|else

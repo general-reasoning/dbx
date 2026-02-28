@@ -54,8 +54,8 @@ class TestRemote(unittest.TestCase):
 
     def test_remote_callable_executor(self):
         """Verify parallel execution of multiple tasks using RemoteCallableExecutor."""
-        n_threads = 2
-        executor = RemoteCallableExecutor(n_threads=n_threads)
+        n_workers = 2
+        executor = RemoteCallableExecutor(n_workers=n_workers)
         
         def multiply(x, y):
             return x * y
@@ -81,7 +81,7 @@ class TestRemote(unittest.TestCase):
 
     def test_remote_exception_handling(self):
         """Verify that exceptions raised in remote workers are correctly propagated to the client."""
-        executor = RemoteCallableExecutor(n_threads=1)
+        executor = RemoteCallableExecutor(n_workers=1)
         
         def fail():
             raise ValueError("Intentional failure")
@@ -105,7 +105,7 @@ class TestRemote(unittest.TestCase):
                 self.built = True
 
         # Use a small number of threads/workers
-        builder = RemoteDatablocksBuilder(n_threads=2)
+        builder = RemoteDatablocksBuilder(n_workers=2)
         
         # Create a few TestBlocks
         blocks = [TestBlock() for _ in range(3)]

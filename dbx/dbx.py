@@ -238,6 +238,14 @@ class JournalEntry(pd.Series):
     def __tag__(self):
         return f"JournalEntry:{self.anchor}/{self.hash}"
 
+    @property
+    def anchorhash(self):
+        return os.path.join(self.anchor, self.hash)
+
+    @property
+    def anchorhashpath(self):
+        return os.path.join(self.root, self.anchorhash)
+
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
             if hasattr(self, thing) and getattr(self, thing) is not None:
@@ -796,6 +804,7 @@ class Datablock:
         kwargs: dict = None,
         **kw,
     ):
+        self._working_params_ = []
         state = {
             'root': root,
             'spec': spec,
@@ -817,6 +826,8 @@ class Datablock:
     def __setstate__(self, state):
         """NB: state keys should match __init__'s keyword arguments, with extra args in 'state' dict"""
         state.pop('gitrepo', None)
+        state.pop('_handle', None)
+        state.pop('_slurm', None)
         
         # Explicit parameters
         self._root_ = state.get('root')
@@ -1394,6 +1405,15 @@ class Datablock:
             self.hash,
         )
         return anchorhash
+
+    @property
+    def anchorhashpath(self):
+        anchorhashpath = os.path.join(
+            self.root,
+            self.anchorhash,
+        )
+        return anchorhashpath
+
 
     @classmethod
     def _xanchorpath(cls, root, x, *, ensure: bool = False):
@@ -2791,8 +2811,8 @@ class RemoteCallableExecutor:
                 self.log.verbose("Raising exception")
                 raise e
             self.log.debug("Workers successfully joined")
-        flat_payloads = [payload for sublist in payloads for payload in sublist]
-        return flat_payloads
+            return payloads
+        return []
 
     def __exec_callables__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
         self.log.debug(f"Executing {len(callables)} callables on worker {thread_idx}")
@@ -2872,7 +2892,7 @@ class UNSAFE_datablock_journal_puller:
             entry = journal(journal.index[self.idx])
             spec = entry.read('spec')
             dbk = eval_term(quotefn(self.datablock_classname, spec=spec))
-            anchorhashpath = os.path.join(entry.root, entry.anchor, entry.hash)
+            anchorhashpath = entry.anchorhashpath
             if datablock_handles is not None:
                 if dbk.handle() in datablock_handles:
                     self.log.debug(f"Skipping datablock {dbk.handle()}: not in datablocks")

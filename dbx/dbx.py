@@ -60,7 +60,7 @@ if DBXGITREPO is None:
     except (ImportError, Exception):
         pass
 _DBXGITREPO_ = DBXGITREPO
-DBXWRKREPO = None
+DBXUSEWRKREPO = None
 DBXWRKROOT = None
 
 def dbx_repos(repopath=None):
@@ -113,7 +113,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     if log is None:
         log = Logger(name="gitwrkreposetup")
     global DBXGITREPO
-    global DBXWRKREPO
+    global DBXUSEWRKREPO
     global DBXWRKROOT
     
     dbx_repo, project_repo = dbx_repos(gitrepo)
@@ -137,8 +137,8 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         sys.path.insert(0, wrkrepo)
         return wrkroot, wrkrepo
 
-    use_wrkrepo = os.environ.get('DBXWRKREPO') == 'True' or revision is not None
-    if use_wrkrepo and DBXWRKREPO is None:
+    use_wrkrepo = os.environ.get('DBXUSEWRKREPO') == 'True' or revision is not None
+    if use_wrkrepo and DBXUSEWRKREPO is None:
         if DBXGITREPO is None:
             raise ValueError("DBXGITREPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
         
@@ -155,13 +155,13 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         else:
             wrkrepo_str = project_wrkrepo
         
-        globals()['DBXWRKREPO'] = wrkrepo_str
+        globals()['DBXUSEWRKREPO'] = wrkrepo_str
         os.environ['DBXGITREPO'] = wrkrepo_str
         
-        if 'DBXWRKREPO' in os.environ:
-            del os.environ['DBXWRKREPO']
+        if 'DBXUSEWRKREPO' in os.environ:
+            del os.environ['DBXUSEWRKREPO']
             
-        log.info(f"DBXWRKREPO: {wrkrepo_str}")
+        log.info(f"DBXUSEWRKREPO: {wrkrepo_str}")
 
 
 def journal(cls_or_df, root=None, **kwargs):
@@ -496,7 +496,7 @@ class JournalFrame(pd.DataFrame):
 
     
 def gitrevision(*, log=Logger()):
-    repopath = DBXWRKREPO if DBXWRKREPO is not None else DBXGITREPO
+    repopath = DBXUSEWRKREPO if DBXUSEWRKREPO is not None else DBXGITREPO
     if repopath is not None:
         d_repo, project_repo = dbx_repos(repopath)
         
@@ -1721,7 +1721,7 @@ class Datablock:
             self.log.detailed(f"--------------> COMPUTING revision")
             if self._revision_ is None:
                 self.log.detailed(f"--------------> self._revision_ is None")
-                gitrepo = DBXWRKREPO if DBXWRKREPO is not None else DBXGITREPO
+                gitrepo = DBXUSEWRKREPO if DBXUSEWRKREPO is not None else DBXGITREPO
                 self._revision = gitrevision(log=self.log) if gitrepo is not None else None
                 self.log.detailed(f"--------------> self._revision_: from gitrevision()")
             else:
@@ -1994,7 +1994,7 @@ class Datablock:
                                          'hashstr': hashstr_path,
                                          'context': context,
                                          'gitrepo': DBXGITREPO,
-                                         'wrkrepo': DBXWRKREPO,
+                                         'wrkrepo': DBXUSEWRKREPO,
         }])
         df.to_parquet(journal_path)
         
@@ -2781,8 +2781,8 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
     """
     dbx_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
     
-    if DBXWRKREPO is not None:
-        dbx_env['DBXGITREPO'] = DBXWRKREPO
+    if DBXUSEWRKREPO is not None:
+        dbx_env['DBXGITREPO'] = DBXUSEWRKREPO
 
     # If we are using a remote cluster, any path in /tmp on the login node will be inaccessible to workers.
     # We revert to the original repository path (usually in /home) which is shared.

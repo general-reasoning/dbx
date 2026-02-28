@@ -62,36 +62,94 @@ _DBXGITREPO_ = DBXGITREPO
 DBXWRKREPO = None
 DBXWRKROOT = None
 
+def dbx_repos(repopath=None):
+    if repopath is None:
+        repopath = DBXGITREPO
+    if repopath is None:
+        return None, None
+    paths = repopath.split(':')
+    if len(paths) == 1:
+        return paths[0], None
+    elif len(paths) == 2:
+        if '/dbx' in paths[0]:
+            return paths[1], paths[0]
+        else:
+            return paths[0], paths[1]
+    else:
+        raise ValueError(f"Too many paths in repopath: {repopath}")
+
+def dbx_revisions(revision):
+    if isinstance(revision, str):
+        if ':' in revision:
+            parts = revision.split(':')
+            if len(parts) == 2:
+                return parts[0], parts[1]
+            else:
+                raise ValueError(f"Revisions string must have exactly one ':': {revision}")
+        return revision, None
+    elif isinstance(revision, tuple):
+        if len(revision) == 2:
+            return revision
+        else:
+            raise ValueError(f"Revisions tuple must have exactly two elements: {revision}")
+    elif revision is None:
+        return None, None
+    else:
+        raise ValueError(f"Unknown revision type: {type(revision)}")
+
 def gitwrkreposetup(revision=None, *, reason: str = "", log=None):
     if log is None:
         log = Logger(name="gitwrkreposetup")
     global DBXGITREPO
-    tbstr = ''.join(tb.format_stack())
-    log.silent(f"gitwrkreposetup callstack:\n{tbstr}")
     global DBXWRKREPO
     global DBXWRKROOT
+    
+    project_repo, dbx_repo = dbx_repos()
+    project_rev, dbx_rev = dbx_revisions(revision)
+
+    def setup_wrkrepo(repo, rev, name):
+        nonlocal log
+        if repo is None:
+            return None
+        log.info(f"SETTING UP TEMPORARY DBXWRKROOT for {name} from {repo=} {reason} with revision {rev}")
+        wrkroot = tempfile.TemporaryDirectory()
+        package = os.path.basename(repo)
+        wrkrepo = os.path.join(wrkroot.name, package)
+        _pkgpath = gitclone(repo, wrkrepo)
+        assert wrkrepo == _pkgpath
+        if rev is not None:
+            gitcheckout(wrkrepo, rev)
+            log.info(f"Checked out {wrkrepo} to revision {rev}")
+        else:
+            log.info(f"Using {wrkrepo} at HEAD")
+        sys.path.insert(0, wrkrepo)
+        return wrkroot, wrkrepo
+
     use_dbxgitrepo = os.environ.get('DBXGITREPO') or revision is not None
     if use_dbxgitrepo and DBXWRKREPO is None:
         if DBXGITREPO is None:
             raise ValueError("DBXGITREPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
-        log.info(f"SETTING UP TEMPORARY DBXWRKROOT from {DBXGITREPO=} {reason} with revision {revision}")
-        DBXWRKROOT = tempfile.TemporaryDirectory()
-        package = os.path.basename(DBXGITREPO)
-        globals()['DBXWRKREPO'] = os.path.join(DBXWRKROOT.name, package)
-        _pkgpath = gitclone(DBXGITREPO, globals()['DBXWRKREPO'])
-        assert globals()['DBXWRKREPO'] == _pkgpath
-        sys.path.insert(0, globals()['DBXWRKREPO'])
-        # ENSURE that any child process gets the same DBXGITREPO and does not spawn its own temporary repo
-        os.environ['DBXGITREPO'] = globals()['DBXWRKREPO']
+        
+        project_wrk = setup_wrkrepo(project_repo, project_rev, "project")
+        dbx_wrk = setup_wrkrepo(dbx_repo, dbx_rev, "dbx")
+
+        DBXWRKROOT = (project_wrk[0] if project_wrk else None, dbx_wrk[0] if dbx_wrk else None)
+        
+        project_wrkrepo = project_wrk[1] if project_wrk else None
+        dbx_wrkrepo = dbx_wrk[1] if dbx_wrk else None
+        
+        if dbx_wrkrepo:
+            wrkrepo_str = f"{project_wrkrepo}:{dbx_wrkrepo}"
+        else:
+            wrkrepo_str = project_wrkrepo
+        
+        globals()['DBXWRKREPO'] = wrkrepo_str
+        os.environ['DBXGITREPO'] = wrkrepo_str
+        
         if 'DBXWRKREPO' in os.environ:
             del os.environ['DBXWRKREPO']
-        log.info(f"DBXWRKROOT: {DBXWRKROOT.name}, DBXWRKREPO: {globals()['DBXWRKREPO']}")
-        log.silent(f"os.environ['DBXGITREPO'] = {os.environ['DBXGITREPO']}, os.environ['DBXWRKREPO'] = {os.environ.get('DBXWRKREPO')}")
-    if revision is not None:
-        gitcheckout(globals()['DBXWRKREPO'], revision)
-        log.info(f"Checked out {globals()['DBXWRKREPO']} to revision {revision}")
-    else:
-        log.info(f"Using {globals()['DBXWRKREPO']} at HEAD")
+            
+        log.info(f"DBXWRKREPO: {wrkrepo_str}")
 
 
 def journal(cls_or_df, root=None, **kwargs):
@@ -404,11 +462,25 @@ class JournalFrame(pd.DataFrame):
 def gitrevision(*, log=Logger()):
     repopath = DBXWRKREPO if DBXWRKREPO is not None else DBXGITREPO
     if repopath is not None:
-        repo = git.Repo(repopath)
-        if repo.is_dirty():
-            raise ValueError(f"Dirty git repo: {repopath}: commit your changes: {DBXWRKREPO=}, {DBXGITREPO=}")
-        revision = repo.head.commit.hexsha
-        log.detailed(f"Obtained git revision for git repo {repopath}: {revision}, {DBXWRKREPO=}, {DBXGITREPO=}")
+        project_repo, d_repo = dbx_repos(repopath)
+        
+        def get_rev(path):
+            if path is None:
+                return None
+            repo = git.Repo(path)
+            if repo.is_dirty():
+                raise ValueError(f"Dirty git repo: {path}: commit your changes")
+            return repo.head.commit.hexsha
+
+        project_rev = get_rev(project_repo)
+        dbx_rev = get_rev(d_repo)
+        
+        if dbx_rev:
+            revision = f"{project_rev}:{dbx_rev}"
+        else:
+            revision = project_rev
+            
+        log.detailed(f"Obtained git revision for git repo(s) {repopath}: {revision}")
     else:
         revision = None
     return revision

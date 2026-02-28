@@ -69,12 +69,12 @@ def dbx_repos(repopath=None):
         return None, None
     paths = repopath.split(':')
     if len(paths) == 1:
-        return paths[0], None
+        return None, paths[0]
     elif len(paths) == 2:
         if '/dbx' in paths[0]:
-            return paths[1], paths[0]
-        else:
             return paths[0], paths[1]
+        else:
+            return paths[1], paths[0]
     else:
         raise ValueError(f"Too many paths in repopath: {repopath}")
 
@@ -86,7 +86,7 @@ def dbx_revisions(revision):
                 return parts[0], parts[1]
             else:
                 raise ValueError(f"Revisions string must have exactly one ':': {revision}")
-        return revision, None
+        return None, revision
     elif isinstance(revision, tuple):
         if len(revision) == 2:
             return revision
@@ -104,8 +104,8 @@ def gitwrkreposetup(revision=None, *, reason: str = "", log=None):
     global DBXWRKREPO
     global DBXWRKROOT
     
-    project_repo, dbx_repo = dbx_repos()
-    project_rev, dbx_rev = dbx_revisions(revision)
+    dbx_repo, project_repo = dbx_repos()
+    dbx_rev, project_rev = dbx_revisions(revision)
 
     def setup_wrkrepo(repo, rev, name):
         nonlocal log
@@ -130,16 +130,16 @@ def gitwrkreposetup(revision=None, *, reason: str = "", log=None):
         if DBXGITREPO is None:
             raise ValueError("DBXGITREPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
         
-        project_wrk = setup_wrkrepo(project_repo, project_rev, "project")
         dbx_wrk = setup_wrkrepo(dbx_repo, dbx_rev, "dbx")
+        project_wrk = setup_wrkrepo(project_repo, project_rev, "project")
 
-        DBXWRKROOT = (project_wrk[0] if project_wrk else None, dbx_wrk[0] if dbx_wrk else None)
+        DBXWRKROOT = (dbx_wrk[0] if dbx_wrk else None, project_wrk[0] if project_wrk else None)
         
-        project_wrkrepo = project_wrk[1] if project_wrk else None
         dbx_wrkrepo = dbx_wrk[1] if dbx_wrk else None
+        project_wrkrepo = project_wrk[1] if project_wrk else None
         
         if dbx_wrkrepo:
-            wrkrepo_str = f"{project_wrkrepo}:{dbx_wrkrepo}"
+            wrkrepo_str = f"{dbx_wrkrepo}:{project_wrkrepo}"
         else:
             wrkrepo_str = project_wrkrepo
         
@@ -462,7 +462,7 @@ class JournalFrame(pd.DataFrame):
 def gitrevision(*, log=Logger()):
     repopath = DBXWRKREPO if DBXWRKREPO is not None else DBXGITREPO
     if repopath is not None:
-        project_repo, d_repo = dbx_repos(repopath)
+        d_repo, project_repo = dbx_repos(repopath)
         
         def get_rev(path):
             if path is None:
@@ -472,11 +472,11 @@ def gitrevision(*, log=Logger()):
                 raise ValueError(f"Dirty git repo: {path}: commit your changes")
             return repo.head.commit.hexsha
 
-        project_rev = get_rev(project_repo)
         dbx_rev = get_rev(d_repo)
+        project_rev = get_rev(project_repo)
         
         if dbx_rev:
-            revision = f"{project_rev}:{dbx_rev}"
+            revision = f"{dbx_rev}:{project_rev}"
         else:
             revision = project_rev
             
@@ -894,6 +894,7 @@ class Datablock:
         
     def __setstate__(self, state):
         """NB: state keys should match __init__'s keyword arguments, with extra args in 'state' dict"""
+        self._working_params_ = []
         state.pop('gitrepo', None)
         state.pop('_handle', None)
         state.pop('_slurm', None)

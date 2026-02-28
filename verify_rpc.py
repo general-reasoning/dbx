@@ -31,11 +31,11 @@ def test_rpc():
     assert remote_prop == "success"
     print("Verification of propagated variables confirmed.")
     
-    # 3. Test nested proxying: Instantiate a Datablocks remotely
-    print("Testing nested proxying: remote_dbx.Datablocks()...")
-    # Datablocks is a class. Calling it should return a Remote instance wrapping a RemoteObject actor
-    db = remote_dbx.Datablocks()
-    print(f"Remote Datablocks proxy: {db}")
+    # 3. Test nested proxying: Instantiate a Datablock remotely
+    print("Testing nested proxying: remote_dbx.Datablock()...")
+    # Datablock is a class. Calling it should return a Remote instance wrapping a RemoteObject actor
+    db = remote_dbx.Datablock()
+    print(f"Remote Datablock proxy: {db}")
     
     # 4. Call a function directly through the proxy.
     print("Calling remote_dbx.gitrevision(os.getcwd())...")

@@ -98,7 +98,7 @@ def journal(cls_or_df, root=None, **kwargs):
     if isinstance(cls_or_df, pd.DataFrame):
         return JournalFrame(cls_or_df, **kwargs)
     else:
-        return Datablocks.Journal(cls_or_df, root, **kwargs)
+        return Datablock.Journal(cls_or_df, root, **kwargs)
 
 
 class Logger:
@@ -720,7 +720,7 @@ def make_halton_sampling_kwargs_sequence(N, range_kwargs, *, seed=123, precision
     return kwargs_list
 
 
-class Datablocks:
+class Datablock:
     """
     ROOT = 'protocol://path/to/root'
     TOPICFILES = {'topic', 'file.csv'} | TOPICFILE = 'file.csv'
@@ -774,7 +774,7 @@ class Datablocks:
 
         def __getattribute__(self, name):
             attr = super().__getattribute__(name)
-            if isinstance(attr, Datablocks.CONFIG.LazyLoader):
+            if isinstance(attr, Datablock.CONFIG.LazyLoader):
                 return attr()
             return attr
 
@@ -907,7 +907,7 @@ class Datablocks:
 
     @staticmethod
     def __explicit_params__():
-        sig = inspect.signature(Datablocks.__init__)
+        sig = inspect.signature(Datablock.__init__)
         return [
             p.name for p in sig.parameters.values()
             if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD) and p.name != 'self'
@@ -1064,7 +1064,7 @@ class Datablocks:
     def __pre_build__(self, *args, **kwargs):
         valid_cfg = self.valid_cfg()
         if not all(list(valid_cfg.values())):
-            raise ValueError(f"Not all upstream Datablocks in cfg are valid: {valid_cfg=}")
+            raise ValueError(f"Not all upstream Datablock in cfg are valid: {valid_cfg=}")
         self._write_journal_entry(event="build:start",)
         return self
 
@@ -1089,7 +1089,7 @@ class Datablocks:
         self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
         for s in self.spec.keys():
             c = getattr(self.cfg, s)
-            if isinstance(c, Datablocks):
+            if isinstance(c, Datablock):
                 self._write_journal_entry(event=f"build_tree:{s}:begin")
                 self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: BEGIN --------------------------------")
                 c.build_tree(*args, **kwargs)   
@@ -1103,7 +1103,7 @@ class Datablocks:
         results = {}
         for s in self.spec.keys():
             c = getattr(self.cfg, s)
-            if isinstance(c, Datablocks):
+            if isinstance(c, Datablock):
                 results[s] = c.valid()
         if reduce:
             return all(list(results.values()))
@@ -1197,7 +1197,7 @@ class Datablocks:
                     dst_fs.put(tmp_path, dst_path, recursive=recursive)
 
         if not overwrite:
-            assert not self.valid(), f"Attempting to overwrite a valid Datablocks {self}. Missing 'overwrite' argument?"
+            assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
         fs, _ = fsspec.url_to_fs(anchorhashpath)
         assert fs.isdir(anchorhashpath), f"Nonexistent hashpath {anchorhashpath}"
         self.log.verbose(f"Copying files from {anchorhashpath}: BEGIN")
@@ -1254,7 +1254,7 @@ class Datablocks:
             self.log.verbose(f"Copying files from {anchorhashpath}: END")
             self._write_journal_entry(event="UNSAFE_copy_from:END", context=anchorhashpath, inline_context=True)
             if validate:
-                assert self.valid(), f"Invalid Datablocks after copy: {self}"
+                assert self.valid(), f"Invalid Datablock after copy: {self}"
         except Exception as e:
             self.log.error(f"UNSAFE_copy_from: Error when trying to copy files from {anchorhashpath}")
             self.log.error(f"EXCEPTION: {e}")
@@ -1271,8 +1271,8 @@ class Datablocks:
         replacements = {}
         for field in fields(config):
             term = getattr(config, field.name)
-            if issubclass(self.CONFIG, Datablocks.CONFIG):
-                getter = Datablocks.CONFIG.LazyLoader(term)
+            if issubclass(self.CONFIG, Datablock.CONFIG):
+                getter = Datablock.CONFIG.LazyLoader(term)
             else:
                 getter = eval_term(term)
             replacements[field.name] = getter
@@ -1568,7 +1568,7 @@ class Datablocks:
 
 
     #IDENTIFICATION: BEGIN
-    #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+    #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
     # computed using the older version of these methods
     """
     
@@ -1611,7 +1611,7 @@ class Datablocks:
         """
             . expansion: 'repr'|'quote'|'handle'
                 . specline:      str starting with '@', '$' or '#'
-                . datablock: Datablocks object
+                . datablock: Datablock object
                 . obj:       object
             'repr':
                 . FULL reduction
@@ -1631,7 +1631,7 @@ class Datablocks:
         spec = {k: self.spec[k] if k in self.spec else getattr(self.cfg, k) for k in keys}
         _spec_ = {}
         if expansion == 'repr':
-            #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+            #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
             # computed using the older version of these methods
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
@@ -1639,7 +1639,7 @@ class Datablocks:
         elif expansion == 'handle':
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
-                if isinstance(value, Datablocks):
+                if isinstance(value, Datablock):
                     _spec_[k] = value.handle()
                 elif self.is_specline(v):
                     _spec_[k] = v
@@ -1652,7 +1652,7 @@ class Datablocks:
                 value = getattr(self.cfg, k)
                 if self.is_specline(v):
                     _spec_[k] = v
-                elif isinstance(value, Datablocks):
+                elif isinstance(value, Datablock):
                     _spec_[k] = value.quote()
                 elif isinstance(value, str):
                     _spec_[k] = value
@@ -1713,7 +1713,7 @@ class Datablocks:
         return quote
 
     def handle(self, *, deslash: bool = False):
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
         # computed using the older version of these methods
         repr_spec = self.__expand_spec__('handle')
         handle = self.__repr_from_kwargs__({
@@ -1765,7 +1765,7 @@ class Datablocks:
     
     @property
     def hashstr(self):
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if hasattr(self, "TOPICFILES"):
             topics = [f"topic:{topic}={file}" for topic, file in self.TOPICFILES.items()]
@@ -1780,7 +1780,7 @@ class Datablocks:
 
     @property
     def keystr(self):
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if hasattr(self, "TOPICFILES"):
             topics = [f"topic:{topic}={file}" for topic, file in self.TOPICFILES.items()]
@@ -1795,7 +1795,7 @@ class Datablocks:
     
     @property
     def hash(self): 
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hash
+        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hash
         # computed with the older code.
         if not hasattr(self, '_hash'): 
             if self._hash_ is not None:
@@ -1818,7 +1818,7 @@ class Datablocks:
     
     @property
     def key(self):
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
         # computed with the older code.
         if not hasattr(self, '_key'): 
             sha = hashlib.sha256()
@@ -1926,7 +1926,7 @@ class Datablocks:
     def Journal(cls, entry: int = None, *, root=None, **kwargs):
         if root is None:
             root = os.environ.get('DBXROOT')
-        journaldirpath = Datablocks._journalanchorpath(eval_term(cls), root)
+        journaldirpath = Datablock._journalanchorpath(eval_term(cls), root)
         fs, _ = fsspec.url_to_fs(journaldirpath)
         files = list(fs.ls(journaldirpath))
         parquet_files = [f for f in files if f.endswith('.parquet')]
@@ -1978,7 +1978,7 @@ def quote(obj, *args, tag="$", **kwargs):
     if not callable(obj):
         assert len(args) == 0, f"Nonempty args for a noncallable obj: {args}"
         assert len(kwargs) == 0, f"Nonempty kwargs for a noncallable obj: {kwargs}"
-        if isinstance(obj, Datablocks):
+        if isinstance(obj, Datablock):
             _quote = obj.quote()
         elif isinstance(obj, str):
             _quote = repr(obj)
@@ -1999,7 +1999,7 @@ class TorchMultithreadingDatablocksBuilder:
         self.devices = devices
         self.log = log
 
-    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             result_queue = queue.Queue()
             done_queue = queue.Queue()
@@ -2035,7 +2035,7 @@ class TorchMultithreadingDatablocksBuilder:
             self.log.debug("Threads successfully joined")
         return blocks
     
-    def __build_blocks__(self, blocks: Sequence[Datablocks], ctx_args, ctx_kwargs, offset: int, device: str, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
+    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, device: str, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
         self.log.debug(f"Building {len(blocks)} feature blocks on device: {device}")
         device_ctx_args, device_ctx_kwargs = self.__args_kwargs_to_device__(ctx_args, ctx_kwargs, device)
         for i, block in enumerate(blocks):
@@ -2078,7 +2078,7 @@ class TorchMultiprocessingDatablocksBuilder(TorchMultithreadingDatablocksBuilder
         self.devices = devices
         self.log = log
 
-    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             result_queue = mp.Queue()
             done_queue = mp.Queue()
@@ -2135,7 +2135,7 @@ class TorchMultiprocessingDatablocksBuilder(TorchMultithreadingDatablocksBuilder
                 raise(exc)
         return blocks
     
-    def __build_blocks__(self, blocks: Sequence[Datablocks], ctx_args, ctx_kwargs, offset: int, process: str, device: str, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
+    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, process: str, device: str, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
         self.log.debug(f"Building {len(blocks)} feature blocks on process: {process}, device: {device}")
         if device is not None:
             device_ctx_args, device_ctx_kwargs = self.__args_kwargs_to_device__(ctx_args, ctx_kwargs, device)
@@ -2257,7 +2257,7 @@ class MultithreadingDatablocksBuilder:
         self.n_threads = n_threads
         self.log = log
 
-    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             result_queue = queue.Queue()
             done_queue = queue.Queue()
@@ -2294,7 +2294,7 @@ class MultithreadingDatablocksBuilder:
         return blocks
     
 
-    def __build_blocks__(self, blocks: Sequence[Datablocks], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
+    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
         self.log.debug(f"Building {len(blocks)} feature blocks on thread: {thread_idx}")
         for i, block in enumerate(blocks):
             exception = None
@@ -2323,12 +2323,12 @@ class MultithreadingDatablocksBuilder:
                 break
 
 
-class MultiprocessingDatablocksBuilder:
+class MultiprocessingDatablockBuilder:
     def __init__(self, *, n_processes: int = 1, log: Logger = Logger()):
         self.n_processes = n_processes
         self.log = log
 
-    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             result_queue = mp.Queue()
             done_queue = mp.Queue()
@@ -2390,7 +2390,7 @@ class MultiprocessingDatablocksBuilder:
                 raise(exc)
         return blocks
 
-    def __build_blocks__(self, blocks: Sequence[Datablocks], ctx_args, ctx_kwargs, offset: int, process_idx: int, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
+    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, process_idx: int, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
         self.log.debug(f"Building {len(blocks)} feature blocks on process: {process_idx}")
         exception = None
         for i, block in enumerate(blocks):
@@ -2833,7 +2833,7 @@ class RemoteDatablocksBuilder:
         self.log = log
         self.executor = RemoteCallableExecutor(n_workers=n_workers, revision=revision, conda=conda, log=log)
 
-    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             def build_block(block, *args, **kwargs):
                 return block.build(*args, **kwargs)
@@ -2901,7 +2901,7 @@ def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, n_workers: int =
     Pull datablocks from the journal based on specified criteria.
 
     Args:
-        datablock_classname (str): The name of the Datablocks class to pull.
+        datablock_classname (str): The name of the Datablock class to pull.
         n_workers (int): Number of worker threads to use for pulling. 
             If 0, pulling is performed sequentially in the main thread.
         throw (bool): If True, exceptions encountered during pulling will be raised.
@@ -2914,8 +2914,8 @@ def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, n_workers: int =
         **other_journal_kwargs: Additional keyword arguments used to filter the journal query in addition to event, revision, and date.
 
     Returns:
-        tuple[tuple[Datablocks, ...], tuple[bool, ...]]: A tuple containing:
-            - A tuple of instantiated Datablocks objects.
+        tuple[tuple[Datablock, ...], tuple[bool, ...]]: A tuple containing:
+            - A tuple of instantiated Datablock objects.
             - A tuple of booleans indicating if each datablock was successfully copied.
     """
     log.verbose(f"Pulling {datablock_classname} ...")

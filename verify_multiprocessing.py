@@ -7,10 +7,10 @@ import multiprocessing as mp
 # Add dbx to path
 sys.path.append('/home/t-9dkarp/dbx')
 
-from dbx.dbx import MultiprocessingDatablocksBuilder, Datablocks, Logger
+from dbx.dbx import MultiprocessingDatablockBuilder, Datablock, Logger
 
-# Define a simple Datablocks for testing
-class TestDatablocks(Datablocks):
+# Define a simple Datablock for testing
+class TestDatablock(Datablock):
     def __init__(self, value, sleep_time=0.1):
         self.value = value
         self.sleep_time = sleep_time
@@ -24,14 +24,14 @@ class TestDatablocks(Datablocks):
         return self
 
     def __repr__(self):
-        return f"TestDatablocks(value={self.value})"
+        return f"TestDatablock(value={self.value})"
 
 def verify_multiprocessing():
-    print("Verifying MultiprocessingDatablocksBuilder...")
-    blocks = [TestDatablocks(i) for i in range(4)]
+    print("Verifying MultiprocessingDatablockBuilder...")
+    blocks = [TestDatablock(i) for i in range(4)]
     
     # Use 2 processes
-    builder = MultiprocessingDatablocksBuilder(n_processes=2, log=Logger(name="TestBuilder"))
+    builder = MultiprocessingDatablockBuilder(n_processes=2, log=Logger(name="TestBuilder"))
     
     start_time = time.time()
     built_blocks = builder.build_blocks(blocks)

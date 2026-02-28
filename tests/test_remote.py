@@ -9,7 +9,7 @@ in dbx. The tests verify:
 3. test_remote_callable_executor: Parallel task execution across multiple workers using `RemoteCallableExecutor`.
 4. test_nested_proxying: Handling of objects returned by remote actors (proxies within proxies).
 5. test_remote_exception_handling: Correct propagation and reraising of exceptions from remote tasks.
-6. test_remote_datablocks_builder: Distributed building of Datablocks using `RemoteDatablocksBuilder`.
+6. test_remote_datablocks_builder: Distributed building of Datablock using `RemoteDatablocksBuilder`.
 
 Note: These tests require a clean git repository if DBXGITREPO is set.
 """
@@ -23,7 +23,7 @@ import queue
 import tqdm
 import functools
 from dbx import dbx
-from dbx.dbx import remote, RemoteCallableExecutor, Datablocks, RemoteDatablocksBuilder
+from dbx.dbx import remote, RemoteCallableExecutor, Datablock, RemoteDatablocksBuilder
 
 class TestRemote(unittest.TestCase):
     @classmethod
@@ -71,10 +71,10 @@ class TestRemote(unittest.TestCase):
         self.assertEqual(results, expected)
 
     def test_nested_proxying(self):
-        """Verify that returning a Datablocks (or other dbx objects) from a remote call returns a proxy."""
+        """Verify that returning a Datablock (or other dbx objects) from a remote call returns a proxy."""
         r = remote()
-        # Datablocks is a class in dbx. Calling it remotely should return a Remote handle to the instance.
-        db = r.Datablocks()
+        # Datablock is a class in dbx. Calling it remotely should return a Remote handle to the instance.
+        db = r.Datablock()
         self.assertTrue(hasattr(db, "_handle"))
         # Verify we can call methods/properties on the nested proxy
         self.assertIsNotNone(db.hash)
@@ -90,8 +90,8 @@ class TestRemote(unittest.TestCase):
             executor.execute([fail])
 
     def test_remote_datablocks_builder(self):
-        """Verify that RemoteDatablocksBuilder can build multiple Datablocks remotely."""
-        class TestBlock(Datablocks):
+        """Verify that RemoteDatablocksBuilder can build multiple Datablock remotely."""
+        class TestBlock(Datablock):
             def __init__(self, **kwargs):
                 # Pass built=False to super to ensure it's tracked in parameters
                 kwargs.setdefault('built', False)

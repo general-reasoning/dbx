@@ -48,6 +48,7 @@ import torch.multiprocessing as mp
 
 
 __eval__ = __builtins__['eval']
+__version__ = "0.1.0"
 
 
 DBXGITREPO = os.environ.get('DBXGITREPO')
@@ -97,14 +98,25 @@ def dbx_revisions(revision):
     else:
         raise ValueError(f"Unknown revision type: {type(revision)}")
 
-def gitwrkreposetup(revision=None, *, reason: str = "", log=None):
+def dbx_versions(version):
+    if isinstance(version, str):
+        if ':' in version:
+            parts = version.split(':')
+            if len(parts) == 2:
+                return parts[0], parts[1]
+            else:
+                raise ValueError(f"Version string must have at most one ':': {version}")
+        return None, version
+    return None, None
+
+def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     if log is None:
         log = Logger(name="gitwrkreposetup")
     global DBXGITREPO
     global DBXWRKREPO
     global DBXWRKROOT
     
-    dbx_repo, project_repo = dbx_repos()
+    dbx_repo, project_repo = dbx_repos(gitrepo)
     dbx_rev, project_rev = dbx_revisions(revision)
 
     def setup_wrkrepo(repo, rev, name):
@@ -297,6 +309,30 @@ class JournalEntry(pd.Series):
         return f"JournalEntry:{self.anchor}/{self.hash}"
 
     @property
+    def anchor(self):
+        return self.get('anchor')
+
+    @property
+    def hash(self):
+        return self.get('hash')
+
+    @property
+    def root(self):
+        return self.get('root')
+
+    @property
+    def revision(self):
+        return self.get('revision')
+
+    @property
+    def gitrepo(self):
+        return self.get('gitrepo')
+
+    @property
+    def version(self):
+        return self.get('version')
+
+    @property
     def anchorhash(self):
         return os.path.join(self.anchor, self.hash)
 
@@ -340,7 +376,7 @@ class JournalEntry(pd.Series):
             thingstr = thingstr.replace('\\', '')
         r = None
         # Call this here because a new revision may need to be checked out
-        gitwrkreposetup(revision=revision, reason=f"because of evaluating a JournalEntry field {thing}")
+        gitwrkreposetup(revision=revision, gitrepo=gitrepo, reason=f"because of evaluating a JournalEntry field {thing}")
         try:
             if eval_term:
                 __eval_term__ = globals()['eval_term']
@@ -1668,11 +1704,10 @@ class Datablock:
     
     @property
     def version(self):
-        if hasattr(self, 'VERSION'):
-            version = self.VERSION
-        else:
-            version = None
-        return version
+        proj_v = self.VERSION if hasattr(self, 'VERSION') else None
+        if proj_v:
+            return f"{__version__}:{proj_v}"
+        return __version__
     
     @property
     def uuid(self):

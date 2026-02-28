@@ -23,7 +23,7 @@ import queue
 import tqdm
 import functools
 from dbx import dbx
-from dbx.dbx import remote, RemoteCallableExecutor, Datablock, RemoteDatablocksBuilder
+from dbx.dbx import remote, RemoteCallableExecutor, Datablocks, RemoteDatablocksBuilder
 
 class TestRemote(unittest.TestCase):
     @classmethod
@@ -71,10 +71,10 @@ class TestRemote(unittest.TestCase):
         self.assertEqual(results, expected)
 
     def test_nested_proxying(self):
-        """Verify that returning a Datablock (or other dbx objects) from a remote call returns a proxy."""
+        """Verify that returning a Datablocks (or other dbx objects) from a remote call returns a proxy."""
         r = remote()
-        # Datablock is a class in dbx. Calling it remotely should return a Remote handle to the instance.
-        db = r.Datablock()
+        # Datablocks is a class in dbx. Calling it remotely should return a Remote handle to the instance.
+        db = r.Datablocks()
         self.assertTrue(hasattr(db, "_handle"))
         # Verify we can call methods/properties on the nested proxy
         self.assertIsNotNone(db.hash)
@@ -91,7 +91,7 @@ class TestRemote(unittest.TestCase):
 
     def test_remote_datablocks_builder(self):
         """Verify that RemoteDatablocksBuilder can build multiple Datablocks remotely."""
-        class TestBlock(Datablock):
+        class TestBlock(Datablocks):
             def __init__(self, **kwargs):
                 # Pass built=False to super to ensure it's tracked in parameters
                 kwargs.setdefault('built', False)

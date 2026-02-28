@@ -98,7 +98,7 @@ def journal(cls_or_df, root=None, **kwargs):
     if isinstance(cls_or_df, pd.DataFrame):
         return JournalFrame(cls_or_df, **kwargs)
     else:
-        return Datablock.Journal(cls_or_df, root, **kwargs)
+        return Datablocks.Journal(cls_or_df, root, **kwargs)
 
 
 class Logger:
@@ -235,7 +235,7 @@ class JournalEntry(pd.Series):
         super().__init__(series)
         self.logger = logger
 
-    def __repr__(self):
+    def __tag__(self):
         return f"JournalEntry:{self.anchor}/{self.hash}"
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
@@ -291,14 +291,14 @@ class JournalEntry(pd.Series):
     def instantiate(self, gitrepo=None, revision=None):
         if revision == 'journal_entry':
             revision = self.revision
-            self.logger.info(f"Instantiating {self} with revision from journal entry {revision}")
+            self.logger.info(f"Instantiating {self.__tag__()} with revision from journal entry {revision}")
         else:
-            self.logger.info(f"Instantiating {self} with revision {revision}")
+            self.logger.info(f"Instantiating {self.__tag__()} with revision {revision}")
         if gitrepo == 'journal_entry':
             gitrepo = self.gitrepo
-            self.logger.info(f"Instantiating {self} with gitrepo from journal entry {gitrepo}")
+            self.logger.info(f"Instantiating {self.__tag__()} with gitrepo from journal entry {gitrepo}")
         else:
-            self.logger.info(f"Instantiating {self} with gitrepo {gitrepo}")
+            self.logger.info(f"Instantiating {self.__tag__()} with gitrepo {gitrepo}")
         return self.eval('quote', eval_term=True, gitrepo=gitrepo, revision=revision)
 
     def inst(self, gitrepo=None, revision='journal_entry'):
@@ -720,7 +720,7 @@ def make_halton_sampling_kwargs_sequence(N, range_kwargs, *, seed=123, precision
     return kwargs_list
 
 
-class Datablock:
+class Datablocks:
     """
     ROOT = 'protocol://path/to/root'
     TOPICFILES = {'topic', 'file.csv'} | TOPICFILE = 'file.csv'
@@ -739,6 +739,7 @@ class Datablock:
         key: str
         version: str
         revision: str
+        state: dict
         kwargs: dict
         spec: dict
         quote: str
@@ -773,7 +774,7 @@ class Datablock:
 
         def __getattribute__(self, name):
             attr = super().__getattribute__(name)
-            if isinstance(attr, Datablock.CONFIG.LazyLoader):
+            if isinstance(attr, Datablocks.CONFIG.LazyLoader):
                 return attr()
             return attr
 
@@ -792,7 +793,8 @@ class Datablock:
         capture_output: bool = False,
         revision: str = None,
         device: str = 'cpu',
-        **kwargs,
+        kwargs: dict = None,
+        **kw,
     ):
         state = {
             'root': root,
@@ -807,12 +809,13 @@ class Datablock:
             'capture_output': capture_output,
             'revision': revision,
             'device': device,
-            'kwargs': kwargs,
+            'kwargs': kwargs, 
+            'state': kw,
         }
         self.__setstate__(state)
         
     def __setstate__(self, state):
-        """NB: state keys should match __init__'s keyword arguments, with extra args in 'kwargs' dict"""
+        """NB: state keys should match __init__'s keyword arguments, with extra args in 'state' dict"""
         state.pop('gitrepo', None)
         
         # Explicit parameters
@@ -847,20 +850,28 @@ class Datablock:
         self.cfg = self._spec_to_cfg(self.spec)
         self.config = self.cfg # alias
         
-        self._working_params_ = ['cfg', 'config', 'log', 'dt', 'build_dt']
-        kwargs = state.get('kwargs', {})
-        for key in kwargs.keys():
+        self._kwargs_ = state.get('kwargs')
+        state_params = state.get('state')
+        if state_params is None:
+            # Legacy: 'kwargs' contained the state.
+            state_params = self._kwargs_ if self._kwargs_ is not None else {}
+            self._kwargs_ = state_params.copy()
+        elif self._kwargs_ is None:
+            # New style, first-time init: 'state' contains the initial kwargs.
+            self._kwargs_ = state_params.copy()
+
+        for key in state_params.keys():
             assert key not in self.__explicit_params__() + self._working_params_, \
-                f"Key {key} in kwargs conflicts with __explicit_params__() + _working_params_: {self.__explicit_params__() + self._working_params_}"
-        for k, v in kwargs.items():
+                f"Key {key} in state_params conflicts with __explicit_params__() + _working_params_: {self.__explicit_params__() + self._working_params_}"
+        for k, v in state_params.items():
             setattr(self, k, v)
             
-        handled_keys = set(self.__explicit_params__()) | {'kwargs'}
+        handled_keys = set(self.__explicit_params__()) | {'state', 'kwargs'}
         other_keys = [k for k in state if k not in handled_keys]
         assert len(other_keys) == 0, f"Unknown keys in state: {other_keys}"
             
         # self.parameters used for state retrieval
-        self.parameters = self.__explicit_params__() + list(kwargs.keys())
+        self.parameters = self.__explicit_params__() + list(state_params.keys())
         
         self.dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         self.build_dt = None
@@ -886,16 +897,17 @@ class Datablock:
                 _state[k] = getattr(self, k)
         
         #TODO: why does 'log' end up in self.parameters?
-        _kwargs = {
+        state_params = {
             k: getattr(self, k)
             for k in self.parameters if k not in self.__explicit_params__() and k != 'log' and hasattr(self, k)
         }
-        _state['kwargs'] = _kwargs
+        _state['state'] = state_params
+        _state['kwargs'] = self._kwargs_
         return _state
 
     @staticmethod
     def __explicit_params__():
-        sig = inspect.signature(Datablock.__init__)
+        sig = inspect.signature(Datablocks.__init__)
         return [
             p.name for p in sig.parameters.values()
             if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD) and p.name != 'self'
@@ -904,9 +916,10 @@ class Datablock:
     def set(self, **kw):
         _kw = copy.deepcopy(self.__getstate__())
         kwargs = _kw.pop('kwargs', {})
-        _kw.update(**kwargs) # Merge old explicit and indirect params
-        _kw.update(**kw)     # Update with NEW params (prioritized)
-        return self.__class__(**_kw)
+        state = _kw.pop('state', {})
+        _kw.update(state)
+        _kw.update(kw)     
+        return self.__class__(kwargs=kwargs, **_kw)
     
     def replace(self, **kw):
         return self.set(**kw)
@@ -925,8 +938,9 @@ class Datablock:
             key=self.key,   
             version=self.version,
             revision=self.revision,
-            spec=self.spec,
             kwargs=self.kwargs,
+            spec=self.spec,
+            state=self.state(),
             quote=self.quote(),
             repr=self.__repr__(),
             handle=self.handle(),
@@ -1075,7 +1089,7 @@ class Datablock:
         self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
         for s in self.spec.keys():
             c = getattr(self.cfg, s)
-            if isinstance(c, Datablock):
+            if isinstance(c, Datablocks):
                 self._write_journal_entry(event=f"build_tree:{s}:begin")
                 self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: BEGIN --------------------------------")
                 c.build_tree(*args, **kwargs)   
@@ -1089,7 +1103,7 @@ class Datablock:
         results = {}
         for s in self.spec.keys():
             c = getattr(self.cfg, s)
-            if isinstance(c, Datablock):
+            if isinstance(c, Datablocks):
                 results[s] = c.valid()
         if reduce:
             return all(list(results.values()))
@@ -1153,8 +1167,8 @@ class Datablock:
             self._write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
-    def UNSAFE_copy_from(self, anchorhashpath, *, overwrite: bool = False, topicpaths=None):
-        def fscopy(*, src_path, dst_path):
+    def UNSAFE_copy_from(self, anchorhashpath, *, overwrite: bool = False, topicpaths=None, validate: bool = True):
+        def fscopy(*, src_path, dst_path, recursive: bool = False):
             # fsspec does not implement .copy, so use put/get or temporary directory
             src_fs, _ = fsspec.url_to_fs(src_path)
             dst_fs, _ = fsspec.url_to_fs(dst_path)
@@ -1168,53 +1182,85 @@ class Datablock:
                 # At least one is local filesystem, use put/get directly
                 if 'file' in src_fs.protocol:
                     # Source is local, destination is remote
-                    dst_fs.put(src_path, dst_path)
+                    dst_fs.put(src_path, dst_path, recursive=recursive)
                 else:
                     # Source is remote, destination is local
-                    src_fs.get(src_path, dst_path)
+                    src_fs.get(src_path, dst_path, recursive=recursive)
             else:
                 # Both are remote, use temporary directory
                 with tempfile.TemporaryDirectory() as tmpdir:
-                    tmp_path = os.path.join(tmpdir, os.path.basename(src_path))
-                    src_fs.get(src_path, tmp_path)
-                    dst_fs.put(tmp_path, dst_path)
+                    basename = os.path.basename(src_path.rstrip('/'))
+                    if not basename:
+                        basename = "root"
+                    tmp_path = os.path.join(tmpdir, basename)
+                    src_fs.get(src_path, tmp_path, recursive=recursive)
+                    dst_fs.put(tmp_path, dst_path, recursive=recursive)
 
         if not overwrite:
-            assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
+            assert not self.valid(), f"Attempting to overwrite a valid Datablocks {self}. Missing 'overwrite' argument?"
         fs, _ = fsspec.url_to_fs(anchorhashpath)
         assert fs.isdir(anchorhashpath), f"Nonexistent hashpath {anchorhashpath}"
-        self.log.debug(f"Copying files from {anchorhashpath}: BEGIN")
+        self.log.verbose(f"Copying files from {anchorhashpath}: BEGIN")
         self._write_journal_entry(event="UNSAFE_copy_from:BEGIN", context=anchorhashpath, inline_context=True)
         try:
             if self.has_topics():
                 for topic in self.topics():
                     dst_path = self.path(topic)
                     if dst_path is not None:
+                        # File copy
                         if topicpaths is not None:
                             _src_path = topicpaths[topic]
                         else:
                             _src_path = os.path.join(topic, self.TOPICFILES[topic])
                         src_path = os.path.join(anchorhashpath, _src_path)
-                        self.log.detailed(f"Copying {src_path} to {dst_path}")
-                        fscopy(src_path=src_path, dst_path=dst_path)
+                        self.log.detailed(f"Copying file {src_path} to {dst_path}")
+                        fscopy(src_path=src_path, dst_path=dst_path, recursive=False)
+                    else:
+                        # Dir copy
+                        dst_path = self.dirpath(topic)
+                        if topicpaths is not None:
+                            _src_path = topicpaths[topic]
+                        else:
+                            _src_path = topic
+                        src_path = os.path.join(anchorhashpath, _src_path)
+                        src_fs, _ = fsspec.url_to_fs(src_path)
+                        if src_fs.exists(src_path):
+                            self.log.detailed(f"Copying directory {src_path} to {dst_path}")
+                            fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
             elif self.has_topic():
                 dst_path = self.path()
                 if dst_path is not None:
+                    # File copy
                     if topicpaths is not None:
                         _src_path = topicpaths
                     else:
                         _src_path = self.TOPICFILE
                     src_path = os.path.join(anchorhashpath, _src_path)
-                    self.log.detailed(f"Copying {src_path} to {dst_path}")
-                    fscopy(src_path=src_path, dst_path=dst_path)
-            self.log.debug(f"Copying files from {anchorhashpath}: END")
+                    self.log.detailed(f"Copying file {src_path} to {dst_path}")
+                    fscopy(src_path=src_path, dst_path=dst_path, recursive=False)
+                else:
+                    # Dir copy
+                    dst_path = self.dirpath()
+                    if topicpaths is not None:
+                        _src_path = topicpaths
+                    else:
+                        _src_path = ""
+                    src_path = os.path.join(anchorhashpath, _src_path)
+                    src_fs, _ = fsspec.url_to_fs(src_path)
+                    if src_fs.exists(src_path):
+                        self.log.detailed(f"Copying directory {src_path} to {dst_path}")
+                        fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
+        
+            self.log.verbose(f"Copying files from {anchorhashpath}: END")
             self._write_journal_entry(event="UNSAFE_copy_from:END", context=anchorhashpath, inline_context=True)
-            assert self.valid(), f"Invalid Datablock after copy: {self}"
+            if validate:
+                assert self.valid(), f"Invalid Datablocks after copy: {self}"
         except Exception as e:
             self.log.error(f"UNSAFE_copy_from: Error when trying to copy files from {anchorhashpath}")
             self.log.error(f"EXCEPTION: {e}")
             self._write_journal_entry(event="UNSAFE_copy_from:ERROR", context=anchorhashpath, inline_context=True)
             raise e
+        return self
 
     # ALIAS
     def UNSAFE_pull(self, *args, **kwargs):
@@ -1225,8 +1271,8 @@ class Datablock:
         replacements = {}
         for field in fields(config):
             term = getattr(config, field.name)
-            if issubclass(self.CONFIG, Datablock.CONFIG):
-                getter = Datablock.CONFIG.LazyLoader(term)
+            if issubclass(self.CONFIG, Datablocks.CONFIG):
+                getter = Datablocks.CONFIG.LazyLoader(term)
             else:
                 getter = eval_term(term)
             replacements[field.name] = getter
@@ -1270,6 +1316,7 @@ class Datablock:
         topic=None,
         *,
         ensure: bool = False,
+        list: bool = False,
     ):  
         hashpath = self.hashpath()
         if topic is not None:
@@ -1280,6 +1327,9 @@ class Datablock:
         if ensure:
             fs, _ = fsspec.url_to_fs(dirpath)
             fs.makedirs(dirpath, exist_ok=True)
+        if list:
+            fs, _ = fsspec.url_to_fs(dirpath)
+            return fs.ls(dirpath)
         return dirpath
     
     def filepath(
@@ -1412,20 +1462,20 @@ class Datablock:
         return scopeanchorpath
     
     @classmethod
-    def _kwargsanchorpath(cls, root):
-        kwargsanchor = os.path.join(
+    def _stateanchorpath(cls, root):
+        stateanchor = os.path.join(
             (
                 cls.__module__
                 + "."
                 + cls.__name__
             ),
-            ".kwargs",
+            ".state",
         )
-        kwargsanchorpath = os.path.join(
+        stateanchorpath = os.path.join(
             root,
-            kwargsanchor,
+            stateanchor,
         )
-        return kwargsanchorpath
+        return stateanchorpath
 
     def _logpath(self, *, ensure: bool = True):
         loganchorpath = self._loganchorpath(self.root)
@@ -1456,25 +1506,25 @@ class Datablock:
             raise ValueError(f"Unknown path kind: {kind}")
         return scopepath
     
-    def _kwargshashpath(self):
-        kwargsanchorpath = self._kwargsanchorpath(self.root)
+    def _statehashpath(self):
+        stateanchorpath = self._stateanchorpath(self.root)
         return os.path.join(
-            kwargsanchorpath,
+            stateanchorpath,
             self.hash,
         )
     
-    def _kwargspath(self, kind, *, ensure: bool = True):
-        kwargshashpath = self._kwargshashpath()
+    def _statepath(self, kind, *, ensure: bool = True):
+        statehashpath = self._statehashpath()
         if ensure:
-            fs, _ = fsspec.url_to_fs(kwargshashpath)
-            fs.makedirs(kwargshashpath, exist_ok=True)
+            fs, _ = fsspec.url_to_fs(statehashpath)
+            fs.makedirs(statehashpath, exist_ok=True)
         if kind == 'yaml':
-            kwargspath = os.path.join(kwargshashpath, f'{self.dt}.yaml')
+            statepath = os.path.join(statehashpath, f'{self.dt}.yaml')
         elif kind == 'parquet':
-            kwargspath = os.path.join(kwargshashpath, f'{self.dt}.parquet')
+            statepath = os.path.join(statehashpath, f'{self.dt}.parquet')
         else:
             raise ValueError(f"Unknown path kind: {kind}")
-        return kwargspath
+        return statepath
 
     @staticmethod
     def _journalanchorpath(cls, root, *, ensure: bool = True):
@@ -1561,7 +1611,7 @@ class Datablock:
         """
             . expansion: 'repr'|'quote'|'handle'
                 . specline:      str starting with '@', '$' or '#'
-                . datablock: Datablock object
+                . datablock: Datablocks object
                 . obj:       object
             'repr':
                 . FULL reduction
@@ -1589,7 +1639,7 @@ class Datablock:
         elif expansion == 'handle':
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
-                if isinstance(value, Datablock):
+                if isinstance(value, Datablocks):
                     _spec_[k] = value.handle()
                 elif self.is_specline(v):
                     _spec_[k] = v
@@ -1602,7 +1652,7 @@ class Datablock:
                 value = getattr(self.cfg, k)
                 if self.is_specline(v):
                     _spec_[k] = v
-                elif isinstance(value, Datablock):
+                elif isinstance(value, Datablocks):
                     _spec_[k] = value.quote()
                 elif isinstance(value, str):
                     _spec_[k] = value
@@ -1629,9 +1679,11 @@ class Datablock:
         tailkwargs = {
             k: v
             for k, v in state.items()
-            if k not in ['root', 'anchored', 'hash', 'spec', 'kwargs']          
+            if k not in ['root', 'anchored', 'hash', 'spec', 'state', 'kwargs']          
         }
-        if 'kwargs' in state:
+        if 'state' in state:
+             tailkwargs.update(state['state'])
+        elif 'kwargs' in state:
             tailkwargs.update(state['kwargs'])
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
@@ -1704,9 +1756,12 @@ class Datablock:
         s = s.replace('\\', '')
         return s
     
+    def state(self):
+        return self.__getstate__()['state']
+    
     @property
     def kwargs(self):
-        return self.__getstate__()
+        return self._kwargs_
     
     @property
     def hashstr(self):
@@ -1803,6 +1858,7 @@ class Datablock:
 
     def _write_journal_entry(self, event:str, *, context: str = None, inline_context: bool = False):
         self._write_journal_dict('spec', self.spec)
+        self._write_journal_dict('state', self.state())
         self._write_journal_dict('kwargs', self.kwargs)
         self._write_str('quote', self.quote())
         self._write_str('repr', self.__repr__())
@@ -1816,6 +1872,7 @@ class Datablock:
         filename = f"{self.hash}-{dt}"
 
         spec_path = self._xpath('spec', 'yaml')
+        state_path = self._xpath('state', 'yaml')
         kwargs_path = self._xpath('kwargs', 'yaml')
         quote_path = self._xpath('quote', 'txt')
         handle_path = self._xpath('quote', 'txt')
@@ -1848,6 +1905,7 @@ class Datablock:
                                          'log': logpath if has_log else None,
                                          'event': event,
                                          'spec': spec_path,
+                                         'state': state_path,
                                          'kwargs': kwargs_path,
                                          'quote': quote_path,
                                          'handle': handle_path,
@@ -1868,7 +1926,7 @@ class Datablock:
     def Journal(cls, entry: int = None, *, root=None, **kwargs):
         if root is None:
             root = os.environ.get('DBXROOT')
-        journaldirpath = Datablock._journalanchorpath(eval_term(cls), root)
+        journaldirpath = Datablocks._journalanchorpath(eval_term(cls), root)
         fs, _ = fsspec.url_to_fs(journaldirpath)
         files = list(fs.ls(journaldirpath))
         parquet_files = [f for f in files if f.endswith('.parquet')]
@@ -1881,6 +1939,10 @@ class Datablock:
                 _df = pd.read_parquet(file)
                 if 'revision' not in _df.columns:
                     _df = _df.rename(columns={'version': 'revision',})
+                if 'kwargs' in _df.columns and 'state' not in _df.columns:
+                    # Legacy entries: 'kwargs' was the state. 
+                    # We map it to 'state' and also keep it as 'kwargs' (fallback).
+                    _df['state'] = _df['kwargs']
                 dfs.append(_df)
             df = pd.concat(dfs)
             # TODO: FIX uuid; currently not unique
@@ -1916,7 +1978,7 @@ def quote(obj, *args, tag="$", **kwargs):
     if not callable(obj):
         assert len(args) == 0, f"Nonempty args for a noncallable obj: {args}"
         assert len(kwargs) == 0, f"Nonempty kwargs for a noncallable obj: {kwargs}"
-        if isinstance(obj, Datablock):
+        if isinstance(obj, Datablocks):
             _quote = obj.quote()
         elif isinstance(obj, str):
             _quote = repr(obj)
@@ -1937,7 +1999,7 @@ class TorchMultithreadingDatablocksBuilder:
         self.devices = devices
         self.log = log
 
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             result_queue = queue.Queue()
             done_queue = queue.Queue()
@@ -1973,7 +2035,7 @@ class TorchMultithreadingDatablocksBuilder:
             self.log.debug("Threads successfully joined")
         return blocks
     
-    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, device: str, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
+    def __build_blocks__(self, blocks: Sequence[Datablocks], ctx_args, ctx_kwargs, offset: int, device: str, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
         self.log.debug(f"Building {len(blocks)} feature blocks on device: {device}")
         device_ctx_args, device_ctx_kwargs = self.__args_kwargs_to_device__(ctx_args, ctx_kwargs, device)
         for i, block in enumerate(blocks):
@@ -2016,7 +2078,7 @@ class TorchMultiprocessingDatablocksBuilder(TorchMultithreadingDatablocksBuilder
         self.devices = devices
         self.log = log
 
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             result_queue = mp.Queue()
             done_queue = mp.Queue()
@@ -2073,7 +2135,7 @@ class TorchMultiprocessingDatablocksBuilder(TorchMultithreadingDatablocksBuilder
                 raise(exc)
         return blocks
     
-    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, process: str, device: str, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
+    def __build_blocks__(self, blocks: Sequence[Datablocks], ctx_args, ctx_kwargs, offset: int, process: str, device: str, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
         self.log.debug(f"Building {len(blocks)} feature blocks on process: {process}, device: {device}")
         if device is not None:
             device_ctx_args, device_ctx_kwargs = self.__args_kwargs_to_device__(ctx_args, ctx_kwargs, device)
@@ -2195,7 +2257,7 @@ class MultithreadingDatablocksBuilder:
         self.n_threads = n_threads
         self.log = log
 
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             result_queue = queue.Queue()
             done_queue = queue.Queue()
@@ -2232,7 +2294,7 @@ class MultithreadingDatablocksBuilder:
         return blocks
     
 
-    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
+    def __build_blocks__(self, blocks: Sequence[Datablocks], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
         self.log.debug(f"Building {len(blocks)} feature blocks on thread: {thread_idx}")
         for i, block in enumerate(blocks):
             exception = None
@@ -2261,12 +2323,12 @@ class MultithreadingDatablocksBuilder:
                 break
 
 
-class MultiprocessingDatablockBuilder:
+class MultiprocessingDatablocksBuilder:
     def __init__(self, *, n_processes: int = 1, log: Logger = Logger()):
         self.n_processes = n_processes
         self.log = log
 
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             result_queue = mp.Queue()
             done_queue = mp.Queue()
@@ -2328,7 +2390,7 @@ class MultiprocessingDatablockBuilder:
                 raise(exc)
         return blocks
 
-    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, process_idx: int, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
+    def __build_blocks__(self, blocks: Sequence[Datablocks], ctx_args, ctx_kwargs, offset: int, process_idx: int, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
         self.log.debug(f"Building {len(blocks)} feature blocks on process: {process_idx}")
         exception = None
         for i, block in enumerate(blocks):
@@ -2771,7 +2833,7 @@ class RemoteDatablocksBuilder:
         self.log = log
         self.executor = RemoteCallableExecutor(n_workers=n_workers, revision=revision, conda=conda, log=log)
 
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+    def build_blocks(self, blocks: Sequence[Datablocks], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
             def build_block(block, *args, **kwargs):
                 return block.build(*args, **kwargs)
@@ -2839,7 +2901,7 @@ def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, n_workers: int =
     Pull datablocks from the journal based on specified criteria.
 
     Args:
-        datablock_classname (str): The name of the Datablock class to pull.
+        datablock_classname (str): The name of the Datablocks class to pull.
         n_workers (int): Number of worker threads to use for pulling. 
             If 0, pulling is performed sequentially in the main thread.
         throw (bool): If True, exceptions encountered during pulling will be raised.
@@ -2852,8 +2914,8 @@ def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, n_workers: int =
         **other_journal_kwargs: Additional keyword arguments used to filter the journal query in addition to event, revision, and date.
 
     Returns:
-        tuple[tuple[Datablock, ...], tuple[bool, ...]]: A tuple containing:
-            - A tuple of instantiated Datablock objects.
+        tuple[tuple[Datablocks, ...], tuple[bool, ...]]: A tuple containing:
+            - A tuple of instantiated Datablocks objects.
             - A tuple of booleans indicating if each datablock was successfully copied.
     """
     log.verbose(f"Pulling {datablock_classname} ...")

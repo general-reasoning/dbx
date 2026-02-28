@@ -2031,7 +2031,8 @@ class Datablock:
                     _df['state'] = _df['kwargs']
                 dfs.append(_df)
             df = pd.concat(dfs)
-            columns = ['hash', 'uuid', 'datetime'] + [c for c in df.columns if c not in ('hash', 'uuid', 'datetime', 'event')] + ['event']
+            leading = ['hash'] + (['uuid'] if 'uuid' in df.columns else []) + ['datetime']
+            columns = leading + [c for c in df.columns if c not in set(leading + ['event'])] + ['event']
             df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)
             df = df.rename(columns={'build_log': 'log'})
         else:

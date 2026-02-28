@@ -9,7 +9,7 @@ in dbx. The tests verify:
 3. test_remote_callable_executor: Parallel task execution across multiple workers using `RemoteCallableExecutor`.
 4. test_nested_proxying: Handling of objects returned by remote actors (proxies within proxies).
 5. test_remote_exception_handling: Correct propagation and reraising of exceptions from remote tasks.
-6. test_remote_datablocks_builder: Distributed building of Datablock using `RemoteDatablocksBuilder`.
+6. test_remote_datablocks_builder: Distributed building of Datablocks using `RemoteDatablocksBuilder`.
 
 Note: These tests require a clean git repository if DBXGITREPO is set.
 """

@@ -2323,7 +2323,7 @@ class MultithreadingDatablocksBuilder:
                 break
 
 
-class MultiprocessingDatablockBuilder:
+class MultiprocessingDatablocksBuilder:
     def __init__(self, *, n_processes: int = 1, log: Logger = Logger()):
         self.n_processes = n_processes
         self.log = log

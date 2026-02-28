@@ -744,18 +744,15 @@ class Datablock:
     @dataclass
     class Bid: #BlockId
         hash: str
-        key: str
         version: str
         revision: str
-        state: dict
+        defn: dict
         kwargs: dict
         spec: dict
         quote: str
         repr: str
         handle: str
-        knob: str
         hashstr: str
-        keystr: str
         anchor: str
 
         def deslash(self, attr):
@@ -946,18 +943,15 @@ class Datablock:
     def bid(self):
         return self.Bid(
             hash=self.hash,
-            key=self.key,   
             version=self.version,
             revision=self.revision,
             kwargs=self.kwargs,
             spec=self.spec,
-            state=self.state(),
+            defn=self.defn(),
             quote=self.quote(),
             repr=self.__repr__(),
             handle=self.handle(),
-            knob=self.knob(),
             hashstr=self.hashstr,
-            keystr=self.keystr,
             anchor=self.anchor,
         )
     
@@ -1746,18 +1740,6 @@ class Datablock:
         self.log.detailed(f"handle: ------------>{handle=}")
         return handle
 
-    def knob(self, *, deslash: bool = False):
-        repr_spec = self.__expand_spec__('handle')
-        knob = self.__repr_from_kwargs__({
-            **self._rootkwargs_,
-            **{'spec': repr_spec},
-        }, use_stump=True)
-        if deslash:
-            knob = knob.replace('\\', '')
-        self.log.detailed(f"knob: ------------> {repr_spec=}")
-        self.log.detailed(f"knob: ------------>{knob=}")
-        return knob
-    
     def __repr__(self, *, deslash: bool = True):
         repr_spec = self.__expand_spec__('repr')
         r = self.__repr_from_kwargs__({
@@ -1770,13 +1752,13 @@ class Datablock:
         if deslash:
             r = r.replace('\\', '')
         return r
-    
+
     def __str__(self):
         s = self.quote()
         s = s.replace('\\', '')
         return s
     
-    def state(self):
+    def defn(self):
         return self.__getstate__()['state']
     
     @property
@@ -1797,21 +1779,6 @@ class Datablock:
             *topics,
         )
         return hashstr
-
-    @property
-    def keystr(self):
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
-        # computed using the older version of these methods
-        if hasattr(self, "TOPICFILES"):
-            topics = [f"topic:{topic}={file}" for topic, file in self.TOPICFILES.items()]
-        else:
-            topics = ["topics:None"]
-        keystr = os.path.join(
-            self.knob(),
-            f"version={self.version}",
-            *topics,
-        )
-        return keystr
     
     @property
     def hash(self): 
@@ -1835,17 +1802,6 @@ class Datablock:
             else:
                 self._tag = self.anchorhash
         return self._tag
-    
-    @property
-    def key(self):
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
-        # computed with the older code.
-        if not hasattr(self, '_key'): 
-            sha = hashlib.sha256()
-            sha.update(self.keystr.encode())
-            self._key = sha.hexdigest()
-            self.log.detailed(f"key: ---------===---------> {self.keystr=} ---> key: {self._key}")
-        return self._key
     #IDENTIFICATION: END
 
     #JOURNAL: BEGIN
@@ -1878,13 +1834,12 @@ class Datablock:
 
     def _write_journal_entry(self, event:str, *, context: str = None, inline_context: bool = False):
         self._write_journal_dict('spec', self.spec)
-        self._write_journal_dict('state', self.state())
+        self._write_journal_dict('defn', self.defn())
         self._write_journal_dict('kwargs', self.kwargs)
         self._write_str('quote', self.quote())
         self._write_str('repr', self.__repr__())
         self._write_str('handle', self.handle())
         self._write_str('hashstr', self.hashstr)
-        self._write_str('keystr', self.keystr)
         if context is not None and not inline_context:
             self._write_str('context', context)
         #
@@ -1892,13 +1847,12 @@ class Datablock:
         filename = f"{self.hash}-{dt}"
 
         spec_path = self._xpath('spec', 'yaml')
-        state_path = self._xpath('state', 'yaml')
+        defn_path = self._xpath('defn', 'yaml')
         kwargs_path = self._xpath('kwargs', 'yaml')
         quote_path = self._xpath('quote', 'txt')
         handle_path = self._xpath('quote', 'txt')
         repr_path = self._xpath('repr', 'txt')
         hashstr_path = self._xpath('hashstr', 'txt')
-        keystr_path = self._xpath('keystr', 'txt')
         if context is not None and not inline_context:
             context_path = self._xpath('context', 'txt')
             context = context_path
@@ -1920,18 +1874,16 @@ class Datablock:
                                          'root': self.root,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
-                                         'key': self.key,
                                          'tag': self.tag, 
                                          'log': logpath if has_log else None,
                                          'event': event,
                                          'spec': spec_path,
-                                         'state': state_path,
+                                         'defn': defn_path,
                                          'kwargs': kwargs_path,
                                          'quote': quote_path,
                                          'handle': handle_path,
                                          'repr': repr_path,
                                          'hashstr': hashstr_path,
-                                         'keystr': keystr_path,
                                          'context': context,
                                          'gitrepo': DBXGITREPO,
                                          'wrkrepo': DBXWRKREPO,

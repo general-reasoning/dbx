@@ -137,8 +137,8 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         sys.path.insert(0, wrkrepo)
         return wrkroot, wrkrepo
 
-    use_dbxgitrepo = os.environ.get('DBXGITREPO') or revision is not None
-    if use_dbxgitrepo and DBXWRKREPO is None:
+    use_wrkrepo = os.environ.get('DBXWRKREPO') == 'True' or revision is not None
+    if use_wrkrepo and DBXWRKREPO is None:
         if DBXGITREPO is None:
             raise ValueError("DBXGITREPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
         

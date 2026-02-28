@@ -910,6 +910,7 @@ class Datablock:
         **kw,
     ):
         self._working_params_ = []
+        self._uuid = str(uuid.uuid4())  # unique per live instance, not preserved across serialization
         state = {
             'root': root,
             'spec': spec,
@@ -1982,6 +1983,7 @@ class Datablock:
                                          'root': self.root,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
+                                         'uuid': self.uuid,
                                          'tag': self.tag, 
                                          'log': logpath if has_log else None,
                                          'event': event,
@@ -2025,8 +2027,7 @@ class Datablock:
                     _df['state'] = _df['kwargs']
                 dfs.append(_df)
             df = pd.concat(dfs)
-            # TODO: FIX uuid; currently not unique
-            columns = ['hash', 'datetime'] + [c for c in df.columns if c not in ('hash', 'datetime', 'event', 'uuid')] + ['event']
+            columns = ['hash', 'uuid', 'datetime'] + [c for c in df.columns if c not in ('hash', 'uuid', 'datetime', 'event')] + ['event']
             df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)
             df = df.rename(columns={'build_log': 'log'})
         else:

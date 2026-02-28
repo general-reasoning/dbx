@@ -1064,7 +1064,7 @@ class Datablock:
     def __pre_build__(self, *args, **kwargs):
         valid_cfg = self.valid_cfg()
         if not all(list(valid_cfg.values())):
-            raise ValueError(f"Not all upstream Datablock in cfg are valid: {valid_cfg=}")
+            raise ValueError(f"Not all upstream Datablocks in cfg are valid: {valid_cfg=}")
         self._write_journal_entry(event="build:start",)
         return self
 
@@ -1568,7 +1568,7 @@ class Datablock:
 
 
     #IDENTIFICATION: BEGIN
-    #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
+    #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
     # computed using the older version of these methods
     """
     
@@ -1631,7 +1631,7 @@ class Datablock:
         spec = {k: self.spec[k] if k in self.spec else getattr(self.cfg, k) for k in keys}
         _spec_ = {}
         if expansion == 'repr':
-            #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
+            #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
             # computed using the older version of these methods
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
@@ -1713,7 +1713,7 @@ class Datablock:
         return quote
 
     def handle(self, *, deslash: bool = False):
-        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
+        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         repr_spec = self.__expand_spec__('handle')
         handle = self.__repr_from_kwargs__({
@@ -1765,7 +1765,7 @@ class Datablock:
     
     @property
     def hashstr(self):
-        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
+        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if hasattr(self, "TOPICFILES"):
             topics = [f"topic:{topic}={file}" for topic, file in self.TOPICFILES.items()]
@@ -1780,7 +1780,7 @@ class Datablock:
 
     @property
     def keystr(self):
-        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
+        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if hasattr(self, "TOPICFILES"):
             topics = [f"topic:{topic}={file}" for topic, file in self.TOPICFILES.items()]
@@ -1795,7 +1795,7 @@ class Datablock:
     
     @property
     def hash(self): 
-        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hash
+        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hash
         # computed with the older code.
         if not hasattr(self, '_hash'): 
             if self._hash_ is not None:
@@ -1818,7 +1818,7 @@ class Datablock:
     
     @property
     def key(self):
-        #CAUTION! Changing this code may invalidate Datablock that have already been computed and identified by their hashes
+        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed with the older code.
         if not hasattr(self, '_key'): 
             sha = hashlib.sha256()

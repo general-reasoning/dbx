@@ -1705,11 +1705,14 @@ class Datablock:
     
     @property
     def version(self):
-        proj_v = self.VERSION if hasattr(self, 'VERSION') else None
-        if proj_v:
-            return f"{__version__}:{proj_v}"
+        """User-defined version of this Datablock subclass. Used in hash computation — do NOT include dbx version here."""
+        return self.VERSION if hasattr(self, 'VERSION') else None
+
+    @property
+    def dbx_version(self):
+        """The dbx library version. Recorded in the journal but NOT used in hash computation."""
         return __version__
-    
+
     @property
     def uuid(self):
         if not hasattr(self, '_uuid'):
@@ -1979,6 +1982,7 @@ class Datablock:
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build_datetime': self.build_dt,
                                          'version': self.version,
+                                         'dbx_version': self.dbx_version,
                                          'revision': self.revision, 
                                          'root': self.root,
                                          'anchor': self.anchor,

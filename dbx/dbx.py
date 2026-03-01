@@ -907,10 +907,12 @@ class Datablock:
         revision: str = None,
         device: str = 'cpu',
         kwargs: dict = None,
+        uuid16: bool = False,
         **kw,
     ):
         self._working_params_ = []
-        self._uuid = str(uuid.uuid4())  # unique per live instance, not preserved across serialization
+        self._uuid16_ = uuid16
+        self._uuid = uuid.uuid4().hex[:16] if uuid16 else str(uuid.uuid4())  # unique per live instance, not preserved across serialization
         state = {
             'root': root,
             'spec': spec,
@@ -963,7 +965,8 @@ class Datablock:
         )
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
-        self.device = state.get('device', 'cpu')  
+        self.device = state.get('device', 'cpu')
+        self._uuid16_ = state.get('uuid16', False)
         
         self.cfg = self._spec_to_cfg(self.spec)
         self.config = self.cfg # alias
@@ -1716,7 +1719,7 @@ class Datablock:
     @property
     def uuid(self):
         if not hasattr(self, '_uuid'):
-            self._uuid = str(uuid.uuid4())
+            self._uuid = uuid.uuid4().hex[:16] if getattr(self, '_uuid16_', False) else str(uuid.uuid4())
         return self._uuid
     
     @property
@@ -1905,6 +1908,11 @@ class Datablock:
                 self._hash = sha.hexdigest()
                 self.log.detailed(f"hash: ---------===---------> {self.hashstr=} ---> hash: {self._hash}")
         return self._hash
+
+    def getag(self, tag):
+        new = self.set(tag=tag)
+        new._write_journal_entry(event='tag')
+        return new
 
     @property
     def tag(self):

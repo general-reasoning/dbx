@@ -854,7 +854,7 @@ class Datablock:
         hash: str
         version: str
         revision: str
-        defn: dict
+        dfn: dict
         kwargs: dict
         spec: dict
         quote: str
@@ -906,9 +906,8 @@ class Datablock:
         capture_output: bool = False,
         revision: str = None,
         device: str = 'cpu',
-        kwargs: dict = None,
         uuid16: bool = False,
-        **kw,
+        **kwargs,
     ):
         self._working_params_ = []
         self._uuid16_ = uuid16
@@ -926,18 +925,32 @@ class Datablock:
             'capture_output': capture_output,
             'revision': revision,
             'device': device,
-            'kwargs': kwargs, 
-            'state': kw,
+            'uuid16': uuid16,
         }
+        state.update(kwargs)
         self.__setstate__(state)
         
     def __setstate__(self, state):
-        """NB: state keys should match __init__'s keyword arguments, with extra args in 'state' dict"""
+        """NB: state keys should match __init__'s keyword arguments, with extra args properly captured in state."""
         self._working_params_ = []
         state.pop('gitrepo', None)
         state.pop('_handle', None)
         state.pop('_slurm', None)
         
+        # Backward compatibility for legacy pickles or explicit kwargs dict arguments
+        old_kwargs = state.pop('kwargs', None)
+        old_state = state.pop('state', None)
+        
+        if old_kwargs is not None and isinstance(old_kwargs, dict):
+            for k, v in old_kwargs.items():
+                if k not in state:
+                    state[k] = v
+                    
+        if old_state is not None and isinstance(old_state, dict):
+            for k, v in old_state.items():
+                if k not in state:
+                    state[k] = v
+
         # Explicit parameters
         self._root_ = state.get('root')
         self.root = self._root_
@@ -968,28 +981,16 @@ class Datablock:
         self.device = state.get('device', 'cpu')
         self._uuid16_ = state.get('uuid16', False)
         
-        self.cfg = self._spec_to_cfg(self.spec)
-        self.config = self.cfg # alias
+
         
-        self._kwargs_ = state.get('kwargs')
-        state_params = state.get('state')
-        if state_params is None:
-            # Legacy: 'kwargs' contained the state.
-            state_params = self._kwargs_ if self._kwargs_ is not None else {}
-            self._kwargs_ = state_params.copy()
-        elif self._kwargs_ is None:
-            # New style, first-time init: 'state' contains the initial kwargs.
-            self._kwargs_ = state_params.copy()
+        explicit_keys = set(self.__explicit_params__())
+        state_params = {k: v for k, v in state.items() if k not in explicit_keys}
 
         for key in state_params.keys():
-            assert key not in self.__explicit_params__() + self._working_params_, \
-                f"Key {key} in state_params conflicts with __explicit_params__() + _working_params_: {self.__explicit_params__() + self._working_params_}"
+            assert key not in explicit_keys | set(self._working_params_), \
+                f"Key {key} in state_params conflicts with __explicit_params__() + _working_params_: {explicit_keys | set(self._working_params_)}"
         for k, v in state_params.items():
             setattr(self, k, v)
-            
-        handled_keys = set(self.__explicit_params__()) | {'state', 'kwargs'}
-        other_keys = [k for k in state if k not in handled_keys]
-        assert len(other_keys) == 0, f"Unknown keys in state: {other_keys}"
             
         # self.parameters used for state retrieval
         self.parameters = self.__explicit_params__() + list(state_params.keys())
@@ -1018,12 +1019,9 @@ class Datablock:
                 _state[k] = getattr(self, k)
         
         #TODO: why does 'log' end up in self.parameters?
-        state_params = {
-            k: getattr(self, k)
-            for k in self.parameters if k not in self.__explicit_params__() and k != 'log' and hasattr(self, k)
-        }
-        _state['state'] = state_params
-        _state['kwargs'] = self._kwargs_
+        for k in self.parameters:
+            if k not in self.__explicit_params__() and k != 'log' and hasattr(self, k):
+                _state[k] = getattr(self, k)
         return _state
 
     @staticmethod
@@ -1036,11 +1034,8 @@ class Datablock:
     
     def set(self, **kw):
         _kw = copy.deepcopy(self.__getstate__())
-        kwargs = _kw.pop('kwargs', {})
-        state = _kw.pop('state', {})
-        _kw.update(state)
         _kw.update(kw)     
-        return self.__class__(kwargs=kwargs, **_kw)
+        return self.__class__(**_kw)
     
     def replace(self, **kw):
         return self.set(**kw)
@@ -1060,7 +1055,7 @@ class Datablock:
             revision=self.revision,
             kwargs=self.kwargs,
             spec=self.spec,
-            defn=self.defn(),
+            dfn=self.dfn,
             quote=self.quote(),
             repr=self.__repr__(),
             handle=self.handle(),
@@ -1808,12 +1803,8 @@ class Datablock:
         tailkwargs = {
             k: v
             for k, v in state.items()
-            if k not in ['root', 'anchored', 'hash', 'spec', 'state', 'kwargs']          
+            if k not in ['root', 'anchored', 'hash', 'spec']          
         }
-        if 'state' in state:
-             tailkwargs.update(state['state'])
-        elif 'kwargs' in state:
-            tailkwargs.update(state['kwargs'])
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
     
@@ -1873,12 +1864,24 @@ class Datablock:
         s = s.replace('\\', '')
         return s
     
-    def defn(self):
-        return self.__getstate__()['state']
+    @property
+    def dfn(self):
+        """Returns ALL variables including explicit defaults and dynamically-supplied kwargs."""
+        return self.__getstate__()
+
+    @functools.cached_property
+    def cfg(self):
+        return self._spec_to_cfg(self.spec)
+
+    @property
+    def config(self):
+        return self.cfg
     
     @property
     def kwargs(self):
-        return self._kwargs_
+        """Returns ONLY the dynamically-supplied kwargs and arguments not contained in the explicit parameters."""
+        explicit_keys = set(self.__explicit_params__())
+        return {k: v for k, v in self.__getstate__().items() if k not in explicit_keys}
     
     @property
     def hashstr(self):
@@ -1954,7 +1957,7 @@ class Datablock:
 
     def _write_journal_entry(self, event:str, *, context: str = None, inline_context: bool = False):
         self._write_journal_dict('spec', self.spec)
-        self._write_journal_dict('defn', self.defn())
+        self._write_journal_dict('dfn', self.dfn)
         self._write_journal_dict('kwargs', self.kwargs)
         self._write_str('quote', self.quote())
         self._write_str('repr', self.__repr__())
@@ -1967,7 +1970,7 @@ class Datablock:
         filename = f"{self.hash}-{dt}"
 
         spec_path = self._xpath('spec', 'yaml')
-        defn_path = self._xpath('defn', 'yaml')
+        dfn_path = self._xpath('dfn', 'yaml')
         kwargs_path = self._xpath('kwargs', 'yaml')
         quote_path = self._xpath('quote', 'txt')
         handle_path = self._xpath('quote', 'txt')
@@ -2000,7 +2003,7 @@ class Datablock:
                                          'log': logpath if has_log else None,
                                          'event': event,
                                          'spec': spec_path,
-                                         'defn': defn_path,
+                                         'dfn': dfn_path,
                                          'kwargs': kwargs_path,
                                          'quote': quote_path,
                                          'handle': handle_path,

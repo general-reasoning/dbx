@@ -935,9 +935,6 @@ class Datablock:
     def __setstate__(self, state):
         """NB: state keys should match __init__'s keyword arguments, with extra args properly captured in state."""
         self._working_params_ = []
-        state.pop('gitrepo', None)
-        state.pop('_handle', None)
-        state.pop('_slurm', None)
         
         # Backward compatibility for legacy pickles or explicit kwargs dict arguments
         old_kwargs = state.pop('kwargs', None)

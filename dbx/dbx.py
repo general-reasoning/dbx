@@ -2474,8 +2474,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase):
 
 
 def _build_block(block, *args, **kwargs):
-    block.build(*args, **kwargs)
-    return None
+    return block.build(*args, **kwargs)
 
 class MultithreadingDatablocksBuilder:
     """Builds Datablocks concurrently using threads, via MultithreadingCallableExecutor."""
@@ -2676,11 +2675,11 @@ class Remote:
                 return val
 
         def getattr(self, name):
-            val = getattr(self.obj, name)
+            val = getattr(self._obj, name)
             return self._wrap(val)
 
         def call(self, name, *args, **kwargs):
-            if hasattr(self, name) and name != 'obj': # Avoid recursion or direct access to internal state
+            if hasattr(self, name) and name != 'obj' and not name.startswith('__'):
                 attr = getattr(self, name)
             else:
                 attr = getattr(self._obj, name)
@@ -2741,14 +2740,19 @@ class Remote:
         """
         Ensure Slurm job is cancelled when the Remote instance is deleted.
         """
-        if hasattr(self, '_slurm') and self._slurm:
-            self._slurm.cancel()
+        # Safely check for _slurm without triggering __getattr__
+        slurm = self.__dict__.get('_slurm')
+        if slurm:
+            slurm.cancel()
             self._slurm = None
 
     def __getattr__(self, name):
         """
         Dispatch attribute access to the remote actor.
         """
+        if name.startswith('_') and not name.startswith('__'):
+            raise AttributeError(name)
+
         is_callable, value = ray.get(self._handle.info.remote(name))
         
         if is_callable:
@@ -2758,6 +2762,12 @@ class Remote:
             return wrapper
         else:
             return self._unwrap_or_proxy(value)
+
+    def __getstate__(self):
+        """
+        Return the state of the remote object.
+        """
+        return ray.get(self._handle.call.remote('__getstate__'))
 
     def _unwrap_or_proxy(self, val):
         if isinstance(val, ray.actor.ActorHandle):
@@ -2911,10 +2921,7 @@ class RayDatablocksBuilder:
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
-            def build_block(block, *args, **kwargs):
-                return block.build(*args, **kwargs)
-
-            callables = [functools.partial(build_block, block) for block in blocks]
+            callables = [functools.partial(_build_block, block) for block in blocks]
             results = self.executor.execute(callables, *ctx_args, **ctx_kwargs)
             
             # Update local blocks with built state from remote workers
@@ -2923,8 +2930,9 @@ class RayDatablocksBuilder:
                     # RayCallableExecutor returns a list of lists: [[res]]
                     # We expect one result per block.
                     remote_block = result_list[0]
+                    state = remote_block.__getstate__()
                     # Update local block state from the remote result
-                    block.__setstate__(remote_block.__getstate__())
+                    block.__setstate__(state)
 
         return blocks
 

@@ -1871,7 +1871,10 @@ class Datablock:
 
     @functools.cached_property
     def cfg(self):
-        return self._spec_to_cfg(self.spec)
+        self.log.detailed(f"Forming cfg from spec: BEGIN")
+        cfg = self._spec_to_cfg(self.spec)
+        self.log.detailed(f"Forming cfg from spec: END")
+        return cfg
 
     @property
     def config(self):

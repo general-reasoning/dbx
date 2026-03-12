@@ -6,10 +6,10 @@ in dbx. The tests verify:
 
 1. test_remote_instantiation: Basic connectivity and remote actor creation via `remote()`.
 2. test_remote_apply: Execution of arbitrary callables on remote actors using `run()`.
-3. test_remote_callable_executor: Parallel task execution across multiple workers using `RemoteCallableExecutor`.
+3. test_remote_callable_executor: Parallel task execution across multiple workers using `RayCallableExecutor`.
 4. test_nested_proxying: Handling of objects returned by remote actors (proxies within proxies).
 5. test_remote_exception_handling: Correct propagation and reraising of exceptions from remote tasks.
-6. test_remote_datablocks_builder: Distributed building of Datablocks using `RemoteDatablocksBuilder`.
+6. test_remote_datablocks_builder: Distributed building of Datablocks using `RayDatablocksBuilder`.
 
 Note: These tests require a clean git repository if DBXGITREPO is set.
 """
@@ -23,7 +23,7 @@ import queue
 import tqdm
 import functools
 from dbx import dbx
-from dbx.dbx import remote, RemoteCallableExecutor, Datablock, RemoteDatablocksBuilder
+from dbx.dbx import remote, RayCallableExecutor, Datablock, RayDatablocksBuilder
 
 class TestRemote(unittest.TestCase):
     @classmethod
@@ -53,9 +53,9 @@ class TestRemote(unittest.TestCase):
         self.assertEqual(result, 30)
 
     def test_remote_callable_executor(self):
-        """Verify parallel execution of multiple tasks using RemoteCallableExecutor."""
+        """Verify parallel execution of multiple tasks using RayCallableExecutor."""
         n_workers = 2
-        executor = RemoteCallableExecutor(n_workers=n_workers)
+        executor = RayCallableExecutor(n_workers=n_workers)
         
         def multiply(x, y):
             return x * y
@@ -66,7 +66,7 @@ class TestRemote(unittest.TestCase):
         callables = [functools.partial(task, i) for i in range(5)]
         results = executor.execute(callables)
         
-        # RemoteCallableExecutor returns a list of lists: [[res1], [res2], ...]
+        # RayCallableExecutor returns a list of lists: [[res1], [res2], ...]
         expected = [[i * 2] for i in range(5)]
         self.assertEqual(results, expected)
 
@@ -81,7 +81,7 @@ class TestRemote(unittest.TestCase):
 
     def test_remote_exception_handling(self):
         """Verify that exceptions raised in remote workers are correctly propagated to the client."""
-        executor = RemoteCallableExecutor(n_workers=1)
+        executor = RayCallableExecutor(n_workers=1)
         
         def fail():
             raise ValueError("Intentional failure")
@@ -90,7 +90,7 @@ class TestRemote(unittest.TestCase):
             executor.execute([fail])
 
     def test_remote_datablocks_builder(self):
-        """Verify that RemoteDatablocksBuilder can build multiple Datablock remotely."""
+        """Verify that RayDatablocksBuilder can build multiple Datablock remotely."""
         class TestBlock(Datablock):
             def __init__(self, **kwargs):
                 # Pass built=False to super to ensure it's tracked in parameters
@@ -105,7 +105,7 @@ class TestRemote(unittest.TestCase):
                 self.built = True
 
         # Use a small number of threads/workers
-        builder = RemoteDatablocksBuilder(n_workers=2)
+        builder = RayDatablocksBuilder(n_workers=2)
         
         # Create a few TestBlocks
         blocks = [TestBlock() for _ in range(3)]

@@ -3,7 +3,7 @@ import ray
 import time
 import functools
 from dbx import dbx
-from dbx.dbx import RemoteCallableExecutor
+from dbx.dbx import RayCallableExecutor
 
 def work_fn(seconds):
     time.sleep(seconds)
@@ -18,8 +18,8 @@ def main():
     
     print(f"\n--- Running {tasks_count} tasks of {task_duration}s each with 1 worker ---")
     print("Initializing executor with 1 worker...")
-    executor_1 = RemoteCallableExecutor(n_threads=1)
-    # Warmup / Wait for workers? RemoteCallableExecutor init creates workers immediately but they might take a moment.
+    executor_1 = RayCallableExecutor(n_workers=1)
+    # Warmup / Wait for workers? RayCallableExecutor init creates workers immediately but they might take a moment.
     # But usually ray.remote() returns a handle immediately. The actual startup happens async.
     # However, let's just measure execute().
     
@@ -32,7 +32,7 @@ def main():
 
     print(f"\n--- Running {tasks_count} tasks of {task_duration}s each with 5 workers ---")
     print("Initializing executor with 5 workers...")
-    executor_5 = RemoteCallableExecutor(n_threads=5)
+    executor_5 = RayCallableExecutor(n_workers=5)
     
     start_time_5 = time.time()
     callables_5 = [functools.partial(work_fn, task_duration) for _ in range(tasks_count)]

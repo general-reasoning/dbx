@@ -2270,259 +2270,239 @@ class TorchMultiprocessingDatablocksBuilder(TorchMultithreadingDatablocksBuilder
                 break
 
 
-class MultithreadingCallableExecutor:
-    def __init__(self, *, n_threads, log: Logger = Logger()):
-        self.n_threads = n_threads
-        self.log = log
+class _CallableExecutorBase:
+    """
+    Abstract base that implements the fan-out / collect / join scaffold shared by
+    MultithreadingCallableExecutor and MultiprocessingCallableExecutor.
 
-    #ALIAS
-    def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
-    
+    Wire protocol (result_queue items published by workers):
+        success=True  → (True,  worker_idx, item_idx, payload)
+        success=False → (False, worker_idx, item_idx, (exception, tbstr))
+
+    Subclasses must implement:
+        _n_workers  → int
+        _make_queue()   → a Queue-like object
+        _make_event()   → an Event-like object
+        _make_worker(target, args) → a Thread/Process-like object with .start()/.join()
+        _after_start(items, workers) → called after workers are started (default: no-op)
+    """
+
+    @property
+    def _n_workers(self) -> int:
+        raise NotImplementedError
+
+    def _make_queue(self):
+        raise NotImplementedError
+
+    def _make_event(self):
+        raise NotImplementedError
+
+    def _make_worker(self, target, args):
+        raise NotImplementedError
+
+    def _after_start(self, items, workers):
+        """Hook called in the main process right after all workers have been started."""
+        pass
+
+    # ------------------------------------------------------------------
+    # Worker-side helper (called inside each worker)
+    # ------------------------------------------------------------------
+    def _run_items(self, items, ctx_args, ctx_kwargs, offset, worker_idx,
+                   result_queue, done_queue, abort_event):
+        """Run each item in *items* sequentially and report via *result_queue*."""
+        worker_label = self._worker_label(worker_idx)
+        self.log.debug(f"Executing {len(items)} callables on {worker_label}")
+        exception = None
+        for i, item in enumerate(items):
+            exception = None
+            try:
+                if abort_event.is_set():
+                    break
+                payload = item(*ctx_args, **ctx_kwargs)
+            except Exception as e:
+                exception = e
+                self.log.info(f"ERROR executing callable {offset+i} on {worker_label}")
+            finally:
+                self._after_item(item)
+            if exception is not None:
+                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
+                result_queue.put((False, worker_idx, offset + i, (exception, tbstr)))
+                break
+            result_queue.put((True, worker_idx, offset + i, payload))
+        gc.collect()
+        if exception is None:
+            self.log.debug(f"Done executing {len(items)} callables on {worker_label}")
+        else:
+            self.log.debug(f"Abandoning callables on {worker_label} due to exception")
+        self.log.debug(f"Waiting on done_queue on {worker_label}")
+        while True:
+            if done_queue.get() is None:
+                self.log.debug(f"Done signal received on {worker_label}")
+                break
+
+    def _after_item(self, item):
+        """Hook called after each item is processed (e.g. to del block and gc)."""
+        pass
+
+    def _worker_label(self, worker_idx) -> str:
+        return f"worker {worker_idx}"
+
+    # ------------------------------------------------------------------
+    # Main-process driver
+    # ------------------------------------------------------------------
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        payloads = [[] for _ in range(len(callables))]
         if len(callables) > 0:
-            result_queue = queue.Queue()
-            done_queue = queue.Queue()
-            abort_event = threading.Event()
+            result_queue = self._make_queue()
+            done_queue   = self._make_queue()
+            abort_event  = self._make_event()
             progress_bar = tqdm.tqdm(total=len(callables))
-            callable_lists = np.array_split(callables, self.n_threads)
-            callable_offsets = np.cumsum([0] + [len(callable_list) for callable_list in callable_lists])
-            threads = [
-                threading.Thread(target=self.__exec_callables__, args=(callable_list, ctx_args, ctx_kwargs, callable_offset, thread_idx, result_queue, done_queue, abort_event))
-                for thread_idx, (callable_list, callable_offset) in enumerate(zip(callable_lists, callable_offsets))
+            callable_lists   = np.array_split(callables, self._n_workers)
+            callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
+            workers = [
+                self._make_worker(
+                    target=self._run_items,
+                    args=(cl, ctx_args, ctx_kwargs, off, idx,
+                          result_queue, done_queue, abort_event),
+                )
+                for idx, (cl, off) in enumerate(zip(callable_lists, callable_offsets))
             ]
-            payloads = [[] for _ in range(len(callables))]
-            done_idxs = []
-            for thread in threads:
-                thread.start()
-            while len(done_idxs) < len(callables):
-                success, thread_idx, callable_idx, payload = result_queue.get()
-                if success:
-                    done_idxs.append(callable_idx)
-                    e = None
-                    payloads[callable_idx].append(payload)
-                    progress_bar.update(1)
-                else:
-                    e = payload
-                    self.log.info(f"Received error from callable with {callable_idx=} on thread {thread_idx}. Abandoning result_queue polling.")
-                    break
-            self.log.debug(f"Production loop done, feeding done_queue")
-            for _ in range(self.n_threads):
-                done_queue.put(None)
-            self.log.debug(f"Joining threads")
-            for thread in threads:
-                thread.join()
-            if e is not None:
-                self.log.verbose("Raising exception")
-                raise e
-            self.log.debug("Threads successfully joined")
-        flat_payloads = [payload for sublist in payloads for payload in sublist]
-        return flat_payloads
-    
-    def __exec_callables__(self, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
-        self.log.debug(f"Executing {len(callables)} callables on thread: {thread_idx}")
-        for i, callable in enumerate(callables):
-            self.log.detailed(f"EXECUTING callable {i+offset} on {thread_idx=}: {callable}")
-            exception = None
-            try:
-                if abort_event.is_set():
-                    break
-                payload = callable(*ctx_args, **ctx_kwargs)
-                self.log.detailed(f"EXECUTED callable {i+offset}: result: {payload}")
-            except Exception as e:
-                exception = e
-                self.log.info(f"ERROR executing callable {callable} on {thread_idx=}")
-            if exception is not None:
-                result_queue.put((False, thread_idx, offset+i, exception))
-                break
-            result_queue.put((True, thread_idx, offset+i, payload))
-        gc.collect()
-        if exception is None:
-            self.log.debug(f"Done executing {len(callables)} callables on {thread_idx=}")
-        else:
-            self.log.debug(f"Abandoning executing {len(callables)} callables on {thread_idx=} due to an exception")
-        self.log.debug(f"Waiting on the done_queue on {thread_idx}")
-        while True:
-            item = done_queue.get()
-            if item is None:
-                self.log.debug(f"Done message received on the done_queue on {thread_idx=}")
-                break
-
-
-class MultithreadingDatablocksBuilder:
-    def __init__(self, *, n_threads: int = 1, log: Logger = Logger()):
-        self.n_threads = n_threads
-        self.log = log
-
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        if len(blocks) > 0:
-            result_queue = queue.Queue()
-            done_queue = queue.Queue()
-            abort_event = threading.Event()
-            progress_bar = tqdm.tqdm(total=len(blocks))
-            block_lists = np.array_split(blocks, self.n_threads)
-            block_offsets = np.cumsum([0] + [len(block_list) for block_list in block_lists])
-            threads = [
-                threading.Thread(target=self.__build_blocks__, args=(block_list, ctx_args, ctx_kwargs, block_offset, thread_idx, result_queue, done_queue, abort_event, progress_bar))
-                for thread_idx, (block_list, block_offset) in enumerate(zip(block_lists, block_offsets))
-            ]
-            done_idxs = []
-            for thread in threads:
-                thread.start()
-            while len(done_idxs) < len(blocks):
-                success, idx, payload = result_queue.get()
-                if success:
-                    done_idxs.append(idx)
-                    e = None
-                else:
-                    e = payload
-                    self.log.info(f"Received error from block with index {idx}: {blocks[idx]}. Abandoning result_queue polling.")
-                    break
-            self.log.debug(f"Production loop done, feeding done_queue")
-            for _ in range(self.n_threads):
-                done_queue.put(None)
-            self.log.debug(f"Joining threads")
-            for thread in threads:
-                thread.join()
-            if e is not None:
-                self.log.verbose("Raising exception")
-                raise e
-            self.log.debug("Threads successfully joined")
-        return blocks
-    
-
-    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
-        self.log.debug(f"Building {len(blocks)} feature blocks on thread: {thread_idx}")
-        for i, block in enumerate(blocks):
-            exception = None
-            try:
-                if abort_event.is_set():
-                    break
-                block.build(*ctx_args, **ctx_kwargs).to('cpu')
-            except Exception as e:
-                exception = e
-                self.log.info(f"ERROR building feature block {block} on thread: {thread_idx}")
-            if exception is not None:
-                result_queue.put((False, offset+i, exception))
-                break
-            result_queue.put((True, offset+i, None))
-            progress_bar.update(1)
-        gc.collect()
-        if exception is None:
-            self.log.debug(f"Done building {len(blocks)} feature blocks on thread: {thread_idx}")
-        else:
-            self.log.debug(f"Abandoning building {len(blocks)} feature blocks on thread: {thread_idx} due to an exception")
-        self.log.debug(f"Waiting on the done_queue on thread: {thread_idx}")
-        while True:
-            item = done_queue.get()
-            if item is None:
-                self.log.debug(f"Done message received on the done_queue on thread: {thread_idx}")
-                break
-
-
-class MultiprocessingDatablocksBuilder:
-    def __init__(self, *, n_processes: int = 1, log: Logger = Logger()):
-        self.n_processes = n_processes
-        self.log = log
-
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        if len(blocks) > 0:
-            result_queue = mp.Queue()
-            done_queue = mp.Queue()
-            abort_event = mp.Event()
-            progress_bar = tqdm.tqdm(total=len(blocks))
-            block_lists = np.array_split(blocks, self.n_processes)
-            block_offsets = np.cumsum([0] + [len(block_list) for block_list in block_lists])
-            processes = [
-                mp.Process(target=self.__build_blocks__, args=(block_list, ctx_args, ctx_kwargs, block_offset, i, result_queue, done_queue, abort_event))
-                for i, (block_list, block_offset) in enumerate(zip(block_lists, block_offsets))
-            ]
-            self.log.verbose(f"Building {len(blocks)} feature blocks with {self.n_processes} processes")
             done_idxs = []
             exc = None
+            pexc = None
             try:
-                for process in processes:
-                    process.start()
-                # Clear references to blocks in main process to save memory/allow pickling if needed (though copy happens on fork/spawn)
-                # In multiprocessing spawn (default on some OS, optional on Linux), blocks need to be pickled.
-                # Assuming linux fork by default but being safe.
-                for block in blocks:
-                    del block
-                gc.collect()
-
-                while len(done_idxs) < len(blocks):
-                    pexc, ptbstr = None, None
-                    success, proc, idx, payload = result_queue.get()
+                for w in workers:
+                    w.start()
+                self._after_start(callables, workers)
+                while len(done_idxs) < len(callables):
+                    success, worker_idx, item_idx, payload = result_queue.get()
                     if success:
-                        done_idxs.append(idx)
+                        done_idxs.append(item_idx)
+                        payloads[item_idx].append(payload)
                         progress_bar.update(1)
                     else:
                         pexc, ptbstr = payload
-                        self.log.info(f"Received exception from process {proc}, block with index {idx}")
+                        self.log.info(
+                            f"Received exception from {self._worker_label(worker_idx)}, "
+                            f"callable {item_idx}. Abandoning result_queue polling."
+                        )
                         self.log.info(f"Exception: {pexc}")
                         self.log.info(f"Traceback:\n{ptbstr}")
-                        self.log.info(f"Abandoning result_queue polling.")
+                        abort_event.set()
                         break
-                self.log.debug(f"Production loop done")
+                self.log.debug("Production loop done")
             except Exception as e:
                 exc = e
-                self.log.info(f"Caught exception in production loop\nException: {e}")
+                self.log.info(f"Exception in production loop: {e}")
                 tbstr = '\n'.join(tb.format_tb(e.__traceback__))
                 self.log.info(f"Traceback:\n{tbstr}")
                 abort_event.set()
             finally:
-                self.log.debug(f"Feeding done_queue")
-                for _ in range(self.n_processes):
+                self.log.debug("Feeding done_queue")
+                for _ in workers:
                     done_queue.put(None)
-                self.log.debug(f"Joining processes")
-                for process in processes:
-                    process.join()
-                self.log.debug("Processes successfully joined")
-            
+                self.log.debug("Joining workers")
+                for w in workers:
+                    w.join()
+                self.log.debug("Workers successfully joined")
             if pexc is not None:
-                self.log.verbose(f"Reraising exception from process {proc}, block {idx}")
-                raise(pexc)
+                self.log.verbose("Reraising exception from worker")
+                raise pexc
             if exc is not None:
-                self.log.verbose("Reraising production loop exception")
-                raise(exc)
+                self.log.verbose("Reraising production-loop exception")
+                raise exc
+        return [p for sub in payloads for p in sub]
+
+    # Alias
+    def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
+
+
+class MultithreadingCallableExecutor(_CallableExecutorBase):
+    def __init__(self, *, n_threads: int, log: Logger = Logger()):
+        self.n_threads = n_threads
+        self.log = log
+
+    @property
+    def _n_workers(self) -> int:
+        return self.n_threads
+
+    def _make_queue(self):
+        return queue.Queue()
+
+    def _make_event(self):
+        return threading.Event()
+
+    def _make_worker(self, target, args):
+        return threading.Thread(target=target, args=args)
+
+    def _worker_label(self, worker_idx) -> str:
+        return f"thread {worker_idx}"
+
+
+class MultiprocessingCallableExecutor(_CallableExecutorBase):
+    def __init__(self, *, n_processes: int, log: Logger = Logger()):
+        self.n_processes = n_processes
+        self.log = log
+
+    @property
+    def _n_workers(self) -> int:
+        return self.n_processes
+
+    def _make_queue(self):
+        return mp.Queue()
+
+    def _make_event(self):
+        return mp.Event()
+
+    def _make_worker(self, target, args):
+        return mp.Process(target=target, args=args)
+
+    def _worker_label(self, worker_idx) -> str:
+        return f"process {worker_idx}"
+
+    def _after_start(self, items, workers):
+        """Release main-process references so forked memory can be reclaimed."""
+        for item in items:
+            del item
+        gc.collect()
+
+    def _after_item(self, item):
+        """Delete item reference inside the worker after each iteration."""
+        del item
+        gc.collect()
+
+
+def _build_block(block, *args, **kwargs):
+    block.build(*args, **kwargs)
+    return None
+
+class MultithreadingDatablocksBuilder:
+    """Builds Datablocks concurrently using threads, via MultithreadingCallableExecutor."""
+
+    def __init__(self, *, n_threads: int = 1, log: Logger = Logger()):
+        self.n_threads = n_threads
+        self.log = log
+        self._executor = MultithreadingCallableExecutor(n_threads=n_threads, log=log)
+
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+        callables = [functools.partial(_build_block, block) for block in blocks]
+        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
         return blocks
 
-    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, process_idx: int, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
-        self.log.debug(f"Building {len(blocks)} feature blocks on process: {process_idx}")
-        exception = None
-        for i, block in enumerate(blocks):
-            exception = None
-            try:
-                if abort_event.is_set():
-                    break
-                # Assuming .build() method exists and works in subprocess
-                block.build(*ctx_args, **ctx_kwargs)
-            except Exception as e:
-                exception = e
-                self.log.info(f"ERROR building datablock {block} on process: {process_idx}")
-            finally:
-                del block
-                gc.collect()
-            
-            if exception is not None:
-                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
-                result_queue.put((False, process_idx, offset+i, (exception, tbstr)))
-                break
-            result_queue.put((True, process_idx, offset+i, None))
-        
-        # Cleanup
-        gc.collect()
-        if exception is None:
-            self.log.debug(f"Done building {len(blocks)} datablocks on process: {process_idx}")
-        else:
-            self.log.debug(f"Abandoning building {len(blocks)} datablocks on process: {process_idx} due to an exception")
-        
-        self.log.debug(f"Waiting on the done_queue on process: {process_idx}")
-        while True:
-            item = done_queue.get()
-            if item is None:
-                self.log.debug(f"Done message received on the done_queue on process: {process_idx}")
-                break
+
+class MultiprocessingDatablocksBuilder:
+    """Builds Datablocks concurrently using processes, via MultiprocessingCallableExecutor."""
+
+    def __init__(self, *, n_processes: int = 1, log: Logger = Logger()):
+        self.n_processes = n_processes
+        self.log = log
+        self._executor = MultiprocessingCallableExecutor(n_processes=n_processes, log=log)
+
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+        callables = [functools.partial(_build_block, block) for block in blocks]
+        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
+        return blocks
 
     
 
@@ -2832,13 +2812,12 @@ def slurm_remote(*, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partiti
     return remote(revision=revision, slurm=cluster, conda=conda, log=log)
 
 
-class RemoteCallableExecutor:
+class RayCallableExecutor:
     def __init__(self, *, n_workers, revision=None, conda=None, log: Logger = Logger()):
         self.n_workers = n_workers
         self.log = log
         self.workers = [remote(revision=revision, conda=conda) for _ in range(n_workers)]
 
-    #ALIAS
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
 
@@ -2924,11 +2903,11 @@ class RemoteCallableExecutor:
                 break
 
 
-class RemoteDatablocksBuilder:
+class RayDatablocksBuilder:
     def __init__(self, *, n_workers: int = 1, revision=None, conda=None, log: Logger = Logger()):
         self.n_workers = n_workers
         self.log = log
-        self.executor = RemoteCallableExecutor(n_workers=n_workers, revision=revision, conda=conda, log=log)
+        self.executor = RayCallableExecutor(n_workers=n_workers, revision=revision, conda=conda, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
@@ -2941,7 +2920,7 @@ class RemoteDatablocksBuilder:
             # Update local blocks with built state from remote workers
             for block, result_list in zip(blocks, results):
                 if result_list:
-                    # RemoteCallableExecutor returns a list of lists: [[res]]
+                    # RayCallableExecutor returns a list of lists: [[res]]
                     # We expect one result per block.
                     remote_block = result_list[0]
                     # Update local block state from the remote result

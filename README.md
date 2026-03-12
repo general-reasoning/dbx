@@ -47,6 +47,6 @@ python -m unittest tests/test_remote.py
 ## Features
 
 - **Remote execution**: Use the `remote()` function to instantiate a remote dbx interpreter via Ray.
-- **Parallel processing**: Use `RemoteCallableExecutor` to execute tasks in parallel across distributed workers.
+- **Parallel processing**: Use `RayCallableExecutor` to execute tasks in parallel across distributed workers.
 - **Data handling**: Structured datablocks for tracking experiments and results.
 - **Nested Proxying**: Transparently interact with remote objects as if they were local.

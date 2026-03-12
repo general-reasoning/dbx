@@ -849,6 +849,8 @@ class Datablock:
     # path:       '{dirpath}/{TOPICFILE}'|'{dirpath}' if TOPICFILE is not None|else
     
     """
+    VERBOSE_CONFIG = False
+
     @dataclass
     class Bid: #BlockId
         hash: str
@@ -1871,9 +1873,10 @@ class Datablock:
 
     @functools.cached_property
     def cfg(self):
-        self.log.detailed(f"Forming cfg from spec: BEGIN")
+        log_fn = self.log.verbose if getattr(self, 'VERBOSE_CONFIG', False) else self.log.detailed
+        log_fn(f"Forming cfg from spec: BEGIN")
         cfg = self._spec_to_cfg(self.spec)
-        self.log.detailed(f"Forming cfg from spec: END")
+        log_fn(f"Forming cfg from spec: END")
         return cfg
 
     @property

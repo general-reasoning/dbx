@@ -42,20 +42,20 @@ class DummyBlock:
 # MultithreadingCallableExecutor Tests
 # ---------------------------------------------------------
 def test_multithreading_executor_success():
-    ex = MultithreadingCallableExecutor(n_threads=2)
+    ex = MultithreadingCallableExecutor(n_workers=2)
     funcs = [functools.partial(dummy_func, i) for i in range(10)]
     res = ex.execute(funcs)
     assert res == [i * 2 for i in range(10)]
 
 def test_multithreading_executor_failure():
-    ex = MultithreadingCallableExecutor(n_threads=2)
+    ex = MultithreadingCallableExecutor(n_workers=2)
     funcs = [functools.partial(dummy_func, i) for i in range(5)]
     funcs.append(functools.partial(fail_func, 99))
     with pytest.raises(ValueError, match="Failing on 99"):
         ex.execute(funcs)
 
 def test_multithreading_executor_args():
-    ex = MultithreadingCallableExecutor(n_threads=2)
+    ex = MultithreadingCallableExecutor(n_workers=2)
     # Using execute with args/kwargs
     funcs = [functools.partial(delay_func, delay=0.01) for _ in range(5)]
     res = ex.execute(funcs, 5)
@@ -65,13 +65,13 @@ def test_multithreading_executor_args():
 # MultiprocessingCallableExecutor Tests
 # ---------------------------------------------------------
 def test_multiprocessing_executor_success():
-    ex = MultiprocessingCallableExecutor(n_processes=2)
+    ex = MultiprocessingCallableExecutor(n_workers=2)
     funcs = [functools.partial(dummy_func, i) for i in range(10)]
     res = ex.execute(funcs)
     assert res == [i * 2 for i in range(10)]
 
 def test_multiprocessing_executor_failure():
-    ex = MultiprocessingCallableExecutor(n_processes=2)
+    ex = MultiprocessingCallableExecutor(n_workers=2)
     funcs = [functools.partial(dummy_func, i) for i in range(5)]
     funcs.append(functools.partial(fail_func, 99))
     # Multiprocessing executor wraps the exception but re-raises
@@ -79,7 +79,7 @@ def test_multiprocessing_executor_failure():
         ex.execute(funcs)
 
 def test_multiprocessing_executor_args():
-    ex = MultiprocessingCallableExecutor(n_processes=2)
+    ex = MultiprocessingCallableExecutor(n_workers=2)
     funcs = [functools.partial(delay_func, delay=0.01) for _ in range(5)]
     res = ex.execute(funcs, 5)
     assert res == [10] * 5
@@ -88,7 +88,7 @@ def test_multiprocessing_executor_args():
 # MultithreadingDatablocksBuilder Tests
 # ---------------------------------------------------------
 def test_multithreading_builder_success():
-    builder = MultithreadingDatablocksBuilder(n_threads=2)
+    builder = MultithreadingDatablocksBuilder(n_workers=2)
     blocks = [DummyBlock(i) for i in range(10)]
     res = builder.build_blocks(blocks, "arg1", kw="kw1")
     
@@ -98,7 +98,7 @@ def test_multithreading_builder_success():
         assert b.ctx == (("arg1",), {"kw": "kw1"})
 
 def test_multithreading_builder_failure():
-    builder = MultithreadingDatablocksBuilder(n_threads=2)
+    builder = MultithreadingDatablocksBuilder(n_workers=2)
     blocks = [DummyBlock(i) for i in range(5)] + [DummyBlock(99, fail=True)]
     with pytest.raises(ValueError, match="Failing block 99"):
         builder.build_blocks(blocks)
@@ -107,7 +107,7 @@ def test_multithreading_builder_failure():
 # MultiprocessingDatablocksBuilder Tests
 # ---------------------------------------------------------
 def test_multiprocessing_builder_success():
-    builder = MultiprocessingDatablocksBuilder(n_processes=2)
+    builder = MultiprocessingDatablocksBuilder(n_workers=2)
     blocks = [DummyBlock(i) for i in range(10)]
     res = builder.build_blocks(blocks, "arg1", kw="kw1")
     
@@ -118,7 +118,7 @@ def test_multiprocessing_builder_success():
     # The test passes checking no errors.
 
 def test_multiprocessing_builder_failure():
-    builder = MultiprocessingDatablocksBuilder(n_processes=2)
+    builder = MultiprocessingDatablocksBuilder(n_workers=2)
     blocks = [DummyBlock(i) for i in range(5)] + [DummyBlock(99, fail=True)]
     with pytest.raises(ValueError, match="Failing block 99"):
         builder.build_blocks(blocks)

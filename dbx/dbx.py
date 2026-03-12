@@ -504,7 +504,7 @@ def gitrevision(*, log=Logger()):
             if path is None:
                 return None
             repo = git.Repo(path)
-            if repo.is_dirty():
+            if repo.is_dirty() and not os.environ.get('DBXNODIRTY'):
                 raise ValueError(f"Dirty git repo: {path}: commit your changes")
             return repo.head.commit.hexsha
 
@@ -2419,13 +2419,13 @@ class _CallableExecutorBase:
 
 
 class MultithreadingCallableExecutor(_CallableExecutorBase):
-    def __init__(self, *, n_threads: int, log: Logger = Logger()):
-        self.n_threads = n_threads
+    def __init__(self, *, n_workers: int, log: Logger = Logger()):
+        self.n_workers = n_workers
         self.log = log
 
     @property
     def _n_workers(self) -> int:
-        return self.n_threads
+        return self.n_workers
 
     def _make_queue(self):
         return queue.Queue()
@@ -2441,13 +2441,13 @@ class MultithreadingCallableExecutor(_CallableExecutorBase):
 
 
 class MultiprocessingCallableExecutor(_CallableExecutorBase):
-    def __init__(self, *, n_processes: int, log: Logger = Logger()):
-        self.n_processes = n_processes
+    def __init__(self, *, n_workers: int, log: Logger = Logger()):
+        self.n_workers = n_workers
         self.log = log
 
     @property
     def _n_workers(self) -> int:
-        return self.n_processes
+        return self.n_workers
 
     def _make_queue(self):
         return mp.Queue()
@@ -2479,10 +2479,10 @@ def _build_block(block, *args, **kwargs):
 class MultithreadingDatablocksBuilder:
     """Builds Datablocks concurrently using threads, via MultithreadingCallableExecutor."""
 
-    def __init__(self, *, n_threads: int = 1, log: Logger = Logger()):
-        self.n_threads = n_threads
+    def __init__(self, *, n_workers: int = 1, log: Logger = Logger()):
+        self.n_workers = n_workers
         self.log = log
-        self._executor = MultithreadingCallableExecutor(n_threads=n_threads, log=log)
+        self._executor = MultithreadingCallableExecutor(n_workers=n_workers, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         callables = [functools.partial(_build_block, block) for block in blocks]
@@ -2493,10 +2493,10 @@ class MultithreadingDatablocksBuilder:
 class MultiprocessingDatablocksBuilder:
     """Builds Datablocks concurrently using processes, via MultiprocessingCallableExecutor."""
 
-    def __init__(self, *, n_processes: int = 1, log: Logger = Logger()):
-        self.n_processes = n_processes
+    def __init__(self, *, n_workers: int = 1, log: Logger = Logger()):
+        self.n_workers = n_workers
         self.log = log
-        self._executor = MultiprocessingCallableExecutor(n_processes=n_processes, log=log)
+        self._executor = MultiprocessingCallableExecutor(n_workers=n_workers, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         callables = [functools.partial(_build_block, block) for block in blocks]
@@ -3026,7 +3026,7 @@ def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, n_workers: int =
                 if result is not None:
                     results.append(result)
     else:
-        executor = MultithreadingCallableExecutor(n_threads=n_workers, log=log)
+        executor = MultithreadingCallableExecutor(n_workers=n_workers, log=log)
         _results_ = executor.execute(_callables_, _journal_)
         results = [result for result in _results_ if result is not None]
     dbks, copied = zip(*results)

@@ -364,7 +364,7 @@ class JournalEntry(pd.Series):
             result = {thing: read_thing(thing) for thing in things}
         if deslash:
             if isinstance(result, dict):
-                result = {k: v.replace('\\', '') for k, v in result.items()}
+                result = {k: v.replace('\\', '') if isinstance(v, str) else v for k, v in result.items()}
             elif isinstance(result, str):
                 result = result.replace('\\', '')
         return result
@@ -2476,6 +2476,30 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase):
         gc.collect()
 
 
+class InlineCallableExecutor:
+    """Executes callables sequentially in the local process."""
+    def __init__(self, *, n_workers: int = 1, log: Logger = Logger()):
+        self.n_workers = n_workers
+        self.log = log
+
+    def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
+
+    def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        payloads = []
+        if len(callables) > 0:
+            progress_bar = tqdm.tqdm(total=len(callables), desc="Inline")
+            for i, item in enumerate(callables):
+                try:
+                    payload = item(*ctx_args, **ctx_kwargs)
+                    payloads.append(payload)
+                    progress_bar.update(1)
+                except Exception as e:
+                    self.log.info(f"ERROR executing callable {i}")
+                    raise e
+            gc.collect()
+        return payloads
+
 def _build_block(block, *args, **kwargs):
     return block.build(*args, **kwargs)
 
@@ -2500,6 +2524,19 @@ class MultiprocessingDatablocksBuilder:
         self.n_workers = n_workers
         self.log = log
         self._executor = MultiprocessingCallableExecutor(n_workers=n_workers, log=log)
+
+    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
+        callables = [functools.partial(_build_block, block) for block in blocks]
+        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
+        return blocks
+
+
+class InlineDatablocksBuilder:
+    """Builds Datablocks sequentially in the local process, via InlineCallableExecutor."""
+    def __init__(self, *, n_workers: int = 1, log: Logger = Logger()):
+        self.n_workers = n_workers
+        self.log = log
+        self._executor = InlineCallableExecutor(n_workers=n_workers, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         callables = [functools.partial(_build_block, block) for block in blocks]

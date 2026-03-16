@@ -2333,26 +2333,45 @@ class _CallableExecutorBase_:
     # ------------------------------------------------------------------
     def _run_items(self, items, ctx_args, ctx_kwargs, offset, worker_idx,
                    result_queue, done_queue, abort_event):
-        """Run each item in *items* sequentially and report via *result_queue*."""
+        """Run each item in *items* sequentially, accumulating results into
+        batches of *self.batch_size* before putting them on *result_queue*.
+        This amortises IPC / queue overhead when batch_size > 1.
+
+        Wire protocol:
+            success → (True,  worker_idx, [(item_idx, payload), ...])
+            failure → (False, worker_idx, item_idx, (exception, tbstr))
+        """
         worker_label = self._worker_label(worker_idx)
         self.log.debug(f"Executing {len(items)} callables on {worker_label}")
+        batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
         exception = None
+        batch = []  # list of (item_idx, payload)
         for i, item in enumerate(items):
             exception = None
             try:
                 if abort_event.is_set():
                     break
                 payload = item(*ctx_args, **ctx_kwargs)
+                batch.append((offset + i, payload))
             except Exception as e:
                 exception = e
                 self.log.info(f"ERROR executing callable {offset+i} on {worker_label}")
             finally:
                 self._after_item(item)
             if exception is not None:
+                # Flush any accumulated results before reporting the error
+                if batch:
+                    result_queue.put((True, worker_idx, batch))
+                    batch = []
                 tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
                 result_queue.put((False, worker_idx, offset + i, (exception, tbstr)))
                 break
-            result_queue.put((True, worker_idx, offset + i, payload))
+            if len(batch) >= batch_size:
+                result_queue.put((True, worker_idx, batch))
+                batch = []
+        # Flush any remaining results
+        if batch and exception is None:
+            result_queue.put((True, worker_idx, batch))
         gc.collect()
         if exception is None:
             self.log.debug(f"Done executing {len(items)} callables on {worker_label}")
@@ -2386,9 +2405,16 @@ class _CallableExecutorBase_:
     # Main-process driver
     # ------------------------------------------------------------------
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        if self.streaming:
-            return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
-        payloads = [[] for _ in range(len(callables))]
+        """Execute all callables and return results as a flat list.
+
+        When *batch_size* is set, workers accumulate that many results before
+        sending them back to the main process, amortising IPC overhead.  The
+        progress bar advances in bursts of *batch_size* to reflect this.
+
+        Always returns a plain list regardless of *batch_size*.  Use
+        :meth:`exec_callables_streaming` explicitly when you need a generator.
+        """
+        payloads = [None] * len(callables)
         if len(callables) > 0:
             result_queue = self._make_queue()
             done_queue   = self._make_queue()
@@ -2404,21 +2430,23 @@ class _CallableExecutorBase_:
                 )
                 for idx, (cl, off) in enumerate(zip(callable_lists, callable_offsets))
             ]
-            done_idxs = []
+            done_count = 0
             exc = None
             pexc = None
             try:
                 for w in workers:
                     w.start()
                 self._after_start(callables, workers)
-                while len(done_idxs) < len(callables):
-                    success, worker_idx, item_idx, payload = result_queue.get()
-                    if success:
-                        done_idxs.append(item_idx)
-                        payloads[item_idx].append(payload)
-                        progress_bar.update(1)
-                    else:
-                        pexc, ptbstr = payload
+                while done_count < len(callables):
+                    msg = result_queue.get()
+                    if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])
+                        _, worker_idx, batch = msg
+                        for item_idx, item_payload in batch:
+                            payloads[item_idx] = item_payload
+                            done_count += 1
+                        progress_bar.update(len(batch))
+                    else:       # failure: (False, worker_idx, item_idx, (exc, tbstr))
+                        _, worker_idx, item_idx, (pexc, ptbstr) = msg
                         self.log.info(
                             f"Received exception from {self._worker_label(worker_idx)}, "
                             f"callable {item_idx}. Abandoning result_queue polling."
@@ -2448,10 +2476,18 @@ class _CallableExecutorBase_:
             if exc is not None:
                 self.log.verbose("Reraising production-loop exception")
                 raise exc
-        return [p for sub in payloads for p in sub]
+        return payloads
 
-    # Alias
     def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """Execute callables and yield results as they become available.
+
+        When *batch_size* > 1 results are yielded in lists of up to *batch_size*
+        items (reflecting the batches assembled by the worker).  When
+        *batch_size* is None or 1, individual payloads are yielded.
+
+        The progress bar advances by the size of each received batch, giving
+        bursty updates that mirror the actual IPC rhythm.
+        """
         if len(callables) > 0:
             result_queue = self._make_queue()
             done_queue   = self._make_queue()
@@ -2473,26 +2509,21 @@ class _CallableExecutorBase_:
                 for w in workers:
                     w.start()
                 self._after_start(callables, workers)
-                
-                batch = []
                 while done_count < len(callables):
-                    success, worker_idx, item_idx, payload = result_queue.get()
-                    if success:
-                        done_count += 1
-                        progress_bar.update(1)
+                    msg = result_queue.get()
+                    if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])
+                        _, worker_idx, batch = msg
+                        done_count += len(batch)
+                        progress_bar.update(len(batch))
                         if self.batch_size is not None and self.batch_size > 1:
-                            batch.append(payload)
-                            if len(batch) >= self.batch_size:
-                                yield batch
-                                batch = []
+                            yield [payload for _, payload in batch]
                         else:
-                            yield payload
-                    else:
-                        e, ptbstr = payload
+                            for _, payload in batch:
+                                yield payload
+                    else:       # failure: (False, worker_idx, item_idx, (exc, tbstr))
+                        _, worker_idx, item_idx, (e, ptbstr) = msg
                         abort_event.set()
                         break
-                if batch:
-                    yield batch
             finally:
                 for _ in workers:
                     done_queue.put(None)
@@ -2502,7 +2533,7 @@ class _CallableExecutorBase_:
                     raise e
         else:
             return
-            yield
+            yield  # make this a generator
 
     # Alias
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):

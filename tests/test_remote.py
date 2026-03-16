@@ -66,9 +66,33 @@ class TestRemote(unittest.TestCase):
         callables = [functools.partial(task, i) for i in range(5)]
         results = executor.execute(callables)
         
-        # RayCallableExecutor returns a list of lists: [[res1], [res2], ...]
-        expected = [[i * 2] for i in range(5)]
+        # RayCallableExecutor now returns a flat list, consistent with other executors
+        expected = [i * 2 for i in range(5)]
         self.assertEqual(results, expected)
+
+    def test_remote_run_batch(self):
+        """Verify executing multiple callables on a remote actor in one round-trip."""
+        r = remote()
+        def add(a, b): return a + b
+        
+        batch = [
+            (add, (1, 2), {}),
+            (add, (10, 20), {}),
+            (len, ([1, 2, 3],), {})
+        ]
+        results = r.run_batch(batch)
+        self.assertEqual(results, [3, 30, 3])
+
+    def test_remote_callable_executor_streaming(self):
+        """Verify streaming results from RayCallableExecutor."""
+        executor = RayCallableExecutor(n_workers=2, streaming=True)
+        def task(i): return i * 2
+        
+        callables = [functools.partial(task, i) for i in range(10)]
+        gen = executor.execute(callables)
+        
+        results = list(gen)
+        self.assertEqual(sorted(results), sorted([i * 2 for i in range(10)]))
 
     def test_nested_proxying(self):
         """Verify that returning a Datablock (or other dbx objects) from a remote call returns a proxy."""

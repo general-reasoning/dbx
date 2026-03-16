@@ -184,6 +184,7 @@ class Logger:
         debug: bool = None,
         selected: bool = None,
         detailed: bool = None,
+        selection: Union[str, Sequence[str]] = None,
         datetime: bool = True,
         stack_depth: int = 2,
     ):
@@ -199,6 +200,7 @@ class Logger:
             'selected': True,
             'debug': False,
             'detailed': False,
+            'selection': None,
         }
         def set_arg(name, locals):
             """Prioritize kwarg value, fall back to env var, then to default."""
@@ -218,12 +220,21 @@ class Logger:
                 else:
                     result = _defaults_[name]
             setattr(self, f'_{name}_', result)
-            if result:
+            if result and name != 'selection':
                 self.allowed.append(name.upper())
         
         for argname in _defaults_.keys():
             set_arg(argname, locals())
-
+        
+        if self._selection_ is None:
+            self._selection_ = []
+        elif isinstance(self._selection_, str):
+            self._selection_ = [self._selection_]
+        if len(self._selection_) == 0:
+            self._selection_ = os.environ.get('DBXLOGSELECTION')
+            if self._selection_ is not None:
+                self._selection_ = [s.strip() for s in self._selection_.split(',')]
+            
     def get(self, key):
         return getattr(self, f"_{key}_")
     
@@ -273,6 +284,16 @@ class Logger:
         self._print("VERBOSE", msg)
 
     def selected(self, msg):
+        if self._selection_:
+            try:
+                frame = sys._getframe(self.stack_depth - 1)
+                module = frame.f_globals.get('__name__')
+                function = frame.f_code.co_name
+                fqn = f"{module}.{function}"
+                if fqn not in self._selection_:
+                    return
+            except (ValueError, AttributeError):
+                pass
         self._print("SELECTED", msg)
 
     def detailed(self, msg):
@@ -2273,7 +2294,7 @@ class TorchMultiprocessingDatablocksBuilder(TorchMultithreadingDatablocksBuilder
                 break
 
 
-class _CallableExecutorBase:
+class _CallableExecutorBase_:
     """
     Abstract base that implements the fan-out / collect / join scaffold shared by
     MultithreadingCallableExecutor and MultiprocessingCallableExecutor.
@@ -2354,6 +2375,8 @@ class _CallableExecutorBase:
     # Main-process driver
     # ------------------------------------------------------------------
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        if self.streaming:
+            return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
         payloads = [[] for _ in range(len(callables))]
         if len(callables) > 0:
             result_queue = self._make_queue()
@@ -2417,13 +2440,58 @@ class _CallableExecutorBase:
         return [p for sub in payloads for p in sub]
 
     # Alias
+    def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        if len(callables) > 0:
+            result_queue = self._make_queue()
+            done_queue   = self._make_queue()
+            abort_event  = self._make_event()
+            progress_bar = tqdm.tqdm(total=len(callables), desc="Streaming")
+            callable_lists   = np.array_split(callables, self._n_workers)
+            callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
+            workers = [
+                self._make_worker(
+                    target=self._run_items,
+                    args=(cl, ctx_args, ctx_kwargs, off, idx,
+                          result_queue, done_queue, abort_event),
+                )
+                for idx, (cl, off) in enumerate(zip(callable_lists, callable_offsets))
+            ]
+            done_count = 0
+            e = None
+            try:
+                for w in workers:
+                    w.start()
+                self._after_start(callables, workers)
+                while done_count < len(callables):
+                    success, worker_idx, item_idx, payload = result_queue.get()
+                    if success:
+                        done_count += 1
+                        progress_bar.update(1)
+                        yield payload
+                    else:
+                        e, ptbstr = payload
+                        abort_event.set()
+                        break
+            finally:
+                for _ in workers:
+                    done_queue.put(None)
+                for w in workers:
+                    w.join()
+                if e is not None:
+                    raise e
+        else:
+            return
+            yield
+
+    # Alias
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
 
 
-class MultithreadingCallableExecutor(_CallableExecutorBase):
-    def __init__(self, *, n_workers: int, log: Logger = Logger()):
+class MultithreadingCallableExecutor(_CallableExecutorBase_):
+    def __init__(self, *, n_workers: int, streaming: bool = False, log: Logger = Logger()):
         self.n_workers = n_workers
+        self.streaming = streaming
         self.log = log
 
     @property
@@ -2443,9 +2511,10 @@ class MultithreadingCallableExecutor(_CallableExecutorBase):
         return f"thread {worker_idx}"
 
 
-class MultiprocessingCallableExecutor(_CallableExecutorBase):
-    def __init__(self, *, n_workers: int, log: Logger = Logger()):
+class MultiprocessingCallableExecutor(_CallableExecutorBase_):
+    def __init__(self, *, n_workers: int, streaming: bool = False, log: Logger = Logger()):
         self.n_workers = n_workers
+        self.streaming = streaming
         self.log = log
 
     @property
@@ -2478,11 +2547,14 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase):
 
 class InlineCallableExecutor:
     """Executes callables sequentially in the local process."""
-    def __init__(self, *, n_workers: int = 1, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int = 1, streaming: bool = False, log: Logger = Logger()):
         self.n_workers = n_workers
+        self.streaming = streaming
         self.log = log
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        if self.streaming:
+            return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
 
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
@@ -2499,6 +2571,22 @@ class InlineCallableExecutor:
                     raise e
             gc.collect()
         return payloads
+
+    def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        if len(callables) > 0:
+            progress_bar = tqdm.tqdm(total=len(callables), desc="Inline Streaming")
+            for i, item in enumerate(callables):
+                try:
+                    payload = item(*ctx_args, **ctx_kwargs)
+                    progress_bar.update(1)
+                    yield payload
+                except Exception as e:
+                    self.log.info(f"ERROR executing callable {i}")
+                    raise e
+            gc.collect()
+        else:
+            return
+            yield
 
 def _build_block(block, *args, **kwargs):
     return block.build(*args, **kwargs)
@@ -2765,6 +2853,16 @@ class Remote:
             res = func(*args, **kwargs)
             return self._wrap(res)
 
+        def apply_batch(self, funcs_args_kwargs):
+            """
+            Execute a sequence of (func, args, kwargs) on the remote actor.
+            """
+            results = []
+            for func, args, kwargs in funcs_args_kwargs:
+                res = func(*args, **kwargs)
+                results.append(self._wrap(res))
+            return results
+
     def __init__(self, handle=None, *, revision=None, slurm=None):
         """
         Initialize the remote proxy.
@@ -2821,6 +2919,13 @@ class Remote:
         res = ray.get(self._handle.apply.remote(func, *args, **kwargs))
         return self._unwrap_or_proxy(res)
 
+    def run_batch(self, funcs_args_kwargs):
+        """
+        Execute a sequence of (func, args, kwargs) on the remote actor in one round-trip.
+        """
+        results = ray.get(self._handle.apply_batch.remote(funcs_args_kwargs))
+        return [self._unwrap_or_proxy(res) for res in results]
+
 
 def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
     """
@@ -2863,12 +2968,15 @@ def slurm_remote(*, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partiti
 
 
 class RayCallableExecutor:
-    def __init__(self, *, n_workers, revision=None, conda=None, log: Logger = Logger()):
+    def __init__(self, *, n_workers, streaming: bool = False, revision=None, conda=None, log: Logger = Logger()):
         self.n_workers = n_workers
+        self.streaming = streaming
         self.log = log
         self.workers = [remote(revision=revision, conda=conda) for _ in range(n_workers)]
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        if self.streaming:
+             return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
 
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
@@ -2876,35 +2984,34 @@ class RayCallableExecutor:
             result_queue = queue.Queue()
             done_queue = queue.Queue()
             abort_event = threading.Event()
-            progress_bar = tqdm.tqdm(total=len(callables))
             
             # Split callables among workers
             callable_lists = np.array_split(callables, self.n_workers)
             callable_offsets = np.cumsum([0] + [len(callable_list) for callable_list in callable_lists])
             
             threads = [
-                threading.Thread(target=self.__exec_callables__, 
+                threading.Thread(target=self.__exec_callables_batched__, 
                                  args=(worker, callable_list, ctx_args, ctx_kwargs, callable_offset, thread_idx, result_queue, done_queue, abort_event))
                 for thread_idx, (worker, callable_list, callable_offset) in enumerate(zip(self.workers, callable_lists, callable_offsets))
             ]
             
-            payloads = [[] for _ in range(len(callables))]
+            payloads = [None] * len(callables)
             done_idxs = []
             for thread in threads:
                 thread.start()
                 
+            progress_bar = tqdm.tqdm(total=len(callables), desc="Ray Batched")
             e = None
             while len(done_idxs) < len(callables):
                 success, worker_idx, callable_idx, payload = result_queue.get()
                 if success:
                     done_idxs.append(callable_idx)
-                    e = None
-                    payloads[callable_idx].append(payload)
+                    payloads[callable_idx] = payload
+                    progress_bar.update(1)
                 else:
                     e = payload
                     self.log.info(f"Received error from callable with {callable_idx=} on worker {worker_idx}. Abandoning result_queue polling.")
                     break
-                progress_bar.update(1)
                 
             self.log.debug(f"Production loop done, feeding done_queue")
             for _ in range(self.n_workers):
@@ -2920,7 +3027,66 @@ class RayCallableExecutor:
             return payloads
         return []
 
-    def __exec_callables__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
+    def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        if len(callables) > 0:
+            result_queue = queue.Queue()
+            done_queue = queue.Queue()
+            abort_event = threading.Event()
+            progress_bar = tqdm.tqdm(total=len(callables), desc="Ray Streaming")
+            
+            # Split callables among workers
+            callable_lists = np.array_split(callables, self.n_workers)
+            callable_offsets = np.cumsum([0] + [len(callable_list) for callable_list in callable_lists])
+            
+            threads = [
+                threading.Thread(target=self.__exec_callables_sequential__, 
+                                 args=(worker, callable_list, ctx_args, ctx_kwargs, callable_offset, thread_idx, result_queue, done_queue, abort_event))
+                for thread_idx, (worker, callable_list, callable_offset) in enumerate(zip(self.workers, callable_lists, callable_offsets))
+            ]
+            
+            for thread in threads:
+                thread.start()
+                
+            e = None
+            done_count = 0
+            try:
+                while done_count < len(callables):
+                    success, worker_idx, callable_idx, payload = result_queue.get()
+                    if success:
+                        done_count += 1
+                        progress_bar.update(1)
+                        yield payload
+                    else:
+                        e = payload
+                        abort_event.set()
+                        break
+            finally:
+                for _ in range(self.n_workers):
+                    done_queue.put(None)
+                for thread in threads:
+                    thread.join()
+                if e is not None:
+                    raise e
+        else:
+            return
+            yield # make it a generator
+
+    def __exec_callables_batched__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
+        self.log.debug(f"Executing batch of {len(callables)} callables on worker {thread_idx}")
+        try:
+            if not abort_event.is_set():
+                batch_args = [(c, ctx_args, ctx_kwargs) for c in callables]
+                results = worker.run_batch(batch_args)
+                for i, res in enumerate(results):
+                    result_queue.put((True, thread_idx, offset+i, res))
+        except Exception as e:
+            result_queue.put((False, thread_idx, offset, e)) # reported at the offset of the batch
+        
+        while True:
+            if done_queue.get() is None:
+                break
+
+    def __exec_callables_sequential__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
         self.log.debug(f"Executing {len(callables)} callables on worker {thread_idx}")
         for i, callable in enumerate(callables):
             self.log.detailed(f"EXECUTING callable {i+offset} on worker {thread_idx}: {callable}")
@@ -2965,11 +3131,11 @@ class RayDatablocksBuilder:
             results = self.executor.execute(callables, *ctx_args, **ctx_kwargs)
             
             # Update local blocks with built state from remote workers
-            for block, result_list in zip(blocks, results):
-                if result_list:
-                    # RayCallableExecutor returns a list of lists: [[res]]
+            for block, res in zip(blocks, results):
+                if res:
+                    # RayCallableExecutor returns a flat list: [res1, res2, ...]
                     # We expect one result per block.
-                    remote_block = result_list[0]
+                    remote_block = res
                     state = remote_block.__getstate__()
                     # Update local block state from the remote result
                     block.__setstate__(state)

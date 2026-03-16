@@ -2437,6 +2437,9 @@ class _CallableExecutorBase_:
                 for w in workers:
                     w.start()
                 self._after_start(callables, workers)
+                # Progress bar is created AFTER forking so child processes
+                # do not inherit a live tqdm instance and redraw it on exit.
+                progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=False))
                 while done_count < len(callables):
                     msg = result_queue.get()
                     if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])
@@ -2492,7 +2495,6 @@ class _CallableExecutorBase_:
             result_queue = self._make_queue()
             done_queue   = self._make_queue()
             abort_event  = self._make_event()
-            progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=True))
             callable_lists   = np.array_split(callables, self._n_workers)
             callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
             workers = [
@@ -2509,6 +2511,9 @@ class _CallableExecutorBase_:
                 for w in workers:
                     w.start()
                 self._after_start(callables, workers)
+                # Progress bar is created AFTER forking so child processes
+                # do not inherit a live tqdm instance and redraw it on exit.
+                progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=True))
                 while done_count < len(callables):
                     msg = result_queue.get()
                     if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])

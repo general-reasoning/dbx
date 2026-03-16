@@ -1158,7 +1158,9 @@ class Datablock:
                 result = results
         return result
     
-    def valid(self,):
+    def valid(self, topic=None):
+        if topic is not None:
+            return self.validtopic(topic)
         return self.validpaths(reduce=True)
     
     def topics(self):

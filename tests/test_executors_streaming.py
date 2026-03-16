@@ -110,12 +110,20 @@ def test_executor_streaming_batch_size(executor_class, n_workers):
     gen = ex.execute(funcs)
     chunks = list(gen)
     
-    # We expect chunks of size 3, with the last one being size 1 (10 items total)
-    assert len(chunks) == 4
-    assert len(chunks[0]) == 3
-    assert len(chunks[1]) == 3
-    assert len(chunks[2]) == 3
-    assert len(chunks[3]) == 1
+    # Each chunk must be a list (not a scalar) and no larger than batch_size
+    for chunk in chunks:
+        assert isinstance(chunk, list), f"Expected list, got {type(chunk)}"
+        assert len(chunk) <= batch_size, f"Chunk size {len(chunk)} exceeds batch_size {batch_size}"
     
+    # All results must be present and correct
     all_results = [res for chunk in chunks for res in chunk]
     assert sorted(all_results) == sorted([i * 2 for i in range(10)])
+    
+    # InlineCallableExecutor is a single worker so batches are global and predictable
+    if executor_class == InlineCallableExecutor:
+        assert len(chunks) == 4  # ceil(10 / 3)
+        assert len(chunks[0]) == 3
+        assert len(chunks[1]) == 3
+        assert len(chunks[2]) == 3
+        assert len(chunks[3]) == 1
+

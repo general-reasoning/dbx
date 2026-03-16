@@ -2540,8 +2540,14 @@ class _CallableExecutorBase_:
             return
             yield  # make this a generator
 
-    # Alias
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """Dispatch to exec_callables_streaming (generator) when batch_size is
+        set, otherwise exec_callables (plain list).
+
+        Use exec_callables() directly when you always want a list.
+        """
+        if self.streaming:
+            return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
 
 

@@ -2611,7 +2611,15 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         return mp.Event()
 
     def _make_worker(self, target, args):
-        return mp.Process(target=target, args=args)
+        def _worker(*a, **kw):
+            # Silence all tqdm bars in the worker process — only the
+            # main process bar is meaningful.  tqdm checks TQDM_DISABLE
+            # at bar-creation time, so setting it here suppresses any
+            # nested executors or builders that run inside this worker.
+            import os
+            os.environ['TQDM_DISABLE'] = '1'
+            target(*a, **kw)
+        return mp.Process(target=_worker, args=args)
 
     def _worker_label(self, worker_idx) -> str:
         return f"process {worker_idx}"

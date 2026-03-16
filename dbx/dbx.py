@@ -2600,6 +2600,19 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         return f"thread {worker_idx}"
 
 
+def _mp_worker_fn(target, args):
+    """Module-level wrapper used by MultiprocessingCallableExecutor.
+
+    Defined at module level (not as a closure) so it is picklable by name,
+    which is required when multiprocessing uses the 'spawn' or 'forkserver'
+    start method.  Sets TQDM_DISABLE so nested executors inside the worker
+    do not produce progress bars.
+    """
+    import os
+    os.environ['TQDM_DISABLE'] = '1'
+    target(*args)
+
+
 class MultiprocessingCallableExecutor(_CallableExecutorBase_):
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
@@ -2618,15 +2631,9 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         return mp.Event()
 
     def _make_worker(self, target, args):
-        def _worker(*a, **kw):
-            # Silence all tqdm bars in the worker process — only the
-            # main process bar is meaningful.  tqdm checks TQDM_DISABLE
-            # at bar-creation time, so setting it here suppresses any
-            # nested executors or builders that run inside this worker.
-            import os
-            os.environ['TQDM_DISABLE'] = '1'
-            target(*a, **kw)
-        return mp.Process(target=_worker, args=args)
+        # Pass target and args explicitly so the module-level _mp_worker_fn
+        # can be pickled by name (required for spawn/forkserver start methods).
+        return mp.Process(target=_mp_worker_fn, args=(target, args))
 
     def _worker_label(self, worker_idx) -> str:
         return f"process {worker_idx}"

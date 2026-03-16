@@ -525,7 +525,7 @@ def gitrevision(*, log=Logger()):
             if path is None:
                 return None
             repo = git.Repo(path)
-            if repo.is_dirty() and not os.environ.get('DBXNODIRTY'):
+            if repo.is_dirty() and not os.environ.get('DBXDIRTYREPOK'):
                 raise ValueError(f"Dirty git repo: {path}: commit your changes")
             return repo.head.commit.hexsha
 

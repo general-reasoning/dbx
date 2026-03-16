@@ -24,7 +24,7 @@ class MyBlock(Datablock):
 @pytest.fixture(autouse=True)
 def setup_env(monkeypatch):
     monkeypatch.setenv('DBXROOT', '/tmp/dbx')
-    monkeypatch.setenv('DBXNODIRTY', '1')
+    monkeypatch.setenv('DBXDIRTYREPOK', '1')
     # Patch Logger in dbx.dbx module
     monkeypatch.setattr('dbx.dbx.Logger', MockLogger)
 

@@ -36,6 +36,13 @@ import git
 
 import tqdm
 
+# Disable tqdm's background TMonitor thread.
+# The monitor races with explicit update() calls (causing the bar count to
+# visually bounce) and is alive at fork() time, triggering the Python 3.12
+# DeprecationWarning "This process is multi-threaded, use of fork() may lead
+# to deadlocks".  We drive all updates explicitly so the monitor is unneeded.
+tqdm.tqdm.monitor_interval = 0
+
 import numpy as np
 
 import fsspec

@@ -85,7 +85,7 @@ class TestRemote(unittest.TestCase):
 
     def test_remote_callable_executor_streaming(self):
         """Verify streaming results from RayCallableExecutor."""
-        executor = RayCallableExecutor(n_workers=2, streaming=True)
+        executor = RayCallableExecutor(n_workers=2, batch_size=1)
         def task(i): return i * 2
         
         callables = [functools.partial(task, i) for i in range(10)]
@@ -148,7 +148,7 @@ class TestRemote(unittest.TestCase):
     def test_remote_callable_executor_streaming_batch_size(self):
         """Verify streaming results in chunks from RayCallableExecutor."""
         batch_size = 4
-        executor = RayCallableExecutor(n_workers=2, streaming=True, batch_size=batch_size)
+        executor = RayCallableExecutor(n_workers=2, batch_size=batch_size)
         def task(i): return i * 2
         
         callables = [functools.partial(task, i) for i in range(10)]

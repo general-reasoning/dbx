@@ -2469,7 +2469,7 @@ class _CallableExecutorBase_:
                     if success:
                         done_count += 1
                         progress_bar.update(1)
-                        if self.batch_size is not None:
+                        if self.batch_size is not None and self.batch_size > 1:
                             batch.append(payload)
                             if len(batch) >= self.batch_size:
                                 yield batch
@@ -2499,10 +2499,10 @@ class _CallableExecutorBase_:
 
 
 class MultithreadingCallableExecutor(_CallableExecutorBase_):
-    def __init__(self, *, n_workers: int, streaming: bool = False, batch_size: int = None, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int, batch_size: int = None, log: Logger = Logger()):
         self.n_workers = n_workers
-        self.streaming = streaming
         self.batch_size = batch_size
+        self.streaming = batch_size is not None
         self.log = log
 
     @property
@@ -2523,10 +2523,10 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
 
 
 class MultiprocessingCallableExecutor(_CallableExecutorBase_):
-    def __init__(self, *, n_workers: int, streaming: bool = False, batch_size: int = None, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int, batch_size: int = None, log: Logger = Logger()):
         self.n_workers = n_workers
-        self.streaming = streaming
         self.batch_size = batch_size
+        self.streaming = batch_size is not None
         self.log = log
 
     @property
@@ -2558,10 +2558,10 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
 
 
 class RayCallableExecutor:
-    def __init__(self, *, n_workers, streaming: bool = False, batch_size: int = None, revision=None, conda=None, log: Logger = Logger()):
+    def __init__(self, *, n_workers, batch_size: int = None, revision=None, conda=None, log: Logger = Logger()):
         self.n_workers = n_workers
-        self.streaming = streaming
         self.batch_size = batch_size
+        self.streaming = batch_size is not None
         self.log = log
         self.workers = [remote(revision=revision, conda=conda) for _ in range(n_workers)]
 
@@ -2647,7 +2647,7 @@ class RayCallableExecutor:
                     if success:
                         done_count += 1
                         progress_bar.update(1)
-                        if self.batch_size is not None:
+                        if self.batch_size is not None and self.batch_size > 1:
                             batch.append(payload)
                             if len(batch) >= self.batch_size:
                                 yield batch
@@ -2732,10 +2732,10 @@ class RayCallableExecutor:
 
 class InlineCallableExecutor:
     """Executes callables sequentially in the local process."""
-    def __init__(self, *, n_workers: int = 1, streaming: bool = False, batch_size: int = None, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int = 1, batch_size: int = None, log: Logger = Logger()):
         self.n_workers = n_workers
-        self.streaming = streaming
         self.batch_size = batch_size
+        self.streaming = batch_size is not None
         self.log = log
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
@@ -2766,7 +2766,7 @@ class InlineCallableExecutor:
                 try:
                     payload = item(*ctx_args, **ctx_kwargs)
                     progress_bar.update(1)
-                    if self.batch_size is not None:
+                    if self.batch_size is not None and self.batch_size > 1:
                         batch.append(payload)
                         if len(batch) >= self.batch_size:
                             yield batch

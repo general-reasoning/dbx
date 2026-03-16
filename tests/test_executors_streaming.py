@@ -25,9 +25,9 @@ def fail_func(x):
 ])
 def test_executor_streaming_success(executor_class, n_workers):
     if executor_class == InlineCallableExecutor:
-        ex = executor_class(streaming=True)
+        ex = executor_class(batch_size=1)
     else:
-        ex = executor_class(n_workers=n_workers, streaming=True)
+        ex = executor_class(n_workers=n_workers, batch_size=1)
         
     funcs = [functools.partial(dummy_func, i) for i in range(10)]
     
@@ -46,9 +46,9 @@ def test_executor_streaming_success(executor_class, n_workers):
 ])
 def test_executor_streaming_failure(executor_class, n_workers):
     if executor_class == InlineCallableExecutor:
-        ex = executor_class(streaming=True)
+        ex = executor_class(batch_size=1)
     else:
-        ex = executor_class(n_workers=n_workers, streaming=True)
+        ex = executor_class(n_workers=n_workers, batch_size=1)
         
     funcs = [functools.partial(dummy_func, i) for i in range(5)]
     funcs.append(functools.partial(fail_func, 99))
@@ -68,7 +68,7 @@ def test_executor_streaming_failure(executor_class, n_workers):
 
 def test_executor_streaming_order():
     # Multithreading usually yields as they come, but let's check with delays
-    ex = MultithreadingCallableExecutor(n_workers=2, streaming=True)
+    ex = MultithreadingCallableExecutor(n_workers=2, batch_size=1)
     
     # func 0: fast
     # func 1: slow
@@ -101,9 +101,9 @@ def test_executor_streaming_order():
 def test_executor_streaming_batch_size(executor_class, n_workers):
     batch_size = 3
     if executor_class == InlineCallableExecutor:
-        ex = executor_class(streaming=True, batch_size=batch_size)
+        ex = executor_class(batch_size=batch_size)
     else:
-        ex = executor_class(n_workers=n_workers, streaming=True, batch_size=batch_size)
+        ex = executor_class(n_workers=n_workers, batch_size=batch_size)
         
     funcs = [functools.partial(dummy_func, i) for i in range(10)]
     

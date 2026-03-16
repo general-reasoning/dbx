@@ -145,5 +145,24 @@ class TestRemote(unittest.TestCase):
         for b in blocks:
             self.assertTrue(b.built)
 
+    def test_remote_callable_executor_streaming_batch_size(self):
+        """Verify streaming results in chunks from RayCallableExecutor."""
+        batch_size = 4
+        executor = RayCallableExecutor(n_workers=2, streaming=True, batch_size=batch_size)
+        def task(i): return i * 2
+        
+        callables = [functools.partial(task, i) for i in range(10)]
+        gen = executor.execute(callables)
+        
+        chunks = list(gen)
+        # 10 items, batch size 4 -> chunks of [4, 4, 2]
+        self.assertEqual(len(chunks), 3)
+        self.assertEqual(len(chunks[0]), 4)
+        self.assertEqual(len(chunks[1]), 4)
+        self.assertEqual(len(chunks[2]), 2)
+        
+        all_results = [res for chunk in chunks for res in chunk]
+        self.assertEqual(sorted(all_results), sorted([i * 2 for i in range(10)]))
+
 if __name__ == "__main__":
     unittest.main()

@@ -31,13 +31,13 @@ def test_executor_streaming_success(executor_class, n_workers):
         
     funcs = [functools.partial(dummy_func, i) for i in range(10)]
     
-    # execute with streaming=True (now on init) should return a generator
+    # execute with streaming=True (batch_size set) should return a generator
     gen = ex.execute(funcs)
     assert isinstance(gen, types.GeneratorType)
     
     res = list(gen)
-    # Order might be different for parallel executors, but values should be correct
-    assert sorted(res) == sorted([i * 2 for i in range(10)])
+    # Results must be in input order (reorder buffer guarantees this)
+    assert res == [i * 2 for i in range(10)]
 
 @pytest.mark.parametrize("executor_class,n_workers", [
     (InlineCallableExecutor, 1),
@@ -82,16 +82,8 @@ def test_executor_streaming_order():
     gen = ex.execute(funcs)
     results = list(gen)
     
-    # Values should be correct
-    assert sorted(results) == [0, 2, 4]
-    
-    # In streaming mode with 2 workers:
-    # Worker 1 gets [0, 1]
-    # Worker 2 gets [2]
-    # 0 finishes fast, 2 finishes fast, 1 finishes slow.
-    # So we expect [0, 4, 2] or [4, 0, 2]
-    # If it was NOT streaming/yielding as available, it might wait for 1.
-    # But here they are Yielded as they become available in result_queue.
+    # Values should be correct and in input order (reorder buffer)
+    assert results == [0, 2, 4]
 
 @pytest.mark.parametrize("executor_class,n_workers", [
     (InlineCallableExecutor, 1),
@@ -110,20 +102,16 @@ def test_executor_streaming_batch_size(executor_class, n_workers):
     gen = ex.execute(funcs)
     chunks = list(gen)
     
-    # Each chunk must be a list (not a scalar) and no larger than batch_size
-    for chunk in chunks:
-        assert isinstance(chunk, list), f"Expected list, got {type(chunk)}"
-        assert len(chunk) <= batch_size, f"Chunk size {len(chunk)} exceeds batch_size {batch_size}"
+    # Reorder buffer + global batching: always 4 chunks of [3, 3, 3, 1]
+    # regardless of how many workers are used.
+    assert len(chunks) == 4
+    assert len(chunks[0]) == 3
+    assert len(chunks[1]) == 3
+    assert len(chunks[2]) == 3
+    assert len(chunks[3]) == 1
     
-    # All results must be present and correct
+    # Results must be in input order
     all_results = [res for chunk in chunks for res in chunk]
-    assert sorted(all_results) == sorted([i * 2 for i in range(10)])
-    
-    # InlineCallableExecutor is a single worker so batches are global and predictable
-    if executor_class == InlineCallableExecutor:
-        assert len(chunks) == 4  # ceil(10 / 3)
-        assert len(chunks[0]) == 3
-        assert len(chunks[1]) == 3
-        assert len(chunks[2]) == 3
-        assert len(chunks[3]) == 1
+    assert all_results == [i * 2 for i in range(10)]
+
 

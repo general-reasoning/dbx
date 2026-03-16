@@ -2482,14 +2482,18 @@ class _CallableExecutorBase_:
         return payloads
 
     def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        """Execute callables and yield results as they become available.
+        """Execute callables and yield results in **input order**.
 
-        When *batch_size* > 1 results are yielded in lists of up to *batch_size*
-        items (reflecting the batches assembled by the worker).  When
-        *batch_size* is None or 1, individual payloads are yielded.
+        A reorder buffer holds out-of-order arrivals from parallel workers;
+        items are only yielded once all predecessors have been received.
 
-        The progress bar advances by the size of each received batch, giving
-        bursty updates that mirror the actual IPC rhythm.
+        When *batch_size* > 1, results are yielded in lists of exactly
+        *batch_size* items (or fewer for the final group), assembled in
+        input order across worker-batch boundaries.  When *batch_size* is
+        None or 1, individual payloads are yielded one at a time.
+
+        The progress bar advances by the size of each received IPC batch,
+        giving bursty updates that mirror the actual IPC rhythm.
         """
         if len(callables) > 0:
             result_queue = self._make_queue()
@@ -2514,21 +2518,37 @@ class _CallableExecutorBase_:
                 # Progress bar is created AFTER forking so child processes
                 # do not inherit a live tqdm instance and redraw it on exit.
                 progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=True))
+                # Reorder buffer: holds payloads that arrived before their
+                # predecessors, keyed by global item index.
+                pending = {}        # item_idx -> payload
+                next_to_yield = 0   # index of the next item to emit
+                emit_buf = []       # accumulator for batch_size > 1 mode
                 while done_count < len(callables):
                     msg = result_queue.get()
                     if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])
                         _, worker_idx, batch = msg
                         done_count += len(batch)
                         progress_bar.update(len(batch))
-                        if self.batch_size is not None and self.batch_size > 1:
-                            yield [payload for _, payload in batch]
-                        else:
-                            for _, payload in batch:
-                                yield payload
+                        for item_idx, payload in batch:
+                            pending[item_idx] = payload
+                        # Drain pending in strict input order
+                        while next_to_yield in pending:
+                            p = pending.pop(next_to_yield)
+                            next_to_yield += 1
+                            if self.batch_size is not None and self.batch_size > 1:
+                                emit_buf.append(p)
+                                if len(emit_buf) >= self.batch_size:
+                                    yield emit_buf
+                                    emit_buf = []
+                            else:
+                                yield p
                     else:       # failure: (False, worker_idx, item_idx, (exc, tbstr))
                         _, worker_idx, item_idx, (e, ptbstr) = msg
                         abort_event.set()
                         break
+                # Yield any remainder (last partial batch)
+                if emit_buf:
+                    yield emit_buf
             finally:
                 for _ in workers:
                     done_queue.put(None)

@@ -2371,6 +2371,17 @@ class _CallableExecutorBase_:
     def _worker_label(self, worker_idx) -> str:
         return f"worker {worker_idx}"
 
+    def _desc(self, streaming: bool) -> str:
+        """Helper to format the progress bar description."""
+        label = self._worker_label(0).split()[0].capitalize() # "Thread", "Process", etc.
+        prefix = "Streaming " if streaming else ""
+        desc = f"{prefix}{label}"
+        if hasattr(self, 'tag') and self.tag:
+            desc = f"{desc}: {self.tag}"
+        if hasattr(self, 'batch_size') and self.batch_size is not None:
+            desc = f"{desc} [bs={self.batch_size}]"
+        return desc
+
     # ------------------------------------------------------------------
     # Main-process driver
     # ------------------------------------------------------------------
@@ -2382,7 +2393,7 @@ class _CallableExecutorBase_:
             result_queue = self._make_queue()
             done_queue   = self._make_queue()
             abort_event  = self._make_event()
-            progress_bar = tqdm.tqdm(total=len(callables))
+            progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=False))
             callable_lists   = np.array_split(callables, self._n_workers)
             callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
             workers = [
@@ -2445,7 +2456,7 @@ class _CallableExecutorBase_:
             result_queue = self._make_queue()
             done_queue   = self._make_queue()
             abort_event  = self._make_event()
-            progress_bar = tqdm.tqdm(total=len(callables), desc="Streaming")
+            progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=True))
             callable_lists   = np.array_split(callables, self._n_workers)
             callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
             workers = [
@@ -2499,10 +2510,11 @@ class _CallableExecutorBase_:
 
 
 class MultithreadingCallableExecutor(_CallableExecutorBase_):
-    def __init__(self, *, n_workers: int, batch_size: int = None, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.streaming = batch_size is not None
+        self.tag = tag
         self.log = log
 
     @property
@@ -2523,10 +2535,11 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
 
 
 class MultiprocessingCallableExecutor(_CallableExecutorBase_):
-    def __init__(self, *, n_workers: int, batch_size: int = None, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.streaming = batch_size is not None
+        self.tag = tag
         self.log = log
 
     @property
@@ -2558,10 +2571,11 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
 
 
 class RayCallableExecutor:
-    def __init__(self, *, n_workers, batch_size: int = None, revision=None, conda=None, log: Logger = Logger()):
+    def __init__(self, *, n_workers, batch_size: int = None, tag: str = "", revision=None, conda=None, log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.streaming = batch_size is not None
+        self.tag = tag
         self.log = log
         self.workers = [remote(revision=revision, conda=conda) for _ in range(n_workers)]
 
@@ -2591,7 +2605,12 @@ class RayCallableExecutor:
             for thread in threads:
                 thread.start()
                 
-            progress_bar = tqdm.tqdm(total=len(callables), desc="Ray Batched")
+            label = "Ray Batched"
+            if self.tag:
+                label = f"{label}: {self.tag}"
+            if self.batch_size is not None:
+                label = f"{label} [bs={self.batch_size}]"
+            progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             e = None
             while len(done_idxs) < len(callables):
                 success, worker_idx, callable_idx, payload = result_queue.get()
@@ -2623,7 +2642,13 @@ class RayCallableExecutor:
             result_queue = queue.Queue()
             done_queue = queue.Queue()
             abort_event = threading.Event()
-            progress_bar = tqdm.tqdm(total=len(callables), desc="Ray Streaming")
+            
+            label = "Ray Streaming"
+            if self.tag:
+                label = f"{label}: {self.tag}"
+            if self.batch_size is not None:
+                label = f"{label} [bs={self.batch_size}]"
+            progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             
             # Split callables among workers
             callable_lists = np.array_split(callables, self.n_workers)
@@ -2732,10 +2757,11 @@ class RayCallableExecutor:
 
 class InlineCallableExecutor:
     """Executes callables sequentially in the local process."""
-    def __init__(self, *, n_workers: int = 1, batch_size: int = None, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.streaming = batch_size is not None
+        self.tag = tag
         self.log = log
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
@@ -2746,7 +2772,12 @@ class InlineCallableExecutor:
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         payloads = []
         if len(callables) > 0:
-            progress_bar = tqdm.tqdm(total=len(callables), desc="Inline")
+            label = "Inline"
+            if self.tag:
+                label = f"{label}: {self.tag}"
+            if self.batch_size is not None:
+                label = f"{label} [bs={self.batch_size}]"
+            progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             for i, item in enumerate(callables):
                 try:
                     payload = item(*ctx_args, **ctx_kwargs)
@@ -2760,7 +2791,12 @@ class InlineCallableExecutor:
 
     def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         if len(callables) > 0:
-            progress_bar = tqdm.tqdm(total=len(callables), desc="Inline Streaming")
+            label = "Inline Streaming"
+            if self.tag:
+                label = f"{label}: {self.tag}"
+            if self.batch_size is not None:
+                label = f"{label} [bs={self.batch_size}]"
+            progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             batch = []
             for i, item in enumerate(callables):
                 try:

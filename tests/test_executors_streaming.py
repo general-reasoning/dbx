@@ -31,8 +31,8 @@ def test_executor_streaming_success(executor_class, n_workers):
         
     funcs = [functools.partial(dummy_func, i) for i in range(10)]
     
-    # execute with streaming=True (batch_size set) should return a generator
-    gen = ex.execute(funcs)
+    # execute_streaming should return a generator
+    gen = ex.execute_streaming(funcs)
     assert isinstance(gen, types.GeneratorType)
     
     res = list(gen)
@@ -54,32 +54,25 @@ def test_executor_streaming_failure(executor_class, n_workers):
     funcs.append(functools.partial(fail_func, 99))
     funcs.extend([functools.partial(dummy_func, i) for i in range(5, 10)])
     
-    gen = ex.execute(funcs)
+    gen = ex.execute_streaming(funcs)
     
     results = []
     with pytest.raises(ValueError, match="Failing on 99"):
         for res in gen:
             results.append(res)
     
-    # We should have received some results before the failure
-    # (except maybe for inline if it fails early, or pool if it reports late)
-    # Actually for 11 items, at least some should pass.
     assert len(results) >= 0
 
 def test_executor_streaming_order():
-    # Multithreading usually yields as they come, but let's check with delays
     ex = MultithreadingCallableExecutor(n_workers=2, batch_size=1)
     
-    # func 0: fast
-    # func 1: slow
-    # func 2: fast
     funcs = [
         functools.partial(delay_func, 0, 0.01),
         functools.partial(delay_func, 1, 0.2),
         functools.partial(delay_func, 2, 0.01),
     ]
     
-    gen = ex.execute(funcs)
+    gen = ex.execute_streaming(funcs)
     results = list(gen)
     
     # Values should be correct and in input order (reorder buffer)
@@ -99,7 +92,7 @@ def test_executor_streaming_batch_size(executor_class, n_workers):
         
     funcs = [functools.partial(dummy_func, i) for i in range(10)]
     
-    gen = ex.execute(funcs)
+    gen = ex.execute_streaming(funcs)
     chunks = list(gen)
     
     # Reorder buffer + global batching: always 4 chunks of [3, 3, 3, 1]
@@ -114,4 +107,21 @@ def test_executor_streaming_batch_size(executor_class, n_workers):
     all_results = [res for chunk in chunks for res in chunk]
     assert all_results == [i * 2 for i in range(10)]
 
+@pytest.mark.parametrize("executor_class,n_workers", [
+    (InlineCallableExecutor, 1),
+    (MultithreadingCallableExecutor, 2),
+    (MultiprocessingCallableExecutor, 2),
+])
+def test_executor_execute_with_batch_size_returns_list(executor_class, n_workers):
+    """execute() always returns a plain list, even when batch_size is set."""
+    batch_size = 3
+    if executor_class == InlineCallableExecutor:
+        ex = executor_class(batch_size=batch_size)
+    else:
+        ex = executor_class(n_workers=n_workers, batch_size=batch_size)
 
+    funcs = [functools.partial(dummy_func, i) for i in range(10)]
+    result = ex.execute(funcs)
+
+    assert isinstance(result, list)
+    assert result == [i * 2 for i in range(10)]

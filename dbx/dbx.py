@@ -2561,21 +2561,18 @@ class _CallableExecutorBase_:
             yield  # make this a generator
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        """Dispatch to exec_callables_streaming (generator) when batch_size is
-        set, otherwise exec_callables (plain list).
-
-        Use exec_callables() directly when you always want a list.
-        """
-        if self.streaming:
-            return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
+        """Execute all callables and return results as a flat list (same as exec_callables)."""
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
+
+    def execute_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """Execute callables and yield results in input order (same as exec_callables_streaming)."""
+        return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
 
 
 class MultithreadingCallableExecutor(_CallableExecutorBase_):
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
-        self.streaming = batch_size is not None
         self.tag = tag
         self.log = log
 
@@ -2600,7 +2597,6 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
-        self.streaming = batch_size is not None
         self.tag = tag
         self.log = log
 
@@ -2636,15 +2632,17 @@ class RayCallableExecutor:
     def __init__(self, *, n_workers, batch_size: int = None, tag: str = "", revision=None, conda=None, log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
-        self.streaming = batch_size is not None
         self.tag = tag
         self.log = log
         self.workers = [remote(revision=revision, conda=conda) for _ in range(n_workers)]
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        if self.streaming:
-             return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
+        """Execute all callables and return results as a flat list (same as exec_callables)."""
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
+
+    def execute_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """Execute callables and yield results in input order (same as exec_callables_streaming)."""
+        return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
 
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         if len(callables) > 0:
@@ -2822,14 +2820,16 @@ class InlineCallableExecutor:
     def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
-        self.streaming = batch_size is not None
         self.tag = tag
         self.log = log
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        if self.streaming:
-            return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
+        """Execute all callables and return results as a flat list (same as exec_callables)."""
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
+
+    def execute_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """Execute callables and yield results in input order (same as exec_callables_streaming)."""
+        return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
 
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         payloads = []

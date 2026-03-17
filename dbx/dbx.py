@@ -47,8 +47,6 @@ import numpy as np
 
 import fsspec
 
-from scipy.stats import qmc
-
 import pandas as pd
 import torch
 import torch.multiprocessing as mp

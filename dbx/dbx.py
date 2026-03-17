@@ -1369,7 +1369,7 @@ class Datablock:
             return self
         
         def clear_dirpath(dirpath, *, throw=False):
-            self.log.info(f"removing {dirpath}")
+            self.log.verbose(f"removing {dirpath}")
             try:
                 if dirpath.startswith("gs://"):
                     """
@@ -3011,10 +3011,12 @@ def _build_block(block, *args, **kwargs):
 class MultithreadingDatablocksBuilder:
     """Builds Datablocks concurrently using threads, via MultithreadingCallableExecutor."""
 
-    def __init__(self, *, n_workers: int = 1, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
+        self.batch_size = batch_size
+        self.tag = tag
         self.log = log
-        self._executor = MultithreadingCallableExecutor(n_workers=n_workers, log=log)
+        self._executor = MultithreadingCallableExecutor(n_workers=n_workers, batch_size=batch_size, tag=tag, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         callables = [functools.partial(_build_block, block) for block in blocks]
@@ -3025,10 +3027,12 @@ class MultithreadingDatablocksBuilder:
 class MultiprocessingDatablocksBuilder:
     """Builds Datablocks concurrently using processes, via MultiprocessingCallableExecutor."""
 
-    def __init__(self, *, n_workers: int = 1, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
+        self.batch_size = batch_size
+        self.tag = tag
         self.log = log
-        self._executor = MultiprocessingCallableExecutor(n_workers=n_workers, log=log)
+        self._executor = MultiprocessingCallableExecutor(n_workers=n_workers, batch_size=batch_size, tag=tag, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         callables = [functools.partial(_build_block, block) for block in blocks]
@@ -3037,10 +3041,12 @@ class MultiprocessingDatablocksBuilder:
 
 
 class RayDatablocksBuilder:
-    def __init__(self, *, n_workers: int = 1, revision=None, conda=None, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", revision=None, conda=None, log: Logger = Logger()):
         self.n_workers = n_workers
+        self.batch_size = batch_size
+        self.tag = tag
         self.log = log
-        self.executor = RayCallableExecutor(n_workers=n_workers, revision=revision, conda=conda, log=log)
+        self.executor = RayCallableExecutor(n_workers=n_workers, batch_size=batch_size, tag=tag, revision=revision, conda=conda, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         if len(blocks) > 0:
@@ -3062,10 +3068,12 @@ class RayDatablocksBuilder:
 
 class InlineDatablocksBuilder:
     """Builds Datablocks sequentially in the local process, via InlineCallableExecutor."""
-    def __init__(self, *, n_workers: int = 1, log: Logger = Logger()):
+    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
+        self.batch_size = batch_size
+        self.tag = tag
         self.log = log
-        self._executor = InlineCallableExecutor(n_workers=n_workers, log=log)
+        self._executor = InlineCallableExecutor(n_workers=n_workers, batch_size=batch_size, tag=tag, log=log)
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
         callables = [functools.partial(_build_block, block) for block in blocks]

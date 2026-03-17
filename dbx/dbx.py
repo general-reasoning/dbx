@@ -236,7 +236,7 @@ class Logger:
         if self._selection_ is None:
             self._selection_ = []
         elif isinstance(self._selection_, str):
-            self._selection_ = [self._selection_]
+            self._selection_ = [s.strip() for s in self._selection_.split(',')]
         if len(self._selection_) == 0:
             self._selection_ = os.environ.get('DBXLOGSELECTION')
             if self._selection_ is not None:
@@ -2667,7 +2667,9 @@ class RayCallableExecutor:
         self.workers = [remote(revision=revision, conda=conda) for _ in range(n_workers)]
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        """Execute all callables and return results as a flat list (same as exec_callables)."""
+        """Execute all callables; streams chunked results if batch_size is set."""
+        if self.batch_size is not None:
+            return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
 
     def execute_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):

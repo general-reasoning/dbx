@@ -439,6 +439,14 @@ class JournalEntry(pd.Series):
         return self.instantiate(gitrepo=gitrepo, revision=revision)
     
 
+def UNSAFE_allowed(what: str, *, OVERRIDE: bool = False):
+    if not OVERRIDE:
+        response = input(f"ARE YOU SURE YOU WANT TO EXECUTE UNSAFE CODE: {what}? [y/N]")
+        if response.lower() != 'y':
+            return False
+    return True
+
+
 class JournalFrame(pd.DataFrame):
     def __init__(self, df: pd.DataFrame, *, parse_datetimes: bool = True, logger: Logger = Logger(), **kwargs):
         
@@ -1265,10 +1273,8 @@ class Datablock:
         raise NotImplementedError()
     
     def UNSAFE_clear(self, *topics, OVERRIDE: bool = False):
-        if not OVERRIDE:
-            response = input("ARE YOU SURE YOU WANT TO EXECUTE 'UNSAFE_clear'? [y/N]")
-            if response.lower() != 'y':
-                return self
+        if not UNSAFE_allowed("UNSAFE_clear", OVERRIDE=OVERRIDE):
+            return self
         
         def clear_dirpath(dirpath, *, throw=False):
             self.log.info(f"removing {dirpath}")

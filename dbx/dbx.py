@@ -1529,7 +1529,7 @@ class Datablock:
         anchorhash = os.path.join(
             self.anchor,
             self.hash,
-        )
+        ) if self.anchored else self.hash
         return anchorhash
 
     @property

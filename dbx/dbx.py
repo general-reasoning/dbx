@@ -819,6 +819,48 @@ def read_pickle(path):
         return pickle.load(f)
 
 
+def write_frame(frame: pd.DataFrame, path, *, log=Logger(), **kwargs):
+    """Write a pandas DataFrame to *path* (any fsspec URL).
+
+    The serialisation format is chosen by the file extension:
+    - ``.parquet`` (default / recommended) — written via ``pyarrow``.
+    - ``.csv``                             — written as UTF-8 CSV.
+
+    Extra keyword arguments are forwarded to the underlying writer.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    fs, fpath = fsspec.url_to_fs(path)
+    if path.endswith('.csv'):
+        with fs.open(path, 'w', encoding='utf-8') as f:
+            frame.to_csv(f, **kwargs)
+    else:
+        table = pa.Table.from_pandas(frame)
+        with fs.open(path, 'wb') as f:
+            pq.write_table(table, f, **kwargs)
+    log.detailed(f"WROTE frame {frame.shape} to {path}")
+
+
+def read_frame(path, *, log=Logger(), **kwargs) -> pd.DataFrame:
+    """Read a pandas DataFrame from *path* (any fsspec URL).
+
+    Format is inferred from the file extension (see :func:`write_frame`).
+    Extra keyword arguments are forwarded to the underlying reader.
+    """
+    import pyarrow.parquet as pq
+
+    fs, fpath = fsspec.url_to_fs(path)
+    if path.endswith('.csv'):
+        with fs.open(path, 'r', encoding='utf-8') as f:
+            frame = pd.read_csv(f, **kwargs)
+    else:
+        with fs.open(path, 'rb') as f:
+            frame = pq.read_table(f, **kwargs).to_pandas()
+    log.detailed(f"READ frame {frame.shape} from {path}")
+    return frame
+
+
 class Datablock:
     """
     ROOT = 'protocol://path/to/root'

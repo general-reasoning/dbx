@@ -1902,7 +1902,23 @@ class Datablock:
     
     @property
     def dfn(self):
-        """Returns ALL variables including explicit defaults and dynamically-supplied kwargs."""
+        """The full definition (state) of this Datablock instance.
+
+        Returns a dict containing ALL parameters — both the explicit parameters
+        declared in ``Datablock.__init__`` (e.g. ``root``, ``tag``, ``revision``,
+        ``device``, …) and any extra ``**kwargs`` that were passed at construction
+        time.
+
+        This is the dict that would be needed to reconstruct the block::
+
+            block2 = MyBlock(**block1.dfn)
+            assert block1.dfn == block2.dfn
+
+        See also
+        --------
+        kwargs : The complementary property that returns *only* the dynamic
+                 (non-explicit) parameters.
+        """
         return self.__getstate__()
 
     @functools.cached_property
@@ -1919,7 +1935,25 @@ class Datablock:
     
     @property
     def kwargs(self):
-        """Returns ONLY the dynamically-supplied kwargs and arguments not contained in the explicit parameters."""
+        """The dynamically-supplied keyword arguments of this Datablock instance.
+
+        Returns a dict containing *only* the parameters that are NOT declared
+        as explicit keyword arguments in ``Datablock.__init__``.  For example,
+        if a block is created as::
+
+            block = MyBlock(root='/data', my_custom_param=42)
+
+        then ``block.kwargs == {'my_custom_param': 42}`` — the ``root`` key is
+        excluded because it is an explicit parameter.
+
+        These are the "user-defined" parameters that distinguish one block
+        configuration from another within the same class.
+
+        See also
+        --------
+        dfn : The complementary property that returns the full definition
+              including explicit parameters.
+        """
         explicit_keys = set(self.__explicit_params__())
         return {k: v for k, v in self.__getstate__().items() if k not in explicit_keys}
     

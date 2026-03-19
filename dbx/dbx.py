@@ -1080,9 +1080,9 @@ class Datablock:
             kwargs=self.kwargs,
             spec=self.spec,
             dfn=self.dfn,
-            quote=self.quote(),
-            repr=self.__repr__(),
-            handle=self.handle(),
+            quote=self.quote(deslash=True),
+            repr=self.__repr__(deslash=True),
+            handle=self.handle(deslash=True),
             hashstr=self.hashstr,
             anchor=self.anchor,
         )

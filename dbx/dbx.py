@@ -174,11 +174,11 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         log.info(f"DBXUSEWRKREPO: {wrkrepo_str}")
 
 
-def journal(cls_or_df, root=None, **kwargs):
+def journal(cls_or_df, entry=None, root=None, **kwargs):
     if isinstance(cls_or_df, pd.DataFrame):
         return JournalFrame(cls_or_df, **kwargs)
     else:
-        return Datablock.Journal(cls_or_df, root, **kwargs)
+        return Datablock.Journal(cls_or_df, entry=entry, root=root, **kwargs)
 
 
 class Logger:
@@ -453,6 +453,10 @@ def UNSAFE_allowed(what: str, *, OVERRIDE: bool = False):
 class JournalFrame(pd.DataFrame):
     def __init__(self, df: pd.DataFrame, *, parse_datetimes: bool = True, logger: Logger = Logger(), **kwargs):
         
+        # Guard against an empty journal (no parquet files written yet).
+        if df is None:
+            df = pd.DataFrame()
+
         # Process the dataframe before calling super().__init__()
         if parse_datetimes:
             if 'datetime' in df.columns and not isinstance(df['datetime'].iloc[0], datetime.datetime): # TODO: use dtype?
@@ -2059,12 +2063,20 @@ class Datablock:
     def Journal(cls, entry: int = None, *, root=None, **kwargs):
         if root is None:
             root = os.environ.get('DBX_ROOT')
-        journaldirpath = Datablock._journalanchorpath(eval_term(cls), root)
+        # Use ensure=False: we are reading, not writing — do not create the dir.
+        journaldirpath = Datablock._journalanchorpath(eval_term(cls), root, ensure=False)
         fs, _ = fsspec.url_to_fs(journaldirpath)
+
+        log = Logger()
+        if not fs.exists(journaldirpath):
+            raise FileNotFoundError(
+                f"Journal directory not found for {eval_term(cls)!r}: {journaldirpath}\n"
+                f"Check that the class name / anchor and root path are correct."
+            )
+
         files = list(fs.ls(journaldirpath))
         parquet_files = [f for f in files if f.endswith('.parquet')]
 
-        log = Logger()
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:
             dfs = []

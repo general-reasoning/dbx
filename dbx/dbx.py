@@ -164,6 +164,9 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         
         globals()['DBXUSEWRKREPO'] = wrkrepo_str
         os.environ['DBXGITREPO'] = wrkrepo_str
+        # Signal to worker processes (Ray, multiprocessing) that we are
+        # operating from a wrkrepo and the dirty check should be skipped.
+        os.environ['DBXWRKROOT'] = wrkrepo_str
         
         if 'DBXUSEWRKREPO' in os.environ:
             del os.environ['DBXUSEWRKREPO']
@@ -540,9 +543,12 @@ def gitrevision(*, log=Logger()):
             if path is None:
                 return None
             repo = git.Repo(path)
-            # Skip the dirty check when using a wrkrepo: it is a fresh clone
-            # and is assumed to be clean by construction.
-            if DBXUSEWRKREPO is None and repo.is_dirty() and not os.environ.get('DBXDIRTYREPOK'):
+            # Skip the dirty check when operating from a wrkrepo (fresh clone,
+            # always clean).  DBXUSEWRKREPO covers the master process; DBXWRKROOT
+            # covers worker processes (Ray, multiprocessing) that inherit the env
+            # var but not the in-process global.
+            in_wrkrepo = DBXUSEWRKREPO is not None or os.environ.get('DBXWRKROOT')
+            if not in_wrkrepo and repo.is_dirty() and not os.environ.get('DBXDIRTYREPOK'):
                 raise ValueError(f"Dirty git repo: {path}: commit your changes")
             return repo.head.commit.hexsha
 

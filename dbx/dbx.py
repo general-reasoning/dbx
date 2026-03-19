@@ -540,7 +540,9 @@ def gitrevision(*, log=Logger()):
             if path is None:
                 return None
             repo = git.Repo(path)
-            if repo.is_dirty() and not os.environ.get('DBXDIRTYREPOK'):
+            # Skip the dirty check when using a wrkrepo: it is a fresh clone
+            # and is assumed to be clean by construction.
+            if DBXUSEWRKREPO is None and repo.is_dirty() and not os.environ.get('DBXDIRTYREPOK'):
                 raise ValueError(f"Dirty git repo: {path}: commit your changes")
             return repo.head.commit.hexsha
 

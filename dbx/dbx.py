@@ -1480,7 +1480,7 @@ class Datablock:
             path = os.path.join(dirpath, topicfile) if topicfile is not None else None     
         return path
     
-    def hashpath(self, *, ensure: bool = True):
+    def hashpath(self, *, ensure: bool = False):
         anchorpath = self.anchorpath()
         hashpath = os.path.join(anchorpath, self.hash)
         if ensure:

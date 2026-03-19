@@ -16,7 +16,7 @@ def get_requirements():
 
 setuptools.setup(
     name="dbx",
-    version="0.1.0",
+    version="0.2.0",
     author="Dmitry Karpeyev",
     author_email="dmitry.karpeyev@gmail.com",
     description="Data experiment management hub",

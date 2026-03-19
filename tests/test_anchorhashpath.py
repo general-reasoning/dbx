@@ -4,6 +4,9 @@ import pandas as pd
 from dbx.dbx import Datablock, JournalEntry
 
 class TestAnchorHashPath(unittest.TestCase):
+    def setUp(self):
+        os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
+
     def test_datablock_anchorhashpath(self):
         class MyBlock(Datablock):
             pass

@@ -60,7 +60,7 @@ def test_logger_selection_none():
 
 def test_logger_selection_env(monkeypatch):
     fqn = f"{__name__}.caller_func"
-    monkeypatch.setenv('DBXLOGSELECTION', fqn)
+    monkeypatch.setenv('DBX_LOG_SELECTION', fqn)
     logger = CaptureLogger()
     
     caller_func(logger, "Should print")

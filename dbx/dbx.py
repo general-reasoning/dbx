@@ -56,7 +56,7 @@ __eval__ = __builtins__['eval']
 __version__ = "0.1.0"
 
 
-DBXGITREPO = os.environ.get('DBXGITREPO')
+DBXGITREPO = os.environ.get('DBX_GIT_REPO')
 if DBXGITREPO is None:
     try:
         import git
@@ -144,7 +144,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         sys.path.insert(0, wrkrepo)
         return wrkroot, wrkrepo
 
-    use_wrkrepo = os.environ.get('DBXUSEWRKREPO') == 'True' or revision is not None
+    use_wrkrepo = os.environ.get('DBX_USE_WORK_REPO') == 'True' or revision is not None
     if use_wrkrepo and DBXUSEWRKREPO is None:
         if DBXGITREPO is None:
             raise ValueError("DBXGITREPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
@@ -163,13 +163,13 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
             wrkrepo_str = project_wrkrepo
         
         globals()['DBXUSEWRKREPO'] = wrkrepo_str
-        os.environ['DBXGITREPO'] = wrkrepo_str
+        os.environ['DBX_GIT_REPO'] = wrkrepo_str
         # Signal to worker processes (Ray, multiprocessing) that we are
         # operating from a wrkrepo and the dirty check should be skipped.
-        os.environ['DBXWRKROOT'] = wrkrepo_str
+        os.environ['DBX_WORK_ROOT'] = wrkrepo_str
         
-        if 'DBXUSEWRKREPO' in os.environ:
-            del os.environ['DBXUSEWRKREPO']
+        if 'DBX_USE_WORK_REPO' in os.environ:
+            del os.environ['DBX_USE_WORK_REPO']
             
         log.info(f"DBXUSEWRKREPO: {wrkrepo_str}")
 
@@ -219,8 +219,8 @@ class Logger:
             if kwarg_value is not None:
                 result = kwarg_value
             else:
-                # Generate env key: 'warning' -> 'DBXLOGWARNING'
-                env_key = f'DBXLOG{name.upper()}'
+                # Generate env key: 'warning' -> 'DBX_LOG_WARNING'
+                env_key = f'DBX_LOG_{name.upper()}'
                 env_val = os.environ.get(env_key)
                 if env_val is not None:
                     try:
@@ -241,7 +241,7 @@ class Logger:
         elif isinstance(self._selection_, str):
             self._selection_ = [s.strip() for s in self._selection_.split(',')]
         if len(self._selection_) == 0:
-            self._selection_ = os.environ.get('DBXLOGSELECTION')
+            self._selection_ = os.environ.get('DBX_LOG_SELECTION')
             if self._selection_ is not None:
                 self._selection_ = [s.strip() for s in self._selection_.split(',')]
             
@@ -547,8 +547,8 @@ def gitrevision(*, log=Logger()):
             # always clean).  DBXUSEWRKREPO covers the master process; DBXWRKROOT
             # covers worker processes (Ray, multiprocessing) that inherit the env
             # var but not the in-process global.
-            in_wrkrepo = DBXUSEWRKREPO is not None or os.environ.get('DBXWRKROOT')
-            if not in_wrkrepo and repo.is_dirty() and not os.environ.get('DBXDIRTYREPOK'):
+            in_wrkrepo = DBXUSEWRKREPO is not None or os.environ.get('DBX_WORK_ROOT')
+            if not in_wrkrepo and repo.is_dirty() and not os.environ.get('DBX_DIRTY_REPO_OK'):
                 raise ValueError(f"Dirty git repo: {path}: commit your changes")
             return repo.head.commit.hexsha
 
@@ -987,9 +987,9 @@ class Datablock:
         self._root_ = state.get('root')
         self.root = self._root_
         if self.root is None:
-            self.root = os.environ.get('DBXROOT')
+            self.root = os.environ.get('DBX_ROOT')
         if self.root is None:
-            raise ValueError(f"None root for {self.__class__.__name__}: maybe set DBXROOT?")
+            raise ValueError(f"None root for {self.__class__.__name__}: maybe set DBX_ROOT?")
         self._spec_ = state.get('spec')
         if self._spec_ is None:
             self.spec = asdict(self.CONFIG())
@@ -2058,7 +2058,7 @@ class Datablock:
     @staticmethod
     def Journal(cls, entry: int = None, *, root=None, **kwargs):
         if root is None:
-            root = os.environ.get('DBXROOT')
+            root = os.environ.get('DBX_ROOT')
         journaldirpath = Datablock._journalanchorpath(eval_term(cls), root)
         fs, _ = fsspec.url_to_fs(journaldirpath)
         files = list(fs.ls(journaldirpath))
@@ -3292,12 +3292,12 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
     dbx_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
     
     if DBXUSEWRKREPO is not None:
-        dbx_env['DBXGITREPO'] = DBXUSEWRKREPO
+        dbx_env['DBX_GIT_REPO'] = DBXUSEWRKREPO
 
     # If we are using a remote cluster, any path in /tmp on the login node will be inaccessible to workers.
     # We revert to the original repository path (usually in /home) which is shared.
     if slurm:
-        dbx_env['DBXGITREPO'] = _DBXGITREPO_
+        dbx_env['DBX_GIT_REPO'] = _DBXGITREPO_
 
     runtime_env = {'env_vars': dbx_env}
     if conda:

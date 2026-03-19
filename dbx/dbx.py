@@ -130,7 +130,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         nonlocal log
         if repo is None:
             return None
-        log.info(f"SETTING UP TEMPORARY DBXWRKROOT for {name} from {repo=} {reason} with revision {rev}")
+        log.detailed(f"SETTING UP TEMPORARY DBXWRKROOT for {name} from {repo=} {reason} with revision {rev}")
         wrkroot = tempfile.TemporaryDirectory()
         package = os.path.basename(repo)
         wrkrepo = os.path.join(wrkroot.name, package)
@@ -2403,6 +2403,8 @@ class _CallableExecutorBase_:
             desc = f"{desc}: {self.tag}"
         if hasattr(self, 'batch_size') and self.batch_size is not None:
             desc = f"{desc} [bs={self.batch_size}]"
+        if hasattr(self, '_n_workers'):
+            desc = f"{desc} [nw={self._n_workers}]"
         return desc
 
     # ------------------------------------------------------------------
@@ -2691,6 +2693,7 @@ class RayCallableExecutor:
                 label = f"{label}: {self.tag}"
             if self.batch_size is not None:
                 label = f"{label} [bs={self.batch_size}]"
+            label = f"{label} [nw={self.n_workers}]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             e = None
             while len(done_idxs) < len(callables):
@@ -2729,6 +2732,7 @@ class RayCallableExecutor:
                 label = f"{label}: {self.tag}"
             if self.batch_size is not None:
                 label = f"{label} [bs={self.batch_size}]"
+            label = f"{label} [nw={self.n_workers}]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             
             # Split callables among workers

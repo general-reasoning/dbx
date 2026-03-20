@@ -1711,6 +1711,100 @@ class Datablock:
     
 
 
+class Datastack(Datablock):
+    """Abstract Datablock that orchestrates the building of multiple child
+    Datablocks (shards).
+
+    Subclasses must implement:
+
+        shards() -> list[Datablock]
+            Return the list of child Datablocks to be built.
+
+    Parallelisation is controlled by two ``__init__``-only parameters
+    (they are passed through to the Datablock ``__init__`` via ``**kwargs``
+    and stored on ``self``, but do **not** affect the hash):
+
+        parallelization : str | None
+            Which DatablocksBuilder to use:
+                None / 'inline'       → InlineDatablocksBuilder  (sequential)
+                'multithreading'      → MultithreadingDatablocksBuilder
+                'multiprocessing'     → MultiprocessingDatablocksBuilder
+                'ray'                 → RayDatablocksBuilder
+        n_workers : int
+            Passed straight through to the selected builder.
+
+    Example
+    -------
+    ::
+
+        class MyStack(Datastack):
+            @dataclass
+            class CONFIG(Datablock.CONFIG):
+                path: str = None
+                shard_size: int = 100
+
+            def shards(self):
+                n = self._total_items()
+                return [
+                    MyShard(root=self.root, spec=dict(path=self.cfg.path, idx=i))
+                    for i in range(math.ceil(n / self.cfg.shard_size))
+                ]
+
+        stack = MyStack(root='/data', spec=dict(path='/input', shard_size=100),
+                        parallelization='multithreading', n_workers=4)
+        stack.build()
+    """
+
+    @classmethod
+    def _get_builders(cls):
+        """Lazily resolve builder classes (defined later in the module)."""
+        if not hasattr(cls, '_builders_cache'):
+            cls._builders_cache = {
+                "inline":          InlineDatablocksBuilder,
+                "multithreading":  MultithreadingDatablocksBuilder,
+                "multiprocessing": MultiprocessingDatablocksBuilder,
+                "ray":             RayDatablocksBuilder,
+            }
+        return cls._builders_cache
+
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, **kwargs):
+        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, **kwargs)
+        builders = self._get_builders()
+        key = (self.parallelization or "inline").lower()
+        if key not in builders:
+            raise ValueError(
+                f"Unknown parallelization {self.parallelization!r}. "
+                f"Choose from {list(builders)}"
+            )
+        self.builder_cls = builders[key]
+
+    # -- Abstract interface -------------------------------------------------------
+
+    def shards(self) -> list:
+        """Return the list of child :class:`Datablock` instances to build.
+
+        Subclasses **must** override this method.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement shards()"
+        )
+
+    # -- Default build logic ------------------------------------------------------
+
+    def __build__(self, *args, **kwargs):
+        """Build all shards returned by :meth:`shards` using the configured builder."""
+        shard_list = self.shards()
+        self.log.info(
+            f"Building {self.__class__.__name__}: {len(shard_list)} shards, "
+            f"builder={self.builder_cls.__name__}, n_workers={self.n_workers}"
+        )
+        builder = self.builder_cls(
+            n_workers=self.n_workers,
+            tag=f"BUILDING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]",
+        )
+        builder.build_blocks(shard_list, *args, **kwargs)
+        self.log.info(f"Build complete: {self.__class__.__name__}")
+        return self
 
 
 def quotefn(fn, *args, tag="$", **kwargs):

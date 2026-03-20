@@ -1787,14 +1787,36 @@ class Datastack(Datablock):
 
     # -- Abstract interface -------------------------------------------------------
 
-    def shards(self) -> list:
-        """Return the list of child :class:`Datablock` instances to build.
+    @property
+    def n_shards(self) -> int:
+        """Return the number of shards.
+
+        Subclasses **must** override this property.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement n_shards"
+        )
+
+    def __shard__(self, idx: int):
+        """Return a single child :class:`Datablock` for the given index.
 
         Subclasses **must** override this method.
         """
         raise NotImplementedError(
-            f"{self.__class__.__name__} must implement shards()"
+            f"{self.__class__.__name__} must implement __shard__(idx)"
         )
+
+    def shard(self, idx: int):
+        """Return the shard at *idx*, lazily forming ``_shards_`` if needed."""
+        if not hasattr(self, '_shards_') or self._shards_ is None:
+            self._shards_ = [None] * self.n_shards
+        if self._shards_[idx] is None:
+            self._shards_[idx] = self.__shard__(idx)
+        return self._shards_[idx]
+
+    def shards(self) -> list:
+        """Return all shards, forming them via :meth:`shard` if needed."""
+        return [self.shard(idx) for idx in range(self.n_shards)]
 
     # -- Default build logic ------------------------------------------------------
 

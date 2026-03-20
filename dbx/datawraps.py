@@ -246,11 +246,16 @@ def datastack(cls):
         class CONFIG:
             ...
 
-        def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
+        def __init__(self, *, cfg, verbose, detailed, debug, log, device):
             ...
 
-        def __shards__(self) -> list:
-            # Return a list of SHARD instances (Datablockable objects)
+        @property
+        def n_shards(self) -> int:
+            # Return the number of shards
+            ...
+
+        def __shard__(self, idx: int):
+            # Return the SHARD instance for the given index
             ...
 
     Optional methods:
@@ -261,11 +266,12 @@ def datastack(cls):
     The wrapper creates a ``Datastack`` subclass that:
 
     1. Creates the inner Datastackable object (like ``datablock()``).
-    2. Overrides ``shards()`` to call ``self.obj.__shards__()``, converting
-       each returned Datablockable instance into a proper ``Datablock`` via
-       ``from_datablockable()``.
-    3. Inherits ``__build__()`` from ``Datastack``, which builds shards in
-       parallel using the selected ``DatablocksBuilder``.
+    2. Overrides ``n_shards`` and ``__shard__(idx)`` to delegate to the
+       inner object, converting each returned Datablockable instance into
+       a proper ``Datablock`` via ``from_datablockable()``.
+    3. Inherits ``shard()``, ``shards()``, and ``__build__()`` from
+       ``Datastack``, which builds shards in parallel using the selected
+       ``DatablocksBuilder``.
 
     Usage::
 
@@ -278,12 +284,16 @@ def datastack(cls):
                 input_dir: str = None
                 shard_size: int = 100
 
-            def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
+            def __init__(self, *, cfg, verbose, detailed, debug, log, device):
                 self.cfg = cfg
                 ...
 
-            def __shards__(self):
-                return [MyProcessor(...) for i in range(n_shards)]
+            @property
+            def n_shards(self):
+                return compute_n_shards()
+
+            def __shard__(self, idx):
+                return MyProcessor(cfg=..., ...)
 
         stack = MyPipeline(root='/data', spec={...},
                            parallelization='multithreading', n_workers=4)
@@ -302,8 +312,10 @@ def datastack(cls):
     from .datablocks import Datastack
 
     # -- Validate protocol --------------------------------------------------------
-    if not hasattr(cls, '__shards__'):
-        raise TypeError(f"{cls.__name__} must define __shards__ to be Datastackable")
+    if not hasattr(cls, '__shard__'):
+        raise TypeError(f"{cls.__name__} must define __shard__ to be Datastackable")
+    if not hasattr(cls, 'n_shards'):
+        raise TypeError(f"{cls.__name__} must define n_shards to be Datastackable")
     if not hasattr(cls, 'SHARD'):
         raise TypeError(f"{cls.__name__} must define SHARD to be Datastackable")
 
@@ -368,19 +380,20 @@ def datastack(cls):
         )
         self.obj.block = self
 
-    def shards(self):
-        """Convert Datastackable __shards__ output to Datablock instances."""
-        datablockable_shards = self.obj.__shards__()
-        return [
-            self._ShardBlock_.from_datablockable(s, root=self.root)
-            for s in datablockable_shards
-        ]
+    def n_shards_prop(self):
+        return self.obj.n_shards
+    class_attrs['n_shards'] = property(n_shards_prop)
+
+    def __shard__(self, idx: int):
+        """Convert a single Datastackable __shard__ output to a Datablock."""
+        datablockable_shard = self.obj.__shard__(idx)
+        return self._ShardBlock_.from_datablockable(datablockable_shard, root=self.root)
 
     def __reduce__(self):
         return (_unpickle_datastack_instance, (cls, self.__class__.__module__, self.__getstate__()))
 
     class_attrs['__post_init__'] = __post_init__
-    class_attrs['shards'] = shards
+    class_attrs['__shard__'] = __shard__
     class_attrs['__reduce__'] = __reduce__
 
     # Optional __read__ delegation

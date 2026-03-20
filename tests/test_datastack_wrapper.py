@@ -85,18 +85,19 @@ class BatchProcessor:
         self.log = log
         self.device = device
 
-    def __shards__(self):
-        return [
-            ItemProcessor(
-                cfg=ItemProcessor.CONFIG(item_id=i),
-                verbose=self.verbose,
-                detailed=self.detailed,
-                debug=self.debug,
-                log=self.log,
-                device=self.device,
-            )
-            for i in range(self.cfg.n_items)
-        ]
+    @property
+    def n_shards(self):
+        return self.cfg.n_items
+
+    def __shard__(self, idx):
+        return ItemProcessor(
+            cfg=ItemProcessor.CONFIG(item_id=idx),
+            verbose=self.verbose,
+            detailed=self.detailed,
+            debug=self.debug,
+            log=self.log,
+            device=self.device,
+        )
 
     def __read__(self, topic=None):
         return f"batch with {self.cfg.n_items} items"
@@ -118,18 +119,19 @@ class NoReadBatchProcessor:
         self.log = log
         self.device = device
 
-    def __shards__(self):
-        return [
-            ItemProcessor(
-                cfg=ItemProcessor.CONFIG(item_id=i),
-                verbose=self.verbose,
-                detailed=self.detailed,
-                debug=self.debug,
-                log=self.log,
-                device=self.device,
-            )
-            for i in range(self.cfg.n_items)
-        ]
+    @property
+    def n_shards(self):
+        return self.cfg.n_items
+
+    def __shard__(self, idx):
+        return ItemProcessor(
+            cfg=ItemProcessor.CONFIG(item_id=idx),
+            verbose=self.verbose,
+            detailed=self.detailed,
+            debug=self.debug,
+            log=self.log,
+            device=self.device,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -138,15 +140,26 @@ class NoReadBatchProcessor:
 
 class TestProtocolValidation:
 
-    def test_missing_shards_raises(self):
-        class Bad:
-            SHARD = ItemProcessor
-        with pytest.raises(TypeError, match="__shards__"):
-            datastack(Bad)
-
     def test_missing_shard_raises(self):
         class Bad:
-            def __shards__(self): return []
+            SHARD = ItemProcessor
+            @property
+            def n_shards(self): return 0
+        with pytest.raises(TypeError, match="__shard__"):
+            datastack(Bad)
+
+    def test_missing_n_shards_raises(self):
+        class Bad:
+            SHARD = ItemProcessor
+            def __shard__(self, idx): return None
+        with pytest.raises(TypeError, match="n_shards"):
+            datastack(Bad)
+
+    def test_missing_shard_class_raises(self):
+        class Bad:
+            @property
+            def n_shards(self): return 0
+            def __shard__(self, idx): return None
         with pytest.raises(TypeError, match="SHARD"):
             datastack(Bad)
 

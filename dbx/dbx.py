@@ -400,7 +400,7 @@ class JournalEntry(pd.Series):
                 result = result.replace('\\', '')
         return result
     
-    def eval(self, thing, *, debug: bool = False, context={}, eval_term: bool = False, deslash: bool = False, gitrepo=None, revision=None):
+    def eval(self, thing, *, debug: bool = False, context={}, eval: bool = False, deslash: bool = False, gitrepo=None, revision=None):
         exc = None
         thingstr = self.read(thing, raw=True)
         if deslash:
@@ -409,9 +409,9 @@ class JournalEntry(pd.Series):
         # Call this here because a new revision may need to be checked out
         gitwrkreposetup(revision=revision, gitrepo=gitrepo, reason=f"because of evaluating a JournalEntry field {thing}")
         try:
-            if eval_term:
-                __eval_term__ = globals()['eval_term']
-                r = __eval_term__(thingstr)
+            if eval:
+                __eval__ = globals()['eval']
+                r = __eval__(thingstr)
             else:
                 r = __eval__(thingstr, globals(), context)
         except Exception as exc:
@@ -432,7 +432,7 @@ class JournalEntry(pd.Series):
             self.logger.info(f"Instantiating {self.__tag__()} with gitrepo from journal entry {gitrepo}")
         else:
             self.logger.info(f"Instantiating {self.__tag__()} with gitrepo {gitrepo}")
-        return self.eval('quote', eval_term=True, gitrepo=gitrepo, revision=revision)
+        return self.eval('quote', eval=True, gitrepo=gitrepo, revision=revision)
 
     def inst(self, gitrepo=None, revision='journal_entry'):
         if gitrepo is None:
@@ -584,13 +584,6 @@ def gitcheckout(repopath, revision):
 gitwrkreposetup(reason="for initial import of dbx")
 
 
-def make_google_cloud_storage_download_url(path):
-    if not path.startswith("gs://"):
-        return None
-    _path = path.removeprefix("gs://")
-    return f"https://storage.cloud.google.com/{_path}"
-
-
 def get_named_const_and_cxt(name):
     bits = name.split(".")
     modbits = bits[:-1]
@@ -611,7 +604,7 @@ def get_named_const_and_cxt(name):
     return const, cxt
 
 
-def eval_term(name):
+def eval(name):
     def get_named_args_kwargs(argkwargstr):
         args = []
         kwargs = {}
@@ -639,9 +632,9 @@ def eval_term(name):
             argkwargstr = name[lb + 1 : rb]
         return funcstr, argkwargstr
 
-    Logger("eval_term").detailed(f" ====================> Evaluating term {repr(name)}")
+    Logger("eval").detailed(f" ====================> Evaluating term {repr(name)}")
     if isinstance(name, Iterable) and not isinstance(name, str):
-        term = [eval_term(item) for item in name]
+        term = [eval(item) for item in name]
     elif isinstance(name, str):
         if name.startswith("@") or name.startswith("#") or name.startswith("$"):
             _name_ = name[1:]
@@ -658,7 +651,7 @@ def eval_term(name):
     return term
 
 
-def eval(s=None, **kwargs):
+def exec(s=None, **kwargs):
     if s is None:
         if len(sys.argv) < 2:
             raise ValueError(f"Too few args: {sys.argv}")
@@ -680,7 +673,7 @@ def eval(s=None, **kwargs):
     return r
 
 
-def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
+def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
     if s is None:
         if len(sys.argv) < 2:
             raise ValueError(f"Too few args: {sys.argv}")
@@ -714,20 +707,12 @@ def slurm_eval(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, p
                  r._slurm = None
 
 
-def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
-    return slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs)
-
-
 def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
-    _pprint_.pprint(slurm_eval(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs))
+    _pprint_.pprint(slurm_exec(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs))
 
 
 def pprint(argstr=None, **kwargs):
     _pprint_.pprint(exec(argstr, **kwargs))
-
-
-def exec(s=None, **kwargs):
-    return eval(s, **kwargs)
 
 
 def write_str(text, path, *, log=Logger(), debug: bool = False):
@@ -921,7 +906,7 @@ class Datablock:
                 self.value = None
             def __call__(self):
                 if self.value is None:
-                    self.value = eval_term(self.term)
+                    self.value = eval(self.term)
                 return self.value
 
         def __getattribute__(self, name):
@@ -1423,7 +1408,7 @@ class Datablock:
             if issubclass(self.CONFIG, Datablock.CONFIG):
                 getter = Datablock.CONFIG.LazyLoader(term)
             else:
-                getter = eval_term(term)
+                getter = eval(term)
             replacements[field.name] = getter
         config = replace(config, **replacements)
         self.log.detailed(f"Made {config=} from {spec=}")
@@ -2098,13 +2083,13 @@ class Datablock:
         if root is None:
             root = os.environ.get('DBX_ROOT')
         # Use ensure=False: we are reading, not writing — do not create the dir.
-        journaldirpath = Datablock._journalanchorpath(eval_term(cls), root, ensure=False)
+        journaldirpath = Datablock._journalanchorpath(eval(cls), root, ensure=False)
         fs, _ = fsspec.url_to_fs(journaldirpath)
 
         log = Logger()
         if not fs.exists(journaldirpath):
             raise FileNotFoundError(
-                f"Journal directory not found for {eval_term(cls)!r}: {journaldirpath}\n"
+                f"Journal directory not found for {eval(cls)!r}: {journaldirpath}\n"
                 f"Check that the class name / anchor and root path are correct."
             )
 
@@ -3555,7 +3540,7 @@ class UNSAFE_datablock_journal_puller:
             anchorhashpath = None
             entry = journal(journal.index[self.idx])
             spec = entry.read('spec')
-            dbk = eval_term(quotefn(self.datablock_classname, spec=spec))
+            dbk = eval(quotefn(self.datablock_classname, spec=spec))
             anchorhashpath = entry.anchorhashpath
             if datablock_handles is not None:
                 if dbk.handle() in datablock_handles:

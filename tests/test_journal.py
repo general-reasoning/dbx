@@ -22,7 +22,7 @@ from dbx.dbx import journal, Datablock, JournalFrame, JournalEntry
 
 def _journal_dir(root, cls) -> str:
     """Return the journal directory path for a given class and root."""
-    return Datablock._journalanchorpath(dbxmod.eval_term(cls), root, ensure=False)
+    return Datablock._journalanchorpath(dbxmod.eval(cls), root, ensure=False)
 
 
 def _write_fake_journal_entry(journal_dir: str, hash_val: str = "abc123", event: str = "build"):

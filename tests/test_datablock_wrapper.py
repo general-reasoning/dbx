@@ -40,8 +40,7 @@ class MultiTopicProcessor:
         model_name: str = 'resnet50'
         layer: str = 'avgpool'
 
-    def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
-        self.paths = paths
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
         self.cfg = cfg
         self.verbose = verbose
         self.detailed = detailed
@@ -57,7 +56,7 @@ class MultiTopicProcessor:
         return self
 
     def __read__(self, topic):
-        return f"data_for_{topic}_at_{self.paths[topic]}"
+        return f"data_for_{topic}"
 
 
 class SingleTopicProcessor:
@@ -68,15 +67,14 @@ class SingleTopicProcessor:
     class CONFIG:
         delimiter: str = ','
 
-    def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
-        self.paths = paths
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
         self.cfg = cfg
 
     def __build__(self, *args, **kwargs):
         return self
 
     def __read__(self, topic=None):
-        return f"single_topic_data_at_{self.paths}"
+        return "single_topic_data"
 
 
 class InheritingConfigProcessor:
@@ -87,8 +85,7 @@ class InheritingConfigProcessor:
     class CONFIG(Datablock.CONFIG):
         n_components: str = '10'
 
-    def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
-        self.paths = paths
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
         self.cfg = cfg
 
     def __build__(self, *args, **kwargs):
@@ -107,8 +104,8 @@ class VersionedProcessor:
     class CONFIG:
         pass
 
-    def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
-        self.paths = paths
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
+        pass
 
     def __build__(self, *args, **kwargs):
         return self
@@ -121,8 +118,8 @@ class NoConfigProcessor:
     """A Datablockable with no CONFIG at all."""
     TOPICFILE = 'out.txt'
 
-    def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
-        self.paths = paths
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
+        pass
 
     def __build__(self, *args, **kwargs):
         return self
@@ -235,16 +232,15 @@ class TestInnerObjectInstantiation:
         assert hasattr(block, 'obj')
         assert isinstance(block.obj, MultiTopicProcessor)
 
-    def test_obj_receives_paths_dict(self):
-        Wrapped = datablock(MultiTopicProcessor)
-        block = Wrapped(root='/tmp/dbx_test_wrapper')
-        assert isinstance(block.obj.paths, dict)
-        assert set(block.obj.paths.keys()) == {'features', 'metadata'}
-
     def test_obj_receives_cfg(self):
         Wrapped = datablock(MultiTopicProcessor)
         block = Wrapped(root='/tmp/dbx_test_wrapper')
         assert block.obj.cfg is block.cfg
+
+    def test_obj_receives_device(self):
+        Wrapped = datablock(MultiTopicProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        assert block.obj.device == block.device
 
 
 # ---------------------------------------------------------------------------
@@ -266,8 +262,7 @@ class TestDelegation:
         Wrapped = datablock(MultiTopicProcessor)
         block = Wrapped(root='/tmp/dbx_test_wrapper')
         result = block.__read__('features')
-        expected_path = block.path('features')
-        assert result == f"data_for_features_at_{expected_path}"
+        assert result == "data_for_features"
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +293,7 @@ class TestSerialization:
         block = Wrapped(root='/tmp/dbx_test_wrapper')
         restored = pickle.loads(pickle.dumps(block))
         assert isinstance(restored.obj, MultiTopicProcessor)
-        assert restored.obj.paths == block.obj.paths
+        assert restored.obj.cfg.model_name == block.obj.cfg.model_name
 
     def test_set_creates_new_instance(self):
         Wrapped = datablock(MultiTopicProcessor)
@@ -318,7 +313,6 @@ class TestFromDatablockable:
         """Create a MultiTopicProcessor instance with sensible defaults."""
         from dbx.databits import Logger
         defaults = dict(
-            paths={'features': '/fake/features.pt', 'metadata': '/fake/meta.json'},
             cfg=MultiTopicProcessor.CONFIG(model_name='vit_b', layer='layer4'),
             verbose=True,
             detailed=False,

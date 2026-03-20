@@ -16,7 +16,7 @@ def datablock(cls):
         class CONFIG:
             ...
 
-        def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
+        def __init__(self, *, cfg, verbose, detailed, debug, log, device):
             ...
 
         def __build__(self, *args, **kwargs):
@@ -24,6 +24,12 @@ def datablock(cls):
             return self
 
         def __read__(self, topic):
+            ...
+
+    Optionally, a Datablockable may define:
+
+        def path(self, topic=None, *, ensure_dirpath=False):
+            # Override Datablock.path() with custom path logic
             ...
 
     Usage::
@@ -102,18 +108,23 @@ def datablock(cls):
             pass
         class_attrs['CONFIG'] = _EmptyCONFIG
 
-    # -- Helper: construct resolved paths for the inner object --------------------
-    def _make_paths(wrapper_self):
-        if wrapper_self.has_topics():
-            return {topic: wrapper_self.path(topic) for topic in wrapper_self.topics()}
-        else:
-            return wrapper_self.path()
+    # -- If the Datablockable implements path(), lift it onto the wrapper --------
+    if hasattr(cls, 'path') and callable(getattr(cls, 'path')):
+        def path(self, topic=None, *, ensure_dirpath=False):
+            return self.obj.path(topic, ensure_dirpath=ensure_dirpath)
+        class_attrs['path'] = path
+
+        def dirpath(self, topic=None, *, ensure=False, list=False):
+            raise NotImplementedError(
+                f"{cls.__name__} defines its own path(); "
+                f"the standard Datablock.dirpath() (root/anchor/hash/topic) "
+                f"is not used. Use .path() instead."
+            )
+        class_attrs['dirpath'] = dirpath
 
     # -- Delegating methods -------------------------------------------------------
     def __post_init__(self):
-        paths = _make_paths(self)
         self.obj = cls(
-            paths=paths,
             cfg=self.cfg,
             verbose=self.verbose,
             detailed=self.detailed,
@@ -121,6 +132,7 @@ def datablock(cls):
             log=self.log,
             device=self.device,
         )
+        self.obj.block = self
 
     def __build__(self, *args, **kwargs):
         self.obj.__build__(*args, **kwargs)
@@ -338,18 +350,15 @@ def datastack(cls):
             pass
         class_attrs['CONFIG'] = _EmptyCONFIG
 
-    # -- Helper: construct resolved paths for the inner object --------------------
-    def _make_paths(wrapper_self):
-        if wrapper_self.has_topics():
-            return {topic: wrapper_self.path(topic) for topic in wrapper_self.topics()}
-        else:
-            return wrapper_self.path()
+    # -- If the Datastackable implements path(), lift it onto the wrapper --------
+    if hasattr(cls, 'path') and callable(getattr(cls, 'path')):
+        def path(self, topic=None, *, ensure_dirpath=False):
+            return self.obj.path(topic, ensure_dirpath=ensure_dirpath)
+        class_attrs['path'] = path
 
     # -- Delegating methods -------------------------------------------------------
     def __post_init__(self):
-        paths = _make_paths(self)
         self.obj = cls(
-            paths=paths,
             cfg=self.cfg,
             verbose=self.verbose,
             detailed=self.detailed,
@@ -357,6 +366,7 @@ def datastack(cls):
             log=self.log,
             device=self.device,
         )
+        self.obj.block = self
 
     def shards(self):
         """Convert Datastackable __shards__ output to Datablock instances."""

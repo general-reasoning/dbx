@@ -39,8 +39,7 @@ class ItemProcessor:
     class CONFIG:
         item_id: int = None
 
-    def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
-        self.paths = paths
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
         self.cfg = cfg
         self.verbose = verbose
         self.detailed = detailed
@@ -50,20 +49,18 @@ class ItemProcessor:
         self.built = False
 
     def __build__(self, *args, **kwargs):
-        import fsspec
-        path = self.paths
-        fs, _ = fsspec.url_to_fs(path)
-        fs.makedirs(os.path.dirname(path), exist_ok=True)
-        with fs.open(path, 'w') as f:
-            f.write(f"item:{self.cfg.item_id}")
         self.built = True
+        # The wrapper Datablock handles path management;
+        # write the topic file via the wrapper's path().
+        path = self.block.path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w') as f:
+            f.write(f"item:{self.cfg.item_id}")
         return self
 
     def __read__(self, topic=None):
-        import fsspec
-        path = self.paths
-        fs, _ = fsspec.url_to_fs(path)
-        with fs.open(path, 'r') as f:
+        path = self.block.path()
+        with open(path, 'r') as f:
             return f.read()
 
 
@@ -80,8 +77,7 @@ class BatchProcessor:
     class CONFIG:
         n_items: int = 5
 
-    def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
-        self.paths = paths
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
         self.cfg = cfg
         self.verbose = verbose
         self.detailed = detailed
@@ -92,7 +88,6 @@ class BatchProcessor:
     def __shards__(self):
         return [
             ItemProcessor(
-                paths=None,  # will be overridden by from_datablockable
                 cfg=ItemProcessor.CONFIG(item_id=i),
                 verbose=self.verbose,
                 detailed=self.detailed,
@@ -115,7 +110,7 @@ class NoReadBatchProcessor:
     class CONFIG:
         n_items: int = 3
 
-    def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
         self.cfg = cfg
         self.verbose = verbose
         self.detailed = detailed
@@ -126,7 +121,6 @@ class NoReadBatchProcessor:
     def __shards__(self):
         return [
             ItemProcessor(
-                paths=None,
                 cfg=ItemProcessor.CONFIG(item_id=i),
                 verbose=self.verbose,
                 detailed=self.detailed,
@@ -312,7 +306,6 @@ class TestFromDatastackable:
     def _make_obj(self, **overrides):
         from dbx.databits import Logger
         defaults = dict(
-            paths=None,
             cfg=BatchProcessor.CONFIG(n_items=7),
             verbose=True,
             detailed=False,

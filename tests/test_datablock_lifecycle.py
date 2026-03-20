@@ -306,7 +306,6 @@ class TestLeaveBreadcrumbs:
         block.UNSAFE_clear(OVERRIDE=True)
         assert block.valid() is False
 
-
 # ---------------------------------------------------------------------------
 # 5. Full lifecycle: invalid → build → valid → clear → invalid → rebuild
 # ---------------------------------------------------------------------------
@@ -337,3 +336,116 @@ class TestFullLifecycle:
         assert block.valid() is False
         block.build()
         assert block.valid() is True
+
+
+# ---------------------------------------------------------------------------
+# 6. UNSAFE_copy_from()
+# ---------------------------------------------------------------------------
+
+class TestUNSAFECopyFrom:
+
+    # -- copy_dirpath=False (default): copies individual files -----------------
+
+    def test_copy_single_topic_file(self, tmp_path):
+        src_root = tmp_path / "src"
+        dst_root = tmp_path / "dst"
+        src = _make_block(SingleTopicBlock, src_root)
+        src.build()
+        assert src.valid() is True
+
+        dst = _make_block(SingleTopicBlock, dst_root)
+        assert dst.valid() is False
+        dst.UNSAFE_copy_from(src.anchorhashpath)
+        assert dst.valid() is True
+        # The file content should match
+        with open(dst.path()) as f:
+            content = f.read()
+        assert "built:" in content
+
+    def test_copy_multi_topic_files(self, tmp_path):
+        src_root = tmp_path / "src"
+        dst_root = tmp_path / "dst"
+        src = _make_block(MultiTopicBlock, src_root)
+        src.build()
+
+        dst = _make_block(MultiTopicBlock, dst_root)
+        dst.UNSAFE_copy_from(src.anchorhashpath)
+        assert dst.valid() is True
+        for topic in dst.TOPICFILES:
+            assert os.path.isfile(dst.path(topic))
+
+    def test_copy_default_preserves_only_files(self, tmp_path):
+        """Default copy_dirpath=False copies files, not extra dir contents."""
+        src_root = tmp_path / "src"
+        dst_root = tmp_path / "dst"
+        src = _make_block(SingleTopicBlock, src_root)
+        src.build()
+        # Add an extra file in the source dirpath that isn't the topic file
+        extra = os.path.join(src.dirpath(), "extra.txt")
+        with open(extra, "w") as f:
+            f.write("extra")
+
+        dst = _make_block(SingleTopicBlock, dst_root)
+        dst.UNSAFE_copy_from(src.anchorhashpath)
+        assert dst.valid() is True
+        # The extra file should NOT have been copied
+        assert not os.path.exists(os.path.join(dst.dirpath(), "extra.txt"))
+
+    # -- copy_dirpath=True: copies entire directories --------------------------
+
+    def test_copy_dirpath_single_topic(self, tmp_path):
+        src_root = tmp_path / "src"
+        dst_root = tmp_path / "dst"
+        src = _make_block(SingleTopicBlock, src_root)
+        src.build()
+        # Add an extra file in the source dirpath
+        extra = os.path.join(src.dirpath(), "extra.txt")
+        with open(extra, "w") as f:
+            f.write("extra")
+
+        dst = _make_block(SingleTopicBlock, dst_root)
+        dst.UNSAFE_copy_from(src.anchorhashpath, copy_dirpath=True)
+        assert dst.valid() is True
+        # The extra file SHOULD have been copied with copy_dirpath=True
+        assert os.path.exists(os.path.join(dst.dirpath(), "extra.txt"))
+
+    def test_copy_dirpath_multi_topic(self, tmp_path):
+        src_root = tmp_path / "src"
+        dst_root = tmp_path / "dst"
+        src = _make_block(MultiTopicBlock, src_root)
+        src.build()
+        # Add extra files in each topic dirpath
+        for topic in src.TOPICFILES:
+            extra = os.path.join(src.dirpath(topic), "bonus.txt")
+            with open(extra, "w") as f:
+                f.write(f"bonus_{topic}")
+
+        dst = _make_block(MultiTopicBlock, dst_root)
+        dst.UNSAFE_copy_from(src.anchorhashpath, copy_dirpath=True)
+        assert dst.valid() is True
+        for topic in dst.TOPICFILES:
+            assert os.path.exists(os.path.join(dst.dirpath(topic), "bonus.txt"))
+
+    def test_copy_returns_self(self, tmp_path):
+        src_root = tmp_path / "src"
+        dst_root = tmp_path / "dst"
+        src = _make_block(SingleTopicBlock, src_root)
+        src.build()
+        dst = _make_block(SingleTopicBlock, dst_root)
+        result = dst.UNSAFE_copy_from(src.anchorhashpath)
+        assert result is dst
+
+    def test_copy_then_clear_then_recopy(self, tmp_path):
+        """Full cycle: copy → valid → clear → invalid → copy again → valid."""
+        src_root = tmp_path / "src"
+        dst_root = tmp_path / "dst"
+        src = _make_block(SingleTopicBlock, src_root)
+        src.build()
+
+        dst = _make_block(SingleTopicBlock, dst_root)
+        dst.UNSAFE_copy_from(src.anchorhashpath)
+        assert dst.valid() is True
+        dst.UNSAFE_clear(OVERRIDE=True)
+        assert dst.valid() is False
+        dst.UNSAFE_copy_from(src.anchorhashpath)
+        assert dst.valid() is True

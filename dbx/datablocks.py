@@ -881,7 +881,7 @@ class Datablock:
             self._write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
-    def UNSAFE_copy_from(self, anchorhashpath, *, overwrite: bool = False, topicpaths=None, validate: bool = True):
+    def UNSAFE_copy_from(self, anchorhashpath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
         def fscopy(*, src_path, dst_path, recursive: bool = False):
             # fsspec does not implement .copy, so use put/get or temporary directory
             src_fs, _ = fsspec.url_to_fs(src_path)
@@ -910,6 +910,45 @@ class Datablock:
                     src_fs.get(src_path, tmp_path, recursive=recursive)
                     dst_fs.put(tmp_path, dst_path, recursive=recursive)
 
+        def copy_topic_file(topic=None):
+            """Copy the individual .path(topic) file."""
+            if topic is not None:
+                dst_path = self.path(topic)
+                if topicpaths is not None:
+                    _src_path = topicpaths[topic]
+                else:
+                    _src_path = os.path.join(topic, self.TOPICFILES[topic])
+            else:
+                dst_path = self.path()
+                if topicpaths is not None:
+                    _src_path = topicpaths
+                else:
+                    _src_path = self.TOPICFILE
+            if dst_path is not None:
+                src_path = os.path.join(anchorhashpath, _src_path)
+                self.log.detailed(f"Copying file {src_path} to {dst_path}")
+                fscopy(src_path=src_path, dst_path=dst_path, recursive=False)
+
+        def copy_topic_dir(topic=None):
+            """Copy the entire .dirpath(topic) directory."""
+            if topic is not None:
+                dst_path = self.dirpath(topic)
+                if topicpaths is not None:
+                    _src_path = topicpaths[topic]
+                else:
+                    _src_path = topic
+            else:
+                dst_path = self.dirpath()
+                if topicpaths is not None:
+                    _src_path = topicpaths
+                else:
+                    _src_path = ""
+            src_path = os.path.join(anchorhashpath, _src_path)
+            src_fs, _ = fsspec.url_to_fs(src_path)
+            if src_fs.exists(src_path):
+                self.log.detailed(f"Copying directory {src_path} to {dst_path}")
+                fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
+
         if not overwrite:
             assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
         fs, _ = fsspec.url_to_fs(anchorhashpath)
@@ -919,51 +958,15 @@ class Datablock:
         try:
             if self.has_topics():
                 for topic in self.topics():
-                    dst_path = self.path(topic)
-                    if dst_path is not None:
-                        # File copy
-                        if topicpaths is not None:
-                            _src_path = topicpaths[topic]
-                        else:
-                            _src_path = os.path.join(topic, self.TOPICFILES[topic])
-                        src_path = os.path.join(anchorhashpath, _src_path)
-                        self.log.detailed(f"Copying file {src_path} to {dst_path}")
-                        fscopy(src_path=src_path, dst_path=dst_path, recursive=False)
+                    if copy_dirpath:
+                        copy_topic_dir(topic)
                     else:
-                        # Dir copy
-                        dst_path = self.dirpath(topic)
-                        if topicpaths is not None:
-                            _src_path = topicpaths[topic]
-                        else:
-                            _src_path = topic
-                        src_path = os.path.join(anchorhashpath, _src_path)
-                        src_fs, _ = fsspec.url_to_fs(src_path)
-                        if src_fs.exists(src_path):
-                            self.log.detailed(f"Copying directory {src_path} to {dst_path}")
-                            fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
+                        copy_topic_file(topic)
             elif self.has_topic():
-                dst_path = self.path()
-                if dst_path is not None:
-                    # File copy
-                    if topicpaths is not None:
-                        _src_path = topicpaths
-                    else:
-                        _src_path = self.TOPICFILE
-                    src_path = os.path.join(anchorhashpath, _src_path)
-                    self.log.detailed(f"Copying file {src_path} to {dst_path}")
-                    fscopy(src_path=src_path, dst_path=dst_path, recursive=False)
+                if copy_dirpath:
+                    copy_topic_dir()
                 else:
-                    # Dir copy
-                    dst_path = self.dirpath()
-                    if topicpaths is not None:
-                        _src_path = topicpaths
-                    else:
-                        _src_path = ""
-                    src_path = os.path.join(anchorhashpath, _src_path)
-                    src_fs, _ = fsspec.url_to_fs(src_path)
-                    if src_fs.exists(src_path):
-                        self.log.detailed(f"Copying directory {src_path} to {dst_path}")
-                        fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
+                    copy_topic_file()
         
             self.log.verbose(f"Copying files from {anchorhashpath}: END")
             self._write_journal_entry(event="UNSAFE_copy_from:END", context=anchorhashpath, inline_context=True)

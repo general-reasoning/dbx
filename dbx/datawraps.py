@@ -200,7 +200,7 @@ def datablock(cls):
     class_attrs['from_datablockable'] = from_datablockable
 
     # -- Create the subclass dynamically ------------------------------------------
-    wrapper_name = f'_{cls.__name__}_Datablock_'
+    wrapper_name = f'{cls.__name__}_Datablock'
 
     caller_module = inspect.currentframe().f_back.f_globals.get(
         '__name__', cls.__module__
@@ -420,7 +420,7 @@ def datastack(cls):
     class_attrs['from_datastackable'] = from_datastackable
 
     # -- Create the subclass dynamically ------------------------------------------
-    wrapper_name = f'_{cls.__name__}_Datastack_'
+    wrapper_name = f'{cls.__name__}_Datastack'
 
     caller_module = inspect.currentframe().f_back.f_globals.get(
         '__name__', cls.__module__

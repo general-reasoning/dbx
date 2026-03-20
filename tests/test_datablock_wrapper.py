@@ -17,7 +17,8 @@ import pickle
 import pytest
 from dataclasses import dataclass
 
-from dbx.dbx import Datablock, datablock
+from dbx.dbx import Datablock
+from dbx.datawraps import datablock
 
 
 @pytest.fixture(autouse=True)

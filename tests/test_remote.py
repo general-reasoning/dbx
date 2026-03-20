@@ -11,7 +11,7 @@ in dbx. The tests verify:
 5. test_remote_exception_handling: Correct propagation and reraising of exceptions from remote tasks.
 6. test_remote_datablocks_builder: Distributed building of Datablocks using `RayDatablocksBuilder`.
 
-Note: These tests require a clean git repository if DBXGITREPO is set.
+Note: These tests require a clean git repository if DBX_GIT_REPO is set.
 """
 
 import os

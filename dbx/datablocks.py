@@ -58,22 +58,22 @@ from .databits import *
 __version__ = "0.1.0"
 
 
-DBXGITREPO = os.environ.get('DBX_GIT_REPO')
-if DBXGITREPO is None:
+DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
+if DBX_GIT_REPO is None:
     try:
         import git
         _repo = git.Repo('.', search_parent_directories=True)
-        DBXGITREPO = _repo.working_tree_dir
+        DBX_GIT_REPO = _repo.working_tree_dir
     except (ImportError, Exception):
         pass
-_DBXGITREPO_ = DBXGITREPO
+_DBX_GIT_REPO_ = DBX_GIT_REPO
 DBX_USE_WORK_REPO = None
-DBXWRKROOT = None
+DBX_WORK_ROOT = None
 
 
 def dbx_repos(repopath=None):
     if repopath is None:
-        repopath = DBXGITREPO
+        repopath = DBX_GIT_REPO
     if repopath is None:
         return None, None
     paths = repopath.split(':')
@@ -121,9 +121,9 @@ def dbx_versions(version):
 def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     if log is None:
         log = Logger(name="gitwrkreposetup")
-    global DBXGITREPO
+    global DBX_GIT_REPO
     global DBX_USE_WORK_REPO
-    global DBXWRKROOT
+    global DBX_WORK_ROOT
     
     dbx_repo, project_repo = dbx_repos(gitrepo)
     dbx_rev, project_rev = dbx_revisions(revision)
@@ -148,13 +148,13 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
 
     use_wrkrepo = os.environ.get('DBX_USE_WORK_REPO') == 'True' or revision is not None
     if use_wrkrepo and DBX_USE_WORK_REPO is None:
-        if DBXGITREPO is None:
-            raise ValueError("DBXGITREPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
+        if DBX_GIT_REPO is None:
+            raise ValueError("DBX_GIT_REPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
         
         dbx_wrk = setup_wrkrepo(dbx_repo, dbx_rev, "dbx")
         project_wrk = setup_wrkrepo(project_repo, project_rev, "project")
 
-        DBXWRKROOT = (dbx_wrk[0] if dbx_wrk else None, project_wrk[0] if project_wrk else None)
+        DBX_WORK_ROOT = (dbx_wrk[0] if dbx_wrk else None, project_wrk[0] if project_wrk else None)
         
         dbx_wrkrepo = dbx_wrk[1] if dbx_wrk else None
         project_wrkrepo = project_wrk[1] if project_wrk else None
@@ -289,7 +289,7 @@ class JournalEntry(pd.Series):
 
     def inst(self, gitrepo=None, revision='journal_entry'):
         if gitrepo is None:
-            gitrepo = DBXGITREPO
+            gitrepo = DBX_GIT_REPO
         if gitrepo is None:
             gitrepo = 'journal_entry'
         return self.instantiate(gitrepo=gitrepo, revision=revision)
@@ -385,7 +385,7 @@ class JournalFrame(pd.DataFrame):
 
     
 def gitrevision(*, log=Logger()):
-    repopath = DBX_USE_WORK_REPO if DBX_USE_WORK_REPO is not None else DBXGITREPO
+    repopath = DBX_USE_WORK_REPO if DBX_USE_WORK_REPO is not None else DBX_GIT_REPO
     if repopath is not None:
         d_repo, project_repo = dbx_repos(repopath)
         
@@ -394,7 +394,7 @@ def gitrevision(*, log=Logger()):
                 return None
             repo = git.Repo(path)
             # Skip the dirty check when operating from a wrkrepo (fresh clone,
-            # always clean).  DBX_USE_WORK_REPO covers the master process; DBXWRKROOT
+            # always clean).  DBX_USE_WORK_REPO covers the master process; DBX_WORK_ROOT
             # covers worker processes (Ray, multiprocessing) that inherit the env
             # var but not the in-process global.
             in_wrkrepo = DBX_USE_WORK_REPO is not None or os.environ.get('DBX_WORK_ROOT')
@@ -1316,7 +1316,7 @@ class Datablock:
             self.log.detailed(f"--------------> COMPUTING revision")
             if self._revision_ is None:
                 self.log.detailed(f"--------------> self._revision_ is None")
-                gitrepo = DBX_USE_WORK_REPO if DBX_USE_WORK_REPO is not None else DBXGITREPO
+                gitrepo = DBX_USE_WORK_REPO if DBX_USE_WORK_REPO is not None else DBX_GIT_REPO
                 self._revision = gitrevision(log=self.log) if gitrepo is not None else None
                 self.log.detailed(f"--------------> self._revision_: from gitrevision()")
             else:
@@ -1641,7 +1641,7 @@ class Datablock:
                                          'repr': repr_path,
                                          'hashstr': hashstr_path,
                                          'context': context,
-                                         'gitrepo': DBXGITREPO,
+                                         'gitrepo': DBX_GIT_REPO,
                                          'wrkrepo': DBX_USE_WORK_REPO,
         }])
         df.to_parquet(journal_path)
@@ -2398,7 +2398,7 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
     # If we are using a remote cluster, any path in /tmp on the login node will be inaccessible to workers.
     # We revert to the original repository path (usually in /home) which is shared.
     if slurm:
-        dbx_env['DBX_GIT_REPO'] = _DBXGITREPO_
+        dbx_env['DBX_GIT_REPO'] = _DBX_GIT_REPO_
 
     runtime_env = {'env_vars': dbx_env}
     if conda:

@@ -1,9 +1,9 @@
 """
-Tests for the dirty-repo check bypass in gitrevision() and the DBXWRKROOT
+Tests for the dirty-repo check bypass in gitrevision() and the DBX_WORK_ROOT
 environment variable set by gitwrkreposetup().
 
 Strategy: we mock git.Repo so we never need a real git repository, and we
-patch the module-level globals (DBX_USE_WORK_REPO, DBXGITREPO, DBXWRKROOT) as
+patch the module-level globals (DBX_USE_WORK_REPO, DBX_GIT_REPO, DBX_WORK_ROOT) as
 well as os.environ to exercise each code path in isolation.
 """
 import os
@@ -41,7 +41,7 @@ class TestGitrevisionDirtyCheck:
     def test_dirty_repo_raises_without_wrkrepo(self, monkeypatch):
         """Dirty repo should raise when no wrkrepo is active."""
         monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBXGITREPO', '/fake/project')
+        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/project')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
@@ -54,7 +54,7 @@ class TestGitrevisionDirtyCheck:
     def test_clean_repo_succeeds_without_wrkrepo(self, monkeypatch):
         """Clean repo should return a hexsha without error."""
         monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBXGITREPO', '/fake/project')
+        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/project')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
@@ -67,7 +67,7 @@ class TestGitrevisionDirtyCheck:
     def test_dirty_repo_ok_with_dbxdirtyrepok(self, monkeypatch):
         """DBXDIRTYREPOK env var should bypass the dirty check."""
         monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBXGITREPO', '/fake/project')
+        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/project')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
@@ -87,7 +87,7 @@ class TestGitrevisionSkipsWhenWrkrepo:
     def test_dirty_repo_ok_when_dbxusewrkrepo_global_set(self, monkeypatch):
         """Master process: DBX_USE_WORK_REPO global set → dirty check skipped."""
         monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', '/tmp/wrk/project')
-        monkeypatch.setattr(dbxmod, 'DBXGITREPO', '/tmp/wrk/project')
+        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/tmp/wrk/project')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
@@ -99,9 +99,9 @@ class TestGitrevisionSkipsWhenWrkrepo:
         # is_dirty should never have been called (or at least not caused a raise)
 
     def test_dirty_repo_ok_when_dbxwrkroot_env_set(self, monkeypatch):
-        """Worker process: DBXWRKROOT env var set → dirty check skipped."""
+        """Worker process: DBX_WORK_ROOT env var set → dirty check skipped."""
         monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBXGITREPO', '/fake/project')
+        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/project')
         monkeypatch.setenv('DBX_WORK_ROOT', '/tmp/wrk/project')
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
@@ -113,17 +113,17 @@ class TestGitrevisionSkipsWhenWrkrepo:
 
 
 # ---------------------------------------------------------------------------
-# gitwrkreposetup() sets DBXWRKROOT in the environment
+# gitwrkreposetup() sets DBX_WORK_ROOT in the environment
 # ---------------------------------------------------------------------------
 
 class TestGitwrkreposetupSetsEnvVar:
 
     def test_dbxwrkroot_set_in_env_after_setup(self, monkeypatch, tmp_path):
-        """gitwrkreposetup() must set DBXWRKROOT=True in os.environ."""
-        # Pre-conditions: no wrkrepo yet, a valid DBXGITREPO
+        """gitwrkreposetup() must set DBX_WORK_ROOT=True in os.environ."""
+        # Pre-conditions: no wrkrepo yet, a valid DBX_GIT_REPO
         monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBXWRKROOT', None)
-        monkeypatch.setattr(dbxmod, 'DBXGITREPO', '/fake/gitrepo')
+        monkeypatch.setattr(dbxmod, 'DBX_WORK_ROOT', None)
+        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/gitrepo')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
 
         # Provide a fake clone destination
@@ -157,9 +157,9 @@ class TestGitwrkreposetupSetsEnvVar:
 
     def test_dbxwrkroot_not_set_when_no_wrkrepo_needed(self, monkeypatch):
         """gitwrkreposetup() with no revision and DBX_USE_WORK_REPO env not 'True'
-        should NOT set DBXWRKROOT (no wrkrepo is created)."""
+        should NOT set DBX_WORK_ROOT (no wrkrepo is created)."""
         monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBXGITREPO', '/fake/gitrepo')
+        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/gitrepo')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
         monkeypatch.delenv('DBX_USE_WORK_REPO', raising=False)  # env flag also off
 

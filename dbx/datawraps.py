@@ -431,6 +431,10 @@ def datastack(cls):
     WrapperClass.__qualname__ = wrapper_name
     WrapperClass.__wrapped__ = cls
 
+    # The ShardBlock was created by datablock() inside datastack(), so its
+    # __module__ defaults to dbx.datawraps.  Fix it to match the caller.
+    ShardBlock.__module__ = caller_module
+
     return WrapperClass
 
 

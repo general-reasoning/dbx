@@ -12,8 +12,8 @@ import datetime
 import pytest
 import pandas as pd
 
-import dbx.dbx as dbxmod
-from dbx.dbx import journal, Datablock, JournalFrame, JournalEntry
+import dbx.datablocks as dbxmod
+from dbx.datablocks import journal, Datablock, JournalFrame, JournalEntry
 
 
 # ---------------------------------------------------------------------------

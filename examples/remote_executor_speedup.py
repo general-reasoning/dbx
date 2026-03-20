@@ -2,8 +2,8 @@
 import ray
 import time
 import functools
-from dbx import dbx
-from dbx.dbx import RayCallableExecutor
+from dbx import datablocks
+from dbx.datablocks import RayCallableExecutor
 
 def work_fn(seconds):
     time.sleep(seconds)

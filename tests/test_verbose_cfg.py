@@ -1,6 +1,6 @@
 import os
 import pytest
-from dbx.dbx import Datablock, Logger
+from dbx.datablocks import Datablock, Logger
 
 # Mock Logger to capture calls
 class MockLogger(Logger):
@@ -25,8 +25,8 @@ class MyBlock(Datablock):
 def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_ROOT', '/tmp/dbx')
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-    # Patch Logger in dbx.dbx module
-    monkeypatch.setattr('dbx.dbx.Logger', MockLogger)
+    # Patch Logger in dbx.datablocks module
+    monkeypatch.setattr('dbx.datablocks.Logger', MockLogger)
 
 def test_verbose_config_false():
     """Verify that VERBOSE_CONFIG=False uses log.detailed for cfg formation."""

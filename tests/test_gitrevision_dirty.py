@@ -9,7 +9,7 @@ well as os.environ to exercise each code path in isolation.
 import os
 import pytest
 from unittest.mock import patch, MagicMock
-import dbx.dbx as dbxmod
+import dbx.datablocks as dbxmod
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ class TestGitrevisionDirtyCheck:
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
         mock_repo = _make_dirty_repo()
-        with patch('dbx.dbx.git') as mock_git:
+        with patch('dbx.datablocks.git') as mock_git:
             mock_git.Repo.return_value = mock_repo
             with pytest.raises(ValueError, match="Dirty git repo"):
                 dbxmod.gitrevision()
@@ -59,7 +59,7 @@ class TestGitrevisionDirtyCheck:
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
         mock_repo = _make_clean_repo("deadbeef")
-        with patch('dbx.dbx.git') as mock_git:
+        with patch('dbx.datablocks.git') as mock_git:
             mock_git.Repo.return_value = mock_repo
             rev = dbxmod.gitrevision()
         assert rev == "deadbeef"
@@ -72,7 +72,7 @@ class TestGitrevisionDirtyCheck:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
         mock_repo = _make_dirty_repo("cafebabe")
-        with patch('dbx.dbx.git') as mock_git:
+        with patch('dbx.datablocks.git') as mock_git:
             mock_git.Repo.return_value = mock_repo
             rev = dbxmod.gitrevision()
         assert rev == "cafebabe"
@@ -92,7 +92,7 @@ class TestGitrevisionSkipsWhenWrkrepo:
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
         mock_repo = _make_dirty_repo("deadc0de")
-        with patch('dbx.dbx.git') as mock_git:
+        with patch('dbx.datablocks.git') as mock_git:
             mock_git.Repo.return_value = mock_repo
             rev = dbxmod.gitrevision()
         assert rev == "deadc0de"
@@ -106,7 +106,7 @@ class TestGitrevisionSkipsWhenWrkrepo:
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
         mock_repo = _make_dirty_repo("0xdeadbeef")
-        with patch('dbx.dbx.git') as mock_git:
+        with patch('dbx.datablocks.git') as mock_git:
             mock_git.Repo.return_value = mock_repo
             rev = dbxmod.gitrevision()
         assert rev == "0xdeadbeef"
@@ -137,11 +137,11 @@ class TestGitwrkreposetupSetsEnvVar:
         fake_tmpdir.name = str(tmp_path)
 
         with (
-            patch('dbx.dbx.dbx_repos', return_value=(None, '/fake/gitrepo')),
-            patch('dbx.dbx.gitclone', return_value=str(fake_wrk_dir)),
-            patch('dbx.dbx.gitcheckout', return_value=str(fake_wrk_dir)),
-            patch('dbx.dbx.tempfile.TemporaryDirectory', return_value=fake_tmpdir),
-            patch('dbx.dbx.sys') as mock_sys,
+            patch('dbx.datablocks.dbx_repos', return_value=(None, '/fake/gitrepo')),
+            patch('dbx.datablocks.gitclone', return_value=str(fake_wrk_dir)),
+            patch('dbx.datablocks.gitcheckout', return_value=str(fake_wrk_dir)),
+            patch('dbx.datablocks.tempfile.TemporaryDirectory', return_value=fake_tmpdir),
+            patch('dbx.datablocks.sys') as mock_sys,
         ):
             mock_sys.path = []
             # revision=something triggers use_wrkrepo=True inside gitwrkreposetup

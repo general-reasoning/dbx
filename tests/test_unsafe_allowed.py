@@ -2,7 +2,7 @@
 import os
 import pytest
 from unittest.mock import patch, MagicMock
-from dbx.dbx import UNSAFE_allowed, Datablock
+from dbx.datablocks import UNSAFE_allowed, Datablock
 
 
 # ---------------------------------------------------------------------------

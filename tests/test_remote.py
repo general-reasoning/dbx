@@ -22,8 +22,8 @@ import threading
 import queue
 import tqdm
 import functools
-from dbx import dbx
-from dbx.dbx import remote, RayCallableExecutor, Datablock, RayDatablocksBuilder
+from dbx import datablocks
+from dbx.datablocks import remote, RayCallableExecutor, Datablock, RayDatablocksBuilder
 
 class TestRemote(unittest.TestCase):
     @classmethod

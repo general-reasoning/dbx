@@ -9,7 +9,7 @@ Verifies:
 5. __post_init__ instantiates the inner object with resolved paths and cfg.
 6. __build__ and __read__ delegate to the inner object.
 7. VERSION is lifted when present.
-8. Anchor uses caller module, not dbx.dbx.
+8. Anchor uses caller module, not dbx.datablocks.
 9. Serialization round-trip works (pickle).
 """
 import os
@@ -17,7 +17,7 @@ import pickle
 import pytest
 from dataclasses import dataclass
 
-from dbx.dbx import Datablock
+from dbx.datablocks import Datablock
 from dbx.datawraps import datablock
 
 

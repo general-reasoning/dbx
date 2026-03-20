@@ -11,7 +11,7 @@ import os
 import pickle
 import copy
 import pytest
-from dbx.dbx import Datablock
+from dbx.datablocks import Datablock
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import os
 import unittest
 import pandas as pd
-from dbx.dbx import Datablock, JournalEntry
+from dbx.datablocks import Datablock, JournalEntry
 
 class TestAnchorHashPath(unittest.TestCase):
     def setUp(self):

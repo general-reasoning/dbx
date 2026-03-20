@@ -1,7 +1,7 @@
 import inspect
 from dataclasses import dataclass, fields, is_dataclass
 
-from .dbx import Datablock
+from .datablocks import Datablock
 
 
 def datablock(cls):

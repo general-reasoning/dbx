@@ -1,7 +1,7 @@
 import unittest
 import pickle
 import os
-from dbx.dbx import Datablock
+from dbx.datablocks import Datablock
 
 class MyTestBlock(Datablock):
     VERSION = "v1"

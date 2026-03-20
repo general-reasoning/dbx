@@ -2,7 +2,7 @@
 import os
 import pytest
 import sys
-from dbx.dbx import Logger
+from dbx.datablocks import Logger
 
 # Custom Logger that captures whether _print was called
 class CaptureLogger(Logger):

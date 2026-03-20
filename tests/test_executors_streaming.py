@@ -2,7 +2,7 @@ import time
 import pytest
 import functools
 import types
-from dbx.dbx import (
+from dbx.datablocks import (
     MultithreadingCallableExecutor,
     MultiprocessingCallableExecutor,
     InlineCallableExecutor,

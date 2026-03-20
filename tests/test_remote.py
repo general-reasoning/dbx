@@ -57,7 +57,8 @@ class TestRemote(unittest.TestCase):
     def test_remote_callable_executor(self):
         """Verify parallel execution of multiple tasks using RayCallableExecutor."""
         n_workers = 2
-        executor = RayCallableExecutor(n_workers=n_workers)
+        workers = [remote() for _ in range(n_workers)]
+        executor = RayCallableExecutor(workers=workers)
         
         def multiply(x, y):
             return x * y
@@ -87,7 +88,7 @@ class TestRemote(unittest.TestCase):
 
     def test_remote_callable_executor_streaming(self):
         """Verify streaming results from RayCallableExecutor."""
-        executor = RayCallableExecutor(n_workers=2, batch_size=1)
+        executor = RayCallableExecutor(workers=[remote() for _ in range(2)], batch_size=1)
         def task(i): return i * 2
         
         callables = [functools.partial(task, i) for i in range(10)]
@@ -107,7 +108,7 @@ class TestRemote(unittest.TestCase):
 
     def test_remote_exception_handling(self):
         """Verify that exceptions raised in remote workers are correctly propagated to the client."""
-        executor = RayCallableExecutor(n_workers=1)
+        executor = RayCallableExecutor(workers=[remote()])
         
         def fail():
             raise ValueError("Intentional failure")
@@ -150,7 +151,7 @@ class TestRemote(unittest.TestCase):
     def test_remote_callable_executor_streaming_batch_size(self):
         """Verify streaming results in chunks from RayCallableExecutor."""
         batch_size = 4
-        executor = RayCallableExecutor(n_workers=2, batch_size=batch_size)
+        executor = RayCallableExecutor(workers=[remote() for _ in range(2)], batch_size=batch_size)
         def task(i): return i * 2
         
         callables = [functools.partial(task, i) for i in range(10)]

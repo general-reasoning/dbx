@@ -43,6 +43,9 @@ class MultiTopicProcessor:
     def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
         self.paths = paths
         self.cfg = cfg
+        self.verbose = verbose
+        self.detailed = detailed
+        self.debug = debug
         self.log = log
         self.device = device
         self.built = False
@@ -303,3 +306,82 @@ class TestSerialization:
         block2 = block1.set(device='cuda')
         assert block2.device == 'cuda'
         assert isinstance(block2.obj, MultiTopicProcessor)
+
+
+# ---------------------------------------------------------------------------
+# 9. from_datablockable
+# ---------------------------------------------------------------------------
+
+class TestFromDatablockable:
+
+    def _make_processor(self, **overrides):
+        """Create a MultiTopicProcessor instance with sensible defaults."""
+        from dbx.databits import Logger
+        defaults = dict(
+            paths={'features': '/fake/features.pt', 'metadata': '/fake/meta.json'},
+            cfg=MultiTopicProcessor.CONFIG(model_name='vit_b', layer='layer4'),
+            verbose=True,
+            detailed=False,
+            debug=True,
+            log=Logger(),
+            device='cuda:1',
+        )
+        defaults.update(overrides)
+        return MultiTopicProcessor(**defaults)
+
+    def test_spec_extracted_from_cfg(self):
+        Wrapped = datablock(MultiTopicProcessor)
+        obj = self._make_processor()
+        block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
+        assert block.cfg.model_name == 'vit_b'
+        assert block.cfg.layer == 'layer4'
+
+    def test_verbose_propagated(self):
+        Wrapped = datablock(MultiTopicProcessor)
+        obj = self._make_processor(verbose=True)
+        block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
+        assert block.verbose is True
+
+    def test_device_propagated(self):
+        Wrapped = datablock(MultiTopicProcessor)
+        obj = self._make_processor(device='cuda:1')
+        block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
+        assert block.device == 'cuda:1'
+
+    def test_debug_propagated(self):
+        Wrapped = datablock(MultiTopicProcessor)
+        obj = self._make_processor(debug=True)
+        block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
+        assert block.debug is True
+
+    def test_kwargs_override_propagated_attrs(self):
+        Wrapped = datablock(MultiTopicProcessor)
+        obj = self._make_processor(device='cuda:1')
+        block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper', device='cpu')
+        assert block.device == 'cpu'
+
+    def test_type_check_rejects_wrong_type(self):
+        Wrapped = datablock(MultiTopicProcessor)
+        with pytest.raises(TypeError, match="Expected an instance of"):
+            Wrapped.from_datablockable("not_a_processor", root='/tmp')
+
+    def test_result_is_datablock(self):
+        Wrapped = datablock(MultiTopicProcessor)
+        obj = self._make_processor()
+        block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
+        assert isinstance(block, Datablock)
+
+    def test_inner_obj_created(self):
+        Wrapped = datablock(MultiTopicProcessor)
+        obj = self._make_processor()
+        block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
+        assert hasattr(block, 'obj')
+        assert isinstance(block.obj, MultiTopicProcessor)
+
+    def test_hash_matches_direct_construction(self):
+        """from_datablockable with same spec should produce same hash as direct construction."""
+        Wrapped = datablock(MultiTopicProcessor)
+        obj = self._make_processor()
+        block_from = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
+        block_direct = Wrapped(root='/tmp/dbx_test_wrapper', spec=dict(model_name='vit_b', layer='layer4'))
+        assert block_from.hash == block_direct.hash

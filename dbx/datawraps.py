@@ -134,10 +134,70 @@ def datablock(cls):
         # preserving the original __module__ so the anchor stays the same.
         return (_unpickle_datablock_instance, (cls, self.__class__.__module__, self.__getstate__()))
 
+    @classmethod
+    def from_datablockable(wrapper_cls, obj, *, root=None, **kwargs):
+        """Create a Datablock wrapper from an existing datablockable instance.
+
+        Extracts the CONFIG fields from *obj*.cfg as the ``spec`` dict,
+        and propagates ``verbose``, ``detailed``, ``debug``, and ``device``
+        from the datablockable instance to the wrapper.
+
+        Parameters
+        ----------
+        obj : instance of the wrapped datablockable class
+            Must have a ``.cfg`` attribute whose fields become the spec.
+        root : str, optional
+            Datablock root path.  If not given, falls back to DBX_ROOT.
+        **kwargs
+            Additional keyword arguments forwarded to the wrapper's
+            ``__init__`` (e.g. ``tag``, ``anchored``, ``revision``).
+
+        Returns
+        -------
+        Datablock
+            A new wrapper instance ready for ``.build()`` / ``.read()``.
+
+        Example
+        -------
+        ::
+
+            @dbx.datablock
+            class MyProcessor:
+                ...
+
+            proc = MyProcessor(paths=..., cfg=cfg, verbose=True, ...)
+            block = MyProcessor.from_datablockable(proc, root='/data')
+        """
+        if not isinstance(obj, cls):
+            raise TypeError(
+                f"Expected an instance of {cls.__name__}, "
+                f"got {type(obj).__name__}"
+            )
+
+        # Extract spec from the datablockable's CONFIG fields
+        cfg = obj.cfg
+        if is_dataclass(cfg):
+            spec = {f.name: getattr(cfg, f.name) for f in fields(cfg)}
+        elif hasattr(cfg, '__dict__'):
+            spec = dict(cfg.__dict__)
+        else:
+            raise TypeError(
+                f"Cannot extract spec from {type(cfg).__name__}: "
+                f"expected a dataclass or object with __dict__"
+            )
+
+        # Propagate observability / device settings from the datablockable
+        for attr in ('verbose', 'detailed', 'debug', 'device'):
+            if attr not in kwargs and hasattr(obj, attr):
+                kwargs[attr] = getattr(obj, attr)
+
+        return wrapper_cls(root=root, spec=spec, **kwargs)
+
     class_attrs['__post_init__'] = __post_init__
     class_attrs['__build__'] = __build__
     class_attrs['__read__'] = __read__
     class_attrs['__reduce__'] = __reduce__
+    class_attrs['from_datablockable'] = from_datablockable
 
     # -- Create the subclass dynamically ------------------------------------------
     wrapper_name = f'_{cls.__name__}_Datablock_'
@@ -163,4 +223,222 @@ def _unpickle_datablock_instance(cls, module, state):
     return obj
 
 
+def datastack(cls):
+    """Wrap a Datastackable class as a :class:`Datastack` subclass.
+
+    A class is *Datastackable* if it defines:
+
+        SHARD = SomeDatablockableClass
+
+        @dataclass
+        class CONFIG:
+            ...
+
+        def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
+            ...
+
+        def __shards__(self) -> list:
+            # Return a list of SHARD instances (Datablockable objects)
+            ...
+
+    Optional methods:
+
+        def __read__(self, topic):  # if the stack produces its own output
+            ...
+
+    The wrapper creates a ``Datastack`` subclass that:
+
+    1. Creates the inner Datastackable object (like ``datablock()``).
+    2. Overrides ``shards()`` to call ``self.obj.__shards__()``, converting
+       each returned Datablockable instance into a proper ``Datablock`` via
+       ``from_datablockable()``.
+    3. Inherits ``__build__()`` from ``Datastack``, which builds shards in
+       parallel using the selected ``DatablocksBuilder``.
+
+    Usage::
+
+        @dbx.datastack
+        class MyPipeline:
+            SHARD = MyProcessor   # a Datablockable class
+
+            @dataclass
+            class CONFIG:
+                input_dir: str = None
+                shard_size: int = 100
+
+            def __init__(self, *, paths, cfg, verbose, detailed, debug, log, device):
+                self.cfg = cfg
+                ...
+
+            def __shards__(self):
+                return [MyProcessor(...) for i in range(n_shards)]
+
+        stack = MyPipeline(root='/data', spec={...},
+                           parallelization='multithreading', n_workers=4)
+        stack.build()
+
+    Parameters
+    ----------
+    cls : type
+        A class satisfying the Datastackable protocol.
+
+    Returns
+    -------
+    type
+        A dynamically-created ``Datastack`` subclass wrapping *cls*.
+    """
+    from .datablocks import Datastack
+
+    # -- Validate protocol --------------------------------------------------------
+    if not hasattr(cls, '__shards__'):
+        raise TypeError(f"{cls.__name__} must define __shards__ to be Datastackable")
+    if not hasattr(cls, 'SHARD'):
+        raise TypeError(f"{cls.__name__} must define SHARD to be Datastackable")
+
+    # -- Create the Datablock wrapper for this stack's shard class ----------------
+    ShardBlock = datablock(cls.SHARD)
+
+    # -- Collect class-level attributes -------------------------------------------
+    class_attrs = {}
+
+    # Store the shard block class for use by shards()
+    class_attrs['_ShardBlock_'] = ShardBlock
+
+    # TOPICFILES / TOPICFILE
+    if hasattr(cls, 'TOPICFILES'):
+        class_attrs['TOPICFILES'] = cls.TOPICFILES
+    if hasattr(cls, 'TOPICFILE'):
+        class_attrs['TOPICFILE'] = cls.TOPICFILE
+
+    # VERSION
+    if hasattr(cls, 'VERSION'):
+        class_attrs['VERSION'] = cls.VERSION
+
+    # CONFIG — ensure it inherits from Datablock.CONFIG
+    if hasattr(cls, 'CONFIG') and is_dataclass(cls.CONFIG):
+        user_config = cls.CONFIG
+        if issubclass(user_config, Datablock.CONFIG):
+            class_attrs['CONFIG'] = user_config
+        else:
+            from dataclasses import MISSING, field as _dc_field_
+            ns = {'__annotations__': {}}
+            for f in fields(user_config):
+                ns['__annotations__'][f.name] = f.type
+                if f.default is not MISSING:
+                    ns[f.name] = f.default
+                elif f.default_factory is not MISSING:
+                    ns[f.name] = _dc_field_(default_factory=f.default_factory)
+            new_config = dataclass(
+                type(user_config.__name__, (Datablock.CONFIG,), ns)
+            )
+            class_attrs['CONFIG'] = new_config
+    else:
+        @dataclass
+        class _EmptyCONFIG(Datablock.CONFIG):
+            pass
+        class_attrs['CONFIG'] = _EmptyCONFIG
+
+    # -- Helper: construct resolved paths for the inner object --------------------
+    def _make_paths(wrapper_self):
+        if wrapper_self.has_topics():
+            return {topic: wrapper_self.path(topic) for topic in wrapper_self.topics()}
+        else:
+            return wrapper_self.path()
+
+    # -- Delegating methods -------------------------------------------------------
+    def __post_init__(self):
+        paths = _make_paths(self)
+        self.obj = cls(
+            paths=paths,
+            cfg=self.cfg,
+            verbose=self.verbose,
+            detailed=self.detailed,
+            debug=self.debug,
+            log=self.log,
+            device=self.device,
+        )
+
+    def shards(self):
+        """Convert Datastackable __shards__ output to Datablock instances."""
+        datablockable_shards = self.obj.__shards__()
+        return [
+            self._ShardBlock_.from_datablockable(s, root=self.root)
+            for s in datablockable_shards
+        ]
+
+    def __reduce__(self):
+        return (_unpickle_datastack_instance, (cls, self.__class__.__module__, self.__getstate__()))
+
+    class_attrs['__post_init__'] = __post_init__
+    class_attrs['shards'] = shards
+    class_attrs['__reduce__'] = __reduce__
+
+    # Optional __read__ delegation
+    if hasattr(cls, '__read__'):
+        def __read__(self, topic=None):
+            return self.obj.__read__(topic)
+        class_attrs['__read__'] = __read__
+
+    # -- from_datastackable classmethod -------------------------------------------
+    @classmethod
+    def from_datastackable(wrapper_cls, obj, *, root=None, **kwargs):
+        """Create a Datastack wrapper from an existing Datastackable instance.
+
+        Extracts the CONFIG fields from *obj*.cfg as the ``spec`` dict,
+        and propagates ``verbose``, ``detailed``, ``debug``, and ``device``.
+
+        Parameters
+        ----------
+        obj : instance of the wrapped Datastackable class
+        root : str, optional
+        **kwargs : forwarded to wrapper ``__init__``
+
+        Returns
+        -------
+        Datastack
+        """
+        if not isinstance(obj, cls):
+            raise TypeError(
+                f"Expected an instance of {cls.__name__}, "
+                f"got {type(obj).__name__}"
+            )
+        cfg = obj.cfg
+        if is_dataclass(cfg):
+            spec = {f.name: getattr(cfg, f.name) for f in fields(cfg)}
+        elif hasattr(cfg, '__dict__'):
+            spec = dict(cfg.__dict__)
+        else:
+            raise TypeError(
+                f"Cannot extract spec from {type(cfg).__name__}: "
+                f"expected a dataclass or object with __dict__"
+            )
+        for attr in ('verbose', 'detailed', 'debug', 'device'):
+            if attr not in kwargs and hasattr(obj, attr):
+                kwargs[attr] = getattr(obj, attr)
+        return wrapper_cls(root=root, spec=spec, **kwargs)
+
+    class_attrs['from_datastackable'] = from_datastackable
+
+    # -- Create the subclass dynamically ------------------------------------------
+    wrapper_name = f'_{cls.__name__}_Datastack_'
+
+    caller_module = inspect.currentframe().f_back.f_globals.get(
+        '__name__', cls.__module__
+    )
+
+    WrapperClass = type(wrapper_name, (Datastack,), class_attrs)
+    WrapperClass.__module__ = caller_module
+    WrapperClass.__qualname__ = wrapper_name
+    WrapperClass.__wrapped__ = cls
+
+    return WrapperClass
+
+
+def _unpickle_datastack_instance(cls, module, state):
+    """Reconstruct a ``datastack(cls)`` wrapper instance from pickled state."""
+    WrapperClass = datastack(cls)
+    WrapperClass.__module__ = module
+    obj = WrapperClass.__new__(WrapperClass)
+    obj.__setstate__(state)
+    return obj
 

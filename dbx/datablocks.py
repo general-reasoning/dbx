@@ -133,7 +133,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         if repo is None:
             return None
         if reason is not None:
-            log.verbose(f"SETTING UP TEMPORARY DBXWRKROOT for {name} from {repo=} {reason} with revision {rev}")
+            log.verbose(f"SETTING UP WORK REPO for {name} from {repo=} {reason} with revision {rev}")
         wrkroot = tempfile.TemporaryDirectory()
         package = os.path.basename(repo)
         wrkrepo = os.path.join(wrkroot.name, package)
@@ -428,7 +428,7 @@ def gitcheckout(repopath, revision):
     return repopath
 
 
-gitwrkreposetup(reason=None)
+gitwrkreposetup(reason="datablocks import")
 
 
 class Datablock:

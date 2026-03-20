@@ -72,6 +72,7 @@ class TestUNSAFEAllowed:
 # ---------------------------------------------------------------------------
 
 class MyBlock(Datablock):
+    TOPICFILE = 'output.txt'
     def __build__(self):
         pass
 

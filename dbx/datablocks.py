@@ -436,11 +436,11 @@ class Datablock:
     TOPICFILES = {'topic', 'file.csv'} | TOPICFILE = 'file.csv'
     # protocol://path --- module/class/ --- topic [--- file]
     #        root           [anchor]        [topic]   [file]
-    # root:       'protocol://path/to/root'
-    # anchorpath: '{root}/modpath/class'|'{root}' if anchored|else
-    # hashpath:   '{anchorpath}/{hash}|{anchorpath}/{hash}' if hash supplied through args|else
-    # dirpath:    '{hashpath}/topic'|{hashpath}' if topic is not None|else
-    # path:       '{dirpath}/{TOPICFILE}'|'{dirpath}' if TOPICFILE is not None|else
+    # root:               'protocol://path/to/root'
+    # anchorpath:         '{root}/modpath/class'|'{root}' if anchored|else
+    # anchorhashpath:     '{anchorpath}/{hash}
+    # dirpath:            '{anchorhashpath}/topic'|{anchorhashpath}' if topic is not None|else
+    # path:               '{dirpath}/{TOPICFILE}'|'{dirpath}' if TOPICFILE is not None|else
     
     """
     VERBOSE_CONFIG = False
@@ -830,21 +830,21 @@ class Datablock:
     def __read__(self, topic=None):
         raise NotImplementedError()
     
-    def UNSAFE_clear(self, *topics, OVERRIDE: bool = False):
+    def UNSAFE_clear(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
         if not UNSAFE_allowed("UNSAFE_clear", OVERRIDE=OVERRIDE):
             return self
         
-        def clear_dirpath(dirpath, *, throw=False):
-            self.log.verbose(f"removing {dirpath}")
+        def clear_path(path, *, recursive=False, throw=False):
+            self.log.verbose(f"removing {path}")
             try:
-                if dirpath.startswith("gs://"):
+                if path.startswith("gs://"):
                     """
                     Circumvent bugs in fsspec and helm.data.utils
                     """
                     from google.cloud import storage
 
                     client = storage.Client()
-                    bits = dirpath.removeprefix("gs://").split("/")
+                    bits = path.removeprefix("gs://").split("/")
                     bucket_name = bits[0]
                     prefix = "/".join(bits[1:])
                     bucket = client.get_bucket(bucket_name)
@@ -852,24 +852,32 @@ class Datablock:
                     for blob in blobs:
                         blob.delete()
                 else:
-                    # fs = makefs(dirpath) # TODO: REMOVE
-                    fs, _ = fsspec.url_to_fs(dirpath)
-                    fs.rm(dirpath, recursive=True)
+                    fs, _ = fsspec.url_to_fs(path)
+                    fs.rm(path, recursive=recursive)
             except Exception as e:
-                self.log.warning(f"Error when trying to remove {dirpath}")
+                self.log.warning(f"Error when trying to remove {path}")
                 self.log.warning(f"EXCEPTION: {e}")
                 if throw:
                     raise (e)
         if len(topics) == 0:
             if hasattr(self, "TOPICFILES"):
                 for topic in self.TOPICFILES:
-                    clear_dirpath(self.dirpath(topic))
+                    if clear_dirpath:
+                        clear_path(self.dirpath(topic), recursive=True)
+                    else:
+                        clear_path(self.path(topic))
             else:
-                clear_dirpath(self.dirpath())
+                if clear_dirpath:
+                    clear_path(self.dirpath(), recursive=True)
+                else:
+                    clear_path(self.path())
             self._write_journal_entry(event="UNSAFE_clear")
         else:
             for topic in topics:
-                clear_dirpath(self.dirpath(topic))
+                if clear_dirpath:
+                    clear_path(self.dirpath(topic), recursive=True)
+                else:
+                    clear_path(self.path(topic))
             self._write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     

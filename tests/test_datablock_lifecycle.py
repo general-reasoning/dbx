@@ -158,6 +158,8 @@ class TestBuild:
 
 class TestUNSAFEClear:
 
+    # -- Core lifecycle (default clear_dirpath=False) --------------------------
+
     def test_clear_after_build_makes_invalid(self, tmp_path):
         """The core lifecycle: invalid → build → valid → clear → invalid."""
         block = _make_block(SingleTopicBlock, tmp_path)
@@ -174,31 +176,6 @@ class TestUNSAFEClear:
         block.UNSAFE_clear(OVERRIDE=True)
         assert block.valid() is False
 
-    def test_clear_removes_topic_file(self, tmp_path):
-        block = _make_block(SingleTopicBlock, tmp_path)
-        block.build()
-        path = block.path()
-        assert os.path.exists(path)
-        block.UNSAFE_clear(OVERRIDE=True)
-        assert not os.path.exists(path)
-
-    def test_clear_removes_all_topic_dirs(self, tmp_path):
-        block = _make_block(MultiTopicBlock, tmp_path)
-        block.build()
-        for topic in block.TOPICFILES:
-            assert os.path.exists(block.path(topic))
-        block.UNSAFE_clear(OVERRIDE=True)
-        for topic in block.TOPICFILES:
-            assert not os.path.exists(block.dirpath(topic))
-
-    def test_clear_specific_topic(self, tmp_path):
-        block = _make_block(MultiTopicBlock, tmp_path)
-        block.build()
-        # Clear only 'alpha', 'beta' should remain
-        block.UNSAFE_clear('alpha', OVERRIDE=True)
-        assert not os.path.exists(block.dirpath('alpha'))
-        assert os.path.exists(block.path('beta'))
-
     def test_clear_returns_self(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
         block.build()
@@ -211,6 +188,73 @@ class TestUNSAFEClear:
         block.build()
         assert block.valid() is True
         block.UNSAFE_clear(OVERRIDE=True)
+        assert block.valid() is False
+        block.build()
+        assert block.valid() is True
+
+    # -- clear_dirpath=False (default): removes files, preserves dirs ----------
+
+    def test_default_removes_single_topic_file(self, tmp_path):
+        block = _make_block(SingleTopicBlock, tmp_path)
+        block.build()
+        path = block.path()
+        assert os.path.exists(path)
+        block.UNSAFE_clear(OVERRIDE=True)
+        assert not os.path.exists(path)
+        # directory should still exist
+        assert os.path.isdir(block.dirpath())
+
+    def test_default_removes_multi_topic_files_preserves_dirs(self, tmp_path):
+        block = _make_block(MultiTopicBlock, tmp_path)
+        block.build()
+        for topic in block.TOPICFILES:
+            assert os.path.exists(block.path(topic))
+        block.UNSAFE_clear(OVERRIDE=True)
+        for topic in block.TOPICFILES:
+            assert not os.path.exists(block.path(topic))
+            assert os.path.isdir(block.dirpath(topic))
+
+    def test_default_specific_topic_removes_file_preserves_dir(self, tmp_path):
+        block = _make_block(MultiTopicBlock, tmp_path)
+        block.build()
+        block.UNSAFE_clear('alpha', OVERRIDE=True)
+        assert not os.path.exists(block.path('alpha'))
+        assert os.path.isdir(block.dirpath('alpha'))
+        # beta untouched
+        assert os.path.exists(block.path('beta'))
+
+    # -- clear_dirpath=True: removes entire directories ------------------------
+
+    def test_clear_dirpath_removes_single_topic_dir(self, tmp_path):
+        block = _make_block(SingleTopicBlock, tmp_path)
+        block.build()
+        dirpath = block.dirpath()
+        assert os.path.isdir(dirpath)
+        block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
+        assert not os.path.exists(dirpath)
+
+    def test_clear_dirpath_removes_multi_topic_dirs(self, tmp_path):
+        block = _make_block(MultiTopicBlock, tmp_path)
+        block.build()
+        block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
+        for topic in block.TOPICFILES:
+            assert not os.path.exists(block.dirpath(topic))
+
+    def test_clear_dirpath_specific_topic_removes_dir(self, tmp_path):
+        block = _make_block(MultiTopicBlock, tmp_path)
+        block.build()
+        block.UNSAFE_clear('alpha', OVERRIDE=True, clear_dirpath=True)
+        assert not os.path.exists(block.dirpath('alpha'))
+        # beta untouched
+        assert os.path.isdir(block.dirpath('beta'))
+        assert os.path.exists(block.path('beta'))
+
+    def test_clear_dirpath_rebuild(self, tmp_path):
+        """Full cycle with clear_dirpath=True."""
+        block = _make_block(MultiTopicBlock, tmp_path)
+        block.build()
+        assert block.valid() is True
+        block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
         assert block.valid() is False
         block.build()
         assert block.valid() is True

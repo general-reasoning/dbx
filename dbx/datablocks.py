@@ -591,9 +591,12 @@ class Datablock:
         self.dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         self.build_dt = None
         
-        # Redefine logger with hash
+        # Redefine logger with hash (and tag if present)
+        log_name = f"{self.anchor}/{self.hash}"
+        if self._tag_ is not None:
+            log_name = f"{log_name} [{self._tag_}]"
         self.log = Logger(
-            name=f"{self.anchor}/{self.hash}",
+            name=log_name,
             debug=state.get('debug', False),
             verbose=state.get('verbose', False),
             detailed=state.get('detailed', False),

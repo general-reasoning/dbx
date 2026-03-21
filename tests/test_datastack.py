@@ -61,15 +61,18 @@ class SimpleStack(Datastack):
 
     TOPICFILE = "stack_meta.txt"
 
+    @property
+    def n_shards(self):
+        return math.ceil(self.cfg.total_items / self.cfg.shard_size)
+
+    def __shard__(self, idx):
+        return CounterShard(
+            root=self.root,
+            spec=dict(idx=idx),
+        )
+
     def shards(self):
-        n_shards = math.ceil(self.cfg.total_items / self.cfg.shard_size)
-        return [
-            CounterShard(
-                root=self.root,
-                spec=dict(idx=i),
-            )
-            for i in range(n_shards)
-        ]
+        return [self.__shard__(i) for i in range(self.n_shards)]
 
     def __read__(self, topic=None):
         return f"stack with {len(self.shards())} shards"

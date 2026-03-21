@@ -172,7 +172,7 @@ class TestWrapperStructure:
 
     def test_name(self):
         Wrapped = datastack(BatchProcessor)
-        assert Wrapped.__name__ == '_BatchProcessor_Datastack_'
+        assert Wrapped.__name__ == 'BatchProcessor_Datastack'
 
     def test_is_datastack_subclass(self):
         Wrapped = datastack(BatchProcessor)

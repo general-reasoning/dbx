@@ -148,12 +148,17 @@ class TestProtocolValidation:
         with pytest.raises(TypeError, match="__read__"):
             datablock(Bad)
 
-    def test_missing_topics_raises(self):
-        class Bad:
-            def __build__(self): ...
-            def __read__(self, topic): ...
-        with pytest.raises(TypeError, match="TOPICFILES or TOPICFILE"):
-            datablock(Bad)
+    def test_missing_topics_accepted(self):
+        """TOPICFILES/TOPICFILE may be set in __init__, so class-level absence is fine."""
+        class NoClassLevelTopics:
+            def __init__(self, *, cfg, verbose, detailed, debug, log, device):
+                self.cfg = cfg
+                self.TOPICFILE = 'dynamic.txt'  # set at instance level
+            def __build__(self, *args, **kwargs): return self
+            def __read__(self, topic=None): return None
+        # Should NOT raise
+        Wrapped = datablock(NoClassLevelTopics)
+        assert issubclass(Wrapped, Datablock)
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +169,7 @@ class TestWrapperClassStructure:
 
     def test_name(self):
         Wrapped = datablock(MultiTopicProcessor)
-        assert Wrapped.__name__ == '_MultiTopicProcessor_Datablock_'
+        assert Wrapped.__name__ == 'MultiTopicProcessor_Datablock'
 
     def test_is_datablock_subclass(self):
         Wrapped = datablock(MultiTopicProcessor)
@@ -379,3 +384,179 @@ class TestFromDatablockable:
         block_from = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
         block_direct = Wrapped(root='/tmp/dbx_test_wrapper', spec=dict(model_name='vit_b', layer='layer4'))
         assert block_from.hash == block_direct.hash
+
+
+# ---------------------------------------------------------------------------
+# 10. Instance-level TOPICFILE(S) propagation
+# ---------------------------------------------------------------------------
+
+class InstanceTopicFileProcessor:
+    """Datablockable that sets TOPICFILE in __init__ based on cfg."""
+
+    @dataclass
+    class CONFIG:
+        output_name: str = 'result'
+
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
+        self.cfg = cfg
+        self.verbose = verbose
+        self.detailed = detailed
+        self.debug = debug
+        self.log = log
+        self.device = device
+        self.TOPICFILE = f'{cfg.output_name}.csv'
+
+    def __build__(self, *args, **kwargs):
+        return self
+
+    def __read__(self, topic=None):
+        return 'instance_data'
+
+
+class InstanceTopicFilesProcessor:
+    """Datablockable that sets TOPICFILES in __init__ based on cfg."""
+
+    @dataclass
+    class CONFIG:
+        prefix: str = 'out'
+
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
+        self.cfg = cfg
+        self.verbose = verbose
+        self.detailed = detailed
+        self.debug = debug
+        self.log = log
+        self.device = device
+        self.TOPICFILES = {
+            'data': f'{cfg.prefix}_data.pt',
+            'meta': f'{cfg.prefix}_meta.json',
+        }
+
+    def __build__(self, *args, **kwargs):
+        return self
+
+    def __read__(self, topic):
+        return f'{topic}_content'
+
+
+class BothClassAndInstanceTopicProcessor:
+    """Class-level TOPICFILE should take precedence (no instance propagation)."""
+    TOPICFILE = 'class_level.txt'
+
+    @dataclass
+    class CONFIG:
+        pass
+
+    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
+        self.cfg = cfg
+        # Also set at instance level — should NOT override class-level
+        self.TOPICFILE = 'instance_level.txt'
+
+    def __build__(self, *args, **kwargs):
+        return self
+
+    def __read__(self, topic=None):
+        return None
+
+
+class TestInstanceTopicPropagation:
+    """Tests for TOPICFILE(S) defined in __init__ instead of at class level."""
+
+    def test_instance_topicfile_propagated(self):
+        """TOPICFILE set in __init__ should be available on the wrapper instance."""
+        Wrapped = datablock(InstanceTopicFileProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        assert hasattr(block, 'TOPICFILE')
+        assert block.TOPICFILE == 'result.csv'
+
+    def test_instance_topicfile_reflects_cfg(self):
+        """TOPICFILE set from cfg in __init__ should reflect the spec."""
+        Wrapped = datablock(InstanceTopicFileProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper', spec={'output_name': 'features'})
+        assert block.TOPICFILE == 'features.csv'
+
+    def test_instance_topicfiles_propagated(self):
+        """TOPICFILES set in __init__ should be available on the wrapper instance."""
+        Wrapped = datablock(InstanceTopicFilesProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        assert hasattr(block, 'TOPICFILES')
+        assert block.TOPICFILES == {
+            'data': 'out_data.pt',
+            'meta': 'out_meta.json',
+        }
+
+    def test_instance_topicfiles_reflects_cfg(self):
+        """TOPICFILES set from cfg in __init__ should reflect the spec."""
+        Wrapped = datablock(InstanceTopicFilesProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper', spec={'prefix': 'train'})
+        assert block.TOPICFILES == {
+            'data': 'train_data.pt',
+            'meta': 'train_meta.json',
+        }
+
+    def test_class_level_topicfile_not_overridden_by_instance(self):
+        """When TOPICFILE is defined at class level, instance-level should NOT override it."""
+        Wrapped = datablock(BothClassAndInstanceTopicProcessor)
+        # The class-level TOPICFILE is lifted as a class attribute
+        assert Wrapped.TOPICFILE == 'class_level.txt'
+        # When instantiated, the class-level attribute takes priority
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        assert block.TOPICFILE == 'class_level.txt'
+
+    def test_no_class_level_topicfile_attribute(self):
+        """Wrapper class should NOT have TOPICFILE as class attribute when only set in __init__."""
+        Wrapped = datablock(InstanceTopicFileProcessor)
+        # Not a class-level attribute
+        assert not hasattr(Wrapped, 'TOPICFILE')
+        # But IS available on instances after construction
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        assert hasattr(block, 'TOPICFILE')
+
+    def test_instance_topicfile_inner_obj_has_it(self):
+        """The inner Datablockable object should have the TOPICFILE attribute."""
+        Wrapped = datablock(InstanceTopicFileProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        assert hasattr(block.obj, 'TOPICFILE')
+        assert block.obj.TOPICFILE == block.TOPICFILE
+
+    def test_instance_topicfiles_has_topics(self):
+        """Block with instance-level TOPICFILES should report has_topics()=True."""
+        Wrapped = datablock(InstanceTopicFilesProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        assert block.has_topics()
+        assert set(block.topics()) == {'data', 'meta'}
+
+    def test_instance_topicfile_has_topic(self):
+        """Block with instance-level TOPICFILE should report has_topic()=True."""
+        Wrapped = datablock(InstanceTopicFileProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        assert block.has_topic()
+
+    def test_build_delegates_with_instance_topicfile(self):
+        """__build__ should still delegate correctly when TOPICFILE is set in __init__."""
+        Wrapped = datablock(InstanceTopicFileProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        block.__build__()
+        # No error = success
+
+    def test_read_delegates_with_instance_topicfiles(self):
+        """__read__ should delegate correctly when TOPICFILES is set in __init__."""
+        Wrapped = datablock(InstanceTopicFilesProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper')
+        assert block.__read__('data') == 'data_content'
+
+    def test_pickle_roundtrip_instance_topicfile(self):
+        """Pickle roundtrip should work for instance-level TOPICFILE blocks."""
+        Wrapped = datablock(InstanceTopicFileProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper', spec={'output_name': 'myfile'})
+        restored = pickle.loads(pickle.dumps(block))
+        assert hasattr(restored, 'TOPICFILE')
+        assert restored.TOPICFILE == 'myfile.csv'
+
+    def test_set_preserves_instance_topicfile(self):
+        """block.set() should reconstruct correctly and re-propagate instance TOPICFILE."""
+        Wrapped = datablock(InstanceTopicFileProcessor)
+        block = Wrapped(root='/tmp/dbx_test_wrapper', spec={'output_name': 'alpha'})
+        block2 = block.set(device='cuda')
+        assert hasattr(block2, 'TOPICFILE')
+        assert block2.TOPICFILE == 'alpha.csv'

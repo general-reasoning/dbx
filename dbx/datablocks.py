@@ -1832,7 +1832,12 @@ class Datastack(Datablock):
             tag=f"BUILDING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]",
         )
         builder.build_blocks(shard_list, *args, **kwargs)
+        self.log.info(f"Stacking {self.n_shards} shards of {self.__class__.__name__}")
+        self.__stack__()
         self.log.info(f"Build complete: {self.__class__.__name__}")
+        return self
+
+    def __stack__(self):
         return self
 
 

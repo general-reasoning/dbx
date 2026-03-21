@@ -215,6 +215,14 @@ def datablock(cls):
     class_attrs['__reduce__'] = __reduce__
     class_attrs['from_datablockable'] = from_datablockable
 
+    # -- Fallback attribute delegation to the inner Datablockable -----------------
+    def __getattr__(self, name):
+        # Avoid infinite recursion before __post_init__ sets self.obj
+        if name == 'obj':
+            raise AttributeError(name)
+        return getattr(self.obj, name)
+    class_attrs['__getattr__'] = __getattr__
+
     # -- Create the subclass dynamically ------------------------------------------
     wrapper_name = f'{cls.__name__}_Datablock'
 
@@ -416,6 +424,14 @@ def datastack(cls):
         def __stack__(self):
             return self.obj.__stack__()
         class_attrs['__stack__'] = __stack__
+
+    # -- Fallback attribute delegation to the inner Datastackable -----------------
+    def __getattr__(self, name):
+        # Avoid infinite recursion before __post_init__ sets self.obj
+        if name == 'obj':
+            raise AttributeError(name)
+        return getattr(self.obj, name)
+    class_attrs['__getattr__'] = __getattr__
 
     # -- from_datastackable classmethod -------------------------------------------
     @classmethod

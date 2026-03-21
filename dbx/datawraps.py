@@ -107,12 +107,9 @@ def datablock(cls):
             pass
         class_attrs['CONFIG'] = _EmptyCONFIG
 
-    # -- If the Datablockable implements path(), lift it onto the wrapper --------
+    # -- If the Datablockable implements path(), override dirpath ----------------
+    # path() comes naturally via MRO from cls; dirpath() must be blocked.
     if hasattr(cls, 'path') and callable(getattr(cls, 'path')):
-        def path(self, topic=None, *, ensure_dirpath=False):
-            return self.obj.path(topic, ensure_dirpath=ensure_dirpath)
-        class_attrs['path'] = path
-
         def dirpath(self, topic=None, *, ensure=False, list=False):
             raise NotImplementedError(
                 f"{cls.__name__} defines its own path(); "
@@ -123,7 +120,10 @@ def datablock(cls):
 
     # -- Delegating methods -------------------------------------------------------
     def __post_init__(self):
-        self.obj = cls(
+        # Call the Datablockable's __init__ to set up its instance state
+        # (TOPICFILE(S), tag, etc.) directly on self.
+        cls.__init__(
+            self,
             cfg=self.cfg,
             verbose=self.verbose,
             detailed=self.detailed,
@@ -131,19 +131,13 @@ def datablock(cls):
             log=self.log,
             device=self.device,
         )
-        self.obj.block = self
-        # Propagate instance-level TOPICFILE(S) set in __init__
-        if hasattr(self.obj, 'TOPICFILES') and not hasattr(type(self.obj), 'TOPICFILES'):
-            self.TOPICFILES = self.obj.TOPICFILES
-        if hasattr(self.obj, 'TOPICFILE') and not hasattr(type(self.obj), 'TOPICFILE'):
-            self.TOPICFILE = self.obj.TOPICFILE
 
     def __build__(self, *args, **kwargs):
-        self.obj.__build__(*args, **kwargs)
+        cls.__build__(self, *args, **kwargs)
         return self
 
     def __read__(self, topic=None):
-        return self.obj.__read__(topic)
+        return cls.__read__(self, topic)
 
     def __reduce__(self):
         # Reconstruct via datablock(wrapped_cls) + __setstate__,
@@ -215,14 +209,6 @@ def datablock(cls):
     class_attrs['__reduce__'] = __reduce__
     class_attrs['from_datablockable'] = from_datablockable
 
-    # -- Fallback attribute delegation to the inner Datablockable -----------------
-    def __getattr__(self, name):
-        # Avoid infinite recursion before __post_init__ sets self.obj
-        if name == 'obj':
-            raise AttributeError(name)
-        return getattr(self.obj, name)
-    class_attrs['__getattr__'] = __getattr__
-
     # -- Create the subclass dynamically ------------------------------------------
     wrapper_name = f'{cls.__name__}_Datablock'
 
@@ -230,7 +216,7 @@ def datablock(cls):
         '__name__', cls.__module__
     )
 
-    WrapperClass = type(wrapper_name, (Datablock,), class_attrs)
+    WrapperClass = type(wrapper_name, (Datablock, cls), class_attrs)
     WrapperClass.__module__ = caller_module
     WrapperClass.__qualname__ = wrapper_name
     WrapperClass.__wrapped__ = cls
@@ -374,15 +360,14 @@ def datastack(cls):
             pass
         class_attrs['CONFIG'] = _EmptyCONFIG
 
-    # -- If the Datastackable implements path(), lift it onto the wrapper --------
-    if hasattr(cls, 'path') and callable(getattr(cls, 'path')):
-        def path(self, topic=None, *, ensure_dirpath=False):
-            return self.obj.path(topic, ensure_dirpath=ensure_dirpath)
-        class_attrs['path'] = path
+    # path() comes naturally via MRO from cls; no explicit delegation needed.
 
     # -- Delegating methods -------------------------------------------------------
     def __post_init__(self):
-        self.obj = cls(
+        # Call the Datastackable's __init__ to set up its instance state
+        # (TOPICFILES, tag, etc.) directly on self.
+        cls.__init__(
+            self,
             cfg=self.cfg,
             verbose=self.verbose,
             detailed=self.detailed,
@@ -390,20 +375,14 @@ def datastack(cls):
             log=self.log,
             device=self.device,
         )
-        self.obj.block = self
-        # Propagate instance-level TOPICFILE(S) set in __init__
-        if hasattr(self.obj, 'TOPICFILES') and not hasattr(type(self.obj), 'TOPICFILES'):
-            self.TOPICFILES = self.obj.TOPICFILES
-        if hasattr(self.obj, 'TOPICFILE') and not hasattr(type(self.obj), 'TOPICFILE'):
-            self.TOPICFILE = self.obj.TOPICFILE
 
     def n_shards_prop(self):
-        return self.obj.n_shards
+        return cls.n_shards.fget(self)
     class_attrs['n_shards'] = property(n_shards_prop)
 
     def __shard__(self, idx: int):
         """Convert a single Datastackable __shard__ output to a Datablock."""
-        datablockable_shard = self.obj.__shard__(idx)
+        datablockable_shard = cls.__shard__(self, idx)
         return self._ShardBlock_.from_datablockable(datablockable_shard, root=self.root)
 
     def __reduce__(self):
@@ -416,22 +395,14 @@ def datastack(cls):
     # Optional __read__ delegation
     if hasattr(cls, '__read__'):
         def __read__(self, topic=None):
-            return self.obj.__read__(topic)
+            return cls.__read__(self, topic)
         class_attrs['__read__'] = __read__
 
     # Optional __stack__ delegation
     if hasattr(cls, '__stack__'):
         def __stack__(self):
-            return self.obj.__stack__()
+            return cls.__stack__(self)
         class_attrs['__stack__'] = __stack__
-
-    # -- Fallback attribute delegation to the inner Datastackable -----------------
-    def __getattr__(self, name):
-        # Avoid infinite recursion before __post_init__ sets self.obj
-        if name == 'obj':
-            raise AttributeError(name)
-        return getattr(self.obj, name)
-    class_attrs['__getattr__'] = __getattr__
 
     # -- from_datastackable classmethod -------------------------------------------
     @classmethod
@@ -480,7 +451,7 @@ def datastack(cls):
         '__name__', cls.__module__
     )
 
-    WrapperClass = type(wrapper_name, (Datastack,), class_attrs)
+    WrapperClass = type(wrapper_name, (Datastack, cls), class_attrs)
     WrapperClass.__module__ = caller_module
     WrapperClass.__qualname__ = wrapper_name
     WrapperClass.__wrapped__ = cls

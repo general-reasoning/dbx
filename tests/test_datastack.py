@@ -258,5 +258,98 @@ class TestDatastackParallelization(unittest.TestCase):
         self.assertEqual(stack.n_workers, 8)
 
 
+class TestDatastackClearShards(unittest.TestCase):
+    """Verify UNSAFE_clear_shards() removes shard data correctly."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
+
+    def _build_stack(self, **kwargs):
+        stack = SimpleStack(
+            root=self.tmpdir,
+            spec=dict(total_items=6, shard_size=2),
+            **kwargs,
+        )
+        stack.build()
+        return stack
+
+    def test_inline_clear(self):
+        """UNSAFE_clear_shards with inline parallelization removes shard files."""
+        stack = self._build_stack()
+        # All shards valid after build
+        for shard in stack.shards():
+            self.assertTrue(shard.valid())
+        # Clear
+        stack.UNSAFE_clear_shards(OVERRIDE=True)
+        # All shards invalid after clear
+        for shard in stack.shards():
+            self.assertFalse(shard.valid())
+
+    def test_multithreading_clear(self):
+        """UNSAFE_clear_shards with multithreading removes shard files."""
+        stack = self._build_stack(parallelization='multithreading', n_workers=2)
+        for shard in stack.shards():
+            self.assertTrue(shard.valid())
+        stack.UNSAFE_clear_shards(OVERRIDE=True)
+        for shard in stack.shards():
+            self.assertFalse(shard.valid())
+
+    def test_rebuild_after_clear(self):
+        """Shards can be rebuilt after clearing."""
+        stack = self._build_stack()
+        stack.UNSAFE_clear_shards(OVERRIDE=True)
+        for shard in stack.shards():
+            self.assertFalse(shard.valid())
+        # Rebuild
+        for shard in stack.shards():
+            shard.build()
+        for shard in stack.shards():
+            self.assertTrue(shard.valid())
+            content = shard.read()
+            self.assertEqual(content, f"built:{shard.cfg.idx}")
+
+    def test_returns_self(self):
+        """UNSAFE_clear_shards should return the stack itself."""
+        stack = self._build_stack()
+        result = stack.UNSAFE_clear_shards(OVERRIDE=True)
+        self.assertIs(result, stack)
+
+
+class TestCallableExecutorFactory(unittest.TestCase):
+    """Verify the callable_executor() factory from databits."""
+
+    def test_default_is_inline(self):
+        from dbx.databits import callable_executor, InlineCallableExecutor
+        executor = callable_executor(n_workers=1)
+        self.assertIsInstance(executor, InlineCallableExecutor)
+
+    def test_explicit_inline(self):
+        from dbx.databits import callable_executor, InlineCallableExecutor
+        executor = callable_executor('inline', n_workers=1)
+        self.assertIsInstance(executor, InlineCallableExecutor)
+
+    def test_multithreading(self):
+        from dbx.databits import callable_executor, MultithreadingCallableExecutor
+        executor = callable_executor('multithreading', n_workers=2)
+        self.assertIsInstance(executor, MultithreadingCallableExecutor)
+
+    def test_multiprocessing(self):
+        from dbx.databits import callable_executor, MultiprocessingCallableExecutor
+        executor = callable_executor('multiprocessing', n_workers=2)
+        self.assertIsInstance(executor, MultiprocessingCallableExecutor)
+
+    def test_unknown_raises(self):
+        from dbx.databits import callable_executor
+        with self.assertRaises(ValueError):
+            callable_executor('quantum', n_workers=1)
+
+    def test_case_insensitive(self):
+        from dbx.databits import callable_executor, MultithreadingCallableExecutor
+        executor = callable_executor('Multithreading', n_workers=1)
+        self.assertIsInstance(executor, MultithreadingCallableExecutor)
+
+
 if __name__ == "__main__":
     unittest.main()

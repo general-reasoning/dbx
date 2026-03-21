@@ -1843,6 +1843,48 @@ class Datastack(Datablock):
     def __stack__(self):
         return self
 
+    def UNSAFE_clear_shards(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
+        """Clear all shard data, parallelized using the stack's builder settings.
+
+        The interactive UNSAFE confirmation prompt is shown **once** at the
+        stack level.  Individual ``shard.UNSAFE_clear()`` calls are invoked
+        with ``OVERRIDE=True`` so they do not re-prompt.
+
+        Parameters
+        ----------
+        *topics : str
+            Forwarded to each shard's ``UNSAFE_clear()``.
+        OVERRIDE : bool
+            If ``True``, skip the interactive confirmation.
+        clear_dirpath : bool
+            Forwarded to each shard's ``UNSAFE_clear()``.
+        """
+        if not UNSAFE_allowed("UNSAFE_clear_shards", OVERRIDE=OVERRIDE):
+            return self
+
+        shard_list = self.shards()
+        self.log.info(
+            f"UNSAFE_clear_shards: clearing {len(shard_list)} shards, "
+            f"builder={self.builder_cls.__name__}, n_workers={self.n_workers}"
+        )
+        self._write_journal_entry(event="UNSAFE_clear_shards:begin")
+
+        tag = f"CLEARING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]"
+        executor = callable_executor(
+            self.parallelization, n_workers=self.n_workers, tag=tag,
+        )
+
+        def _clear_shard(shard):
+            shard.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
+            return shard
+
+        callables = [functools.partial(_clear_shard, shard) for shard in shard_list]
+        executor.exec_callables(callables)
+
+        self.log.info(f"UNSAFE_clear_shards complete: {self.__class__.__name__}")
+        self._write_journal_entry(event="UNSAFE_clear_shards:end")
+        return self
+
 
 def quotefn(fn, *args, tag="$", **kwargs):
     log = Logger()

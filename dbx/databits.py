@@ -1051,3 +1051,36 @@ class InlineCallableExecutor:
         else:
             return
             yield
+
+
+_CALLABLE_EXECUTORS = {
+    "inline":          InlineCallableExecutor,
+    "multithreading":  MultithreadingCallableExecutor,
+    "multiprocessing": MultiprocessingCallableExecutor,
+}
+
+
+def callable_executor(parallelization: str = None, **kwargs):
+    """Create a callable executor for the given parallelization strategy.
+
+    Parameters
+    ----------
+    parallelization : str or None
+        One of ``'inline'`` (default), ``'multithreading'``,
+        ``'multiprocessing'``.  ``None`` maps to ``'inline'``.
+    **kwargs
+        Forwarded to the executor constructor (e.g. ``n_workers``, ``tag``).
+
+    Returns
+    -------
+    InlineCallableExecutor | MultithreadingCallableExecutor | MultiprocessingCallableExecutor
+    """
+    key = (parallelization or "inline").lower()
+    cls = _CALLABLE_EXECUTORS.get(key)
+    if cls is None:
+        raise ValueError(
+            f"Unknown parallelization {parallelization!r}. "
+            f"Choose from {list(_CALLABLE_EXECUTORS)}"
+        )
+    return cls(**kwargs)
+

@@ -203,7 +203,7 @@ def datablock(cls):
             )
 
         # Propagate observability / device settings from the datablockable
-        for attr in ('verbose', 'detailed', 'debug', 'device'):
+        for attr in ('verbose', 'detailed', 'debug', 'device', 'tag'):
             if attr not in kwargs and hasattr(obj, attr):
                 kwargs[attr] = getattr(obj, attr)
 

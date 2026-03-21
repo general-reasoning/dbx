@@ -61,10 +61,9 @@ def datablock(cls):
         raise TypeError(f"{cls.__name__} must define __build__ to be Datablockable")
     if not hasattr(cls, '__read__'):
         raise TypeError(f"{cls.__name__} must define __read__ to be Datablockable")
-    if not (hasattr(cls, 'TOPICFILES') or hasattr(cls, 'TOPICFILE')):
-        raise TypeError(
-            f"{cls.__name__} must define TOPICFILES or TOPICFILE to be Datablockable"
-        )
+    # NOTE: TOPICFILES / TOPICFILE may be defined at class level OR in __init__.
+    # We lift class-level ones here; instance-level ones are propagated in
+    # __post_init__ after the inner object is constructed.
 
     # -- Collect class-level attributes to lift onto the wrapper -------------------
     class_attrs = {}
@@ -133,6 +132,11 @@ def datablock(cls):
             device=self.device,
         )
         self.obj.block = self
+        # Propagate instance-level TOPICFILE(S) set in __init__
+        if hasattr(self.obj, 'TOPICFILES') and not hasattr(type(self.obj), 'TOPICFILES'):
+            self.TOPICFILES = self.obj.TOPICFILES
+        if hasattr(self.obj, 'TOPICFILE') and not hasattr(type(self.obj), 'TOPICFILE'):
+            self.TOPICFILE = self.obj.TOPICFILE
 
     def __build__(self, *args, **kwargs):
         self.obj.__build__(*args, **kwargs)
@@ -379,6 +383,11 @@ def datastack(cls):
             device=self.device,
         )
         self.obj.block = self
+        # Propagate instance-level TOPICFILE(S) set in __init__
+        if hasattr(self.obj, 'TOPICFILES') and not hasattr(type(self.obj), 'TOPICFILES'):
+            self.TOPICFILES = self.obj.TOPICFILES
+        if hasattr(self.obj, 'TOPICFILE') and not hasattr(type(self.obj), 'TOPICFILE'):
+            self.TOPICFILE = self.obj.TOPICFILE
 
     def n_shards_prop(self):
         return self.obj.n_shards

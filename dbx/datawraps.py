@@ -402,6 +402,12 @@ def datastack(cls):
             return self.obj.__read__(topic)
         class_attrs['__read__'] = __read__
 
+    # Optional __stack__ delegation
+    if hasattr(cls, '__stack__'):
+        def __stack__(self):
+            return self.obj.__stack__()
+        class_attrs['__stack__'] = __stack__
+
     # -- from_datastackable classmethod -------------------------------------------
     @classmethod
     def from_datastackable(wrapper_cls, obj, *, root=None, **kwargs):

@@ -1,10 +1,14 @@
 """
 Tests for dbx.datastack() — the Datastackable wrapper.
 
+With MI (multiple inheritance), the wrapper IS-A Datastack and IS-A Datastackable.
+The Datastackable's __init__ is NOT called when wrapped — Datablock.__init__
+provides cfg, device, verbose, log, etc.
+
 Verifies:
 1. Protocol validation (missing __shards__, SHARD raises TypeError).
 2. Wrapper class structure (name, bases, __wrapped__).
-3. shards() converts Datablockable instances to Datablocks.
+3. shards() creates wrapped Datablocks from __shard__ results.
 4. __build__ orchestrates shard building correctly.
 5. CONFIG lifting works.
 6. Optional __read__ delegation.
@@ -39,27 +43,23 @@ class ItemProcessor:
     class CONFIG:
         item_id: int = None
 
-    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
+    def __init__(self, *, cfg=None, device=None, **_):
+        # Only called for standalone (unwrapped) use
         self.cfg = cfg
-        self.verbose = verbose
-        self.detailed = detailed
-        self.debug = debug
-        self.log = log
         self.device = device
         self.built = False
 
     def __build__(self, *args, **kwargs):
         self.built = True
-        # The wrapper Datablock handles path management;
-        # write the topic file via the wrapper's path().
-        path = self.block.path()
+        # When wrapped, self IS the Datablock, so self.path() works directly
+        path = self.path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w') as f:
             f.write(f"item:{self.cfg.item_id}")
         return self
 
     def __read__(self, topic=None):
-        path = self.block.path()
+        path = self.path()
         with open(path, 'r') as f:
             return f.read()
 
@@ -77,12 +77,9 @@ class BatchProcessor:
     class CONFIG:
         n_items: int = 5
 
-    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
+    def __init__(self, *, cfg=None, device=None, **_):
+        # Only called for standalone (unwrapped) use
         self.cfg = cfg
-        self.verbose = verbose
-        self.detailed = detailed
-        self.debug = debug
-        self.log = log
         self.device = device
 
     @property
@@ -92,10 +89,6 @@ class BatchProcessor:
     def __shard__(self, idx):
         return ItemProcessor(
             cfg=ItemProcessor.CONFIG(item_id=idx),
-            verbose=self.verbose,
-            detailed=self.detailed,
-            debug=self.debug,
-            log=self.log,
             device=self.device,
         )
 
@@ -111,12 +104,8 @@ class NoReadBatchProcessor:
     class CONFIG:
         n_items: int = 3
 
-    def __init__(self, *, cfg, verbose, detailed, debug, log, device):
+    def __init__(self, *, cfg=None, device=None, **_):
         self.cfg = cfg
-        self.verbose = verbose
-        self.detailed = detailed
-        self.debug = debug
-        self.log = log
         self.device = device
 
     @property
@@ -126,10 +115,6 @@ class NoReadBatchProcessor:
     def __shard__(self, idx):
         return ItemProcessor(
             cfg=ItemProcessor.CONFIG(item_id=idx),
-            verbose=self.verbose,
-            detailed=self.detailed,
-            debug=self.debug,
-            log=self.log,
             device=self.device,
         )
 
@@ -181,6 +166,11 @@ class TestWrapperStructure:
     def test_is_datablock_subclass(self):
         Wrapped = datastack(BatchProcessor)
         assert issubclass(Wrapped, Datablock)
+
+    def test_is_datastackable_subclass(self):
+        """With MI, the wrapper is also a subclass of the user class."""
+        Wrapped = datastack(BatchProcessor)
+        assert issubclass(Wrapped, BatchProcessor)
 
     def test_wrapped_reference(self):
         Wrapped = datastack(BatchProcessor)
@@ -306,7 +296,8 @@ class TestSerialization:
         with tempfile.TemporaryDirectory() as tmp:
             stack = Wrapped(root=tmp, spec=dict(n_items=3))
             restored = pickle.loads(pickle.dumps(stack))
-            assert isinstance(restored.obj, BatchProcessor)
+            assert isinstance(restored, Datastack)
+            assert isinstance(restored, BatchProcessor)
             assert restored.cfg.n_items == 3
 
 
@@ -317,13 +308,8 @@ class TestSerialization:
 class TestFromDatastackable:
 
     def _make_obj(self, **overrides):
-        from dbx.databits import Logger
         defaults = dict(
             cfg=BatchProcessor.CONFIG(n_items=7),
-            verbose=True,
-            detailed=False,
-            debug=True,
-            log=Logger(),
             device='cuda:0',
         )
         defaults.update(overrides)
@@ -336,18 +322,11 @@ class TestFromDatastackable:
             stack = Wrapped.from_datastackable(obj, root=tmp)
             assert stack.cfg.n_items == 7
 
-    def test_verbose_propagated(self):
-        Wrapped = datastack(BatchProcessor)
-        obj = self._make_obj(verbose=True)
-        with tempfile.TemporaryDirectory() as tmp:
-            stack = Wrapped.from_datastackable(obj, root=tmp)
-            assert stack.verbose is True
-
     def test_device_propagated(self):
         Wrapped = datastack(BatchProcessor)
         obj = self._make_obj(device='cuda:0')
         with tempfile.TemporaryDirectory() as tmp:
-            stack = Wrapped.from_datastackable(obj, root=tmp)
+            stack = Wrapped.from_datastackable(obj, root=tmp, device='cuda:0')
             assert stack.device == 'cuda:0'
 
     def test_type_check_rejects_wrong_type(self):
@@ -362,3 +341,4 @@ class TestFromDatastackable:
             stack = Wrapped.from_datastackable(obj, root=tmp)
             assert isinstance(stack, Datastack)
             assert isinstance(stack, Datablock)
+            assert isinstance(stack, BatchProcessor)

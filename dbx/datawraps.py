@@ -107,9 +107,15 @@ def datablock(cls):
             pass
         class_attrs['CONFIG'] = _EmptyCONFIG
 
-    # -- If the Datablockable implements path(), override dirpath ----------------
-    # path() comes naturally via MRO from cls; dirpath() must be blocked.
+    # -- If the Datablockable implements path(), lift it + block dirpath --------
+    # With MI order (Datablock, cls), Datablock.path() would shadow the user's
+    # path() since Datablock comes first in MRO.  We must explicitly lift it
+    # into class_attrs so it takes priority.
     if hasattr(cls, 'path') and callable(getattr(cls, 'path')):
+        def path(self, topic=None, *, ensure_dirpath=False):
+            return cls.path(self, topic, ensure_dirpath=ensure_dirpath)
+        class_attrs['path'] = path
+
         def dirpath(self, topic=None, *, ensure=False, list=False):
             raise NotImplementedError(
                 f"{cls.__name__} defines its own path(); "
@@ -120,17 +126,13 @@ def datablock(cls):
 
     # -- Delegating methods -------------------------------------------------------
     def __post_init__(self):
-        # Call the Datablockable's __init__ to set up its instance state
-        # (TOPICFILE(S), tag, etc.) directly on self.
-        cls.__init__(
-            self,
-            cfg=self.cfg,
-            verbose=self.verbose,
-            detailed=self.detailed,
-            debug=self.debug,
-            log=self.log,
-            device=self.device,
-        )
+        # The Datablockable's __init__ is NOT called when wrapped.
+        # Datablock.__init__ already provides everything the wrapper needs:
+        # cfg (cached_property), device, verbose/detailed/debug (properties),
+        # log, TOPICFILE(S) (class-level, lifted into class_attrs).
+        #
+        # The Datablockable's __init__ is only for standalone (unwrapped) use.
+        pass
 
     def __build__(self, *args, **kwargs):
         cls.__build__(self, *args, **kwargs)
@@ -364,17 +366,10 @@ def datastack(cls):
 
     # -- Delegating methods -------------------------------------------------------
     def __post_init__(self):
-        # Call the Datastackable's __init__ to set up its instance state
-        # (TOPICFILES, tag, etc.) directly on self.
-        cls.__init__(
-            self,
-            cfg=self.cfg,
-            verbose=self.verbose,
-            detailed=self.detailed,
-            debug=self.debug,
-            log=self.log,
-            device=self.device,
-        )
+        # The Datastackable's __init__ is NOT called when wrapped.
+        # Datablock.__init__ already provides everything the wrapper needs.
+        # See datablock().__post_init__ for rationale.
+        pass
 
     def n_shards_prop(self):
         return cls.n_shards.fget(self)

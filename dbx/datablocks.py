@@ -1156,7 +1156,7 @@ class Datablock:
             fs.makedirs(anchorpathx, exist_ok=True)
         return anchorpathx
 
-    def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True, dt=None):
+    def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
         anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x)
         anchorhashpathx = os.path.join(anchorpathx, self.hash)
         if ensure_dirpath:
@@ -1164,21 +1164,13 @@ class Datablock:
             fs.makedirs(anchorhashpathx, exist_ok=True)
         if ext is None:
             ext = x
-        if dt is None:
-            dt = self.dt
-        xpath = os.path.join(anchorhashpathx, f'{self.fqcn}-{x}-{dt}.{ext}')
+        xpath = os.path.join(anchorhashpathx, f'{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
         return xpath
 
-    def journalanchorpath(self, *, ensure_dirpath: bool = False):
-        """Convenience function: primarily for user feedback.
-        Return /root/anchor/.dbx/journal — the anchor-level directory for journal files."""
-        return Datablock.anchorpathx(self.root, self.anchor, 'journal', ensure=ensure_dirpath)
-
-    
-    def journalanchorhashpath(self, *, ensure_dirpath: bool = False):
-        """Convenience function: primarily for user feedback.
+    def journalinstancepath(self, *, ensure_dirpath: bool = False):
+        """
         Return /root/anchor/.dbx/journal/hash/{fqcn}-{dt}.journal."""
-        return self.anchorhashpathx('journal', ensure_dirpath=ensure_dirpath)
+        return self.anchorhashpathx('journal', 'parquet', ensure_dirpath=ensure_dirpath)
 
     #PATHS: END
 
@@ -1551,7 +1543,7 @@ class Datablock:
         else:
             has_log = False
         #
-        journal_path = self.anchorhashpathx('journal', 'parquet', dt=dt)
+        journal_path = self.journalinstancepath(ensure_dirpath=True)
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build_datetime': self.build_dt,
                                          'version': self.version,

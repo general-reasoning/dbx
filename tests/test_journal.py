@@ -174,7 +174,7 @@ def _write_journal_in_hash_dir(journal_dir, classname, hash_val="abc", event="bu
     os.makedirs(hash_dir, exist_ok=True)
     now = datetime.datetime.now()
     dt = now.isoformat().replace(' ', '-').replace(':', '-')
-    filename = f"{classname}-journal-{dt}"
+    filename = f"journal-{classname}-{hash_val}-{dt}"
     df = pd.DataFrame([{
         'hash': hash_val,
         'datetime': now,

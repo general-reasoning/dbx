@@ -1126,7 +1126,7 @@ class Datablock:
     def anchor(self):
         if self._anchor_ is not None:
             return self._anchor_
-        return self.__module__ + "." + self.__class__.__name__
+        return self.fqcn
 
     @property
     def stump(self):
@@ -1158,7 +1158,10 @@ class Datablock:
 
     def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
         anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x)
-        anchorhashpathx = os.path.join(anchorpathx, self.fqcn, self.hash)
+        if self.anchor == self.fqcn:
+            anchorhashpathx = os.path.join(anchorpathx, self.hash)
+        else:
+            anchorhashpathx = os.path.join(anchorpathx, self.fqcn, self.hash)
         if ensure_dirpath:
             fs, _ = fsspec.url_to_fs(anchorhashpathx)
             fs.makedirs(anchorhashpathx, exist_ok=True)
@@ -1591,7 +1594,7 @@ class Datablock:
 
         files = fs.glob(os.path.join(journaldirpath, '**/*.parquet'))
         if classname is not None:
-            files = [f for f in files if os.path.basename(f).startswith(classname)]
+            files = [f for f in files if os.path.basename(f).startswith(f'journal-{classname}')]
         parquet_files = files
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")

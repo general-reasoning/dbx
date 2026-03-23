@@ -373,9 +373,9 @@ def datastack(cls):
         # See datablock().__post_init__ for rationale.
         pass
 
-    def n_shards_prop(self):
-        return cls.n_shards.fget(self)
-    class_attrs['n_shards'] = property(n_shards_prop)
+    # n_shards: with MRO (cls, Datastack), cls.n_shards (whether property
+    # or cached_property) naturally overrides Datastack.n_shards — no
+    # explicit delegation needed.
 
     def __shard__(self, idx: int):
         """Convert a single Datastackable __shard__ output to a Datablock."""

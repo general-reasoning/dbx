@@ -77,13 +77,12 @@ class TestJournalMissingDir:
         """The FileNotFoundError message should include the resolved path."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path / "nonexistent_root")
-        anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
-        expected_dbx_dir = os.path.join(root, anchor, ".dbx")
+        expected_dir = _journal_dir(root, FakeBlock)
 
         with pytest.raises(FileNotFoundError) as exc_info:
             journal(FakeBlock, root=root)
 
-        assert expected_dbx_dir in str(exc_info.value)
+        assert expected_dir in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -189,13 +188,13 @@ def _write_journal_in_hash_dir(journal_dir, classname, hash_val="abc", event="bu
 
 
 # ---------------------------------------------------------------------------
-# 5. classname filtering
+# 5. fqcn filtering
 # ---------------------------------------------------------------------------
 
-class TestJournalClassnameFiltering:
+class TestJournalFqcnFiltering:
 
-    def test_no_classname_returns_all(self, tmp_path, monkeypatch):
-        """Without classname, Journal() returns entries from all classes."""
+    def test_no_fqcn_returns_all(self, tmp_path, monkeypatch):
+        """Without fqcn, Journal() returns entries from all classes."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         jdir = _journal_dir(root, FakeBlock)
@@ -208,8 +207,8 @@ class TestJournalClassnameFiltering:
         assert isinstance(result, JournalFrame)
         assert len(result) == 2
 
-    def test_classname_filters(self, tmp_path, monkeypatch):
-        """With classname=, only matching entries are returned."""
+    def test_fqcn_filters(self, tmp_path, monkeypatch):
+        """With fqcn=, only matching entries are returned."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         jdir = _journal_dir(root, FakeBlock)
@@ -219,35 +218,35 @@ class TestJournalClassnameFiltering:
         _write_journal_in_hash_dir(jdir, other_anchor, hash_val="bbb")
 
         result = Datablock.Journal(
-            fake_anchor, root=root, classname=fake_anchor,
+            fake_anchor, root=root, fqcn=fake_anchor,
         )
         assert isinstance(result, JournalFrame)
         assert len(result) == 1
         assert result.iloc[0]['hash'] == "aaa"
 
-    def test_classname_no_match_returns_empty(self, tmp_path, monkeypatch):
-        """Classname that matches nothing yields JournalFrame(None)."""
+    def test_fqcn_no_match_raises(self, tmp_path, monkeypatch):
+        """fqcn that doesn't match any real class raises FileNotFoundError
+        (the fqcn subdirectory was never created)."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         jdir = _journal_dir(root, FakeBlock)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
         _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="aaa")
 
-        result = Datablock.Journal(
-            fake_anchor, root=root, classname="nonexistent.Class",
-        )
-        assert isinstance(result, JournalFrame)
-        assert len(result) == 0
+        with pytest.raises(FileNotFoundError):
+            Datablock.Journal(
+                fake_anchor, root=root, fqcn="nonexistent.Class",
+            )
 
-    def test_classname_none_is_default(self, tmp_path, monkeypatch):
-        """classname=None (default) returns everything."""
+    def test_fqcn_none_is_default(self, tmp_path, monkeypatch):
+        """fqcn=None (default) returns everything."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         jdir = _journal_dir(root, FakeBlock)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
         _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="xyz")
 
-        result = Datablock.Journal(fake_anchor, root=root, classname=None)
+        result = Datablock.Journal(fake_anchor, root=root, fqcn=None)
         assert len(result) == 1
 
 
@@ -299,12 +298,13 @@ class TestJournalAnchorForms:
         assert len(result) >= 1
 
     def test_static_journal_custom_anchor(self, tmp_path, monkeypatch):
-        """Datablock.Journal(anchor) finds entries for custom anchor."""
+        """Datablock.Journal(anchor, fqcn=) finds entries for custom anchor."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         block = BuildableBlock(root=root, anchor='custom.anchor')
         block.build()
-        result = Datablock.Journal('custom.anchor', root=root)
+        fqcn = BuildableBlock.__module__ + '.' + BuildableBlock.__name__
+        result = Datablock.Journal('custom.anchor', root=root, fqcn=fqcn)
         assert isinstance(result, JournalFrame)
         assert len(result) >= 1
 

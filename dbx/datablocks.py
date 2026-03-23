@@ -1578,26 +1578,28 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, entry: int = None, *, classname: str = None, root=None, **kwargs):
+    def Journal(anchor, entry: int = None, *, fqcn: str = None, root=None, **kwargs):
         if root is None:
             root = os.environ.get('DBX_ROOT')
-        # Use ensure=False: we are reading, not writing — do not create the dir.
-        dbxdir = os.path.join(root, anchor, ".dbx")
-        fs, _ = fsspec.url_to_fs(dbxdir)
+
+        # When fqcn differs from anchor, the path includes a fqcn level.
+        _fqcn = fqcn if (fqcn is not None and fqcn != anchor) else None
+        journaldirpath = Datablock.anchorpathx(root, anchor, 'journal', fqcn=_fqcn)
+        fs, _ = fsspec.url_to_fs(journaldirpath)
 
         log = Logger()
-        if not fs.exists(dbxdir):
+        if not fs.exists(journaldirpath):
             raise FileNotFoundError(
-                f"Journal directory not found for {anchor!r}: {dbxdir}\n"
+                f"Journal directory not found for {anchor!r}: {journaldirpath}\n"
                 f"Check that the class name / anchor and root path are correct."
             )
 
-        files = fs.glob(os.path.join(dbxdir, '**/journal/**/*.parquet'))
-        if classname is not None:
-            files = [f for f in files if os.path.basename(f).startswith(classname)]
+        files = fs.glob(os.path.join(journaldirpath, '**/*.parquet'))
+        if fqcn is not None:
+            files = [f for f in files if os.path.basename(f).startswith(fqcn)]
         parquet_files = files
 
-        log.detailed(f"READING JOURNAL: from {dbxdir=}, files: {parquet_files}")
+        log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:
             dfs = []
             for file in parquet_files:
@@ -1631,7 +1633,7 @@ class Datablock:
         return result
 
     def journal(self, entry: int = None, **kwargs):
-        return self.Journal(self.anchor, entry, root=self.root, **kwargs)
+        return self.Journal(self.anchor, entry, root=self.root, fqcn=self.fqcn, **kwargs)
     #JOURNAL: END
     
 

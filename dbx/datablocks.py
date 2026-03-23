@@ -1195,6 +1195,15 @@ class Datablock:
     @property
     def detailed(self):
         return self.log.ist('detailed')
+
+    @property
+    def log_volume(self):
+        return LogVolume(
+            info=self.info,
+            verbose=self.verbose,
+            debug=self.debug,
+            detailed=self.detailed,
+        )
     #LOG LEVEL: END
 
 

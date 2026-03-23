@@ -107,22 +107,11 @@ def datablock(cls):
             pass
         class_attrs['CONFIG'] = _EmptyCONFIG
 
-    # -- If the Datablockable implements path(), lift it + block dirpath --------
-    # With MI order (Datablock, cls), Datablock.path() would shadow the user's
-    # path() since Datablock comes first in MRO.  We must explicitly lift it
-    # into class_attrs so it takes priority.
-    if hasattr(cls, 'path') and callable(getattr(cls, 'path')):
-        def path(self, topic=None, *, ensure_dirpath=False):
-            return cls.path(self, topic, ensure_dirpath=ensure_dirpath)
-        class_attrs['path'] = path
-
-        def dirpath(self, topic=None, *, ensure=False, list=False):
-            raise NotImplementedError(
-                f"{cls.__name__} defines its own path(); "
-                f"the standard Datablock.dirpath() (root/anchor/hash/topic) "
-                f"is not used. Use .path() instead."
-            )
-        class_attrs['dirpath'] = dirpath
+    # -- MRO note -----------------------------------------------------------------
+    # The wrapper bases are (cls, Datablock) so that cls's methods (path,
+    # anchorkeypath, anchor, key, TOPICFILES, etc.) naturally override
+    # Datablock's defaults.  We protect essential Datablock machinery
+    # (__init__, build) by putting them explicitly in class_attrs.
 
     # -- Delegating methods -------------------------------------------------------
     def __post_init__(self):
@@ -212,6 +201,8 @@ def datablock(cls):
 
         return wrapper_cls(root=root, spec=spec, **kwargs)
 
+    class_attrs['__init__'] = Datablock.__init__
+    class_attrs['build'] = Datablock.build
     class_attrs['__post_init__'] = __post_init__
     class_attrs['__build__'] = __build__
     class_attrs['__read__'] = __read__
@@ -225,7 +216,7 @@ def datablock(cls):
         '__name__', cls.__module__
     )
 
-    WrapperClass = type(wrapper_name, (Datablock, cls), class_attrs)
+    WrapperClass = type(wrapper_name, (cls, Datablock), class_attrs)
     WrapperClass.__module__ = caller_module
     WrapperClass.__qualname__ = wrapper_name
     WrapperClass.__wrapped__ = cls
@@ -369,22 +360,11 @@ def datastack(cls):
             pass
         class_attrs['CONFIG'] = _EmptyCONFIG
 
-    # path() comes naturally via MRO from cls; no explicit delegation needed.
-    # CORRECTION: With MI order (Datastack > Datablock > cls), Datablock.path()
-    # would shadow the Datastackable's path() since Datablock comes first in MRO.
-    # We must explicitly lift it into class_attrs so it takes priority.
-    if hasattr(cls, 'path') and callable(getattr(cls, 'path')):
-        def path(self, topic=None, *, ensure_dirpath=False):
-            return cls.path(self, topic, ensure_dirpath=ensure_dirpath)
-        class_attrs['path'] = path
-
-        def dirpath(self, topic=None, *, ensure=False, list=False):
-            raise NotImplementedError(
-                f"{cls.__name__} defines its own path(); "
-                f"the standard Datablock.dirpath() (root/anchor/hash/topic) "
-                f"is not used. Use .path() instead."
-            )
-        class_attrs['dirpath'] = dirpath
+    # -- MRO note -----------------------------------------------------------------
+    # The wrapper bases are (cls, Datastack) so that cls's methods (path,
+    # anchorkeypath, anchor, key, TOPICFILES, etc.) naturally override
+    # Datablock's defaults.  We protect essential Datastack/Datablock
+    # machinery (__init__, build) by putting them explicitly in class_attrs.
 
     # -- Delegating methods -------------------------------------------------------
     def __post_init__(self):
@@ -405,6 +385,8 @@ def datastack(cls):
     def __reduce__(self):
         return (_unpickle_datastack_instance, (cls, self.__class__.__module__, self.__getstate__()))
 
+    class_attrs['__init__'] = Datastack.__init__
+    class_attrs['build'] = Datablock.build
     class_attrs['__post_init__'] = __post_init__
     class_attrs['__shard__'] = __shard__
     class_attrs['__reduce__'] = __reduce__
@@ -472,7 +454,7 @@ def datastack(cls):
         '__name__', cls.__module__
     )
 
-    WrapperClass = type(wrapper_name, (Datastack, cls), class_attrs)
+    WrapperClass = type(wrapper_name, (cls, Datastack), class_attrs)
     WrapperClass.__module__ = caller_module
     WrapperClass.__qualname__ = wrapper_name
     WrapperClass.__wrapped__ = cls

@@ -1150,7 +1150,7 @@ class Datablock:
     @staticmethod
     def anchorpathx(root, anchor, x, *, fqcn=None, ensure: bool = False):
         """Return /root/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
-        if fqcn is not None:
+        if fqcn is not None and anchor != fqcn:
             anchorpathx = os.path.join(root, anchor, ".dbx", fqcn, x)
         else:
             anchorpathx = os.path.join(root, anchor, ".dbx", x)
@@ -1160,7 +1160,7 @@ class Datablock:
         return anchorpathx
 
     def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
-        anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x, fqcn=self.fqcn if self.anchor != self.fqcn else None)
+        anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x, fqcn=self.fqcn)
         anchorhashpathx = os.path.join(anchorpathx, self.hash)
         if ensure_dirpath:
             fs, _ = fsspec.url_to_fs(anchorhashpathx)
@@ -1582,9 +1582,7 @@ class Datablock:
         if root is None:
             root = os.environ.get('DBX_ROOT')
 
-        # When fqcn differs from anchor, the path includes a fqcn level.
-        _fqcn = fqcn if (fqcn is not None and fqcn != anchor) else None
-        journaldirpath = Datablock.anchorpathx(root, anchor, 'journal', fqcn=_fqcn)
+        journaldirpath = Datablock.anchorpathx(root, anchor, 'journal', fqcn=fqcn)
         fs, _ = fsspec.url_to_fs(journaldirpath)
 
         log = Logger()

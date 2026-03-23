@@ -1158,13 +1158,13 @@ class Datablock:
 
     def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
         anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x)
-        anchorhashpathx = os.path.join(anchorpathx, self.hash)
+        anchorhashpathx = os.path.join(anchorpathx, self.fqcn, self.hash)
         if ensure_dirpath:
             fs, _ = fsspec.url_to_fs(anchorhashpathx)
             fs.makedirs(anchorhashpathx, exist_ok=True)
         if ext is None:
             ext = x
-        xpath = os.path.join(anchorhashpathx, f'{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
+        xpath = os.path.join(anchorhashpathx, f'{x}-{self.fqcn}-{self.hash}-{self.dt}.{ext}')
         return xpath
 
     def journalinstancepath(self, *, ensure_dirpath: bool = False):

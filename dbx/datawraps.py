@@ -380,7 +380,12 @@ def datastack(cls):
     def __shard__(self, idx: int):
         """Convert a single Datastackable __shard__ output to a Datablock."""
         datablockable_shard = cls.__shard__(self, idx)
-        return self._ShardBlock_.from_datablockable(datablockable_shard, root=self.root)
+        return self._ShardBlock_.from_datablockable(
+            datablockable_shard,
+            root=self.root,
+            anchor=self.anchor,
+            keyby=self.keyby,
+        )
 
     def __reduce__(self):
         return (_unpickle_datastack_instance, (cls, self.__class__.__module__, self.__getstate__()))

@@ -1,7 +1,7 @@
 import inspect
 from dataclasses import dataclass, fields, is_dataclass
 
-from .datablocks import Datablock
+from .datablocks import Datablock, LogVolume
 
 
 def datablock(cls):
@@ -16,7 +16,7 @@ def datablock(cls):
         class CONFIG:
             ...
 
-        def __init__(self, *, cfg, verbose, detailed, debug, log):
+        def __init__(self, *, cfg, log_volume: LogVolume, log):
             ...
 
         def __build__(self, *args, **kwargs):
@@ -151,7 +151,7 @@ def datablock(cls):
         """Create a Datablock wrapper from an existing datablockable instance.
 
         Extracts the CONFIG fields from *obj*.cfg as the ``spec`` dict,
-        and propagates ``verbose``, ``detailed``, ``debug``
+        and propagates ``log_volume``
         from the datablockable instance to the wrapper.
 
         Parameters
@@ -198,10 +198,17 @@ def datablock(cls):
                 f"expected a dataclass or object with __dict__"
             )
 
-        # Propagate observability / device settings from the datablockable
-        for attr in ('verbose', 'detailed', 'debug', 'tag'):
+        # Propagate observability settings from the datablockable
+        for attr in ('tag',):
             if attr not in kwargs and hasattr(obj, attr):
                 kwargs[attr] = getattr(obj, attr)
+        if 'log_volume' not in kwargs:
+            lv = {}
+            for attr in ('info', 'verbose', 'debug', 'detailed'):
+                if hasattr(obj, attr):
+                    lv[attr] = getattr(obj, attr)
+            if lv:
+                kwargs.update(lv)
 
         return wrapper_cls(root=root, spec=spec, **kwargs)
 
@@ -246,7 +253,7 @@ def datastack(cls):
         class CONFIG:
             ...
 
-        def __init__(self, *, cfg, verbose, detailed, debug, log):
+        def __init__(self, *, cfg, log_volume: LogVolume, log):
             ...
 
         @property
@@ -284,7 +291,7 @@ def datastack(cls):
                 input_dir: str = None
                 shard_size: int = 100
 
-            def __init__(self, *, cfg, verbose, detailed, debug, log):
+            def __init__(self, *, cfg, log_volume, log):
                 self.cfg = cfg
                 ...
 
@@ -405,7 +412,7 @@ def datastack(cls):
         """Create a Datastack wrapper from an existing Datastackable instance.
 
         Extracts the CONFIG fields from *obj*.cfg as the ``spec`` dict,
-        and propagates ``verbose``, ``detailed``, ``debug``.
+        and propagates ``log_volume``.
 
         Parameters
         ----------
@@ -432,9 +439,13 @@ def datastack(cls):
                 f"Cannot extract spec from {type(cfg).__name__}: "
                 f"expected a dataclass or object with __dict__"
             )
-        for attr in ('verbose', 'detailed', 'debug'):
-            if attr not in kwargs and hasattr(obj, attr):
-                kwargs[attr] = getattr(obj, attr)
+        if 'log_volume' not in kwargs:
+            lv = {}
+            for attr in ('info', 'verbose', 'debug', 'detailed'):
+                if hasattr(obj, attr):
+                    lv[attr] = getattr(obj, attr)
+            if lv:
+                kwargs.update(lv)
         return wrapper_cls(root=root, spec=spec, **kwargs)
 
     class_attrs['from_datastackable'] = from_datastackable

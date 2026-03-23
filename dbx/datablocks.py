@@ -176,6 +176,15 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         log.info(f"DBX_USE_WORK_REPO: {wrkrepo_str}")
 
 
+@dataclass
+class LogVolume:
+    """Bundle of log-verbosity settings used by Datablockable / Datastackable."""
+    info: bool = None
+    verbose: bool = None
+    debug: bool = None
+    detailed: bool = None
+
+
 def journal(cls_or_df, entry=None, root=None, **kwargs):
     if isinstance(cls_or_df, pd.DataFrame):
         return JournalFrame(cls_or_df, **kwargs)

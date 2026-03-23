@@ -1514,7 +1514,8 @@ class Datablock:
             self._write_str('context', context)
         #
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-        filename = f"{self.hash}-{dt}"
+        classname = self.__module__ + "." + self.__class__.__name__
+        filename = f"{classname}-{self.hash}-{dt}"
 
         spec_path = self._xpath('spec', 'yaml')
         dfn_path = self._xpath('dfn', 'yaml')
@@ -1568,7 +1569,8 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, entry: int = None, *, root=None, **kwargs):
+    def Journal(anchor, entry: int = None, *, root=None,
+                prefix: str = None, **kwargs):
         if root is None:
             root = os.environ.get('DBX_ROOT')
         # Use ensure=False: we are reading, not writing — do not create the dir.
@@ -1584,6 +1586,9 @@ class Datablock:
 
         files = list(fs.ls(journaldirpath))
         parquet_files = [f for f in files if f.endswith('.parquet')]
+        if prefix is not None:
+            parquet_files = [f for f in parquet_files
+                            if os.path.basename(f).startswith(prefix)]
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:

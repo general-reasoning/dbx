@@ -160,3 +160,91 @@ class TestJournalRootPassedCorrectly:
         bad_root = str(tmp_path / "missing")
         with pytest.raises(FileNotFoundError):
             journal(FakeBlock, root=bad_root)
+
+
+# A second Datablock subclass for prefix-filtering tests
+class OtherBlock(Datablock):
+    def __build__(self):
+        pass
+
+
+def _write_prefixed_entry(journal_dir, classname, hash_val="abc", event="build"):
+    """Write a parquet entry with a classname-prefixed filename."""
+    os.makedirs(journal_dir, exist_ok=True)
+    now = datetime.datetime.now()
+    dt = now.isoformat().replace(' ', '-').replace(':', '-')
+    filename = f"{classname}-{hash_val}-{dt}"
+    df = pd.DataFrame([{
+        'hash': hash_val,
+        'datetime': now,
+        'event': event,
+        'anchor': classname,
+        'root': '/tmp/dbx_test',
+    }])
+    path = os.path.join(journal_dir, f"{filename}.parquet")
+    df.to_parquet(path)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# 5. prefix filtering
+# ---------------------------------------------------------------------------
+
+class TestJournalPrefixFiltering:
+
+    def test_no_prefix_returns_all(self, tmp_path, monkeypatch):
+        """Without prefix, Journal() returns entries from all classes."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        jdir = _journal_dir(root, FakeBlock)
+        fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
+        other_anchor = OtherBlock.__module__ + "." + OtherBlock.__name__
+        _write_prefixed_entry(jdir, fake_anchor, hash_val="aaa")
+        _write_prefixed_entry(jdir, other_anchor, hash_val="bbb")
+
+        result = journal(FakeBlock, root=root)
+        assert isinstance(result, JournalFrame)
+        assert len(result) == 2
+
+    def test_prefix_filters_by_classname(self, tmp_path, monkeypatch):
+        """With prefix=anchor, only matching entries are returned."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        jdir = _journal_dir(root, FakeBlock)
+        fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
+        other_anchor = OtherBlock.__module__ + "." + OtherBlock.__name__
+        _write_prefixed_entry(jdir, fake_anchor, hash_val="aaa")
+        _write_prefixed_entry(jdir, other_anchor, hash_val="bbb")
+
+        result = Datablock.Journal(
+            fake_anchor, root=root, prefix=fake_anchor + "-",
+        )
+        assert isinstance(result, JournalFrame)
+        assert len(result) == 1
+        assert result.iloc[0]['hash'] == "aaa"
+
+    def test_prefix_no_match_returns_empty(self, tmp_path, monkeypatch):
+        """Prefix that matches nothing yields JournalFrame(None)."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        jdir = _journal_dir(root, FakeBlock)
+        fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
+        _write_prefixed_entry(jdir, fake_anchor, hash_val="aaa")
+
+        result = Datablock.Journal(
+            fake_anchor, root=root, prefix="nonexistent.Class-",
+        )
+        assert isinstance(result, JournalFrame)
+        # No matching files → wraps None → length 0
+        assert len(result) == 0
+
+    def test_prefix_none_is_default(self, tmp_path, monkeypatch):
+        """prefix=None (default) behaves identically to no prefix."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        jdir = _journal_dir(root, FakeBlock)
+        fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
+        _write_prefixed_entry(jdir, fake_anchor, hash_val="xyz")
+
+        result = Datablock.Journal(fake_anchor, root=root, prefix=None)
+        assert len(result) == 1

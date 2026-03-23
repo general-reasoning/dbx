@@ -1737,7 +1737,9 @@ class Datastack(Datablock):
         if not hasattr(self, '_shards_') or self._shards_ is None:
             self._shards_ = [None] * self.n_shards
         if self._shards_[idx] is None:
-            self._shards_[idx] = self.__shard__(idx)
+            s = self.__shard__(idx)
+            s.keyby = self.keyby
+            self._shards_[idx] = s
         return self._shards_[idx]
 
     def shards(self) -> list:

@@ -355,7 +355,7 @@ class TestUNSAFECopyFrom:
 
         dst = _make_block(SingleTopicBlock, dst_root)
         assert dst.valid() is False
-        dst.UNSAFE_copy_from(src.anchorhashpath)
+        dst.UNSAFE_copy_from(src.anchorkeypath)
         assert dst.valid() is True
         # The file content should match
         with open(dst.path()) as f:
@@ -369,7 +369,7 @@ class TestUNSAFECopyFrom:
         src.build()
 
         dst = _make_block(MultiTopicBlock, dst_root)
-        dst.UNSAFE_copy_from(src.anchorhashpath)
+        dst.UNSAFE_copy_from(src.anchorkeypath)
         assert dst.valid() is True
         for topic in dst.TOPICFILES:
             assert os.path.isfile(dst.path(topic))
@@ -386,7 +386,7 @@ class TestUNSAFECopyFrom:
             f.write("extra")
 
         dst = _make_block(SingleTopicBlock, dst_root)
-        dst.UNSAFE_copy_from(src.anchorhashpath)
+        dst.UNSAFE_copy_from(src.anchorkeypath)
         assert dst.valid() is True
         # The extra file should NOT have been copied
         assert not os.path.exists(os.path.join(dst.dirpath(), "extra.txt"))
@@ -404,7 +404,7 @@ class TestUNSAFECopyFrom:
             f.write("extra")
 
         dst = _make_block(SingleTopicBlock, dst_root)
-        dst.UNSAFE_copy_from(src.anchorhashpath, copy_dirpath=True)
+        dst.UNSAFE_copy_from(src.anchorkeypath, copy_dirpath=True)
         assert dst.valid() is True
         # The extra file SHOULD have been copied with copy_dirpath=True
         assert os.path.exists(os.path.join(dst.dirpath(), "extra.txt"))
@@ -421,7 +421,7 @@ class TestUNSAFECopyFrom:
                 f.write(f"bonus_{topic}")
 
         dst = _make_block(MultiTopicBlock, dst_root)
-        dst.UNSAFE_copy_from(src.anchorhashpath, copy_dirpath=True)
+        dst.UNSAFE_copy_from(src.anchorkeypath, copy_dirpath=True)
         assert dst.valid() is True
         for topic in dst.TOPICFILES:
             assert os.path.exists(os.path.join(dst.dirpath(topic), "bonus.txt"))
@@ -432,7 +432,7 @@ class TestUNSAFECopyFrom:
         src = _make_block(SingleTopicBlock, src_root)
         src.build()
         dst = _make_block(SingleTopicBlock, dst_root)
-        result = dst.UNSAFE_copy_from(src.anchorhashpath)
+        result = dst.UNSAFE_copy_from(src.anchorkeypath)
         assert result is dst
 
     def test_copy_then_clear_then_recopy(self, tmp_path):
@@ -443,9 +443,9 @@ class TestUNSAFECopyFrom:
         src.build()
 
         dst = _make_block(SingleTopicBlock, dst_root)
-        dst.UNSAFE_copy_from(src.anchorhashpath)
+        dst.UNSAFE_copy_from(src.anchorkeypath)
         assert dst.valid() is True
         dst.UNSAFE_clear(OVERRIDE=True)
         assert dst.valid() is False
-        dst.UNSAFE_copy_from(src.anchorhashpath)
+        dst.UNSAFE_copy_from(src.anchorkeypath)
         assert dst.valid() is True

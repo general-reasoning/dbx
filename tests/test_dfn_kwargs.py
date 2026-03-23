@@ -43,12 +43,12 @@ def setup_env(monkeypatch):
 class TestDfn:
 
     def test_dfn_contains_explicit_params(self):
-        """dfn should include explicit Datablock.__init__ params like root, tag, device."""
-        block = SimpleBlock(root='/tmp/test', tag='mytag', device='cuda')
+        """dfn should include explicit Datablock.__init__ params like root, tag, keyby."""
+        block = SimpleBlock(root='/tmp/test', tag='mytag', keyby='handle')
         d = block.dfn
         assert d['root'] == '/tmp/test'
         assert d['tag'] == 'mytag'
-        assert d['device'] == 'cuda'
+        assert d['keyby'] == 'handle'
 
     def test_dfn_contains_dynamic_kwargs(self):
         """dfn should also include user-supplied **kwargs."""
@@ -61,10 +61,10 @@ class TestDfn:
         """dfn should include explicit params even when left at their defaults."""
         block = SimpleBlock(root='/tmp/test')
         d = block.dfn
-        # anchored defaults to True, capture_output to False, device to 'cpu'
+        # anchored defaults to True, capture_output to False, keyby to 'hash'
         assert d['anchored'] is True
         assert d['capture_output'] is False
-        assert d['device'] == 'cpu'
+        assert d['keyby'] == 'hash'
 
     def test_dfn_matches_getstate(self):
         """dfn should be identical to __getstate__()."""
@@ -100,12 +100,12 @@ class TestDfn:
 class TestKwargs:
 
     def test_kwargs_excludes_explicit_params(self):
-        """kwargs should not contain root, tag, revision, device, etc."""
-        block = SimpleBlock(root='/tmp/test', tag='t', device='cuda', my_param=42)
+        """kwargs should not contain root, tag, revision, keyby, etc."""
+        block = SimpleBlock(root='/tmp/test', tag='t', keyby='handle', my_param=42)
         kw = block.kwargs
         assert 'root' not in kw
         assert 'tag' not in kw
-        assert 'device' not in kw
+        assert 'keyby' not in kw
         assert 'anchored' not in kw
 
     def test_kwargs_contains_only_dynamic(self):

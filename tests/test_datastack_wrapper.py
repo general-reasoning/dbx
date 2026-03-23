@@ -3,7 +3,7 @@ Tests for dbx.datastack() — the Datastackable wrapper.
 
 With MI (multiple inheritance), the wrapper IS-A Datastack and IS-A Datastackable.
 The Datastackable's __init__ is NOT called when wrapped — Datablock.__init__
-provides cfg, device, verbose, log, etc.
+provides cfg, verbose, log, etc.
 
 Verifies:
 1. Protocol validation (missing __shards__, SHARD raises TypeError).
@@ -43,10 +43,9 @@ class ItemProcessor:
     class CONFIG:
         item_id: int = None
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         # Only called for standalone (unwrapped) use
         self.cfg = cfg
-        self.device = device
         self.built = False
 
     def __build__(self, *args, **kwargs):
@@ -77,10 +76,9 @@ class BatchProcessor:
     class CONFIG:
         n_items: int = 5
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         # Only called for standalone (unwrapped) use
         self.cfg = cfg
-        self.device = device
 
     @property
     def n_shards(self):
@@ -89,7 +87,6 @@ class BatchProcessor:
     def __shard__(self, idx):
         return ItemProcessor(
             cfg=ItemProcessor.CONFIG(item_id=idx),
-            device=self.device,
         )
 
     def __read__(self, topic=None):
@@ -104,9 +101,8 @@ class NoReadBatchProcessor:
     class CONFIG:
         n_items: int = 3
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
-        self.device = device
 
     @property
     def n_shards(self):
@@ -115,7 +111,6 @@ class NoReadBatchProcessor:
     def __shard__(self, idx):
         return ItemProcessor(
             cfg=ItemProcessor.CONFIG(item_id=idx),
-            device=self.device,
         )
 
 
@@ -310,7 +305,6 @@ class TestFromDatastackable:
     def _make_obj(self, **overrides):
         defaults = dict(
             cfg=BatchProcessor.CONFIG(n_items=7),
-            device='cuda:0',
         )
         defaults.update(overrides)
         return BatchProcessor(**defaults)
@@ -322,12 +316,12 @@ class TestFromDatastackable:
             stack = Wrapped.from_datastackable(obj, root=tmp)
             assert stack.cfg.n_items == 7
 
-    def test_device_propagated(self):
+    def test_spec_propagated(self):
         Wrapped = datastack(BatchProcessor)
-        obj = self._make_obj(device='cuda:0')
+        obj = self._make_obj()
         with tempfile.TemporaryDirectory() as tmp:
-            stack = Wrapped.from_datastackable(obj, root=tmp, device='cuda:0')
-            assert stack.device == 'cuda:0'
+            stack = Wrapped.from_datastackable(obj, root=tmp)
+            assert stack.cfg.n_items == 7
 
     def test_type_check_rejects_wrong_type(self):
         Wrapped = datastack(BatchProcessor)

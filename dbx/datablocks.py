@@ -217,12 +217,21 @@ class JournalEntry(pd.Series):
         return self.get('version')
 
     @property
-    def anchorhash(self):
+    def anchorkey(self):
         return os.path.join(self.anchor, self.hash)
 
     @property
+    def anchorkeypath(self):
+        return os.path.join(self.root, self.anchorkey)
+
+    # Backward-compatible aliases
+    @property
+    def anchorhash(self):
+        return self.anchorkey
+
+    @property
     def anchorhashpath(self):
-        return os.path.join(self.root, self.anchorhash)
+        return self.anchorkeypath
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
@@ -438,8 +447,8 @@ class Datablock:
     #        root           [anchor]        [topic]   [file]
     # root:               'protocol://path/to/root'
     # anchorpath:         '{root}/modpath/class'|'{root}' if anchored|else
-    # anchorhashpath:     '{anchorpath}/{hash}
-    # dirpath:            '{anchorhashpath}/topic'|{anchorhashpath}' if topic is not None|else
+    # anchorkeypath:      '{anchorpath}/{key}'
+    # dirpath:            '{anchorkeypath}/topic'|{anchorkeypath}' if topic is not None|else
     # path:               '{dirpath}/{TOPICFILE}'|'{dirpath}' if TOPICFILE is not None|else
     
     """
@@ -501,7 +510,7 @@ class Datablock:
         detailed: bool = None,
         capture_output: bool = False,
         revision: str = None,
-        device: str = 'cpu',
+        keyby: str = 'hash',
         uuid16: bool = False,
         **kwargs,
     ):
@@ -520,7 +529,7 @@ class Datablock:
             'detailed': detailed,
             'capture_output': capture_output,
             'revision': revision,
-            'device': device,
+            'keyby': keyby,
             'uuid16': uuid16,
         }
         state.update(kwargs)
@@ -571,7 +580,9 @@ class Datablock:
         )
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
-        self.device = state.get('device', 'cpu')
+        self.keyby = state.get('keyby', 'hash')
+        if self.keyby not in ('hash', 'handle', None):
+            raise ValueError(f"keyby must be 'hash', 'handle' or None, got {self.keyby!r}")
         self._uuid16_ = state.get('uuid16', False)
         
 
@@ -636,9 +647,6 @@ class Datablock:
     def replace(self, **kw):
         return self.set(**kw)
     
-    def to(self, device):
-        self.device = device
-        return self
 
     def __post_init__(self):
         ...
@@ -758,7 +766,7 @@ class Datablock:
                 self.build_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
                 self.__post_build__(*args, **kwargs)
             else:
-                self.log.verbose(f"Skipping existing datablock: {self.hashpath()}")
+                self.log.verbose(f"Skipping existing datablock: {self.keypath()}")
         except KeyboardInterrupt as e:
             self.__post_build__(*args, event="build:keyboard_interrupt", **kwargs)
             raise(e)
@@ -1038,12 +1046,12 @@ class Datablock:
         ensure: bool = False,
         list: bool = False,
     ):  
-        hashpath = self.hashpath()
+        keypath = self.keypath()
         if topic is not None:
             assert topic in self.TOPICFILES, f"Topic {repr(topic)} not in {self.TOPICFILES}"
-            dirpath = os.path.join(hashpath, topic)
+            dirpath = os.path.join(keypath, topic)
         else:
-            dirpath = hashpath
+            dirpath = keypath
         if ensure:
             fs, _ = fsspec.url_to_fs(dirpath)
             fs.makedirs(dirpath, exist_ok=True)
@@ -1063,13 +1071,24 @@ class Datablock:
             path = os.path.join(dirpath, topicfile) if topicfile is not None else None     
         return path
     
-    def hashpath(self, *, ensure: bool = False):
+    @property
+    def key(self):
+        """Return the key component based on self.keyby."""
+        if self.keyby == 'hash':
+            return self.hash
+        elif self.keyby == 'handle':
+            return self.handle()
+        else:  # None
+            return None
+
+    def keypath(self, *, ensure: bool = False):
         anchorpath = self.anchorpath()
-        hashpath = os.path.join(anchorpath, self.hash)
+        key = self.key
+        keypath = os.path.join(anchorpath, key) if key else anchorpath
         if ensure:
-            fs, _ = fsspec.url_to_fs(hashpath)
-            fs.makedirs(hashpath, exist_ok=True)
-        return hashpath
+            fs, _ = fsspec.url_to_fs(keypath)
+            fs.makedirs(keypath, exist_ok=True)
+        return keypath
 
     def ensure_path(self, path):
         fs, _ = fsspec.url_to_fs(path)
@@ -1108,21 +1127,19 @@ class Datablock:
         return anchorpath
 
     @property
-    def anchorhash(self):
-        anchorhash = os.path.join(
-            self.anchor,
-            self.hash,
-        ) if self.anchored else self.hash
-        return anchorhash
+    def anchorkey(self):
+        key = self.key
+        if self.anchored:
+            return os.path.join(self.anchor, key) if key else self.anchor
+        else:
+            return key
 
     @property
-    def anchorhashpath(self):
-        anchorhashpath = os.path.join(
+    def anchorkeypath(self):
+        return os.path.join(
             self.root,
-            self.anchorhash,
-        )
-        return anchorhashpath
-
+            self.anchorkey,
+        ) if self.anchorkey else self.root
 
     @classmethod
     def _xanchorpath(cls, root, x, *, ensure: bool = False):
@@ -1477,7 +1494,7 @@ class Datablock:
 
         Returns a dict containing ALL parameters — both the explicit parameters
         declared in ``Datablock.__init__`` (e.g. ``root``, ``tag``, ``revision``,
-        ``device``, …) and any extra ``**kwargs`` that were passed at construction
+        ``keyby``, …) and any extra ``**kwargs`` that were passed at construction
         time.
 
         This is the dict that would be needed to reconstruct the block::
@@ -1568,7 +1585,7 @@ class Datablock:
             if self._tag_ is not None:
                 self._tag = self._tag_
             else:
-                self._tag = self.anchorhash
+                self._tag = self.anchorkey
         return self._tag
     #IDENTIFICATION: END
 
@@ -1643,6 +1660,7 @@ class Datablock:
                                          'root': self.root,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
+                                         'keyby': self.keyby,
                                          'uuid': self.uuid,
                                          'tag': self.tag, 
                                          'log': logpath if has_log else None,
@@ -1915,185 +1933,84 @@ def quote(obj, *args, tag="$", **kwargs):
     return _quote
 
 
+def _build_block_with_to(block, *args, **kwargs):
+    """Build helper for TorchXXX builders: the callable IS the block itself.
+
+    The callable must have ``.to(device)`` — the TorchXXXCallableExecutor
+    validates this and calls ``block.to(device)`` before invoking, then
+    ``block.to('cpu')`` afterwards.  We implement ``__call__`` via this
+    partial, and ``.to()`` is already on the block.
+    """
+    return block.build(*args, **kwargs)
+
+
+class _TorchBlockCallable_:
+    """Thin wrapper that makes a Datablock usable as a TorchXXX callable.
+
+    The executor calls ``callable.to(device)(...).to('cpu')``, so we need
+    ``.to()`` and ``__call__()`` on the same object.  This wrapper delegates
+    both to the underlying block.
+    """
+    def __init__(self, block):
+        if not hasattr(block, 'to') or not callable(getattr(block, 'to')):
+            raise TypeError(
+                f"{type(block).__name__} does not implement .to(device). "
+                f"Datablocks used with TorchMultithreadingDatablocksBuilder / "
+                f"TorchMultiprocessingDatablocksBuilder must define a .to() method."
+            )
+        self.block = block
+
+    def to(self, device):
+        self.block.to(device)
+        return self
+
+    def __call__(self, *args, **kwargs):
+        self.block.build(*args, **kwargs)
+        return self.block
+
+
 class TorchMultithreadingDatablocksBuilder:
+    """Builds Datablocks concurrently using threads with per-device placement.
+
+    Delegates to :class:`TorchMultithreadingCallableExecutor`.
+    Each block must implement ``.to(device)``.
+    """
+
     def __init__(self, *, devices: list[str] = 'cuda', log: Logger = Logger()):
         if isinstance(devices, str):
             devices = [devices]
         self.devices = devices
         self.log = log
+        self._executor = TorchMultithreadingCallableExecutor(
+            devices=devices, log=log,
+        )
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        if len(blocks) > 0:
-            result_queue = queue.Queue()
-            done_queue = queue.Queue()
-            abort_event = threading.Event()
-            progress_bar = tqdm.tqdm(total=len(blocks))
-            block_lists = np.array_split(blocks, len(self.devices))
-            block_offsets = np.cumsum([0] + [len(block_list) for block_list in block_lists])
-            threads = [
-                threading.Thread(target=self.__build_blocks__, args=(block_list, ctx_args, ctx_kwargs, block_offset, device, result_queue, done_queue, abort_event, progress_bar))
-                for block_list, block_offset, device in zip(block_lists, block_offsets, self.devices)
-            ]
-            done_idxs = []
-            for thread in threads:
-                thread.start()
-            while len(done_idxs) < len(blocks):
-                success, idx, payload = result_queue.get()
-                if success:
-                    done_idxs.append(idx)
-                    e = None
-                else:
-                    e = payload
-                    self.log.info(f"Received error from block with index {idx}: {blocks[idx]}. Abandoning result_queue polling.")
-                    break
-            self.log.debug(f"Production loop done, feeding done_queue")
-            for _ in range(len(self.devices)):
-                done_queue.put(None)
-            self.log.debug(f"Joining threads")
-            for thread in threads:
-                thread.join()
-            if e is not None:
-                self.log.verbose("Raising exception")
-                raise e
-            self.log.debug("Threads successfully joined")
+        callables = [_TorchBlockCallable_(block) for block in blocks]
+        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
         return blocks
-    
-    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, device: str, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event, progress_bar):
-        self.log.debug(f"Building {len(blocks)} feature blocks on device: {device}")
-        device_ctx_args, device_ctx_kwargs = self.__args_kwargs_to_device__(ctx_args, ctx_kwargs, device)
-        for i, block in enumerate(blocks):
-            exception = None
-            try:
-                if abort_event.is_set():
-                    break
-                block.to(device).build(*device_ctx_args, **device_ctx_kwargs).to('cpu')
-            except Exception as e:
-                exception = e
-                self.log.info(f"ERROR building feature block {block} on device: {device}")
-            if exception is not None:
-                result_queue.put((False, offset+i, exception))
-                break
-            result_queue.put((True, offset+i, None))
-            progress_bar.update(1)
-        del device_ctx_args, device_ctx_kwargs
-        gc.collect()
-        if exception is None:
-            self.log.debug(f"Done building {len(blocks)} feature blocks on device: {device}")
-        else:
-            self.log.debug(f"Abandoning building {len(blocks)} feature blocks on device: {device} due to an exception")
-        self.log.debug(f"Waiting on the done_queue on device: {device}")
-        while True:
-            item = done_queue.get()
-            if item is None:
-                self.log.debug(f"Done message received on the done_queue on device: {device}")
-                break
 
-    def __args_kwargs_to_device__(self, args, kwargs, device):
-        device_args = [arg.to(device) if hasattr(arg, 'to') else arg for arg in args]
-        device_kwargs = {k: v.to(device) if hasattr(v, 'to') else v for k, v in kwargs.items()}
-        return device_args, device_kwargs
-    
 
-class TorchMultiprocessingDatablocksBuilder(TorchMultithreadingDatablocksBuilder):
+class TorchMultiprocessingDatablocksBuilder:
+    """Builds Datablocks concurrently using processes with per-device placement.
+
+    Delegates to :class:`TorchMultiprocessingCallableExecutor`.
+    Each block must implement ``.to(device)``.
+    """
+
     def __init__(self, *, devices: list[str] = None, log: Logger = Logger()):
         if isinstance(devices, str):
             devices = [devices]
         self.devices = devices
         self.log = log
+        self._executor = TorchMultiprocessingCallableExecutor(
+            devices=devices, log=log,
+        )
 
     def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        if len(blocks) > 0:
-            result_queue = mp.Queue()
-            done_queue = mp.Queue()
-            abort_event = mp.Event()
-            progress_bar = tqdm.tqdm(total=len(blocks))
-            block_lists = np.array_split(blocks, len(self.devices))
-            block_offsets = np.cumsum([0] + [len(block_list) for block_list in block_lists])
-            processes = [
-                mp.Process(target=self.__build_blocks__, args=(block_list, ctx_args, ctx_kwargs, block_offset, f"{i}", device, result_queue, done_queue, abort_event))
-                for i, (block_list, block_offset, device) in enumerate(zip(block_lists, block_offsets, self.devices))
-            ]
-            self.log.verbose(f"Building {len(blocks)} feature blocks with {len(self.devices)} processes")
-            done_idxs = []
-            exc = None
-            try:
-                for process in processes:
-                    process.start()
-                for block in blocks:
-                    del block
-                gc.collect()
-                while len(done_idxs) < len(blocks):
-                    pexc, ptbstr = None, None
-                    success, proc, idx, payload = result_queue.get()
-                    if success:
-                        done_idxs.append(idx)
-                        progress_bar.update(1)
-                    else:
-                        pexc, ptbstr = payload
-                        self.log.info(f"Received exception from process {proc}, block with index {idx}: {blocks[idx]}")
-                        self.log.info(f"Exception: {pexc}")
-                        self.log.info(f"Traceback:\n{ptbstr}")
-                        self.log.info(f"Abandoning result_queue polling.")
-                        break
-                self.log.debug(f"Production loop done")
-            except Exception as e:
-                exc = e
-                self.log.info(f"Caught exception in production loop\nException: {e}")
-                tbstr = '\n'.join(tb.format_tb(e.__traceback__))
-                self.log.info(f"Traceback:\n{tbstr}")
-                abort_event.set()
-            finally:
-                self.log.debug(f"Feeding done_queue")
-                for _ in self.devices:
-                    done_queue.put(None)
-                self.log.debug(f"Joining processes")
-                for process in processes:
-                    process.join()
-                self.log.debug("Processes successfully joined")
-            if pexc is not None:
-                self.log.verbose(f"Reraising exception from process {proc}, block {idx}: {blocks[idx]}")
-                raise(pexc)
-            if exc is not None:
-                self.log.verbose("Reraising production loop exception")
-                raise(exc)
+        callables = [_TorchBlockCallable_(block) for block in blocks]
+        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
         return blocks
-    
-    def __build_blocks__(self, blocks: Sequence[Datablock], ctx_args, ctx_kwargs, offset: int, process: str, device: str, result_queue: mp.Queue, done_queue: mp.Queue, abort_event: mp.Event):
-        self.log.debug(f"Building {len(blocks)} feature blocks on process: {process}, device: {device}")
-        if device is not None:
-            device_ctx_args, device_ctx_kwargs = self.__args_kwargs_to_device__(ctx_args, ctx_kwargs, device)
-        else:
-            device_ctx_args, device_ctx_kwargs = ctx_args, ctx_kwargs
-        exception = None
-        for i, block in enumerate(blocks):
-            exception = None
-            try:
-                if abort_event.is_set():
-                    break
-                block.to(device).build(*device_ctx_args, **device_ctx_kwargs).to('cpu')
-            except Exception as e:
-                exception = e
-                self.log.info(f"ERROR building datablock {block} on process: {process}, device: {device}")
-            finally:
-                del block
-                gc.collect()
-            if exception is not None:
-                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
-                result_queue.put((False, process, offset+i, (exception, tbstr)))
-                break
-            result_queue.put((True, process, offset+i, None))
-        del device_ctx_args, device_ctx_kwargs
-        gc.collect()
-        if exception is None:
-            self.log.debug(f"Done building {len(blocks)} datablocks on process: {process}, device: {device}")
-        else:
-            self.log.debug(f"Abandoning building {len(blocks)} datablocks on process: {process}, device: {device} due to an exception")
-        self.log.debug(f"Waiting on the done_queue on process: {process}, device: {device}")
-        while True:
-            item = done_queue.get()
-            if item is None:
-                self.log.debug(f"Done message received on the done_queue on process: {process}, device: {device}")
-                break
 
 
 
@@ -2173,7 +2090,42 @@ class InlineDatablocksBuilder:
         self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
         return blocks
 
-    
+
+_DATABLOCKS_BUILDERS = {
+    "inline":                InlineDatablocksBuilder,
+    "multithreading":        MultithreadingDatablocksBuilder,
+    "multiprocessing":       MultiprocessingDatablocksBuilder,
+    "ray":                   RayDatablocksBuilder,
+    "torch_multithreading":  TorchMultithreadingDatablocksBuilder,
+    "torch_multiprocessing": TorchMultiprocessingDatablocksBuilder,
+}
+
+
+def select_builder(parallelization: str | None = None):
+    """Return the datablocks-builder **class** for the given parallelization strategy.
+
+    Parameters
+    ----------
+    parallelization : str or None
+        One of ``'inline'`` (default), ``'multithreading'``,
+        ``'multiprocessing'``, ``'ray'``, ``'torch_multithreading'``,
+        ``'torch_multiprocessing'``.  Case-insensitive.
+        ``None`` maps to ``'inline'``.
+
+    Returns
+    -------
+    type
+        The builder class (not an instance).
+    """
+    key = (parallelization or "inline").lower()
+    cls = _DATABLOCKS_BUILDERS.get(key)
+    if cls is None:
+        raise ValueError(
+            f"Unknown parallelization {parallelization!r}. "
+            f"Choose from {list(_DATABLOCKS_BUILDERS)}"
+        )
+    return cls
+
 
 class SlurmRayCluster:
     """

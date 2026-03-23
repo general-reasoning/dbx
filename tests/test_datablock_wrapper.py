@@ -3,7 +3,7 @@ Tests for dbx.datablock() — the Datablockable wrapper.
 
 With MI (multiple inheritance), the wrapper IS-A Datablock and IS-A Datablockable.
 The Datablockable's __init__ is NOT called when wrapped — Datablock.__init__
-provides cfg, device, verbose, log, etc.
+provides cfg, verbose, log, etc.
 
 Verifies:
 1. Protocol validation (missing __build__, __read__ raises TypeError).
@@ -47,10 +47,9 @@ class MultiTopicProcessor:
         model_name: str = 'resnet50'
         layer: str = 'avgpool'
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         # Only called for standalone (unwrapped) use
         self.cfg = cfg
-        self.device = device
         self.built = False
         self.build_args = None
 
@@ -71,7 +70,7 @@ class SingleTopicProcessor:
     class CONFIG:
         delimiter: str = ','
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
     def __build__(self, *args, **kwargs):
@@ -89,7 +88,7 @@ class InheritingConfigProcessor:
     class CONFIG(Datablock.CONFIG):
         n_components: str = '10'
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
     def __build__(self, *args, **kwargs):
@@ -107,7 +106,7 @@ class EmptyConfigProcessor:
     class CONFIG:
         pass
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
     def __build__(self, *args, **kwargs):
@@ -121,7 +120,7 @@ class NoConfigProcessor:
     """A Datablockable with no CONFIG at all."""
     TOPICFILE = 'out.txt'
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
     def __build__(self, *args, **kwargs):
@@ -140,7 +139,7 @@ class VersionedProcessor:
     class CONFIG:
         pass
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
     def __build__(self, *args, **kwargs):
@@ -174,7 +173,7 @@ class TestProtocolValidation:
         """TOPICFILES/TOPICFILE may be set at class level or not (dynamic setting
         is no longer supported since __init__ is not called when wrapped)."""
         class NoClassLevelTopics:
-            def __init__(self, *, cfg=None, device=None, **_):
+            def __init__(self, *, cfg=None, **_):
                 self.TOPICFILE = 'dynamic.txt'  # only works standalone
             def __build__(self, *args, **kwargs): return self
             def __read__(self, topic=None): return None
@@ -275,10 +274,10 @@ class TestMIInstance:
         assert block.cfg is not None
         assert block.cfg.model_name == 'resnet50'
 
-    def test_device_available(self):
+    def test_keyby_available(self):
         Wrapped = datablock(MultiTopicProcessor)
-        block = Wrapped(root='/tmp/dbx_test_wrapper', device='cuda')
-        assert block.device == 'cuda'
+        block = Wrapped(root='/tmp/dbx_test_wrapper', keyby='handle')
+        assert block.keyby == 'handle'
 
     def test_init_not_called(self):
         """Datablockable's __init__ is NOT called when wrapped."""
@@ -342,8 +341,8 @@ class TestSerialization:
     def test_set_creates_new_instance(self):
         Wrapped = datablock(MultiTopicProcessor)
         block1 = Wrapped(root='/tmp/dbx_test_wrapper')
-        block2 = block1.set(device='cuda')
-        assert block2.device == 'cuda'
+        block2 = block1.set(tag='newtag')
+        assert block2.tag == 'newtag'
         assert isinstance(block2, MultiTopicProcessor)
 
 
@@ -357,7 +356,6 @@ class TestFromDatablockable:
         """Create a standalone MultiTopicProcessor instance with sensible defaults."""
         defaults = dict(
             cfg=MultiTopicProcessor.CONFIG(model_name='vit_b', layer='layer4'),
-            device='cuda:1',
         )
         defaults.update(overrides)
         return MultiTopicProcessor(**defaults)
@@ -369,17 +367,17 @@ class TestFromDatablockable:
         assert block.cfg.model_name == 'vit_b'
         assert block.cfg.layer == 'layer4'
 
-    def test_device_propagated(self):
+    def test_spec_propagated(self):
         Wrapped = datablock(MultiTopicProcessor)
-        obj = self._make_processor(device='cuda:1')
+        obj = self._make_processor()
         block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
-        assert block.device == 'cuda:1'
+        assert block.cfg.model_name == 'vit_b'
 
     def test_kwargs_override_propagated_attrs(self):
         Wrapped = datablock(MultiTopicProcessor)
-        obj = self._make_processor(device='cuda:1')
-        block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper', device='cpu')
-        assert block.device == 'cpu'
+        obj = self._make_processor()
+        block = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper', tag='override')
+        assert block.tag == 'override'
 
     def test_type_check_rejects_wrong_type(self):
         Wrapped = datablock(MultiTopicProcessor)

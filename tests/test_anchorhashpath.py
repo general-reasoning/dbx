@@ -3,26 +3,26 @@ import unittest
 import pandas as pd
 from dbx.datablocks import Datablock, JournalEntry
 
-class TestAnchorHashPath(unittest.TestCase):
+class TestAnchorKeyPath(unittest.TestCase):
     def setUp(self):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
-    def test_datablock_anchorhashpath(self):
+    def test_datablock_anchorkeypath(self):
         class MyBlock(Datablock):
             pass
         
         block = MyBlock(root="/tmp/dbx_test")
-        # Manually set hash if needed, but Datablock should compute it
-        self.assertTrue(hasattr(block, 'anchorhash'))
-        self.assertTrue(hasattr(block, 'anchorhashpath'))
+        # Default keyby='hash', so key == hash
+        self.assertTrue(hasattr(block, 'anchorkey'))
+        self.assertTrue(hasattr(block, 'anchorkeypath'))
         
-        expected_anchorhash = os.path.join(block.anchor, block.hash)
-        self.assertEqual(block.anchorhash, expected_anchorhash)
+        expected_anchorkey = os.path.join(block.anchor, block.hash)
+        self.assertEqual(block.anchorkey, expected_anchorkey)
         
-        expected_anchorhashpath = os.path.join(block.root, expected_anchorhash)
-        self.assertEqual(block.anchorhashpath, expected_anchorhashpath)
+        expected_anchorkeypath = os.path.join(block.root, expected_anchorkey)
+        self.assertEqual(block.anchorkeypath, expected_anchorkeypath)
 
-    def test_journal_entry_anchorhashpath(self):
+    def test_journal_entry_anchorkeypath(self):
         data = {
             'root': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
@@ -31,14 +31,26 @@ class TestAnchorHashPath(unittest.TestCase):
         series = pd.Series(data)
         entry = JournalEntry(series)
         
-        self.assertTrue(hasattr(entry, 'anchorhash'))
-        self.assertTrue(hasattr(entry, 'anchorhashpath'))
+        self.assertTrue(hasattr(entry, 'anchorkey'))
+        self.assertTrue(hasattr(entry, 'anchorkeypath'))
         
-        expected_anchorhash = os.path.join(data['anchor'], data['hash'])
-        self.assertEqual(entry.anchorhash, expected_anchorhash)
+        expected_anchorkey = os.path.join(data['anchor'], data['hash'])
+        self.assertEqual(entry.anchorkey, expected_anchorkey)
         
-        expected_anchorhashpath = os.path.join(data['root'], expected_anchorhash)
-        self.assertEqual(entry.anchorhashpath, expected_anchorhashpath)
+        expected_anchorkeypath = os.path.join(data['root'], expected_anchorkey)
+        self.assertEqual(entry.anchorkeypath, expected_anchorkeypath)
+
+    def test_journal_entry_backward_compat_aliases(self):
+        """anchorhash and anchorhashpath still work as aliases on JournalEntry."""
+        data = {
+            'root': '/tmp/dbx_test',
+            'anchor': 'my.module.MyBlock',
+            'hash': '12345abcde'
+        }
+        series = pd.Series(data)
+        entry = JournalEntry(series)
+        self.assertEqual(entry.anchorhash, entry.anchorkey)
+        self.assertEqual(entry.anchorhashpath, entry.anchorkeypath)
 
 if __name__ == "__main__":
     unittest.main()

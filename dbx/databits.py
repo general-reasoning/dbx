@@ -1053,27 +1053,153 @@ class InlineCallableExecutor:
             yield
 
 
+
+class _TorchCallableExecutorMixin_:
+    """Mixin that adds device-management to a ``_CallableExecutorBase_`` subclass.
+
+    Subclasses of this mixin combine it with ``MultithreadingCallableExecutor``
+    or ``MultiprocessingCallableExecutor`` and override ``_run_items`` so that
+    each callable is:
+
+    1. validated (must have a ``.to()`` method),
+    2. moved to the worker's device via ``callable.to(device)``,
+    3. executed,
+    4. moved back via ``callable.to('cpu')``.
+
+    Context args / kwargs that have a ``.to()`` method are also moved to the
+    worker's device.
+    """
+
+    def __init__(self, *, devices: list[str] = 'cuda', batch_size: int = None,
+                 tag: str = "", log: Logger = Logger()):
+        if isinstance(devices, str):
+            devices = [devices]
+        # Initialise the concrete executor base (Thread or Process variant).
+        super().__init__(n_workers=len(devices), batch_size=batch_size, tag=tag, log=log)
+        self.devices = devices
+
+    # ------------------------------------------------------------------
+    # Device helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _validate_callable(item):
+        """Raise ``TypeError`` if *item* lacks a ``.to()`` method; return *item*.
+
+        Designed to be chained::
+
+            self._validate_callable(c).to(device)(...)
+        """
+        if not hasattr(item, 'to') or not callable(getattr(item, 'to')):
+            raise TypeError(
+                f"{type(item).__name__} does not implement .to(device). "
+                f"Callables used with TorchMultithreadingCallableExecutor / "
+                f"TorchMultiprocessingCallableExecutor must define a .to() method."
+            )
+        return item
+
+    @staticmethod
+    def _args_kwargs_to_device(args, kwargs, device):
+        device_args = [a.to(device) if hasattr(a, 'to') else a for a in args]
+        device_kwargs = {k: v.to(device) if hasattr(v, 'to') else v
+                         for k, v in kwargs.items()}
+        return device_args, device_kwargs
+
+    # ------------------------------------------------------------------
+    # Override worker loop
+    # ------------------------------------------------------------------
+    def _run_items(self, items, ctx_args, ctx_kwargs, offset, worker_idx,
+                   result_queue, done_queue, abort_event):
+        device = self.devices[worker_idx]
+        worker_label = self._worker_label(worker_idx)
+        self.log.debug(f"Executing {len(items)} callables on {worker_label} (device={device})")
+
+        device_ctx_args, device_ctx_kwargs = self._args_kwargs_to_device(
+            ctx_args, ctx_kwargs, device,
+        )
+
+        batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
+        exception = None
+        batch = []
+        for i, item in enumerate(items):
+            exception = None
+            try:
+                if abort_event.is_set():
+                    break
+                payload = self._validate_callable(item).to(device)(*device_ctx_args, **device_ctx_kwargs)
+                item.to('cpu')
+                batch.append((offset + i, payload))
+            except Exception as e:
+                exception = e
+                self.log.info(f"ERROR executing callable {offset+i} on {worker_label} (device={device})")
+            finally:
+                self._after_item(item)
+            if exception is not None:
+                if batch:
+                    result_queue.put((True, worker_idx, batch))
+                    batch = []
+                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
+                result_queue.put((False, worker_idx, offset + i, (exception, tbstr)))
+                break
+            if len(batch) >= batch_size:
+                result_queue.put((True, worker_idx, batch))
+                batch = []
+        if batch and exception is None:
+            result_queue.put((True, worker_idx, batch))
+
+        del device_ctx_args, device_ctx_kwargs
+        gc.collect()
+        if exception is None:
+            self.log.debug(f"Done executing {len(items)} callables on {worker_label}")
+        else:
+            self.log.debug(f"Abandoning callables on {worker_label} due to exception")
+        self.log.debug(f"Waiting on done_queue on {worker_label}")
+        while True:
+            if done_queue.get() is None:
+                self.log.debug(f"Done signal received on {worker_label}")
+                break
+
+
+class TorchMultithreadingCallableExecutor(_TorchCallableExecutorMixin_,
+                                          MultithreadingCallableExecutor):
+    """Multithreading callable executor with per-worker device management.
+
+    Each worker is assigned a device from *devices*.  Before execution,
+    each callable is validated for ``.to()``, moved to the device,
+    executed, then moved back to cpu.
+    """
+    pass
+
+
+class TorchMultiprocessingCallableExecutor(_TorchCallableExecutorMixin_,
+                                           MultiprocessingCallableExecutor):
+    """Multiprocessing callable executor with per-worker device management."""
+    pass
+
+
 _CALLABLE_EXECUTORS = {
-    "inline":          InlineCallableExecutor,
-    "multithreading":  MultithreadingCallableExecutor,
-    "multiprocessing": MultiprocessingCallableExecutor,
+    "inline":                InlineCallableExecutor,
+    "multithreading":        MultithreadingCallableExecutor,
+    "multiprocessing":       MultiprocessingCallableExecutor,
+    "torch_multithreading":  TorchMultithreadingCallableExecutor,
+    "torch_multiprocessing": TorchMultiprocessingCallableExecutor,
 }
 
 
-def callable_executor(parallelization: str = None, **kwargs):
-    """Create a callable executor for the given parallelization strategy.
+def select_executor(parallelization: str | None = None):
+    """Return the callable-executor **class** for the given parallelization strategy.
 
     Parameters
     ----------
     parallelization : str or None
         One of ``'inline'`` (default), ``'multithreading'``,
-        ``'multiprocessing'``.  ``None`` maps to ``'inline'``.
-    **kwargs
-        Forwarded to the executor constructor (e.g. ``n_workers``, ``tag``).
+        ``'multiprocessing'``, ``'torch_multithreading'``,
+        ``'torch_multiprocessing'``.  Case-insensitive.
+        ``None`` maps to ``'inline'``.
 
     Returns
     -------
-    InlineCallableExecutor | MultithreadingCallableExecutor | MultiprocessingCallableExecutor
+    type
+        The executor class (not an instance).
     """
     key = (parallelization or "inline").lower()
     cls = _CALLABLE_EXECUTORS.get(key)
@@ -1082,5 +1208,23 @@ def callable_executor(parallelization: str = None, **kwargs):
             f"Unknown parallelization {parallelization!r}. "
             f"Choose from {list(_CALLABLE_EXECUTORS)}"
         )
-    return cls(**kwargs)
+    return cls
 
+
+def callable_executor(parallelization: str = None, **kwargs):
+    """Create a callable-executor instance for the given parallelization strategy.
+
+    Parameters
+    ----------
+    parallelization : str or None
+        One of ``'inline'`` (default), ``'multithreading'``,
+        ``'multiprocessing'``, ``'torch_multithreading'``,
+        ``'torch_multiprocessing'``.  ``None`` maps to ``'inline'``.
+    **kwargs
+        Forwarded to the executor constructor (e.g. ``n_workers``, ``tag``).
+
+    Returns
+    -------
+    A callable-executor instance.
+    """
+    return select_executor(parallelization)(**kwargs)

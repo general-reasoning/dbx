@@ -15,7 +15,7 @@ This means:
 
 Because `verbose`, `detailed`, `debug`, and `cfg` are read-only properties
 or cached_property on Datablock, Datablockable __init__ must NOT assign
-those — Datablock manages them.  Only `device` needs direct assignment.
+those — Datablock manages them.
 
 These tests verify that all three categories resolve correctly and that
 the Datablockable/Datastackable side of the MRO doesn't accidentally
@@ -49,10 +49,9 @@ class ProcessorWithCustomMethods:
     class CONFIG:
         factor: int = 2
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         # Only called for standalone (unwrapped) use
         self.cfg = cfg
-        self.device = device
         self._built = False
 
     def __build__(self, *args, **kwargs):
@@ -81,7 +80,7 @@ class ProcessorWithPathOverride:
     class CONFIG:
         output_dir: str = '/tmp/custom'
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
     def __build__(self, *args, **kwargs):
@@ -102,7 +101,7 @@ class ProcessorWithConflictingProperty:
     class CONFIG:
         pass
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
         self.verbose = True  # should fail: read-only property on Datablock
 
@@ -125,9 +124,8 @@ class ShardProcessor:
     class CONFIG:
         idx: int = 0
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
-        self.device = device
 
     def __build__(self, *args, **kwargs):
         return self
@@ -145,9 +143,8 @@ class PipelineWithCustomMethods:
         n_items: int = 6
         shard_size: int = 2
 
-    def __init__(self, *, cfg=None, device=None, **_):
+    def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
-        self.device = device
 
     @property
     def n_shards(self):
@@ -157,7 +154,6 @@ class PipelineWithCustomMethods:
     def __shard__(self, idx):
         return ShardProcessor(
             cfg=ShardProcessor.CONFIG(idx=idx),
-            device=self.device,
         )
 
     # -- Custom methods --
@@ -244,9 +240,9 @@ class TestDatablockMRO:
         """Datablock.set() is inherited and returns correct wrapper type."""
         Wrapped = datablock(ProcessorWithCustomMethods)
         block = Wrapped(root='/tmp/dbx_test_mro')
-        block2 = block.set(device='cuda')
+        block2 = block.set(tag='newtag')
         assert isinstance(block2, Wrapped)
-        assert block2.device == 'cuda'
+        assert block2.tag == 'newtag'
 
     def test_verbose_is_datablock_property(self):
         """verbose should resolve to Datablock's read-only property, not a plain attribute."""
@@ -446,9 +442,9 @@ class TestDatastackMRO:
         """Datablock.set() returns correct wrapper type."""
         Wrapped = datastack(PipelineWithCustomMethods)
         stack = Wrapped(root='/tmp/dbx_test_mro')
-        stack2 = stack.set(device='cuda')
+        stack2 = stack.set(tag='newtag')
         assert isinstance(stack2, Wrapped)
-        assert stack2.device == 'cuda'
+        assert stack2.tag == 'newtag'
 
     def test_verbose_is_datablock_property(self):
         """verbose should resolve to Datablock's read-only property."""

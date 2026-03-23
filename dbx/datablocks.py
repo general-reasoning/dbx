@@ -616,7 +616,9 @@ class Datablock:
         self.build_dt = None
         
         # Redefine logger with hash (and tag if present)
-        log_name = f"{self.anchor}/{self.hash}"
+        log_name = f"{self.anchor}/{self.key}"
+        if self._anchor_ is not None:
+            log_name = f"{self.fqcn}: {log_name}"
         if self._tag_ is not None:
             log_name = f"{log_name} [{self._tag_}]"
         self.log = Logger(
@@ -1218,6 +1220,10 @@ class Datablock:
         return isinstance(s, str) and (
             s.startswith('@') or s.startswith('$') or s.startswith('#')
         )
+    
+    @property
+    def fqcn(self):
+        return f"{self.__class__.__module__}.{self.__class__.__name__}"
     
     @property
     def version(self):

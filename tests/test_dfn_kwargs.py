@@ -61,8 +61,8 @@ class TestDfn:
         """dfn should include explicit params even when left at their defaults."""
         block = SimpleBlock(root='/tmp/test')
         d = block.dfn
-        # anchored defaults to True, capture_output to False, keyby to 'hash'
-        assert d['anchored'] is True
+        # anchor defaults to None, capture_output to False, keyby to 'hash'
+        assert d['anchor'] is None
         assert d['capture_output'] is False
         assert d['keyby'] == 'hash'
 
@@ -106,7 +106,7 @@ class TestKwargs:
         assert 'root' not in kw
         assert 'tag' not in kw
         assert 'keyby' not in kw
-        assert 'anchored' not in kw
+        assert 'anchor' not in kw
 
     def test_kwargs_contains_only_dynamic(self):
         """kwargs should contain exactly the user-supplied **kwargs."""
@@ -193,7 +193,7 @@ class TestDfnKwargsSerialization:
         old_state = {
             'root': '/tmp/legacy',
             'kwargs': {'a': 100, 'b': 200},
-            'anchored': True,
+            'anchor': None,
             'revision': 'test',
         }
         block = SimpleBlock.__new__(SimpleBlock)
@@ -207,7 +207,7 @@ class TestDfnKwargsSerialization:
         old_state = {
             'root': '/tmp/legacy',
             'state': {'c': 300},
-            'anchored': True,
+            'anchor': None,
             'revision': 'test',
         }
         block = SimpleBlock.__new__(SimpleBlock)

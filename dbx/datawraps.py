@@ -162,7 +162,7 @@ def datablock(cls):
             Datablock root path.  If not given, falls back to DBX_ROOT.
         **kwargs
             Additional keyword arguments forwarded to the wrapper's
-            ``__init__`` (e.g. ``tag``, ``anchored``, ``revision``).
+            ``__init__`` (e.g. ``tag``, ``anchor``, ``revision``).
 
         Returns
         -------

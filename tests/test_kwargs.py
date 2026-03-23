@@ -26,7 +26,7 @@ class TestDatablockKwargs(unittest.TestCase):
         self.assertEqual(defn['info'], True)
         self.assertEqual(defn['my_param'], "hello")
         self.assertEqual(defn['extra_val'], 123)
-        self.assertEqual(defn['anchored'], True) # verifying default property fallback
+        self.assertIsNone(defn['anchor']) # verifying default property fallback
 
     def test_set_method_updates_kwargs(self):
         block1 = MyTestBlock(root="/tmp/a", a=1, b=2, revision="test")
@@ -63,7 +63,7 @@ class TestDatablockKwargs(unittest.TestCase):
             'root': '/tmp/legacy',
             'kwargs': {'a': 100, 'b': 200},
             'state': {'c': 300},
-            'anchored': True,
+            'anchor': None,
             'revision': 'test'
         }
         

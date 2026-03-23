@@ -180,7 +180,11 @@ def journal(cls_or_df, entry=None, root=None, **kwargs):
     if isinstance(cls_or_df, pd.DataFrame):
         return JournalFrame(cls_or_df, **kwargs)
     else:
-        return Datablock.Journal(cls_or_df, entry=entry, root=root, **kwargs)
+        if isinstance(cls_or_df, str):
+            anchor = cls_or_df
+        else:
+            anchor = cls_or_df.__module__ + "." + cls_or_df.__name__
+        return Datablock.Journal(anchor, entry=entry, root=root, **kwargs)
 
 
 
@@ -306,7 +310,7 @@ class JournalEntry(pd.Series):
 
 
 class JournalFrame(pd.DataFrame):
-    def __init__(self, df: pd.DataFrame, *, parse_datetimes: bool = True, logger: Logger = Logger(), **kwargs):
+    def __init__(self, df: pd.DataFrame|None, *, parse_datetimes: bool = True, logger: Logger = Logger(), **kwargs):
         
         # Guard against an empty journal (no parquet files written yet).
         if df is None:
@@ -446,7 +450,7 @@ class Datablock:
     # protocol://path --- module/class/ --- topic [--- file]
     #        root           [anchor]        [topic]   [file]
     # root:               'protocol://path/to/root'
-    # anchorpath:         '{root}/modpath/class'|'{root}' if anchored|else
+    # anchorpath:         '{root}/{anchor}'
     # anchorkeypath:      '{anchorpath}/{key}'
     # dirpath:            '{anchorkeypath}/topic'|{anchorkeypath}' if topic is not None|else
     # path:               '{dirpath}/{TOPICFILE}'|'{dirpath}' if TOPICFILE is not None|else
@@ -501,7 +505,7 @@ class Datablock:
         *,
         root: str = None,
         spec: Optional[Union[str, dict]] = None,
-        anchored: bool = True,
+        anchor: str = None,
         hash: Optional[str] = None,
         tag: Optional[str] = None,
         info: bool = None,
@@ -520,7 +524,7 @@ class Datablock:
         state = {
             'root': root,
             'spec': spec,
-            'anchored': anchored,
+            'anchor': anchor,
             'hash': hash,
             'tag': tag,
             'info': info,
@@ -565,7 +569,7 @@ class Datablock:
             self.spec = asdict(self.CONFIG())
         else:
             self.spec = self._spec_
-        self.anchored = state.get('anchored', True)
+        self._anchor_ = state.get('anchor')
         self._hash_ = state.get('hash')
         self._tag_ = state.get('tag')
         
@@ -1108,31 +1112,21 @@ class Datablock:
 
     @property
     def anchor(self):
-        anchor = (
-            self.__module__
-            + "."
-            + self.__class__.__name__
-        )
-        return anchor
+        if self._anchor_ is not None:
+            return self._anchor_
+        return self.__module__ + "." + self.__class__.__name__
 
     @property
     def stump(self):
         return self.__class__.__name__
 
     def anchorpath(self):
-        anchorpath = os.path.join(
-            self.root,
-            self.anchor,
-        ) if self.anchored else self.root
-        return anchorpath
+        return os.path.join(self.root, self.anchor)
 
     @property
     def anchorkey(self):
         key = self.key
-        if self.anchored:
-            return os.path.join(self.anchor, key) if key else self.anchor
-        else:
-            return key
+        return os.path.join(self.anchor, key) if key else self.anchor
 
     @property
     def anchorkeypath(self):
@@ -1141,31 +1135,17 @@ class Datablock:
             self.anchorkey,
         ) if self.anchorkey else self.root
 
-    @classmethod
-    def _xanchorpath(cls, root, x, *, ensure: bool = False):
-        xanchor = os.path.join(
-            (
-                cls.__module__
-                + "."
-                + cls.__name__
-            ),
-            f".{x}",
-        )
-        xanchorpath = os.path.join(
-            root,
-            xanchor,
-        )
+    def _xanchorpath(self, x, *, ensure: bool = False):
+        xanchor = os.path.join(self.anchor, f".{x}")
+        xanchorpath = os.path.join(self.root, xanchor)
         if ensure:
             fs, _ = fsspec.url_to_fs(xanchorpath)
             fs.makedirs(xanchorpath, exist_ok=True)
         return xanchorpath
     
     def _xpath(self, x, ext=None, *, ensure: bool = True):
-        xanchorpath = self._xanchorpath(self.root, x)
-        xhashpath = os.path.join(
-            xanchorpath,
-            self.hash,
-        )
+        xanchorpath = self._xanchorpath(x)
+        xhashpath = os.path.join(xanchorpath, self.hash)
         if ensure:
             fs, _ = fsspec.url_to_fs(xhashpath)
             fs.makedirs(xhashpath, exist_ok=True)
@@ -1174,124 +1154,20 @@ class Datablock:
         xpath = os.path.join(xhashpath, f'{self.dt}.{ext}')
         return xpath
     
-    ##REFACTOR: through _xanchorpath/_xpath: BEGIN
-    @classmethod
-    def _loganchorpath(cls, root):
-        loganchor = os.path.join(
-            (
-                cls.__module__
-                + "."
-                + cls.__name__
-            ),
-            ".log",
-        )
-        loganchorpath = os.path.join(
-            root,
-            loganchor,
-        )
-        return loganchorpath
-
-    @classmethod
-    def _scopeanchorpath(cls, root):
-        scopeanchor = os.path.join(
-            (
-                cls.__module__
-                + "."
-                + cls.__name__
-            ),
-            ".scope",
-        )
-        scopeanchorpath = os.path.join(
-            root,
-            scopeanchor,
-        )
-        return scopeanchorpath
-    
-    @classmethod
-    def _stateanchorpath(cls, root):
-        stateanchor = os.path.join(
-            (
-                cls.__module__
-                + "."
-                + cls.__name__
-            ),
-            ".state",
-        )
-        stateanchorpath = os.path.join(
-            root,
-            stateanchor,
-        )
-        return stateanchorpath
+    def _loganchorpath(self):
+        return self._xanchorpath('log')
 
     def _logpath(self, *, ensure: bool = True):
-        loganchorpath = self._loganchorpath(self.root)
-        logdirpath = os.path.join(
-            loganchorpath,
-            self.hash,
-        )
-        if ensure:
-            fs, _ = fsspec.url_to_fs(logdirpath)
-            fs.makedirs(logdirpath, exist_ok=True)
-        logpath = os.path.join(logdirpath, f'{self.dt}.log')
-        return logpath
-
-    def _scopepath(self, kind, *, ensure: bool = True):
-        scopeanchorpath = self._scopeanchorpath(self.root)
-        scopedirpath = os.path.join(
-            scopeanchorpath,
-            self.hash,
-        )
-        if ensure:
-            fs, _ = fsspec.url_to_fs(scopedirpath)
-            fs.makedirs(scopedirpath, exist_ok=True)
-        if kind == 'yaml':
-            scopepath = os.path.join(scopedirpath, f'{self.dt}.yaml')
-        elif kind == 'parquet':
-            scopepath = os.path.join(scopedirpath, f'{self.dt}.parquet')
-        else:
-            raise ValueError(f"Unknown path kind: {kind}")
-        return scopepath
-    
-    def _statehashpath(self):
-        stateanchorpath = self._stateanchorpath(self.root)
-        return os.path.join(
-            stateanchorpath,
-            self.hash,
-        )
-    
-    def _statepath(self, kind, *, ensure: bool = True):
-        statehashpath = self._statehashpath()
-        if ensure:
-            fs, _ = fsspec.url_to_fs(statehashpath)
-            fs.makedirs(statehashpath, exist_ok=True)
-        if kind == 'yaml':
-            statepath = os.path.join(statehashpath, f'{self.dt}.yaml')
-        elif kind == 'parquet':
-            statepath = os.path.join(statehashpath, f'{self.dt}.parquet')
-        else:
-            raise ValueError(f"Unknown path kind: {kind}")
-        return statepath
+        return self._xpath('log', ext='log', ensure=ensure)
 
     @staticmethod
-    def _journalanchorpath(cls, root, *, ensure: bool = True):
-        journalclassname = cls if isinstance(cls, str) else os.path.join(
-            cls.__module__
-            + "."
-            + cls.__name__,
-        )
-        journalanchor = os.path.join(
-            journalclassname,
-            ".journal",
-        )
-        journalanchorpath = os.path.join(
-            root,
-            journalanchor,
-        )
+    def _journalanchorpath(anchor, root, *, ensure: bool = True):
+        journalanchor = os.path.join(anchor, ".journal")
+        journalanchorpath = os.path.join(root, journalanchor)
         if ensure:
             fs, _ = fsspec.url_to_fs(journalanchorpath)
             fs.makedirs(journalanchorpath, exist_ok=True)
         return journalanchorpath
-    ##REFACTOR: through _xanchorpath/_xpath: END
     #PATHS: END
 
     #LOG LEVEL: BEGIN
@@ -1415,8 +1291,8 @@ class Datablock:
         rootkwargs = {}
         if self._root_ is not None:
             rootkwargs['root'] = self._root_
-        if not self.anchored:
-            rootkwargs['anchored'] = False
+        if self._anchor_ is not None:
+            rootkwargs['anchor'] = self._anchor_
         if self._hash_ is not None:
             rootkwargs['hash'] = self._hash_
         return rootkwargs
@@ -1427,7 +1303,7 @@ class Datablock:
         tailkwargs = {
             k: v
             for k, v in state.items()
-            if k not in ['root', 'anchored', 'hash', 'spec']          
+            if k not in ['root', 'anchor', 'hash', 'spec']          
         }
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
@@ -1651,7 +1527,7 @@ class Datablock:
         else:
             has_log = False
         #
-        journal_path = os.path.join(self._journalanchorpath(self.__class__, self.root), f"{filename}.parquet")
+        journal_path = os.path.join(self._journalanchorpath(self.anchor, self.root), f"{filename}.parquet")
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build_datetime': self.build_dt,
                                          'version': self.version,
@@ -1683,17 +1559,17 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(cls, entry: int = None, *, root=None, **kwargs):
+    def Journal(anchor, entry: int = None, *, root=None, **kwargs):
         if root is None:
             root = os.environ.get('DBX_ROOT')
         # Use ensure=False: we are reading, not writing — do not create the dir.
-        journaldirpath = Datablock._journalanchorpath(eval(cls), root, ensure=False)
+        journaldirpath = Datablock._journalanchorpath(anchor, root, ensure=False)
         fs, _ = fsspec.url_to_fs(journaldirpath)
 
         log = Logger()
         if not fs.exists(journaldirpath):
             raise FileNotFoundError(
-                f"Journal directory not found for {eval(cls)!r}: {journaldirpath}\n"
+                f"Journal directory not found for {anchor!r}: {journaldirpath}\n"
                 f"Check that the class name / anchor and root path are correct."
             )
 
@@ -1734,7 +1610,7 @@ class Datablock:
         return result
 
     def journal(self, entry: int = None, **kwargs):
-        return self.Journal(self.__class__,entry, root=self.root, **kwargs)
+        return self.Journal(self.anchor, entry, root=self.root, **kwargs)
     #JOURNAL: END
     
 

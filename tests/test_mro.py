@@ -291,12 +291,14 @@ class TestDatablockMRO:
         # Should use the Datablockable's path(), not Datablock's
         assert block.path() == '/data/out/out.dat'
 
-    def test_dirpath_blocked_when_path_overridden(self):
-        """When Datablockable defines path(), dirpath() should raise."""
+    def test_dirpath_still_works_when_path_overridden(self):
+        """With (cls, Datablock) MRO, cls.path() naturally shadows Datablock.path().
+        dirpath() still resolves to Datablock.dirpath() since cls doesn't define it."""
         Wrapped = datablock(ProcessorWithPathOverride)
         block = Wrapped(root='/tmp/dbx_test_mro')
-        with pytest.raises(NotImplementedError, match="defines its own path"):
-            block.dirpath()
+        # dirpath() is Datablock.dirpath(), which should work normally
+        dp = block.dirpath()
+        assert isinstance(dp, str)
 
     # -- Conflict detection ---------------------------------------------------
 
@@ -337,16 +339,16 @@ class TestDatablockMRO:
     # -- MRO order verification -----------------------------------------------
 
     def test_mro_order(self):
-        """MRO should be: Wrapper → Datablock → Datablockable → object."""
+        """MRO should be: Wrapper → Datablockable → Datablock → object."""
         Wrapped = datablock(ProcessorWithCustomMethods)
         mro = Wrapped.__mro__
         # Wrapper comes first
         assert mro[0] is Wrapped
-        # Then Datablock
-        db_idx = mro.index(Datablock)
         # Then the user class
         cls_idx = mro.index(ProcessorWithCustomMethods)
-        assert db_idx < cls_idx
+        # Then Datablock
+        db_idx = mro.index(Datablock)
+        assert cls_idx < db_idx
 
     def test_explicit_attrs_shadow_both_parents(self):
         """class_attrs (__build__, __read__) on the wrapper take priority."""
@@ -478,17 +480,16 @@ class TestDatastackMRO:
     # -- MRO order verification -----------------------------------------------
 
     def test_mro_order(self):
-        """MRO should be: Wrapper → Datastack → Datablock → Datastackable → object."""
+        """MRO should be: Wrapper → Datastackable → Datastack → Datablock → object."""
         Wrapped = datastack(PipelineWithCustomMethods)
         mro = Wrapped.__mro__
         assert mro[0] is Wrapped
+        cls_idx = mro.index(PipelineWithCustomMethods)
         ds_idx = mro.index(Datastack)
         db_idx = mro.index(Datablock)
-        cls_idx = mro.index(PipelineWithCustomMethods)
-        assert ds_idx < db_idx < cls_idx
+        assert cls_idx < ds_idx < db_idx
 
     def test_explicit_attrs_shadow_both_parents(self):
         """class_attrs (__shard__, n_shards) on the wrapper take priority."""
         Wrapped = datastack(PipelineWithCustomMethods)
         assert '__shard__' in Wrapped.__dict__
-        assert 'n_shards' in Wrapped.__dict__

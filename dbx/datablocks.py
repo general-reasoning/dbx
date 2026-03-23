@@ -766,10 +766,11 @@ class Datablock:
 
     def build(self, *args, **kwargs):
         if self.capture_output:
-            self.log.verbose(f"-------------------- Capturing stdout/stderr to {self._logpath()} ------------------")
+            logpath = self.anchorhashpathx('log', ext='log', ensure=True)
+            self.log.verbose(f"-------------------- Capturing stdout/stderr to {logpath} ------------------")
             stdout = sys.stdout
             stderr = sys.stderr
-            logpath = self._logpath()
+            
             outfs, _ = fsspec.url_to_fs(logpath)
             captured_stream = outfs.open(logpath, "w", encoding="utf-8")
             sys.stdout = Tee(stdout, captured_stream)
@@ -1145,40 +1146,40 @@ class Datablock:
             self.root,
             self.anchorkey,
         ) if self.anchorkey else self.root
-
-    def _xanchorpath(self, x, *, ensure: bool = False):
-        xanchor = os.path.join(self.anchor, f".{x}")
-        xanchorpath = os.path.join(self.root, xanchor)
-        if ensure:
-            fs, _ = fsspec.url_to_fs(xanchorpath)
-            fs.makedirs(xanchorpath, exist_ok=True)
-        return xanchorpath
     
-    def _xpath(self, x, ext=None, *, ensure: bool = True):
-        xanchorpath = self._xanchorpath(x)
-        xhashpath = os.path.join(xanchorpath, self.hash)
+    @staticmethod
+    def anchorpathx(root, anchor, x, *, ensure: bool = False):
+        """Return /root/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
+        anchorpathx = os.path.join(root, anchor, ".dbx", x)
         if ensure:
-            fs, _ = fsspec.url_to_fs(xhashpath)
-            fs.makedirs(xhashpath, exist_ok=True)
+            fs, _ = fsspec.url_to_fs(anchorpathx)
+            fs.makedirs(anchorpathx, exist_ok=True)
+        return anchorpathx
+
+    def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True, dt=None):
+        anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x)
+        anchorhashpathx = os.path.join(anchorpathx, self.hash)
+        if ensure_dirpath:
+            fs, _ = fsspec.url_to_fs(anchorhashpathx)
+            fs.makedirs(anchorhashpathx, exist_ok=True)
         if ext is None:
             ext = x
-        xpath = os.path.join(xhashpath, f'{self.dt}.{ext}')
+        if dt is None:
+            dt = self.dt
+        xpath = os.path.join(anchorhashpathx, f'{self.fqcn}-{x}-{dt}.{ext}')
         return xpath
+
+    def journalanchorpath(self, *, ensure_dirpath: bool = False):
+        """Convenience function: primarily for user feedback.
+        Return /root/anchor/.dbx/journal — the anchor-level directory for journal files."""
+        return Datablock.anchorpathx(self.root, self.anchor, 'journal', ensure=ensure_dirpath)
+
     
-    def _loganchorpath(self):
-        return self._xanchorpath('log')
+    def journalanchorhashpath(self, *, ensure_dirpath: bool = False):
+        """Convenience function: primarily for user feedback.
+        Return /root/anchor/.dbx/journal/hash/{fqcn}-{dt}.journal."""
+        return self.anchorhashpathx('journal', ensure_dirpath=ensure_dirpath)
 
-    def _logpath(self, *, ensure: bool = True):
-        return self._xpath('log', ext='log', ensure=ensure)
-
-    @staticmethod
-    def _journalanchorpath(anchor, root, *, ensure: bool = True):
-        journalanchor = os.path.join(anchor, ".journal")
-        journalanchorpath = os.path.join(root, journalanchor)
-        if ensure:
-            fs, _ = fsspec.url_to_fs(journalanchorpath)
-            fs.makedirs(journalanchorpath, exist_ok=True)
-        return journalanchorpath
     #PATHS: END
 
     #LOG LEVEL: BEGIN
@@ -1496,13 +1497,13 @@ class Datablock:
             data['hash'] = self.hash
             data['datetime'] = self.dt
         #
-        ypath = self._xpath(name, 'yaml')
+        ypath = self.anchorhashpathx(name, 'yaml')
         yfs, _ = fsspec.url_to_fs(ypath)
         write_yaml(data, ypath)
         assert yfs.exists(ypath), f"path {ypath} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
         #
-        pqpath = self._xpath(name, 'parquet')
+        pqpath = self.anchorhashpathx(name, 'parquet')
         pqfs, _ = fsspec.url_to_fs(pqpath)
         df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
         df.to_parquet(pqpath)
@@ -1511,7 +1512,7 @@ class Datablock:
 
     def _write_str(self, name, text):
         #
-        path = self._xpath(name, 'txt')
+        path = self.anchorhashpathx(name, 'txt')
         fs, _ = fsspec.url_to_fs(path)
         write_str(text, path)
         assert fs.exists(path), f"scopepath {path} does not exist after writing"
@@ -1529,30 +1530,28 @@ class Datablock:
             self._write_str('context', context)
         #
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-        classname = self.__module__ + "." + self.__class__.__name__
-        filename = f"{classname}-{self.hash}-{dt}"
 
-        spec_path = self._xpath('spec', 'yaml')
-        dfn_path = self._xpath('dfn', 'yaml')
-        kwargs_path = self._xpath('kwargs', 'yaml')
-        quote_path = self._xpath('quote', 'txt')
-        handle_path = self._xpath('quote', 'txt')
-        repr_path = self._xpath('repr', 'txt')
-        hashstr_path = self._xpath('hashstr', 'txt')
+        spec_path = self.anchorhashpathx('spec', 'yaml')
+        dfn_path = self.anchorhashpathx('dfn', 'yaml')
+        kwargs_path = self.anchorhashpathx('kwargs', 'yaml')
+        quote_path = self.anchorhashpathx('quote', 'txt')
+        handle_path = self.anchorhashpathx('quote', 'txt')
+        repr_path = self.anchorhashpathx('repr', 'txt')
+        hashstr_path = self.anchorhashpathx('hashstr', 'txt')
         if context is not None and not inline_context:
-            context_path = self._xpath('context', 'txt')
+            context_path = self.anchorhashpathx('context', 'txt')
             context = context_path
         else:
             context_path = None
         #
-        logpath = self._logpath()
+        logpath = self.anchorhashpathx('log', ensure_dirpath=True)
         if logpath is not None:
             logfs, _ = fsspec.url_to_fs(logpath)
             has_log = logfs.exists(logpath)
         else:
             has_log = False
         #
-        journal_path = os.path.join(self._journalanchorpath(self.anchor, self.root), f"{filename}.parquet")
+        journal_path = self.anchorhashpathx('journal', 'parquet', dt=dt)
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build_datetime': self.build_dt,
                                          'version': self.version,
@@ -1584,12 +1583,11 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, entry: int = None, *, root=None,
-                prefix: str = None, **kwargs):
+    def Journal(anchor, entry: int = None, *, classname: str = None, root=None, **kwargs):
         if root is None:
             root = os.environ.get('DBX_ROOT')
         # Use ensure=False: we are reading, not writing — do not create the dir.
-        journaldirpath = Datablock._journalanchorpath(anchor, root, ensure=False)
+        journaldirpath = Datablock.anchorpathx(root, anchor, 'journal')
         fs, _ = fsspec.url_to_fs(journaldirpath)
 
         log = Logger()
@@ -1599,11 +1597,10 @@ class Datablock:
                 f"Check that the class name / anchor and root path are correct."
             )
 
-        files = list(fs.ls(journaldirpath))
-        parquet_files = [f for f in files if f.endswith('.parquet')]
-        if prefix is not None:
-            parquet_files = [f for f in parquet_files
-                            if os.path.basename(f).startswith(prefix)]
+        files = fs.glob(os.path.join(journaldirpath, '**/*.parquet'))
+        if classname is not None:
+            files = [f for f in files if os.path.basename(f).startswith(classname)]
+        parquet_files = files
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:

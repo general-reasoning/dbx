@@ -23,7 +23,7 @@ from dbx.datablocks import journal, Datablock, JournalFrame, JournalEntry
 def _journal_dir(root, cls) -> str:
     """Return the journal directory path for a given class and root."""
     anchor = cls.__module__ + "." + cls.__name__
-    return Datablock._journalanchorpath(anchor, root, ensure=False)
+    return Datablock.anchorpathx(root, anchor, 'journal')
 
 
 def _write_fake_journal_entry(journal_dir: str, hash_val: str = "abc123", event: str = "build"):
@@ -162,18 +162,19 @@ class TestJournalRootPassedCorrectly:
             journal(FakeBlock, root=bad_root)
 
 
-# A second Datablock subclass for prefix-filtering tests
+# A second Datablock subclass for classname-filtering tests
 class OtherBlock(Datablock):
     def __build__(self):
         pass
 
 
-def _write_prefixed_entry(journal_dir, classname, hash_val="abc", event="build"):
-    """Write a parquet entry with a classname-prefixed filename."""
-    os.makedirs(journal_dir, exist_ok=True)
+def _write_journal_in_hash_dir(journal_dir, classname, hash_val="abc", event="build"):
+    """Write a parquet entry inside a hash subdirectory, mirroring anchorhashpathx layout."""
+    hash_dir = os.path.join(journal_dir, hash_val)
+    os.makedirs(hash_dir, exist_ok=True)
     now = datetime.datetime.now()
     dt = now.isoformat().replace(' ', '-').replace(':', '-')
-    filename = f"{classname}-{hash_val}-{dt}"
+    filename = f"{classname}-journal-{dt}"
     df = pd.DataFrame([{
         'hash': hash_val,
         'datetime': now,
@@ -181,70 +182,69 @@ def _write_prefixed_entry(journal_dir, classname, hash_val="abc", event="build")
         'anchor': classname,
         'root': '/tmp/dbx_test',
     }])
-    path = os.path.join(journal_dir, f"{filename}.parquet")
+    path = os.path.join(hash_dir, f"{filename}.parquet")
     df.to_parquet(path)
     return path
 
 
 # ---------------------------------------------------------------------------
-# 5. prefix filtering
+# 5. classname filtering
 # ---------------------------------------------------------------------------
 
-class TestJournalPrefixFiltering:
+class TestJournalClassnameFiltering:
 
-    def test_no_prefix_returns_all(self, tmp_path, monkeypatch):
-        """Without prefix, Journal() returns entries from all classes."""
+    def test_no_classname_returns_all(self, tmp_path, monkeypatch):
+        """Without classname, Journal() returns entries from all classes."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         jdir = _journal_dir(root, FakeBlock)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
         other_anchor = OtherBlock.__module__ + "." + OtherBlock.__name__
-        _write_prefixed_entry(jdir, fake_anchor, hash_val="aaa")
-        _write_prefixed_entry(jdir, other_anchor, hash_val="bbb")
+        _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="aaa")
+        _write_journal_in_hash_dir(jdir, other_anchor, hash_val="bbb")
 
         result = journal(FakeBlock, root=root)
         assert isinstance(result, JournalFrame)
         assert len(result) == 2
 
-    def test_prefix_filters_by_classname(self, tmp_path, monkeypatch):
-        """With prefix=anchor, only matching entries are returned."""
+    def test_classname_filters(self, tmp_path, monkeypatch):
+        """With classname=, only matching entries are returned."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         jdir = _journal_dir(root, FakeBlock)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
         other_anchor = OtherBlock.__module__ + "." + OtherBlock.__name__
-        _write_prefixed_entry(jdir, fake_anchor, hash_val="aaa")
-        _write_prefixed_entry(jdir, other_anchor, hash_val="bbb")
+        _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="aaa")
+        _write_journal_in_hash_dir(jdir, other_anchor, hash_val="bbb")
 
         result = Datablock.Journal(
-            fake_anchor, root=root, prefix=fake_anchor + "-",
+            fake_anchor, root=root, classname=fake_anchor,
         )
         assert isinstance(result, JournalFrame)
         assert len(result) == 1
         assert result.iloc[0]['hash'] == "aaa"
 
-    def test_prefix_no_match_returns_empty(self, tmp_path, monkeypatch):
-        """Prefix that matches nothing yields JournalFrame(None)."""
+    def test_classname_no_match_returns_empty(self, tmp_path, monkeypatch):
+        """Classname that matches nothing yields JournalFrame(None)."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         jdir = _journal_dir(root, FakeBlock)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
-        _write_prefixed_entry(jdir, fake_anchor, hash_val="aaa")
+        _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="aaa")
 
         result = Datablock.Journal(
-            fake_anchor, root=root, prefix="nonexistent.Class-",
+            fake_anchor, root=root, classname="nonexistent.Class",
         )
         assert isinstance(result, JournalFrame)
-        # No matching files → wraps None → length 0
         assert len(result) == 0
 
-    def test_prefix_none_is_default(self, tmp_path, monkeypatch):
-        """prefix=None (default) behaves identically to no prefix."""
+    def test_classname_none_is_default(self, tmp_path, monkeypatch):
+        """classname=None (default) returns everything."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         jdir = _journal_dir(root, FakeBlock)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
-        _write_prefixed_entry(jdir, fake_anchor, hash_val="xyz")
+        _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="xyz")
 
-        result = Datablock.Journal(fake_anchor, root=root, prefix=None)
+        result = Datablock.Journal(fake_anchor, root=root, classname=None)
         assert len(result) == 1

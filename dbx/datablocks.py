@@ -1167,7 +1167,7 @@ class Datablock:
             fs.makedirs(anchorhashpathx, exist_ok=True)
         if ext is None:
             ext = x
-        xpath = os.path.join(anchorhashpathx, f'{x}-{self.fqcn}-{self.hash}-{self.dt}.{ext}')
+        xpath = os.path.join(anchorhashpathx, f'{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
         return xpath
 
     def journalinstancepath(self, *, ensure_dirpath: bool = False):
@@ -1594,7 +1594,7 @@ class Datablock:
 
         files = fs.glob(os.path.join(journaldirpath, '**/*.parquet'))
         if classname is not None:
-            files = [f for f in files if os.path.basename(f).startswith(f'journal-{classname}')]
+            files = [f for f in files if os.path.basename(f).startswith(classname)]
         parquet_files = files
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")

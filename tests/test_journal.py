@@ -248,3 +248,85 @@ class TestJournalClassnameFiltering:
 
         result = Datablock.Journal(fake_anchor, root=root, classname=None)
         assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. journal() finds entries regardless of anchor form
+# ---------------------------------------------------------------------------
+
+class BuildableBlock(Datablock):
+    """Block that actually builds a file so a journal entry gets written."""
+    TOPICFILE = 'output.txt'
+
+    def __build__(self):
+        self.dirpath(ensure=True)
+        with open(self.path(), 'w') as f:
+            f.write('built')
+
+
+class TestJournalAnchorForms:
+
+    def test_default_anchor_journal(self, tmp_path, monkeypatch):
+        """journal() finds entries when using the default anchor (fqcn)."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        block = BuildableBlock(root=root)
+        block.build()
+        result = block.journal()
+        assert isinstance(result, JournalFrame)
+        assert len(result) >= 1
+
+    def test_custom_anchor_journal(self, tmp_path, monkeypatch):
+        """journal() finds entries when using a custom anchor."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        block = BuildableBlock(root=root, anchor='my.custom.anchor')
+        block.build()
+        result = block.journal()
+        assert isinstance(result, JournalFrame)
+        assert len(result) >= 1
+
+    def test_static_journal_default_anchor(self, tmp_path, monkeypatch):
+        """Datablock.Journal(anchor) finds entries for default anchor."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        block = BuildableBlock(root=root)
+        block.build()
+        anchor = block.anchor
+        result = Datablock.Journal(anchor, root=root)
+        assert isinstance(result, JournalFrame)
+        assert len(result) >= 1
+
+    def test_static_journal_custom_anchor(self, tmp_path, monkeypatch):
+        """Datablock.Journal(anchor) finds entries for custom anchor."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        block = BuildableBlock(root=root, anchor='custom.anchor')
+        block.build()
+        result = Datablock.Journal('custom.anchor', root=root)
+        assert isinstance(result, JournalFrame)
+        assert len(result) >= 1
+
+    def test_multiple_builds_all_found(self, tmp_path, monkeypatch):
+        """Builds with different specs create distinct journal entries, all found."""
+        from dataclasses import dataclass
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+
+        class CfgBlock(Datablock):
+            TOPICFILE = 'out.txt'
+            @dataclass
+            class CONFIG(Datablock.CONFIG):
+                label: str = 'a'
+            def __build__(self):
+                self.dirpath(ensure=True)
+                with open(self.path(), 'w') as f:
+                    f.write(self.cfg.label)
+
+        b1 = CfgBlock(root=root, spec={'label': 'first'})
+        b1.build()
+        b2 = CfgBlock(root=root, spec={'label': 'second'})
+        b2.build()
+        # Both share the same anchor, journal should find both
+        result = b1.journal()
+        assert len(result) >= 2

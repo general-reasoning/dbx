@@ -370,6 +370,21 @@ def datastack(cls):
         class_attrs['CONFIG'] = _EmptyCONFIG
 
     # path() comes naturally via MRO from cls; no explicit delegation needed.
+    # CORRECTION: With MI order (Datastack > Datablock > cls), Datablock.path()
+    # would shadow the Datastackable's path() since Datablock comes first in MRO.
+    # We must explicitly lift it into class_attrs so it takes priority.
+    if hasattr(cls, 'path') and callable(getattr(cls, 'path')):
+        def path(self, topic=None, *, ensure_dirpath=False):
+            return cls.path(self, topic, ensure_dirpath=ensure_dirpath)
+        class_attrs['path'] = path
+
+        def dirpath(self, topic=None, *, ensure=False, list=False):
+            raise NotImplementedError(
+                f"{cls.__name__} defines its own path(); "
+                f"the standard Datablock.dirpath() (root/anchor/hash/topic) "
+                f"is not used. Use .path() instead."
+            )
+        class_attrs['dirpath'] = dirpath
 
     # -- Delegating methods -------------------------------------------------------
     def __post_init__(self):

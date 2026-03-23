@@ -1148,20 +1148,20 @@ class Datablock:
         ) if self.anchorkey else self.root
     
     @staticmethod
-    def anchorpathx(root, anchor, x, *, ensure: bool = False):
+    def anchorpathx(root, anchor, x, *, fqcn=None, ensure: bool = False):
         """Return /root/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
-        anchorpathx = os.path.join(root, anchor, ".dbx", x)
+        if fqcn is not None:
+            anchorpathx = os.path.join(root, anchor, ".dbx", fqcn, x)
+        else:
+            anchorpathx = os.path.join(root, anchor, ".dbx", x)
         if ensure:
             fs, _ = fsspec.url_to_fs(anchorpathx)
             fs.makedirs(anchorpathx, exist_ok=True)
         return anchorpathx
 
     def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
-        anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x)
-        if self.anchor == self.fqcn:
-            anchorhashpathx = os.path.join(anchorpathx, self.hash)
-        else:
-            anchorhashpathx = os.path.join(anchorpathx, self.fqcn, self.hash)
+        anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x, fqcn=self.fqcn if self.anchor != self.fqcn else None)
+        anchorhashpathx = os.path.join(anchorpathx, self.hash)
         if ensure_dirpath:
             fs, _ = fsspec.url_to_fs(anchorhashpathx)
             fs.makedirs(anchorhashpathx, exist_ok=True)
@@ -1582,22 +1582,22 @@ class Datablock:
         if root is None:
             root = os.environ.get('DBX_ROOT')
         # Use ensure=False: we are reading, not writing — do not create the dir.
-        journaldirpath = Datablock.anchorpathx(root, anchor, 'journal')
-        fs, _ = fsspec.url_to_fs(journaldirpath)
+        dbxdir = os.path.join(root, anchor, ".dbx")
+        fs, _ = fsspec.url_to_fs(dbxdir)
 
         log = Logger()
-        if not fs.exists(journaldirpath):
+        if not fs.exists(dbxdir):
             raise FileNotFoundError(
-                f"Journal directory not found for {anchor!r}: {journaldirpath}\n"
+                f"Journal directory not found for {anchor!r}: {dbxdir}\n"
                 f"Check that the class name / anchor and root path are correct."
             )
 
-        files = fs.glob(os.path.join(journaldirpath, '**/*.parquet'))
+        files = fs.glob(os.path.join(dbxdir, '**/journal/**/*.parquet'))
         if classname is not None:
             files = [f for f in files if os.path.basename(f).startswith(classname)]
         parquet_files = files
 
-        log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
+        log.detailed(f"READING JOURNAL: from {dbxdir=}, files: {parquet_files}")
         if len(parquet_files) > 0:
             dfs = []
             for file in parquet_files:

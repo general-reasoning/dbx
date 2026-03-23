@@ -77,12 +77,13 @@ class TestJournalMissingDir:
         """The FileNotFoundError message should include the resolved path."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path / "nonexistent_root")
-        expected_dir = _journal_dir(root, FakeBlock)
+        anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
+        expected_dbx_dir = os.path.join(root, anchor, ".dbx")
 
         with pytest.raises(FileNotFoundError) as exc_info:
             journal(FakeBlock, root=root)
 
-        assert expected_dir in str(exc_info.value)
+        assert expected_dbx_dir in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

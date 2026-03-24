@@ -6,12 +6,12 @@ The Datastackable's __init__ is NOT called when wrapped — Datablock.__init__
 provides cfg, verbose, log, etc.
 
 Verifies:
-1. Protocol validation (missing __shards__, SHARD raises TypeError).
+1. Protocol validation (missing shard(), SHARD raises TypeError).
 2. Wrapper class structure (name, bases, __wrapped__).
-3. shards() creates wrapped Datablocks from __shard__ results.
+3. shards() creates wrapped Datablocks from shard() results.
 4. __build__ orchestrates shard building correctly.
 5. CONFIG lifting works.
-6. Optional __read__ delegation.
+6. Optional read() → __read__ delegation.
 7. Serialization round-trip (pickle).
 8. from_datastackable classmethod.
 """
@@ -48,7 +48,7 @@ class ItemProcessor:
         self.cfg = cfg
         self.built = False
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         self.built = True
         # When wrapped, self IS the Datablock, so self.path() works directly
         path = self.path()
@@ -57,7 +57,7 @@ class ItemProcessor:
             f.write(f"item:{self.cfg.item_id}")
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         path = self.path()
         with open(path, 'r') as f:
             return f.read()
@@ -84,17 +84,17 @@ class BatchProcessor:
     def n_shards(self):
         return self.cfg.n_items
 
-    def __shard__(self, idx):
+    def shard(self, idx):
         return ItemProcessor(
             cfg=ItemProcessor.CONFIG(item_id=idx),
         )
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return f"batch with {self.cfg.n_items} items"
 
 
 class NoReadBatchProcessor:
-    """A Datastackable without __read__."""
+    """A Datastackable without read()."""
     SHARD = ItemProcessor
 
     @dataclass
@@ -108,7 +108,7 @@ class NoReadBatchProcessor:
     def n_shards(self):
         return self.cfg.n_items
 
-    def __shard__(self, idx):
+    def shard(self, idx):
         return ItemProcessor(
             cfg=ItemProcessor.CONFIG(item_id=idx),
         )
@@ -125,13 +125,13 @@ class TestProtocolValidation:
             SHARD = ItemProcessor
             @property
             def n_shards(self): return 0
-        with pytest.raises(TypeError, match="__shard__"):
+        with pytest.raises(TypeError, match="shard"):
             datastack(Bad)
 
     def test_missing_n_shards_raises(self):
         class Bad:
             SHARD = ItemProcessor
-            def __shard__(self, idx): return None
+            def shard(self, idx): return None
         with pytest.raises(TypeError, match="n_shards"):
             datastack(Bad)
 
@@ -139,7 +139,7 @@ class TestProtocolValidation:
         class Bad:
             @property
             def n_shards(self): return 0
-            def __shard__(self, idx): return None
+            def shard(self, idx): return None
         with pytest.raises(TypeError, match="SHARD"):
             datastack(Bad)
 
@@ -276,8 +276,8 @@ class TestReadDelegation:
 
     def test_no_read_when_not_defined(self):
         Wrapped = datastack(NoReadBatchProcessor)
-        assert not hasattr(NoReadBatchProcessor, '__read__')
-        # The wrapper should NOT have __read__ either (inherits Datablock's)
+        assert 'read' not in NoReadBatchProcessor.__dict__
+        # The wrapper should NOT have __read__ (inherits Datablock's stub)
 
 
 # ---------------------------------------------------------------------------

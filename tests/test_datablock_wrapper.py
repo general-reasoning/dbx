@@ -6,12 +6,12 @@ The Datablockable's __init__ is NOT called when wrapped — Datablock.__init__
 provides cfg, verbose, log, etc.
 
 Verifies:
-1. Protocol validation (missing __build__, __read__ raises TypeError).
+1. Protocol validation (missing build(), read() raises TypeError).
 2. Wrapper class has correct name, bases, and __wrapped__ attribute.
 3. TOPICFILES / TOPICFILE are correctly lifted from the Datablockable class.
 4. CONFIG is lifted; user CONFIG not inheriting Datablock.CONFIG gets auto-wrapped.
 5. The wrapper instance IS both Datablock and Datablockable.
-6. __build__ and __read__ delegate to the Datablockable class methods.
+6. Wrapper __build__/__read__ delegate to Datablockable's build()/read().
 7. VERSION is lifted when present.
 8. Anchor uses caller module, not dbx.datablocks.
 9. Serialization round-trip works (pickle).
@@ -53,12 +53,12 @@ class MultiTopicProcessor:
         self.built = False
         self.build_args = None
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         self.built = True
         self.build_args = (args, kwargs)
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return f"data_for_{topic}"
 
 
@@ -73,10 +73,10 @@ class SingleTopicProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return "single_topic_data"
 
 
@@ -91,10 +91,10 @@ class InheritingConfigProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         return self
 
-    def __read__(self, topic):
+    def read(self, topic=None):
         return f"result_{self.cfg.n_components}"
 
 
@@ -109,10 +109,10 @@ class EmptyConfigProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return None
 
 
@@ -123,10 +123,10 @@ class NoConfigProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return None
 
 
@@ -141,21 +141,20 @@ class NoTopicProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         NoTopicProcessor._build_count += 1
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return "no_topic_data"
 
 
 class PathOverrideProcessor:
     """A no-topic Datablockable that overrides path() to return dirpath().
 
-    This mimics config-wrapper Datablocks (like Lightning) that define a
-    custom path() returning the key-level directory instead of None.
-    Before the valid() fix, this would cause valid() to return False
-    because the directory doesn't exist yet.
+    path() overrides Datablock.path() directly via MRO (not mapped to a dunder).
+    This mimics config-wrapper Datablocks (like Lightning) where the artifact
+    is a directory, not a file.
     """
     _build_count = 0
 
@@ -167,13 +166,14 @@ class PathOverrideProcessor:
         self.cfg = cfg
 
     def path(self, topic=None, *, ensure_dirpath=False):
+        """Override Datablock.path() via MRO — not mapped to a dunder."""
         return self.dirpath()
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         PathOverrideProcessor._build_count += 1
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return "path_override_data"
 
 
@@ -189,10 +189,10 @@ class VersionedProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return "versioned_data"
 
 
@@ -205,25 +205,24 @@ class TestProtocolValidation:
     def test_missing_build_raises(self):
         class Bad:
             TOPICFILE = 'x.txt'
-            def __read__(self, topic): ...
-        with pytest.raises(TypeError, match="__build__"):
+            def read(self, topic=None): ...
+        with pytest.raises(TypeError, match="build"):
             datablock(Bad)
 
     def test_missing_read_raises(self):
         class Bad:
             TOPICFILE = 'x.txt'
-            def __build__(self): ...
-        with pytest.raises(TypeError, match="__read__"):
+            def build(self): ...
+        with pytest.raises(TypeError, match="read"):
             datablock(Bad)
 
     def test_missing_topics_accepted(self):
-        """TOPICFILES/TOPICFILE may be set at class level or not (dynamic setting
-        is no longer supported since __init__ is not called when wrapped)."""
+        """TOPICFILES/TOPICFILE may be set at class level or not."""
         class NoClassLevelTopics:
             def __init__(self, *, cfg=None, **_):
                 self.TOPICFILE = 'dynamic.txt'  # only works standalone
-            def __build__(self, *args, **kwargs): return self
-            def __read__(self, topic=None): return None
+            def build(self, *args, **kwargs): return self
+            def read(self, topic=None): return None
         # Should NOT raise
         Wrapped = datablock(NoClassLevelTopics)
         assert issubclass(Wrapped, Datablock)
@@ -346,6 +345,7 @@ class TestMIInstance:
 class TestDelegation:
 
     def test_build_delegates(self):
+        """Wrapper __build__ delegates to Datablockable.build()."""
         Wrapped = datablock(MultiTopicProcessor)
         block = Wrapped(root='/tmp/dbx_test_wrapper')
         block.__build__('arg1', key='val')
@@ -353,6 +353,7 @@ class TestDelegation:
         assert block.build_args == (('arg1',), {'key': 'val'})
 
     def test_read_delegates(self):
+        """Wrapper __read__ delegates to Datablockable.read()."""
         Wrapped = datablock(MultiTopicProcessor)
         block = Wrapped(root='/tmp/dbx_test_wrapper')
         result = block.__read__('features')

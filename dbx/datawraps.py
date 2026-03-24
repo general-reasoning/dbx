@@ -19,11 +19,13 @@ def datablock(cls):
         def __init__(self, *, cfg, log_volume: LogVolume, log):
             ...
 
-        def __build__(self, *args, **kwargs):
+        def build(self, *args, **kwargs):
+            # Public build — maps onto Datablock.__build__
             ...
             return self
 
-        def __read__(self, topic):
+        def read(self, topic=None):
+            # Public read — maps onto Datablock.__read__
             ...
 
     Optionally, a Datablockable may define:
@@ -31,6 +33,12 @@ def datablock(cls):
         def path(self, topic=None, *, ensure_dirpath=False):
             # Override Datablock.path() with custom path logic
             ...
+
+    The Datablockable's ``build`` and ``read`` become the wrapper's
+    ``__build__`` and ``__read__`` dunders, keeping the Datablock dunder
+    interface internal.  This means the Datablockable is fully usable as a
+    standalone class (calling ``.build()`` / ``.read()`` directly) *and*
+    pluggable into the ``Datablock`` framework.
 
     Usage::
 
@@ -40,7 +48,7 @@ def datablock(cls):
         result = block.read('features')
 
     The returned class is a proper ``Datablock`` subclass named
-    ``_<cls.__name__>_Datablock_``.  It can also be used as a decorator::
+    ``<cls.__name__>_Datablock``.  It can also be used as a decorator::
 
         @dbx.datablock
         class MyProcessor:
@@ -57,10 +65,10 @@ def datablock(cls):
         A dynamically-created ``Datablock`` subclass wrapping *cls*.
     """
     # -- Validate protocol --------------------------------------------------------
-    if not hasattr(cls, '__build__'):
-        raise TypeError(f"{cls.__name__} must define __build__ to be Datablockable")
-    if not hasattr(cls, '__read__'):
-        raise TypeError(f"{cls.__name__} must define __read__ to be Datablockable")
+    if 'build' not in cls.__dict__:
+        raise TypeError(f"{cls.__name__} must define build() to be Datablockable")
+    if 'read' not in cls.__dict__:
+        raise TypeError(f"{cls.__name__} must define read() to be Datablockable")
     # NOTE: TOPICFILES / TOPICFILE may be defined at class level OR in __init__.
     # We lift class-level ones here; instance-level ones are propagated in
     # __post_init__ after the inner object is constructed.
@@ -124,11 +132,11 @@ def datablock(cls):
         pass
 
     def __build__(self, *args, **kwargs):
-        cls.__build__(self, *args, **kwargs)
+        cls.build(self, *args, **kwargs)
         return self
 
     def __read__(self, topic=None):
-        return cls.__read__(self, topic)
+        return cls.read(self, topic)
 
     def __reduce__(self):
         # Reconstruct via datablock(wrapped_cls) + __setstate__,
@@ -202,7 +210,10 @@ def datablock(cls):
         return wrapper_cls(root=root, spec=spec, **kwargs)
 
     class_attrs['__init__'] = Datablock.__init__
-    class_attrs['build'] = Datablock.build
+    class_attrs['build'] = Datablock.build    # shields cls.build from MRO: cls.build() → __build__ only
+    class_attrs['read'] = Datablock.read      # shields cls.read  from MRO: cls.read()  → __read__  only
+    # NOTE: path() and valid() are NOT shielded — if cls defines them they
+    # override Datablock's public methods directly via MRO (cls, Datablock).
     class_attrs['__post_init__'] = __post_init__
     class_attrs['__build__'] = __build__
     class_attrs['__read__'] = __read__
@@ -252,24 +263,29 @@ def datastack(cls):
             # Return the number of shards
             ...
 
-        def __shard__(self, idx: int):
-            # Return the SHARD instance for the given index
+        def shard(self, idx: int):
+            # Return the SHARD instance for the given index.
+            # Maps onto Datastack.__shard__ in the wrapper.
             ...
 
     Optional methods:
 
-        def __read__(self, topic):  # if the stack produces its own output
+        def read(self, topic=None):  # if the stack produces its own output
+            # Maps onto Datastack.__read__ in the wrapper.
+            ...
+
+        def stack(self):  # if the stack produces aggregated output
+            # Maps onto Datastack.__stack__ in the wrapper.
             ...
 
     The wrapper creates a ``Datastack`` subclass that:
 
     1. Creates the inner Datastackable object (like ``datablock()``).
-    2. Overrides ``n_shards`` and ``__shard__(idx)`` to delegate to the
-       inner object, converting each returned Datablockable instance into
-       a proper ``Datablock`` via ``from_datablockable()``.
+    2. Overrides ``n_shards`` and ``__shard__(idx)`` to delegate to
+       ``cls.shard(self, idx)``, converting each returned Datablockable
+       instance into a proper ``Datablock`` via ``from_datablockable()``.
     3. Inherits ``shard()``, ``shards()``, and ``__build__()`` from
-       ``Datastack``, which builds shards in parallel using the selected
-       ``DatablocksBuilder``.
+       ``Datastack``, which builds shards in parallel.
 
     Usage::
 
@@ -290,7 +306,7 @@ def datastack(cls):
             def n_shards(self):
                 return compute_n_shards()
 
-            def __shard__(self, idx):
+            def shard(self, idx):
                 return MyProcessor(cfg=..., ...)
 
         stack = MyPipeline(root='/data', spec={...},
@@ -310,8 +326,8 @@ def datastack(cls):
     from .datablocks import Datastack
 
     # -- Validate protocol --------------------------------------------------------
-    if not hasattr(cls, '__shard__'):
-        raise TypeError(f"{cls.__name__} must define __shard__ to be Datastackable")
+    if 'shard' not in cls.__dict__:
+        raise TypeError(f"{cls.__name__} must define shard() to be Datastackable")
     if not hasattr(cls, 'n_shards'):
         raise TypeError(f"{cls.__name__} must define n_shards to be Datastackable")
     if not hasattr(cls, 'SHARD'):
@@ -378,8 +394,8 @@ def datastack(cls):
     # explicit delegation needed.
 
     def __shard__(self, idx: int):
-        """Convert a single Datastackable __shard__ output to a Datablock."""
-        datablockable_shard = cls.__shard__(self, idx)
+        """Convert a Datastackable shard() output to a Datablock."""
+        datablockable_shard = cls.shard(self, idx)
         return self._ShardBlock_.from_datablockable(
             datablockable_shard,
             root=self.root,
@@ -391,21 +407,23 @@ def datastack(cls):
         return (_unpickle_datastack_instance, (cls, self.__class__.__module__, self.__getstate__()))
 
     class_attrs['__init__'] = Datastack.__init__
-    class_attrs['build'] = Datablock.build
+    class_attrs['build'] = Datablock.build       # shields cls.build from MRO → __build__ only
+    class_attrs['shard'] = Datastack.shard       # shields cls.shard from MRO → __shard__ only
+    # NOTE: n_shards, path(), valid() are NOT shielded — cls overrides via MRO.
     class_attrs['__post_init__'] = __post_init__
     class_attrs['__shard__'] = __shard__
     class_attrs['__reduce__'] = __reduce__
 
-    # Optional __read__ delegation
-    if hasattr(cls, '__read__'):
+    # Optional read() → __read__ delegation
+    if 'read' in cls.__dict__:
         def __read__(self, topic=None):
-            return cls.__read__(self, topic)
+            return cls.read(self, topic)
         class_attrs['__read__'] = __read__
 
-    # Optional __stack__ delegation
-    if hasattr(cls, '__stack__'):
+    # Optional stack() → __stack__ delegation
+    if 'stack' in cls.__dict__:
         def __stack__(self):
-            return cls.__stack__(self)
+            return cls.stack(self)
         class_attrs['__stack__'] = __stack__
 
     # -- from_datastackable classmethod -------------------------------------------

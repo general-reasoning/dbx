@@ -61,14 +61,14 @@ class SimpleDatblockable:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         path = self.path()
         self.dirpath(ensure=True)
         with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         with open(self.path(), 'r') as f:
             return f.read()
 

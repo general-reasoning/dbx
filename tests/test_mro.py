@@ -6,10 +6,13 @@ The wrappers use true multiple inheritance:
     datastack(cls) → type(name, (Datastack, cls), ...)
 
 This means:
-- Protocol methods (__build__, __read__, __shard__, n_shards) are delegated
-  via explicit class_attrs that call cls.method(self, ...).
+- Protocol methods (build/read → __build__/__read__, shard → __shard__, n_shards)
+  are delegated via explicit class_attrs that call cls.method(self, ...).
 - Datablock/Datastack methods (build, valid, hash, path, shards, ...) are
-  inherited normally.
+  inherited normally and shielded in class_attrs so cls.build/shard map only
+  to the dunders, not to Datablock's public build()/shard().
+- path() and valid() are NOT shielded: if cls defines them they override
+  Datablock's public methods directly via MRO.
 - Custom methods on the Datablockable/Datastackable are accessible on
   wrapper instances via MRO.
 
@@ -54,11 +57,11 @@ class ProcessorWithCustomMethods:
         self.cfg = cfg
         self._built = False
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         self._built = True
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return f"result_{self.cfg.factor}"
 
     # -- Custom methods (should be accessible on wrapper via MRO) --
@@ -73,7 +76,7 @@ class ProcessorWithCustomMethods:
 
 
 class ProcessorWithPathOverride:
-    """Datablockable that overrides path() — should shadow Datablock.path()."""
+    """Datablockable that overrides path() — shadows Datablock.path() via MRO."""
     TOPICFILE = 'out.dat'
 
     @dataclass
@@ -83,13 +86,14 @@ class ProcessorWithPathOverride:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return None
 
     def path(self, topic=None, *, ensure_dirpath=False):
+        """Override Datablock.path() via MRO — not mapped to a dunder."""
         return os.path.join(self.cfg.output_dir, self.TOPICFILE)
 
 
@@ -105,10 +109,10 @@ class ProcessorWithConflictingProperty:
         self.cfg = cfg
         self.verbose = True  # should fail: read-only property on Datablock
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return None
 
 
@@ -127,10 +131,10 @@ class ShardProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def __build__(self, *args, **kwargs):
+    def build(self, *args, **kwargs):
         return self
 
-    def __read__(self, topic=None):
+    def read(self, topic=None):
         return f"shard_{self.cfg.idx}"
 
 
@@ -151,7 +155,7 @@ class PipelineWithCustomMethods:
         import math
         return math.ceil(self.cfg.n_items / self.cfg.shard_size)
 
-    def __shard__(self, idx):
+    def shard(self, idx):
         return ShardProcessor(
             cfg=ShardProcessor.CONFIG(idx=idx),
         )
@@ -190,14 +194,14 @@ class TestDatablockMRO:
     # -- Protocol methods (delegated via class_attrs) -------------------------
 
     def test_build_delegates_to_datablockable(self):
-        """__build__ should call the Datablockable's __build__."""
+        """__build__ delegates to Datablockable.build()."""
         Wrapped = datablock(ProcessorWithCustomMethods)
         block = Wrapped(root='/tmp/dbx_test_mro')
         block.__build__()
         assert block._built is True
 
     def test_read_delegates_to_datablockable(self):
-        """__read__ should call the Datablockable's __read__."""
+        """__read__ delegates to Datablockable.read()."""
         Wrapped = datablock(ProcessorWithCustomMethods)
         block = Wrapped(root='/tmp/dbx_test_mro', spec={'factor': 5})
         assert block.__read__() == "result_5"
@@ -313,8 +317,8 @@ class TestDatablockMRO:
             def __init__(self, **_):
                 self.init_called = True
                 self.verbose = True  # would fail if called on wrapper
-            def __build__(self, *args, **kwargs): return self
-            def __read__(self, topic=None): return None
+            def build(self, *args, **kwargs): return self
+            def read(self, topic=None): return None
         Wrapped = datablock(ChecksInit)
         block = Wrapped(root='/tmp/dbx_test_mro')
         # __init__ was NOT called, so no AttributeError and init_called stays False
@@ -329,8 +333,8 @@ class TestDatablockMRO:
                 x: int = 1
             def __init__(self, *, cfg=None, device=None, **_):
                 self.cfg = 'CLOBBERED'  # would clobber if called
-            def __build__(self, *args, **kwargs): return self
-            def __read__(self, topic=None): return None
+            def build(self, *args, **kwargs): return self
+            def read(self, topic=None): return None
         Wrapped = datablock(CfgAssigner)
         block = Wrapped(root='/tmp/dbx_test_mro', spec={'x': 42})
         # __init__ is NOT called, so cfg is Datablock's cached_property

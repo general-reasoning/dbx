@@ -75,6 +75,39 @@ class NoTopicBlock(Datablock):
         self.dirpath(ensure=True)
 
 
+class DirTopicBlock(Datablock):
+    """Datablock where TOPICFILES[topic]=None — artifact is a whole directory.
+
+    path(topic) returns None (validpath → True by convention), but the
+    dirpath(topic) is the real artifact.  UNSAFE_clear must remove it
+    recursively.
+    """
+    TOPICFILES = {'images': None, 'masks': None}
+
+    @dataclass
+    class CONFIG(Datablock.CONFIG):
+        pass
+
+    def __build__(self):
+        for topic in self.TOPICFILES:
+            dirpath = self.dirpath(topic, ensure=True)
+            # Write one or more files inside the topic directory.
+            with open(os.path.join(dirpath, 'data.bin'), 'wb') as f:
+                f.write(b'\x00' * 16)
+
+    def validtopic(self, topic=None):
+        """For dir-valued topics, validity = dirpath exists and is non-empty."""
+        if topic is None:
+            return all(self.validtopic(t) for t in self.TOPICFILES)
+        d = self.dirpath(topic)
+        return os.path.isdir(d) and bool(os.listdir(d))
+
+    def valid(self, topic=None):
+        if topic is not None:
+            return self.validtopic(topic)
+        return all(self.validtopic(t) for t in self.TOPICFILES)
+
+
 class CountingBlock(Datablock):
     """Tracks how many times __build__ is called (to verify skip-if-valid)."""
     TOPICFILE = 'counter.txt'
@@ -477,3 +510,47 @@ class TestUNSAFECopyFrom:
         assert dst.valid() is False
         dst.UNSAFE_copy_from(src.anchorkeypath)
         assert dst.valid() is True
+
+
+# ---------------------------------------------------------------------------
+# 7. TOPICFILES[topic]=None — directory-valued topics
+# ---------------------------------------------------------------------------
+
+class TestDirTopicClear:
+    """TOPICFILES[topic]=None means the artifact is a directory, not a file.
+
+    UNSAFE_clear() must remove it recursively (the fix on datablocks.py
+    lines 897 and 910: is_dir = TOPICFILES.get(topic) is None).
+    """
+
+    def test_build_creates_topic_dirs(self, tmp_path):
+        block = _make_block(DirTopicBlock, tmp_path)
+        block.__build__()
+        for topic in block.TOPICFILES:
+            assert os.path.isdir(block.dirpath(topic))
+            assert os.listdir(block.dirpath(topic))
+
+    def test_valid_after_build(self, tmp_path):
+        block = _make_block(DirTopicBlock, tmp_path)
+        assert not block.valid()
+        block.__build__()
+        assert block.valid()
+
+    def test_clear_all_removes_topic_dirs_recursively(self, tmp_path):
+        """UNSAFE_clear() with no topics should remove each dir-valued topic dir."""
+        block = _make_block(DirTopicBlock, tmp_path)
+        block.__build__()
+        assert block.valid()
+        block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
+        for topic in block.TOPICFILES:
+            assert not os.path.exists(block.dirpath(topic))
+
+    def test_clear_specific_topic_removes_only_that_dir(self, tmp_path):
+        """UNSAFE_clear('images') should only remove images/, not masks/."""
+        block = _make_block(DirTopicBlock, tmp_path)
+        block.__build__()
+        assert block.valid()
+        block.UNSAFE_clear('images', OVERRIDE=True, clear_dirpath=True)
+        assert not os.path.exists(block.dirpath('images'))
+        assert os.path.isdir(block.dirpath('masks'))
+        assert os.listdir(block.dirpath('masks'))

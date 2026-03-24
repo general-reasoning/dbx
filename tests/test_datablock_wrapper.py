@@ -507,3 +507,66 @@ class TestNoTopicWrapper:
         block = Wrapped(root=str(tmp_path))
         block.build()
         assert PathOverrideProcessor._build_count == 0
+
+
+# ---------------------------------------------------------------------------
+# 11. No CONFIG — equivalent to class CONFIG: pass
+# ---------------------------------------------------------------------------
+
+class TestNoConfig:
+    """A Datablockable with no CONFIG should be treated identically to one
+    with `class CONFIG: pass`.  The wrapper synthesises an empty
+    Datablock.CONFIG subclass, so all config/hash/build/read machinery works.
+    """
+
+    def test_wrapping_succeeds(self):
+        Wrapped = datablock(NoConfigProcessor)
+        assert issubclass(Wrapped, Datablock)
+        assert issubclass(Wrapped, NoConfigProcessor)
+
+    def test_config_is_datablock_config_subclass(self):
+        """Synthesised CONFIG must be a Datablock.CONFIG subclass (no extra fields)."""
+        from dataclasses import fields as dc_fields
+        Wrapped = datablock(NoConfigProcessor)
+        assert issubclass(Wrapped.CONFIG, Datablock.CONFIG)
+        # No user-defined fields — only whatever Datablock.CONFIG itself has
+        base_fields = {f.name for f in dc_fields(Datablock.CONFIG)}
+        wrapper_fields = {f.name for f in dc_fields(Wrapped.CONFIG)}
+        assert wrapper_fields == base_fields
+
+    def test_instantiation(self, tmp_path):
+        Wrapped = datablock(NoConfigProcessor)
+        block = Wrapped(root=str(tmp_path))
+        assert isinstance(block, Datablock)
+
+    def test_cfg_accessible(self, tmp_path):
+        """cfg should be available even with no user-defined CONFIG fields."""
+        Wrapped = datablock(NoConfigProcessor)
+        block = Wrapped(root=str(tmp_path))
+        assert block.cfg is not None
+        assert isinstance(block.cfg, Datablock.CONFIG)
+
+    def test_hash_works(self, tmp_path):
+        Wrapped = datablock(NoConfigProcessor)
+        block = Wrapped(root=str(tmp_path))
+        assert isinstance(block.hash, str)
+        assert len(block.hash) > 0
+
+    def test_two_instances_same_hash(self, tmp_path):
+        """Two instances with default (empty) config should have the same hash."""
+        Wrapped = datablock(NoConfigProcessor)
+        b1 = Wrapped(root=str(tmp_path))
+        b2 = Wrapped(root=str(tmp_path))
+        assert b1.hash == b2.hash
+
+    def test_build_and_read(self, tmp_path):
+        Wrapped = datablock(NoConfigProcessor)
+        block = Wrapped(root=str(tmp_path))
+        block.__build__()          # wrapper __build__ → NoConfigProcessor.build()
+        assert block.__read__() is None
+
+    def test_valid(self, tmp_path):
+        """valid() should return False initially (TOPICFILE exists, no file on disk)."""
+        Wrapped = datablock(NoConfigProcessor)
+        block = Wrapped(root=str(tmp_path))
+        assert isinstance(block.valid(), bool)

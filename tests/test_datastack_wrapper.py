@@ -336,3 +336,76 @@ class TestFromDatastackable:
             assert isinstance(stack, Datastack)
             assert isinstance(stack, Datablock)
             assert isinstance(stack, BatchProcessor)
+
+
+# ---------------------------------------------------------------------------
+# 9. No CONFIG — equivalent to class CONFIG: pass
+# ---------------------------------------------------------------------------
+
+class NoConfigBatchProcessor:
+    """A Datastackable with no CONFIG at all.
+
+    Should behave identically to having `class CONFIG: pass`.
+    """
+    SHARD = ItemProcessor
+
+    def __init__(self, *, cfg=None, **_):
+        self.cfg = cfg
+
+    @property
+    def n_shards(self):
+        return 2
+
+    def shard(self, idx):
+        return ItemProcessor(cfg=ItemProcessor.CONFIG(item_id=idx))
+
+
+class TestNoConfigDatastack:
+    """A Datastackable with no CONFIG should be treated identically to one
+    with `class CONFIG: pass` — wrapper succeeds, CONFIG is an empty
+    Datablock.CONFIG subclass, cfg/hash/shards all work.
+    """
+
+    def test_wrapping_succeeds(self):
+        Wrapped = datastack(NoConfigBatchProcessor)
+        assert issubclass(Wrapped, Datastack)
+        assert issubclass(Wrapped, NoConfigBatchProcessor)
+
+    def test_config_is_datablock_config_subclass(self):
+        """Synthesised CONFIG must be a Datablock.CONFIG subclass with no extra fields."""
+        from dataclasses import fields as dc_fields
+        Wrapped = datastack(NoConfigBatchProcessor)
+        assert issubclass(Wrapped.CONFIG, Datablock.CONFIG)
+        base_fields = {f.name for f in dc_fields(Datablock.CONFIG)}
+        wrapper_fields = {f.name for f in dc_fields(Wrapped.CONFIG)}
+        assert wrapper_fields == base_fields
+
+    def test_instantiation(self, tmp_path):
+        Wrapped = datastack(NoConfigBatchProcessor)
+        stack = Wrapped(root=str(tmp_path))
+        assert isinstance(stack, Datastack)
+        assert isinstance(stack, Datablock)
+
+    def test_cfg_accessible(self, tmp_path):
+        Wrapped = datastack(NoConfigBatchProcessor)
+        stack = Wrapped(root=str(tmp_path))
+        assert stack.cfg is not None
+        assert isinstance(stack.cfg, Datablock.CONFIG)
+
+    def test_hash_works(self, tmp_path):
+        Wrapped = datastack(NoConfigBatchProcessor)
+        stack = Wrapped(root=str(tmp_path))
+        assert isinstance(stack.hash, str)
+
+    def test_n_shards(self, tmp_path):
+        Wrapped = datastack(NoConfigBatchProcessor)
+        stack = Wrapped(root=str(tmp_path))
+        assert stack.n_shards == 2
+
+    def test_shards_are_datablocks(self, tmp_path):
+        Wrapped = datastack(NoConfigBatchProcessor)
+        stack = Wrapped(root=str(tmp_path))
+        shard_list = stack.shards()
+        assert len(shard_list) == 2
+        for s in shard_list:
+            assert isinstance(s, Datablock)

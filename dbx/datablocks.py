@@ -1047,7 +1047,7 @@ class Datablock:
             dirpath = self.dirpath(topic)
             topicfiles = self.TOPICFILES[topic]
         if ensure_dirpath and dirpath is not None:
-            self.ensure_path(dirpath)
+            ensure_path(dirpath)
         if isinstance(topicfiles, dict): 
             path = {topic: self.filepath(dirpath, topicfile) for topic, topicfile in topicfiles.items()}
         elif isinstance(topicfiles, list):
@@ -1106,14 +1106,8 @@ class Datablock:
         key = self.key
         keypath = os.path.join(anchorpath, key) if key else anchorpath
         if ensure:
-            fs, _ = fsspec.url_to_fs(keypath)
-            fs.makedirs(keypath, exist_ok=True)
+            ensure_path(keypath)
         return keypath
-
-    def ensure_path(self, path):
-        fs, _ = fsspec.url_to_fs(path)
-        fs.makedirs(path, exist_ok=True)
-        return self
 
     def url(self, topic=None, *, redirect=None):
         path = self.path(topic)

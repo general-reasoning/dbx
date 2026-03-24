@@ -206,6 +206,10 @@ class Tee:
         return getattr(self.files[0], name)
 
 
+def ensure_path(path):
+    fs, _ = fsspec.url_to_fs(path)
+    fs.makedirs(path, exist_ok=True)
+
 
 def UNSAFE_allowed(what: str, *, OVERRIDE: bool = False):
     if not OVERRIDE:

@@ -143,6 +143,29 @@ class TestProtocolValidation:
         with pytest.raises(TypeError, match="SHARD"):
             datastack(Bad)
 
+    def test_inherited_shard_accepted(self, tmp_path):
+        """A class that inherits shard() from a base must be accepted as Datastackable."""
+        class BasePipeline:
+            SHARD = ItemProcessor
+            @property
+            def n_shards(self): return 1
+            def shard(self, idx):
+                return ItemProcessor(cfg=ItemProcessor.CONFIG(item_id=idx))
+
+        class ChildPipeline(BasePipeline):
+            """Inherits shard() — no override."""
+            pass
+
+        # Should NOT raise
+        Wrapped = datastack(ChildPipeline)
+        assert issubclass(Wrapped, Datastack)
+        assert issubclass(Wrapped, ChildPipeline)
+        stack = Wrapped(root=str(tmp_path))
+        assert stack.n_shards == 1
+        shards = stack.shards()
+        assert len(shards) == 1
+        assert isinstance(shards[0], Datablock)
+
 
 # ---------------------------------------------------------------------------
 # 2. Wrapper class structure

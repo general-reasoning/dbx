@@ -227,6 +227,24 @@ class TestProtocolValidation:
         Wrapped = datablock(NoClassLevelTopics)
         assert issubclass(Wrapped, Datablock)
 
+    def test_inherited_build_read_accepted(self, tmp_path):
+        """A class that inherits build() and read() must be accepted as Datablockable."""
+        class Base:
+            TOPICFILE = 'base.txt'
+            def build(self, *args, **kwargs): return self
+            def read(self, topic=None): return 'inherited'
+
+        class Child(Base):
+            """No build/read defined — inherits from Base."""
+            pass
+
+        # Should NOT raise
+        Wrapped = datablock(Child)
+        assert issubclass(Wrapped, Datablock)
+        assert issubclass(Wrapped, Child)
+        block = Wrapped(root=str(tmp_path))
+        assert block.__read__() == 'inherited'
+
 
 # ---------------------------------------------------------------------------
 # 2. Wrapper class structure

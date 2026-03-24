@@ -65,9 +65,12 @@ def datablock(cls):
         A dynamically-created ``Datablock`` subclass wrapping *cls*.
     """
     # -- Validate protocol --------------------------------------------------------
-    if 'build' not in cls.__dict__:
+    # Use hasattr() so subclasses that inherit build()/read() are accepted.
+    # (Pre-wrapping, cls is a plain class; Datablock is not in its MRO yet,
+    # so hasattr won't accidentally match framework methods.)
+    if not hasattr(cls, 'build'):
         raise TypeError(f"{cls.__name__} must define build() to be Datablockable")
-    if 'read' not in cls.__dict__:
+    if not hasattr(cls, 'read'):
         raise TypeError(f"{cls.__name__} must define read() to be Datablockable")
     # NOTE: TOPICFILES / TOPICFILE may be defined at class level OR in __init__.
     # We lift class-level ones here; instance-level ones are propagated in
@@ -326,7 +329,8 @@ def datastack(cls):
     from .datablocks import Datastack
 
     # -- Validate protocol --------------------------------------------------------
-    if 'shard' not in cls.__dict__:
+    # Use hasattr() so subclasses that inherit shard() are accepted.
+    if not hasattr(cls, 'shard'):
         raise TypeError(f"{cls.__name__} must define shard() to be Datastackable")
     if not hasattr(cls, 'n_shards'):
         raise TypeError(f"{cls.__name__} must define n_shards to be Datastackable")
@@ -414,14 +418,14 @@ def datastack(cls):
     class_attrs['__shard__'] = __shard__
     class_attrs['__reduce__'] = __reduce__
 
-    # Optional read() → __read__ delegation
-    if 'read' in cls.__dict__:
+    # Optional read() → __read__ delegation (inherited read() counts)
+    if hasattr(cls, 'read'):
         def __read__(self, topic=None):
             return cls.read(self, topic)
         class_attrs['__read__'] = __read__
 
-    # Optional stack() → __stack__ delegation
-    if 'stack' in cls.__dict__:
+    # Optional stack() → __stack__ delegation (inherited stack() counts)
+    if hasattr(cls, 'stack'):
         def __stack__(self):
             return cls.stack(self)
         class_attrs['__stack__'] = __stack__

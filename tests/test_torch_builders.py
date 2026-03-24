@@ -13,7 +13,7 @@ import os
 import pytest
 from dataclasses import dataclass
 
-from dbx.databits import (
+from dbx.databolts import (
     TorchMultithreadingCallableExecutor,
     TorchMultiprocessingCallableExecutor,
 )

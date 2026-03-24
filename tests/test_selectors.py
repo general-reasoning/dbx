@@ -1,5 +1,5 @@
 """
-Tests for select_executor (databolts) and select_builder (datablocks).
+Tests for select_executor (dataparts) and select_builder (datablocks).
 
 Verifies:
 1. Each valid parallelization string returns the correct class.
@@ -10,7 +10,7 @@ Verifies:
 import os
 import pytest
 
-from dbx.databolts import (
+from dbx.dataparts import (
     select_executor,
     callable_executor,
     InlineCallableExecutor,

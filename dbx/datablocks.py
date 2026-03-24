@@ -54,7 +54,7 @@ import torch.multiprocessing as mp
 
 __eval__ = __builtins__['eval']
 
-from .databolts import *
+from .dataparts import *
 __version__ = "0.1.0"
 
 

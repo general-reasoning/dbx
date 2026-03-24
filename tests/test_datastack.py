@@ -318,35 +318,35 @@ class TestDatastackClearShards(unittest.TestCase):
 
 
 class TestCallableExecutorFactory(unittest.TestCase):
-    """Verify the callable_executor() factory from databolts."""
+    """Verify the callable_executor() factory from dataparts."""
 
     def test_default_is_inline(self):
-        from dbx.databolts import callable_executor, InlineCallableExecutor
+        from dbx.dataparts import callable_executor, InlineCallableExecutor
         executor = callable_executor(n_workers=1)
         self.assertIsInstance(executor, InlineCallableExecutor)
 
     def test_explicit_inline(self):
-        from dbx.databolts import callable_executor, InlineCallableExecutor
+        from dbx.dataparts import callable_executor, InlineCallableExecutor
         executor = callable_executor('inline', n_workers=1)
         self.assertIsInstance(executor, InlineCallableExecutor)
 
     def test_multithreading(self):
-        from dbx.databolts import callable_executor, MultithreadingCallableExecutor
+        from dbx.dataparts import callable_executor, MultithreadingCallableExecutor
         executor = callable_executor('multithreading', n_workers=2)
         self.assertIsInstance(executor, MultithreadingCallableExecutor)
 
     def test_multiprocessing(self):
-        from dbx.databolts import callable_executor, MultiprocessingCallableExecutor
+        from dbx.dataparts import callable_executor, MultiprocessingCallableExecutor
         executor = callable_executor('multiprocessing', n_workers=2)
         self.assertIsInstance(executor, MultiprocessingCallableExecutor)
 
     def test_unknown_raises(self):
-        from dbx.databolts import callable_executor
+        from dbx.dataparts import callable_executor
         with self.assertRaises(ValueError):
             callable_executor('quantum', n_workers=1)
 
     def test_case_insensitive(self):
-        from dbx.databolts import callable_executor, MultithreadingCallableExecutor
+        from dbx.dataparts import callable_executor, MultithreadingCallableExecutor
         executor = callable_executor('Multithreading', n_workers=1)
         self.assertIsInstance(executor, MultithreadingCallableExecutor)
 

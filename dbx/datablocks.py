@@ -740,8 +740,13 @@ class Datablock:
             else:
                 topics = self.topics()
         if result is None:
+            def _topic_path(topic):
+                p = self.path(topic)
+                if p is None and self.has_topics() and self.TOPICFILES.get(topic) is None:
+                    return self.dirpath(topic)
+                return p
             results = {
-                topic: self.validpath(self.path(topic))
+                topic: self.validpath(_topic_path(topic))
                 for topic in topics
             }
             if reduce:

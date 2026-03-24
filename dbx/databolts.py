@@ -140,22 +140,34 @@ class Logger:
             dt = f"{datetime.datetime.now().isoformat()}: " if self.datetime else ""
             print(f"{prefix}: {dt}{tag}{msg}")
 
-    def error(self, msg):
-        self._print("ERROR", msg)
+    def _fmt(self, msg, args):
+        """Format message stdlib-style: msg % args when args are provided."""
+        if args:
+            try:
+                return msg % args
+            except (TypeError, ValueError):
+                return f"{msg} {args}"
+        return msg
 
-    def warning(self, msg):
-        self._print("WARNING", msg)
+    def error(self, msg, *args, **kwargs):
+        self._print("ERROR", self._fmt(msg, args))
 
-    def info(self, msg):
-        self._print("INFO", msg)
+    def warning(self, msg, *args, **kwargs):
+        self._print("WARNING", self._fmt(msg, args))
 
-    def debug(self, msg):
-        self._print("DEBUG", msg)
+    def warn(self, msg, *args, **kwargs):
+        self._print("WARNING", self._fmt(msg, args))
 
-    def verbose(self, msg):
-        self._print("VERBOSE", msg)
+    def info(self, msg, *args, **kwargs):
+        self._print("INFO", self._fmt(msg, args))
 
-    def selected(self, msg):
+    def debug(self, msg, *args, **kwargs):
+        self._print("DEBUG", self._fmt(msg, args))
+
+    def verbose(self, msg, *args, **kwargs):
+        self._print("VERBOSE", self._fmt(msg, args))
+
+    def selected(self, msg, *args, **kwargs):
         if self._selection_:
             try:
                 frame = sys._getframe(self.stack_depth - 1)
@@ -166,12 +178,12 @@ class Logger:
                     return
             except (ValueError, AttributeError):
                 pass
-        self._print("SELECTED", msg)
+        self._print("SELECTED", self._fmt(msg, args))
 
-    def detailed(self, msg):
-        self._print("DETAILED", msg)
+    def detailed(self, msg, *args, **kwargs):
+        self._print("DETAILED", self._fmt(msg, args))
 
-    def silent(self, mst):
+    def silent(self, msg, *args, **kwargs):
         pass
 
 

@@ -753,6 +753,8 @@ class Datablock:
     def valid(self, topic=None):
         if topic is not None:
             return self.validtopic(topic)
+        if not self.has_topics() and not self.has_topic():
+            return True  # no TOPICFILE(S) → produces no artifacts → always valid
         return self.validpaths(reduce=True)
     
     def topics(self):

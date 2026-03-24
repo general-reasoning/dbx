@@ -149,6 +149,34 @@ class NoTopicProcessor:
         return "no_topic_data"
 
 
+class PathOverrideProcessor:
+    """A no-topic Datablockable that overrides path() to return dirpath().
+
+    This mimics config-wrapper Datablocks (like Lightning) that define a
+    custom path() returning the key-level directory instead of None.
+    Before the valid() fix, this would cause valid() to return False
+    because the directory doesn't exist yet.
+    """
+    _build_count = 0
+
+    @dataclass
+    class CONFIG:
+        variant: str = 'base'
+
+    def __init__(self, *, cfg=None, **_):
+        self.cfg = cfg
+
+    def path(self, topic=None, *, ensure_dirpath=False):
+        return self.dirpath()
+
+    def __build__(self, *args, **kwargs):
+        PathOverrideProcessor._build_count += 1
+        return self
+
+    def __read__(self, topic=None):
+        return "path_override_data"
+
+
 class VersionedProcessor:
     """A Datablockable with a VERSION attribute."""
     TOPICFILE = 'versioned.txt'
@@ -459,3 +487,22 @@ class TestNoTopicWrapper:
         Wrapped = datablock(NoTopicProcessor)
         block = Wrapped(root=str(tmp_path))
         assert block.__read__() == "no_topic_data"
+
+    def test_path_override_valid_despite_missing_dir(self, tmp_path):
+        """A Datablockable that overrides path() to return dirpath() should
+        still be valid when it has no TOPICFILE(S) — the fix short-circuits
+        before path() is ever called."""
+        Wrapped = datablock(PathOverrideProcessor)
+        block = Wrapped(root=str(tmp_path))
+        # dirpath() points to a nonexistent directory, but valid() should
+        # not even check it.
+        assert not os.path.exists(block.dirpath())
+        assert block.valid() is True
+
+    def test_path_override_build_skips(self, tmp_path):
+        """build() should skip __build__ for path-overriding no-topic blocks."""
+        PathOverrideProcessor._build_count = 0
+        Wrapped = datablock(PathOverrideProcessor)
+        block = Wrapped(root=str(tmp_path))
+        block.build()
+        assert PathOverrideProcessor._build_count == 0

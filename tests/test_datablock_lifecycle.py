@@ -63,6 +63,18 @@ class MultiTopicBlock(Datablock):
                 f.write(f"{topic}:{self.cfg.n}")
 
 
+class NoTopicBlock(Datablock):
+    """Datablock with no TOPICFILE or TOPICFILES — valid() should be True immediately."""
+
+    @dataclass
+    class CONFIG(Datablock.CONFIG):
+        pass
+
+    def __build__(self):
+        # Nothing to write — no topic files.
+        self.dirpath(ensure=True)
+
+
 class CountingBlock(Datablock):
     """Tracks how many times __build__ is called (to verify skip-if-valid)."""
     TOPICFILE = 'counter.txt'
@@ -102,6 +114,22 @@ class TestInitialState:
     def test_multi_topic_starts_invalid(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
         assert block.valid() is False
+
+    def test_no_topic_is_always_valid(self, tmp_path):
+        """A Datablock with no TOPICFILE(S) should report valid() == True immediately."""
+        block = _make_block(NoTopicBlock, tmp_path)
+        assert block.valid() is True
+
+    def test_no_topic_path_returns_none(self, tmp_path):
+        """path() should return None when no TOPICFILE is defined."""
+        block = _make_block(NoTopicBlock, tmp_path)
+        assert block.path() is None
+
+    def test_no_topic_has_no_topics(self, tmp_path):
+        """has_topics() and has_topic() should both be False."""
+        block = _make_block(NoTopicBlock, tmp_path)
+        assert block.has_topics() is False
+        assert block.has_topic() is False
 
 
 # ---------------------------------------------------------------------------

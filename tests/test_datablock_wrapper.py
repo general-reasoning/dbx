@@ -130,6 +130,25 @@ class NoConfigProcessor:
         return None
 
 
+class NoTopicProcessor:
+    """A Datablockable with NO TOPICFILE or TOPICFILES."""
+    _build_count = 0
+
+    @dataclass
+    class CONFIG:
+        label: str = 'noop'
+
+    def __init__(self, *, cfg=None, **_):
+        self.cfg = cfg
+
+    def __build__(self, *args, **kwargs):
+        NoTopicProcessor._build_count += 1
+        return self
+
+    def __read__(self, topic=None):
+        return "no_topic_data"
+
+
 class VersionedProcessor:
     """A Datablockable with a VERSION attribute."""
     TOPICFILE = 'versioned.txt'
@@ -223,6 +242,11 @@ class TestTopicLifting:
     def test_topicfile_lifted(self):
         Wrapped = datablock(SingleTopicProcessor)
         assert Wrapped.TOPICFILE == 'output.csv'
+
+    def test_no_topics_not_lifted(self):
+        Wrapped = datablock(NoTopicProcessor)
+        assert not hasattr(Wrapped, 'TOPICFILE')
+        assert not hasattr(Wrapped, 'TOPICFILES')
 
 
 # ---------------------------------------------------------------------------
@@ -398,3 +422,40 @@ class TestFromDatablockable:
         block_from = Wrapped.from_datablockable(obj, root='/tmp/dbx_test_wrapper')
         block_direct = Wrapped(root='/tmp/dbx_test_wrapper', spec=dict(model_name='vit_b', layer='layer4'))
         assert block_from.hash == block_direct.hash
+
+
+# ---------------------------------------------------------------------------
+# 10. No-topic wrapper: valid() == True, build() skips
+# ---------------------------------------------------------------------------
+
+class TestNoTopicWrapper:
+
+    def test_valid_returns_true_immediately(self, tmp_path):
+        """A datablock()-wrapped Datablockable with no TOPICFILE(S) is always valid."""
+        Wrapped = datablock(NoTopicProcessor)
+        block = Wrapped(root=str(tmp_path))
+        assert block.valid() is True
+
+    def test_path_returns_none(self, tmp_path):
+        Wrapped = datablock(NoTopicProcessor)
+        block = Wrapped(root=str(tmp_path))
+        assert block.path() is None
+
+    def test_build_skips_because_valid(self, tmp_path):
+        """Since valid() is True, build() should skip __build__ entirely."""
+        NoTopicProcessor._build_count = 0
+        Wrapped = datablock(NoTopicProcessor)
+        block = Wrapped(root=str(tmp_path))
+        block.build()
+        assert NoTopicProcessor._build_count == 0, "__build__ should not be called when valid() is True"
+
+    def test_isinstance_checks(self, tmp_path):
+        Wrapped = datablock(NoTopicProcessor)
+        block = Wrapped(root=str(tmp_path))
+        assert isinstance(block, Datablock)
+        assert isinstance(block, NoTopicProcessor)
+
+    def test_read_delegates(self, tmp_path):
+        Wrapped = datablock(NoTopicProcessor)
+        block = Wrapped(root=str(tmp_path))
+        assert block.__read__() == "no_topic_data"

@@ -203,6 +203,115 @@ class TestCiteStringQuoting:
 
 
 # ---------------------------------------------------------------------------
+# Tests: tailkwargs (extra **kwargs) in quote()
+# ---------------------------------------------------------------------------
+
+class TestQuoteTailkwargs:
+    """Verify that extra **kwargs passed to __init__ appear in quote()."""
+
+    def test_extra_kwargs_appear_in_quote(self, tmp_path):
+        """Extra kwargs like batch_size should appear in quote() output."""
+        block = _make_block(SimpleBlock, tmp_path, batch_size=32, num_workers=4)
+        q = block.quote()
+        assert 'batch_size=32' in q
+        assert 'num_workers=4' in q
+
+    def test_string_extra_kwargs_are_cited(self, tmp_path):
+        """String-valued extra kwargs should be repr-quoted by cite()."""
+        block = _make_block(SimpleBlock, tmp_path, device='cuda:0')
+        q = block.quote()
+        assert "device='cuda:0'" in q
+
+    def test_extra_kwargs_appear_after_spec(self, tmp_path):
+        """Tailkwargs should appear after spec in the quote."""
+        block = _make_block(SimpleBlock, tmp_path, batch_size=32)
+        q = block.quote()
+        spec_idx = q.index('spec=')
+        batch_idx = q.index('batch_size=')
+        assert batch_idx > spec_idx
+
+    def test_quote_matches_repr_structure_for_tailkwargs(self, tmp_path):
+        """quote() and __repr__() should both include tailkwargs."""
+        block = _make_block(SimpleBlock, tmp_path, batch_size=32)
+        q = block.quote()
+        r = repr(block)
+        assert 'batch_size=32' in q
+        assert 'batch_size=32' in r
+
+    def test_no_extra_kwargs_no_tailkwargs(self, tmp_path):
+        """When no extra kwargs are passed, no tailkwargs appear in quote."""
+        block = _make_block(SimpleBlock, tmp_path)
+        q = block.quote()
+        # quote should end with spec={...})
+        assert q.endswith(')')
+        # No extra keys beyond root= and spec=
+        # Count top-level = signs (rough check)
+        prefix = q[q.index('(') + 1 : q.rindex(')')]
+        # Should only have root= and spec=
+        assert 'root=' in prefix
+        assert 'spec=' in prefix
+
+
+# ---------------------------------------------------------------------------
+# Tests: tailkwargs in wrapped Datablockable quote()
+# ---------------------------------------------------------------------------
+
+class TestWrappedQuoteTailkwargs:
+    """Verify that datablock()-wrapped classes also include tailkwargs in quote()."""
+
+    def test_wrapped_extra_kwargs_in_quote(self, tmp_path):
+        from dbx.datawraps import datablock
+
+        class MyProcessor:
+            TOPICFILE = 'out.txt'
+
+            @dataclass
+            class CONFIG(Datablock.CONFIG):
+                label: str = "'hello'"
+
+            def __init__(self, *, cfg=None, **_):
+                self.cfg = cfg
+
+            def build(self, *args, **kwargs):
+                return self
+
+            def read(self, topic=None):
+                return None
+
+        Wrapped = datablock(MyProcessor)
+        block = Wrapped(root=str(tmp_path), batch_size=64, num_workers=8)
+        q = block.quote()
+        assert 'batch_size=64' in q
+        assert 'num_workers=8' in q
+
+    def test_wrapped_extra_kwargs_saved_on_self(self, tmp_path):
+        from dbx.datawraps import datablock
+
+        class MyProcessor:
+            TOPICFILE = 'out.txt'
+
+            @dataclass
+            class CONFIG(Datablock.CONFIG):
+                label: str = "'hello'"
+
+            def __init__(self, *, cfg=None, **_):
+                self.cfg = cfg
+
+            def build(self, *args, **kwargs):
+                return self
+
+            def read(self, topic=None):
+                return None
+
+        Wrapped = datablock(MyProcessor)
+        block = Wrapped(root=str(tmp_path), batch_size=64, num_workers=8)
+        # Extra kwargs must be saved on self by __setstate__
+        assert hasattr(block, 'batch_size')
+        assert block.batch_size == 64
+        assert hasattr(block, 'num_workers')
+        assert block.num_workers == 8
+
+# ---------------------------------------------------------------------------
 # Tests: deslash
 # ---------------------------------------------------------------------------
 

@@ -1344,7 +1344,7 @@ class Datablock:
         quoted_spec = self.__expand_spec__('quote')
         def cite(x):
             return repr(x) if isinstance(x, str) else x
-        kwargstrs = [f"{k}={cite(v)}" for k, v in {**self._rootkwargs_, **{'spec': quoted_spec}}.items()]
+        kwargstrs = [f"{k}={cite(v)}" for k, v in {**self._rootkwargs_, **{'spec': quoted_spec}, **self._tailkwargs_}.items()]
         kwargsrepr = ', '.join(kwargstrs)
         quote = f"${self.fqcn}({kwargsrepr})"
         if deslash:

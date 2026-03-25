@@ -1481,8 +1481,10 @@ class Datablock:
         if not hasattr(self, '_tag'): 
             if self._tag_ is not None:
                 self._tag = self._tag_
+                self.log.detailed(f"tag: ---------===---------> {self._tag_=} ---> tag: {self._tag}")
             else:
                 self._tag = self.anchorkey
+                self.log.detailed(f"tag: ---------===---------> {self.anchorkey=} ---> tag: {self._tag}")
         return self._tag
     #IDENTIFICATION: END
 

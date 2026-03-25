@@ -125,14 +125,6 @@ def datablock(cls):
     # (__init__, build) by putting them explicitly in class_attrs.
 
     # -- Delegating methods -------------------------------------------------------
-    def __post_init__(self):
-        # The Datablockable's __init__ is NOT called when wrapped.
-        # Datablock.__init__ already provides everything the wrapper needs:
-        # cfg (cached_property), verbose/detailed/debug (properties),
-        # log, TOPICFILE(S) (class-level, lifted into class_attrs).
-        #
-        # The Datablockable's __init__ is only for standalone (unwrapped) use.
-        pass
 
     def __build__(self, *args, **kwargs):
         cls.build(self, *args, **kwargs)
@@ -217,7 +209,8 @@ def datablock(cls):
     class_attrs['read'] = Datablock.read      # shields cls.read  from MRO: cls.read()  → __read__  only
     # NOTE: path() and valid() are NOT shielded — if cls defines them they
     # override Datablock's public methods directly via MRO (cls, Datablock).
-    class_attrs['__post_init__'] = __post_init__
+    # NOTE: __post_init__ is NOT shielded — if cls defines it, it overrides
+    # Datablock's no-op via MRO (cls, Datablock).
     class_attrs['__build__'] = __build__
     class_attrs['__read__'] = __read__
     class_attrs['__reduce__'] = __reduce__
@@ -387,11 +380,6 @@ def datastack(cls):
     # machinery (__init__, build) by putting them explicitly in class_attrs.
 
     # -- Delegating methods -------------------------------------------------------
-    def __post_init__(self):
-        # The Datastackable's __init__ is NOT called when wrapped.
-        # Datablock.__init__ already provides everything the wrapper needs.
-        # See datablock().__post_init__ for rationale.
-        pass
 
     # n_shards: with MRO (cls, Datastack), cls.n_shards (whether property
     # or cached_property) naturally overrides Datastack.n_shards — no
@@ -414,7 +402,8 @@ def datastack(cls):
     class_attrs['build'] = Datablock.build       # shields cls.build from MRO → __build__ only
     class_attrs['shard'] = Datastack.shard       # shields cls.shard from MRO → __shard__ only
     # NOTE: n_shards, path(), valid() are NOT shielded — cls overrides via MRO.
-    class_attrs['__post_init__'] = __post_init__
+    # NOTE: __post_init__ is NOT shielded — if cls defines it, it overrides
+    # Datablock's no-op via MRO (cls, Datastack).
     class_attrs['__shard__'] = __shard__
     class_attrs['__reduce__'] = __reduce__
 

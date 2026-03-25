@@ -588,3 +588,34 @@ class TestNoConfig:
         Wrapped = datablock(NoConfigProcessor)
         block = Wrapped(root=str(tmp_path))
         assert isinstance(block.valid(), bool)
+
+
+# ---------------------------------------------------------------------------
+# 12. Tag preservation
+# ---------------------------------------------------------------------------
+
+class TestTagPreservation:
+    """A custom tag= passed to a wrapped Datablockable must survive as obj.tag."""
+
+    def test_custom_tag_preserved(self, tmp_path):
+        Wrapped = datablock(MultiTopicProcessor)
+        block = Wrapped(root=str(tmp_path), tag='XXX')
+        assert block.tag == 'XXX'
+
+    def test_tag_none_defaults_to_anchorkey(self, tmp_path):
+        Wrapped = datablock(MultiTopicProcessor)
+        block = Wrapped(root=str(tmp_path))
+        # When tag is not provided, it defaults to anchorkey
+        assert block.tag == block.anchorkey
+
+    def test_tag_survives_set(self, tmp_path):
+        Wrapped = datablock(MultiTopicProcessor)
+        block1 = Wrapped(root=str(tmp_path), tag='AAA')
+        block2 = block1.set(tag='BBB')
+        assert block2.tag == 'BBB'
+
+    def test_tag_survives_pickle(self, tmp_path):
+        Wrapped = datablock(MultiTopicProcessor)
+        block = Wrapped(root=str(tmp_path), tag='PICKLE_TAG')
+        restored = pickle.loads(pickle.dumps(block))
+        assert restored.tag == 'PICKLE_TAG'

@@ -1471,20 +1471,15 @@ class Datablock:
                 self.log.detailed(f"hash: ---------===---------> {self.hashstr=} ---> hash: {self._hash}")
         return self._hash
 
-    def getag(self, tag):
-        new = self.set(tag=tag)
-        new._write_journal_entry(event='tag')
-        return new
-
     @property
     def tag(self):
         if not hasattr(self, '_tag'): 
             if self._tag_ is not None:
                 self._tag = self._tag_
-                self.log.detailed(f"tag: ---------===---------> {self._tag_=} ---> tag: {self._tag}")
+                self.log.debug(f"tag: ---------------------------------===---------> {self._tag_=} ---> tag: {self._tag}")
             else:
                 self._tag = self.anchorkey
-                self.log.detailed(f"tag: ---------===---------> {self.anchorkey=} ---> tag: {self._tag}")
+                self.log.debug(f"tag: ---------------------------------===---------> {self.anchorkey=} ---> tag: {self._tag}")
         return self._tag
     #IDENTIFICATION: END
 

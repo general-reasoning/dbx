@@ -1335,7 +1335,7 @@ class Datablock:
         def cite(x):
             return repr(x) if isinstance(x, str) else x
 
-        kwargstrs = [f"{k}={v}" for k, v in kwargs.items()]
+        kwargstrs = [f"{k}={cite(v)}" for k, v in kwargs.items()]
         kwargsrepr = ', '.join(kwargstrs)
         if use_stump:
             _repr_ = f"{self.stump}({kwargsrepr})"

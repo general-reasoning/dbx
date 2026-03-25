@@ -1345,10 +1345,11 @@ class Datablock:
     
     def quote(self, *, deslash: bool = False):
         quoted_spec = self.__expand_spec__('quote')
-        quote = "$" + self.__repr_from_kwargs__({
-            **self._rootkwargs_,
-            **{'spec': quoted_spec},
-        })
+        def cite(x):
+            return repr(x) if isinstance(x, str) else x
+        kwargstrs = [f"{k}={cite(v)}" for k, v in {**self._rootkwargs_, **{'spec': quoted_spec}}.items()]
+        kwargsrepr = ', '.join(kwargstrs)
+        quote = f"${self.fqcn}({kwargsrepr})"
         if deslash:
             quote = quote.replace('\\', '')
         self.log.detailed(f"quote: ------------> {quoted_spec=}")

@@ -515,8 +515,8 @@ class Datablock:
         root: str = None,
         spec: Optional[Union[str, dict]] = None,
         anchor: str = None,
-        hash: Optional[str] = None,
-        tag: Optional[str] = None,
+        hash: str|None = None,
+        tag: str|None = None,
         info: bool = None,
         verbose: bool = None,
         debug: bool = None,
@@ -526,10 +526,19 @@ class Datablock:
         keyby: str = 'hash',
         uuid16: bool = False,
         **kwargs,
-    ):
+    ):# Initialize early logger for __post_init__ if needed, though usually hash is needed
+        self.log = Logger(
+            f"{self.fqcn}",
+            debug=debug,
+            verbose=verbose,
+            detailed=detailed,
+            info=info,
+            stack_depth=None, #TODO: restore stack_depth default
+        )
         self._working_params_ = []
         self._uuid16_ = uuid16
         self._uuid = uuid.uuid4().hex[:16] if uuid16 else str(uuid.uuid4())  # unique per live instance, not preserved across serialization
+        self.log.detailed(f"__init__: ------------------------------------------------> {tag=}")
         state = {
             'root': root,
             'spec': spec,
@@ -545,8 +554,11 @@ class Datablock:
             'keyby': keyby,
             'uuid16': uuid16,
         }
+        self.log.detailed(f"__init__: ------------------------------------------------> initial:         {state=}")
         state.update(kwargs)
+        self.log.detailed(f"__init__: ------------------------------------------------> updated(kwargs): {state=}")
         self.__setstate__(state)
+        self.log.detailed(f"__init__: ------------------------------------------------> __setstate__:    {self._tag_=},{self.tag=}")
         
     def __setstate__(self, state):
         """NB: state keys should match __init__'s keyword arguments, with extra args properly captured in state."""
@@ -582,15 +594,6 @@ class Datablock:
         self._hash_ = state.get('hash')
         self._tag_ = state.get('tag')
         
-        # Initialize early logger for __post_init__ if needed, though usually hash is needed
-        self.log = Logger(
-            f"{self.anchor}",
-            debug=state.get('debug', False),
-            verbose=state.get('verbose', False),
-            detailed=state.get('detailed', False),
-            info=state.get('info', True),
-            stack_depth=None, #TODO: restore stack_depth default
-        )
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'hash')
@@ -1476,10 +1479,10 @@ class Datablock:
         if not hasattr(self, '_tag'): 
             if self._tag_ is not None:
                 self._tag = self._tag_
-                self.log.debug(f"tag: ---------------------------------===---------> {self._tag_=} ---> tag: {self._tag}")
+                self.log.detailed(f"tag: ---------------------------------===---------> {self._tag_=} ---> tag: {self._tag}")
             else:
                 self._tag = self.anchorkey
-                self.log.debug(f"tag: ---------------------------------===---------> {self.anchorkey=} ---> tag: {self._tag}")
+                self.log.detailed(f"tag: ---------------------------------===---------> {self.anchorkey=} ---> tag: {self._tag}")
         return self._tag
     #IDENTIFICATION: END
 

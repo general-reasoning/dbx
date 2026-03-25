@@ -1332,10 +1332,7 @@ class Datablock:
         return tailkwargs
     
     def __repr_from_kwargs__(self, kwargs, *, use_stump: bool = False):
-        def cite(x):
-            return repr(x) if isinstance(x, str) else x
-
-        kwargstrs = [f"{k}={cite(v)}" for k, v in kwargs.items()]
+        kwargstrs = [f"{k}={v}" for k, v in kwargs.items()]
         kwargsrepr = ', '.join(kwargstrs)
         if use_stump:
             _repr_ = f"{self.stump}({kwargsrepr})"

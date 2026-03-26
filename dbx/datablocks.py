@@ -533,7 +533,7 @@ class Datablock:
             verbose=verbose,
             detailed=detailed,
             info=info,
-            stack_depth=None, #TODO: restore stack_depth default
+            # stack_depth=2 (default) is correct for both _print (stack[2]) and selected (_getframe(1))
         )
         self._working_params_ = []
         self._uuid16_ = uuid16
@@ -630,7 +630,7 @@ class Datablock:
             verbose=state.get('verbose', False),
             detailed=state.get('detailed', False),
             info=state.get('info', True),
-            stack_depth=None, #TODO: restore stack_depth default
+            # stack_depth=2 (default) is correct for both _print (stack[2]) and selected (_getframe(1))
         )
         self.__post_init__()
         self.log.detailed(f"======--------------> bid: {self.bid}")
@@ -1479,10 +1479,10 @@ class Datablock:
         if not hasattr(self, '_tag'): 
             if self._tag_ is not None:
                 self._tag = self._tag_
-                self.log.detailed(f"tag: ---------------------------------===---------> {self._tag_=} ---> tag: {self._tag}")
+                self.log.selected(f"tag: ---------------------------------===---------> {self._tag_=} ---> tag: {self._tag}")
             else:
                 self._tag = self.anchorkey
-                self.log.detailed(f"tag: ---------------------------------===---------> {self.anchorkey=} ---> tag: {self._tag}")
+                self.log.selected(f"tag: ---------------------------------===---------> {self.anchorkey=} ---> tag: {self._tag}")
         return self._tag
     #IDENTIFICATION: END
 

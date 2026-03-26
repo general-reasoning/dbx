@@ -70,6 +70,120 @@ def test_logger_selection_env(monkeypatch):
     dummmy_func(logger, "Should not print")
     assert logger.printed is False
 
+
+def test_logger_selected_default_stack_depth():
+    """selected() works with default stack_depth=2."""
+    fqn = f"{__name__}.caller_func"
+    logger = CaptureLogger(selection=[fqn])
+    assert logger.stack_depth == 2  # default
+    caller_func(logger, "Should print with default stack_depth")
+    assert logger.printed is True
+
+
+def test_logger_selected_stack_depth_none_breaks():
+    """stack_depth=None causes TypeError in selected() when selection is set."""
+    fqn = f"{__name__}.caller_func"
+    logger = CaptureLogger(selection=[fqn], stack_depth=None)
+    with pytest.raises(TypeError):
+        caller_func(logger, "Should raise TypeError")
+
+
+def test_datablock_logger_has_working_stack_depth(monkeypatch, tmp_path):
+    """Datablock's Logger should have a valid stack_depth so selected() works."""
+    from dbx.datablocks import Datablock
+    from dbx.datawraps import datablock
+
+    monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+    monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+    monkeypatch.setenv('DBX_LOG_SELECTED', 'True')
+
+    class SimpleBlock(Datablock):
+        TOPICFILE = 'out.txt'
+        def __build__(self, *a, **kw): return self
+        def __read__(self, topic=None): return None
+
+    block = SimpleBlock(root=str(tmp_path))
+    assert block.log.stack_depth is not None
+    assert isinstance(block.log.stack_depth, int)
+
+    # selected() should not raise
+    block.log.selected("Test message from Datablock")
+
+
+def test_wrapped_datablockable_logger_has_working_stack_depth(monkeypatch, tmp_path):
+    """A datablock()-wrapped class should also have a valid stack_depth."""
+    from dbx.datablocks import Datablock
+    from dbx.datawraps import datablock
+
+    monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+    monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+
+    class MyProcessor:
+        TOPICFILE = 'out.txt'
+        def build(self, *a, **kw): return self
+        def read(self, topic=None): return None
+
+    Wrapped = datablock(MyProcessor)
+    block = Wrapped(root=str(tmp_path))
+    assert block.log.stack_depth is not None
+    assert isinstance(block.log.stack_depth, int)
+
+    # selected() should not raise
+    block.log.selected("Test message from wrapped Datablockable")
+
+
+# ---------------------------------------------------------------------------
+# Class-method selection via co_qualname
+# ---------------------------------------------------------------------------
+
+class Widget:
+    """Test class with a method that calls logger.selected()."""
+    def do_work(self, logger, msg):
+        logger.selected(msg)
+
+    @classmethod
+    def class_work(cls, logger, msg):
+        logger.selected(msg)
+
+
+class OtherWidget:
+    """A different class — should not match Widget selections."""
+    def do_work(self, logger, msg):
+        logger.selected(msg)
+
+
+def test_selection_matches_class_qualified_fqn():
+    """Selection with module.Class.method matches a method call."""
+    fqn = f"{__name__}.Widget.do_work"
+    logger = CaptureLogger(selection=[fqn])
+    Widget().do_work(logger, "Should print via class-qualified fqn")
+    assert logger.printed is True
+
+
+def test_selection_short_form_matches_method():
+    """Selection with module.method (no class) still matches a method call."""
+    fqn = f"{__name__}.do_work"
+    logger = CaptureLogger(selection=[fqn])
+    Widget().do_work(logger, "Should print via short fqn")
+    assert logger.printed is True
+
+
+def test_selection_class_qualified_rejects_wrong_class():
+    """Selection for Widget.do_work should NOT match OtherWidget.do_work."""
+    fqn = f"{__name__}.Widget.do_work"
+    logger = CaptureLogger(selection=[fqn])
+    OtherWidget().do_work(logger, "Should NOT print")
+    assert logger.printed is False
+
+
+def test_selection_class_qualified_classmethod():
+    """Selection with module.Class.class_work matches a classmethod call."""
+    fqn = f"{__name__}.Widget.class_work"
+    logger = CaptureLogger(selection=[fqn])
+    Widget.class_work(logger, "Should print via classmethod")
+    assert logger.printed is True
+
+
 if __name__ == "__main__":
     # Manual run
     logger = CaptureLogger(selection=['__main__.caller_func'])
@@ -78,3 +192,4 @@ if __name__ == "__main__":
         print("Manual test passed!")
     else:
         print("Manual test failed!")
+

@@ -172,9 +172,11 @@ class Logger:
             try:
                 frame = sys._getframe(self.stack_depth - 1)
                 module = frame.f_globals.get('__name__')
-                function = frame.f_code.co_name
-                fqn = f"{module}.{function}"
-                if fqn not in self._selection_:
+                qualname = frame.f_code.co_qualname  # e.g. "Datablock.tag" (Python 3.11+)
+                function = frame.f_code.co_name      # e.g. "tag"
+                fqn_full  = f"{module}.{qualname}"   # "dbx.datablocks.Datablock.tag"
+                fqn_short = f"{module}.{function}"   # "dbx.datablocks.tag"
+                if fqn_full not in self._selection_ and fqn_short not in self._selection_:
                     return
             except (ValueError, AttributeError):
                 pass

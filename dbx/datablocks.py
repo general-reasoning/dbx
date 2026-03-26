@@ -562,6 +562,15 @@ class Datablock:
         
     def __setstate__(self, state):
         """NB: state keys should match __init__'s keyword arguments, with extra args properly captured in state."""
+        # Early logger for unpickling path (__setstate__ is called without __init__)
+        if not hasattr(self, 'log'):
+            self.log = Logger(
+                f"{self.__class__.__name__}",
+                debug=state.get('debug', False),
+                verbose=state.get('verbose', False),
+                detailed=state.get('detailed', False),
+                info=state.get('info', True),
+            )
         self._working_params_ = []
         
         # Backward compatibility for legacy pickles or explicit kwargs dict arguments

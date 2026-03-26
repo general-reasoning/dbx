@@ -174,7 +174,6 @@ class Logger:
         function = frame.f_code.co_name      # e.g. "tag"
         fqn_full  = f"{module}.{qualname}"   # "dbx.datablocks.Datablock.tag"
         fqn_short = f"{module}.{function}"   # "dbx.datablocks.tag"
-        print(f"DEBUG: ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ selection: {self._selection_}, {fqn_full}, {fqn_short}")
         if self._selection_:
             try:
                 if fqn_full not in self._selection_ and fqn_short not in self._selection_:

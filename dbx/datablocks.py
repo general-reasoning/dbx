@@ -1471,7 +1471,7 @@ class Datablock:
                 sha = hashlib.sha256()
                 sha.update(self.hashstr.encode())
                 self._hash = sha.hexdigest()
-                self.log.detailed(f"hash: ---------===---------> {self.hashstr=} ---> hash: {self._hash}")
+                self.log.detailed(f"hash: ---------===---------\u003e {self.hashstr=} ---\u003e hash: {self._hash}")
         return self._hash
 
     @property

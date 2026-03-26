@@ -48,15 +48,23 @@ def test_logger_selection_string():
     assert logger.printed is True
     logger.printed = False
 
-def test_logger_selection_none():
+def test_logger_selection_none_is_silent():
+    """When selection is None/empty, selected() should not print anything."""
     logger = CaptureLogger(selection=None)
     
-    caller_func(logger, "Should print")
-    assert logger.printed is True
-    logger.printed = False
+    caller_func(logger, "Should NOT print")
+    assert logger.printed is False
     
-    dummmy_func(logger, "Should also print")
-    assert logger.printed is True
+    dummmy_func(logger, "Should also NOT print")
+    assert logger.printed is False
+
+def test_logger_selection_unset_env_is_silent(monkeypatch):
+    """When DBX_LOG_SELECTION is not set, selected() should be silent."""
+    monkeypatch.delenv('DBX_LOG_SELECTION', raising=False)
+    logger = CaptureLogger()
+    
+    caller_func(logger, "Should NOT print")
+    assert logger.printed is False
 
 def test_logger_selection_env(monkeypatch):
     fqn = f"{__name__}.caller_func"

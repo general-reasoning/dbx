@@ -51,7 +51,7 @@ python -m unittest tests/test_remote.py
 - **Data handling**: Structured datablocks for tracking experiments and results.
 - **Nested Proxying**: Transparently interact with remote objects as if they were local.
 
-## Wrapper Method Mapping Reference
+## Datablockable/Datastackable: Wrapper Method Mapping Reference
 
 How `datablock(Datablockable)` and `datastack(Datastackable)` map user-defined methods onto the framework.
 
@@ -100,7 +100,7 @@ How `datablock(Datablockable)` and `datastack(Datastackable)` map user-defined m
 | Datastackable defines | Wrapper gets | How |
 |---|---|---|
 | `__init__(…)` | `Datastack.__init__` | `class_attrs['__init__']` — framework init + parallelization setup. |
-| `build(…)` (if any) | `Datablock.build` | `class_attrs['build']` — same framework build as Datablock. |
+| `build(…)` (if any) | `Datablock.build` | `class_attrs['build']` — same framework build as Datablock. Remapped to `__build__` if defined (see below). |
 | `shard(idx)` | `Datastack.shard` | `class_attrs['shard']` — framework shard: lazy-inits `_shards_`, calls `__shard__(idx)`, sets `keyby`. |
 
 #### Remapped to dunders
@@ -108,6 +108,7 @@ How `datablock(Datablockable)` and `datastack(Datastackable)` map user-defined m
 | Datastackable defines | Becomes on wrapper | How |
 |---|---|---|
 | `shard(idx)` | `__shard__(idx)` | `class_attrs['__shard__']` calls `cls.shard(self, idx)`, then wraps result via `ShardBlock.from_datablockable()`. |
+| `build(…)` *(optional)* | `__build__(…)` | Only if cls has `build()`. Calls `cls.build(self, …)`. Falls back to `Datastack.__build__` (shard-based). |
 | `read(topic)` *(optional)* | `__read__(topic)` | Only if cls has `read()`. Calls `cls.read(self, topic)`. |
 | `stack()` *(optional)* | `__stack__()` | Only if cls has `stack()`. Calls `cls.stack(self)`. Falls back to `Datastack.__stack__` (no-op). |
 
@@ -140,9 +141,10 @@ wrapper.build()                            wrapper.build()
   ├─ valid() → cls or Datablock              ├─ valid() → cls or Datablock
   ├─ __pre_build__() → journal               ├─ __pre_build__() → journal
   ├─ __build__()                             ├─ __build__()
-  │   └─ cls.build(self, …)                  │   │ Datastack.__build__ (MRO)
-  ├─ __post_build__() → journal              │   ├─ shards() → shard(0..n)
-  └─ return self                             │   │   └─ shard(idx)
+  │   └─ cls.build(self, …)                  │   │ cls.build (if defined) OR
+  ├─ __post_build__() → journal              │   │ Datastack.__build__ (default):
+  └─ return self                             │   ├─ shards() → shard(0..n)
+                                             │   │   └─ shard(idx)
                                              │   │       │ Datastack.shard (shielded)
                                              │   │       └─ __shard__(idx)
                                              │   │           ├─ cls.shard(self, idx)

@@ -211,8 +211,8 @@ def datablock(cls):
     # override Datablock's public methods directly via MRO (cls, Datablock).
     # NOTE: __post_init__ is NOT shielded — if cls defines it, it overrides
     # Datablock's no-op via MRO (cls, Datablock).
-    class_attrs['__build__'] = __build__
-    class_attrs['__read__'] = __read__
+    class_attrs['__build__'] = __build__    # wraps cls.build(): calls cls.build() and returns self
+    class_attrs['__read__'] = __read__      # wraps cls.read(): calls cls.read() and returns result
     class_attrs['__reduce__'] = __reduce__
     class_attrs['from_datablockable'] = from_datablockable
 
@@ -404,8 +404,15 @@ def datastack(cls):
     # NOTE: n_shards, path(), valid() are NOT shielded — cls overrides via MRO.
     # NOTE: __post_init__ is NOT shielded — if cls defines it, it overrides
     # Datablock's no-op via MRO (cls, Datastack).
-    class_attrs['__shard__'] = __shard__
+    class_attrs['__shard__'] = __shard__     # wraps cls.shard(): calls cls.shard(), wraps it with from_datablockable() and returns the resulting Datablock wrapper
     class_attrs['__reduce__'] = __reduce__
+
+    # Optional build() → __build__ delegation (inherited build() counts)
+    if hasattr(cls, 'build'):
+        def __build__(self, *args, **kwargs):
+            cls.build(self, *args, **kwargs)
+            return self
+        class_attrs['__build__'] = __build__
 
     # Optional read() → __read__ delegation (inherited read() counts)
     if hasattr(cls, 'read'):

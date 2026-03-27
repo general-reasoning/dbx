@@ -196,7 +196,7 @@ def _lift_class_attrs(cls, class_attrs):
 # ===========================================================================
 
 
-def datablock(cls, *, underride=('build', 'read')):
+def datablock(cls, *, underride=('build', 'read'), extra_underride=()):
     """Wrap a Datablockable class as a Datablock subclass.
 
     The wrapper creates a dynamic class ``(cls, Datablock)`` and
@@ -211,9 +211,12 @@ def datablock(cls, *, underride=('build', 'read')):
     ----------
     cls : type
         A class satisfying the Datablockable protocol.
-    underride : list[str], optional
+    underride : tuple[str], optional
         Method names to underride with ``Datablock`` versions.
-        Default: ``['build', 'read']``.
+        Default: ``('build', 'read')``.
+    extra_underride : tuple[str], optional
+        Additional method names to underride, combined with *underride*.
+        Allows extending the defaults without restating them.
 
     Returns
     -------
@@ -223,8 +226,9 @@ def datablock(cls, *, underride=('build', 'read')):
     Usage::
 
         FeatureBlock = dbx.datablock(FeatureExtractor)
-        FeatureBlock = dbx.datablock(FeatureExtractor, underride=['build'])
+        FeatureBlock = dbx.datablock(FeatureExtractor, extra_underride=('valid',))
     """
+    underride = tuple(underride) + tuple(extra_underride)
     # -- Validate protocol --------------------------------------------------------
     if not hasattr(cls, '__build__'):
         raise TypeError(f"{cls.__name__} must define __build__() to be Datablockable")
@@ -318,7 +322,7 @@ def _unpickle_datablock_instance(cls, underride, module, state):
 # ===========================================================================
 
 
-def datastack(cls, *, underride=('build', 'read', 'shard')):
+def datastack(cls, *, underride=('build', 'read', 'shard'), extra_underride=()):
     """Wrap a Datastackable class as a :class:`Datastack` subclass.
 
     The wrapper creates a dynamic class ``(cls, Datastack)`` and
@@ -336,9 +340,12 @@ def datastack(cls, *, underride=('build', 'read', 'shard')):
     ----------
     cls : type
         A class satisfying the Datastackable protocol.
-    underride : list[str], optional
+    underride : tuple[str], optional
         Method names to underride with ``Datastack``/``Datablock`` versions.
-        Default: ``['build', 'read', 'shard']``.
+        Default: ``('build', 'read', 'shard')``.
+    extra_underride : tuple[str], optional
+        Additional method names to underride, combined with *underride*.
+        Allows extending the defaults without restating them.
 
     Returns
     -------
@@ -348,8 +355,9 @@ def datastack(cls, *, underride=('build', 'read', 'shard')):
     Usage::
 
         MyStack = dbx.datastack(MyPipeline)
-        MyStack = dbx.datastack(MyPipeline, underride=['build', 'shard'])
+        MyStack = dbx.datastack(MyPipeline, extra_underride=('valid',))
     """
+    underride = tuple(underride) + tuple(extra_underride)
     from .datablocks import Datastack
 
     # -- Validate protocol --------------------------------------------------------

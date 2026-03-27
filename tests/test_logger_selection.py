@@ -128,8 +128,8 @@ def test_wrapped_datablockable_logger_has_working_stack_depth(monkeypatch, tmp_p
 
     class MyProcessor:
         TOPICFILE = 'out.txt'
-        def build(self, *a, **kw): return self
-        def read(self, topic=None): return None
+        def __build__(self, *a, **kw): return self
+        def __read__(self, topic=None): return None
 
     Wrapped = datablock(MyProcessor)
     block = Wrapped(root=str(tmp_path))

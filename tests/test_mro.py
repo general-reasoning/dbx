@@ -57,11 +57,11 @@ class ProcessorWithCustomMethods:
         self.cfg = cfg
         self._built = False
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         self._built = True
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return f"result_{self.cfg.factor}"
 
     # -- Custom methods (should be accessible on wrapper via MRO) --
@@ -86,10 +86,10 @@ class ProcessorWithPathOverride:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return None
 
     def path(self, topic=None, *, ensure_dirpath=False):
@@ -109,10 +109,10 @@ class ProcessorWithConflictingProperty:
         self.cfg = cfg
         self.verbose = True  # should fail: read-only property on Datablock
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return None
 
 
@@ -131,10 +131,10 @@ class ShardProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return f"shard_{self.cfg.idx}"
 
 
@@ -155,7 +155,7 @@ class PipelineWithCustomMethods:
         import math
         return math.ceil(self.cfg.n_items / self.cfg.shard_size)
 
-    def shard(self, idx):
+    def __shard__(self, idx):
         return ShardProcessor(
             cfg=ShardProcessor.CONFIG(idx=idx),
         )
@@ -317,8 +317,8 @@ class TestDatablockMRO:
             def __init__(self, **_):
                 self.init_called = True
                 self.verbose = True  # would fail if called on wrapper
-            def build(self, *args, **kwargs): return self
-            def read(self, topic=None): return None
+            def __build__(self, *args, **kwargs): return self
+            def __read__(self, topic=None): return None
         Wrapped = datablock(ChecksInit)
         block = Wrapped(root='/tmp/dbx_test_mro')
         # __init__ was NOT called, so no AttributeError and init_called stays False
@@ -333,8 +333,8 @@ class TestDatablockMRO:
                 x: int = 1
             def __init__(self, *, cfg=None, device=None, **_):
                 self.cfg = 'CLOBBERED'  # would clobber if called
-            def build(self, *args, **kwargs): return self
-            def read(self, topic=None): return None
+            def __build__(self, *args, **kwargs): return self
+            def __read__(self, topic=None): return None
         Wrapped = datablock(CfgAssigner)
         block = Wrapped(root='/tmp/dbx_test_mro', spec={'x': 42})
         # __init__ is NOT called, so cfg is Datablock's cached_property
@@ -355,11 +355,11 @@ class TestDatablockMRO:
         assert cls_idx < db_idx
 
     def test_explicit_attrs_shadow_both_parents(self):
-        """class_attrs (__build__, __read__) on the wrapper take priority."""
+        """class_attrs (build, read underrides) on the wrapper take priority."""
         Wrapped = datablock(ProcessorWithCustomMethods)
-        # __build__ is defined in class_attrs, not inherited from either parent
-        assert '__build__' in Wrapped.__dict__
-        assert '__read__' in Wrapped.__dict__
+        # build and read are underridden in class_attrs, not inherited from either parent
+        assert 'build' in Wrapped.__dict__
+        assert 'read' in Wrapped.__dict__
 
 
 # ===========================================================================

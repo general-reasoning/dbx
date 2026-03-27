@@ -4,100 +4,159 @@ from dataclasses import dataclass, fields, is_dataclass
 from .datablocks import Datablock, LogVolume
 
 
-def datablock(cls):
-    """Wrap a Datablockable class as a Datablock subclass.
+class Datablockable:
+    """Minimal base providing path infrastructure.
 
-    A class is *Datablockable* if it defines:
+    Subclasses that define ``TOPICFILES`` (a ``{topic: filename_or_None}``
+    dict) can call ``self.path(topic)`` to resolve storage paths without
+    importing ``dbx``.
 
-        TOPICFILES = {topic: filename, ...}   # or TOPICFILE = 'filename'
-        VERSION = '...'                       # optional
-
-        @dataclass
-        class CONFIG:
-            ...
-
-        def __init__(self, *, cfg, log_volume: LogVolume, log):
-            ...
-
-        def build(self, *args, **kwargs):
-            # Public build — maps onto Datablock.__build__
-            ...
-            return self
-
-        def read(self, topic=None):
-            # Public read — maps onto Datablock.__read__
-            ...
-
-    Optionally, a Datablockable may define:
-
-        def path(self, topic=None, *, ensure_dirpath=False):
-            # Override Datablock.path() with custom path logic
-            ...
-
-    The Datablockable's ``build`` and ``read`` become the wrapper's
-    ``__build__`` and ``__read__`` dunders, keeping the Datablock dunder
-    interface internal.  This means the Datablockable is fully usable as a
-    standalone class (calling ``.build()`` / ``.read()`` directly) *and*
-    pluggable into the ``Datablock`` framework.
-
-    Usage::
-
-        FeatureBlock = dbx.datablock(FeatureExtractor)
-        block = FeatureBlock(root='/data', spec={'model': 'resnet50'})
-        block.build()
-        result = block.read('features')
-
-    The returned class is a proper ``Datablock`` subclass named
-    ``<cls.__name__>_Datablock``.  It can also be used as a decorator::
-
-        @dbx.datablock
-        class MyProcessor:
-            ...
-
-    Parameters
-    ----------
-    cls : type
-        A class satisfying the Datablockable protocol.
-
-    Returns
-    -------
-    type
-        A dynamically-created ``Datablock`` subclass wrapping *cls*.
+    Instances are typically created directly for testing or passed through
+    ``dbx.datablock()`` in pipeline modules for full dbx integration.
     """
-    # -- Validate protocol --------------------------------------------------------
-    # Use hasattr() so subclasses that inherit build()/read() are accepted.
-    # (Pre-wrapping, cls is a plain class; Datablock is not in its MRO yet,
-    # so hasattr won't accidentally match framework methods.)
-    if not hasattr(cls, 'build'):
-        raise TypeError(f"{cls.__name__} must define build() to be Datablockable")
-    if not hasattr(cls, 'read'):
-        raise TypeError(f"{cls.__name__} must define read() to be Datablockable")
-    # NOTE: TOPICFILES / TOPICFILE may be defined at class level OR in __init__.
-    # We lift class-level ones here; instance-level ones are propagated in
-    # __post_init__ after the inner object is constructed.
 
-    # -- Collect class-level attributes to lift onto the wrapper -------------------
-    class_attrs = {}
+    TOPICFILES = {}
+    
+    @dataclass
+    class CONFIG:
+        ...   
 
-    # TOPICFILES / TOPICFILE
-    if hasattr(cls, 'TOPICFILES'):
-        class_attrs['TOPICFILES'] = cls.TOPICFILES
-    if hasattr(cls, 'TOPICFILE'):
-        class_attrs['TOPICFILE'] = cls.TOPICFILE
+    def __init__(self, *, root, anchor, key, cfg, log_volume, log, device):
+        self.root = root
+        self.anchor = anchor
+        self.key = key
+        self.cfg = cfg
+        self.log_volume = log_volume
+        self.log = log
+        self.device = device
 
-    # VERSION
-    if hasattr(cls, 'VERSION'):
-        class_attrs['VERSION'] = cls.VERSION
+    def build(self):
+        return self.__pre_build__().__build__().__post_build__()
 
-    # CONFIG — ensure it inherits from Datablock.CONFIG so that the
-    # LazyLoader / specline mechanism works transparently.
+    def __pre_build__(self):
+        return self
+
+    def __build__(self):
+        return self
+
+    def __post_build__(self):
+        return self
+
+    def read(self, topic=None):
+        if topic not in self.TOPICFILES:
+            raise ValueError(f"Topic {repr(topic)} not in {self.TOPICFILES}")
+        return self.__read__(topic)
+    
+    def __read__(self, topic=None):
+        raise NotImplementedError()
+
+    @property
+    def anchorkeypath(self):
+        return os.path.join(self.root, self.anchor, self.key)
+
+    def path(self, topic=None, *, ensure_dirpath=False):
+        """Return the storage path for *topic*.
+
+        When ``TOPICFILES[topic]`` is a filename string the path is::
+
+            root / anchor / key / topic / filename
+
+        When ``TOPICFILES[topic]`` is ``None`` the path is the topic
+        directory itself::
+
+            root / anchor / key / topic
+
+        When *topic* is ``None`` the key-level directory is returned::
+
+            root / anchor / key
+
+        If *ensure_dirpath* is ``True`` the directory containing the
+        returned path is created (``os.makedirs``) before returning.
+        """
+        if topic is not None:
+            topicfile = self.TOPICFILES[topic]
+            if topicfile is not None:
+                p = os.path.join(
+                    self.anchorkeypath, topic, topicfile,
+                )
+            else:
+                p = os.path.join(
+                    self.anchorkeypath, topic,
+                )
+        else:
+            p = self.anchorkeypath
+
+        if ensure_dirpath:
+            os.makedirs(p if topic is None or self.TOPICFILES.get(topic) is None
+                        else os.path.dirname(p),
+                        exist_ok=True)
+        return p
+
+
+class Datastackable(Datablockable):
+    """Minimal base for classes that produce a stack of shards.
+
+    Extends :class:`Datablockable` with two additional protocol methods
+    required by ``dbx.datastack()``:
+
+    ``shard(idx)``
+        Return the :class:`Datablockable` for shard *idx*.  The returned
+        object must itself define ``build()`` and ``read()``.
+
+    ``stack()``
+        Called once after all shards have been built.  Produces any
+        stack-level artefacts (e.g. consolidated index, manifests).
+
+    ``build()``
+        Default implementation builds every shard sequentially via
+        ``shard(idx).build()`` then calls ``stack()``.  Override when
+        parallel or custom orchestration is needed.
+    """
+
+    def __build__(self):
+        for shard in self.shards():
+            shard.build()
+        return self.__stack__()
+    
+    def shard(self, idx: int):
+        """Return the shard at *idx*, potentially lazily forming ``_shards_`` if needed."""
+        return self.__shard__(idx)
+
+    @property
+    def n_shards(self):
+        return 0
+
+    def shards(self) -> list:
+        """Return all shards, forming them via :meth:`shard` if needed."""
+        return [self.shard(idx) for idx in range(self.n_shards)]
+
+    def __shard__(self, idx: int):
+        """Return a single child :class:`Datablock` for the given index.
+
+        Subclasses **must** override this method.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement __shard__(idx)"
+        )
+
+    def __stack__(self):
+        """Produce stack-level artefacts after all shards are built."""
+        return self
+
+
+# ---------------------------------------------------------------------------
+# CONFIG lifting helper (shared by datablock() and datastack())
+# ---------------------------------------------------------------------------
+
+def _lift_config(cls, class_attrs):
+    """Lift CONFIG from *cls* into *class_attrs*, ensuring it inherits from
+    ``Datablock.CONFIG`` so that the LazyLoader / specline mechanism works.
+    """
     if hasattr(cls, 'CONFIG') and is_dataclass(cls.CONFIG):
         user_config = cls.CONFIG
         if issubclass(user_config, Datablock.CONFIG):
             class_attrs['CONFIG'] = user_config
         else:
-            # Dynamically create a new dataclass that inherits from
-            # Datablock.CONFIG with the same fields as the user's CONFIG.
             from dataclasses import MISSING, field as _dc_field_
             ns = {'__annotations__': {}}
             for f in fields(user_config):
@@ -106,79 +165,106 @@ def datablock(cls):
                     ns[f.name] = f.default
                 elif f.default_factory is not MISSING:
                     ns[f.name] = _dc_field_(default_factory=f.default_factory)
-                # else: no default — omit from namespace, dataclass will require it
             new_config = dataclass(
                 type(user_config.__name__, (Datablock.CONFIG,), ns)
             )
             class_attrs['CONFIG'] = new_config
     else:
-        # No CONFIG or not a dataclass — synthesize an empty one
         @dataclass
         class _EmptyCONFIG(Datablock.CONFIG):
             pass
         class_attrs['CONFIG'] = _EmptyCONFIG
 
-    # -- MRO note -----------------------------------------------------------------
-    # The wrapper bases are (cls, Datablock) so that cls's methods (path,
-    # anchorkeypath, anchor, key, TOPICFILES, etc.) naturally override
-    # Datablock's defaults.  We protect essential Datablock machinery
-    # (__init__, build) by putting them explicitly in class_attrs.
 
-    # -- Delegating methods -------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Class attribute lifting helper
+# ---------------------------------------------------------------------------
 
-    def __build__(self, *args, **kwargs):
-        cls.build(self, *args, **kwargs)
-        return self
+def _lift_class_attrs(cls, class_attrs):
+    """Lift TOPICFILES, TOPICFILE, VERSION, and CONFIG from *cls*."""
+    if hasattr(cls, 'TOPICFILES'):
+        class_attrs['TOPICFILES'] = cls.TOPICFILES
+    if hasattr(cls, 'TOPICFILE'):
+        class_attrs['TOPICFILE'] = cls.TOPICFILE
+    if hasattr(cls, 'VERSION'):
+        class_attrs['VERSION'] = cls.VERSION
+    _lift_config(cls, class_attrs)
 
-    def __read__(self, topic=None):
-        return cls.read(self, topic)
 
+# ===========================================================================
+# datablock()
+# ===========================================================================
+
+
+def datablock(cls, *, underride=('build', 'read')):
+    """Wrap a Datablockable class as a Datablock subclass.
+
+    The wrapper creates a dynamic class ``(cls, Datablock)`` and
+    *underrides* selected methods: the framework version (from
+    ``Datablock``) is placed into the wrapper's ``__dict__`` so it takes
+    priority over ``cls``'s version in the MRO.  All other methods
+    resolve normally via MRO (``cls`` first, then ``Datablock``).
+
+    ``__init__`` is always underridden with ``Datablock.__init__``.
+
+    Parameters
+    ----------
+    cls : type
+        A class satisfying the Datablockable protocol.
+    underride : list[str], optional
+        Method names to underride with ``Datablock`` versions.
+        Default: ``['build', 'read']``.
+
+    Returns
+    -------
+    type
+        A dynamically-created ``Datablock`` subclass wrapping *cls*.
+
+    Usage::
+
+        FeatureBlock = dbx.datablock(FeatureExtractor)
+        FeatureBlock = dbx.datablock(FeatureExtractor, underride=['build'])
+    """
+    # -- Validate protocol --------------------------------------------------------
+    if not hasattr(cls, '__build__'):
+        raise TypeError(f"{cls.__name__} must define __build__() to be Datablockable")
+    if not hasattr(cls, '__read__'):
+        raise TypeError(f"{cls.__name__} must define __read__() to be Datablockable")
+
+    # -- Collect class-level attributes -------------------------------------------
+    class_attrs = {}
+    _lift_class_attrs(cls, class_attrs)
+
+    # -- Always underride __init__ ------------------------------------------------
+    class_attrs['__init__'] = Datablock.__init__
+
+    # -- Underride specified methods ----------------------------------------------
+    for method_name in underride:
+        framework_method = getattr(Datablock, method_name, None)
+        if framework_method is not None:
+            class_attrs[method_name] = framework_method
+
+    # -- Pickling support ---------------------------------------------------------
     def __reduce__(self):
-        # Reconstruct via datablock(wrapped_cls) + __setstate__,
-        # preserving the original __module__ so the anchor stays the same.
-        return (_unpickle_datablock_instance, (cls, self.__class__.__module__, self.__getstate__()))
+        return (_unpickle_datablock_instance,
+                (cls, underride, self.__class__.__module__, self.__getstate__()))
 
+    class_attrs['__reduce__'] = __reduce__
+
+    # -- from_datablockable classmethod -------------------------------------------
     @classmethod
     def from_datablockable(wrapper_cls, obj, *, root=None, **kwargs):
         """Create a Datablock wrapper from an existing datablockable instance.
 
         Extracts the CONFIG fields from *obj*.cfg as the ``spec`` dict,
-        and propagates ``log_volume``
-        from the datablockable instance to the wrapper.
-
-        Parameters
-        ----------
-        obj : instance of the wrapped datablockable class
-            Must have a ``.cfg`` attribute whose fields become the spec.
-        root : str, optional
-            Datablock root path.  If not given, falls back to DBX_ROOT.
-        **kwargs
-            Additional keyword arguments forwarded to the wrapper's
-            ``__init__`` (e.g. ``tag``, ``anchor``, ``revision``).
-
-        Returns
-        -------
-        Datablock
-            A new wrapper instance ready for ``.build()`` / ``.read()``.
-
-        Example
-        -------
-        ::
-
-            @dbx.datablock
-            class MyProcessor:
-                ...
-
-            proc = MyProcessor(paths=..., cfg=cfg, verbose=True, ...)
-            block = MyProcessor.from_datablockable(proc, root='/data')
+        and propagates ``log_volume`` from the datablockable instance
+        to the wrapper.
         """
         if not isinstance(obj, cls):
             raise TypeError(
                 f"Expected an instance of {cls.__name__}, "
                 f"got {type(obj).__name__}"
             )
-
-        # Extract spec from the datablockable's CONFIG fields
         cfg = obj.cfg
         if is_dataclass(cfg):
             spec = {f.name: getattr(cfg, f.name) for f in fields(cfg)}
@@ -189,8 +275,6 @@ def datablock(cls):
                 f"Cannot extract spec from {type(cfg).__name__}: "
                 f"expected a dataclass or object with __dict__"
             )
-
-        # Propagate observability settings from the datablockable
         for attr in ('tag',):
             if attr not in kwargs and hasattr(obj, attr):
                 kwargs[attr] = getattr(obj, attr)
@@ -201,19 +285,8 @@ def datablock(cls):
                     lv[attr] = getattr(obj, attr)
             if lv:
                 kwargs.update(lv)
-
         return wrapper_cls(root=root, spec=spec, **kwargs)
 
-    class_attrs['__init__'] = Datablock.__init__
-    class_attrs['build'] = Datablock.build    # shields cls.build from MRO: cls.build() → __build__ only
-    class_attrs['read'] = Datablock.read      # shields cls.read  from MRO: cls.read()  → __read__  only
-    # NOTE: path() and valid() are NOT shielded — if cls defines them they
-    # override Datablock's public methods directly via MRO (cls, Datablock).
-    # NOTE: __post_init__ is NOT shielded — if cls defines it, it overrides
-    # Datablock's no-op via MRO (cls, Datablock).
-    class_attrs['__build__'] = __build__    # wraps cls.build(): calls cls.build() and returns self
-    class_attrs['__read__'] = __read__      # wraps cls.read(): calls cls.read() and returns result
-    class_attrs['__reduce__'] = __reduce__
     class_attrs['from_datablockable'] = from_datablockable
 
     # -- Create the subclass dynamically ------------------------------------------
@@ -231,100 +304,57 @@ def datablock(cls):
     return WrapperClass
 
 
-def _unpickle_datablock_instance(cls, module, state):
+def _unpickle_datablock_instance(cls, underride, module, state):
     """Reconstruct a ``datablock(cls)`` wrapper instance from pickled state."""
-    WrapperClass = datablock(cls)
+    WrapperClass = datablock(cls, underride=underride)
     WrapperClass.__module__ = module
     obj = WrapperClass.__new__(WrapperClass)
     obj.__setstate__(state)
     return obj
 
 
-def datastack(cls):
+# ===========================================================================
+# datastack()
+# ===========================================================================
+
+
+def datastack(cls, *, underride=('build', 'read', 'shard')):
     """Wrap a Datastackable class as a :class:`Datastack` subclass.
 
-    A class is *Datastackable* if it defines:
+    The wrapper creates a dynamic class ``(cls, Datastack)`` and
+    *underrides* selected methods: the framework version is placed into
+    the wrapper's ``__dict__`` so it takes priority over ``cls``'s version
+    in the MRO.  All other methods resolve normally via MRO.
 
-        SHARD = SomeDatablockableClass
+    ``__init__`` is always underridden with ``Datastack.__init__``.
 
-        @dataclass
-        class CONFIG:
-            ...
-
-        def __init__(self, *, cfg, log_volume: LogVolume, log):
-            ...
-
-        @property
-        def n_shards(self) -> int:
-            # Return the number of shards
-            ...
-
-        def shard(self, idx: int):
-            # Return the SHARD instance for the given index.
-            # Maps onto Datastack.__shard__ in the wrapper.
-            ...
-
-    Optional methods:
-
-        def read(self, topic=None):  # if the stack produces its own output
-            # Maps onto Datastack.__read__ in the wrapper.
-            ...
-
-        def stack(self):  # if the stack produces aggregated output
-            # Maps onto Datastack.__stack__ in the wrapper.
-            ...
-
-    The wrapper creates a ``Datastack`` subclass that:
-
-    1. Creates the inner Datastackable object (like ``datablock()``).
-    2. Overrides ``n_shards`` and ``__shard__(idx)`` to delegate to
-       ``cls.shard(self, idx)``, converting each returned Datablockable
-       instance into a proper ``Datablock`` via ``from_datablockable()``.
-    3. Inherits ``shard()``, ``shards()``, and ``__build__()`` from
-       ``Datastack``, which builds shards in parallel.
-
-    Usage::
-
-        @dbx.datastack
-        class MyPipeline:
-            SHARD = MyProcessor   # a Datablockable class
-
-            @dataclass
-            class CONFIG:
-                input_dir: str = None
-                shard_size: int = 100
-
-            def __init__(self, *, cfg, log_volume, log):
-                self.cfg = cfg
-                ...
-
-            @property
-            def n_shards(self):
-                return compute_n_shards()
-
-            def shard(self, idx):
-                return MyProcessor(cfg=..., ...)
-
-        stack = MyPipeline(root='/data', spec={...},
-                           parallelization='multithreading', n_workers=4)
-        stack.build()
+    Additionally, a ``__shard__`` conversion layer is always installed:
+    it wraps the raw Datablockable returned by ``cls.__shard__()`` into a
+    proper ``Datablock`` via ``from_datablockable()``.
 
     Parameters
     ----------
     cls : type
         A class satisfying the Datastackable protocol.
+    underride : list[str], optional
+        Method names to underride with ``Datastack``/``Datablock`` versions.
+        Default: ``['build', 'read', 'shard']``.
 
     Returns
     -------
     type
         A dynamically-created ``Datastack`` subclass wrapping *cls*.
+
+    Usage::
+
+        MyStack = dbx.datastack(MyPipeline)
+        MyStack = dbx.datastack(MyPipeline, underride=['build', 'shard'])
     """
     from .datablocks import Datastack
 
     # -- Validate protocol --------------------------------------------------------
-    # Use hasattr() so subclasses that inherit shard() are accepted.
-    if not hasattr(cls, 'shard'):
-        raise TypeError(f"{cls.__name__} must define shard() to be Datastackable")
+    if not hasattr(cls, '__shard__'):
+        raise TypeError(f"{cls.__name__} must define __shard__() to be Datastackable")
     if not hasattr(cls, 'n_shards'):
         raise TypeError(f"{cls.__name__} must define n_shards to be Datastackable")
     if not hasattr(cls, 'SHARD'):
@@ -335,115 +365,45 @@ def datastack(cls):
 
     # -- Collect class-level attributes -------------------------------------------
     class_attrs = {}
-
-    # Store the shard block class for use by shards()
     class_attrs['_ShardBlock_'] = ShardBlock
+    _lift_class_attrs(cls, class_attrs)
 
-    # TOPICFILES / TOPICFILE
-    if hasattr(cls, 'TOPICFILES'):
-        class_attrs['TOPICFILES'] = cls.TOPICFILES
-    if hasattr(cls, 'TOPICFILE'):
-        class_attrs['TOPICFILE'] = cls.TOPICFILE
+    # -- Always underride __init__ ------------------------------------------------
+    class_attrs['__init__'] = Datastack.__init__
 
-    # VERSION
-    if hasattr(cls, 'VERSION'):
-        class_attrs['VERSION'] = cls.VERSION
+    # -- Underride specified methods ----------------------------------------------
+    for method_name in underride:
+        # Look up from Datastack first, falling back to Datablock.
+        framework_method = getattr(Datastack, method_name, None)
+        if framework_method is None:
+            framework_method = getattr(Datablock, method_name, None)
+        if framework_method is not None:
+            class_attrs[method_name] = framework_method
 
-    # CONFIG — ensure it inherits from Datablock.CONFIG
-    if hasattr(cls, 'CONFIG') and is_dataclass(cls.CONFIG):
-        user_config = cls.CONFIG
-        if issubclass(user_config, Datablock.CONFIG):
-            class_attrs['CONFIG'] = user_config
-        else:
-            from dataclasses import MISSING, field as _dc_field_
-            ns = {'__annotations__': {}}
-            for f in fields(user_config):
-                ns['__annotations__'][f.name] = f.type
-                if f.default is not MISSING:
-                    ns[f.name] = f.default
-                elif f.default_factory is not MISSING:
-                    ns[f.name] = _dc_field_(default_factory=f.default_factory)
-            new_config = dataclass(
-                type(user_config.__name__, (Datablock.CONFIG,), ns)
-            )
-            class_attrs['CONFIG'] = new_config
-    else:
-        @dataclass
-        class _EmptyCONFIG(Datablock.CONFIG):
-            pass
-        class_attrs['CONFIG'] = _EmptyCONFIG
-
-    # -- MRO note -----------------------------------------------------------------
-    # The wrapper bases are (cls, Datastack) so that cls's methods (path,
-    # anchorkeypath, anchor, key, TOPICFILES, etc.) naturally override
-    # Datablock's defaults.  We protect essential Datastack/Datablock
-    # machinery (__init__, build) by putting them explicitly in class_attrs.
-
-    # -- Delegating methods -------------------------------------------------------
-
-    # n_shards: with MRO (cls, Datastack), cls.n_shards (whether property
-    # or cached_property) naturally overrides Datastack.n_shards — no
-    # explicit delegation needed.
-
+    # -- __shard__ conversion layer -----------------------------------------------
+    # cls.__shard__() returns a raw Datablockable, but the framework needs
+    # Datablock instances.  This wrapper converts via from_datablockable().
     def __shard__(self, idx: int):
-        """Convert a Datastackable shard() output to a Datablock."""
-        datablockable_shard = cls.shard(self, idx)
+        datablockable_shard = cls.__shard__(self, idx)
         return self._ShardBlock_.from_datablockable(
             datablockable_shard,
             root=self.root,
             anchor=self.anchor,
             keyby=self.keyby,
         )
+    class_attrs['__shard__'] = __shard__
 
+    # -- Pickling support ---------------------------------------------------------
     def __reduce__(self):
-        return (_unpickle_datastack_instance, (cls, self.__class__.__module__, self.__getstate__()))
+        return (_unpickle_datastack_instance,
+                (cls, underride, self.__class__.__module__, self.__getstate__()))
 
-    class_attrs['__init__'] = Datastack.__init__
-    class_attrs['build'] = Datablock.build       # shields cls.build from MRO → __build__ only
-    class_attrs['shard'] = Datastack.shard       # shields cls.shard from MRO → __shard__ only
-    # NOTE: n_shards, path(), valid() are NOT shielded — cls overrides via MRO.
-    # NOTE: __post_init__ is NOT shielded — if cls defines it, it overrides
-    # Datablock's no-op via MRO (cls, Datastack).
-    class_attrs['__shard__'] = __shard__     # wraps cls.shard(): calls cls.shard(), wraps it with from_datablockable() and returns the resulting Datablock wrapper
     class_attrs['__reduce__'] = __reduce__
-
-    # Optional build() → __build__ delegation (inherited build() counts)
-    if hasattr(cls, 'build'):
-        def __build__(self, *args, **kwargs):
-            cls.build(self, *args, **kwargs)
-            return self
-        class_attrs['__build__'] = __build__
-
-    # Optional read() → __read__ delegation (inherited read() counts)
-    if hasattr(cls, 'read'):
-        def __read__(self, topic=None):
-            return cls.read(self, topic)
-        class_attrs['__read__'] = __read__
-
-    # Optional stack() → __stack__ delegation (inherited stack() counts)
-    if hasattr(cls, 'stack'):
-        def __stack__(self):
-            return cls.stack(self)
-        class_attrs['__stack__'] = __stack__
 
     # -- from_datastackable classmethod -------------------------------------------
     @classmethod
     def from_datastackable(wrapper_cls, obj, *, root=None, **kwargs):
-        """Create a Datastack wrapper from an existing Datastackable instance.
-
-        Extracts the CONFIG fields from *obj*.cfg as the ``spec`` dict,
-        and propagates ``log_volume``.
-
-        Parameters
-        ----------
-        obj : instance of the wrapped Datastackable class
-        root : str, optional
-        **kwargs : forwarded to wrapper ``__init__``
-
-        Returns
-        -------
-        Datastack
-        """
+        """Create a Datastack wrapper from an existing Datastackable instance."""
         if not isinstance(obj, cls):
             raise TypeError(
                 f"Expected an instance of {cls.__name__}, "
@@ -482,18 +442,15 @@ def datastack(cls):
     WrapperClass.__qualname__ = wrapper_name
     WrapperClass.__wrapped__ = cls
 
-    # The ShardBlock was created by datablock() inside datastack(), so its
-    # __module__ defaults to dbx.datawraps.  Fix it to match the caller.
     ShardBlock.__module__ = caller_module
 
     return WrapperClass
 
 
-def _unpickle_datastack_instance(cls, module, state):
+def _unpickle_datastack_instance(cls, underride, module, state):
     """Reconstruct a ``datastack(cls)`` wrapper instance from pickled state."""
-    WrapperClass = datastack(cls)
+    WrapperClass = datastack(cls, underride=underride)
     WrapperClass.__module__ = module
     obj = WrapperClass.__new__(WrapperClass)
     obj.__setstate__(state)
     return obj
-

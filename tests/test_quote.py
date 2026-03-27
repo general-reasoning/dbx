@@ -272,10 +272,10 @@ class TestWrappedQuoteTailkwargs:
             def __init__(self, *, cfg=None, **_):
                 self.cfg = cfg
 
-            def build(self, *args, **kwargs):
+            def __build__(self, *args, **kwargs):
                 return self
 
-            def read(self, topic=None):
+            def __read__(self, topic=None):
                 return None
 
         Wrapped = datablock(MyProcessor)
@@ -297,10 +297,10 @@ class TestWrappedQuoteTailkwargs:
             def __init__(self, *, cfg=None, **_):
                 self.cfg = cfg
 
-            def build(self, *args, **kwargs):
+            def __build__(self, *args, **kwargs):
                 return self
 
-            def read(self, topic=None):
+            def __read__(self, topic=None):
                 return None
 
         Wrapped = datablock(MyProcessor)

@@ -48,7 +48,7 @@ class ItemProcessor:
         self.cfg = cfg
         self.built = False
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         self.built = True
         # When wrapped, self IS the Datablock, so self.path() works directly
         path = self.path()
@@ -57,7 +57,7 @@ class ItemProcessor:
             f.write(f"item:{self.cfg.item_id}")
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         path = self.path()
         with open(path, 'r') as f:
             return f.read()
@@ -84,17 +84,17 @@ class BatchProcessor:
     def n_shards(self):
         return self.cfg.n_items
 
-    def shard(self, idx):
+    def __shard__(self, idx):
         return ItemProcessor(
             cfg=ItemProcessor.CONFIG(item_id=idx),
         )
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return f"batch with {self.cfg.n_items} items"
 
 
 class NoReadBatchProcessor:
-    """A Datastackable without read()."""
+    """A Datastackable without __read__()."""
     SHARD = ItemProcessor
 
     @dataclass
@@ -108,7 +108,7 @@ class NoReadBatchProcessor:
     def n_shards(self):
         return self.cfg.n_items
 
-    def shard(self, idx):
+    def __shard__(self, idx):
         return ItemProcessor(
             cfg=ItemProcessor.CONFIG(item_id=idx),
         )
@@ -125,13 +125,13 @@ class TestProtocolValidation:
             SHARD = ItemProcessor
             @property
             def n_shards(self): return 0
-        with pytest.raises(TypeError, match="shard"):
+        with pytest.raises(TypeError, match="__shard__"):
             datastack(Bad)
 
     def test_missing_n_shards_raises(self):
         class Bad:
             SHARD = ItemProcessor
-            def shard(self, idx): return None
+            def __shard__(self, idx): return None
         with pytest.raises(TypeError, match="n_shards"):
             datastack(Bad)
 
@@ -139,21 +139,21 @@ class TestProtocolValidation:
         class Bad:
             @property
             def n_shards(self): return 0
-            def shard(self, idx): return None
+            def __shard__(self, idx): return None
         with pytest.raises(TypeError, match="SHARD"):
             datastack(Bad)
 
     def test_inherited_shard_accepted(self, tmp_path):
-        """A class that inherits shard() from a base must be accepted as Datastackable."""
+        """A class that inherits __shard__() from a base must be accepted as Datastackable."""
         class BasePipeline:
             SHARD = ItemProcessor
             @property
             def n_shards(self): return 1
-            def shard(self, idx):
+            def __shard__(self, idx):
                 return ItemProcessor(cfg=ItemProcessor.CONFIG(item_id=idx))
 
         class ChildPipeline(BasePipeline):
-            """Inherits shard() — no override."""
+            """Inherits __shard__() — no override."""
             pass
 
         # Should NOT raise
@@ -299,7 +299,7 @@ class TestReadDelegation:
 
     def test_no_read_when_not_defined(self):
         Wrapped = datastack(NoReadBatchProcessor)
-        assert 'read' not in NoReadBatchProcessor.__dict__
+        assert '__read__' not in NoReadBatchProcessor.__dict__
         # The wrapper should NOT have __read__ (inherits Datablock's stub)
 
 
@@ -379,7 +379,7 @@ class NoConfigBatchProcessor:
     def n_shards(self):
         return 2
 
-    def shard(self, idx):
+    def __shard__(self, idx):
         return ItemProcessor(cfg=ItemProcessor.CONFIG(item_id=idx))
 
 

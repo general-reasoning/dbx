@@ -53,12 +53,12 @@ class MultiTopicProcessor:
         self.built = False
         self.build_args = None
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         self.built = True
         self.build_args = (args, kwargs)
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return f"data_for_{topic}"
 
 
@@ -73,10 +73,10 @@ class SingleTopicProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return "single_topic_data"
 
 
@@ -91,10 +91,10 @@ class InheritingConfigProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return f"result_{self.cfg.n_components}"
 
 
@@ -109,10 +109,10 @@ class EmptyConfigProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return None
 
 
@@ -123,10 +123,10 @@ class NoConfigProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return None
 
 
@@ -141,11 +141,11 @@ class NoTopicProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         NoTopicProcessor._build_count += 1
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return "no_topic_data"
 
 
@@ -169,11 +169,11 @@ class PathOverrideProcessor:
         """Override Datablock.path() via MRO — not mapped to a dunder."""
         return self.dirpath()
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         PathOverrideProcessor._build_count += 1
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return "path_override_data"
 
 
@@ -189,10 +189,10 @@ class VersionedProcessor:
     def __init__(self, *, cfg=None, **_):
         self.cfg = cfg
 
-    def build(self, *args, **kwargs):
+    def __build__(self, *args, **kwargs):
         return self
 
-    def read(self, topic=None):
+    def __read__(self, topic=None):
         return "versioned_data"
 
 
@@ -205,14 +205,14 @@ class TestProtocolValidation:
     def test_missing_build_raises(self):
         class Bad:
             TOPICFILE = 'x.txt'
-            def read(self, topic=None): ...
+            def __read__(self, topic=None): ...
         with pytest.raises(TypeError, match="build"):
             datablock(Bad)
 
     def test_missing_read_raises(self):
         class Bad:
             TOPICFILE = 'x.txt'
-            def build(self): ...
+            def __build__(self): ...
         with pytest.raises(TypeError, match="read"):
             datablock(Bad)
 
@@ -221,21 +221,21 @@ class TestProtocolValidation:
         class NoClassLevelTopics:
             def __init__(self, *, cfg=None, **_):
                 self.TOPICFILE = 'dynamic.txt'  # only works standalone
-            def build(self, *args, **kwargs): return self
-            def read(self, topic=None): return None
+            def __build__(self, *args, **kwargs): return self
+            def __read__(self, topic=None): return None
         # Should NOT raise
         Wrapped = datablock(NoClassLevelTopics)
         assert issubclass(Wrapped, Datablock)
 
     def test_inherited_build_read_accepted(self, tmp_path):
-        """A class that inherits build() and read() must be accepted as Datablockable."""
+        """A class that inherits __build__() and __read__() must be accepted as Datablockable."""
         class Base:
             TOPICFILE = 'base.txt'
-            def build(self, *args, **kwargs): return self
-            def read(self, topic=None): return 'inherited'
+            def __build__(self, *args, **kwargs): return self
+            def __read__(self, topic=None): return 'inherited'
 
         class Child(Base):
-            """No build/read defined — inherits from Base."""
+            """No __build__/__read__ defined — inherits from Base."""
             pass
 
         # Should NOT raise

@@ -196,7 +196,7 @@ def _lift_class_attrs(cls, class_attrs):
 # ===========================================================================
 
 
-def datablock(cls, *, underride=('build', 'read'), extra_underride=()):
+def datablock(cls, *, base_underride=('build', 'read'), underride=()):
     """Wrap a Datablockable class as a Datablock subclass.
 
     The wrapper creates a dynamic class ``(cls, Datablock)`` and
@@ -211,11 +211,11 @@ def datablock(cls, *, underride=('build', 'read'), extra_underride=()):
     ----------
     cls : type
         A class satisfying the Datablockable protocol.
-    underride : tuple[str], optional
-        Method names to underride with ``Datablock`` versions.
+    base_underride : tuple[str], optional
+        Base method names to underride with ``Datablock`` versions.
         Default: ``('build', 'read')``.
-    extra_underride : tuple[str], optional
-        Additional method names to underride, combined with *underride*.
+    underride : tuple[str], optional
+        Additional method names to underride, combined with *base_underride*.
         Allows extending the defaults without restating them.
 
     Returns
@@ -226,9 +226,9 @@ def datablock(cls, *, underride=('build', 'read'), extra_underride=()):
     Usage::
 
         FeatureBlock = dbx.datablock(FeatureExtractor)
-        FeatureBlock = dbx.datablock(FeatureExtractor, extra_underride=('valid',))
+        FeatureBlock = dbx.datablock(FeatureExtractor, underride=('valid',))
     """
-    underride = tuple(underride) + tuple(extra_underride)
+    underride = tuple(base_underride) + tuple(underride)
     # -- Validate protocol --------------------------------------------------------
     if not hasattr(cls, '__build__'):
         raise TypeError(f"{cls.__name__} must define __build__() to be Datablockable")
@@ -310,7 +310,7 @@ def datablock(cls, *, underride=('build', 'read'), extra_underride=()):
 
 def _unpickle_datablock_instance(cls, underride, module, state):
     """Reconstruct a ``datablock(cls)`` wrapper instance from pickled state."""
-    WrapperClass = datablock(cls, underride=underride)
+    WrapperClass = datablock(cls, base_underride=underride)
     WrapperClass.__module__ = module
     obj = WrapperClass.__new__(WrapperClass)
     obj.__setstate__(state)
@@ -322,7 +322,7 @@ def _unpickle_datablock_instance(cls, underride, module, state):
 # ===========================================================================
 
 
-def datastack(cls, *, underride=('build', 'read', 'shard'), extra_underride=()):
+def datastack(cls, *, base_underride=('build', 'read', 'shard'), underride=()):
     """Wrap a Datastackable class as a :class:`Datastack` subclass.
 
     The wrapper creates a dynamic class ``(cls, Datastack)`` and
@@ -340,11 +340,11 @@ def datastack(cls, *, underride=('build', 'read', 'shard'), extra_underride=()):
     ----------
     cls : type
         A class satisfying the Datastackable protocol.
-    underride : tuple[str], optional
-        Method names to underride with ``Datastack``/``Datablock`` versions.
+    base_underride : tuple[str], optional
+        Base method names to underride with ``Datastack``/``Datablock`` versions.
         Default: ``('build', 'read', 'shard')``.
-    extra_underride : tuple[str], optional
-        Additional method names to underride, combined with *underride*.
+    underride : tuple[str], optional
+        Additional method names to underride, combined with *base_underride*.
         Allows extending the defaults without restating them.
 
     Returns
@@ -355,9 +355,9 @@ def datastack(cls, *, underride=('build', 'read', 'shard'), extra_underride=()):
     Usage::
 
         MyStack = dbx.datastack(MyPipeline)
-        MyStack = dbx.datastack(MyPipeline, extra_underride=('valid',))
+        MyStack = dbx.datastack(MyPipeline, underride=('valid',))
     """
-    underride = tuple(underride) + tuple(extra_underride)
+    underride = tuple(base_underride) + tuple(underride)
     from .datablocks import Datastack
 
     # -- Validate protocol --------------------------------------------------------
@@ -457,7 +457,7 @@ def datastack(cls, *, underride=('build', 'read', 'shard'), extra_underride=()):
 
 def _unpickle_datastack_instance(cls, underride, module, state):
     """Reconstruct a ``datastack(cls)`` wrapper instance from pickled state."""
-    WrapperClass = datastack(cls, underride=underride)
+    WrapperClass = datastack(cls, base_underride=underride)
     WrapperClass.__module__ = module
     obj = WrapperClass.__new__(WrapperClass)
     obj.__setstate__(state)

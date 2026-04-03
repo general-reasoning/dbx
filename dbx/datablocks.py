@@ -492,6 +492,14 @@ class Datablock:
         def fields(self):
             return {f.name: f.type for f in fields(self)}
 
+        def to_dict(self, *, deslash: bool = False):
+            d = {f.name: getattr(self, f.name) for f in fields(self)}
+            if deslash:
+                for k, v in d.items():
+                    if isinstance(v, str):
+                        d[k] = v.replace('\\', '')
+            return d
+
     @dataclass
     class CONFIG:
         class LazyLoader:

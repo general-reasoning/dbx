@@ -4,16 +4,18 @@ Tests for the Datablock 'keyby' parameter.
 keyby controls how the key component of paths is determined:
     'hash'  (default) – uses self.hash (the SHA-256 of hashstr)
     'handle'          – uses self.handle() (human-readable representation)
+    'tag'             – uses self.tag (explicit tag or default anchorkey)
     None              – no key component (anchorpath IS the keypath)
 
 Verifies:
 1. Default keyby='hash' matches the old hash-based paths.
 2. keyby='handle' uses handle() for keypath, anchorkey, anchorkeypath.
-3. keyby=None collapses keypath to anchorpath.
-4. Invalid keyby values raise ValueError.
-5. keyby is recorded in the journal entry.
-6. keyby survives pickle round-trip.
-7. keyby works correctly with the wrapper (datablock()).
+3. keyby='tag' uses self.tag for key (both explicit and default).
+4. keyby=None collapses keypath to anchorpath.
+5. Invalid keyby values raise ValueError.
+6. keyby is recorded in the journal entry.
+7. keyby survives pickle round-trip.
+8. keyby works correctly with the wrapper (datablock()).
 """
 import os
 import pickle
@@ -146,7 +148,93 @@ class TestKeybyHandle:
 
 
 # ---------------------------------------------------------------------------
-# 3. keyby=None
+# 3. keyby='tag'
+# ---------------------------------------------------------------------------
+
+class TestKeybyTag:
+
+    def test_keyby_tag_set(self):
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='mytag')
+        assert block.keyby == 'tag'
+
+    def test_key_is_tag_explicit(self):
+        """When tag is explicitly provided, key should be that tag."""
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='mytag')
+        assert block.key == 'mytag'
+        assert block.key == block.tag
+
+    def test_keyby_tag_requires_explicit_tag(self):
+        """keyby='tag' without an explicit tag causes recursion (tag defaults
+        to anchorkey which calls key which calls tag …).  Verify the error."""
+        with pytest.raises(RecursionError):
+            SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag')
+
+    def test_keypath_uses_explicit_tag(self):
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='v1')
+        expected = os.path.join(block.anchorpath(), 'v1')
+        assert block.keypath() == expected
+
+    def test_anchorkey_uses_explicit_tag(self):
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='v1')
+        expected = os.path.join(block.anchor, 'v1')
+        assert block.anchorkey == expected
+
+    def test_anchorkeypath_uses_explicit_tag(self):
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='v1')
+        expected = os.path.join(block.root, block.anchor, 'v1')
+        assert block.anchorkeypath == expected
+
+    def test_keypath_differs_from_hash_and_handle(self):
+        """keypath with keyby='tag' should differ from hash and handle."""
+        block_hash = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='hash')
+        block_handle = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='handle')
+        block_tag = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='special')
+        assert block_hash.keypath() != block_tag.keypath()
+        assert block_handle.keypath() != block_tag.keypath()
+
+    def test_tag_appears_in_path(self):
+        """The explicit tag string should appear in the full file path."""
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='experiment-42')
+        assert 'experiment-42' in block.path()
+
+    def test_build_with_tag_keyby(self, tmp_path):
+        """A block with keyby='tag' should build and validate correctly."""
+        block = SimpleBlock(root=str(tmp_path), keyby='tag', tag='run1')
+        assert block.valid() is False
+        block.build()
+        assert block.valid() is True
+        # Verify the path actually uses tag
+        assert 'run1' in block.path()
+
+    def test_build_with_tag_keyby_read_back(self, tmp_path):
+        """Built content should be readable at the tag-keyed path."""
+        block = SimpleBlock(root=str(tmp_path), keyby='tag', tag='run2')
+        block.build()
+        with open(block.path(), 'r') as f:
+            content = f.read()
+            # CONFIG label is "'hello'" (lazy-evaluated), so cfg.label == 'hello' (with quotes)
+            assert content.startswith('built:')
+
+    def test_different_tags_different_paths(self):
+        """Two blocks with different tags should have different keypaths."""
+        block_a = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='alpha')
+        block_b = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='beta')
+        assert block_a.keypath() != block_b.keypath()
+
+    def test_same_tag_same_keypath(self):
+        """Two blocks with the same tag should share the same keypath."""
+        block_a = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='same')
+        block_b = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='same')
+        assert block_a.keypath() == block_b.keypath()
+
+    def test_bid_tag_field(self):
+        """The bid should reflect the explicit tag."""
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='mytag')
+        assert block.bid.tag == 'mytag'
+
+
+# ---------------------------------------------------------------------------
+# 4. keyby=None
 # ---------------------------------------------------------------------------
 
 class TestKeybyNone:
@@ -184,7 +272,7 @@ class TestKeybyNone:
 
 
 # ---------------------------------------------------------------------------
-# 4. Invalid keyby
+# 5. Invalid keyby
 # ---------------------------------------------------------------------------
 
 class TestKeybyInvalid:
@@ -199,7 +287,7 @@ class TestKeybyInvalid:
 
 
 # ---------------------------------------------------------------------------
-# 5. keyby in journal entry
+# 6. keyby in journal entry
 # ---------------------------------------------------------------------------
 
 class TestKeybyJournal:
@@ -212,9 +300,17 @@ class TestKeybyJournal:
         assert 'keyby' in journal.columns
         assert journal.iloc[0]['keyby'] == 'handle'
 
+    def test_keyby_tag_in_journal_on_build(self, tmp_path):
+        """keyby='tag' should appear in the journal entry created during build."""
+        block = SimpleBlock(root=str(tmp_path), keyby='tag', tag='journaltag')
+        block.build()
+        journal = block.journal()
+        assert 'keyby' in journal.columns
+        assert journal.iloc[0]['keyby'] == 'tag'
+
 
 # ---------------------------------------------------------------------------
-# 6. keyby survives serialization
+# 7. keyby survives serialization
 # ---------------------------------------------------------------------------
 
 class TestKeybySerialization:
@@ -228,6 +324,13 @@ class TestKeybySerialization:
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='handle')
         restored = pickle.loads(pickle.dumps(block))
         assert restored.keyby == 'handle'
+
+    def test_pickle_preserves_keyby_tag(self):
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='pkl')
+        restored = pickle.loads(pickle.dumps(block))
+        assert restored.keyby == 'tag'
+        assert restored.tag == 'pkl'
+        assert restored.key == 'pkl'
 
     def test_pickle_preserves_keyby_none(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby=None)
@@ -244,9 +347,19 @@ class TestKeybySerialization:
         block2 = block.set(keyby='handle')
         assert block2.keyby == 'handle'
 
+    def test_set_can_change_to_keyby_tag(self):
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='hash')
+        block2 = block.set(keyby='tag', tag='switched')
+        assert block2.keyby == 'tag'
+        assert block2.key == 'switched'
+
     def test_dfn_includes_keyby(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='handle')
         assert block.dfn['keyby'] == 'handle'
+
+    def test_dfn_includes_keyby_tag(self):
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='t1')
+        assert block.dfn['keyby'] == 'tag'
 
     def test_kwargs_excludes_keyby(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='handle')
@@ -254,7 +367,7 @@ class TestKeybySerialization:
 
 
 # ---------------------------------------------------------------------------
-# 7. keyby with datablock() wrapper
+# 8. keyby with datablock() wrapper
 # ---------------------------------------------------------------------------
 
 class TestKeybyWrapper:
@@ -270,6 +383,13 @@ class TestKeybyWrapper:
         assert block.keyby == 'handle'
         assert block.key == block.handle()
 
+    def test_wrapper_keyby_tag(self):
+        Wrapped = datablock(SimpleDatblockable)
+        block = Wrapped(root='/tmp/dbx_test_keyby', keyby='tag', tag='wrapped')
+        assert block.keyby == 'tag'
+        assert block.key == 'wrapped'
+        assert 'wrapped' in block.keypath()
+
     def test_wrapper_keyby_none(self):
         Wrapped = datablock(SimpleDatblockable)
         block = Wrapped(root='/tmp/dbx_test_keyby', keyby=None)
@@ -282,3 +402,11 @@ class TestKeybyWrapper:
         assert block.valid() is False
         block.build()
         assert block.valid() is True
+
+    def test_wrapper_build_with_tag_keyby(self, tmp_path):
+        Wrapped = datablock(SimpleDatblockable)
+        block = Wrapped(root=str(tmp_path), keyby='tag', tag='wrapbuild')
+        assert block.valid() is False
+        block.build()
+        assert block.valid() is True
+        assert 'wrapbuild' in block.path()

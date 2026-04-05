@@ -481,6 +481,7 @@ class Datablock:
         hashstr: str
         anchor: str
         tag: str
+        keyby: str
 
         def deslash(self, attr):
             a = getattr(self, attr)
@@ -615,8 +616,8 @@ class Datablock:
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'hash')
-        if self.keyby not in ('hash', 'handle', None):
-            raise ValueError(f"keyby must be 'hash', 'handle' or None, got {self.keyby!r}")
+        if self.keyby not in ('hash', 'handle', 'tag', None):
+            raise ValueError(f"keyby must be 'hash', 'handle', 'tag' or None, got {self.keyby!r}")
         self._uuid16_ = state.get('uuid16', False)
         
 
@@ -1061,6 +1062,7 @@ class Datablock:
             hashstr=self.hashstr,
             anchor=self.anchor,
             tag=self.tag,
+            keyby=self.keyby,
         )
     
     @staticmethod
@@ -1345,6 +1347,8 @@ class Datablock:
             return self.hash
         elif self.keyby == 'handle':
             return self.handle()
+        elif self.keyby == 'tag':
+            return self.tag
         else:  # None
             return None
     ### anchoracte: END

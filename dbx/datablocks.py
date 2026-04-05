@@ -480,6 +480,7 @@ class Datablock:
         handle: str
         hashstr: str
         anchor: str
+        tag: str
 
         def deslash(self, attr):
             a = getattr(self, attr)
@@ -686,22 +687,6 @@ class Datablock:
     def __post_init__(self):
         ...
 
-    @property
-    def bid(self):
-        return self.Bid(
-            hash=self.hash,
-            version=self.version,
-            revision=self.revision,
-            kwargs=self.kwargs,
-            spec=self.spec,
-            dfn=self.dfn,
-            quote=self.quote(deslash=True),
-            repr=self.__repr__(deslash=True),
-            handle=self.handle(deslash=True),
-            hashstr=self.hashstr,
-            anchor=self.anchor,
-        )
-    
     def validtopic(self, topic=None):
         if topic is None:
             valid = self.validpath(self.path())
@@ -1058,182 +1043,26 @@ class Datablock:
         with fs.open(path, "w") as f:
             f.write("")
     
-    #PATHS: BEGIN
-    def path(
-        self,
-        topic=None,
-        *,
-        ensure_dirpath: bool = False,
-    ):
-        if topic is None:
-            dirpath = self.dirpath()
-            topicfiles = self.TOPICFILE if hasattr(self, 'TOPICFILE') else None
-        else:
-            dirpath = self.dirpath(topic)
-            topicfiles = self.TOPICFILES[topic]
-        if ensure_dirpath and dirpath is not None:
-            ensure_path(dirpath)
-        if isinstance(topicfiles, dict): 
-            path = {topic: self.filepath(dirpath, topicfile) for topic, topicfile in topicfiles.items()}
-        elif isinstance(topicfiles, list):
-            path = [self.filepath(dirpath, topicfile) for topicfile in topicfiles]
-        elif isinstance(topicfiles, str):
-            path = self.filepath(dirpath, topicfiles)
-        else:
-            path = None
-        self.log.detailed(f"{self.anchor}: path: {path}")
-        return path
-    
-    def dirpath(
-        self,
-        topic=None,
-        *,
-        ensure: bool = False,
-        list: bool = False,
-    ):  
-        keypath = self.keypath()
-        if topic is not None:
-            assert topic in self.TOPICFILES, f"Topic {repr(topic)} not in {self.TOPICFILES}"
-            dirpath = os.path.join(keypath, topic)
-        else:
-            dirpath = keypath
-        if ensure:
-            fs, _ = fsspec.url_to_fs(dirpath)
-            fs.makedirs(dirpath, exist_ok=True)
-        if list:
-            fs, _ = fsspec.url_to_fs(dirpath)
-            return fs.ls(dirpath)
-        return dirpath
-    
-    def filepath(
-        self,
-        dirpath,
-        topicfile=None,
-    ):
-        if topicfile is None:
-            path = None
-        else:
-            path = os.path.join(dirpath, topicfile) if topicfile is not None else None     
-        return path
-    
-    @property
-    def key(self):
-        """Return the key component based on self.keyby."""
-        if self.keyby == 'hash':
-            return self.hash
-        elif self.keyby == 'handle':
-            return self.handle()
-        else:  # None
-            return None
-
-    def keypath(self, *, ensure: bool = False):
-        anchorpath = self.anchorpath()
-        key = self.key
-        keypath = os.path.join(anchorpath, key) if key else anchorpath
-        if ensure:
-            ensure_path(keypath)
-        return keypath
-
-    def url(self, topic=None, *, redirect=None):
-        path = self.path(topic)
-        return make_google_cloud_storage_download_url(path)
-    
-    def paths(self):
-        if self.has_topics:
-            paths = {topic: self.path(topic) for topic in self.topics()}
-        else:
-            paths = self.path()
-        return paths
-
-    @property
-    def anchor(self):
-        if self._anchor_ is not None:
-            return self._anchor_
-        return self.fqcn
-
-    @property
-    def stump(self):
-        return self.__class__.__name__
-
-    def anchorpath(self):
-        return os.path.join(self.root, self.anchor)
-
-    @property
-    def anchorkey(self):
-        key = self.key
-        return os.path.join(self.anchor, key) if key else self.anchor
-
-    @property
-    def anchorkeypath(self):
-        return os.path.join(
-            self.root,
-            self.anchorkey,
-        ) if self.anchorkey else self.root
-    
-    @staticmethod
-    def anchorpathx(root, anchor, x, *, fqcn=None, ensure: bool = False):
-        """Return /root/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
-        if fqcn is not None and anchor != fqcn:
-            anchorpathx = os.path.join(root, anchor, ".dbx", fqcn, x)
-        else:
-            anchorpathx = os.path.join(root, anchor, ".dbx", x)
-        if ensure:
-            fs, _ = fsspec.url_to_fs(anchorpathx)
-            fs.makedirs(anchorpathx, exist_ok=True)
-        return anchorpathx
-
-    def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
-        anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x, fqcn=self.fqcn)
-        anchorhashpathx = os.path.join(anchorpathx, self.hash)
-        if ensure_dirpath:
-            fs, _ = fsspec.url_to_fs(anchorhashpathx)
-            fs.makedirs(anchorhashpathx, exist_ok=True)
-        if ext is None:
-            ext = x
-        xpath = os.path.join(anchorhashpathx, f'{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
-        return xpath
-
-    def journalinstancepath(self, *, ensure_dirpath: bool = False):
-        """
-        Return /root/anchor/.dbx/journal/hash/{fqcn}-{dt}.journal."""
-        return self.anchorhashpathx('journal', 'parquet', ensure_dirpath=ensure_dirpath)
-
-    #PATHS: END
-
-    #LOG LEVEL: BEGIN
-    @property
-    def info(self):
-        return self.log.ist('info')
-    
-    @property
-    def verbose(self):
-        return self.log.ist('verbose')
-    
-    @property
-    def debug(self):
-        return self.log.ist('debug')
-    
-    @property
-    def detailed(self):
-        return self.log.ist('detailed')
-
-    @property
-    def log_volume(self):
-        return LogVolume(
-            info=self.info,
-            verbose=self.verbose,
-            debug=self.debug,
-            detailed=self.detailed,
-        )
-    #LOG LEVEL: END
-
-
-    #IDENTIFICATION: BEGIN
+    #IDS: BEGIN
     #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
     # computed using the older version of these methods
-    """
+    @property
+    def bid(self):
+        return self.Bid(
+            hash=self.hash,
+            version=self.version,
+            revision=self.revision,
+            kwargs=self.kwargs,
+            spec=self.spec,
+            dfn=self.dfn,
+            quote=self.quote(deslash=True),
+            repr=self.__repr__(deslash=True),
+            handle=self.handle(deslash=True),
+            hashstr=self.hashstr,
+            anchor=self.anchor,
+            tag=self.tag,
+        )
     
-    """
     @staticmethod
     def is_specline(s):
         return isinstance(s, str) and (
@@ -1491,6 +1320,13 @@ class Datablock:
                 self.log.detailed(f"hash: ---------===---------\u003e {self.hashstr=} ---\u003e hash: {self._hash}")
         return self._hash
 
+    ### anchorage: begin
+    @property
+    def anchor(self):
+        if self._anchor_ is not None:
+            return self._anchor_
+        return self.fqcn
+
     @property
     def tag(self):
         if not hasattr(self, '_tag'): 
@@ -1501,7 +1337,171 @@ class Datablock:
                 self._tag = self.anchorkey
                 self.log.selected(f"tag: ---------------------------------===---------> {self.anchorkey=} ---> tag: {self._tag}")
         return self._tag
-    #IDENTIFICATION: END
+
+    @property
+    def key(self):
+        """Return the key component based on self.keyby."""
+        if self.keyby == 'hash':
+            return self.hash
+        elif self.keyby == 'handle':
+            return self.handle()
+        else:  # None
+            return None
+    ### anchoracte: END
+    #IDS: END
+
+    #PATHS: BEGIN
+    def path(
+        self,
+        topic=None,
+        *,
+        ensure_dirpath: bool = False,
+    ):
+        if topic is None:
+            dirpath = self.dirpath()
+            topicfiles = self.TOPICFILE if hasattr(self, 'TOPICFILE') else None
+        else:
+            dirpath = self.dirpath(topic)
+            topicfiles = self.TOPICFILES[topic]
+        if ensure_dirpath and dirpath is not None:
+            ensure_path(dirpath)
+        if isinstance(topicfiles, dict): 
+            path = {topic: self.filepath(dirpath, topicfile) for topic, topicfile in topicfiles.items()}
+        elif isinstance(topicfiles, list):
+            path = [self.filepath(dirpath, topicfile) for topicfile in topicfiles]
+        elif isinstance(topicfiles, str):
+            path = self.filepath(dirpath, topicfiles)
+        else:
+            path = None
+        self.log.detailed(f"{self.anchor}: path: {path}")
+        return path
+    
+    def dirpath(
+        self,
+        topic=None,
+        *,
+        ensure: bool = False,
+        list: bool = False,
+    ):  
+        keypath = self.keypath()
+        if topic is not None:
+            assert topic in self.TOPICFILES, f"Topic {repr(topic)} not in {self.TOPICFILES}"
+            dirpath = os.path.join(keypath, topic)
+        else:
+            dirpath = keypath
+        if ensure:
+            fs, _ = fsspec.url_to_fs(dirpath)
+            fs.makedirs(dirpath, exist_ok=True)
+        if list:
+            fs, _ = fsspec.url_to_fs(dirpath)
+            return fs.ls(dirpath)
+        return dirpath
+    
+    def filepath(
+        self,
+        dirpath,
+        topicfile=None,
+    ):
+        if topicfile is None:
+            path = None
+        else:
+            path = os.path.join(dirpath, topicfile) if topicfile is not None else None     
+        return path
+    
+    def keypath(self, *, ensure: bool = False):
+        anchorpath = self.anchorpath()
+        key = self.key
+        keypath = os.path.join(anchorpath, key) if key else anchorpath
+        if ensure:
+            ensure_path(keypath)
+        return keypath
+
+    def url(self, topic=None, *, redirect=None):
+        path = self.path(topic)
+        return make_google_cloud_storage_download_url(path)
+    
+    def paths(self):
+        if self.has_topics:
+            paths = {topic: self.path(topic) for topic in self.topics()}
+        else:
+            paths = self.path()
+        return paths
+
+    @property
+    def stump(self):
+        return self.__class__.__name__
+
+    def anchorpath(self):
+        return os.path.join(self.root, self.anchor)
+
+    @property
+    def anchorkey(self):
+        key = self.key
+        return os.path.join(self.anchor, key) if key else self.anchor
+
+    @property
+    def anchorkeypath(self):
+        return os.path.join(
+            self.root,
+            self.anchorkey,
+        ) if self.anchorkey else self.root
+    
+    @staticmethod
+    def anchorpathx(root, anchor, x, *, fqcn=None, ensure: bool = False):
+        """Return /root/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
+        if fqcn is not None and anchor != fqcn:
+            anchorpathx = os.path.join(root, anchor, ".dbx", fqcn, x)
+        else:
+            anchorpathx = os.path.join(root, anchor, ".dbx", x)
+        if ensure:
+            fs, _ = fsspec.url_to_fs(anchorpathx)
+            fs.makedirs(anchorpathx, exist_ok=True)
+        return anchorpathx
+
+    def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
+        anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x, fqcn=self.fqcn)
+        anchorhashpathx = os.path.join(anchorpathx, self.hash)
+        if ensure_dirpath:
+            fs, _ = fsspec.url_to_fs(anchorhashpathx)
+            fs.makedirs(anchorhashpathx, exist_ok=True)
+        if ext is None:
+            ext = x
+        xpath = os.path.join(anchorhashpathx, f'{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
+        return xpath
+
+    def journalinstancepath(self, *, ensure_dirpath: bool = False):
+        """
+        Return /root/anchor/.dbx/journal/hash/{fqcn}-{dt}.journal."""
+        return self.anchorhashpathx('journal', 'parquet', ensure_dirpath=ensure_dirpath)
+
+    #PATHS: END
+
+    #LOG LEVEL: BEGIN
+    @property
+    def info(self):
+        return self.log.ist('info')
+    
+    @property
+    def verbose(self):
+        return self.log.ist('verbose')
+    
+    @property
+    def debug(self):
+        return self.log.ist('debug')
+    
+    @property
+    def detailed(self):
+        return self.log.ist('detailed')
+
+    @property
+    def log_volume(self):
+        return LogVolume(
+            info=self.info,
+            verbose=self.verbose,
+            debug=self.debug,
+            detailed=self.detailed,
+        )
+    #LOG LEVEL: END
 
     #JOURNAL: BEGIN
     def _write_journal_dict(self, name, data, *, add_credentials: bool = False):

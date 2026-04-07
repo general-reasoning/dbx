@@ -618,7 +618,7 @@ class Datablock:
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'hash')
         if self.keyby not in ('hash', 'handle', 'tag', 'custom'):
-            raise ValueError(f"keyby must be 'hash', 'handle', 'tag', or 'custom', got {self.keyby!r}")
+            raise ValueError(f"keyby must be 'hash', 'handle', 'tag', 'custom', got {self.keyby!r}")
         self._uuid16_ = state.get('uuid16', False)
         
 

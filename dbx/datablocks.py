@@ -617,8 +617,8 @@ class Datablock:
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'hash')
-        if self.keyby not in ('hash', 'handle', 'tag', None):
-            raise ValueError(f"keyby must be 'hash', 'handle', 'tag' or None, got {self.keyby!r}")
+        if self.keyby not in ('hash', 'handle', 'tag', 'custom'):
+            raise ValueError(f"keyby must be 'hash', 'handle', 'tag', or 'custom', got {self.keyby!r}")
         self._uuid16_ = state.get('uuid16', False)
         
 

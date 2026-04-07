@@ -481,6 +481,7 @@ class Datablock:
         hashstr: str
         anchor: str
         tag: str
+        key: str
         keyby: str
 
         def deslash(self, attr):
@@ -1062,6 +1063,7 @@ class Datablock:
             hashstr=self.hashstr,
             anchor=self.anchor,
             tag=self.tag,
+            key=self.key,
             keyby=self.keyby,
         )
     

@@ -1351,8 +1351,8 @@ class Datablock:
             return self.handle()
         elif self.keyby == 'tag':
             return self.tag
-        else:  # None
-            return None
+        else:  
+            raise NotImplemented(f"keyby {repr(self.keyby)} is not implemented: missing override?")
     ### anchoracte: END
     #IDS: END
 

@@ -1205,13 +1205,10 @@ class Datablock:
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
     
-    def __repr_from_kwargs__(self, kwargs, *, use_stump: bool = False):
+    def __repr_from_kwargs__(self, kwargs):
         kwargstrs = [f"{k}={v}" for k, v in kwargs.items()]
         kwargsrepr = ', '.join(kwargstrs)
-        if use_stump:
-            _repr_ = f"{self.stump}({kwargsrepr})"
-        else:
-            _repr_ = f"{self.anchor}({kwargsrepr})"
+        _repr_ = f"{self.anchor}({kwargsrepr})"
         return _repr_
     
     def quote(self, *, deslash: bool = False):
@@ -1470,9 +1467,6 @@ class Datablock:
             paths = self.path()
         return paths
 
-    @property
-    def stump(self):
-        return self.__class__.__name__
 
     def anchorpath(self):
         return os.path.join(self.root, self.anchor)

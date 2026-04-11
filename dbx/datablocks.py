@@ -212,6 +212,10 @@ class JournalEntry(pd.Series):
     @property
     def hash(self):
         return self.get('hash')
+    
+    @property
+    def shorthash(self):
+        return self.hash[:8]
 
     @property
     def root(self):
@@ -617,8 +621,8 @@ class Datablock:
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'hash')
-        if self.keyby not in ('hash', 'handle', 'tag', 'custom'):
-            raise ValueError(f"keyby must be 'hash', 'handle', 'tag', 'custom', got {self.keyby!r}")
+        if self.keyby not in (None, 'hash', 'handle', 'tag', 'taghash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'handle', 'tag', 'taghash', 'custom', got {self.keyby!r}")
         self._uuid16_ = state.get('uuid16', False)
         
 
@@ -1324,6 +1328,10 @@ class Datablock:
                 self.log.detailed(f"hash: ---------===---------\u003e {self.hashstr=} ---\u003e hash: {self._hash}")
         return self._hash
 
+    @property
+    def shorthash(self):
+        return self.hash[:8]
+
     ### anchorage: begin
     @property
     def anchor(self):
@@ -1345,14 +1353,18 @@ class Datablock:
     @property
     def key(self):
         """Return the key component based on self.keyby."""
-        if self.keyby == 'hash':
+        if self.keyby is None:
+            return None
+        elif self.keyby == 'hash':
             return self.hash
         elif self.keyby == 'handle':
             return self.handle()
         elif self.keyby == 'tag':
             return self.tag
+        elif self.keyby == 'taghash':
+            return f"{self.tag}/{self.shorthash}"
         else:  
-            raise NotImplemented(f"keyby {repr(self.keyby)} is not implemented: missing override?")
+            raise NotImplementedError(f"keyby {repr(self.keyby)} is not implemented: missing override?")
     ### anchoracte: END
     #IDS: END
 

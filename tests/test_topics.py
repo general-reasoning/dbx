@@ -46,7 +46,7 @@ class TopicsBlock(Datablock):
         label: str = "'default'"
 
     def path(self, topic=None, *, ensure_dirpath=False):
-        kp = self.keypath()
+        kp = self.anchorkeypath
         if ensure_dirpath:
             os.makedirs(kp, exist_ok=True)
         if topic is None:
@@ -80,7 +80,7 @@ class SingleTopicBlock(Datablock):
         pass
 
     def path(self, topic=None, *, ensure_dirpath=False):
-        kp = self.keypath()
+        kp = self.anchorkeypath
         if topic is None:
             return kp
         elif topic == 'output':
@@ -116,7 +116,7 @@ class TopicsDatblockable:
         self.cfg = cfg
 
     def path(self, topic=None, *, ensure_dirpath=False):
-        kp = self.keypath()
+        kp = self.anchorkeypath
         if topic is None:
             return kp
         elif topic == 'frames':
@@ -175,19 +175,19 @@ class TestTopicsPath:
 
     def test_path_none_returns_keypath(self):
         block = TopicsBlock(root='/tmp/dbx_test_topics')
-        assert block.path() == block.keypath()
+        assert block.path() == block.anchorkeypath
 
     def test_path_frames(self):
         block = TopicsBlock(root='/tmp/dbx_test_topics')
         p = block.path('frames')
         assert p.endswith('data/frames.pt')
-        assert block.keypath() in p
+        assert block.anchorkeypath in p
 
     def test_path_poses(self):
         block = TopicsBlock(root='/tmp/dbx_test_topics')
         p = block.path('poses')
         assert p.endswith('data/poses.json')
-        assert block.keypath() in p
+        assert block.anchorkeypath in p
 
     def test_path_unknown_topic_raises(self):
         block = TopicsBlock(root='/tmp/dbx_test_topics')
@@ -203,7 +203,7 @@ class TestTopicsDirpath:
 
     def test_dirpath_none_returns_keypath(self):
         block = TopicsBlock(root='/tmp/dbx_test_topics')
-        assert block.dirpath() == block.keypath()
+        assert block.dirpath() == block.anchorkeypath
 
     def test_dirpath_topic_derives_from_path(self):
         """For TOPICS-only, dirpath(topic) should be dirname of path(topic)."""

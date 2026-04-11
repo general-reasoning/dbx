@@ -838,7 +838,7 @@ class Datablock:
                 self.build_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
                 self.__post_build__(*args, **kwargs)
             else:
-                self.log.verbose(f"Skipping existing datablock: {self.keypath()}")
+                self.log.verbose(f"Skipping existing datablock: {self.anchorkeypath}")
         except KeyboardInterrupt as e:
             self.__post_build__(*args, event="build:keyboard_interrupt", **kwargs)
             raise(e)
@@ -1452,15 +1452,15 @@ class Datablock:
         if topic is not None and hasattr(self, 'TOPICS') and not hasattr(self, 'TOPICFILES'):
             # TOPICS-only: derive dirpath from the overridden path()
             p = self.path(topic)
-            dirpath = os.path.dirname(p) if p is not None else self.keypath()
+            dirpath = os.path.dirname(p) if p is not None else self.anchorkeypath
         else:
-            keypath = self.keypath()
+            anchorkeypath = self.anchorkeypath
             if topic is not None:
                 assert hasattr(self, 'TOPICFILES') and topic in self.TOPICFILES, \
                     f"Topic {repr(topic)} not in {getattr(self, 'TOPICFILES', None)}"
-                dirpath = os.path.join(keypath, topic)
+                dirpath = os.path.join(anchorkeypath, topic)
             else:
-                dirpath = keypath
+                dirpath = anchorkeypath
         if ensure:
             fs, _ = fsspec.url_to_fs(dirpath)
             fs.makedirs(dirpath, exist_ok=True)
@@ -1468,14 +1468,7 @@ class Datablock:
             fs, _ = fsspec.url_to_fs(dirpath)
             return fs.ls(dirpath)
         return dirpath
-    
-    def keypath(self, *, ensure: bool = False):
-        anchorpath = self.anchorpath()
-        key = self.key
-        keypath = os.path.join(anchorpath, key) if key else anchorpath
-        if ensure:
-            ensure_path(keypath)
-        return keypath
+
 
 
     def paths(self):

@@ -90,7 +90,7 @@ class TestDefaultKeybyHash:
     def test_keypath_equals_old_hashpath_by_default(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby')
         expected = os.path.join(block.anchorpath(), block.hash)
-        assert block.keypath() == expected
+        assert block.anchorkeypath == expected
 
     def test_anchorkey_equals_old_anchorhash_by_default(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby')
@@ -121,7 +121,7 @@ class TestKeybyHandle:
     def test_keypath_uses_handle(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='handle')
         expected = os.path.join(block.anchorpath(), block.handle())
-        assert block.keypath() == expected
+        assert block.anchorkeypath == expected
 
     def test_anchorkey_uses_handle(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='handle')
@@ -137,7 +137,7 @@ class TestKeybyHandle:
         """keypath should be different when keyby='handle' vs keyby='hash'."""
         block_hash = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='hash')
         block_handle = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='handle')
-        assert block_hash.keypath() != block_handle.keypath()
+        assert block_hash.anchorkeypath != block_handle.anchorkeypath
 
     def test_build_with_handle_keyby(self, tmp_path):
         """A block with keyby='handle' should build and validate correctly."""
@@ -174,7 +174,7 @@ class TestKeybyTag:
     def test_keypath_uses_explicit_tag(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='v1')
         expected = os.path.join(block.anchorpath(), 'v1')
-        assert block.keypath() == expected
+        assert block.anchorkeypath == expected
 
     def test_anchorkey_uses_explicit_tag(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='v1')
@@ -191,8 +191,8 @@ class TestKeybyTag:
         block_hash = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='hash')
         block_handle = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='handle')
         block_tag = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='special')
-        assert block_hash.keypath() != block_tag.keypath()
-        assert block_handle.keypath() != block_tag.keypath()
+        assert block_hash.anchorkeypath != block_tag.anchorkeypath
+        assert block_handle.anchorkeypath != block_tag.anchorkeypath
 
     def test_tag_appears_in_path(self):
         """The explicit tag string should appear in the full file path."""
@@ -221,13 +221,13 @@ class TestKeybyTag:
         """Two blocks with different tags should have different keypaths."""
         block_a = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='alpha')
         block_b = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='beta')
-        assert block_a.keypath() != block_b.keypath()
+        assert block_a.anchorkeypath != block_b.anchorkeypath
 
     def test_same_tag_same_keypath(self):
         """Two blocks with the same tag should share the same keypath."""
         block_a = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='same')
         block_b = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='same')
-        assert block_a.keypath() == block_b.keypath()
+        assert block_a.anchorkeypath == block_b.anchorkeypath
 
     def test_bid_tag_field(self):
         """The bid should reflect the explicit tag."""
@@ -260,7 +260,7 @@ class TestKeybyTaghash:
     def test_keypath_uses_tag_and_shorthash(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash', tag='v1')
         expected = os.path.join(block.anchorpath(), 'v1', block.hash[:8])
-        assert block.keypath() == expected
+        assert block.anchorkeypath == expected
 
     def test_anchorkey_uses_tag_and_shorthash(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash', tag='v1')
@@ -276,7 +276,7 @@ class TestKeybyTaghash:
         """keyby='taghash' should produce different paths than keyby='tag'."""
         block_tag = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='tag', tag='same')
         block_taghash = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash', tag='same')
-        assert block_tag.keypath() != block_taghash.keypath()
+        assert block_tag.anchorkeypath != block_taghash.anchorkeypath
 
     def test_tag_and_shorthash_appear_in_path(self):
         """Both tag and shorthash should appear in the full file path."""
@@ -305,13 +305,13 @@ class TestKeybyTaghash:
         """Two blocks with different tags should have different keypaths."""
         block_a = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash', tag='alpha')
         block_b = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash', tag='beta')
-        assert block_a.keypath() != block_b.keypath()
+        assert block_a.anchorkeypath != block_b.anchorkeypath
 
     def test_same_tag_same_keypath(self):
         """Two blocks with the same tag/config should share the same keypath."""
         block_a = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash', tag='same')
         block_b = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash', tag='same')
-        assert block_a.keypath() == block_b.keypath()
+        assert block_a.anchorkeypath == block_b.anchorkeypath
 
     def test_bid_keyby_field(self):
         """The bid should reflect keyby='taghash'."""
@@ -348,7 +348,7 @@ class TestKeybyNone:
     def test_keypath_equals_anchorpath(self):
         """With keyby=None, keypath should collapse to anchorpath."""
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby=None)
-        assert block.keypath() == block.anchorpath()
+        assert block.anchorkeypath == block.anchorpath()
 
     def test_anchorkey_equals_anchor(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby=None)
@@ -486,13 +486,13 @@ class TestKeybyWrapper:
         block = Wrapped(root='/tmp/dbx_test_keyby', keyby='tag', tag='wrapped')
         assert block.keyby == 'tag'
         assert block.key == 'wrapped'
-        assert 'wrapped' in block.keypath()
+        assert 'wrapped' in block.anchorkeypath
 
     def test_wrapper_keyby_none(self):
         Wrapped = datablock(SimpleDatblockable)
         block = Wrapped(root='/tmp/dbx_test_keyby', keyby=None)
         assert block.keyby is None
-        assert block.keypath() == block.anchorpath()
+        assert block.anchorkeypath == block.anchorpath()
 
     def test_wrapper_build_with_handle_keyby(self, tmp_path):
         Wrapped = datablock(SimpleDatblockable)
@@ -506,8 +506,8 @@ class TestKeybyWrapper:
         block = Wrapped(root='/tmp/dbx_test_keyby', keyby='taghash', tag='wrapped')
         assert block.keyby == 'taghash'
         assert block.key == f"wrapped/{block.hash[:8]}"
-        assert 'wrapped' in block.keypath()
-        assert block.hash[:8] in block.keypath()
+        assert 'wrapped' in block.anchorkeypath
+        assert block.hash[:8] in block.anchorkeypath
 
     def test_wrapper_build_with_tag_keyby(self, tmp_path):
         Wrapped = datablock(SimpleDatblockable)

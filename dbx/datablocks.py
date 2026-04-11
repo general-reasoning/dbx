@@ -234,21 +234,50 @@ class JournalEntry(pd.Series):
         return self.get('version')
 
     @property
+    def keyby(self):
+        return self.get('keyby', 'hash')
+
+    @property
+    def tag(self):
+        return self.get('tag')
+
+    @property
+    def key(self):
+        """Reconstruct the key from journal fields, mirroring Datablock.key."""
+        keyby = self.keyby
+        if keyby is None:
+            return None
+        elif keyby == 'hash':
+            return self.hash
+        elif keyby == 'tag':
+            return self.tag
+        elif keyby == 'taghash':
+            return f"{self.tag}/{self.shorthash}"
+        elif keyby == 'handle':
+            h = self.get('handle')
+            if h is not None:
+                return h
+            return self.hash  # fallback if handle not stored
+        else:
+            return self.hash  # fallback
+
+    @property
     def anchorkey(self):
-        return os.path.join(self.anchor, self.hash)
+        key = self.key
+        return os.path.join(self.anchor, key) if key else self.anchor
 
     @property
     def anchorkeypath(self):
         return os.path.join(self.root, self.anchorkey)
 
-    # Backward-compatible aliases
+    # Backward-compatible aliases (always hash-based)
     @property
     def anchorhash(self):
-        return self.anchorkey
+        return os.path.join(self.anchor, self.hash)
 
     @property
     def anchorhashpath(self):
-        return self.anchorkeypath
+        return os.path.join(self.root, self.anchorhash)
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):

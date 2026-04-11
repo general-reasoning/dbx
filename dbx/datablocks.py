@@ -1456,10 +1456,7 @@ class Datablock:
             ensure_path(keypath)
         return keypath
 
-    def url(self, topic=None, *, redirect=None):
-        path = self.path(topic)
-        return make_google_cloud_storage_download_url(path)
-    
+
     def paths(self):
         if self.has_topics:
             paths = {topic: self.path(topic) for topic in self.topics()}

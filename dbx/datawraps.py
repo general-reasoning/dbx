@@ -43,8 +43,9 @@ class Datablockable:
         return self
 
     def read(self, topic=None):
-        if topic not in self.TOPICFILES:
-            raise ValueError(f"Topic {repr(topic)} not in {self.TOPICFILES}")
+        topics = self.topics() if hasattr(self, 'topics') else list(self.TOPICFILES.keys())
+        if topic not in topics:
+            raise ValueError(f"Topic {repr(topic)} not in {topics}")
         return self.__read__(topic)
     
     def __read__(self, topic=None):
@@ -181,11 +182,13 @@ def _lift_config(cls, class_attrs):
 # ---------------------------------------------------------------------------
 
 def _lift_class_attrs(cls, class_attrs):
-    """Lift TOPICFILES, TOPICFILE, VERSION, and CONFIG from *cls*."""
+    """Lift TOPICFILES, TOPICFILE, TOPICS, VERSION, and CONFIG from *cls*."""
     if hasattr(cls, 'TOPICFILES'):
         class_attrs['TOPICFILES'] = cls.TOPICFILES
     if hasattr(cls, 'TOPICFILE'):
         class_attrs['TOPICFILE'] = cls.TOPICFILE
+    if hasattr(cls, 'TOPICS'):
+        class_attrs['TOPICS'] = cls.TOPICS
     if hasattr(cls, 'VERSION'):
         class_attrs['VERSION'] = cls.VERSION
     _lift_config(cls, class_attrs)

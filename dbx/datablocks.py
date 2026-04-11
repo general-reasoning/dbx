@@ -753,6 +753,8 @@ class Datablock:
         if result is None:
             def _topic_path(topic):
                 p = self.path(topic)
+                if hasattr(self, 'TOPICS'):
+                    return p
                 if p is None and self.has_topics() and self.TOPICFILES.get(topic) is None:
                     return self.dirpath(topic)
                 return p
@@ -774,10 +776,17 @@ class Datablock:
         return self.validpaths(reduce=True)
     
     def topics(self):
-        return list(self.TOPICFILES.keys()) if self.has_topics() else ([] if self.has_topic() else None)
+        if hasattr(self, "TOPICFILES"):
+            return list(self.TOPICFILES.keys())
+        elif hasattr(self, "TOPICS"):
+            return list(self.TOPICS)
+        elif self.has_topic():
+            return []
+        else:
+            return None
 
     def has_topics(self):
-        return hasattr(self, "TOPICFILES")
+        return hasattr(self, "TOPICFILES") or hasattr(self, "TOPICS")
     
     def has_topic(self):
         return hasattr(self, "TOPICFILE")
@@ -833,9 +842,13 @@ class Datablock:
             for topic in self.TOPICFILES:
                 self.dirpath(topic, ensure=True)
                 self.leave_breadcrumbs_at_path(self.path(topic))
-        else:
+        elif hasattr(self, "TOPICFILE"):
             self.dirpath(ensure=True)
             self.leave_breadcrumbs_at_path(self.path())
+        else:
+            raise NotImplementedError(
+                f"{self.__class__.__name__}.leave_breadcrumbs() requires TOPICFILES or TOPICFILE"
+            )
         return self
 
     def build_tree(self, *args, exclude_self: bool = False, **kwargs):
@@ -865,8 +878,8 @@ class Datablock:
     
     def read(self, topic=None):
         if self.has_topics():
-            if topic not in self.TOPICFILES:
-                raise ValueError(f"Topic {repr(topic)} not in {self.TOPICFILES}")
+            if topic not in self.topics():
+                raise ValueError(f"Topic {repr(topic)} not in {self.topics()}")
             _ =  self.__read__(topic)
         else:
             _ = self.__read__()
@@ -1003,17 +1016,21 @@ class Datablock:
         self.log.verbose(f"Copying files from {anchorhashpath}: BEGIN")
         self._write_journal_entry(event="UNSAFE_copy_from:BEGIN", context=anchorhashpath, inline_context=True)
         try:
-            if self.has_topics():
+            if hasattr(self, 'TOPICFILES'):
                 for topic in self.topics():
                     if copy_dirpath:
                         copy_topic_dir(topic)
                     else:
                         copy_topic_file(topic)
-            elif self.has_topic():
+            elif hasattr(self, 'TOPICFILE'):
                 if copy_dirpath:
                     copy_topic_dir()
                 else:
                     copy_topic_file()
+            else:
+                raise NotImplementedError(
+                    f"{self.__class__.__name__}.UNSAFE_copy_from() requires TOPICFILES or TOPICFILE"
+                )
         
             self.log.verbose(f"Copying files from {anchorhashpath}: END")
             self._write_journal_entry(event="UNSAFE_copy_from:END", context=anchorhashpath, inline_context=True)
@@ -1305,6 +1322,8 @@ class Datablock:
         # computed using the older version of these methods
         if hasattr(self, "TOPICFILES"):
             topics = [f"topic:{topic}={file}" for topic, file in self.TOPICFILES.items()]
+        elif hasattr(self, "TOPICS"):
+            topics = [f"topic:{topic}" for topic in self.TOPICS]
         else:
             topics = ["topics:None"]
         hashstr = os.path.join(
@@ -1401,12 +1420,18 @@ class Datablock:
         ensure: bool = False,
         list: bool = False,
     ):  
-        keypath = self.keypath()
-        if topic is not None:
-            assert topic in self.TOPICFILES, f"Topic {repr(topic)} not in {self.TOPICFILES}"
-            dirpath = os.path.join(keypath, topic)
+        if topic is not None and hasattr(self, 'TOPICS') and not hasattr(self, 'TOPICFILES'):
+            # TOPICS-only: derive dirpath from the overridden path()
+            p = self.path(topic)
+            dirpath = os.path.dirname(p) if p is not None else self.keypath()
         else:
-            dirpath = keypath
+            keypath = self.keypath()
+            if topic is not None:
+                assert hasattr(self, 'TOPICFILES') and topic in self.TOPICFILES, \
+                    f"Topic {repr(topic)} not in {getattr(self, 'TOPICFILES', None)}"
+                dirpath = os.path.join(keypath, topic)
+            else:
+                dirpath = keypath
         if ensure:
             fs, _ = fsspec.url_to_fs(dirpath)
             fs.makedirs(dirpath, exist_ok=True)

@@ -23,7 +23,7 @@ from dbx.datablocks import journal, Datablock, JournalFrame, JournalEntry
 def _journal_dir(root, cls) -> str:
     """Return the journal directory path for a given class and root."""
     anchor = cls.__module__ + "." + cls.__name__
-    return Datablock.anchorpathx(root, anchor, 'journal')
+    return Datablock._dbxanchorpathx(root, anchor, 'journal')
 
 
 def _write_fake_journal_entry(journal_dir: str, hash_val: str = "abc123", event: str = "build"):
@@ -169,7 +169,7 @@ class OtherBlock(Datablock):
 
 
 def _write_journal_in_hash_dir(journal_dir, classname, hash_val="abc", event="build"):
-    """Write a parquet entry inside a hash subdirectory, mirroring anchorhashpathx layout."""
+    """Write a parquet entry inside a hash subdirectory, mirroring _dbxanchorhashpathx layout."""
     hash_dir = os.path.join(journal_dir, hash_val)
     os.makedirs(hash_dir, exist_ok=True)
     now = datetime.datetime.now()

@@ -822,7 +822,7 @@ class Datablock:
 
     def build(self, *args, **kwargs):
         if self.capture_output:
-            logpath = self.anchorhashpathx('log', ext='log', ensure=True)
+            logpath = self._dbxanchorhashpathx('log', ext='log', ensure=True)
             self.log.verbose(f"-------------------- Capturing stdout/stderr to {logpath} ------------------")
             stdout = sys.stdout
             stderr = sys.stderr
@@ -1495,32 +1495,32 @@ class Datablock:
         ) if self.anchorkey else self.root
     
     @staticmethod
-    def anchorpathx(root, anchor, x, *, fqcn=None, ensure: bool = False):
+    def _dbxanchorpathx(root, anchor, x, *, fqcn=None, ensure: bool = False):
         """Return /root/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
         if fqcn is not None and anchor != fqcn:
-            anchorpathx = os.path.join(root, anchor, ".dbx", fqcn, x)
+            _dbxanchorpathx = os.path.join(root, anchor, ".dbx", fqcn, x)
         else:
-            anchorpathx = os.path.join(root, anchor, ".dbx", x)
+            _dbxanchorpathx = os.path.join(root, anchor, ".dbx", x)
         if ensure:
-            fs, _ = fsspec.url_to_fs(anchorpathx)
-            fs.makedirs(anchorpathx, exist_ok=True)
-        return anchorpathx
+            fs, _ = fsspec.url_to_fs(_dbxanchorpathx)
+            fs.makedirs(_dbxanchorpathx, exist_ok=True)
+        return _dbxanchorpathx
 
-    def anchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
-        anchorpathx = Datablock.anchorpathx(self.root, self.anchor, x, fqcn=self.fqcn)
-        anchorhashpathx = os.path.join(anchorpathx, self.hash)
+    def _dbxanchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
+        _dbxanchorpathx = Datablock._dbxanchorpathx(self.root, self.anchor, x, fqcn=self.fqcn)
+        _dbxanchorhashpathx = os.path.join(_dbxanchorpathx, self.hash)
         if ensure_dirpath:
-            fs, _ = fsspec.url_to_fs(anchorhashpathx)
-            fs.makedirs(anchorhashpathx, exist_ok=True)
+            fs, _ = fsspec.url_to_fs(_dbxanchorhashpathx)
+            fs.makedirs(_dbxanchorhashpathx, exist_ok=True)
         if ext is None:
             ext = x
-        xpath = os.path.join(anchorhashpathx, f'{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
+        xpath = os.path.join(_dbxanchorhashpathx, f'{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
         return xpath
 
-    def journalinstancepath(self, *, ensure_dirpath: bool = False):
+    def _dbxjournalinstancepath(self, *, ensure_dirpath: bool = False):
         """
         Return /root/anchor/.dbx/journal/hash/{fqcn}-{dt}.journal."""
-        return self.anchorhashpathx('journal', 'parquet', ensure_dirpath=ensure_dirpath)
+        return self._dbxanchorhashpathx('journal', 'parquet', ensure_dirpath=ensure_dirpath)
 
     #PATHS: END
 
@@ -1558,13 +1558,13 @@ class Datablock:
             data['hash'] = self.hash
             data['datetime'] = self.dt
         #
-        ypath = self.anchorhashpathx(name, 'yaml')
+        ypath = self._dbxanchorhashpathx(name, 'yaml')
         yfs, _ = fsspec.url_to_fs(ypath)
         write_yaml(data, ypath)
         assert yfs.exists(ypath), f"path {ypath} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
         #
-        pqpath = self.anchorhashpathx(name, 'parquet')
+        pqpath = self._dbxanchorhashpathx(name, 'parquet')
         pqfs, _ = fsspec.url_to_fs(pqpath)
         df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
         df.to_parquet(pqpath)
@@ -1573,7 +1573,7 @@ class Datablock:
 
     def _write_str(self, name, text):
         #
-        path = self.anchorhashpathx(name, 'txt')
+        path = self._dbxanchorhashpathx(name, 'txt')
         fs, _ = fsspec.url_to_fs(path)
         write_str(text, path)
         assert fs.exists(path), f"scopepath {path} does not exist after writing"
@@ -1592,27 +1592,27 @@ class Datablock:
         #
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
 
-        spec_path = self.anchorhashpathx('spec', 'yaml')
-        dfn_path = self.anchorhashpathx('dfn', 'yaml')
-        kwargs_path = self.anchorhashpathx('kwargs', 'yaml')
-        quote_path = self.anchorhashpathx('quote', 'txt')
-        handle_path = self.anchorhashpathx('quote', 'txt')
-        repr_path = self.anchorhashpathx('repr', 'txt')
-        hashstr_path = self.anchorhashpathx('hashstr', 'txt')
+        spec_path = self._dbxanchorhashpathx('spec', 'yaml')
+        dfn_path = self._dbxanchorhashpathx('dfn', 'yaml')
+        kwargs_path = self._dbxanchorhashpathx('kwargs', 'yaml')
+        quote_path = self._dbxanchorhashpathx('quote', 'txt')
+        handle_path = self._dbxanchorhashpathx('quote', 'txt')
+        repr_path = self._dbxanchorhashpathx('repr', 'txt')
+        hashstr_path = self._dbxanchorhashpathx('hashstr', 'txt')
         if context is not None and not inline_context:
-            context_path = self.anchorhashpathx('context', 'txt')
+            context_path = self._dbxanchorhashpathx('context', 'txt')
             context = context_path
         else:
             context_path = None
         #
-        logpath = self.anchorhashpathx('log', ensure_dirpath=True)
+        logpath = self._dbxanchorhashpathx('log', ensure_dirpath=True)
         if logpath is not None:
             logfs, _ = fsspec.url_to_fs(logpath)
             has_log = logfs.exists(logpath)
         else:
             has_log = False
         #
-        journal_path = self.journalinstancepath(ensure_dirpath=True)
+        journal_path = self._dbxjournalinstancepath(ensure_dirpath=True)
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build_datetime': self.build_dt,
                                          'version': self.version,
@@ -1648,7 +1648,7 @@ class Datablock:
         if root is None:
             root = os.environ.get('DBX_ROOT')
 
-        journaldirpath = Datablock.anchorpathx(root, anchor, 'journal', fqcn=fqcn)
+        journaldirpath = Datablock._dbxanchorpathx(root, anchor, 'journal', fqcn=fqcn)
         fs, _ = fsspec.url_to_fs(journaldirpath)
 
         log = Logger()

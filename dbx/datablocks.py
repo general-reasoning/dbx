@@ -1391,6 +1391,9 @@ class Datablock:
         *,
         ensure_dirpath: bool = False,
     ):
+        def _filepath(dirpath, topicfile):
+            return os.path.join(dirpath, topicfile) if topicfile is not None else None
+
         if topic is None:
             dirpath = self.dirpath()
             topicfiles = self.TOPICFILE if hasattr(self, 'TOPICFILE') else None
@@ -1400,11 +1403,11 @@ class Datablock:
         if ensure_dirpath and dirpath is not None:
             ensure_path(dirpath)
         if isinstance(topicfiles, dict): 
-            path = {topic: self.filepath(dirpath, topicfile) for topic, topicfile in topicfiles.items()}
+            path = {topic: _filepath(dirpath, topicfile) for topic, topicfile in topicfiles.items()}
         elif isinstance(topicfiles, list):
-            path = [self.filepath(dirpath, topicfile) for topicfile in topicfiles]
+            path = [_filepath(dirpath, topicfile) for topicfile in topicfiles]
         elif isinstance(topicfiles, str):
-            path = self.filepath(dirpath, topicfiles)
+            path = _filepath(dirpath, topicfiles)
         else:
             path = None
         self.log.detailed(f"{self.anchor}: path: {path}")
@@ -1436,17 +1439,6 @@ class Datablock:
             fs, _ = fsspec.url_to_fs(dirpath)
             return fs.ls(dirpath)
         return dirpath
-    
-    def filepath(
-        self,
-        dirpath,
-        topicfile=None,
-    ):
-        if topicfile is None:
-            path = None
-        else:
-            path = os.path.join(dirpath, topicfile) if topicfile is not None else None     
-        return path
     
     def keypath(self, *, ensure: bool = False):
         anchorpath = self.anchorpath()

@@ -115,6 +115,7 @@ class Datastackable(Datablockable):
     """
 
     def __build__(self):
+        self.__pre_stack__()
         for shard in self.shards():
             shard.build()
         return self.__stack__()
@@ -139,6 +140,10 @@ class Datastackable(Datablockable):
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement __shard__(idx)"
         )
+
+    def __pre_stack__(self):
+        """Produce stack-level artefacts before all shards are built."""
+        return self
 
     def __stack__(self):
         """Produce stack-level artefacts after all shards are built."""
@@ -199,7 +204,7 @@ def _lift_class_attrs(cls, class_attrs):
 # ===========================================================================
 
 
-def datablock(cls, *, base_underride=('build', 'read'), underride=()):
+def datablock(cls, *, base_underride=('build', 'read', 'topics'), underride=()):
     """Wrap a Datablockable class as a Datablock subclass.
 
     The wrapper creates a dynamic class ``(cls, Datablock)`` and

@@ -178,7 +178,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
 
 @dataclass
 class LogVolume:
-    """Bundle of log-verbosity settings used by Datablockable / Datastackable."""
+    """Bundle of log-verbosity settings."""
     info: bool = None
     verbose: bool = None
     debug: bool = None

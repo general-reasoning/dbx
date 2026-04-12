@@ -1808,6 +1808,7 @@ class Datastack(Datablock):
 
     def __build__(self, *args, **kwargs):
         """Build all shards returned by :meth:`shards` using the configured builder."""
+        self.__pre_stack__()
         shard_list = self.shards()
         self.log.info(
             f"Building {self.__class__.__name__}: {len(shard_list)} shards, "
@@ -1821,6 +1822,9 @@ class Datastack(Datablock):
         self.log.info(f"Stacking {self.n_shards} shards of {self.__class__.__name__}")
         self.__stack__()
         self.log.info(f"Build complete: {self.__class__.__name__}")
+        return self
+
+    def __pre_stack__(self):
         return self
 
     def __stack__(self):

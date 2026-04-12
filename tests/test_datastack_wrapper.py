@@ -432,3 +432,78 @@ class TestNoConfigDatastack:
         assert len(shard_list) == 2
         for s in shard_list:
             assert isinstance(s, Datablock)
+
+
+# ---------------------------------------------------------------------------
+# 10. __pre_stack__ hook
+# ---------------------------------------------------------------------------
+
+class PreStackBatchProcessor:
+    """A Datastackable that tracks __pre_stack__ calls."""
+    SHARD = ItemProcessor
+    TOPICFILE = 'pre_stack_meta.txt'
+    _call_order = []
+
+    @dataclass
+    class CONFIG:
+        n_items: int = 3
+
+    def __init__(self, *, cfg=None, **_):
+        self.cfg = cfg
+
+    @property
+    def n_shards(self):
+        return self.cfg.n_items
+
+    def __shard__(self, idx):
+        return ItemProcessor(
+            cfg=ItemProcessor.CONFIG(item_id=idx),
+        )
+
+    def __pre_stack__(self):
+        PreStackBatchProcessor._call_order.append("pre_stack")
+        return self
+
+    def __stack__(self):
+        PreStackBatchProcessor._call_order.append("stack")
+        return self
+
+    def __read__(self, topic=None):
+        return f"pre_stack batch with {self.cfg.n_items} items"
+
+
+class TestPreStack:
+
+    def test_pre_stack_called_during_build(self, tmp_path):
+        """__pre_stack__() should be called when the wrapped stack builds."""
+        Wrapped = datastack(PreStackBatchProcessor)
+        PreStackBatchProcessor._call_order = []
+        stack = Wrapped(root=str(tmp_path), spec=dict(n_items=2))
+        stack.build()
+        assert "pre_stack" in PreStackBatchProcessor._call_order
+
+    def test_pre_stack_called_before_stack(self, tmp_path):
+        """__pre_stack__() should be called before __stack__()."""
+        Wrapped = datastack(PreStackBatchProcessor)
+        PreStackBatchProcessor._call_order = []
+        stack = Wrapped(root=str(tmp_path), spec=dict(n_items=2))
+        stack.build()
+        order = PreStackBatchProcessor._call_order
+        pre_idx = order.index("pre_stack")
+        stack_idx = order.index("stack")
+        assert pre_idx < stack_idx
+
+    def test_default_pre_stack_returns_self(self, tmp_path):
+        """Default __pre_stack__() on BatchProcessor (no override) returns self."""
+        Wrapped = datastack(BatchProcessor)
+        stack = Wrapped(root=str(tmp_path), spec=dict(n_items=1))
+        result = stack.__pre_stack__()
+        assert result is stack
+
+    def test_pre_stack_on_datastackable(self):
+        """Datastackable base __pre_stack__() returns self."""
+        from dbx.datawraps import Datastackable
+        obj = object.__new__(Datastackable)
+        result = Datastackable.__pre_stack__(obj)
+        assert result is obj
+

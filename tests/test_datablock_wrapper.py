@@ -619,3 +619,80 @@ class TestTagPreservation:
         block = Wrapped(root=str(tmp_path), tag='PICKLE_TAG')
         restored = pickle.loads(pickle.dumps(block))
         assert restored.tag == 'PICKLE_TAG'
+
+
+# ---------------------------------------------------------------------------
+# 13. topics() underride
+# ---------------------------------------------------------------------------
+
+class CustomTopicsProcessor:
+    """A Datablockable that defines its own topics() method.
+
+    The wrapper should underride this with Datablock.topics() so the
+    framework version (derived from TOPICFILES) wins.
+    """
+    TOPICFILES = {'alpha': 'alpha.pt', 'beta': 'beta.pt'}
+
+    @dataclass
+    class CONFIG:
+        pass
+
+    def __init__(self, *, cfg=None, **_):
+        self.cfg = cfg
+
+    def topics(self):
+        return ['custom_topic']
+
+    def __build__(self, *args, **kwargs):
+        return self
+
+    def __read__(self, topic=None):
+        return None
+
+
+class TestTopicsUnderride:
+    """Verify that datablock() underrides topics() with Datablock.topics()."""
+
+    def test_topics_uses_framework_version(self, tmp_path):
+        """Wrapped block should use Datablock.topics() not the Datablockable's."""
+        Wrapped = datablock(CustomTopicsProcessor)
+        block = Wrapped(root=str(tmp_path))
+        # Should return keys from TOPICFILES, not ['custom_topic']
+        assert block.topics() == ['alpha', 'beta']
+
+    def test_topics_not_custom(self, tmp_path):
+        """Ensure the custom topics() is truly overridden."""
+        Wrapped = datablock(CustomTopicsProcessor)
+        block = Wrapped(root=str(tmp_path))
+        assert block.topics() != ['custom_topic']
+
+    def test_topics_in_base_underride(self):
+        """'topics' should be in the default base_underride tuple."""
+        import inspect
+        sig = inspect.signature(datablock)
+        base_underride_default = sig.parameters['base_underride'].default
+        assert 'topics' in base_underride_default
+
+    def test_topics_underride_with_topicfile(self, tmp_path):
+        """TOPICFILE-based Datablockable with custom topics() still uses framework topics()."""
+        class TopicFileCls:
+            TOPICFILE = 'single.txt'
+
+            @dataclass
+            class CONFIG:
+                pass
+
+            def topics(self):
+                return ['wrong']
+
+            def __build__(self, *args, **kwargs):
+                return self
+
+            def __read__(self, topic=None):
+                return None
+
+        Wrapped = datablock(TopicFileCls)
+        block = Wrapped(root=str(tmp_path))
+        # TOPICFILE-based blocks: topics() returns []
+        assert block.topics() == []
+

@@ -351,5 +351,110 @@ class TestCallableExecutorFactory(unittest.TestCase):
         self.assertIsInstance(executor, MultithreadingCallableExecutor)
 
 
+class TestDatastackPreStack(unittest.TestCase):
+    """Verify __pre_stack__() hook is called before shards are built."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
+
+    def test_pre_stack_called_during_build(self):
+        """__pre_stack__() should be called when build() runs."""
+        class TrackedStack(Datastack):
+            pre_stack_called = False
+
+            @dataclass
+            class CONFIG(Datablock.CONFIG):
+                total_items: int = 3
+                shard_size: int = 3
+
+            TOPICFILE = "tracked_meta.txt"
+
+            @property
+            def n_shards(self):
+                return math.ceil(self.cfg.total_items / self.cfg.shard_size)
+
+            def __shard__(self, idx):
+                return CounterShard(root=self.root, spec=dict(idx=idx))
+
+            def shards(self):
+                return [self.__shard__(i) for i in range(self.n_shards)]
+
+            def __pre_stack__(self):
+                TrackedStack.pre_stack_called = True
+                return self
+
+        TrackedStack.pre_stack_called = False
+        stack = TrackedStack(root=self.tmpdir, spec=dict(total_items=3, shard_size=3))
+        stack.build()
+        self.assertTrue(TrackedStack.pre_stack_called)
+
+    def test_pre_stack_called_before_shards(self):
+        """__pre_stack__() should be called before any shard is built."""
+        call_order = []
+
+        class OrderedShard(Datablock):
+            @dataclass
+            class CONFIG(Datablock.CONFIG):
+                idx: int = None
+
+            TOPICFILE = "shard.txt"
+
+            def __build__(self, *args, **kwargs):
+                call_order.append(f"shard:{self.cfg.idx}")
+                path = self.path(ensure_dirpath=True)
+                fs, _ = __import__('fsspec').url_to_fs(path)
+                with fs.open(path, "w") as f:
+                    f.write(f"built:{self.cfg.idx}")
+                return self
+
+            def __read__(self, topic=None):
+                return "x"
+
+        class OrderedStack(Datastack):
+            @dataclass
+            class CONFIG(Datablock.CONFIG):
+                n: int = 2
+
+            TOPICFILE = "ordered_meta.txt"
+
+            @property
+            def n_shards(self):
+                return self.cfg.n
+
+            def __shard__(self, idx):
+                return OrderedShard(root=self.root, spec=dict(idx=idx))
+
+            def shards(self):
+                return [self.__shard__(i) for i in range(self.n_shards)]
+
+            def __pre_stack__(self):
+                call_order.append("pre_stack")
+                return self
+
+            def __stack__(self):
+                call_order.append("stack")
+                return self
+
+        call_order.clear()
+        stack = OrderedStack(root=self.tmpdir, spec=dict(n=2))
+        stack.build()
+        # pre_stack must come first, then shards, then stack
+        self.assertEqual(call_order[0], "pre_stack")
+        self.assertIn("shard:0", call_order)
+        self.assertIn("shard:1", call_order)
+        self.assertEqual(call_order[-1], "stack")
+        pre_idx = call_order.index("pre_stack")
+        stack_idx = call_order.index("stack")
+        self.assertLess(pre_idx, stack_idx)
+
+    def test_default_pre_stack_returns_self(self):
+        """Default __pre_stack__() should return self."""
+        stack = SimpleStack(root=self.tmpdir)
+        result = stack.__pre_stack__()
+        self.assertIs(result, stack)
+
+
 if __name__ == "__main__":
     unittest.main()

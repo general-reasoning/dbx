@@ -901,8 +901,11 @@ class Datablock:
     def valid_cfg(self, *, reduce=False):
         if not self.validate_cfg:
             return True if reduce else {}
+        exemptions = set(getattr(self, 'VALIDATE_CFG_EXEMPTIONS', ()))
         results = {}
         for s in self.spec.keys():
+            if s in exemptions:
+                continue
             c = getattr(self.cfg, s)
             if isinstance(c, Datablock):
                 results[s] = c.valid()

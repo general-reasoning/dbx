@@ -204,7 +204,7 @@ def _lift_class_attrs(cls, class_attrs):
 # ===========================================================================
 
 
-def datablock(cls, *, base_underride=('build', 'read', 'topics'), underride=()):
+def datablock(cls, *, base_underride=('build', 'read', 'topics'), underride=(), validate_cfg_exemptions=()):
     """Wrap a Datablockable class as a Datablock subclass.
 
     The wrapper creates a dynamic class ``(cls, Datablock)`` and
@@ -246,6 +246,8 @@ def datablock(cls, *, base_underride=('build', 'read', 'topics'), underride=()):
     # -- Collect class-level attributes -------------------------------------------
     class_attrs = {}
     _lift_class_attrs(cls, class_attrs)
+    if validate_cfg_exemptions:
+        class_attrs['VALIDATE_CFG_EXEMPTIONS'] = list(validate_cfg_exemptions)
 
     # -- Always underride __init__ ------------------------------------------------
     class_attrs['__init__'] = Datablock.__init__
@@ -259,7 +261,8 @@ def datablock(cls, *, base_underride=('build', 'read', 'topics'), underride=()):
     # -- Pickling support ---------------------------------------------------------
     def __reduce__(self):
         return (_unpickle_datablock_instance,
-                (cls, underride, self.__class__.__module__, self.__getstate__()))
+                (cls, underride, validate_cfg_exemptions,
+                 self.__class__.__module__, self.__getstate__()))
 
     class_attrs['__reduce__'] = __reduce__
 
@@ -272,6 +275,7 @@ def datablock(cls, *, base_underride=('build', 'read', 'topics'), underride=()):
         and propagates ``log_volume`` from the datablockable instance
         to the wrapper.
         """
+        instance_exemptions = kwargs.pop('validate_cfg_exemptions', None)
         if not isinstance(obj, cls):
             raise TypeError(
                 f"Expected an instance of {cls.__name__}, "
@@ -297,7 +301,10 @@ def datablock(cls, *, base_underride=('build', 'read', 'topics'), underride=()):
                     lv[attr] = getattr(obj, attr)
             if lv:
                 kwargs.update(lv)
-        return wrapper_cls(root=root, spec=spec, **kwargs)
+        instance = wrapper_cls(root=root, spec=spec, **kwargs)
+        if instance_exemptions is not None:
+            instance.VALIDATE_CFG_EXEMPTIONS = list(instance_exemptions)
+        return instance
 
     class_attrs['from_datablockable'] = from_datablockable
 
@@ -316,9 +323,10 @@ def datablock(cls, *, base_underride=('build', 'read', 'topics'), underride=()):
     return WrapperClass
 
 
-def _unpickle_datablock_instance(cls, underride, module, state):
+def _unpickle_datablock_instance(cls, underride, validate_cfg_exemptions, module, state):
     """Reconstruct a ``datablock(cls)`` wrapper instance from pickled state."""
-    WrapperClass = datablock(cls, base_underride=underride)
+    WrapperClass = datablock(cls, base_underride=underride,
+                             validate_cfg_exemptions=validate_cfg_exemptions)
     WrapperClass.__module__ = module
     obj = WrapperClass.__new__(WrapperClass)
     obj.__setstate__(state)
@@ -330,7 +338,8 @@ def _unpickle_datablock_instance(cls, underride, module, state):
 # ===========================================================================
 
 
-def datastack(cls, *, base_underride=('build', 'read', 'shard', 'shards'), underride=()):
+def datastack(cls, *, base_underride=('build', 'read', 'shard', 'shards'), underride=(),
+              validate_cfg_exemptions=(), shard_validate_cfg_exemptions=()):
     """Wrap a Datastackable class as a :class:`Datastack` subclass.
 
     The wrapper creates a dynamic class ``(cls, Datastack)`` and
@@ -377,11 +386,14 @@ def datastack(cls, *, base_underride=('build', 'read', 'shard', 'shards'), under
         raise TypeError(f"{cls.__name__} must define SHARD to be Datastackable")
 
     # -- Create the Datablock wrapper for this stack's shard class ----------------
-    ShardBlock = datablock(cls.SHARD)
+    ShardBlock = datablock(cls.SHARD, validate_cfg_exemptions=shard_validate_cfg_exemptions)
 
     # -- Collect class-level attributes -------------------------------------------
     class_attrs = {}
     class_attrs['_ShardBlock_'] = ShardBlock
+    class_attrs['_shard_validate_cfg_exemptions_'] = list(shard_validate_cfg_exemptions)
+    if validate_cfg_exemptions:
+        class_attrs['VALIDATE_CFG_EXEMPTIONS'] = list(validate_cfg_exemptions)
     _lift_class_attrs(cls, class_attrs)
 
     # -- Always underride __init__ ------------------------------------------------
@@ -401,18 +413,25 @@ def datastack(cls, *, base_underride=('build', 'read', 'shard', 'shards'), under
     # Datablock instances.  This wrapper converts via from_datablockable().
     def __shard__(self, idx: int):
         datablockable_shard = cls.__shard__(self, idx)
-        return self._ShardBlock_.from_datablockable(
-            datablockable_shard,
+        shard_kwargs = dict(
             root=self.root,
             anchor=self.anchor,
             keyby=self.keyby,
+        )
+        shard_exemptions = getattr(self, '_shard_validate_cfg_exemptions_', None)
+        if shard_exemptions:
+            shard_kwargs['validate_cfg_exemptions'] = shard_exemptions
+        return self._ShardBlock_.from_datablockable(
+            datablockable_shard, **shard_kwargs,
         )
     class_attrs['__shard__'] = __shard__
 
     # -- Pickling support ---------------------------------------------------------
     def __reduce__(self):
         return (_unpickle_datastack_instance,
-                (cls, underride, self.__class__.__module__, self.__getstate__()))
+                (cls, underride, validate_cfg_exemptions,
+                 shard_validate_cfg_exemptions,
+                 self.__class__.__module__, self.__getstate__()))
 
     class_attrs['__reduce__'] = __reduce__
 
@@ -420,6 +439,8 @@ def datastack(cls, *, base_underride=('build', 'read', 'shard', 'shards'), under
     @classmethod
     def from_datastackable(wrapper_cls, obj, *, root=None, **kwargs):
         """Create a Datastack wrapper from an existing Datastackable instance."""
+        instance_exemptions = kwargs.pop('validate_cfg_exemptions', None)
+        instance_shard_exemptions = kwargs.pop('shard_validate_cfg_exemptions', None)
         if not isinstance(obj, cls):
             raise TypeError(
                 f"Expected an instance of {cls.__name__}, "
@@ -442,7 +463,12 @@ def datastack(cls, *, base_underride=('build', 'read', 'shard', 'shards'), under
                     lv[attr] = getattr(obj, attr)
             if lv:
                 kwargs.update(lv)
-        return wrapper_cls(root=root, spec=spec, **kwargs)
+        instance = wrapper_cls(root=root, spec=spec, **kwargs)
+        if instance_exemptions is not None:
+            instance.VALIDATE_CFG_EXEMPTIONS = list(instance_exemptions)
+        if instance_shard_exemptions is not None:
+            instance._shard_validate_cfg_exemptions_ = list(instance_shard_exemptions)
+        return instance
 
     class_attrs['from_datastackable'] = from_datastackable
 
@@ -463,9 +489,12 @@ def datastack(cls, *, base_underride=('build', 'read', 'shard', 'shards'), under
     return WrapperClass
 
 
-def _unpickle_datastack_instance(cls, underride, module, state):
+def _unpickle_datastack_instance(cls, underride, validate_cfg_exemptions,
+                                  shard_validate_cfg_exemptions, module, state):
     """Reconstruct a ``datastack(cls)`` wrapper instance from pickled state."""
-    WrapperClass = datastack(cls, base_underride=underride)
+    WrapperClass = datastack(cls, base_underride=underride,
+                             validate_cfg_exemptions=validate_cfg_exemptions,
+                             shard_validate_cfg_exemptions=shard_validate_cfg_exemptions)
     WrapperClass.__module__ = module
     obj = WrapperClass.__new__(WrapperClass)
     obj.__setstate__(state)

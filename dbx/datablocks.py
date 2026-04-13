@@ -1805,7 +1805,9 @@ class Datastack(Datablock):
 
     def shards(self) -> list:
         """Return all shards, forming them via :meth:`shard` if needed."""
-        return [self.shard(idx) for idx in range(self.n_shards)]
+        n = self.n_shards
+        indices = tqdm.tqdm(range(n), desc=f"Forming {n} shards") if n > 100 else range(n)
+        return [self.shard(idx) for idx in indices]
 
     # -- Default build logic ------------------------------------------------------
 

@@ -569,6 +569,7 @@ class Datablock:
         revision: str = None,
         keyby: str = 'hash',
         uuid16: bool = False,
+        validate_cfg: bool = True,
         **kwargs,
     ):# Initialize early logger for __post_init__ if needed, though usually hash is needed
         self.log = Logger(
@@ -597,6 +598,7 @@ class Datablock:
             'revision': revision,
             'keyby': keyby,
             'uuid16': uuid16,
+            'validate_cfg': validate_cfg,
         }
         self.log.detailed(f"__init__: ------------------------------------------------> initial:         {state=}")
         state.update(kwargs)
@@ -653,6 +655,7 @@ class Datablock:
         if self.keyby not in (None, 'hash', 'handle', 'tag', 'taghash', 'custom'):
             raise ValueError(f"keyby must be None, 'hash', 'handle', 'tag', 'taghash', 'custom', got {self.keyby!r}")
         self._uuid16_ = state.get('uuid16', False)
+        self.validate_cfg = state.get('validate_cfg', True)
         
 
         
@@ -853,9 +856,10 @@ class Datablock:
         return self
 
     def __pre_build__(self, *args, **kwargs):
-        valid_cfg = self.valid_cfg()
-        if not all(list(valid_cfg.values())):
-            raise ValueError(f"Not all upstream Datablocks in cfg are valid: {valid_cfg=}")
+        if self.validate_cfg:
+            valid_cfg = self.valid_cfg()
+            if not all(list(valid_cfg.values())):
+                raise ValueError(f"Not all upstream Datablocks in cfg are valid: {valid_cfg=}")
         self._write_journal_entry(event="build:start",)
         return self
 
@@ -895,11 +899,10 @@ class Datablock:
         return self
     
     def valid_cfg(self, *, reduce=False):
-        skip = set(getattr(self, 'VALID_CFG_SKIP', ()))
+        if not self.validate_cfg:
+            return True if reduce else {}
         results = {}
         for s in self.spec.keys():
-            if s in skip:
-                continue
             c = getattr(self.cfg, s)
             if isinstance(c, Datablock):
                 results[s] = c.valid()

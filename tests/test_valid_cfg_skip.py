@@ -1,5 +1,5 @@
 """
-Tests for VALID_CFG_SKIP: allows a Datablock to skip certain spec keys
+Tests for validate_cfg=False: allows a Datablock to skip cfg validation
 when checking upstream validity in valid_cfg().
 """
 import os
@@ -37,7 +37,7 @@ class Upstream(Datablock):
 
 
 class DownstreamNoSkip(Datablock):
-    """Depends on an upstream block via spec — no VALID_CFG_SKIP."""
+    """Depends on an upstream block via spec — validate_cfg=True (default)."""
     TOPICFILE = 'output.txt'
 
     @dataclass
@@ -51,9 +51,8 @@ class DownstreamNoSkip(Datablock):
 
 
 class DownstreamWithSkip(Datablock):
-    """Depends on an upstream block via spec — VALID_CFG_SKIP skips 'src'."""
+    """Depends on an upstream block via spec — validate_cfg=False skips validation."""
     TOPICFILE = 'output.txt'
-    VALID_CFG_SKIP = ('src',)
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -66,9 +65,8 @@ class DownstreamWithSkip(Datablock):
 
 
 class TwoDeps(Datablock):
-    """Two upstream deps: skip one, check the other."""
+    """Two upstream deps — when validate_cfg=False, all cfg validation is skipped."""
     TOPICFILE = 'output.txt'
-    VALID_CFG_SKIP = ('optional',)
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -102,10 +100,10 @@ def _make(cls, tmp_path, **extra_spec):
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestValidCfgSkip:
+class TestValidateCfg:
 
     def test_no_skip_reports_invalid_upstream(self, tmp_path):
-        """Without VALID_CFG_SKIP, an invalid upstream appears in valid_cfg()."""
+        """Without validate_cfg=False, an invalid upstream appears in valid_cfg()."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamNoSkip(
@@ -116,31 +114,33 @@ class TestValidCfgSkip:
         assert 'src' in result
         assert result['src'] is False
 
-    def test_skip_omits_key_from_valid_cfg(self, tmp_path):
-        """VALID_CFG_SKIP causes the key to be absent from valid_cfg() results."""
+    def test_skip_returns_empty_from_valid_cfg(self, tmp_path):
+        """validate_cfg=False causes valid_cfg() to return empty results."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamWithSkip(
             root=str(tmp_path / 'down'),
             spec={'src': up_spec},
+            validate_cfg=False,
         )
         result = down.valid_cfg()
-        assert 'src' not in result
+        assert result == {}
 
     def test_skip_allows_build_with_invalid_upstream(self, tmp_path):
-        """With VALID_CFG_SKIP, build() succeeds even if the skipped upstream is invalid."""
+        """With validate_cfg=False, build() succeeds even if the upstream is invalid."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamWithSkip(
             root=str(tmp_path / 'down'),
             spec={'src': up_spec},
+            validate_cfg=False,
         )
-        # Should NOT raise — 'src' is skipped in valid_cfg
+        # Should NOT raise — cfg validation is skipped
         down.build()
         assert down.valid()
 
     def test_no_skip_build_raises_on_invalid_upstream(self, tmp_path):
-        """Without VALID_CFG_SKIP, build() raises when upstream is invalid."""
+        """Without validate_cfg=False, build() raises when upstream is invalid."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamNoSkip(
@@ -150,24 +150,34 @@ class TestValidCfgSkip:
         with pytest.raises(ValueError, match="Not all upstream Datablocks"):
             down.build()
 
-    def test_skip_partial_two_deps(self, tmp_path):
-        """Only the skipped dep is omitted; the other still appears."""
+    def test_skip_all_deps(self, tmp_path):
+        """validate_cfg=False skips all deps."""
         down = TwoDeps(
             root=str(tmp_path / 'down'),
             spec={
                 'required': _quote_upstream(tmp_path, 'req'),
                 'optional': _quote_upstream(tmp_path, 'opt'),
             },
+            validate_cfg=False,
         )
         result = down.valid_cfg()
-        # 'optional' should be skipped
-        assert 'optional' not in result
-        # 'required' should still be checked
-        assert 'required' in result
-        assert result['required'] is False
+        assert result == {}
 
-    def test_skip_partial_build_still_checks_required(self, tmp_path):
-        """Even with VALID_CFG_SKIP on 'optional', build fails if 'required' is invalid."""
+    def test_skip_build_succeeds_with_invalid_deps(self, tmp_path):
+        """With validate_cfg=False, build succeeds even if all deps are invalid."""
+        down = TwoDeps(
+            root=str(tmp_path / 'down'),
+            spec={
+                'required': _quote_upstream(tmp_path, 'req'),
+                'optional': _quote_upstream(tmp_path, 'opt'),
+            },
+            validate_cfg=False,
+        )
+        down.build()
+        assert down.valid()
+
+    def test_default_build_raises_on_invalid_deps(self, tmp_path):
+        """Default validate_cfg=True, build fails if deps are invalid."""
         down = TwoDeps(
             root=str(tmp_path / 'down'),
             spec={
@@ -178,50 +188,20 @@ class TestValidCfgSkip:
         with pytest.raises(ValueError, match="Not all upstream Datablocks"):
             down.build()
 
-    def test_skip_partial_build_succeeds_when_required_valid(self, tmp_path):
-        """If 'required' upstream is valid, build succeeds (skipped 'optional' is ignored)."""
-        up_req = Upstream(root=str(tmp_path / 'req'))
-        up_req.build()
-        assert up_req.valid()
-
-        down = TwoDeps(
-            root=str(tmp_path / 'down'),
-            spec={
-                'required': quote(up_req),
-                'optional': _quote_upstream(tmp_path, 'opt'),
-            },
-        )
-        down.build()
-        assert down.valid()
-
     def test_valid_cfg_reduce_with_skip(self, tmp_path):
-        """valid_cfg(reduce=True) should ignore skipped keys."""
+        """valid_cfg(reduce=True) should return True when validate_cfg=False."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamWithSkip(
             root=str(tmp_path / 'down'),
             spec={'src': up_spec},
+            validate_cfg=False,
         )
-        # No upstream keys remain after skipping → reduce over empty → True
         assert down.valid_cfg(reduce=True) is True
 
-    def test_no_valid_cfg_skip_default(self, tmp_path):
-        """Without VALID_CFG_SKIP attribute, all spec keys are checked (baseline)."""
+    def test_default_validate_cfg(self, tmp_path):
+        """Default validate_cfg=True: all spec keys are checked (baseline)."""
         down = _make(DownstreamNoSkip, tmp_path)
         result = down.valid_cfg()
         # 'src' default is a string literal, not a Datablock → not in results
-        assert result == {}
-
-    def test_empty_valid_cfg_skip(self, tmp_path):
-        """VALID_CFG_SKIP=() is equivalent to no skip."""
-        class EmptySkip(Datablock):
-            TOPICFILE = 'out.txt'
-            VALID_CFG_SKIP = ()
-
-            @dataclass
-            class CONFIG(Datablock.CONFIG):
-                src: str = "'x'"
-
-        down = EmptySkip(root=str(tmp_path))
-        result = down.valid_cfg()
         assert result == {}

@@ -895,8 +895,11 @@ class Datablock:
         return self
     
     def valid_cfg(self, *, reduce=False):
+        skip = set(getattr(self, 'VALID_CFG_SKIP', ()))
         results = {}
         for s in self.spec.keys():
+            if s in skip:
+                continue
             c = getattr(self.cfg, s)
             if isinstance(c, Datablock):
                 results[s] = c.valid()

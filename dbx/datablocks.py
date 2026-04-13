@@ -960,6 +960,9 @@ class Datablock:
                     else:
                         is_dir = self.TOPICFILES.get(topic) is None
                         clear_path(self.path(topic), recursive=is_dir)
+            elif hasattr(self, "TOPICS"):
+                for topic in self.TOPICS:
+                    clear_path(self.path(topic), recursive=True)
             else:
                 if clear_dirpath:
                     clear_path(self.dirpath(), recursive=True)
@@ -971,7 +974,7 @@ class Datablock:
                 if clear_dirpath:
                     clear_path(self.dirpath(topic), recursive=True)
                 else:
-                    is_dir = hasattr(self, 'TOPICFILES') and self.TOPICFILES.get(topic) is None
+                    is_dir = (hasattr(self, 'TOPICFILES') and self.TOPICFILES.get(topic) is None) or hasattr(self, 'TOPICS')
                     clear_path(self.path(topic), recursive=is_dir)
             self._write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self

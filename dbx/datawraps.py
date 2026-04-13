@@ -330,7 +330,7 @@ def _unpickle_datablock_instance(cls, underride, module, state):
 # ===========================================================================
 
 
-def datastack(cls, *, base_underride=('build', 'read', 'shard'), underride=()):
+def datastack(cls, *, base_underride=('build', 'read', 'shard', 'shards'), underride=()):
     """Wrap a Datastackable class as a :class:`Datastack` subclass.
 
     The wrapper creates a dynamic class ``(cls, Datastack)`` and

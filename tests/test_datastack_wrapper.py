@@ -435,11 +435,11 @@ class TestNoConfigDatastack:
 
 
 # ---------------------------------------------------------------------------
-# 10. __pre_stack__ hook
+# 10. __split__ hook
 # ---------------------------------------------------------------------------
 
 class PreStackBatchProcessor:
-    """A Datastackable that tracks __pre_stack__ calls."""
+    """A Datastackable that tracks __split__ calls."""
     SHARD = ItemProcessor
     TOPICFILE = 'pre_stack_meta.txt'
     _call_order = []
@@ -460,7 +460,7 @@ class PreStackBatchProcessor:
             cfg=ItemProcessor.CONFIG(item_id=idx),
         )
 
-    def __pre_stack__(self):
+    def __split__(self):
         PreStackBatchProcessor._call_order.append("pre_stack")
         return self
 
@@ -475,7 +475,7 @@ class PreStackBatchProcessor:
 class TestPreStack:
 
     def test_pre_stack_called_during_build(self, tmp_path):
-        """__pre_stack__() should be called when the wrapped stack builds."""
+        """__split__() should be called when the wrapped stack builds."""
         Wrapped = datastack(PreStackBatchProcessor)
         PreStackBatchProcessor._call_order = []
         stack = Wrapped(root=str(tmp_path), spec=dict(n_items=2))
@@ -483,7 +483,7 @@ class TestPreStack:
         assert "pre_stack" in PreStackBatchProcessor._call_order
 
     def test_pre_stack_called_before_stack(self, tmp_path):
-        """__pre_stack__() should be called before __stack__()."""
+        """__split__() should be called before __stack__()."""
         Wrapped = datastack(PreStackBatchProcessor)
         PreStackBatchProcessor._call_order = []
         stack = Wrapped(root=str(tmp_path), spec=dict(n_items=2))
@@ -494,16 +494,16 @@ class TestPreStack:
         assert pre_idx < stack_idx
 
     def test_default_pre_stack_returns_self(self, tmp_path):
-        """Default __pre_stack__() on BatchProcessor (no override) returns self."""
+        """Default __split__() on BatchProcessor (no override) returns self."""
         Wrapped = datastack(BatchProcessor)
         stack = Wrapped(root=str(tmp_path), spec=dict(n_items=1))
-        result = stack.__pre_stack__()
+        result = stack.__split__()
         assert result is stack
 
     def test_pre_stack_on_datastackable(self):
-        """Datastackable base __pre_stack__() returns self."""
+        """Datastackable base __split__() returns self."""
         from dbx.datawraps import Datastackable
         obj = object.__new__(Datastackable)
-        result = Datastackable.__pre_stack__(obj)
+        result = Datastackable.__split__(obj)
         assert result is obj
 

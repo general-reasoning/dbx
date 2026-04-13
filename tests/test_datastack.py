@@ -352,7 +352,7 @@ class TestCallableExecutorFactory(unittest.TestCase):
 
 
 class TestDatastackPreStack(unittest.TestCase):
-    """Verify __pre_stack__() hook is called before shards are built."""
+    """Verify __split__() hook is called before shards are built."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -360,7 +360,7 @@ class TestDatastackPreStack(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_pre_stack_called_during_build(self):
-        """__pre_stack__() should be called when build() runs."""
+        """__split__() should be called when build() runs."""
         class TrackedStack(Datastack):
             pre_stack_called = False
 
@@ -381,7 +381,7 @@ class TestDatastackPreStack(unittest.TestCase):
             def shards(self):
                 return [self.__shard__(i) for i in range(self.n_shards)]
 
-            def __pre_stack__(self):
+            def __split__(self):
                 TrackedStack.pre_stack_called = True
                 return self
 
@@ -391,7 +391,7 @@ class TestDatastackPreStack(unittest.TestCase):
         self.assertTrue(TrackedStack.pre_stack_called)
 
     def test_pre_stack_called_before_shards(self):
-        """__pre_stack__() should be called before any shard is built."""
+        """__split__() should be called before any shard is built."""
         call_order = []
 
         class OrderedShard(Datablock):
@@ -429,7 +429,7 @@ class TestDatastackPreStack(unittest.TestCase):
             def shards(self):
                 return [self.__shard__(i) for i in range(self.n_shards)]
 
-            def __pre_stack__(self):
+            def __split__(self):
                 call_order.append("pre_stack")
                 return self
 
@@ -450,9 +450,9 @@ class TestDatastackPreStack(unittest.TestCase):
         self.assertLess(pre_idx, stack_idx)
 
     def test_default_pre_stack_returns_self(self):
-        """Default __pre_stack__() should return self."""
+        """Default __split__() should return self."""
         stack = SimpleStack(root=self.tmpdir)
-        result = stack.__pre_stack__()
+        result = stack.__split__()
         self.assertIs(result, stack)
 
 

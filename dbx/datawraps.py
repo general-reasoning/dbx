@@ -115,7 +115,7 @@ class Datastackable(Datablockable):
     """
 
     def __build__(self):
-        self.__pre_stack__()
+        self.__split__()
         for shard in self.shards():
             shard.build()
         return self.__stack__()
@@ -141,7 +141,7 @@ class Datastackable(Datablockable):
             f"{self.__class__.__name__} must implement __shard__(idx)"
         )
 
-    def __pre_stack__(self):
+    def __split__(self):
         """Produce stack-level artefacts before all shards are built."""
         return self
 

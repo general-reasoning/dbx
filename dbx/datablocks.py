@@ -544,7 +544,11 @@ class Datablock:
                 self.value = None
             def __call__(self):
                 if self.value is None:
-                    self.value = eval(self.term)
+                    if isinstance(self.term, str):
+                        self.value = eval(self.term)
+                    else:
+                        # from_datablockable passes raw Python objects
+                        self.value = self.term
                 return self.value
 
         def __getattribute__(self, name):

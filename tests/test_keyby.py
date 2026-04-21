@@ -318,10 +318,10 @@ class TestKeybyTaghash:
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash', tag='mytag')
         assert block.bid.keyby == 'taghash'
 
-    def test_taghash_without_explicit_tag_recursion(self):
-        """keyby='taghash' without explicit tag should cause recursion like keyby='tag'."""
-        with pytest.raises(RecursionError):
-            SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash')
+    def test_taghash_without_explicit_tag_defaults_to_hash(self):
+        """keyby='taghash' without explicit tag should default key to self.hash."""
+        block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash')
+        assert block.key == block.hash
 
     def test_pickle_preserves_keyby_taghash(self):
         block = SimpleBlock(root='/tmp/dbx_test_keyby', keyby='taghash', tag='pkl')

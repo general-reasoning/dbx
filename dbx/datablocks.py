@@ -252,6 +252,8 @@ class JournalEntry(pd.Series):
         elif keyby == 'tag':
             return self.tag
         elif keyby == 'taghash':
+            if self.tag is None:
+                return self.hash
             return f"{self.tag}/{self.shorthash}"
         elif keyby == 'handle':
             h = self.get('handle')
@@ -1423,6 +1425,8 @@ class Datablock:
         elif self.keyby == 'tag':
             return self.tag
         elif self.keyby == 'taghash':
+            if self._tag_ is None:
+                return self.hash
             return f"{self.tag}/{self.shorthash}"
         else:  
             raise NotImplementedError(f"keyby {repr(self.keyby)} is not implemented: missing override?")

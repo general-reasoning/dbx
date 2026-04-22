@@ -1781,7 +1781,8 @@ class Datastack(Datablock):
             shard.keyby = stack.keyby
             if build:
                 shard.build()
-            return shard
+            del shard
+            gc.collect()
 
     @classmethod
     def _get_executors_(cls):

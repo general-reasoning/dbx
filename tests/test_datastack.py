@@ -225,33 +225,33 @@ class TestDatastackParallelization(unittest.TestCase):
 
     def test_default_is_inline(self):
         stack = SimpleStack(root=self.tmpdir)
-        from dbx.datablocks import InlineDatablocksBuilder
-        self.assertIs(stack.builder_cls, InlineDatablocksBuilder)
+        from dbx.dataparts import InlineCallableExecutor
+        self.assertIs(stack.executor_cls, InlineCallableExecutor)
 
     def test_explicit_inline(self):
         stack = SimpleStack(root=self.tmpdir, parallelization='inline')
-        from dbx.datablocks import InlineDatablocksBuilder
-        self.assertIs(stack.builder_cls, InlineDatablocksBuilder)
+        from dbx.dataparts import InlineCallableExecutor
+        self.assertIs(stack.executor_cls, InlineCallableExecutor)
 
     def test_multithreading(self):
         stack = SimpleStack(root=self.tmpdir, parallelization='multithreading')
-        from dbx.datablocks import MultithreadingDatablocksBuilder
-        self.assertIs(stack.builder_cls, MultithreadingDatablocksBuilder)
+        from dbx.dataparts import MultithreadingCallableExecutor
+        self.assertIs(stack.executor_cls, MultithreadingCallableExecutor)
 
     def test_multiprocessing(self):
         stack = SimpleStack(root=self.tmpdir, parallelization='multiprocessing')
-        from dbx.datablocks import MultiprocessingDatablocksBuilder
-        self.assertIs(stack.builder_cls, MultiprocessingDatablocksBuilder)
+        from dbx.dataparts import MultiprocessingCallableExecutor
+        self.assertIs(stack.executor_cls, MultiprocessingCallableExecutor)
 
     def test_ray(self):
         stack = SimpleStack(root=self.tmpdir, parallelization='ray')
-        from dbx.datablocks import RayDatablocksBuilder
-        self.assertIs(stack.builder_cls, RayDatablocksBuilder)
+        from dbx.dataparts import RayCallableExecutor
+        self.assertIs(stack.executor_cls, RayCallableExecutor)
 
     def test_case_insensitive(self):
         stack = SimpleStack(root=self.tmpdir, parallelization='Multithreading')
-        from dbx.datablocks import MultithreadingDatablocksBuilder
-        self.assertIs(stack.builder_cls, MultithreadingDatablocksBuilder)
+        from dbx.dataparts import MultithreadingCallableExecutor
+        self.assertIs(stack.executor_cls, MultithreadingCallableExecutor)
 
     def test_n_workers_stored(self):
         stack = SimpleStack(root=self.tmpdir, n_workers=8)

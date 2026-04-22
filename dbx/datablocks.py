@@ -1766,28 +1766,45 @@ class Datastack(Datablock):
         stack.build()
     """
 
+    class ShardMaker:
+        """Lightweight callable that forms and optionally builds a shard.
+
+        Designed to be dispatched to a CallableExecutor so that both
+        shard *formation* (``__shard__``) and *building* happen inside
+        the worker, parallelizing the expensive Datablock instantiation.
+        """
+        def __init__(self, idx: int):
+            self.idx = idx
+
+        def __call__(self, stack, *, build=True):
+            shard = stack.__shard__(self.idx)
+            shard.keyby = stack.keyby
+            if build:
+                shard.build()
+            return shard
+
     @classmethod
-    def _get_builders(cls):
-        """Lazily resolve builder classes (defined later in the module)."""
-        if not hasattr(cls, '_builders_cache'):
-            cls._builders_cache = {
-                "inline":          InlineDatablocksBuilder,
-                "multithreading":  MultithreadingDatablocksBuilder,
-                "multiprocessing": MultiprocessingDatablocksBuilder,
-                "ray":             RayDatablocksBuilder,
+    def _get_executors_(cls):
+        """Lazily resolve executor classes (defined in dataparts)."""
+        if not hasattr(cls, '_executors_cache'):
+            cls._executors_cache = {
+                "inline":          InlineCallableExecutor,
+                "multithreading":  MultithreadingCallableExecutor,
+                "multiprocessing": MultiprocessingCallableExecutor,
+                "ray":             RayCallableExecutor,
             }
-        return cls._builders_cache
+        return cls._executors_cache
 
     def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, **kwargs):
         super().__init__(*args, parallelization=parallelization, n_workers=n_workers, **kwargs)
-        builders = self._get_builders()
+        executors = self._get_executors_()
         key = (self.parallelization or "inline").lower()
-        if key not in builders:
+        if key not in executors:
             raise ValueError(
                 f"Unknown parallelization {self.parallelization!r}. "
-                f"Choose from {list(builders)}"
+                f"Choose from {list(executors)}"
             )
-        self.builder_cls = builders[key]
+        self.executor_cls = executors[key]
 
     # -- Abstract interface -------------------------------------------------------
 
@@ -1829,18 +1846,22 @@ class Datastack(Datablock):
     # -- Default build logic ------------------------------------------------------
 
     def __build__(self, *args, **kwargs):
-        """Build all shards returned by :meth:`shards` using the configured builder."""
+        """Build all shards using ShardMaker + the configured executor.
+
+        Shard formation (``__shard__``) and building both happen inside
+        the worker callables, so they are fully parallelized.
+        """
         self.__split__()
-        shard_list = self.shards()
+        makers = [self.ShardMaker(idx) for idx in range(self.n_shards)]
         self.log.info(
-            f"Building {self.__class__.__name__}: {len(shard_list)} shards, "
-            f"builder={self.builder_cls.__name__}, n_workers={self.n_workers}"
+            f"Building {self.__class__.__name__}: {len(makers)} shards, "
+            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
         )
-        builder = self.builder_cls(
+        executor = self.executor_cls(
             n_workers=self.n_workers,
-            tag=f"BUILDING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]",
+            tag=f"BUILDING {len(makers)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]",
         )
-        builder.build_blocks(shard_list, *args, **kwargs)
+        executor.exec_callables(makers, self, build=True)
         self.log.info(f"Stacking {self.n_shards} shards of {self.__class__.__name__}")
         self.__stack__()
         self.log.info(f"Build complete: {self.__class__.__name__}")
@@ -1874,7 +1895,7 @@ class Datastack(Datablock):
         shard_list = self.shards()
         self.log.info(
             f"UNSAFE_clear_shards: clearing {len(shard_list)} shards, "
-            f"builder={self.builder_cls.__name__}, n_workers={self.n_workers}"
+            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
         )
         self._write_journal_entry(event="UNSAFE_clear_shards:begin")
 

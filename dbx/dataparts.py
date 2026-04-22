@@ -812,9 +812,19 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
 
 
 class RayCallableExecutor:
-    def __init__(self, *, workers, batch_size: int = None, tag: str = "", log: Logger = Logger()):
-        self.workers = workers
-        self.n_workers = len(workers)
+    def __init__(self, *, n_workers: int = 1, workers=None, worker_factory=None,
+                 batch_size: int = None, tag: str = "", log: Logger = Logger()):
+        if workers is not None:
+            self.workers = workers
+            self.n_workers = len(workers)
+        elif worker_factory is not None:
+            self.workers = [worker_factory() for _ in range(n_workers)]
+            self.n_workers = n_workers
+        else:
+            raise ValueError(
+                "RayCallableExecutor requires either 'workers' (pre-created) "
+                "or 'worker_factory' (callable returning a worker)"
+            )
         self.batch_size = batch_size
         self.tag = tag
         self.log = log
@@ -1196,6 +1206,7 @@ _CALLABLE_EXECUTORS = {
     "inline":                InlineCallableExecutor,
     "multithreading":        MultithreadingCallableExecutor,
     "multiprocessing":       MultiprocessingCallableExecutor,
+    "ray":                   RayCallableExecutor,
     "torch_multithreading":  TorchMultithreadingCallableExecutor,
     "torch_multiprocessing": TorchMultiprocessingCallableExecutor,
 }

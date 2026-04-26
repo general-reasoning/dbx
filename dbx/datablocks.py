@@ -847,7 +847,7 @@ class Datablock:
                 self.build_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
                 self.__post_build__(*args, **kwargs)
             else:
-                self.log.debug(f"Skipping existing datablock: {self.anchorkeypath}")
+                self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
         except KeyboardInterrupt as e:
             self.__post_build__(*args, event="build:keyboard_interrupt", **kwargs)
             raise(e)

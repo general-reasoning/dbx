@@ -1252,10 +1252,15 @@ class Datablock:
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
     
-    def __repr_from_kwargs__(self, kwargs):
+    def __repr_from_kwargs__(self, kwargs, anchor='anchor'):
         kwargstrs = [f"{k}={v}" for k, v in kwargs.items()]
         kwargsrepr = ', '.join(kwargstrs)
-        _repr_ = f"{self.anchor}({kwargsrepr})"
+        if anchor == 'anchor':
+            _repr_ = f"{self.anchor}({kwargsrepr})"
+        elif anchor == 'fqcn':
+            _repr_ = f"{self.fqcn}({kwargsrepr})"
+        else:
+            raise ValueError(f"Unknown anchor: {repr(anchor)}")
         return _repr_
     
     def quote(self, *, deslash: bool = False):
@@ -1291,7 +1296,7 @@ class Datablock:
             **self._rootkwargs_,
             **{'spec': repr_spec},
             **self._tailkwargs_,
-        })
+        }, anchor='fqcn')
         self.log.detailed(f"__repr__(): ------------> {repr_spec=}")
         self.log.detailed(f"__repr__(): ------------> __repr__={r}")
         if deslash:

@@ -44,50 +44,31 @@ tqdm.tqdm.monitor_interval = 0
 __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'eval')
 
 
-class Env:
-    """Lazy environment-variable reference for relocatable handles.
+def getenv(key: str) -> str:
+    """Return the value of environment variable *key*.
 
-    When passed as ``root=Env('MY_VAR')`` to a Datablock, the resolved
-    path ``os.environ['MY_VAR']`` is used for all I/O, but the handle
-    and hashstr contain the symbolic ``env('MY_VAR')`` — making BIDs
-    stable across machines or env-var changes.
+    Intended to be referenced in speclines so that handles contain the
+    symbolic ``$dbx.getenv('KEY')`` rather than the resolved path.
     """
-
-    def __init__(self, key: str):
-        self.key = key
-
-    def resolve(self) -> str:
-        return os.environ[self.key]
-
-    def __repr__(self):
-        return f"env('{self.key}')"
-
-    def __str__(self):
-        # Used by f-string formatting in __repr_from_kwargs__,
-        # so the handle serialises as  root=env('SOUNDWORLD_ROOT').
-        return repr(self)
-
-    def __fspath__(self):
-        return self.resolve()
-
-    def __eq__(self, other):
-        return isinstance(other, Env) and self.key == other.key
-
-    def __hash__(self):
-        return hash(('Env', self.key))
+    return os.environ[key]
 
 
-def env(key: str) -> Env:
-    """Return a relocatable environment-variable reference.
+def env(key: str) -> str:
+    """Return a specline that lazily resolves an environment variable.
 
     Usage::
 
         from dbx import env
-        MyBlock(root=env('SOUNDWORLD_ROOT'), ...)
+        MyBlock(root=env('FACTION_DATAROOT'), spec=dict(path=env('MY_PATH')))
+
+    The returned string is a specline (``$``-prefixed) that the existing
+    dbx eval/expand machinery keeps symbolic in handles and evaluates to
+    the real value in cfg / __init__.
     """
-    if isinstance(key, Env):
+    if isinstance(key, str) and key.startswith('$'):
+        # Already a specline — idempotent.
         return key
-    return Env(key)
+    return f"$dbx.getenv('{key}')"
 
 
 class Logger:
@@ -327,7 +308,6 @@ def eval(name):
                 term, _ = get_named_const_and_cxt(_name_)
             else:
                 _, cxt = get_named_const_and_cxt(funcstr)
-                cxt['env'] = env
                 term = __eval__(_name_, cxt)
         else:
             term = name

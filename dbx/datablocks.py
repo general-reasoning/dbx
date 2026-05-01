@@ -640,12 +640,8 @@ class Datablock:
 
         # Explicit parameters
         self._root_ = state.get('root')
-        # Resolve Env references for the actual filesystem root,
-        # but keep _root_ as the Env object for handle serialisation.
-        if isinstance(self._root_, Env):
-            self.root = self._root_.resolve()
-        else:
-            self.root = self._root_
+        # Resolve specline roots (e.g. "$dbx.getenv('KEY')") to real paths.
+        self.root = eval(self._root_) if self._root_ is not None else None
         if self.root is None:
             self.root = os.environ.get('DBX_ROOT')
         if self.root is None:
@@ -1099,12 +1095,7 @@ class Datablock:
         return UNSAFE_copy_from(*args, **kwargs)
 
     def _spec_to_cfg(self, spec):
-        # Resolve any Env references so CONFIG fields receive real paths.
-        resolved_spec = {
-            k: v.resolve() if isinstance(v, Env) else v
-            for k, v in spec.items()
-        }
-        config = self.CONFIG(**resolved_spec)
+        config = self.CONFIG(**spec)
         replacements = {}
         for field in fields(config):
             term = getattr(config, field.name)
@@ -1216,9 +1207,7 @@ class Datablock:
         elif expansion == 'handle':
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
-                if isinstance(v, Env):
-                    _spec_[k] = repr(v)
-                elif isinstance(value, Datablock):
+                if isinstance(value, Datablock):
                     _spec_[k] = value.handle()
                 elif self.is_specline(v):
                     _spec_[k] = v
@@ -1229,9 +1218,7 @@ class Datablock:
         elif expansion == 'quote':
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
-                if isinstance(v, Env):
-                    _spec_[k] = repr(v)
-                elif self.is_specline(v):
+                if self.is_specline(v):
                     _spec_[k] = v
                 elif isinstance(value, Datablock):
                     _spec_[k] = value.quote()

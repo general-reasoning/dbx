@@ -208,3 +208,107 @@ class TestEnvEvalContext:
         assert restored._root_.key == 'RT_ROOT'
         assert restored.root == '/tmp/roundtrip'
         assert restored.hash == block.hash
+
+
+# ---------------------------------------------------------------------------
+# 5. Env in spec fields
+# ---------------------------------------------------------------------------
+
+class EnvSpecBlock(Datablock):
+    """Block with an Env-valued spec field."""
+    TOPICFILE = 'output.txt'
+
+    @dataclass
+    class CONFIG(Datablock.CONFIG):
+        data_path: str = "'/default'"
+
+    def __build__(self):
+        self.dirpath(ensure=True)
+        with open(self.path(), 'w') as f:
+            f.write(f"path:{self.cfg.data_path}")
+
+
+class TestEnvInSpec:
+
+    def test_cfg_resolves_env_to_real_path(self, monkeypatch):
+        """cfg.data_path should be the resolved path, not the Env object."""
+        monkeypatch.setenv('SPEC_PATH', '/data/resolved')
+        block = EnvSpecBlock(root='/tmp/dbx_test_env',
+                             spec=dict(data_path=env('SPEC_PATH')))
+        assert block.cfg.data_path == '/data/resolved'
+        assert isinstance(block.cfg.data_path, str)
+
+    def test_spec_stores_env_object(self, monkeypatch):
+        """self.spec should retain the Env object."""
+        monkeypatch.setenv('SPEC_PATH', '/data/resolved')
+        block = EnvSpecBlock(root='/tmp/dbx_test_env',
+                             spec=dict(data_path=env('SPEC_PATH')))
+        assert isinstance(block.spec['data_path'], Env)
+
+    def test_handle_contains_symbolic_env(self, monkeypatch):
+        """handle() should contain env('SPEC_PATH'), not the resolved path."""
+        monkeypatch.setenv('SPEC_PATH', '/data/resolved')
+        block = EnvSpecBlock(root='/tmp/dbx_test_env',
+                             spec=dict(data_path=env('SPEC_PATH')))
+        handle = block.handle()
+        assert "env('SPEC_PATH')" in handle
+        assert '/data/resolved' not in handle
+
+    def test_hashstr_contains_symbolic_env(self, monkeypatch):
+        """hashstr should contain env('SPEC_PATH')."""
+        monkeypatch.setenv('SPEC_PATH', '/data/resolved')
+        block = EnvSpecBlock(root='/tmp/dbx_test_env',
+                             spec=dict(data_path=env('SPEC_PATH')))
+        assert "env('SPEC_PATH')" in block.hashstr
+        assert '/data/resolved' not in block.hashstr
+
+    def test_quote_contains_symbolic_env(self, monkeypatch):
+        """quote() should contain env('SPEC_PATH')."""
+        monkeypatch.setenv('SPEC_PATH', '/data/resolved')
+        block = EnvSpecBlock(root='/tmp/dbx_test_env',
+                             spec=dict(data_path=env('SPEC_PATH')))
+        assert "env('SPEC_PATH')" in block.quote()
+
+    def test_hash_stable_across_env_values(self, monkeypatch):
+        """Changing the env var should NOT change the hash."""
+        monkeypatch.setenv('SPEC_PATH', '/path/a')
+        block_a = EnvSpecBlock(root='/tmp/dbx_test_env',
+                               spec=dict(data_path=env('SPEC_PATH')))
+        hash_a = block_a.hash
+
+        monkeypatch.setenv('SPEC_PATH', '/path/b')
+        block_b = EnvSpecBlock(root='/tmp/dbx_test_env',
+                               spec=dict(data_path=env('SPEC_PATH')))
+        hash_b = block_b.hash
+
+        assert hash_a == hash_b
+
+    def test_hash_differs_from_literal_spec(self, monkeypatch):
+        """env('SPEC_PATH') in spec should hash differently than a literal."""
+        monkeypatch.setenv('SPEC_PATH', '/data/resolved')
+        block_env = EnvSpecBlock(root='/tmp/dbx_test_env',
+                                 spec=dict(data_path=env('SPEC_PATH')))
+        block_lit = EnvSpecBlock(root='/tmp/dbx_test_env',
+                                 spec=dict(data_path='/data/resolved'))
+        assert block_env.hash != block_lit.hash
+
+    def test_build_with_env_spec(self, tmp_path, monkeypatch):
+        """Build should use the resolved path in cfg."""
+        monkeypatch.setenv('SPEC_PATH', '/data/build_test')
+        block = EnvSpecBlock(root=str(tmp_path),
+                             spec=dict(data_path=env('SPEC_PATH')))
+        block.build()
+        assert block.valid() is True
+        with open(block.path(), 'r') as f:
+            assert f.read() == 'path:/data/build_test'
+
+    def test_combined_env_root_and_spec(self, monkeypatch):
+        """Both root and spec can use Env simultaneously."""
+        monkeypatch.setenv('MY_ROOT', '/tmp/combined')
+        monkeypatch.setenv('MY_DATA', '/data/combined')
+        block = EnvSpecBlock(root=env('MY_ROOT'),
+                             spec=dict(data_path=env('MY_DATA')))
+        assert block.root == '/tmp/combined'
+        assert block.cfg.data_path == '/data/combined'
+        assert "env('MY_ROOT')" in block.handle()
+        assert "env('MY_DATA')" in block.handle()

@@ -325,6 +325,7 @@ def eval(name):
                 term, _ = get_named_const_and_cxt(_name_)
             else:
                 _, cxt = get_named_const_and_cxt(funcstr)
+                cxt['env'] = env
                 term = __eval__(_name_, cxt)
         else:
             term = name

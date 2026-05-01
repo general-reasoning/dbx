@@ -43,6 +43,51 @@ tqdm.tqdm.monitor_interval = 0
 
 __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'eval')
 
+
+class Env:
+    """Lazy environment-variable reference for relocatable handles.
+
+    When passed as ``root=Env('MY_VAR')`` to a Datablock, the resolved
+    path ``os.environ['MY_VAR']`` is used for all I/O, but the handle
+    and hashstr contain the symbolic ``env('MY_VAR')`` — making BIDs
+    stable across machines or env-var changes.
+    """
+
+    def __init__(self, key: str):
+        self.key = key
+
+    def resolve(self) -> str:
+        return os.environ[self.key]
+
+    def __repr__(self):
+        return f"env('{self.key}')"
+
+    def __str__(self):
+        # Used by f-string formatting in __repr_from_kwargs__,
+        # so the handle serialises as  root=env('SOUNDWORLD_ROOT').
+        return repr(self)
+
+    def __fspath__(self):
+        return self.resolve()
+
+    def __eq__(self, other):
+        return isinstance(other, Env) and self.key == other.key
+
+    def __hash__(self):
+        return hash(('Env', self.key))
+
+
+def env(key: str) -> Env:
+    """Return a relocatable environment-variable reference.
+
+    Usage::
+
+        from dbx import env
+        MyBlock(root=env('SOUNDWORLD_ROOT'), ...)
+    """
+    return Env(key)
+
+
 class Logger:
     """Because Python logging is so cumbersome to initialize, configure and control, we have this."""
 

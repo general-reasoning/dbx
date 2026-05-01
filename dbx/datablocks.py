@@ -58,6 +58,50 @@ from .dataparts import *
 __version__ = "0.1.0"
 
 
+class Env:
+    """Lazy environment-variable reference for relocatable handles.
+
+    When passed as ``root=Env('MY_VAR')`` to a Datablock, the resolved
+    path ``os.environ['MY_VAR']`` is used for all I/O, but the handle
+    and hashstr contain the symbolic ``env('MY_VAR')`` — making BIDs
+    stable across machines or env-var changes.
+    """
+
+    def __init__(self, key: str):
+        self.key = key
+
+    def resolve(self) -> str:
+        return os.environ[self.key]
+
+    def __repr__(self):
+        return f"env('{self.key}')"
+
+    def __str__(self):
+        # Used by f-string formatting in __repr_from_kwargs__,
+        # so the handle serialises as  root=env('SOUNDWORLD_ROOT').
+        return repr(self)
+
+    def __fspath__(self):
+        return self.resolve()
+
+    def __eq__(self, other):
+        return isinstance(other, Env) and self.key == other.key
+
+    def __hash__(self):
+        return hash(('Env', self.key))
+
+
+def env(key: str) -> Env:
+    """Return a relocatable environment-variable reference.
+
+    Usage::
+
+        from dbx.datablocks import env
+        MyBlock(root=env('SOUNDWORLD_ROOT'), ...)
+    """
+    return Env(key)
+
+
 DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
 if DBX_GIT_REPO is None:
     try:
@@ -641,7 +685,12 @@ class Datablock:
 
         # Explicit parameters
         self._root_ = state.get('root')
-        self.root = self._root_
+        # Resolve Env references for the actual filesystem root,
+        # but keep _root_ as the Env object for handle serialisation.
+        if isinstance(self._root_, Env):
+            self.root = self._root_.resolve()
+        else:
+            self.root = self._root_
         if self.root is None:
             self.root = os.environ.get('DBX_ROOT')
         if self.root is None:

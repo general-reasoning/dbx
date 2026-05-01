@@ -1283,7 +1283,7 @@ class Datablock:
         handle = self.__repr_from_kwargs__({
             **self._rootkwargs_,
             **{'spec': repr_spec},
-        })
+        }, anchor='fqcn')
         if deslash:
             handle = handle.replace('\\', '')
         self.log.detailed(f"handle: ------------> {repr_spec=}")

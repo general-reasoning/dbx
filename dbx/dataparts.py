@@ -85,6 +85,8 @@ def env(key: str) -> Env:
         from dbx import env
         MyBlock(root=env('SOUNDWORLD_ROOT'), ...)
     """
+    if isinstance(key, Env):
+        return key
     return Env(key)
 
 

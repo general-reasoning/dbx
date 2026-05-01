@@ -89,6 +89,18 @@ class TestEnvBasics:
         result = os.path.join(e, 'subdir', 'file.txt')
         assert result == '/tmp/test_root_value/subdir/file.txt'
 
+    def test_idempotent(self):
+        """env(env('X')) should return the inner Env unchanged."""
+        inner = env('MY_VAR')
+        outer = env(inner)
+        assert outer is inner
+
+    def test_idempotent_triple(self):
+        """Triple wrapping should still return the original Env."""
+        e = env(env(env('MY_VAR')))
+        assert isinstance(e, Env)
+        assert e.key == 'MY_VAR'
+
 
 # ---------------------------------------------------------------------------
 # 2. Datablock with root=env('X')

@@ -1521,11 +1521,11 @@ class Datablock:
     
     @staticmethod
     def _dbxanchorpathx(root, anchor, x, *, fqcn=None, ensure: bool = False):
-        """Return /root/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
+        """Return /root/anchor/_dbx_/x — the anchor-level directory for artefact *x*."""
         if fqcn is not None and anchor != fqcn:
-            _dbxanchorpathx = os.path.join(root, anchor, ".dbx", fqcn, x)
+            _dbxanchorpathx = os.path.join(root, anchor, "_dbx_", fqcn, x)
         else:
-            _dbxanchorpathx = os.path.join(root, anchor, ".dbx", x)
+            _dbxanchorpathx = os.path.join(root, anchor, "_dbx_", x)
         if ensure:
             fs, _ = fsspec.url_to_fs(_dbxanchorpathx)
             fs.makedirs(_dbxanchorpathx, exist_ok=True)

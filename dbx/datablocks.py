@@ -989,6 +989,30 @@ class Datablock:
         return self
     
     def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
+        """Copy topic data from an external directory into this Datablock.
+
+        Parameters
+        ----------
+        anchorkeypath : str
+            Filesystem path to the source anchor+key directory containing
+            the topic subdirectories (e.g. ``ckpts/``, ``logs/``).
+        overwrite : bool, default False
+            If False (default), asserts that this Datablock is not already
+            valid before copying.  Set to True to overwrite existing data.
+        topicpaths : dict or str, optional
+            Override the default source-relative paths for each topic.
+            For TOPICFILES: a ``{topic: relative_path}`` dict.
+            For TOPICFILE: a single relative path string.
+            When None, source paths are derived from the Datablock's own
+            TOPICFILES/TOPICFILE definitions.
+        validate : bool, default True
+            If True, asserts that ``self.valid()`` returns True after
+            the copy completes.  Set to False to skip post-copy validation.
+        copy_dirpath : bool, default False
+            If False (default), copies individual topic files via
+            ``self.path(topic)``.  If True, copies entire topic
+            directories via ``self.dirpath(topic)`` recursively.
+        """
         def fscopy(*, src_path, dst_path, recursive: bool = False):
             # fsspec does not implement .copy, so use put/get or temporary directory
             src_fs, _ = fsspec.url_to_fs(src_path)

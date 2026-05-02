@@ -988,7 +988,7 @@ class Datablock:
             self._write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
-    def UNSAFE_copy_from(self, anchorhashpath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
+    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
         def fscopy(*, src_path, dst_path, recursive: bool = False):
             # fsspec does not implement .copy, so use put/get or temporary directory
             src_fs, _ = fsspec.url_to_fs(src_path)
@@ -1032,7 +1032,7 @@ class Datablock:
                 else:
                     _src_path = self.TOPICFILE
             if dst_path is not None:
-                src_path = os.path.join(anchorhashpath, _src_path)
+                src_path = os.path.join(anchorkeypath, _src_path)
                 self.log.detailed(f"Copying file {src_path} to {dst_path}")
                 fscopy(src_path=src_path, dst_path=dst_path, recursive=False)
 
@@ -1050,7 +1050,7 @@ class Datablock:
                     _src_path = topicpaths
                 else:
                     _src_path = ""
-            src_path = os.path.join(anchorhashpath, _src_path)
+            src_path = os.path.join(anchorkeypath, _src_path)
             src_fs, _ = fsspec.url_to_fs(src_path)
             if src_fs.exists(src_path):
                 self.log.detailed(f"Copying directory {src_path} to {dst_path}")
@@ -1058,10 +1058,10 @@ class Datablock:
 
         if not overwrite:
             assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
-        fs, _ = fsspec.url_to_fs(anchorhashpath)
-        assert fs.isdir(anchorhashpath), f"Nonexistent hashpath {anchorhashpath}"
-        self.log.verbose(f"Copying files from {anchorhashpath}: BEGIN")
-        self._write_journal_entry(event="UNSAFE_copy_from:BEGIN", context=anchorhashpath, inline_context=True)
+        fs, _ = fsspec.url_to_fs(anchorkeypath)
+        assert fs.isdir(anchorkeypath), f"Nonexistent hashpath {anchorkeypath}"
+        self.log.verbose(f"Copying files from {anchorkeypath}: BEGIN")
+        self._write_journal_entry(event="UNSAFE_copy_from:BEGIN", context=anchorkeypath, inline_context=True)
         try:
             if hasattr(self, 'TOPICFILES'):
                 for topic in self.topics():
@@ -1079,14 +1079,14 @@ class Datablock:
                     f"{self.__class__.__name__}.UNSAFE_copy_from() requires TOPICFILES or TOPICFILE"
                 )
         
-            self.log.verbose(f"Copying files from {anchorhashpath}: END")
-            self._write_journal_entry(event="UNSAFE_copy_from:END", context=anchorhashpath, inline_context=True)
+            self.log.verbose(f"Copying files from {anchorkeypath}: END")
+            self._write_journal_entry(event="UNSAFE_copy_from:END", context=anchorkeypath, inline_context=True)
             if validate:
                 assert self.valid(), f"Invalid Datablock after copy: {self}"
         except Exception as e:
-            self.log.error(f"UNSAFE_copy_from: Error when trying to copy files from {anchorhashpath}")
+            self.log.error(f"UNSAFE_copy_from: Error when trying to copy files from {anchorkeypath}")
             self.log.error(f"EXCEPTION: {e}")
-            self._write_journal_entry(event="UNSAFE_copy_from:ERROR", context=anchorhashpath, inline_context=True)
+            self._write_journal_entry(event="UNSAFE_copy_from:ERROR", context=anchorkeypath, inline_context=True)
             raise e
         return self
 

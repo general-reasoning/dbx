@@ -1088,7 +1088,8 @@ class Datablock:
         self._write_journal_entry(event="UNSAFE_copy_from:BEGIN", context=anchorkeypath, inline_context=True)
         try:
             if hasattr(self, 'TOPICFILES'):
-                for topic in self.topics():
+                topics = self.topics()
+                for topic in tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic"):
                     if copy_dirpath:
                         copy_topic_dir(topic)
                     else:

@@ -1491,6 +1491,40 @@ class Datablock:
             path = None
         self.log.detailed(f"{self.anchor}: path: {path}")
         return path
+
+    def ls(self, topic=None, *, detail=False):
+        """List the contents at ``.path(topic)`` using *fsspec*.
+
+        If the path points to a file (i.e. a TOPICFILE is defined), the
+        parent directory is listed.  If the path is a directory (no
+        TOPICFILE), it is listed directly.
+
+        Parameters
+        ----------
+        topic : str, optional
+            The topic whose path to list.
+        detail : bool, optional
+            When *True* return full ``fsspec.ls`` dicts instead of plain
+            path strings.
+
+        Returns
+        -------
+        list[str] | list[dict]
+            Listing of the path contents.
+        """
+        p = self.path(topic)
+        if p is None:
+            p = self.dirpath(topic)
+        if p is None:
+            return []
+        # If path points to a file, list the containing directory
+        fs, _ = fsspec.url_to_fs(p)
+        if not fs.exists(p):
+            return []
+        if fs.isfile(p):
+            p = os.path.dirname(p)
+        return fs.ls(p, detail=detail)
+
     
     def dirpath(
         self,

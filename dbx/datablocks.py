@@ -200,6 +200,35 @@ class LogVolume:
     detailed: bool = None
 
 
+def _parse_storage_options(raw: str | None) -> dict:
+    """Parse a ``key=val;key=val;...`` string into a dict.
+
+    Used to decode the ``DBX_STORAGE_OPTIONS`` environment variable.
+    Returns an empty dict when *raw* is ``None`` or empty.
+
+    Examples
+    --------
+    >>> _parse_storage_options("account_name=myacct;account_key=secret")
+    {'account_name': 'myacct', 'account_key': 'secret'}
+    >>> _parse_storage_options(None)
+    {}
+    """
+    if not raw:
+        return {}
+    opts = {}
+    for pair in raw.split(';'):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if '=' not in pair:
+            raise ValueError(
+                f"Invalid DBX_STORAGE_OPTIONS fragment {pair!r}: expected key=value"
+            )
+        k, v = pair.split('=', 1)
+        opts[k.strip()] = v.strip()
+    return opts
+
+
 def journal(cls_or_df, entry=None, url=None, **kwargs):
     """Retrieve or wrap a Datablock journal.
 
@@ -225,7 +254,7 @@ def journal(cls_or_df, entry=None, url=None, **kwargs):
             anchor = cls_or_df
         else:
             anchor = cls_or_df.__module__ + "." + cls_or_df.__name__
-        return Datablock.Journal(anchor, entry=entry, url=url, **kwargs)
+        return Datablock.Journal(anchor, entry=entry, url=url, storage_options=kwargs.pop('storage_options', None), **kwargs)
 
 
 
@@ -273,7 +302,7 @@ class JournalEntry(pd.Series):
 
     @property
     def keyby(self):
-        return self.get('keyby', 'hash')
+        return self.get('keyby', 'taghash')
 
     @property
     def tag(self):
@@ -611,7 +640,7 @@ class Datablock:
         detailed: bool = None,
         capture_output: bool = False,
         revision: str = None,
-        keyby: str = 'hash',
+        keyby: str = 'taghash',
         uuid16: bool = False,
         validate_cfg: bool = True,
         storage_options: dict = None,
@@ -687,7 +716,11 @@ class Datablock:
             self.url = os.environ.get('DBX_ROOT')
         if self.url is None:
             raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT")
-        self.storage_options = state.get('storage_options') or {}
+        self.storage_options = state.get('storage_options')
+        if self.storage_options is None:
+            self.storage_options = _parse_storage_options(
+                os.environ.get('DBX_STORAGE_OPTIONS')
+            )
         self.fs, self.root = fsspec.url_to_fs(self.url, **self.storage_options)
         self._spec_ = state.get('spec')
         if self._spec_ is None:
@@ -700,7 +733,7 @@ class Datablock:
         
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
-        self.keyby = state.get('keyby', 'hash')
+        self.keyby = state.get('keyby', 'taghash')
         if self.keyby not in (None, 'hash', 'handle', 'tag', 'taghash', 'custom'):
             raise ValueError(f"keyby must be None, 'hash', 'handle', 'tag', 'taghash', 'custom', got {self.keyby!r}")
         self._uuid16_ = state.get('uuid16', False)
@@ -774,6 +807,10 @@ class Datablock:
     def __post_init__(self):
         ...
 
+    def _url_to_fs(self, path):
+        """Wrapper around ``fsspec.url_to_fs`` that injects ``self.storage_options``."""
+        return fsspec.url_to_fs(path, **self.storage_options)
+
     def validtopic(self, topic=None):
         if topic is None:
             valid = self.validpath(self.path())
@@ -812,7 +849,7 @@ class Datablock:
         elif isinstance(path, dict):
             result = all([self.validpath(p) for p in path.values()])
         else:
-            fs, _ = fsspec.url_to_fs(path)
+            fs, _ = self._url_to_fs(path)
             if 'file' not in fs.protocol:
                 result = fsspec.filesystem("gcs").exists(path)
             else:
@@ -879,7 +916,7 @@ class Datablock:
             stdout = sys.stdout
             stderr = sys.stderr
             
-            outfs, _ = fsspec.url_to_fs(logpath)
+            outfs, _ = self._url_to_fs(logpath)
             captured_stream = outfs.open(logpath, "w", encoding="utf-8")
             sys.stdout = Tee(stdout, captured_stream)
             sys.stderr = Tee(stderr, captured_stream)
@@ -997,7 +1034,7 @@ class Datablock:
                     for blob in blobs:
                         blob.delete()
                 else:
-                    fs, _ = fsspec.url_to_fs(path)
+                    fs, _ = self._url_to_fs(path)
                     fs.rm(path, recursive=recursive)
             except Exception as e:
                 self.log.warning(f"Error when trying to remove {path}")
@@ -1058,8 +1095,8 @@ class Datablock:
         """
         def fscopy(*, src_path, dst_path, recursive: bool = False):
             # fsspec does not implement .copy, so use put/get or temporary directory
-            src_fs, _ = fsspec.url_to_fs(src_path)
-            dst_fs, _ = fsspec.url_to_fs(dst_path)
+            src_fs, _ = self._url_to_fs(src_path)
+            dst_fs, _ = self._url_to_fs(dst_path)
             
             # Ensure destination directory exists
             dst_dir = os.path.dirname(dst_path)
@@ -1118,14 +1155,14 @@ class Datablock:
                 else:
                     _src_path = ""
             src_path = os.path.join(anchorkeypath, _src_path)
-            src_fs, _ = fsspec.url_to_fs(src_path)
+            src_fs, _ = self._url_to_fs(src_path)
             if src_fs.exists(src_path):
                 self.log.detailed(f"Copying directory {src_path} to {dst_path}")
                 fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
 
         if not overwrite:
             assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
-        fs, _ = fsspec.url_to_fs(anchorkeypath)
+        fs, _ = self._url_to_fs(anchorkeypath)
         assert fs.isdir(anchorkeypath), f"Nonexistent hashpath {anchorkeypath}"
         self.log.verbose(f"Copying files from {anchorkeypath}: BEGIN")
         self._write_journal_entry(event="UNSAFE_copy_from:BEGIN", context=anchorkeypath, inline_context=True)
@@ -1177,7 +1214,7 @@ class Datablock:
         return config
 
     def leave_breadcrumbs_at_path(self, path):
-        fs, _ = fsspec.url_to_fs(path)
+        fs, _ = self._url_to_fs(path)
         with fs.open(path, "w") as f:
             f.write("")
     
@@ -1561,7 +1598,7 @@ class Datablock:
         if p is None:
             return []
         # If path points to a file, list the containing directory
-        fs, _ = fsspec.url_to_fs(p)
+        fs, _ = self._url_to_fs(p)
         if not fs.exists(p):
             return []
         if fs.isfile(p):
@@ -1589,10 +1626,10 @@ class Datablock:
             else:
                 dirpath = anchorkeypath
         if ensure:
-            fs, _ = fsspec.url_to_fs(dirpath)
+            fs, _ = self._url_to_fs(dirpath)
             fs.makedirs(dirpath, exist_ok=True)
         if list:
-            fs, _ = fsspec.url_to_fs(dirpath)
+            fs, _ = self._url_to_fs(dirpath)
             return fs.ls(dirpath)
         return dirpath
 
@@ -1622,9 +1659,9 @@ class Datablock:
         ) if self.anchorkey else self.root
     
     @staticmethod
-    def _dbxanchorpathx(url, anchor, x, *, fqcn=None, ensure: bool = False):
+    def _dbxanchorpathx(url, anchor, x, *, fqcn=None, ensure: bool = False, storage_options=None):
         """Return {url}/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
-        fs, root = fsspec.url_to_fs(url)
+        fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
         if fqcn is not None and anchor != fqcn:
             _dbxanchorpathx = fs.unstrip_protocol(os.path.join(root, anchor, ".dbx", fqcn, x))
         else:
@@ -1634,10 +1671,10 @@ class Datablock:
         return _dbxanchorpathx
 
     def _dbxanchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
-        _dbxanchorpathx = Datablock._dbxanchorpathx(self.url, self.anchor, x, fqcn=self.fqcn)
+        _dbxanchorpathx = Datablock._dbxanchorpathx(self.url, self.anchor, x, fqcn=self.fqcn, storage_options=self.storage_options)
         _dbxanchorhashpathx = os.path.join(_dbxanchorpathx, self.hash)
         if ensure_dirpath:
-            fs, _ = fsspec.url_to_fs(_dbxanchorhashpathx)
+            fs, _ = self._url_to_fs(_dbxanchorhashpathx)
             fs.makedirs(_dbxanchorhashpathx, exist_ok=True)
         if ext is None:
             ext = x
@@ -1686,13 +1723,13 @@ class Datablock:
             data['datetime'] = self.dt
         #
         ypath = self._dbxanchorhashpathx(name, 'yaml')
-        yfs, _ = fsspec.url_to_fs(ypath)
+        yfs, _ = self._url_to_fs(ypath)
         write_yaml(data, ypath)
         assert yfs.exists(ypath), f"path {ypath} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
         #
         pqpath = self._dbxanchorhashpathx(name, 'parquet')
-        pqfs, _ = fsspec.url_to_fs(pqpath)
+        pqfs, _ = self._url_to_fs(pqpath)
         df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
         df.to_parquet(pqpath)
         assert pqfs.exists(pqpath), f"pqpath {pqpath} does not exist after writing"
@@ -1701,7 +1738,7 @@ class Datablock:
     def _write_str(self, name, text):
         #
         path = self._dbxanchorhashpathx(name, 'txt')
-        fs, _ = fsspec.url_to_fs(path)
+        fs, _ = self._url_to_fs(path)
         write_str(text, path)
         assert fs.exists(path), f"scopepath {path} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
@@ -1734,7 +1771,7 @@ class Datablock:
         #
         logpath = self._dbxanchorhashpathx('log', ensure_dirpath=True)
         if logpath is not None:
-            logfs, _ = fsspec.url_to_fs(logpath)
+            logfs, _ = self._url_to_fs(logpath)
             has_log = logfs.exists(logpath)
         else:
             has_log = False
@@ -1771,12 +1808,14 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, entry: int = None, *, fqcn: str = None, url=None, **kwargs):
+    def Journal(anchor, entry: int = None, *, fqcn: str = None, url=None, storage_options=None, **kwargs):
         if url is None:
             url = os.environ.get('DBX_ROOT')
+        if storage_options is None:
+            storage_options = _parse_storage_options(os.environ.get('DBX_STORAGE_OPTIONS'))
 
-        journaldirpath = Datablock._dbxanchorpathx(url, anchor, 'journal', fqcn=fqcn)
-        fs, _ = fsspec.url_to_fs(journaldirpath)
+        journaldirpath = Datablock._dbxanchorpathx(url, anchor, 'journal', fqcn=fqcn, storage_options=storage_options)
+        fs, _ = fsspec.url_to_fs(journaldirpath, **storage_options)
 
         log = Logger()
         if not fs.exists(journaldirpath):
@@ -1824,7 +1863,7 @@ class Datablock:
         return result
 
     def journal(self, entry: int = None, **kwargs):
-        return self.Journal(self.anchor, entry, url=self.url, fqcn=self.fqcn, **kwargs)
+        return self.Journal(self.anchor, entry, url=self.url, fqcn=self.fqcn, storage_options=self.storage_options, **kwargs)
     #JOURNAL: END
     
 

@@ -61,10 +61,10 @@ class TestDfn:
         """dfn should include explicit params even when left at their defaults."""
         block = SimpleBlock(url='/tmp/test')
         d = block.dfn
-        # anchor defaults to None, capture_output to False, keyby to 'hash'
+        # anchor defaults to None, capture_output to False, keyby to 'taghash'
         assert d['anchor'] is None
         assert d['capture_output'] is False
-        assert d['keyby'] == 'hash'
+        assert d['keyby'] == 'taghash'
 
     def test_dfn_matches_getstate(self):
         """dfn should be identical to __getstate__()."""

@@ -12,7 +12,7 @@ class TestAnchorKeyPath(unittest.TestCase):
             pass
         
         block = MyBlock(url="/tmp/dbx_test")
-        # Default keyby='hash', so key == hash
+        # Default keyby='taghash'; with no tag set, key falls back to hash
         self.assertTrue(hasattr(block, 'anchorkey'))
         self.assertTrue(hasattr(block, 'anchorkeypath'))
         

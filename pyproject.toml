@@ -40,7 +40,6 @@ dependencies = [
     "pandas>=2.0",
     "pyarrow>=14.0",
     "pyyaml>=6.0",
-    "torch>=2.0",
     "tqdm>=4.60",
 ]
 
@@ -48,13 +47,16 @@ dependencies = [
 ray = [
     "ray>=2.0",
 ]
+torch = [
+    "torch>=2.0",
+]
 dev = [
     "build",
     "pytest>=8.0",
     "twine",
 ]
 all = [
-    "datablocks[ray,dev]",
+    "datablocks[ray,torch,dev]",
 ]
 
 [project.urls]

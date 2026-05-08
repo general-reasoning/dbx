@@ -64,8 +64,7 @@ import numpy as np
 import fsspec
 
 import pandas as pd
-import torch
-import torch.multiprocessing as mp
+
 
 
 __eval__ = __builtins__['eval']
@@ -1946,8 +1945,8 @@ class Datastack(Datablock):
             }
         return cls._executors_cache
 
-    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, **kwargs):
-        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, **kwargs)
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, multiprocessing_start_method: str = 'spawn', **kwargs):
+        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, multiprocessing_start_method=multiprocessing_start_method, **kwargs)
         executors = self._get_executors_()
         key = (self.parallelization or "inline").lower()
         if key not in executors:
@@ -2008,10 +2007,15 @@ class Datastack(Datablock):
             f"Building {self.__class__.__name__}: {len(makers)} shards, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
         )
-        executor = self.executor_cls(
+        executor_kwargs = dict(
             n_workers=self.n_workers,
             tag=f"BUILDING {len(makers)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]",
         )
+        if (hasattr(self, 'multiprocessing_start_method')
+                and self.multiprocessing_start_method is not None
+                and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
+            executor_kwargs['start_method'] = self.multiprocessing_start_method
+        executor = self.executor_cls(**executor_kwargs)
         executor.exec_callables(makers, self, build=True)
         self.log.info(f"Stacking {self.n_shards} shards of {self.__class__.__name__}")
         self.__stack__()

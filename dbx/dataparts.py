@@ -32,8 +32,11 @@ import uuid
 import numpy as np
 import fsspec
 import pandas as pd
-import torch
-import torch.multiprocessing as mp
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except ImportError:
+    _TORCH_AVAILABLE = False
 import tqdm
 import yaml
 
@@ -443,11 +446,12 @@ def write_tensor(tensor, path, *, storage_options=None, log=Logger(), debug: boo
 
 
 def read_tensor(path, *, storage_options=None, log=Logger(), debug: bool = False):
+    import torch as _torch
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "rb") as f:
         array = np.load(f)
         log.detailed(f"READ {path}")
-        tensor = torch.from_numpy(array)
+        tensor = _torch.from_numpy(array)
     return tensor
 
 
@@ -457,8 +461,9 @@ def write_tensors(path, *, log=Logger(), debug: bool = False, **tensors):
 
 
 def read_tensors(path, *keys, log=Logger(), debug: bool = False):
+    import torch as _torch
     arrays = read_npz(path, *keys, log=log, debug=debug)
-    tensors = {k: torch.from_numpy(v) for k, v in arrays.items()}
+    tensors = {k: _torch.from_numpy(v) for k, v in arrays.items()}
     return tensors
 
 
@@ -878,26 +883,35 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
-    def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "", log: Logger = Logger()):
+    def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
+                 start_method: str = 'spawn', log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
         self.log = log
+        # Use 'spawn' by default to avoid fork-safety issues with HTTP clients
+        # (e.g. Azure SDK, fsspec AzureBlobFileSystem) and CUDA contexts.
+        # Override with 'fork' for faster startup when all objects are fork-safe.
+        if _TORCH_AVAILABLE:
+            import torch.multiprocessing as _mp
+        else:
+            import multiprocessing as _mp
+        self._mp = _mp.get_context(start_method)
 
     @property
     def _n_workers(self) -> int:
         return self.n_workers
 
     def _make_queue(self):
-        return mp.Queue()
+        return self._mp.Queue()
 
     def _make_event(self):
-        return mp.Event()
+        return self._mp.Event()
 
     def _make_worker(self, target, args):
         # Pass target and args explicitly so the module-level _mp_worker_fn
         # can be pickled by name (required for spawn/forkserver start methods).
-        return mp.Process(target=_mp_worker_fn, args=(target, args))
+        return self._mp.Process(target=_mp_worker_fn, args=(target, args))
 
     def _worker_label(self, worker_idx) -> str:
         return f"process {worker_idx}"
@@ -1222,6 +1236,11 @@ class _TorchCallableExecutorMixin_:
 
     def __init__(self, *, devices: list[str] = 'cuda', batch_size: int = None,
                  tag: str = "", log: Logger = Logger()):
+        if not _TORCH_AVAILABLE:
+            raise ImportError(
+                "torch is required for TorchMulti*CallableExecutor. "
+                "Install it with: pip install datablocks[torch]"
+            )
         if isinstance(devices, str):
             devices = [devices]
         # Initialise the concrete executor base (Thread or Process variant).

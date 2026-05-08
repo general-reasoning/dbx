@@ -164,7 +164,23 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     if use_wrkrepo and DBX_USE_WORK_REPO is None:
         if DBX_GIT_REPO is None:
             raise ValueError("DBX_GIT_REPO is not set and could not be detected. Cannot setup temporary wrkrepo.")
-        
+
+        # --- Early dirty check on the ORIGINAL repos ----------------------
+        # Must happen *before* cloning: the clone uses HEAD, so any
+        # uncommitted changes would be silently lost.
+        def _check_dirty(path):
+            if path is None:
+                return
+            repo = git.Repo(path)
+            if repo.is_dirty() and not os.environ.get('DBX_DIRTY_REPO_OK'):
+                raise ValueError(
+                    f"Dirty git repo: {path}: commit your changes before "
+                    f"creating a work-repo clone (uncommitted changes would be lost)"
+                )
+        _check_dirty(dbx_repo)
+        _check_dirty(project_repo)
+        # ------------------------------------------------------------------
+
         dbx_wrk = setup_wrkrepo(dbx_repo, dbx_rev, "dbx")
         project_wrk = setup_wrkrepo(project_repo, project_rev, "project")
 
@@ -514,13 +530,8 @@ def gitrevision(*, log=Logger()):
             if path is None:
                 return None
             repo = git.Repo(path)
-            # Skip the dirty check when operating from a wrkrepo (fresh clone,
-            # always clean).  DBX_USE_WORK_REPO covers the master process; DBX_WORK_ROOT
-            # covers worker processes (Ray, multiprocessing) that inherit the env
-            # var but not the in-process global.
-            in_wrkrepo = DBX_USE_WORK_REPO is not None or os.environ.get('DBX_WORK_ROOT')
-            if not in_wrkrepo and repo.is_dirty() and not os.environ.get('DBX_DIRTY_REPO_OK'):
-                raise ValueError(f"Dirty git repo: {path}: commit your changes")
+            # Dirty check is now performed in gitwrkreposetup() before
+            # cloning, so we don't need to repeat it here.
             return repo.head.commit.hexsha
 
         dbx_rev = get_rev(d_repo)

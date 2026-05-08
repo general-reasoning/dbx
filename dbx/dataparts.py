@@ -285,6 +285,40 @@ def fs_full_path(fs, path):
     return fs.unstrip_protocol(path)
 
 
+def parse_storage_options(raw: str | None) -> dict:
+    """Parse a ``key=val;key=val;...`` string into a dict.
+
+    Used to decode the ``DBX_STORAGE_OPTIONS`` environment variable.
+    Returns an empty dict when *raw* is ``None`` or empty.
+
+    Examples
+    --------
+    >>> parse_storage_options("account_name=myacct;account_key=secret")
+    {'account_name': 'myacct', 'account_key': 'secret'}
+    >>> parse_storage_options(None)
+    {}
+    """
+    if not raw:
+        return {}
+    opts = {}
+    for pair in raw.split(';'):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if '=' not in pair:
+            raise ValueError(
+                f"Invalid DBX_STORAGE_OPTIONS fragment {pair!r}: expected key=value"
+            )
+        k, v = pair.split('=', 1)
+        opts[k.strip()] = v.strip()
+    return opts
+
+
+def default_storage_options() -> dict:
+    """Return storage options from ``DBX_STORAGE_OPTIONS`` env var, or ``{}``."""
+    return parse_storage_options(os.environ.get('DBX_STORAGE_OPTIONS'))
+
+
 def UNSAFE_allowed(what: str, *, OVERRIDE: bool = False):
     """Prompt the user for confirmation before an unsafe operation.
 

@@ -1,0 +1,12 @@
+name: dbx
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+    - -e .
+    - pytest
+    - ray[default]
+    - fsspec
+    - pandas

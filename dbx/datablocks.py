@@ -199,36 +199,9 @@ class LogVolume:
     detailed: bool = None
 
 
-def _parse_storage_options(raw: str | None) -> dict:
-    """Parse a ``key=val;key=val;...`` string into a dict.
-
-    Used to decode the ``DBX_STORAGE_OPTIONS`` environment variable.
-    Returns an empty dict when *raw* is ``None`` or empty.
-
-    Examples
-    --------
-    >>> _parse_storage_options("account_name=myacct;account_key=secret")
-    {'account_name': 'myacct', 'account_key': 'secret'}
-    >>> _parse_storage_options(None)
-    {}
-    """
-    if not raw:
-        return {}
-    opts = {}
-    for pair in raw.split(';'):
-        pair = pair.strip()
-        if not pair:
-            continue
-        if '=' not in pair:
-            raise ValueError(
-                f"Invalid DBX_STORAGE_OPTIONS fragment {pair!r}: expected key=value"
-            )
-        k, v = pair.split('=', 1)
-        opts[k.strip()] = v.strip()
-    return opts
 
 
-def journal(cls_or_df, entry=None, url=None, **kwargs):
+def journal(cls_or_df, entry=None, url=None, storage_options=None, **kwargs):
     """Retrieve or wrap a Datablock journal.
 
     Parameters
@@ -239,6 +212,8 @@ def journal(cls_or_df, entry=None, url=None, **kwargs):
         If given, return a single :class:`JournalEntry` at this index.
     url : str, optional
         Storage URL.  Defaults to ``DBX_ROOT``.
+    storage_options : dict, optional
+        Storage options for fsspec.  Defaults to ``default_storage_options()``.
     **kwargs
         Forwarded to :class:`JournalFrame` for filtering.
 
@@ -247,13 +222,13 @@ def journal(cls_or_df, entry=None, url=None, **kwargs):
     JournalFrame or JournalEntry
     """
     if isinstance(cls_or_df, pd.DataFrame):
-        return JournalFrame(cls_or_df, **kwargs)
+        return JournalFrame(cls_or_df, storage_options=storage_options, **kwargs)
     else:
         if isinstance(cls_or_df, str):
             anchor = cls_or_df
         else:
             anchor = cls_or_df.__module__ + "." + cls_or_df.__name__
-        return Datablock.Journal(anchor, entry=entry, url=url, storage_options=kwargs.pop('storage_options', None), **kwargs)
+        return Datablock.Journal(anchor, entry=entry, url=url, storage_options=storage_options, **kwargs)
 
 
 
@@ -264,8 +239,10 @@ class JournalEntry(pd.Series):
     operations work.  Named properties expose journal-specific fields
     (``anchor``, ``hash``, ``url``, ``revision``, …).
     """
-    def __init__(self, series: pd.Series, *, logger: Logger = Logger(name="JournalEntry")):
+    def __init__(self, series: pd.Series, *, storage_options: dict = None,
+                 logger: Logger = Logger(name="JournalEntry")):
         super().__init__(series)
+        self.storage_options = storage_options or {}
         self.logger = logger
 
     def __tag__(self):
@@ -340,7 +317,7 @@ class JournalEntry(pd.Series):
         url = self.get('url')
         if url is None:
             return self.get('root')  # legacy fallback
-        _, root = fsspec.url_to_fs(url)
+        _, root = fsspec.url_to_fs(url, **self.storage_options)
         return root
 
     @property
@@ -350,7 +327,7 @@ class JournalEntry(pd.Series):
             # Legacy fallback when only 'root' is available
             root = self.get('root')
             return os.path.join(root, self.anchorkey) if root else self.anchorkey
-        fs, root = fsspec.url_to_fs(url)
+        fs, root = fsspec.url_to_fs(url, **self.storage_options)
         return fs_full_path(fs, os.path.join(root, self.anchorkey))
 
     # Backward-compatible aliases (always hash-based)
@@ -364,7 +341,7 @@ class JournalEntry(pd.Series):
         if url is None:
             root = self.get('root')
             return os.path.join(root, self.anchorhash) if root else self.anchorhash
-        fs, root = fsspec.url_to_fs(url)
+        fs, root = fsspec.url_to_fs(url, **self.storage_options)
         return fs_full_path(fs, os.path.join(root, self.anchorhash))
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
@@ -374,9 +351,9 @@ class JournalEntry(pd.Series):
                 _, _ext = os.path.splitext(path)
                 ext = _ext[1:]
                 if raw or ext == 'txt' or ext == 'log':
-                    result = read_str(getattr(self, thing))
+                    result = read_str(getattr(self, thing), storage_options=self.storage_options)
                 elif ext == 'yaml':
-                    result = read_yaml(getattr(self, thing), safe=safe)
+                    result = read_yaml(getattr(self, thing), safe=safe, storage_options=self.storage_options)
                 else:
                     raise ValueError(f"Uknown journal entry field extention for {thing}: {ext}")
             else:
@@ -437,7 +414,10 @@ class JournalEntry(pd.Series):
 
 
 class JournalFrame(pd.DataFrame):
-    def __init__(self, df: pd.DataFrame|None, *, parse_datetimes: bool = True, logger: Logger = Logger(), **kwargs):
+    _metadata = ['storage_options', 'logger']
+
+    def __init__(self, df: pd.DataFrame|None, *, storage_options: dict = None,
+                 parse_datetimes: bool = True, logger: Logger = Logger(), **kwargs):
         
         # Guard against an empty journal (no parquet files written yet).
         if df is None:
@@ -472,6 +452,7 @@ class JournalFrame(pd.DataFrame):
         super().__init__(df)
         
         # Set custom attributes AFTER super().__init__()
+        self.storage_options = storage_options or {}
         self.logger = logger
             
 
@@ -479,7 +460,7 @@ class JournalFrame(pd.DataFrame):
         entry = self.loc[entry]
         if dropna:
             entry = entry.dropna()
-        return JournalEntry(entry)
+        return JournalEntry(entry, storage_options=self.storage_options)
     
     def __call__(self, entry:int):
         return self.get(entry, dropna=True)
@@ -499,7 +480,7 @@ class JournalFrame(pd.DataFrame):
         for hash, row in unique_rows.iterrows():
             try:
                 entry = None
-                entry = JournalEntry(row)
+                entry = JournalEntry(row, storage_options=self.storage_options)
                 th = None
                 th = entry.read(thing, raw=raw, safe=safe)
                 entries.append(th)
@@ -737,9 +718,7 @@ class Datablock:
             raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT")
         self.storage_options = state.get('storage_options')
         if self.storage_options is None:
-            self.storage_options = _parse_storage_options(
-                os.environ.get('DBX_STORAGE_OPTIONS')
-            )
+            self.storage_options = default_storage_options()
         self.fs, self.root = fsspec.url_to_fs(self.url, **self.storage_options)
         self._spec_ = state.get('spec')
         if self._spec_ is None:
@@ -1820,7 +1799,7 @@ class Datablock:
         if url is None:
             url = os.environ.get('DBX_ROOT')
         if storage_options is None:
-            storage_options = _parse_storage_options(os.environ.get('DBX_STORAGE_OPTIONS'))
+            storage_options = default_storage_options()
 
         journaldirpath = Datablock._dbxanchorpathx(url, anchor, 'journal', fqcn=fqcn, storage_options=storage_options)
         fs, _ = fsspec.url_to_fs(journaldirpath, **storage_options)
@@ -1864,9 +1843,9 @@ class Datablock:
                 df = None
         else:
             df = None
-        journal = JournalFrame(df, **kwargs)
+        journal = JournalFrame(df, storage_options=storage_options, **kwargs)
         if entry is not None:
-            result = JournalEntry(journal.loc[entry].dropna())
+            result = JournalEntry(journal.loc[entry].dropna(), storage_options=storage_options)
         else:
             result = journal
         return result

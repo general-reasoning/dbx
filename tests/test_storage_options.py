@@ -1,7 +1,7 @@
 """Tests for _parse_storage_options and DBX_STORAGE_OPTIONS env-var fallback."""
 import os
 import pytest
-from dbx.datablocks import Datablock, _parse_storage_options
+from dbx.datablocks import Datablock, parse_storage_options
 
 
 # ---------------------------------------------------------------------------
@@ -11,36 +11,36 @@ from dbx.datablocks import Datablock, _parse_storage_options
 class TestParseStorageOptions:
 
     def test_none_returns_empty(self):
-        assert _parse_storage_options(None) == {}
+        assert parse_storage_options(None) == {}
 
     def test_empty_string_returns_empty(self):
-        assert _parse_storage_options("") == {}
+        assert parse_storage_options("") == {}
 
     def test_single_pair(self):
-        assert _parse_storage_options("account_name=myacct") == {
+        assert parse_storage_options("account_name=myacct") == {
             'account_name': 'myacct',
         }
 
     def test_multiple_pairs(self):
-        result = _parse_storage_options("account_name=myacct;account_key=secret")
+        result = parse_storage_options("account_name=myacct;account_key=secret")
         assert result == {'account_name': 'myacct', 'account_key': 'secret'}
 
     def test_whitespace_is_stripped(self):
-        result = _parse_storage_options("  k1 = v1 ; k2=v2  ")
+        result = parse_storage_options("  k1 = v1 ; k2=v2  ")
         assert result == {'k1': 'v1', 'k2': 'v2'}
 
     def test_trailing_semicolon_ignored(self):
-        result = _parse_storage_options("a=b;")
+        result = parse_storage_options("a=b;")
         assert result == {'a': 'b'}
 
     def test_value_with_equals(self):
         """Values may contain '=' (e.g. base64 keys)."""
-        result = _parse_storage_options("key=abc=def==")
+        result = parse_storage_options("key=abc=def==")
         assert result == {'key': 'abc=def=='}
 
     def test_missing_equals_raises(self):
         with pytest.raises(ValueError, match="expected key=value"):
-            _parse_storage_options("no_equals_here")
+            parse_storage_options("no_equals_here")
 
 
 # ---------------------------------------------------------------------------

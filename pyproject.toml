@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datablocks"
+version = "0.0.1"
+description = "Content-addressed, journaled data-experiment management for Python"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [
+    { name = "Dmitry Karpeyev", email = "dmitry.karpeyev@gmail.com" },
+]
+keywords = [
+    "data",
+    "experiment",
+    "management",
+    "pipeline",
+    "reproducibility",
+    "datablock",
+    "journaling",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "fsspec>=2023.1.0",
+    "gitpython>=3.1",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "pyyaml>=6.0",
+    "torch>=2.0",
+    "tqdm>=4.60",
+]
+
+[project.optional-dependencies]
+ray = [
+    "ray>=2.0",
+]
+dev = [
+    "build",
+    "pytest>=8.0",
+    "twine",
+]
+all = [
+    "datablocks[ray,dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/dmitry-karpeyev/datablocks"
+Repository = "https://github.com/dmitry-karpeyev/datablocks"
+Issues = "https://github.com/dmitry-karpeyev/datablocks/issues"
+
+[project.scripts]
+dbx = "dbx:exec"
+"dbx.exec" = "dbx:exec"
+"dbx.eval" = "dbx:eval"
+"dbx.print" = "dbx:pprint"
+"dbx.pprint" = "dbx:pprint"
+"dbx.slurm.exec" = "dbx:slurm_exec"
+"dbx.slurm.eval" = "dbx:slurm_eval"
+"dbx.slurm.print" = "dbx:slurm_pprint"
+"dbx.slurm.pprint" = "dbx:slurm_pprint"
+
+[tool.setuptools.packages.find]
+include = ["dbx*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

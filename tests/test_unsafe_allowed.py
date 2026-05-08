@@ -80,7 +80,7 @@ class MyBlock(Datablock):
 class TestUNSAFEClear:
 
     def _make_block(self):
-        return MyBlock(root='/tmp/dbx_test_clear')
+        return MyBlock(url='/tmp/dbx_test_clear')
 
     def test_clear_with_override_proceeds(self):
         """UNSAFE_clear(OVERRIDE=True) must not prompt and must attempt clearing."""

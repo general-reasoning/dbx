@@ -191,7 +191,7 @@ class TestTorchMultithreadingBuilder:
 
     def test_build_blocks_with_to(self, tmp_path):
         """Blocks with .to() should build successfully."""
-        blocks = [BlockWithTo(root=str(tmp_path), spec=dict(label=f"item{i}")) for i in range(3)]
+        blocks = [BlockWithTo(url=str(tmp_path), spec=dict(label=f"item{i}")) for i in range(3)]
         builder = TorchMultithreadingDatablocksBuilder(devices=['cpu'])
         result = builder.build_blocks(blocks)
         assert result is blocks
@@ -200,7 +200,7 @@ class TestTorchMultithreadingBuilder:
 
     def test_build_blocks_without_to_raises(self, tmp_path):
         """Blocks without .to() should fail with TypeError."""
-        blocks = [BlockWithoutTo(root=str(tmp_path))]
+        blocks = [BlockWithoutTo(url=str(tmp_path))]
         builder = TorchMultithreadingDatablocksBuilder(devices=['cpu'])
         with pytest.raises(TypeError, match="does not implement .to"):
             builder.build_blocks(blocks)
@@ -212,7 +212,7 @@ class TestTorchMultithreadingBuilder:
 
     def test_to_is_called_with_device(self, tmp_path):
         """After build, blocks should have been moved to cpu."""
-        blocks = [BlockWithTo(root=str(tmp_path), spec=dict(label='test'))]
+        blocks = [BlockWithTo(url=str(tmp_path), spec=dict(label='test'))]
         builder = TorchMultithreadingDatablocksBuilder(devices=['cpu'])
         builder.build_blocks(blocks)
         assert blocks[0].device == 'cpu'
@@ -226,7 +226,7 @@ class TestTorchMultiprocessingBuilder:
 
     def test_build_blocks_without_to_raises(self, tmp_path):
         """Blocks without .to() should fail with TypeError."""
-        blocks = [BlockWithoutTo(root=str(tmp_path))]
+        blocks = [BlockWithoutTo(url=str(tmp_path))]
         builder = TorchMultiprocessingDatablocksBuilder(devices=['cpu'])
         with pytest.raises(TypeError, match="does not implement .to"):
             builder.build_blocks(blocks)

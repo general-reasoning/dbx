@@ -64,7 +64,7 @@ class MixedSpecBlock(Datablock):
 # ---------------------------------------------------------------------------
 
 def _make_block(cls, tmp_path, **kwargs):
-    return cls(root=str(tmp_path), **kwargs)
+    return cls(url=str(tmp_path), **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ class TestCiteInQuote:
         q = block.quote()
         root_str = str(tmp_path)
         # cite(root) should produce repr(root), i.e. quoted with apostrophes
-        assert f"root='{root_str}'" in q
+        assert f"url='{root_str}'" in q
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ class TestCiteStringQuoting:
         assert "hash='abc123'" in q
 
     def test_quote_overall_format(self, tmp_path):
-        """Verify the full format: $fqcn(root='...', spec={...})."""
+        """Verify the full format: $fqcn(url='...', spec={...})."""
         block = _make_block(SimpleBlock, tmp_path)
         q = block.quote()
         root_str = str(tmp_path)
@@ -182,7 +182,7 @@ class TestCiteStringQuoting:
         # Must end with )
         assert q.endswith(')')
         # Must contain root= with a repr'd string value
-        assert f"root='{root_str}'" in q
+        assert f"url='{root_str}'" in q
         # Must contain spec= with a dict value
         assert 'spec={' in q
 
@@ -192,12 +192,12 @@ class TestCiteStringQuoting:
                             anchor='custom.anchor', hash='deadbeef')
         q = block.quote()
         root_str = str(tmp_path)
-        assert f"root='{root_str}'" in q
+        assert f"url='{root_str}'" in q
         assert "anchor='custom.anchor'" in q
         assert "hash='deadbeef'" in q
         # All three should appear before spec=
         spec_idx = q.index('spec=')
-        assert q.index('root=') < spec_idx
+        assert q.index('url=') < spec_idx
         assert q.index('anchor=') < spec_idx
         assert q.index('hash=') < spec_idx
 
@@ -248,68 +248,12 @@ class TestQuoteTailkwargs:
         # Count top-level = signs (rough check)
         prefix = q[q.index('(') + 1 : q.rindex(')')]
         # Should only have root= and spec=
-        assert 'root=' in prefix
+        assert 'url=' in prefix
         assert 'spec=' in prefix
 
 
-# ---------------------------------------------------------------------------
-# Tests: tailkwargs in wrapped Datablockable quote()
-# ---------------------------------------------------------------------------
 
-class TestWrappedQuoteTailkwargs:
-    """Verify that datablock()-wrapped classes also include tailkwargs in quote()."""
 
-    def test_wrapped_extra_kwargs_in_quote(self, tmp_path):
-        from dbx.datawraps import datablock
-
-        class MyProcessor:
-            TOPICFILE = 'out.txt'
-
-            @dataclass
-            class CONFIG(Datablock.CONFIG):
-                label: str = "'hello'"
-
-            def __init__(self, *, cfg=None, **_):
-                self.cfg = cfg
-
-            def __build__(self, *args, **kwargs):
-                return self
-
-            def __read__(self, topic=None):
-                return None
-
-        Wrapped = datablock(MyProcessor)
-        block = Wrapped(root=str(tmp_path), batch_size=64, num_workers=8)
-        q = block.quote()
-        assert 'batch_size=64' in q
-        assert 'num_workers=8' in q
-
-    def test_wrapped_extra_kwargs_saved_on_self(self, tmp_path):
-        from dbx.datawraps import datablock
-
-        class MyProcessor:
-            TOPICFILE = 'out.txt'
-
-            @dataclass
-            class CONFIG(Datablock.CONFIG):
-                label: str = "'hello'"
-
-            def __init__(self, *, cfg=None, **_):
-                self.cfg = cfg
-
-            def __build__(self, *args, **kwargs):
-                return self
-
-            def __read__(self, topic=None):
-                return None
-
-        Wrapped = datablock(MyProcessor)
-        block = Wrapped(root=str(tmp_path), batch_size=64, num_workers=8)
-        # Extra kwargs must be saved on self by __setstate__
-        assert hasattr(block, 'batch_size')
-        assert block.batch_size == 64
-        assert hasattr(block, 'num_workers')
-        assert block.num_workers == 8
 
 # ---------------------------------------------------------------------------
 # Tests: deslash

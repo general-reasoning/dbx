@@ -131,7 +131,7 @@ class CountingBlock(Datablock):
 
 def _make_block(cls, tmp_path, **kwargs):
     """Instantiate a Datablock subclass rooted in a pytest tmp_path."""
-    return cls(root=str(tmp_path), **kwargs)
+    return cls(url=str(tmp_path), **kwargs)
 
 
 # ---------------------------------------------------------------------------

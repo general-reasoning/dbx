@@ -34,7 +34,6 @@ import fsspec
 import pandas as pd
 import torch
 import torch.multiprocessing as mp
-import ray
 import tqdm
 import yaml
 
@@ -72,7 +71,29 @@ def env(key: str) -> str:
 
 
 class Logger:
-    """Because Python logging is so cumbersome to initialize, configure and control, we have this."""
+    """Lightweight, printf-style logger with level gating.
+
+    Levels (from most to least severe): ``ERROR``, ``WARNING``, ``INFO``,
+    ``VERBOSE``, ``SELECTED``, ``DEBUG``, ``DETAILED``.
+
+    Each level can be enabled via constructor keyword, environment
+    variable (``DBX_LOG_<LEVEL>``), or built-in default.
+
+    Parameters
+    ----------
+    name : str, optional
+        Prefix printed before every message.
+    warning, info, verbose, debug, selected, detailed : bool, optional
+        Override the default enable/disable for each level.
+    selection : str or list[str], optional
+        Fully-qualified function names that ``selected()`` should emit
+        for.  Comma-separated string or list.  Falls back to
+        ``DBX_LOG_SELECTION``.
+    datetime : bool
+        Include ISO-8601 timestamp in output (default ``True``).
+    stack_depth : int
+        Caller-frame offset for function-name tagging (default ``2``).
+    """
 
     def __init__(
         self,
@@ -217,6 +238,13 @@ class Logger:
 
 
 class Tee:
+    """Write to multiple file-like objects simultaneously.
+
+    Every :meth:`write` and :meth:`flush` is forwarded to all wrapped
+    streams.  Attribute access for anything else is proxied to the
+    first stream.
+    """
+
     def __init__(self, *files):
         self.files = files
 
@@ -235,11 +263,16 @@ class Tee:
 
 
 def ensure_path(path):
+    """Create *path* and all parent directories (``fsspec``-aware)."""
     fs, _ = fsspec.url_to_fs(path)
     fs.makedirs(path, exist_ok=True)
 
 
 def UNSAFE_allowed(what: str, *, OVERRIDE: bool = False):
+    """Prompt the user for confirmation before an unsafe operation.
+
+    Returns ``True`` if the user confirms or *OVERRIDE* is ``True``.
+    """
     if not OVERRIDE:
         response = input(f"ARE YOU SURE YOU WANT TO EXECUTE UNSAFE CODE: {what}? [y/N]")
         if response.lower() != 'y':
@@ -270,6 +303,13 @@ def get_named_const_and_cxt(name):
 
 
 def eval(name):
+    """Evaluate a dbx term expression.
+
+    Strings prefixed with ``@``, ``$``, or ``#`` are resolved as
+    Python expressions in a context that includes imported modules.
+    Iterables are evaluated element-wise.  Plain strings and other
+    objects are returned as-is.
+    """
     def get_named_args_kwargs(argkwargstr):
         args = []
         kwargs = {}
@@ -318,6 +358,11 @@ def eval(name):
 
 
 def exec(s=None, **kwargs):
+    """Parse and execute a dbx expression from *s* or ``sys.argv``.
+
+    When *s* is ``None``, the expression and keyword arguments are
+    read from the command line (``sys.argv[1:]``).
+    """
     if s is None:
         if len(sys.argv) < 2:
             raise ValueError(f"Too few args: {sys.argv}")
@@ -340,6 +385,7 @@ def exec(s=None, **kwargs):
 
 
 def pprint(argstr=None, **kwargs):
+    """Execute a dbx expression and pretty-print the result."""
     _pprint_.pprint(exec(argstr, **kwargs))
 
 
@@ -433,12 +479,14 @@ def read_npz(path, *keys, log=Logger(), debug: bool = False):
     
 
 def write_pickle(obj, path):
+    """Pickle *obj* to *path* (any ``fsspec`` URL)."""
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, 'wb') as f:
         pickle.dump(obj, f)
 
 
 def read_pickle(path):
+    """Unpickle and return the object stored at *path*."""
     fs, _ = fsspec.url_to_fs(path)
     with fs.open(path, 'rb') as f:
         return pickle.load(f)
@@ -766,6 +814,18 @@ class _CallableExecutorBase_:
 
 
 class MultithreadingCallableExecutor(_CallableExecutorBase_):
+    """Execute callables concurrently using threads.
+
+    Parameters
+    ----------
+    n_workers : int
+        Number of threads.
+    batch_size : int, optional
+        Accumulate this many results before IPC transfer.
+    tag : str
+        Label for the progress bar.
+    """
+
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
@@ -803,6 +863,21 @@ def _mp_worker_fn(target, args):
 
 
 class MultiprocessingCallableExecutor(_CallableExecutorBase_):
+    """Execute callables concurrently using separate processes.
+
+    Uses ``torch.multiprocessing`` for CUDA-safe forking.  Main-process
+    references are released after workers start to allow memory reclamation.
+
+    Parameters
+    ----------
+    n_workers : int
+        Number of worker processes.
+    batch_size : int, optional
+        Accumulate this many results before IPC transfer.
+    tag : str
+        Label for the progress bar.
+    """
+
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
@@ -840,6 +915,24 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
 
 
 class RayCallableExecutor:
+    """Execute callables on pre-created Ray actor workers.
+
+    Requires the ``ray`` optional dependency (``pip install datablocks[ray]``).
+
+    Parameters
+    ----------
+    n_workers : int
+        Number of Ray actors (ignored when *workers* is provided).
+    workers : list, optional
+        Pre-created Ray actor handles.
+    worker_factory : callable, optional
+        Factory returning a new Ray actor.  Called *n_workers* times.
+    batch_size : int, optional
+        When set, workers process items in batches of this size.
+    tag : str
+        Label for the progress bar.
+    """
+
     def __init__(self, *, n_workers: int = 1, workers=None, worker_factory=None,
                  batch_size: int = None, tag: str = "", log: Logger = Logger()):
         if workers is not None:
@@ -1041,7 +1134,10 @@ class RayCallableExecutor:
 
 
 class InlineCallableExecutor:
-    """Executes callables sequentially in the local process."""
+    """Execute callables sequentially in the local process.
+
+    Useful as a no-parallelism baseline and for debugging.
+    """
     def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size

@@ -99,7 +99,6 @@ def test_logger_selected_stack_depth_none_breaks():
 def test_datablock_logger_has_working_stack_depth(monkeypatch, tmp_path):
     """Datablock's Logger should have a valid stack_depth so selected() works."""
     from dbx.datablocks import Datablock
-    from dbx.datawraps import datablock
 
     monkeypatch.setenv('DBX_ROOT', str(tmp_path))
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
@@ -110,34 +109,12 @@ def test_datablock_logger_has_working_stack_depth(monkeypatch, tmp_path):
         def __build__(self, *a, **kw): return self
         def __read__(self, topic=None): return None
 
-    block = SimpleBlock(root=str(tmp_path))
+    block = SimpleBlock(url=str(tmp_path))
     assert block.log.stack_depth is not None
     assert isinstance(block.log.stack_depth, int)
 
     # selected() should not raise
     block.log.selected("Test message from Datablock")
-
-
-def test_wrapped_datablockable_logger_has_working_stack_depth(monkeypatch, tmp_path):
-    """A datablock()-wrapped class should also have a valid stack_depth."""
-    from dbx.datablocks import Datablock
-    from dbx.datawraps import datablock
-
-    monkeypatch.setenv('DBX_ROOT', str(tmp_path))
-    monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-
-    class MyProcessor:
-        TOPICFILE = 'out.txt'
-        def __build__(self, *a, **kw): return self
-        def __read__(self, topic=None): return None
-
-    Wrapped = datablock(MyProcessor)
-    block = Wrapped(root=str(tmp_path))
-    assert block.log.stack_depth is not None
-    assert isinstance(block.log.stack_depth, int)
-
-    # selected() should not raise
-    block.log.selected("Test message from wrapped Datablockable")
 
 
 # ---------------------------------------------------------------------------

@@ -1,3 +1,8 @@
+"""remote_executor_speedup.py — Ray executor parallel speedup demo.
+
+Demonstrates RayCallableExecutor with 1 vs 5 workers on I/O-bound
+tasks to show near-linear speedup.  Requires ``pip install datablocks[ray]``.
+"""
 
 import ray
 import time

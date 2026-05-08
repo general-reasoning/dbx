@@ -11,7 +11,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         class MyBlock(Datablock):
             pass
         
-        block = MyBlock(root="/tmp/dbx_test")
+        block = MyBlock(url="/tmp/dbx_test")
         # Default keyby='hash', so key == hash
         self.assertTrue(hasattr(block, 'anchorkey'))
         self.assertTrue(hasattr(block, 'anchorkeypath'))

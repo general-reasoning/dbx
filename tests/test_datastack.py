@@ -67,7 +67,7 @@ class SimpleStack(Datastack):
 
     def __shard__(self, idx):
         return CounterShard(
-            root=self.root,
+            url=self.url,
             spec=dict(idx=idx),
         )
 
@@ -91,7 +91,7 @@ class TestDatastackAbstract(unittest.TestCase):
             TOPICFILE = "bad.txt"
 
         with tempfile.TemporaryDirectory() as tmp:
-            stack = BadStack(root=tmp)
+            stack = BadStack(url=tmp)
             with self.assertRaises(NotImplementedError):
                 stack.shards()
 
@@ -100,7 +100,7 @@ class TestDatastackAbstract(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
-                SimpleStack(root=tmp, parallelization='quantum')
+                SimpleStack(url=tmp, parallelization='quantum')
 
 
 class TestDatastackIsDatablock(unittest.TestCase):
@@ -112,15 +112,15 @@ class TestDatastackIsDatablock(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_isinstance(self):
-        stack = SimpleStack(root=self.tmpdir)
+        stack = SimpleStack(url=self.tmpdir)
         self.assertIsInstance(stack, Datablock)
 
     def test_has_hash(self):
-        stack = SimpleStack(root=self.tmpdir, spec=dict(total_items=10, shard_size=3))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, shard_size=3))
         self.assertIsNotNone(stack.hash)
 
     def test_has_cfg(self):
-        stack = SimpleStack(root=self.tmpdir, spec=dict(total_items=6, shard_size=2))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, shard_size=2))
         self.assertEqual(stack.cfg.total_items, 6)
         self.assertEqual(stack.cfg.shard_size, 2)
 
@@ -133,23 +133,23 @@ class TestDatastackShards(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_shard_count(self):
-        stack = SimpleStack(root=self.tmpdir, spec=dict(total_items=10, shard_size=3))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, shard_size=3))
         shards = stack.shards()
         self.assertEqual(len(shards), 4)  # ceil(10/3) = 4
 
     def test_shard_count_exact(self):
-        stack = SimpleStack(root=self.tmpdir, spec=dict(total_items=9, shard_size=3))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=9, shard_size=3))
         shards = stack.shards()
         self.assertEqual(len(shards), 3)  # 9/3 = 3
 
     def test_shards_are_datablocks(self):
-        stack = SimpleStack(root=self.tmpdir, spec=dict(total_items=4, shard_size=2))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=4, shard_size=2))
         for shard in stack.shards():
             self.assertIsInstance(shard, Datablock)
             self.assertIsInstance(shard, CounterShard)
 
     def test_shard_configs(self):
-        stack = SimpleStack(root=self.tmpdir, spec=dict(total_items=6, shard_size=3))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, shard_size=3))
         shards = stack.shards()
         indices = [s.cfg.idx for s in shards]
         self.assertEqual(indices, [0, 1])
@@ -166,7 +166,7 @@ class TestDatastackBuild(unittest.TestCase):
     def test_inline_build(self):
         """Default (inline) build should build all shards."""
         stack = SimpleStack(
-            root=self.tmpdir,
+            url=self.tmpdir,
             spec=dict(total_items=6, shard_size=2),
         )
         stack.build()
@@ -180,7 +180,7 @@ class TestDatastackBuild(unittest.TestCase):
     def test_multithreading_build(self):
         """Multithreading build should build all shards."""
         stack = SimpleStack(
-            root=self.tmpdir,
+            url=self.tmpdir,
             spec=dict(total_items=6, shard_size=2),
             parallelization='multithreading',
             n_workers=2,
@@ -195,7 +195,7 @@ class TestDatastackBuild(unittest.TestCase):
     def test_multiprocessing_build(self):
         """Multiprocessing build should build all shards (no cross-process state)."""
         stack = SimpleStack(
-            root=self.tmpdir,
+            url=self.tmpdir,
             spec=dict(total_items=4, shard_size=2),
             parallelization='multiprocessing',
             n_workers=2,
@@ -209,7 +209,7 @@ class TestDatastackBuild(unittest.TestCase):
     def test_build_returns_self(self):
         """build() should return the stack itself."""
         stack = SimpleStack(
-            root=self.tmpdir,
+            url=self.tmpdir,
             spec=dict(total_items=3, shard_size=3),
         )
         result = stack.build()
@@ -224,37 +224,37 @@ class TestDatastackParallelization(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_default_is_inline(self):
-        stack = SimpleStack(root=self.tmpdir)
+        stack = SimpleStack(url=self.tmpdir)
         from dbx.dataparts import InlineCallableExecutor
         self.assertIs(stack.executor_cls, InlineCallableExecutor)
 
     def test_explicit_inline(self):
-        stack = SimpleStack(root=self.tmpdir, parallelization='inline')
+        stack = SimpleStack(url=self.tmpdir, parallelization='inline')
         from dbx.dataparts import InlineCallableExecutor
         self.assertIs(stack.executor_cls, InlineCallableExecutor)
 
     def test_multithreading(self):
-        stack = SimpleStack(root=self.tmpdir, parallelization='multithreading')
+        stack = SimpleStack(url=self.tmpdir, parallelization='multithreading')
         from dbx.dataparts import MultithreadingCallableExecutor
         self.assertIs(stack.executor_cls, MultithreadingCallableExecutor)
 
     def test_multiprocessing(self):
-        stack = SimpleStack(root=self.tmpdir, parallelization='multiprocessing')
+        stack = SimpleStack(url=self.tmpdir, parallelization='multiprocessing')
         from dbx.dataparts import MultiprocessingCallableExecutor
         self.assertIs(stack.executor_cls, MultiprocessingCallableExecutor)
 
     def test_ray(self):
-        stack = SimpleStack(root=self.tmpdir, parallelization='ray')
+        stack = SimpleStack(url=self.tmpdir, parallelization='ray')
         from dbx.dataparts import RayCallableExecutor
         self.assertIs(stack.executor_cls, RayCallableExecutor)
 
     def test_case_insensitive(self):
-        stack = SimpleStack(root=self.tmpdir, parallelization='Multithreading')
+        stack = SimpleStack(url=self.tmpdir, parallelization='Multithreading')
         from dbx.dataparts import MultithreadingCallableExecutor
         self.assertIs(stack.executor_cls, MultithreadingCallableExecutor)
 
     def test_n_workers_stored(self):
-        stack = SimpleStack(root=self.tmpdir, n_workers=8)
+        stack = SimpleStack(url=self.tmpdir, n_workers=8)
         self.assertEqual(stack.n_workers, 8)
 
 
@@ -268,7 +268,7 @@ class TestDatastackClearShards(unittest.TestCase):
 
     def _build_stack(self, **kwargs):
         stack = SimpleStack(
-            root=self.tmpdir,
+            url=self.tmpdir,
             spec=dict(total_items=6, shard_size=2),
             **kwargs,
         )
@@ -376,7 +376,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return math.ceil(self.cfg.total_items / self.cfg.shard_size)
 
             def __shard__(self, idx):
-                return CounterShard(root=self.root, spec=dict(idx=idx))
+                return CounterShard(url=self.url, spec=dict(idx=idx))
 
             def shards(self):
                 return [self.__shard__(i) for i in range(self.n_shards)]
@@ -386,7 +386,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return self
 
         TrackedStack.pre_stack_called = False
-        stack = TrackedStack(root=self.tmpdir, spec=dict(total_items=3, shard_size=3))
+        stack = TrackedStack(url=self.tmpdir, spec=dict(total_items=3, shard_size=3))
         stack.build()
         self.assertTrue(TrackedStack.pre_stack_called)
 
@@ -424,7 +424,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return self.cfg.n
 
             def __shard__(self, idx):
-                return OrderedShard(root=self.root, spec=dict(idx=idx))
+                return OrderedShard(url=self.url, spec=dict(idx=idx))
 
             def shards(self):
                 return [self.__shard__(i) for i in range(self.n_shards)]
@@ -438,7 +438,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return self
 
         call_order.clear()
-        stack = OrderedStack(root=self.tmpdir, spec=dict(n=2))
+        stack = OrderedStack(url=self.tmpdir, spec=dict(n=2))
         stack.build()
         # pre_stack must come first, then shards, then stack
         self.assertEqual(call_order[0], "pre_stack")
@@ -451,7 +451,7 @@ class TestDatastackPreStack(unittest.TestCase):
 
     def test_default_pre_stack_returns_self(self):
         """Default __split__() should return self."""
-        stack = SimpleStack(root=self.tmpdir)
+        stack = SimpleStack(url=self.tmpdir)
         result = stack.__split__()
         self.assertIs(result, stack)
 

@@ -1,3 +1,20 @@
+"""Core framework classes: Datablock, Datastack, journaling, and remote execution.
+
+This module defines the central abstractions of dbx:
+
+- :class:`Datablock` — a content-addressed, journaled unit of computation.
+  Each block is uniquely identified by a SHA-256 hash derived from its
+  fully-qualified class name, configuration (``spec``), and version.
+  Builds are journaled as Parquet entries for full reproducibility.
+
+- :class:`Datastack` — a Datablock that orchestrates the parallel
+  construction of child Datablocks (shards).
+
+- :class:`Remote` / :func:`remote` — Ray-based remote execution of
+  dbx pipelines.
+
+- :class:`SlurmRayCluster` — Slurm integration for launching Ray clusters.
+"""
 import atexit
 import collections
 from collections.abc import Iterable, Sequence
@@ -17,7 +34,6 @@ from pathlib import Path
 import pickle
 import pprint as _pprint_
 import queue
-import ray
 import re
 import signal
 import socket
@@ -184,7 +200,24 @@ class LogVolume:
     detailed: bool = None
 
 
-def journal(cls_or_df, entry=None, root=None, **kwargs):
+def journal(cls_or_df, entry=None, url=None, **kwargs):
+    """Retrieve or wrap a Datablock journal.
+
+    Parameters
+    ----------
+    cls_or_df : type | str | pd.DataFrame
+        A Datablock class, an anchor string, or a raw DataFrame.
+    entry : int, optional
+        If given, return a single :class:`JournalEntry` at this index.
+    url : str, optional
+        Storage URL.  Defaults to ``DBX_ROOT``.
+    **kwargs
+        Forwarded to :class:`JournalFrame` for filtering.
+
+    Returns
+    -------
+    JournalFrame or JournalEntry
+    """
     if isinstance(cls_or_df, pd.DataFrame):
         return JournalFrame(cls_or_df, **kwargs)
     else:
@@ -192,11 +225,17 @@ def journal(cls_or_df, entry=None, root=None, **kwargs):
             anchor = cls_or_df
         else:
             anchor = cls_or_df.__module__ + "." + cls_or_df.__name__
-        return Datablock.Journal(anchor, entry=entry, root=root, **kwargs)
+        return Datablock.Journal(anchor, entry=entry, url=url, **kwargs)
 
 
 
 class JournalEntry(pd.Series):
+    """A single row from a Datablock journal, with convenience accessors.
+
+    Inherits from :class:`pandas.Series` so all standard pandas
+    operations work.  Named properties expose journal-specific fields
+    (``anchor``, ``hash``, ``url``, ``revision``, …).
+    """
     def __init__(self, series: pd.Series, *, logger: Logger = Logger(name="JournalEntry")):
         super().__init__(series)
         self.logger = logger
@@ -217,8 +256,8 @@ class JournalEntry(pd.Series):
         return self.hash[:8]
 
     @property
-    def root(self):
-        return self.get('root')
+    def url(self):
+        return self.get('url')
 
     @property
     def revision(self):
@@ -324,10 +363,7 @@ class JournalEntry(pd.Series):
             else:
                 r = __eval__(thingstr, globals(), context)
         except Exception as exc:
-            if debug:
-                breakpoint()
-            else:
-                raise exc
+            raise exc
         return r
     
     def instantiate(self, gitrepo=None, revision=None):
@@ -491,13 +527,16 @@ class Datablock:
     ROOT = 'protocol://path/to/root'
     TOPICFILES = {'topic', 'file.csv'} | TOPICFILE = 'file.csv'
     # protocol://path --- module/class/ --- topic [--- file]
-    #        root           [anchor]        [topic]   [file]
-    # root:               'protocol://path/to/root'
-    # anchorpath:         '{root}/{anchor}'
-    # anchorkeypath:      '{anchorpath}/{key}'
-    # dirpath:            '{anchorkeypath}/topic'|{anchorkeypath}' if topic is not None|else
-    # path:               '{dirpath}/{TOPICFILE}'|'{dirpath}' if TOPICFILE is not None|else
-    
+    #        url            [anchor]        [topic]   [file]
+    # url:                'protocol://path/to/root'
+    # anchorpath:         '{root}/{anchor}'          (root = fsspec-relative path)
+    # anchorkeypath:      '{root}/{anchor}/{key}'
+    # dirpath:            '{root}/{anchor}/{key}/topic'
+    # path:               '{root}/{anchor}/{key}/topic/{TOPICFILE}'
+    #
+    # self.url  = original URL string
+    # self.fs   = fsspec filesystem object
+    # self.root = protocol-free path (via fsspec.url_to_fs)
     """
     VERBOSE_CONFIG = False
 
@@ -561,7 +600,7 @@ class Datablock:
     def __init__(
         self,
         *,
-        root: str = None,
+        url: str = None,
         spec: Optional[Union[str, dict]] = None,
         anchor: str = None,
         hash: str|None = None,
@@ -590,7 +629,7 @@ class Datablock:
         self._uuid = uuid.uuid4().hex[:16] if uuid16 else str(uuid.uuid4())  # unique per live instance, not preserved across serialization
         self.log.detailed(f"__init__: ------------------------------------------------> {tag=}")
         state = {
-            'root': root,
+            'url': url,
             'spec': spec,
             'anchor': anchor,
             'hash': hash,
@@ -639,13 +678,14 @@ class Datablock:
                     state[k] = v
 
         # Explicit parameters
-        self._root_ = state.get('root')
-        # Resolve specline roots (e.g. "$dbx.getenv('KEY')") to real paths.
-        self.root = eval(self._root_) if self._root_ is not None else None
-        if self.root is None:
-            self.root = os.environ.get('DBX_ROOT')
-        if self.root is None:
-            raise ValueError(f"None root for {self.__class__.__name__}: maybe set DBX_ROOT?")
+        self._url_ = state.get('url')
+        # Resolve specline URLs (e.g. "$dbx.getenv('KEY')") to real paths.
+        self.url = eval(self._url_) if self._url_ is not None else None
+        if self.url is None:
+            self.url = os.environ.get('DBX_ROOT')
+        if self.url is None:
+            raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT")
+        self.fs, self.root = fsspec.url_to_fs(self.url)
         self._spec_ = state.get('spec')
         if self._spec_ is None:
             self.spec = asdict(self.CONFIG())
@@ -1258,8 +1298,8 @@ class Datablock:
     @functools.cached_property
     def _rootkwargs_(self):
         rootkwargs = {}
-        if self._root_ is not None:
-            rootkwargs['root'] = self._root_
+        if self._url_ is not None:
+            rootkwargs['url'] = self._url_
         if self._anchor_ is not None:
             rootkwargs['anchor'] = self._anchor_
         if self._hash_ is not None:
@@ -1272,7 +1312,7 @@ class Datablock:
         tailkwargs = {
             k: v
             for k, v in state.items()
-            if k not in ['root', 'anchor', 'hash', 'spec']          
+            if k not in ['url', 'anchor', 'hash', 'spec']          
         }
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
@@ -1579,19 +1619,19 @@ class Datablock:
         ) if self.anchorkey else self.root
     
     @staticmethod
-    def _dbxanchorpathx(root, anchor, x, *, fqcn=None, ensure: bool = False):
-        """Return /root/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
+    def _dbxanchorpathx(url, anchor, x, *, fqcn=None, ensure: bool = False):
+        """Return {url}/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
+        fs, root = fsspec.url_to_fs(url)
         if fqcn is not None and anchor != fqcn:
-            _dbxanchorpathx = os.path.join(root, anchor, ".dbx", fqcn, x)
+            _dbxanchorpathx = fs.unstrip_protocol(os.path.join(root, anchor, ".dbx", fqcn, x))
         else:
-            _dbxanchorpathx = os.path.join(root, anchor, ".dbx", x)
+            _dbxanchorpathx = fs.unstrip_protocol(os.path.join(root, anchor, ".dbx", x))
         if ensure:
-            fs, _ = fsspec.url_to_fs(_dbxanchorpathx)
             fs.makedirs(_dbxanchorpathx, exist_ok=True)
         return _dbxanchorpathx
 
     def _dbxanchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
-        _dbxanchorpathx = Datablock._dbxanchorpathx(self.root, self.anchor, x, fqcn=self.fqcn)
+        _dbxanchorpathx = Datablock._dbxanchorpathx(self.url, self.anchor, x, fqcn=self.fqcn)
         _dbxanchorhashpathx = os.path.join(_dbxanchorpathx, self.hash)
         if ensure_dirpath:
             fs, _ = fsspec.url_to_fs(_dbxanchorhashpathx)
@@ -1702,7 +1742,7 @@ class Datablock:
                                          'version': self.version,
                                          'dbx_version': self.dbx_version,
                                          'revision': self.revision, 
-                                         'root': self.root,
+                                         'url': self.url,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
                                          'keyby': self.keyby,
@@ -1728,18 +1768,18 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, entry: int = None, *, fqcn: str = None, root=None, **kwargs):
-        if root is None:
-            root = os.environ.get('DBX_ROOT')
+    def Journal(anchor, entry: int = None, *, fqcn: str = None, url=None, **kwargs):
+        if url is None:
+            url = os.environ.get('DBX_ROOT')
 
-        journaldirpath = Datablock._dbxanchorpathx(root, anchor, 'journal', fqcn=fqcn)
+        journaldirpath = Datablock._dbxanchorpathx(url, anchor, 'journal', fqcn=fqcn)
         fs, _ = fsspec.url_to_fs(journaldirpath)
 
         log = Logger()
         if not fs.exists(journaldirpath):
             raise FileNotFoundError(
                 f"Journal directory not found for {anchor!r}: {journaldirpath}\n"
-                f"Check that the class name / anchor and root path are correct."
+                f"Check that the class name / anchor and url are correct."
             )
 
         files = fs.glob(os.path.join(journaldirpath, '**/*.parquet'))
@@ -1781,7 +1821,7 @@ class Datablock:
         return result
 
     def journal(self, entry: int = None, **kwargs):
-        return self.Journal(self.anchor, entry, root=self.root, fqcn=self.fqcn, **kwargs)
+        return self.Journal(self.anchor, entry, url=self.url, fqcn=self.fqcn, **kwargs)
     #JOURNAL: END
     
 
@@ -1821,7 +1861,7 @@ class Datastack(Datablock):
             def shards(self):
                 n = self._total_items()
                 return [
-                    MyShard(root=self.root, spec=dict(path=self.cfg.path, idx=i))
+                    MyShard(url=self.url, spec=dict(path=self.cfg.path, idx=i))
                     for i in range(math.ceil(n / self.cfg.shard_size))
                 ]
 
@@ -2369,6 +2409,7 @@ class Remote:
             # Expanded call site with nested class as requested.
             # If actor creation fails (e.g. due to pickling issues), we fall back to returning by value.
             try:
+                import ray
                 return ray.remote(Remote.RemoteObject).remote(val)
             except Exception:
                 return val
@@ -2443,6 +2484,7 @@ class Remote:
         self._handle = handle
         self._slurm = slurm
         if handle is None:
+            import ray
             self._handle = ray.remote(Remote.RemoteDBX).remote(revision=revision)
 
     def __del__(self):
@@ -2462,10 +2504,12 @@ class Remote:
         if name.startswith('_') and not name.startswith('__'):
             raise AttributeError(name)
 
+        import ray
         is_callable, value = ray.get(self._handle.info.remote(name))
         
         if is_callable:
             def wrapper(*args, **kwargs):
+                import ray
                 res = ray.get(self._handle.call.remote(name, *args, **kwargs))
                 return self._unwrap_or_proxy(res)
             return wrapper
@@ -2476,9 +2520,11 @@ class Remote:
         """
         Return the state of the remote object.
         """
+        import ray
         return ray.get(self._handle.call.remote('__getstate__'))
 
     def _unwrap_or_proxy(self, val):
+        import ray
         if isinstance(val, ray.actor.ActorHandle):
             return Remote(val) # Recursive wrapping
         return val
@@ -2487,6 +2533,7 @@ class Remote:
         """
         Execute a callable on the remote actor.
         """
+        import ray
         res = ray.get(self._handle.apply.remote(func, *args, **kwargs))
         return self._unwrap_or_proxy(res)
 
@@ -2494,6 +2541,7 @@ class Remote:
         """
         Execute a sequence of (func, args, kwargs) on the remote actor in one round-trip.
         """
+        import ray
         results = ray.get(self._handle.apply_batch.remote(funcs_args_kwargs))
         return [self._unwrap_or_proxy(res) for res in results]
 
@@ -2502,6 +2550,7 @@ def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
     """
     Instantiate a remote dbx interpreter and return a Remote handle to it.
     """
+    import ray
     dbx_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
     
     if DBX_USE_WORK_REPO is not None:
@@ -2680,7 +2729,7 @@ def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, n_workers: int =
 # @tagged pipeline decorator
 # ---------------------------------------------------------------------------
 
-_TAGGED_SKIP_DEFAULTS = frozenset({'tag', 'root'})
+_TAGGED_SKIP_DEFAULTS = frozenset({'tag', 'url'})
 
 
 def _make_tag(func: callable, sig: inspect.Signature, arguments: dict,
@@ -2734,7 +2783,7 @@ def tagged(func=None, *, skip: frozenset = _TAGGED_SKIP_DEFAULTS):
     Usage::
 
         @tagged
-        def my_pipeline(name, *, tag=None, root=None, n_workers=1):
+        def my_pipeline(name, *, tag=None, url=None, n_workers=1):
             clip = MyClip(...)
             clip.tag = tag   # propagate down to the datablock
             return clip
@@ -2743,7 +2792,7 @@ def tagged(func=None, *, skip: frozenset = _TAGGED_SKIP_DEFAULTS):
     ----------
     skip : frozenset
         Parameter names to exclude from the generated tag string.  Defaults to
-        ``{'tag', 'root'}`` — operational overrides that are not part of a
+        ``{'tag', 'url'}`` — operational overrides that are not part of a
         pipeline's logical identity.
     """
     if func is None:

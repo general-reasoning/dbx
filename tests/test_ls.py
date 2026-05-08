@@ -117,7 +117,7 @@ class NoTopicBlock(Datablock):
 # ---------------------------------------------------------------------------
 
 def _make(cls, tmp_path, **kwargs):
-    return cls(root=str(tmp_path), **kwargs)
+    return cls(url=str(tmp_path), **kwargs)
 
 
 # ---------------------------------------------------------------------------

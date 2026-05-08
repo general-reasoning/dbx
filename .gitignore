@@ -2,3 +2,14 @@ __pycache__
 *.egg-info
 .agent/
 *.log
+
+# Build artifacts
+dist/
+build/
+*.whl
+*.tar.gz
+.eggs/
+
+# IDE
+.vscode/
+.idea/

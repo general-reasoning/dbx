@@ -28,16 +28,18 @@ def _journal_dir(root, cls) -> str:
 
 def _write_fake_journal_entry(journal_dir: str, hash_val: str = "abc123", event: str = "build"):
     """Write a minimal parquet journal entry into journal_dir."""
-    os.makedirs(journal_dir, exist_ok=True)
+    import fsspec
+    fs, jdir = fsspec.url_to_fs(journal_dir)
+    fs.makedirs(jdir, exist_ok=True)
     now = datetime.datetime.now()
     df = pd.DataFrame([{
         'hash':     hash_val,
         'datetime': now,
         'event':    event,
         'anchor':   'test.FakeBlock',
-        'root':     '/tmp/dbx_test',
+        'url':      '/tmp/dbx_test',
     }])
-    path = os.path.join(journal_dir, f"{event}.parquet")
+    path = os.path.join(jdir, f"{event}.parquet")
     df.to_parquet(path)
     return path
 
@@ -61,7 +63,7 @@ class TestJournalMissingDir:
         # Do NOT create the directory
 
         with pytest.raises(FileNotFoundError, match="Journal directory not found"):
-            journal(FakeBlock, root=root)
+            journal(FakeBlock, url=root)
 
     def test_error_message_contains_class_name(self, tmp_path, monkeypatch):
         """The FileNotFoundError message should mention the class anchor."""
@@ -69,7 +71,7 @@ class TestJournalMissingDir:
         root = str(tmp_path / "nonexistent_root")
 
         with pytest.raises(FileNotFoundError) as exc_info:
-            journal(FakeBlock, root=root)
+            journal(FakeBlock, url=root)
 
         assert "FakeBlock" in str(exc_info.value)
 
@@ -80,7 +82,7 @@ class TestJournalMissingDir:
         expected_dir = _journal_dir(root, FakeBlock)
 
         with pytest.raises(FileNotFoundError) as exc_info:
-            journal(FakeBlock, root=root)
+            journal(FakeBlock, url=root)
 
         assert expected_dir in str(exc_info.value)
 
@@ -97,9 +99,11 @@ class TestJournalEmptyDir:
         root = str(tmp_path)
         # Create the journal directory with no parquet files
         journal_dir = _journal_dir(root, FakeBlock)
-        os.makedirs(journal_dir, exist_ok=True)
+        import fsspec
+        fs, jdir = fsspec.url_to_fs(journal_dir)
+        fs.makedirs(jdir, exist_ok=True)
 
-        result = journal(FakeBlock, root=root)
+        result = journal(FakeBlock, url=root)
         assert isinstance(result, JournalFrame)
 
 
@@ -110,23 +114,23 @@ class TestJournalEmptyDir:
 class TestJournalEntryParam:
 
     def test_entry_returns_journal_entry(self, tmp_path, monkeypatch):
-        """journal(cls, entry=0, root=...) should return the 0th JournalEntry."""
+        """journal(cls, entry=0, url=...) should return the 0th JournalEntry."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="deadbeef", event="build")
 
-        result = journal(FakeBlock, entry=0, root=root)
+        result = journal(FakeBlock, entry=0, url=root)
         assert isinstance(result, JournalEntry)
 
     def test_entry_none_returns_journalframe(self, tmp_path, monkeypatch):
-        """journal(cls, root=...) with no entry should return the full JournalFrame."""
+        """journal(cls, url=...) with no entry should return the full JournalFrame."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="cafebabe", event="build")
 
-        result = journal(FakeBlock, root=root)
+        result = journal(FakeBlock, url=root)
         assert isinstance(result, JournalFrame)
         assert len(result) == 1
 
@@ -137,7 +141,7 @@ class TestJournalEntryParam:
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="myhash42", event="build")
 
-        entry = journal(FakeBlock, entry=0, root=root)
+        entry = journal(FakeBlock, entry=0, url=root)
         assert entry.get('hash') == "myhash42"
 
 
@@ -159,7 +163,7 @@ class TestJournalRootPassedCorrectly:
         # TypeError about entry being a string, which is what the old bug caused).
         bad_root = str(tmp_path / "missing")
         with pytest.raises(FileNotFoundError):
-            journal(FakeBlock, root=bad_root)
+            journal(FakeBlock, url=bad_root)
 
 
 # A second Datablock subclass for classname-filtering tests
@@ -171,7 +175,9 @@ class OtherBlock(Datablock):
 def _write_journal_in_hash_dir(journal_dir, classname, hash_val="abc", event="build"):
     """Write a parquet entry inside a hash subdirectory, mirroring _dbxanchorhashpathx layout."""
     hash_dir = os.path.join(journal_dir, hash_val)
-    os.makedirs(hash_dir, exist_ok=True)
+    import fsspec
+    fs, hdir = fsspec.url_to_fs(hash_dir)
+    fs.makedirs(hdir, exist_ok=True)
     now = datetime.datetime.now()
     dt = now.isoformat().replace(' ', '-').replace(':', '-')
     filename = f"{classname}-journal-{hash_val}-{dt}"
@@ -180,9 +186,10 @@ def _write_journal_in_hash_dir(journal_dir, classname, hash_val="abc", event="bu
         'datetime': now,
         'event': event,
         'anchor': classname,
-        'root': '/tmp/dbx_test',
+        'url': '/tmp/dbx_test',
     }])
-    path = os.path.join(hash_dir, f"{filename}.parquet")
+    _, hdir = fsspec.url_to_fs(hash_dir)
+    path = os.path.join(hdir, f"{filename}.parquet")
     df.to_parquet(path)
     return path
 
@@ -203,7 +210,7 @@ class TestJournalFqcnFiltering:
         _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="aaa")
         _write_journal_in_hash_dir(jdir, other_anchor, hash_val="bbb")
 
-        result = journal(FakeBlock, root=root)
+        result = journal(FakeBlock, url=root)
         assert isinstance(result, JournalFrame)
         assert len(result) == 2
 
@@ -218,7 +225,7 @@ class TestJournalFqcnFiltering:
         _write_journal_in_hash_dir(jdir, other_anchor, hash_val="bbb")
 
         result = Datablock.Journal(
-            fake_anchor, root=root, fqcn=fake_anchor,
+            fake_anchor, url=root, fqcn=fake_anchor,
         )
         assert isinstance(result, JournalFrame)
         assert len(result) == 1
@@ -235,7 +242,7 @@ class TestJournalFqcnFiltering:
 
         with pytest.raises(FileNotFoundError):
             Datablock.Journal(
-                fake_anchor, root=root, fqcn="nonexistent.Class",
+                fake_anchor, url=root, fqcn="nonexistent.Class",
             )
 
     def test_fqcn_none_is_default(self, tmp_path, monkeypatch):
@@ -246,7 +253,7 @@ class TestJournalFqcnFiltering:
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
         _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="xyz")
 
-        result = Datablock.Journal(fake_anchor, root=root, fqcn=None)
+        result = Datablock.Journal(fake_anchor, url=root, fqcn=None)
         assert len(result) == 1
 
 
@@ -270,7 +277,7 @@ class TestJournalAnchorForms:
         """journal() finds entries when using the default anchor (fqcn)."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
-        block = BuildableBlock(root=root)
+        block = BuildableBlock(url=root)
         block.build()
         result = block.journal()
         assert isinstance(result, JournalFrame)
@@ -280,7 +287,7 @@ class TestJournalAnchorForms:
         """journal() finds entries when using a custom anchor."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
-        block = BuildableBlock(root=root, anchor='my.custom.anchor')
+        block = BuildableBlock(url=root, anchor='my.custom.anchor')
         block.build()
         result = block.journal()
         assert isinstance(result, JournalFrame)
@@ -290,10 +297,10 @@ class TestJournalAnchorForms:
         """Datablock.Journal(anchor) finds entries for default anchor."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
-        block = BuildableBlock(root=root)
+        block = BuildableBlock(url=root)
         block.build()
         anchor = block.anchor
-        result = Datablock.Journal(anchor, root=root)
+        result = Datablock.Journal(anchor, url=root)
         assert isinstance(result, JournalFrame)
         assert len(result) >= 1
 
@@ -301,10 +308,10 @@ class TestJournalAnchorForms:
         """Datablock.Journal(anchor, fqcn=) finds entries for custom anchor."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
-        block = BuildableBlock(root=root, anchor='custom.anchor')
+        block = BuildableBlock(url=root, anchor='custom.anchor')
         block.build()
         fqcn = BuildableBlock.__module__ + '.' + BuildableBlock.__name__
-        result = Datablock.Journal('custom.anchor', root=root, fqcn=fqcn)
+        result = Datablock.Journal('custom.anchor', url=root, fqcn=fqcn)
         assert isinstance(result, JournalFrame)
         assert len(result) >= 1
 
@@ -324,9 +331,9 @@ class TestJournalAnchorForms:
                 with open(self.path(), 'w') as f:
                     f.write(self.cfg.label)
 
-        b1 = CfgBlock(root=root, spec={'label': 'first'})
+        b1 = CfgBlock(url=root, spec={'label': 'first'})
         b1.build()
-        b2 = CfgBlock(root=root, spec={'label': 'second'})
+        b2 = CfgBlock(url=root, spec={'label': 'second'})
         b2.build()
         # Both share the same anchor, journal should find both
         result = b1.journal()

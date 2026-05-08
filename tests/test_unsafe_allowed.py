@@ -107,11 +107,10 @@ class TestUNSAFEClear:
     def test_clear_proceeds_when_user_confirms(self):
         """UNSAFE_clear() should attempt clearing when user types 'y'."""
         block = self._make_block()
+        mock_fs = MagicMock()
         with patch('builtins.input', return_value='y'), \
              patch.object(block, '_write_journal_entry'), \
-             patch('fsspec.url_to_fs') as mock_url_to_fs:
-            mock_fs = MagicMock()
-            mock_url_to_fs.return_value = (mock_fs, None)
+             patch.object(block, 'fs', mock_fs):
             result = block.UNSAFE_clear()
         assert result is block
         # The filesystem rm should have been reached

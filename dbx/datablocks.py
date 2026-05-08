@@ -1033,8 +1033,7 @@ class Datablock:
                     for blob in blobs:
                         blob.delete()
                 else:
-                    fs, _ = self._url_to_fs(path)
-                    fs.rm(path, recursive=recursive)
+                    self.fs.rm(path, recursive=recursive)
             except Exception as e:
                 self.log.warning(f"Error when trying to remove {path}")
                 self.log.warning(f"EXCEPTION: {e}")
@@ -2055,20 +2054,25 @@ class Datastack(Datablock):
         self._write_journal_entry(event="UNSAFE_clear_shards:begin")
 
         tag = f"CLEARING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]"
-        executor = callable_executor(
-            self.parallelization, n_workers=self.n_workers, tag=tag,
-        )
+        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
+        if (hasattr(self, 'multiprocessing_start_method')
+                and self.multiprocessing_start_method is not None
+                and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
+            executor_kwargs['start_method'] = self.multiprocessing_start_method
+        executor = callable_executor(self.parallelization, **executor_kwargs)
 
-        def _clear_shard(shard):
-            shard.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
-            return shard
-
-        callables = [functools.partial(_clear_shard, shard) for shard in shard_list]
+        callables = [functools.partial(_clear_shard_callable, shard, topics, clear_dirpath) for shard in shard_list]
         executor.exec_callables(callables)
 
         self.log.info(f"UNSAFE_clear_shards complete: {self.__class__.__name__}")
         self._write_journal_entry(event="UNSAFE_clear_shards:end")
         return self
+
+
+def _clear_shard_callable(shard, topics, clear_dirpath):
+    """Module-level callable for UNSAFE_clear_shards (must be picklable)."""
+    shard.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
+    return shard
 
 
 def quotefn(fn, *args, tag="$", **kwargs):

@@ -271,6 +271,20 @@ def ensure_path(path, *, storage_options=None):
     fs.makedirs(path, exist_ok=True)
 
 
+def fs_full_path(fs, path):
+    """Return *path* with the protocol prefix restored for remote filesystems.
+
+    For local (``file``) filesystems the bare path is returned unchanged
+    so that it remains compatible with Python's built-in ``open()``.
+    For remote filesystems (``abfs``, ``gcs``, ``memory``, …) the protocol
+    is re-attached via ``fs.unstrip_protocol()``.
+    """
+    protocol = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
+    if protocol in ('file', 'local', ''):
+        return path
+    return fs.unstrip_protocol(path)
+
+
 def UNSAFE_allowed(what: str, *, OVERRIDE: bool = False):
     """Prompt the user for confirmation before an unsafe operation.
 

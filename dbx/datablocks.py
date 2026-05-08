@@ -70,7 +70,7 @@ import pandas as pd
 __eval__ = __builtins__['eval']
 
 from .dataparts import *
-__version__ = "0.1.0"
+__version__ = "0.0.2"
 
 DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
 if DBX_GIT_REPO is None:
@@ -335,8 +335,23 @@ class JournalEntry(pd.Series):
         return os.path.join(self.anchor, key) if key else self.anchor
 
     @property
+    def root(self):
+        """Protocol-free root derived from ``url`` via ``fsspec.url_to_fs``."""
+        url = self.get('url')
+        if url is None:
+            return self.get('root')  # legacy fallback
+        _, root = fsspec.url_to_fs(url)
+        return root
+
+    @property
     def anchorkeypath(self):
-        return os.path.join(self.root, self.anchorkey)
+        url = self.get('url')
+        if url is None:
+            # Legacy fallback when only 'root' is available
+            root = self.get('root')
+            return os.path.join(root, self.anchorkey) if root else self.anchorkey
+        fs, root = fsspec.url_to_fs(url)
+        return fs_full_path(fs, os.path.join(root, self.anchorkey))
 
     # Backward-compatible aliases (always hash-based)
     @property
@@ -345,7 +360,12 @@ class JournalEntry(pd.Series):
 
     @property
     def anchorhashpath(self):
-        return os.path.join(self.root, self.anchorhash)
+        url = self.get('url')
+        if url is None:
+            root = self.get('root')
+            return os.path.join(root, self.anchorhash) if root else self.anchorhash
+        fs, root = fsspec.url_to_fs(url)
+        return fs_full_path(fs, os.path.join(root, self.anchorhash))
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
@@ -810,6 +830,7 @@ class Datablock:
         """Wrapper around ``fsspec.url_to_fs`` that injects ``self.storage_options``."""
         return fsspec.url_to_fs(path, **self.storage_options)
 
+
     def validtopic(self, topic=None):
         if topic is None:
             valid = self.validpath(self.path())
@@ -848,11 +869,7 @@ class Datablock:
         elif isinstance(path, dict):
             result = all([self.validpath(p) for p in path.values()])
         else:
-            fs, _ = self._url_to_fs(path)
-            if 'file' not in fs.protocol:
-                result = fsspec.filesystem("gcs").exists(path)
-            else:
-                result = os.path.exists(path) #TODO: Why not handle this case using fsspec? 
+            result = self.fs.exists(path)
         self.log.detailed(f"{self.anchor}: path {path} valid: {result}") 
         return result
     
@@ -915,8 +932,7 @@ class Datablock:
             stdout = sys.stdout
             stderr = sys.stderr
             
-            outfs, _ = self._url_to_fs(logpath)
-            captured_stream = outfs.open(logpath, "w", encoding="utf-8")
+            captured_stream = self.fs.open(logpath, "w", encoding="utf-8")
             sys.stdout = Tee(stdout, captured_stream)
             sys.stderr = Tee(stderr, captured_stream)
         try:
@@ -1212,8 +1228,7 @@ class Datablock:
         return config
 
     def leave_breadcrumbs_at_path(self, path):
-        fs, _ = self._url_to_fs(path)
-        with fs.open(path, "w") as f:
+        with self.fs.open(path, "w") as f:
             f.write("")
     
     #IDS: BEGIN
@@ -1596,12 +1611,11 @@ class Datablock:
         if p is None:
             return []
         # If path points to a file, list the containing directory
-        fs, _ = self._url_to_fs(p)
-        if not fs.exists(p):
+        if not self.fs.exists(p):
             return []
-        if fs.isfile(p):
+        if self.fs.isfile(p):
             p = os.path.dirname(p)
-        return fs.ls(p, detail=detail)
+        return self.fs.ls(p, detail=detail)
 
     
     def dirpath(
@@ -1624,11 +1638,9 @@ class Datablock:
             else:
                 dirpath = anchorkeypath
         if ensure:
-            fs, _ = self._url_to_fs(dirpath)
-            fs.makedirs(dirpath, exist_ok=True)
+            self.fs.makedirs(dirpath, exist_ok=True)
         if list:
-            fs, _ = self._url_to_fs(dirpath)
-            return fs.ls(dirpath)
+            return self.fs.ls(dirpath)
         return dirpath
 
 
@@ -1642,7 +1654,7 @@ class Datablock:
 
 
     def anchorpath(self):
-        return os.path.join(self.root, self.anchor)
+        return fs_full_path(self.fs, os.path.join(self.root, self.anchor))
 
     @property
     def anchorkey(self):
@@ -1651,19 +1663,20 @@ class Datablock:
 
     @property
     def anchorkeypath(self):
-        return os.path.join(
+        raw = os.path.join(
             self.root,
             self.anchorkey,
         ) if self.anchorkey else self.root
+        return fs_full_path(self.fs, raw)
     
     @staticmethod
     def _dbxanchorpathx(url, anchor, x, *, fqcn=None, ensure: bool = False, storage_options=None):
         """Return {url}/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
         fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
         if fqcn is not None and anchor != fqcn:
-            _dbxanchorpathx = fs.unstrip_protocol(os.path.join(root, anchor, ".dbx", fqcn, x))
+            _dbxanchorpathx = fs_full_path(fs, os.path.join(root, anchor, ".dbx", fqcn, x))
         else:
-            _dbxanchorpathx = fs.unstrip_protocol(os.path.join(root, anchor, ".dbx", x))
+            _dbxanchorpathx = fs_full_path(fs, os.path.join(root, anchor, ".dbx", x))
         if ensure:
             fs.makedirs(_dbxanchorpathx, exist_ok=True)
         return _dbxanchorpathx
@@ -1672,8 +1685,7 @@ class Datablock:
         _dbxanchorpathx = Datablock._dbxanchorpathx(self.url, self.anchor, x, fqcn=self.fqcn, storage_options=self.storage_options)
         _dbxanchorhashpathx = os.path.join(_dbxanchorpathx, self.hash)
         if ensure_dirpath:
-            fs, _ = self._url_to_fs(_dbxanchorhashpathx)
-            fs.makedirs(_dbxanchorhashpathx, exist_ok=True)
+            self.fs.makedirs(_dbxanchorhashpathx, exist_ok=True)
         if ext is None:
             ext = x
         xpath = os.path.join(_dbxanchorhashpathx, f'{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
@@ -1721,25 +1733,22 @@ class Datablock:
             data['datetime'] = self.dt
         #
         ypath = self._dbxanchorhashpathx(name, 'yaml')
-        yfs, _ = self._url_to_fs(ypath)
         write_yaml(data, ypath, storage_options=self.storage_options)
-        assert yfs.exists(ypath), f"path {ypath} does not exist after writing"
+        assert self.fs.exists(ypath), f"path {ypath} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
         #
         pqpath = self._dbxanchorhashpathx(name, 'parquet')
-        pqfs, _ = self._url_to_fs(pqpath)
         df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
-        with pqfs.open(pqpath, 'wb') as f:
+        with self.fs.open(pqpath, 'wb') as f:
             df.to_parquet(f)
-        assert pqfs.exists(pqpath), f"pqpath {pqpath} does not exist after writing"
+        assert self.fs.exists(pqpath), f"pqpath {pqpath} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: parquet: {pqpath}")
 
     def _write_str(self, name, text):
         #
         path = self._dbxanchorhashpathx(name, 'txt')
-        fs, _ = self._url_to_fs(path)
         write_str(text, path, storage_options=self.storage_options)
-        assert fs.exists(path), f"scopepath {path} does not exist after writing"
+        assert self.fs.exists(path), f"scopepath {path} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
     def _write_journal_entry(self, event:str, *, context: str = None, inline_context: bool = False):
@@ -1770,8 +1779,7 @@ class Datablock:
         #
         logpath = self._dbxanchorhashpathx('log', ensure_dirpath=True)
         if logpath is not None:
-            logfs, _ = self._url_to_fs(logpath)
-            has_log = logfs.exists(logpath)
+            has_log = self.fs.exists(logpath)
         else:
             has_log = False
         #
@@ -1800,8 +1808,7 @@ class Datablock:
                                          'gitrepo': DBX_GIT_REPO,
                                          'wrkrepo': DBX_USE_WORK_REPO,
         }])
-        journal_fs, _ = self._url_to_fs(journal_path)
-        with journal_fs.open(journal_path, 'wb') as f:
+        with self.fs.open(journal_path, 'wb') as f:
             df.to_parquet(f)
         
         tagstr = f"with tag {repr(self.tag)} " if self.tag is not None else ""

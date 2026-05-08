@@ -1992,6 +1992,10 @@ class Datastack(Datablock):
         indices = tqdm.tqdm(range(n), desc=f"Forming {n} shards") if n > 100 else range(n)
         return [self.shard(idx) for idx in indices]
 
+    def valid_shards(self) -> list[bool]:
+        """Return a list of booleans, one per shard, indicating validity."""
+        return [s.valid() for s in self.shards()]
+
     # -- Default build logic ------------------------------------------------------
 
     def __build__(self, *args, **kwargs):

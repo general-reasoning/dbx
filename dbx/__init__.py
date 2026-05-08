@@ -1,7 +1,7 @@
-"""dbx — Content-addressed, journaled data-experiment management.
+"""dbx — Config-addressed, journaled data-experiment management.
 
 The ``dbx`` package provides :class:`~dbx.datablocks.Datablock` and
-:class:`~dbx.datablocks.Datastack`, content-addressed building blocks for
+:class:`~dbx.datablocks.Datastack`, config-addressed building blocks for
 organising data pipelines.  Every block is identified by a deterministic
 hash of its configuration; every build is journaled for full
 reproducibility.

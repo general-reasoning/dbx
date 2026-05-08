@@ -1,6 +1,6 @@
 # datablocks
 
-**Content-addressed, journaled data-experiment management for Python.**
+**Config-addressed, journaled data-experiment management for Python.**
 
 [![PyPI](https://img.shields.io/pypi/v/datablocks)](https://pypi.org/project/datablocks/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -12,7 +12,7 @@
 
 `datablocks` (imported as `dbx`) is a framework for building reproducible data pipelines where every computation step is:
 
-- **Content-addressed** — identified by a deterministic SHA-256 hash of its class name, configuration, and version.
+- **Config-addressed** — identified by a deterministic SHA-256 hash of its class name, configuration, and version.
 - **Journaled** — every build writes a Parquet journal entry recording the full provenance (timestamp, git revision, config, hash).
 - **Idempotent** — calling `build()` on an already-valid block is a no-op.
 - **Storage-agnostic** — paths are resolved via [fsspec](https://filesystem-spec.readthedocs.io/), supporting local, S3, GCS, ADLS, and any other backend.
@@ -21,7 +21,7 @@
 
 | Feature | Description |
 |---|---|
-| `Datablock` | Content-addressed unit of computation with topic-based output paths |
+| `Datablock` | Config-addressed unit of computation with topic-based output paths |
 | `Datastack` | Orchestrates parallel builds of child Datablocks (shards) |
 | `CONFIG` | Dataclass-based configuration schema with lazy evaluation and specline support |
 | Journaling | Automatic Parquet-based provenance tracking for every build |

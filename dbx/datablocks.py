@@ -2,7 +2,7 @@
 
 This module defines the central abstractions of dbx:
 
-- :class:`Datablock` — a content-addressed, journaled unit of computation.
+- :class:`Datablock` — a config-addressed, journaled unit of computation.
   Each block is uniquely identified by a SHA-256 hash derived from its
   fully-qualified class name, configuration (``spec``), and version.
   Builds are journaled as Parquet entries for full reproducibility.

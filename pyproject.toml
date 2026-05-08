@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "datablocks"
 version = "0.0.2"
-description = "Content-addressed, journaled data-experiment management for Python"
+description = "Config-addressed, journaled data-experiment management for Python"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"

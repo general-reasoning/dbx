@@ -614,6 +614,7 @@ class Datablock:
         keyby: str = 'hash',
         uuid16: bool = False,
         validate_cfg: bool = True,
+        storage_options: dict = None,
         **kwargs,
     ):# Initialize early logger for __post_init__ if needed, though usually hash is needed
         self.log = Logger(
@@ -643,6 +644,7 @@ class Datablock:
             'keyby': keyby,
             'uuid16': uuid16,
             'validate_cfg': validate_cfg,
+            'storage_options': storage_options,
         }
         self.log.detailed(f"__init__: ------------------------------------------------> initial:         {state=}")
         state.update(kwargs)
@@ -685,7 +687,8 @@ class Datablock:
             self.url = os.environ.get('DBX_ROOT')
         if self.url is None:
             raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT")
-        self.fs, self.root = fsspec.url_to_fs(self.url)
+        self.storage_options = state.get('storage_options') or {}
+        self.fs, self.root = fsspec.url_to_fs(self.url, **self.storage_options)
         self._spec_ = state.get('spec')
         if self._spec_ is None:
             self.spec = asdict(self.CONFIG())

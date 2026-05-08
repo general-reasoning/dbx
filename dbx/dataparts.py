@@ -262,9 +262,9 @@ class Tee:
         return getattr(self.files[0], name)
 
 
-def ensure_path(path):
+def ensure_path(path, *, storage_options=None):
     """Create *path* and all parent directories (``fsspec``-aware)."""
-    fs, _ = fsspec.url_to_fs(path)
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     fs.makedirs(path, exist_ok=True)
 
 
@@ -389,61 +389,61 @@ def pprint(argstr=None, **kwargs):
     _pprint_.pprint(exec(argstr, **kwargs))
 
 
-def write_str(text, path, *, log=Logger(), debug: bool = False):
-    fs, _ = fsspec.url_to_fs(path)
+def write_str(text, path, *, storage_options=None, log=Logger(), debug: bool = False):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "w") as f:
         f.write(text)
         log.detailed(f"WROTE {path}")
 
 
-def read_str(path, *, log=Logger(), debug: bool = False):
-    fs, _ = fsspec.url_to_fs(path)
+def read_str(path, *, storage_options=None, log=Logger(), debug: bool = False):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "r") as f:
         text = f.read()
         log.detailed(f"READ {path}")
     return text
 
 
-def write_yaml(data, path, *, log=Logger(), debug: bool = False):
-    fs, _ = fsspec.url_to_fs(path)
+def write_yaml(data, path, *, storage_options=None, log=Logger(), debug: bool = False):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "w") as f:
         yaml.dump(data, f)
         log.detailed(f"WROTE {path}")
 
 
-def read_yaml(path, *, log=Logger(), safe: bool = False, debug: bool = False):
-    fs, _ = fsspec.url_to_fs(path)
+def read_yaml(path, *, storage_options=None, log=Logger(), safe: bool = False, debug: bool = False):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "r") as f:
         data = yaml.load(f, Loader=yaml.BaseLoader) if safe else yaml.load(f, Loader=yaml.UnsafeLoader)
         log.detailed(f"READ {path}")
     return data
 
 
-def write_json(data, path, *, log=Logger(), debug: bool = False):
-    fs, _ = fsspec.url_to_fs(path)
+def write_json(data, path, *, storage_options=None, log=Logger(), debug: bool = False):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "w") as f:
         json.dump(data, f)
         log.detailed(f"WROTE {path}")
 
 
-def read_json(path, *, log=Logger(), debug: bool = False):
-    fs, _ = fsspec.url_to_fs(path)
+def read_json(path, *, storage_options=None, log=Logger(), debug: bool = False):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "r") as f:
         data = json.load(f)
         log.detailed(f"READ {path}")
     return data
 
 
-def write_tensor(tensor, path, *, log=Logger(), debug: bool = False):
-    fs, _ = fsspec.url_to_fs(path)
+def write_tensor(tensor, path, *, storage_options=None, log=Logger(), debug: bool = False):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     array = tensor.numpy()
     with fs.open(path, "wb") as f:
         np.save(f, array)
         log.detailed(f"WROTE {path}")
 
 
-def read_tensor(path, *, log=Logger(), debug: bool = False):
-    fs, _ = fsspec.url_to_fs(path)
+def read_tensor(path, *, storage_options=None, log=Logger(), debug: bool = False):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "rb") as f:
         array = np.load(f)
         log.detailed(f"READ {path}")
@@ -462,15 +462,15 @@ def read_tensors(path, *keys, log=Logger(), debug: bool = False):
     return tensors
 
 
-def write_npz(path, *, log=Logger(), debug: bool = False, **kwargs):
-    fs, _ = fsspec.url_to_fs(path)
+def write_npz(path, *, storage_options=None, log=Logger(), debug: bool = False, **kwargs):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "wb") as f:
         np.savez(f, **kwargs)
         log.detailed(f"WROTE {list(kwargs.keys())} to {path}")
 
 
-def read_npz(path, *keys, log=Logger(), debug: bool = False):
-    fs, _ = fsspec.url_to_fs(path)
+def read_npz(path, *keys, storage_options=None, log=Logger(), debug: bool = False):
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "rb") as f:
         data = np.load(f, allow_pickle=True)
         results = {k: data[k] for k in keys}
@@ -478,21 +478,21 @@ def read_npz(path, *keys, log=Logger(), debug: bool = False):
         return results
     
 
-def write_pickle(obj, path):
+def write_pickle(obj, path, *, storage_options=None):
     """Pickle *obj* to *path* (any ``fsspec`` URL)."""
-    fs, _ = fsspec.url_to_fs(path)
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, 'wb') as f:
         pickle.dump(obj, f)
 
 
-def read_pickle(path):
+def read_pickle(path, *, storage_options=None):
     """Unpickle and return the object stored at *path*."""
-    fs, _ = fsspec.url_to_fs(path)
+    fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, 'rb') as f:
         return pickle.load(f)
 
 
-def write_frame(frame: pd.DataFrame, path, *, log=Logger(), **kwargs):
+def write_frame(frame: pd.DataFrame, path, *, storage_options=None, log=Logger(), **kwargs):
     """Write a pandas DataFrame to *path* (any fsspec URL).
 
     The serialisation format is chosen by the file extension:
@@ -504,7 +504,7 @@ def write_frame(frame: pd.DataFrame, path, *, log=Logger(), **kwargs):
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    fs, fpath = fsspec.url_to_fs(path)
+    fs, fpath = fsspec.url_to_fs(path, **(storage_options or {}))
     if path.endswith('.csv'):
         with fs.open(path, 'w', encoding='utf-8') as f:
             frame.to_csv(f, **kwargs)
@@ -515,7 +515,7 @@ def write_frame(frame: pd.DataFrame, path, *, log=Logger(), **kwargs):
     log.detailed(f"WROTE frame {frame.shape} to {path}")
 
 
-def read_frame(path, *, log=Logger(), **kwargs) -> pd.DataFrame:
+def read_frame(path, *, storage_options=None, log=Logger(), **kwargs) -> pd.DataFrame:
     """Read a pandas DataFrame from *path* (any fsspec URL).
 
     Format is inferred from the file extension (see :func:`write_frame`).
@@ -523,7 +523,7 @@ def read_frame(path, *, log=Logger(), **kwargs) -> pd.DataFrame:
     """
     import pyarrow.parquet as pq
 
-    fs, fpath = fsspec.url_to_fs(path)
+    fs, fpath = fsspec.url_to_fs(path, **(storage_options or {}))
     if path.endswith('.csv'):
         with fs.open(path, 'r', encoding='utf-8') as f:
             frame = pd.read_csv(f, **kwargs)

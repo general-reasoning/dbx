@@ -1560,7 +1560,7 @@ class Datablock:
             dirpath = self.dirpath(topic)
             topicfiles = self.TOPICFILES[topic]
         if ensure_dirpath and dirpath is not None:
-            ensure_path(dirpath)
+            ensure_path(dirpath, storage_options=self.storage_options)
         if isinstance(topicfiles, dict): 
             path = {topic: _filepath(dirpath, topicfile) for topic, topicfile in topicfiles.items()}
         elif isinstance(topicfiles, list):
@@ -1724,14 +1724,15 @@ class Datablock:
         #
         ypath = self._dbxanchorhashpathx(name, 'yaml')
         yfs, _ = self._url_to_fs(ypath)
-        write_yaml(data, ypath)
+        write_yaml(data, ypath, storage_options=self.storage_options)
         assert yfs.exists(ypath), f"path {ypath} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
         #
         pqpath = self._dbxanchorhashpathx(name, 'parquet')
         pqfs, _ = self._url_to_fs(pqpath)
         df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
-        df.to_parquet(pqpath)
+        with pqfs.open(pqpath, 'wb') as f:
+            df.to_parquet(f)
         assert pqfs.exists(pqpath), f"pqpath {pqpath} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: parquet: {pqpath}")
 
@@ -1739,7 +1740,7 @@ class Datablock:
         #
         path = self._dbxanchorhashpathx(name, 'txt')
         fs, _ = self._url_to_fs(path)
-        write_str(text, path)
+        write_str(text, path, storage_options=self.storage_options)
         assert fs.exists(path), f"scopepath {path} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
@@ -1801,7 +1802,9 @@ class Datablock:
                                          'gitrepo': DBX_GIT_REPO,
                                          'wrkrepo': DBX_USE_WORK_REPO,
         }])
-        df.to_parquet(journal_path)
+        journal_fs, _ = self._url_to_fs(journal_path)
+        with journal_fs.open(journal_path, 'wb') as f:
+            df.to_parquet(f)
         
         tagstr = f"with tag {repr(self.tag)} " if self.tag is not None else ""
         self.log.debug(f"WROTE JOURNAL entry for event {repr(event)} {tagstr}"
@@ -1834,7 +1837,8 @@ class Datablock:
             dfs = []
             for file in parquet_files:
                 try:
-                    _df = pd.read_parquet(file)
+                    with fs.open(file, 'rb') as f:
+                        _df = pd.read_parquet(f)
                 except Exception as e:
                     log.warning(f"Skipping unreadable journal file {file}: {e}")
                     continue

@@ -921,7 +921,7 @@ class Datablock:
 
     def build(self, *args, **kwargs):
         if self.capture_output:
-            logpath = self._dbxanchorhashpathx('log', ext='log', ensure=True)
+            logpath = self._dbxanchorhashpathx('log', ext='log', ensure_dirpath=True)
             self.log.verbose(f"-------------------- Capturing stdout/stderr to {logpath} ------------------")
             stdout = sys.stdout
             stderr = sys.stderr

@@ -278,10 +278,23 @@ def fs_full_path(fs, path):
     so that it remains compatible with Python's built-in ``open()``.
     For remote filesystems (``abfs``, ``gcs``, ``memory``, …) the protocol
     is re-attached via ``fs.unstrip_protocol()``.
+
+    Special case: ``adlfs`` (Azure) — ``unstrip_protocol()`` drops the
+    ``@account.dfs.core.windows.net`` portion.  We reconstruct the full
+    ``abfss://container@account.dfs.core.windows.net/path`` form so that
+    downstream consumers (e.g. MosaicML) can extract the account name.
     """
     protocol = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
     if protocol in ('file', 'local', ''):
         return path
+    # adlfs: unstrip_protocol() loses the account — reconstruct manually.
+    if protocol in ('abfs', 'az') and hasattr(fs, 'account_name') and fs.account_name:
+        # path = "container/sub/path" → split into container + rest
+        parts = path.split('/', 1)
+        container = parts[0]
+        rest = parts[1] if len(parts) > 1 else ''
+        host = f"{fs.account_name}.dfs.core.windows.net"
+        return f"abfss://{container}@{host}/{rest}"
     return fs.unstrip_protocol(path)
 
 

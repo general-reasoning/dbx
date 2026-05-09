@@ -925,10 +925,14 @@ class Datablock:
             self.log.verbose(f"-------------------- Capturing stdout/stderr to {logpath} ------------------")
             stdout = sys.stdout
             stderr = sys.stderr
-            
-            captured_stream = self.fs.open(logpath, "w", encoding="utf-8")
-            sys.stdout = Tee(stdout, captured_stream)
-            sys.stderr = Tee(stderr, captured_stream)
+
+            # Write to a local temp file; upload to remote logpath at the end.
+            import tempfile as _tempfile
+            _local_log = _tempfile.NamedTemporaryFile(
+                mode='w', suffix='.log', prefix='dbx_capture_', delete=False, encoding='utf-8',
+            )
+            sys.stdout = Tee(stdout, _local_log)
+            sys.stderr = Tee(stderr, _local_log)
         try:
             if not self.valid():
                 self.__pre_build__(*args, **kwargs)
@@ -947,7 +951,16 @@ class Datablock:
             if self.capture_output:
                 sys.stdout = stdout
                 sys.stderr = stderr
-                captured_stream.close()
+                _local_log.close()
+                # Upload the local log to the (possibly remote) logpath
+                try:
+                    self.fs.put(_local_log.name, logpath)
+                    self.log.verbose(f"Captured output uploaded to {logpath}")
+                except Exception as upload_exc:
+                    self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
+                finally:
+                    import os as _os
+                    _os.unlink(_local_log.name)
         return self
 
     def __pre_build__(self, *args, **kwargs):

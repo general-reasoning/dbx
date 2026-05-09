@@ -745,6 +745,10 @@ class Datablock:
         self.keyby = state.get('keyby', 'taghash')
         if self.keyby not in (None, 'hash', 'handle', 'tag', 'taghash', 'custom'):
             raise ValueError(f"keyby must be None, 'hash', 'handle', 'tag', 'taghash', 'custom', got {self.keyby!r}")
+        if self.keyby == 'tag' and self._tag_ is None:
+            raise ValueError(
+                f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
+            )
         self._uuid16_ = state.get('uuid16', False)
         self.validate_cfg = state.get('validate_cfg', True)
         

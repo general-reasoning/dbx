@@ -1578,6 +1578,9 @@ class Datablock:
             topicfiles = self.TOPICFILE if hasattr(self, 'TOPICFILE') else None
         else:
             dirpath = self.dirpath(topic)
+            if hasattr(self, 'TOPICS') and not hasattr(self, 'TOPICFILES'):
+                # TOPICS-only: the topic IS a directory, no file inside it
+                return dirpath
             topicfiles = self.TOPICFILES[topic]
         if ensure_dirpath and dirpath is not None:
             ensure_path(dirpath, storage_options=self.storage_options)
@@ -1633,9 +1636,8 @@ class Datablock:
         list: bool = False,
     ):  
         if topic is not None and hasattr(self, 'TOPICS') and not hasattr(self, 'TOPICFILES'):
-            # TOPICS-only: derive dirpath from the overridden path()
-            p = self.path(topic)
-            dirpath = os.path.dirname(p) if p is not None else self.anchorkeypath
+            # TOPICS-only: topic IS the directory name under anchorkeypath
+            dirpath = os.path.join(self.anchorkeypath, topic)
         else:
             anchorkeypath = self.anchorkeypath
             if topic is not None:

@@ -1963,6 +1963,7 @@ class Datastack(Datablock):
 
     def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, multiprocessing_start_method: str = 'spawn', **kwargs):
         super().__init__(*args, parallelization=parallelization, n_workers=n_workers, multiprocessing_start_method=multiprocessing_start_method, **kwargs)
+        # Early validation only — executor_cls is a property so deepcopy/setstate paths work.
         executors = self._get_executors_()
         key = (self.parallelization or "inline").lower()
         if key not in executors:
@@ -1970,7 +1971,23 @@ class Datastack(Datablock):
                 f"Unknown parallelization {self.parallelization!r}. "
                 f"Choose from {list(executors)}"
             )
-        self.executor_cls = executors[key]
+
+    @property
+    def executor_cls(self):
+        """Resolve executor class from self.parallelization.
+
+        Implemented as a property (not set in __init__) so that objects
+        reconstructed via deepcopy / __setstate__ — which bypass __init__ —
+        still return the correct class.
+        """
+        executors = self._get_executors_()
+        key = (getattr(self, 'parallelization', None) or "inline").lower()
+        if key not in executors:
+            raise ValueError(
+                f"Unknown parallelization {self.parallelization!r}. "
+                f"Choose from {list(executors)}"
+            )
+        return executors[key]
 
     # -- Abstract interface -------------------------------------------------------
 

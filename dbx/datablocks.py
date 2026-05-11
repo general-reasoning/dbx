@@ -994,7 +994,11 @@ class Datablock:
 
     def build_tree(self, *args, exclude_self: bool = False, **kwargs):
         self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
+        exemptions = set(getattr(self, 'BUILD_TREE_EXEMPTIONS', ()))
         for s in self.spec.keys():
+            if s in exemptions:
+                self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (BUILD_TREE_EXEMPTIONS) --------")
+                continue
             c = getattr(self.cfg, s)
             if isinstance(c, Datablock):
                 self._write_journal_entry(event=f"build_tree:{s}:begin")

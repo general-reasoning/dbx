@@ -1878,7 +1878,10 @@ class Datablock:
             result = journal
         return result
 
-    def journal(self, entry: int = None, **kwargs):
+    def journal(self, loc: int = None, *, iloc: int = None, **kwargs):
+        if loc is not None and iloc is not None:
+            raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
+        entry = loc if loc is not None else iloc
         return self.Journal(self.anchor, entry, url=self.url, fqcn=self.fqcn, storage_options=self.storage_options, **kwargs)
     #JOURNAL: END
     

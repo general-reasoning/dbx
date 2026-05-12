@@ -426,6 +426,26 @@ class JournalEntry(pd.Series):
         if gitrepo is None:
             gitrepo = 'journal_entry'
         return self.instantiate(gitrepo=gitrepo, revision=revision)
+
+    @property
+    def bid(self):
+        """Reconstruct a Datablock.Bid from this journal entry."""
+        return Datablock.Bid(
+            hash=self.hash,
+            version=self.version,
+            revision=self.revision,
+            dfn=self.read('dfn', safe=True) or {},
+            kwargs=self.read('kwargs', safe=True) or {},
+            spec=self.read('spec', safe=True) or {},
+            quote=self.read('quote') or '',
+            repr=self.read('repr') or '',
+            handle=self.read('handle') or '',
+            hashstr=self.read('hashstr') or '',
+            anchor=self.anchor,
+            tag=self.tag,
+            key=self.key,
+            keyby=self.keyby,
+        )
     
 
 

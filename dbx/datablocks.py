@@ -1911,6 +1911,27 @@ class Datablock:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         entry = loc if loc is not None else iloc
         return self.Journal(self.anchor, entry, url=self.url, storage_options=self.storage_options, **filter_kwargs)
+
+    def lastbuilt(self):
+        """Return the most recent 'build:end' JournalEntry, or None."""
+        j = self.journal(event='build:end')
+        if len(j) == 0:
+            return None
+        return j.get(0, dropna=True)
+
+    def running(self):
+        """Return the latest 'build:start' JournalEntry with no matching 'build:end', or None."""
+        j = self.journal()
+        if len(j) == 0:
+            return None
+        started = set(j[j['event'] == 'build:start']['hash'])
+        ended = set(j[j['event'] == 'build:end']['hash'])
+        running_hashes = started - ended
+        if not running_hashes:
+            return None
+        running_entries = j[(j['event'] == 'build:start') & (j['hash'].isin(running_hashes))]
+        return JournalEntry(running_entries.iloc[0].dropna(), storage_options=self.storage_options)
+
     #JOURNAL: END
     
 

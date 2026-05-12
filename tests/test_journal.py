@@ -23,7 +23,7 @@ from dbx.datablocks import journal, Datablock, JournalFrame, JournalEntry
 def _journal_dir(root, cls) -> str:
     """Return the journal directory path for a given class and root."""
     anchor = cls.__module__ + "." + cls.__name__
-    return Datablock._dbxanchorpathx(root, anchor, 'journal')
+    return Datablock._dbxanchorpathx(root, anchor, 'journal', fqcn=anchor)
 
 
 def _write_fake_journal_entry(journal_dir: str, hash_val: str = "abc123", event: str = "build"):
@@ -84,7 +84,10 @@ class TestJournalMissingDir:
         with pytest.raises(FileNotFoundError) as exc_info:
             journal(FakeBlock, url=root)
 
-        assert expected_dir in str(exc_info.value)
+        # journal() without fqcn checks {anchor}/.dbx, not the fqcn-qualified path
+        anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
+        assert anchor in str(exc_info.value)
+        assert ".dbx" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -198,62 +201,33 @@ def _write_journal_in_hash_dir(journal_dir, classname, hash_val="abc", event="bu
 # 5. fqcn filtering
 # ---------------------------------------------------------------------------
 
-class TestJournalFqcnFiltering:
+class TestJournalFqcnSubdirectories:
 
-    def test_no_fqcn_returns_all(self, tmp_path, monkeypatch):
-        """Without fqcn, Journal() returns entries from all classes."""
+    def test_returns_all_fqcn_entries(self, tmp_path, monkeypatch):
+        """Journal() returns entries from all fqcn subdirectories under an anchor."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
-        jdir = _journal_dir(root, FakeBlock)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
         other_anchor = OtherBlock.__module__ + "." + OtherBlock.__name__
-        _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="aaa")
-        _write_journal_in_hash_dir(jdir, other_anchor, hash_val="bbb")
+        # Write entries into separate fqcn-qualified journal dirs
+        fake_jdir = Datablock._dbxanchorpathx(root, fake_anchor, 'journal', fqcn=fake_anchor)
+        other_jdir = Datablock._dbxanchorpathx(root, fake_anchor, 'journal', fqcn=other_anchor)
+        _write_journal_in_hash_dir(fake_jdir, fake_anchor, hash_val="aaa")
+        _write_journal_in_hash_dir(other_jdir, other_anchor, hash_val="bbb")
 
-        result = journal(FakeBlock, url=root)
+        result = Datablock.Journal(fake_anchor, url=root)
         assert isinstance(result, JournalFrame)
         assert len(result) == 2
 
-    def test_fqcn_filters(self, tmp_path, monkeypatch):
-        """With fqcn=, only matching entries are returned."""
+    def test_single_fqcn_found(self, tmp_path, monkeypatch):
+        """Journal() finds entries when only one fqcn subdirectory exists."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
-        jdir = _journal_dir(root, FakeBlock)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
-        other_anchor = OtherBlock.__module__ + "." + OtherBlock.__name__
-        _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="aaa")
-        _write_journal_in_hash_dir(jdir, other_anchor, hash_val="bbb")
+        fake_jdir = Datablock._dbxanchorpathx(root, fake_anchor, 'journal', fqcn=fake_anchor)
+        _write_journal_in_hash_dir(fake_jdir, fake_anchor, hash_val="xyz")
 
-        result = Datablock.Journal(
-            fake_anchor, url=root, fqcn=fake_anchor,
-        )
-        assert isinstance(result, JournalFrame)
-        assert len(result) == 1
-        assert result.iloc[0]['hash'] == "aaa"
-
-    def test_fqcn_no_match_raises(self, tmp_path, monkeypatch):
-        """fqcn that doesn't match any real class raises FileNotFoundError
-        (the fqcn subdirectory was never created)."""
-        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        root = str(tmp_path)
-        jdir = _journal_dir(root, FakeBlock)
-        fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
-        _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="aaa")
-
-        with pytest.raises(FileNotFoundError):
-            Datablock.Journal(
-                fake_anchor, url=root, fqcn="nonexistent.Class",
-            )
-
-    def test_fqcn_none_is_default(self, tmp_path, monkeypatch):
-        """fqcn=None (default) returns everything."""
-        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        root = str(tmp_path)
-        jdir = _journal_dir(root, FakeBlock)
-        fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
-        _write_journal_in_hash_dir(jdir, fake_anchor, hash_val="xyz")
-
-        result = Datablock.Journal(fake_anchor, url=root, fqcn=None)
+        result = Datablock.Journal(fake_anchor, url=root)
         assert len(result) == 1
 
 
@@ -305,13 +279,12 @@ class TestJournalAnchorForms:
         assert len(result) >= 1
 
     def test_static_journal_custom_anchor(self, tmp_path, monkeypatch):
-        """Datablock.Journal(anchor, fqcn=) finds entries for custom anchor."""
+        """Datablock.Journal(anchor) finds entries for custom anchor."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         block = BuildableBlock(url=root, anchor='custom.anchor')
         block.build()
-        fqcn = BuildableBlock.__module__ + '.' + BuildableBlock.__name__
-        result = Datablock.Journal('custom.anchor', url=root, fqcn=fqcn)
+        result = Datablock.Journal('custom.anchor', url=root)
         assert isinstance(result, JournalFrame)
         assert len(result) >= 1
 

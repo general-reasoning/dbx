@@ -217,7 +217,7 @@ class LogVolume:
 
 
 
-def journal(cls_or_df, entry=None, url=None, storage_options=None, **kwargs):
+def journal(cls_or_df, entry=None, url=None, storage_options=None, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
 
     Parameters
@@ -230,7 +230,7 @@ def journal(cls_or_df, entry=None, url=None, storage_options=None, **kwargs):
         Storage URL.  Defaults to ``DBX_ROOT``.
     storage_options : dict, optional
         Storage options for fsspec.  Defaults to ``default_storage_options()``.
-    **kwargs
+    **filter_kwargs
         Forwarded to :class:`JournalFrame` for filtering.
 
     Returns
@@ -238,13 +238,13 @@ def journal(cls_or_df, entry=None, url=None, storage_options=None, **kwargs):
     JournalFrame or JournalEntry
     """
     if isinstance(cls_or_df, pd.DataFrame):
-        return JournalFrame(cls_or_df, storage_options=storage_options, **kwargs)
+        return JournalFrame(cls_or_df, storage_options=storage_options, **filter_kwargs)
     else:
         if isinstance(cls_or_df, str):
             anchor = cls_or_df
         else:
             anchor = cls_or_df.__module__ + "." + cls_or_df.__name__
-        return Datablock.Journal(anchor, entry=entry, url=url, storage_options=storage_options, **kwargs)
+        return Datablock.Journal(anchor, entry=entry, url=url, storage_options=storage_options, **filter_kwargs)
 
 
 
@@ -433,7 +433,7 @@ class JournalFrame(pd.DataFrame):
     _metadata = ['storage_options', 'logger']
 
     def __init__(self, df: pd.DataFrame|None, *, storage_options: dict = None,
-                 parse_datetimes: bool = True, logger: Logger = Logger(), **kwargs):
+                 parse_datetimes: bool = True, logger: Logger = Logger(), **filter_kwargs):
         
         # Guard against an empty journal (no parquet files written yet).
         if df is None:
@@ -443,7 +443,7 @@ class JournalFrame(pd.DataFrame):
         if parse_datetimes:
             if 'datetime' in df.columns and not isinstance(df['datetime'].iloc[0], datetime.datetime): # TODO: use dtype?
                 df['datetime'] = pd.to_datetime(df['datetime'], format='%Y-%m-%dT%H-%M-%S.%f')
-        for k, v in kwargs.items():
+        for k, v in filter_kwargs.items():
             if k == 'date':
                 if isinstance(v, str):
                     v = pd.to_datetime(v).date()
@@ -1683,13 +1683,10 @@ class Datablock:
         return fs_full_path(self.fs, raw)
     
     @staticmethod
-    def _dbxanchorpathx(url, anchor, x, *, fqcn=None, ensure: bool = False, storage_options=None):
-        """Return {url}/anchor/.dbx/x — the anchor-level directory for artefact *x*."""
+    def _dbxanchorpathx(url, anchor, x, *, fqcn, ensure: bool = False, storage_options=None):
+        """Return {url}/anchor/.dbx/fqcn/x — the anchor-level directory for artefact *x*."""
         fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
-        if fqcn is not None and anchor != fqcn:
-            _dbxanchorpathx = fs_full_path(fs, os.path.join(root, anchor, ".dbx", fqcn, x))
-        else:
-            _dbxanchorpathx = fs_full_path(fs, os.path.join(root, anchor, ".dbx", x))
+        _dbxanchorpathx = fs_full_path(fs, os.path.join(root, anchor, ".dbx", fqcn, x))
         if ensure:
             fs.makedirs(_dbxanchorpathx, exist_ok=True)
         return _dbxanchorpathx
@@ -1829,25 +1826,24 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, entry: int = None, *, fqcn: str = None, url=None, storage_options=None, **kwargs):
+    def Journal(anchor, entry: int = None, *, url=None, storage_options=None, **filter_kwargs):
         if url is None:
             url = os.environ.get('DBX_ROOT')
         if storage_options is None:
             storage_options = default_storage_options()
 
-        journaldirpath = Datablock._dbxanchorpathx(url, anchor, 'journal', fqcn=fqcn, storage_options=storage_options)
-        fs, _ = fsspec.url_to_fs(journaldirpath, **storage_options)
-
+        fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
         log = Logger()
+
+        journaldirpath = fs_full_path(fs, os.path.join(root, anchor, ".dbx"))
+
         if not fs.exists(journaldirpath):
             raise FileNotFoundError(
                 f"Journal directory not found for {anchor!r}: {journaldirpath}\n"
                 f"Check that the class name / anchor and url are correct."
             )
 
-        files = fs.glob(os.path.join(journaldirpath, '**/*.parquet'))
-        if fqcn is not None:
-            files = [f for f in files if os.path.basename(f).startswith(fqcn)]
+        files = fs.glob(os.path.join(journaldirpath, '**/journal/**/*.parquet'))
         parquet_files = files
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
@@ -1877,18 +1873,18 @@ class Datablock:
                 df = None
         else:
             df = None
-        journal = JournalFrame(df, storage_options=storage_options, **kwargs)
+        journal = JournalFrame(df, storage_options=storage_options, **filter_kwargs)
         if entry is not None:
             result = JournalEntry(journal.loc[entry].dropna(), storage_options=storage_options)
         else:
             result = journal
         return result
 
-    def journal(self, loc: int = None, *, iloc: int = None, **kwargs):
+    def journal(self, loc: int = None, *, iloc: int = None, **filter_kwargs):
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         entry = loc if loc is not None else iloc
-        return self.Journal(self.anchor, entry, url=self.url, fqcn=self.fqcn, storage_options=self.storage_options, **kwargs)
+        return self.Journal(self.anchor, entry, url=self.url, storage_options=self.storage_options, **filter_kwargs)
     #JOURNAL: END
     
 

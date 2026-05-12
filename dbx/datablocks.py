@@ -453,6 +453,12 @@ class JournalFrame(pd.DataFrame):
                     df = df[df['datetime'].dt.date.isin(v)]
                 else:
                     df = df[df['datetime'].dt.date == v]         
+            elif k == 'hash':
+                # Prefix match: allow short hashes
+                if isinstance(v, list):
+                    df = df[df['hash'].apply(lambda h: h.startswith(tuple(v)))]
+                else:
+                    df = df[df['hash'].str.startswith(v)]
             else:
                 if k == 'datetime':
                     if isinstance(v, str):

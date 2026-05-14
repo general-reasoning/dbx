@@ -52,7 +52,14 @@ def getenv(key: str) -> str:
     Intended to be referenced in speclines so that handles contain the
     symbolic ``$dbx.getenv('KEY')`` rather than the resolved path.
     """
-    return os.environ[key]
+    try:
+        return os.environ[key]
+    except KeyError:
+        raise EnvironmentError(
+            f"Required environment variable '{key}' is not set. "
+            f"Please set it before running this pipeline, e.g.: "
+            f"export {key}=<value>"
+        ) from None
 
 
 def env(key: str) -> str:

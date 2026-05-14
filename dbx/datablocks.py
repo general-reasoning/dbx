@@ -746,17 +746,17 @@ class Datablock:
                     state[k] = v
 
         # Explicit parameters
-        self._url_ = state.get('url')
+        self.url = state.get('url')
         # Resolve specline URLs (e.g. "$dbx.getenv('KEY')") to real paths.
-        self.url = eval(self._url_) if self._url_ is not None else None
-        if self.url is None:
-            self.url = os.environ.get('DBX_ROOT')
-        if self.url is None:
+        self._url_ = eval(self.url) if self.url is not None else None
+        if self._url_ is None:
+            self._url_ = os.environ.get('DBX_ROOT')
+        if self._url_ is None:
             raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT")
         self.storage_options = state.get('storage_options')
         if self.storage_options is None:
             self.storage_options = default_storage_options()
-        self.fs, self.root = fsspec.url_to_fs(self.url, **self.storage_options)
+        self.fs, self.root = fsspec.url_to_fs(self._url_, **self.storage_options)
         self._spec_ = state.get('spec')
         if self._spec_ is None:
             self.spec = asdict(self.CONFIG())
@@ -1388,8 +1388,8 @@ class Datablock:
     @functools.cached_property
     def _rootkwargs_(self):
         rootkwargs = {}
-        if self._url_ is not None:
-            rootkwargs['url'] = self._url_
+        if self.url is not None:
+            rootkwargs['url'] = self.url
         if self._anchor_ is not None:
             rootkwargs['anchor'] = self._anchor_
         if self._hash_ is not None:
@@ -1718,7 +1718,7 @@ class Datablock:
         return _dbxanchorpathx
 
     def _dbxanchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
-        _dbxanchorpathx = Datablock._dbxanchorpathx(self.url, self.anchor, x, fqcn=self.fqcn, storage_options=self.storage_options)
+        _dbxanchorpathx = Datablock._dbxanchorpathx(self._url_, self.anchor, x, fqcn=self.fqcn, storage_options=self.storage_options)
         _dbxanchorhashpathx = os.path.join(_dbxanchorpathx, self.hash)
         if ensure_dirpath:
             self.fs.makedirs(_dbxanchorhashpathx, exist_ok=True)
@@ -1825,7 +1825,7 @@ class Datablock:
                                          'version': self.version,
                                          'dbx_version': self.dbx_version,
                                          'revision': self.revision, 
-                                         'url': self.url,
+                                         'url': self._url_,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
                                          'keyby': self.keyby,
@@ -1910,7 +1910,7 @@ class Datablock:
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         entry = loc if loc is not None else iloc
-        return self.Journal(self.anchor, entry, url=self.url, storage_options=self.storage_options, **filter_kwargs)
+        return self.Journal(self.anchor, entry, url=self._url_, storage_options=self.storage_options, **filter_kwargs)
 
     def lastbuilt(self):
         """Return the most recent 'build:end' JournalEntry, or None."""

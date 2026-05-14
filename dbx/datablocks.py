@@ -1048,6 +1048,11 @@ class Datablock:
     def __build__(self, *args, **kwargs):
         return self
 
+    def flag(self, message: str, *, inline: bool = False):
+        """Write a journal entry with event='flag' and *message* as context."""
+        self._write_journal_entry(event="flag", context=message, inline_context=inline)
+        return self
+
     def leave_breadcrumbs(self):
         if hasattr(self, "TOPICFILES"):
             for topic in self.TOPICFILES:

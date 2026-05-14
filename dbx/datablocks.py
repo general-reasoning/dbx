@@ -987,11 +987,28 @@ class Datablock:
             )
             sys.stdout = Tee(stdout, _local_log)
             sys.stderr = Tee(stderr, _local_log)
+        _log_uploaded = False
         try:
             if not self.valid():
                 self.__pre_build__(*args, **kwargs)
                 self.__build__(*args, **kwargs)
                 self.build_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+                # Upload the captured log BEFORE __post_build__ writes the
+                # journal entry, so that the journal's fs.exists(logpath)
+                # check finds the file and records the path.
+                if self.capture_output:
+                    sys.stdout = stdout
+                    sys.stderr = stderr
+                    _local_log.close()
+                    _log_uploaded = True
+                    try:
+                        self.fs.put(_local_log.name, logpath)
+                        self.log.verbose(f"Captured output uploaded to {logpath}")
+                    except Exception as upload_exc:
+                        self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
+                    finally:
+                        import os as _os
+                        _os.unlink(_local_log.name)
                 self.__post_build__(*args, **kwargs)
             else:
                 self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
@@ -1002,11 +1019,10 @@ class Datablock:
             self.__post_build__(*args, event="build:exception", **kwargs)
             raise(e)
         finally:
-            if self.capture_output:
+            if self.capture_output and not _log_uploaded:
                 sys.stdout = stdout
                 sys.stderr = stderr
                 _local_log.close()
-                # Upload the local log to the (possibly remote) logpath
                 try:
                     self.fs.put(_local_log.name, logpath)
                     self.log.verbose(f"Captured output uploaded to {logpath}")

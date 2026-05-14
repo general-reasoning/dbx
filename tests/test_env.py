@@ -83,7 +83,7 @@ class TestEnvBasics:
         assert getenv('TEST_ROOT') == '/tmp/test_root_value'
 
     def test_getenv_missing_raises(self):
-        with pytest.raises(KeyError):
+        with pytest.raises(EnvironmentError, match="Required environment variable 'NONEXISTENT_VAR_12345' is not set"):
             getenv('NONEXISTENT_VAR_12345')
 
     def test_dbx_eval_resolves_specline(self):
@@ -108,7 +108,7 @@ class TestEnvInRoot:
 
     def test_root_underscore_is_specline(self):
         block = EnvBlock(url=env('TEST_ROOT'))
-        assert block._url_ == "$dbx.getenv('TEST_ROOT')"
+        assert block.url == "$dbx.getenv('TEST_ROOT')"
 
     def test_handle_contains_specline(self):
         block = EnvBlock(url=env('TEST_ROOT'))
@@ -233,6 +233,6 @@ class TestEnvQuoteRoundtrip:
         assert quote.startswith('$')
         restored = dbx_eval(quote)
         assert isinstance(restored, EnvBlock)
-        assert restored._url_ == "$dbx.getenv('RT_ROOT')"
+        assert restored.url == "$dbx.getenv('RT_ROOT')"
         assert restored.root == '/tmp/roundtrip'
         assert restored.hash == block.hash

@@ -813,12 +813,33 @@ class Datablock:
         self.log.detailed(f"======--------------> bid: {self.bid}")
 
     def __getstate__(self):
+        # Serialization convention for explicit params (url, spec, anchor, …):
+        #
+        #   _{k}_ = the *original* value the user passed in (or None).
+        #           This is what gets serialized so that the block can be
+        #           faithfully reconstructed by __setstate__.
+        #   {k}   = the *resolved* / post-processed value used at runtime.
+        #           For most params the resolution is simple (e.g. eval of
+        #           a default expression), but for ``url`` it involves
+        #           evaluating speclines like ``$dbx.getenv('KEY')``.
+        #
+        # The loop below prefers _{k}_ over {k} to capture the original.
+        #
+        # Exception — ``url``:
+        #   After the url/._url_ swap, the naming is inverted:
+        #     self.url  = raw specline (what the user passed)
+        #     self._url_ = resolved filesystem path
+        #   The _{k}_ pattern would pick up the resolved path, losing the
+        #   specline and breaking env() relocatability.  We override it
+        #   explicitly below.
         _state = {}
         for k in self.__explicit_params__():
             if hasattr(self, f"_{k}_"):
                 _state[k] = getattr(self, f"_{k}_")
             elif hasattr(self, k):
                 _state[k] = getattr(self, k)
+        # Override: serialize the raw specline, not the resolved _url_.
+        _state['url'] = self.url
         
         #TODO: why does 'log' end up in self.parameters?
         for k in self.parameters:

@@ -1933,10 +1933,7 @@ class Datablock:
                     continue
                 if 'revision' not in _df.columns:
                     _df = _df.rename(columns={'version': 'revision',})
-                if 'kwargs' in _df.columns and 'state' not in _df.columns:
-                    # Legacy entries: 'kwargs' was the state. 
-                    # We map it to 'state' and also keep it as 'kwargs' (fallback).
-                    _df['state'] = _df['kwargs']
+
                 dfs.append(_df)
             if len(dfs) > 0:
                 df = pd.concat(dfs)

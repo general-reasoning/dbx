@@ -272,6 +272,76 @@ class Tee:
         return getattr(self.files[0], name)
 
 
+class FDCapture:
+    """Capture OS-level stdout/stderr (FDs 1 & 2) and mirror to a log file.
+    
+    This captures everything, including C-extensions and subprocesses,
+    unlike sys.stdout/sys.stderr redirection.
+    """
+    def __init__(self, log_file):
+        self.log_file = log_file
+        import os
+        import threading
+        
+        self.saved_stdout_fd = os.dup(1)
+        self.saved_stderr_fd = os.dup(2)
+        
+        self.stdout_pipe_r, self.stdout_pipe_w = os.pipe()
+        self.stderr_pipe_r, self.stderr_pipe_w = os.pipe()
+
+        os.dup2(self.stdout_pipe_w, 1)
+        os.dup2(self.stderr_pipe_w, 2)
+        
+        self.stop_event = threading.Event()
+        
+        def pump(pipe_r, original_fd, log_f):
+            while not self.stop_event.is_set():
+                try:
+                    data = os.read(pipe_r, 4096)
+                    if not data:
+                        break
+                    os.write(original_fd, data)
+                    # We write binary to the log file since os.read gives bytes.
+                    # If log_f is opened in text mode, we must decode.
+                    if hasattr(log_f, 'buffer'):
+                        log_f.buffer.write(data)
+                        log_f.buffer.flush()
+                    else:
+                        log_f.write(data.decode('utf-8', errors='replace'))
+                        log_f.flush()
+                except OSError:
+                    break
+                    
+        self.t_out = threading.Thread(target=pump, args=(self.stdout_pipe_r, self.saved_stdout_fd, self.log_file))
+        self.t_err = threading.Thread(target=pump, args=(self.stderr_pipe_r, self.saved_stderr_fd, self.log_file))
+        
+        self.t_out.daemon = True
+        self.t_err.daemon = True
+        self.t_out.start()
+        self.t_err.start()
+
+    def close(self):
+        import sys
+        import os
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        os.dup2(self.saved_stdout_fd, 1)
+        os.dup2(self.saved_stderr_fd, 2)
+        
+        os.close(self.stdout_pipe_w)
+        os.close(self.stderr_pipe_w)
+        
+        self.t_out.join()
+        self.t_err.join()
+        
+        os.close(self.stdout_pipe_r)
+        os.close(self.stderr_pipe_r)
+        
+        os.close(self.saved_stdout_fd)
+        os.close(self.saved_stderr_fd)
+
+
 def ensure_path(path, *, storage_options=None):
     """Create *path* and all parent directories (``fsspec``-aware)."""
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))

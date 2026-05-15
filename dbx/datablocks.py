@@ -977,16 +977,13 @@ class Datablock:
         if self.capture_output:
             logpath = self._dbxanchorhashpathx('log', ext='log', ensure_dirpath=True)
             self.log.verbose(f"-------------------- Capturing stdout/stderr to {logpath} ------------------")
-            stdout = sys.stdout
-            stderr = sys.stderr
 
             # Write to a local temp file; upload to remote logpath at the end.
             import tempfile as _tempfile
             _local_log = _tempfile.NamedTemporaryFile(
                 mode='w', suffix='.log', prefix='dbx_capture_', delete=False, encoding='utf-8',
             )
-            sys.stdout = Tee(stdout, _local_log)
-            sys.stderr = Tee(stderr, _local_log)
+            _fd_capture = FDCapture(_local_log)
         _log_uploaded = False
         try:
             if not self.valid():
@@ -997,8 +994,7 @@ class Datablock:
                 # journal entry, so that the journal's fs.exists(logpath)
                 # check finds the file and records the path.
                 if self.capture_output:
-                    sys.stdout = stdout
-                    sys.stderr = stderr
+                    _fd_capture.close()
                     _local_log.close()
                     _log_uploaded = True
                     try:
@@ -1014,8 +1010,7 @@ class Datablock:
                 self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
         except KeyboardInterrupt as e:
             if self.capture_output and not _log_uploaded:
-                sys.stdout = stdout
-                sys.stderr = stderr
+                _fd_capture.close()
                 _local_log.close()
                 _log_uploaded = True
                 try:
@@ -1030,8 +1025,7 @@ class Datablock:
             raise(e)
         except Exception as e:
             if self.capture_output and not _log_uploaded:
-                sys.stdout = stdout
-                sys.stderr = stderr
+                _fd_capture.close()
                 _local_log.close()
                 _log_uploaded = True
                 try:
@@ -1046,8 +1040,7 @@ class Datablock:
             raise(e)
         finally:
             if self.capture_output and not _log_uploaded:
-                sys.stdout = stdout
-                sys.stderr = stderr
+                _fd_capture.close()
                 _local_log.close()
                 try:
                     self.fs.put(_local_log.name, logpath)

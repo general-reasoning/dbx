@@ -212,9 +212,10 @@ class TestCaptureOutputTempFileCleanup:
 class TestCaptureOutputContent:
     """Verify the captured log content is correct."""
 
-    def test_log_contains_stdout_output(self, tmp_path):
+    def test_log_contains_stdout_output(self, tmp_path, capfd):
         block = _make_block(SlowCapturedBlock, tmp_path)
-        block.build()
+        with capfd.disabled():
+            block.build()
 
         # Find the uploaded log file
         logpath = block._dbxanchorhashpathx('log', ext='log', ensure_dirpath=False)

@@ -874,9 +874,16 @@ class Datablock:
 
     def validtopic(self, topic=None):
         if topic is None:
-            valid = self.validpath(self.path())
+            path = self.path()
+        elif (hasattr(self, 'TOPICFILES') and not hasattr(self, 'TOPICS')
+              and self.TOPICFILES.get(topic) is None):
+            # Directory-based topic: TOPICFILES[topic]=None means the artifact
+            # is a directory, not a file.  path(topic) returns None in this
+            # case, so we check dirpath(topic) instead.
+            path = self.dirpath(topic)
         else:
-            valid = self.validpath(self.path(topic))
+            path = self.path(topic)
+        valid = self.validpath(path)
         self.log.detailed(f"{self.anchor}: topic {topic} valid: {valid}")
         return valid
     
@@ -948,7 +955,7 @@ class Datablock:
             return self.validtopic(topic)
         if not self.has_topics() and not self.has_topic():
             return True  # no TOPICFILE(S) → produces no artifacts → always valid
-        return self.validpaths(reduce=True)
+        return self.validtopics(reduce=True)
     
     def topics(self):
         if hasattr(self, "TOPICFILES"):

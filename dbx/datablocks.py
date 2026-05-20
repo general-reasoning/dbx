@@ -2188,7 +2188,7 @@ class Datastack(Datablock):
         )
         executor_kwargs = dict(
             n_workers=self.n_workers,
-            tag=f"BUILDING {len(callables)} callables [{self.__class__.__name__}, n_workers={self.n_workers}]",
+            tag=f"EXECUTING {len(callables)} callables [{self.__class__.__name__}, n_workers={self.n_workers}]",
         )
         if (hasattr(self, 'multiprocessing_start_method')
                 and self.multiprocessing_start_method is not None

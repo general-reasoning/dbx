@@ -2075,8 +2075,8 @@ class Datastack(Datablock):
             }
         return cls._executors_cache
 
-    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, multiprocessing_start_method: str = 'spawn', **kwargs):
-        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, multiprocessing_start_method=multiprocessing_start_method, **kwargs)
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, multiprocessing_start_method: str = 'spawn', v2: bool = False, **kwargs):
+        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, multiprocessing_start_method=multiprocessing_start_method, v2=v2, **kwargs)
         # Early validation only — executor_cls is a property so deepcopy/setstate paths work.
         executors = self._get_executors_()
         key = (self.parallelization or "inline").lower()
@@ -2152,6 +2152,13 @@ class Datastack(Datablock):
         Shard formation (``__shard__``) and building both happen inside
         the worker callables, so they are fully parallelized.
         """
+
+        if self.v2:
+            return self.__build_v2__(*args, **kwargs)
+        else:
+            return self.__build_v1__(*args, **kwargs)
+
+    def __build_v1__(self, *args, **kwargs):
         self.__split__()
         makers = [self.ShardMaker(idx) for idx in range(self.n_shards)]
         self.log.info(
@@ -2173,10 +2180,51 @@ class Datastack(Datablock):
         self.log.info(f"Build complete: {self.__class__.__name__}")
         return self
 
-    def __split__(self):
-        return self
+    def __build_v2__(self, *args, **kwargs):
+        callables, callable_kwargs = self.__split__(*args, **kwargs)
+        self.log.info(
+            f"Building {self.__class__.__name__}: shards using {len(callables)} callables, "
+            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
+        )
+        executor_kwargs = dict(
+            n_workers=self.n_workers,
+            tag=f"BUILDING {len(callables)} callables [{self.__class__.__name__}, n_workers={self.n_workers}]",
+        )
+        if (hasattr(self, 'multiprocessing_start_method')
+                and self.multiprocessing_start_method is not None
+                and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
+            executor_kwargs['start_method'] = self.multiprocessing_start_method
+        executor = self.executor_cls(**executor_kwargs)
+        callable_results = executor.exec_callables(callables, self, **callable_kwargs)
+        self.log.info(f"Stacking the results of {len(callable_results)} callables of {self.__class__.__name__}")
+        result = self.__stack__(callable_results)
+        self.log.info(f"Build complete: {self.__class__.__name__}")
+        return result
 
-    def __stack__(self):
+    def __split__(self, *args, **kwargs):
+        if self.v2:
+            return self.__split_v2__(*args, **kwargs)
+        else:
+            return self.__split_v1__(*args, **kwargs)
+
+    def __split_v1__(self, *args, **kwargs):
+        return self
+    
+    def __split_v2__(self, *args, **kwargs):
+        callables = [self.ShardMaker(idx) for idx in range(self.n_shards)]
+        callable_kwargs = dict(build=True)
+        return callables, callable_kwargs
+
+    def __stack__(self, results=None):
+        if self.v2:
+            return self.__stack_v2__(results)
+        else:
+            return self.__stack_v1__()
+
+    def __stack_v1__(self):
+        return self
+    
+    def __stack_v2__(self, results):
         return self
 
     def UNSAFE_clear_shards(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):

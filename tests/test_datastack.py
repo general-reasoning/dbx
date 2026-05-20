@@ -206,6 +206,19 @@ class TestDatastackBuild(unittest.TestCase):
         for shard in shards:
             self.assertTrue(shard.valid(), f"Shard {shard.cfg.idx} was not built")
 
+    def test_v2_build(self):
+        """v2 build should build all shards."""
+        stack = SimpleStack(
+            url=self.tmpdir,
+            spec=dict(total_items=4, shard_size=2),
+            v2=True,
+        )
+        stack.build()
+        # Verify shards were built by checking files exist
+        shards = stack.shards()
+        for shard in shards:
+            self.assertTrue(shard.valid(), f"Shard {shard.cfg.idx} was not built")
+
     def test_build_returns_self(self):
         """build() should return the stack itself."""
         stack = SimpleStack(

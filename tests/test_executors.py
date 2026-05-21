@@ -135,6 +135,22 @@ def test_inline_executor_args():
     assert res == [10] * 5
 
 # ---------------------------------------------------------
+# Shuffle Callables Tests
+# ---------------------------------------------------------
+def test_multithreading_executor_shuffle():
+    ex = MultithreadingCallableExecutor(n_workers=2, shuffle_callables=True)
+    # 50 items to ensure shuffling actually happens and we can unshuffle it properly
+    funcs = [functools.partial(dummy_func, i) for i in range(50)]
+    res = ex.execute(funcs)
+    assert res == [i * 2 for i in range(50)]
+
+def test_multiprocessing_executor_shuffle():
+    ex = MultiprocessingCallableExecutor(n_workers=2, shuffle_callables=True)
+    funcs = [functools.partial(dummy_func, i) for i in range(50)]
+    res = ex.execute(funcs)
+    assert res == [i * 2 for i in range(50)]
+
+# ---------------------------------------------------------
 # MultithreadingDatablocksBuilder Tests
 # ---------------------------------------------------------
 def test_multithreading_builder_success():

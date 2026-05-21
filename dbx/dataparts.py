@@ -1153,7 +1153,9 @@ class RayCallableExecutor:
     """
 
     def __init__(self, *, n_workers: int = 1, workers=None, worker_factory=None,
-                 batch_size: int = None, tag: str = "", log: Logger = Logger()):
+                 batch_size: int = None, tag: str = "",
+                 worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
+                 log: Logger = Logger()):
         if workers is not None:
             self.workers = workers
             self.n_workers = len(workers)
@@ -1167,6 +1169,8 @@ class RayCallableExecutor:
             )
         self.batch_size = batch_size
         self.tag = tag
+        self.worker_done_timeout_sec = worker_done_timeout_sec
+        self.shuffle_callables = shuffle_callables
         self.log = log
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
@@ -1357,10 +1361,14 @@ class InlineCallableExecutor:
 
     Useful as a no-parallelism baseline and for debugging.
     """
-    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
+    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "",
+                 worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
+                 log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
+        self.worker_done_timeout_sec = worker_done_timeout_sec
+        self.shuffle_callables = shuffle_callables
         self.log = log
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
@@ -1440,6 +1448,7 @@ class _TorchCallableExecutorMixin_:
     """
 
     def __init__(self, *, devices: list[str] = 'cuda', batch_size: int = None,
+                 worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  tag: str = "", log: Logger = Logger()):
         if not _TORCH_AVAILABLE:
             raise ImportError(
@@ -1449,7 +1458,9 @@ class _TorchCallableExecutorMixin_:
         if isinstance(devices, str):
             devices = [devices]
         # Initialise the concrete executor base (Thread or Process variant).
-        super().__init__(n_workers=len(devices), batch_size=batch_size, tag=tag, log=log)
+        super().__init__(n_workers=len(devices), batch_size=batch_size, tag=tag,
+                         worker_done_timeout_sec=worker_done_timeout_sec,
+                         shuffle_callables=shuffle_callables, log=log)
         self.devices = devices
 
     # ------------------------------------------------------------------

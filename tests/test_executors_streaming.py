@@ -63,6 +63,30 @@ def test_executor_streaming_failure(executor_class, n_workers):
     
     assert len(results) >= 0
 
+@pytest.mark.parametrize("executor_class,n_workers", [
+    (InlineCallableExecutor, 1),
+    (MultithreadingCallableExecutor, 2),
+    (MultiprocessingCallableExecutor, 2),
+])
+def test_executor_streaming_timeout(executor_class, n_workers):
+    # Set a very short timeout
+    if executor_class == InlineCallableExecutor:
+        # InlineExecutor doesn't strictly have worker_done_timeout_sec, but we pass it anyway or ignore
+        pytest.skip("InlineExecutor doesn't use queue timeouts in the same way")
+    else:
+        ex = executor_class(n_workers=n_workers, batch_size=1, worker_done_timeout_sec=0.1)
+        
+    funcs = [
+        functools.partial(dummy_func, 1),
+        functools.partial(delay_func, 2, delay=0.5), # will cause timeout
+        functools.partial(dummy_func, 3),
+    ]
+    
+    gen = ex.execute_streaming(funcs)
+    results = list(gen)
+    # The timeout breaks the loop, so results should be incomplete (less than 3)
+    assert len(results) < 3
+
 def test_executor_streaming_order():
     ex = MultithreadingCallableExecutor(n_workers=2, batch_size=1)
     

@@ -947,7 +947,17 @@ class _CallableExecutorBase_:
                 next_to_yield = 0   # index of the next item to emit
                 emit_buf = []       # accumulator for batch_size > 1 mode
                 while done_count < len(callables):
-                    msg = result_queue.get()
+                    try:
+                        msg = result_queue.get(timeout=self.worker_done_timeout_sec
+                                               if hasattr(self, 'worker_done_timeout_sec')
+                                               else 1000)
+                    except Exception:
+                        # Timed out — some results never arrived.
+                        self.log.info(
+                            f"result_queue timeout: received {done_count}/{len(callables)} results. "
+                            f"Missing items. Stream will terminate early."
+                        )
+                        break
                     if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])
                         _, worker_idx, batch = msg
                         done_count += len(batch)

@@ -63,6 +63,19 @@ def test_multithreading_executor_args():
     res = ex.execute(funcs, 5)
     assert res == [10] * 5
 
+def test_multithreading_executor_timeout():
+    # Set a very short timeout to simulate deadlock
+    ex = MultithreadingCallableExecutor(n_workers=2, worker_done_timeout_sec=0.1)
+    funcs = [
+        functools.partial(dummy_func, 1),
+        functools.partial(delay_func, 2, delay=0.5), # will cause timeout
+        functools.partial(dummy_func, 3),
+    ]
+    res = ex.execute(funcs)
+    # Because of the timeout, at least one payload should be None
+    assert None in res
+    assert len(res) == 3
+
 # ---------------------------------------------------------
 # MultiprocessingCallableExecutor Tests
 # ---------------------------------------------------------
@@ -85,6 +98,19 @@ def test_multiprocessing_executor_args():
     funcs = [functools.partial(delay_func, delay=0.01) for _ in range(5)]
     res = ex.execute(funcs, 5)
     assert res == [10] * 5
+
+def test_multiprocessing_executor_timeout():
+    # Set a very short timeout to simulate deadlock
+    ex = MultiprocessingCallableExecutor(n_workers=2, worker_done_timeout_sec=0.1)
+    funcs = [
+        functools.partial(dummy_func, 1),
+        functools.partial(delay_func, 2, delay=0.5), # will cause timeout
+        functools.partial(dummy_func, 3),
+    ]
+    res = ex.execute(funcs)
+    # Because of the timeout, at least one payload should be None
+    assert None in res
+    assert len(res) == 3
 
 # ---------------------------------------------------------
 # InlineCallableExecutor Tests

@@ -750,7 +750,17 @@ class _CallableExecutorBase_:
                     result_queue.put((True, worker_idx, batch))
                     batch = []
                 tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
-                result_queue.put((False, worker_idx, offset + i, (exception, tbstr)))
+                # Guard against unpicklable exceptions (e.g. Azure SDK,
+                # fsspec exceptions holding open sockets/file handles).
+                # If the original exception can't be pickled, substitute
+                # a plain RuntimeError carrying the string representation.
+                try:
+                    result_queue.put((False, worker_idx, offset + i, (exception, tbstr)))
+                except Exception:
+                    safe_exc = RuntimeError(
+                        f"[unpicklable {type(exception).__name__}] {exception}"
+                    )
+                    result_queue.put((False, worker_idx, offset + i, (safe_exc, tbstr)))
                 break
             if len(batch) >= batch_size:
                 result_queue.put((True, worker_idx, batch))
@@ -764,8 +774,20 @@ class _CallableExecutorBase_:
         else:
             self.log.debug(f"Abandoning callables on {worker_label} due to exception")
         self.log.debug(f"Waiting on done_queue on {worker_label}")
+        # Use a timeout to avoid blocking forever if the main process
+        # is stuck (e.g. because it never received all expected results).
+        _timeout = getattr(self, 'worker_done_timeout_sec', 1000)
         while True:
-            if done_queue.get() is None:
+            try:
+                sentinel = done_queue.get(timeout=_timeout)
+            except Exception:
+                # Timed out or queue broken — exit gracefully
+                self.log.info(
+                    f"done_queue timeout ({_timeout}s) on {worker_label}, "
+                    f"exiting without sentinel"
+                )
+                break
+            if sentinel is None:
                 self.log.debug(f"Done signal received on {worker_label}")
                 break
 
@@ -829,7 +851,20 @@ class _CallableExecutorBase_:
                 # do not inherit a live tqdm instance and redraw it on exit.
                 progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=False))
                 while done_count < len(callables):
-                    msg = result_queue.get()
+                    try:
+                        msg = result_queue.get(timeout=self.worker_done_timeout_sec
+                                               if hasattr(self, 'worker_done_timeout_sec')
+                                               else 1000)
+                    except Exception:
+                        # Timed out — some results never arrived.
+                        received = {i for i, p in enumerate(payloads) if p is not None}
+                        missing = sorted(set(range(len(callables))) - received)
+                        self.log.info(
+                            f"result_queue timeout: received {done_count}/{len(callables)} results. "
+                            f"Missing item indices ({len(missing)}): {missing[:20]}"
+                            f"{'...' if len(missing) > 20 else ''}"
+                        )
+                        break
                     if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])
                         _, worker_idx, batch = msg
                         for item_idx, item_payload in batch:
@@ -970,10 +1005,12 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
-    def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "", log: Logger = Logger()):
+    def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
+                 worker_done_timeout_sec: int = 1000, log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
+        self.worker_done_timeout_sec = worker_done_timeout_sec
         self.log = log
 
     @property
@@ -1023,10 +1060,12 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
     """
 
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
-                 start_method: str = 'spawn', log: Logger = Logger()):
+                 start_method: str = 'spawn', worker_done_timeout_sec: int = 1000,
+                 log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
+        self.worker_done_timeout_sec = worker_done_timeout_sec
         self.log = log
         # Use 'spawn' by default to avoid fork-safety issues with HTTP clients
         # (e.g. Azure SDK, fsspec AzureBlobFileSystem) and CUDA contexts.

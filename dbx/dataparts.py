@@ -830,6 +830,17 @@ class _CallableExecutorBase_:
             done_queue   = self._make_queue()
             abort_event  = self._make_event()
             progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=False))
+            # Optionally shuffle callables to distribute heterogeneous
+            # workloads (e.g. mix of already-built and unbuilt shards)
+            # evenly across workers.
+            shuffle = getattr(self, 'shuffle_callables', False)
+            if shuffle:
+                import random as _random
+                perm = list(range(len(callables)))
+                _random.Random(0).shuffle(perm)
+                callables = [callables[i] for i in perm]
+            else:
+                perm = None
             callable_lists   = np.array_split(callables, self._n_workers)
             callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
             workers = [
@@ -868,7 +879,8 @@ class _CallableExecutorBase_:
                     if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])
                         _, worker_idx, batch = msg
                         for item_idx, item_payload in batch:
-                            payloads[item_idx] = item_payload
+                            orig_idx = perm[item_idx] if perm is not None else item_idx
+                            payloads[orig_idx] = item_payload
                             done_count += 1
                         progress_bar.update(len(batch))
                     else:       # failure: (False, worker_idx, item_idx, (exc, tbstr))
@@ -1016,11 +1028,14 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
     """
 
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
-                 worker_done_timeout_sec: int = 1000, log: Logger = Logger()):
+                 worker_done_timeout_sec: int = 1000,
+                 shuffle_callables: bool = False,
+                 log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
         self.worker_done_timeout_sec = worker_done_timeout_sec
+        self.shuffle_callables = shuffle_callables
         self.log = log
 
     @property
@@ -1071,11 +1086,13 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
 
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
                  start_method: str = 'spawn', worker_done_timeout_sec: int = 1000,
+                 shuffle_callables: bool = False,
                  log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
         self.worker_done_timeout_sec = worker_done_timeout_sec
+        self.shuffle_callables = shuffle_callables
         self.log = log
         # Use 'spawn' by default to avoid fork-safety issues with HTTP clients
         # (e.g. Azure SDK, fsspec AzureBlobFileSystem) and CUDA contexts.

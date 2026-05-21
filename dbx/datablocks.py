@@ -2075,8 +2075,8 @@ class Datastack(Datablock):
             }
         return cls._executors_cache
 
-    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, multiprocessing_start_method: str = 'spawn', v2: bool = False, **kwargs):
-        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, multiprocessing_start_method=multiprocessing_start_method, v2=v2, **kwargs)
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False, v2: bool = False, **kwargs):
+        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, shuffle_callables=shuffle_callables, v2=v2, **kwargs)
         # Early validation only — executor_cls is a property so deepcopy/setstate paths work.
         executors = self._get_executors_()
         key = (self.parallelization or "inline").lower()
@@ -2169,6 +2169,10 @@ class Datastack(Datablock):
             n_workers=self.n_workers,
             tag=f"BUILDING {len(makers)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]",
         )
+        if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
+            executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec
+        if hasattr(self, 'shuffle_callables') and self.shuffle_callables:
+            executor_kwargs['shuffle_callables'] = self.shuffle_callables
         if (hasattr(self, 'multiprocessing_start_method')
                 and self.multiprocessing_start_method is not None
                 and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
@@ -2190,6 +2194,10 @@ class Datastack(Datablock):
             n_workers=self.n_workers,
             tag=f"EXECUTING {len(callables)} callables [{self.__class__.__name__}, n_workers={self.n_workers}]",
         )
+        if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
+            executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec
+        if hasattr(self, 'shuffle_callables') and self.shuffle_callables:
+            executor_kwargs['shuffle_callables'] = self.shuffle_callables
         if (hasattr(self, 'multiprocessing_start_method')
                 and self.multiprocessing_start_method is not None
                 and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):

@@ -1086,20 +1086,29 @@ class Datablock:
             )
         return self
 
-    def build_tree(self, *args, exclude_self: bool = False, **kwargs):
-        self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
-        exemptions = set(getattr(self, 'BUILD_TREE_EXEMPTIONS', ()))
+    def _iter_cfg_blocks(self, exemptions_attr=None, skip_callback=None):
+        """Yield (key, Datablock) pairs from self.cfg that are not in the given exemptions list."""
+        exemptions = set(getattr(self, exemptions_attr, ())) if exemptions_attr else set()
         for s in self.spec.keys():
             if s in exemptions:
-                self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (BUILD_TREE_EXEMPTIONS) --------")
+                if skip_callback:
+                    skip_callback(s)
                 continue
             c = getattr(self.cfg, s)
             if isinstance(c, Datablock):
-                self._write_journal_entry(event=f"build_tree:{s}:begin")
-                self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: BEGIN --------------------------------")
-                c.build_tree(*args, **kwargs)   
-                self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: END --------------------------------")
-                self._write_journal_entry(event=f"build_tree:{s}:end")
+                yield s, c
+
+    def build_tree(self, *args, exclude_self: bool = False, **kwargs):
+        self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
+        def skip_cb(s):
+            self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (BUILD_TREE_EXEMPTIONS) --------")
+        
+        for s, c in self._iter_cfg_blocks('BUILD_TREE_EXEMPTIONS', skip_callback=skip_cb):
+            self._write_journal_entry(event=f"build_tree:{s}:begin")
+            self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: BEGIN --------------------------------")
+            c.build_tree(*args, **kwargs)   
+            self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: END --------------------------------")
+            self._write_journal_entry(event=f"build_tree:{s}:end")
         if not exclude_self:
             self.build(*args, **kwargs)
         return self
@@ -1107,18 +1116,20 @@ class Datablock:
     def valid_cfg(self, *, reduce=False):
         if not self.validate_cfg:
             return True if reduce else {}
-        exemptions = set(getattr(self, 'VALIDATE_CFG_EXEMPTIONS', ()))
-        results = {}
-        for s in self.spec.keys():
-            if s in exemptions:
-                continue
-            c = getattr(self.cfg, s)
-            if isinstance(c, Datablock):
-                results[s] = c.valid()
+        results = {s: c.valid() for s, c in self._iter_cfg_blocks('VALIDATE_CFG_EXEMPTIONS')}
         if reduce:
-            return all(list(results.values()))
+            return all(list(results.values())) if results else True
         else:
             return results
+
+    def valid_tree(self):
+        """Return a nested dictionary mapping cfg keys to their valid status and the valid status of their subtrees."""
+        if not self.validate_cfg:
+            return {}
+        return {
+            s: {'valid': c.valid(), 'tree': c.valid_tree()}
+            for s, c in self._iter_cfg_blocks('VALIDATE_CFG_EXEMPTIONS')
+        }
     
     def read(self, topic=None):
         if self.has_topics():

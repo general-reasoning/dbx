@@ -125,6 +125,21 @@ class CountingBlock(Datablock):
             f.write(str(CountingBlock._build_count))
 
 
+class NestedBlock(Datablock):
+    """Datablock containing another Datablock to test valid_tree and valid_cfg."""
+    TOPICFILE = 'nested.txt'
+    
+    @dataclass
+    class CONFIG(Datablock.CONFIG):
+        child: SingleTopicBlock = None
+        
+    def __build__(self):
+        path = self.path()
+        self.dirpath(ensure=True)
+        with open(path, 'w') as f:
+            f.write("nested")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -554,3 +569,72 @@ class TestDirTopicClear:
         assert not os.path.exists(block.dirpath('images'))
         assert os.path.isdir(block.dirpath('masks'))
         assert os.listdir(block.dirpath('masks'))
+
+
+# ---------------------------------------------------------------------------
+# 8. valid_cfg() and valid_tree()
+# ---------------------------------------------------------------------------
+
+class TestValidTree:
+    
+    def test_valid_tree_invalid_initial(self, tmp_path):
+        from dbx.datablocks import quote
+        child = SingleTopicBlock(url=str(tmp_path / "child"))
+        parent = NestedBlock(
+            url=str(tmp_path / "parent"),
+            spec={'child': quote(child)},
+        )
+        
+        # Initially both are invalid
+        assert parent.valid() is False
+        assert child.valid() is False
+        
+        assert parent.valid_cfg() == {'child': False}
+        assert parent.valid_cfg(reduce=True) is False
+        
+        assert parent.valid_tree() == {
+            'child': {
+                'valid': False,
+                'tree': {}
+            }
+        }
+        
+    def test_valid_tree_mixed_validity(self, tmp_path):
+        from dbx.datablocks import quote
+        child = SingleTopicBlock(url=str(tmp_path / "child"))
+        parent = NestedBlock(
+            url=str(tmp_path / "parent"),
+            spec={'child': quote(child)},
+        )
+        
+        # Build child only
+        child.build()
+        assert child.valid() is True
+        assert parent.valid() is False
+        
+        assert parent.valid_cfg() == {'child': True}
+        assert parent.valid_cfg(reduce=True) is True
+        
+        assert parent.valid_tree() == {
+            'child': {
+                'valid': True,
+                'tree': {}
+            }
+        }
+        
+        # Build parent
+        parent.build()
+        assert parent.valid() is True
+        
+        # Clear child (parent remains valid but its upstream is invalid)
+        child.UNSAFE_clear(OVERRIDE=True)
+        assert child.valid() is False
+        assert parent.valid() is True
+        
+        assert parent.valid_cfg() == {'child': False}
+        assert parent.valid_tree() == {
+            'child': {
+                'valid': False,
+                'tree': {}
+            }
+        }

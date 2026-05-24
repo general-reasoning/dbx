@@ -217,15 +217,18 @@ class LogVolume:
 
 
 
-def journal(cls_or_df, entry=None, url=None, storage_options=None, **filter_kwargs):
+def journal(cls_or_df, loc=None, *, iloc=None, url=None, storage_options=None, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
 
     Parameters
     ----------
     cls_or_df : type | str | pd.DataFrame
         A Datablock class, an anchor string, or a raw DataFrame.
-    entry : int, optional
-        If given, return a single :class:`JournalEntry` at this index.
+    loc : int, optional
+        If given, return a single :class:`JournalEntry` at this label index.
+    iloc : int, optional
+        If given, return a single :class:`JournalEntry` at this positional index.
+        Mutually exclusive with *loc*.
     url : str, optional
         Storage URL.  Defaults to ``DBX_ROOT``.
     storage_options : dict, optional
@@ -237,6 +240,8 @@ def journal(cls_or_df, entry=None, url=None, storage_options=None, **filter_kwar
     -------
     JournalFrame or JournalEntry
     """
+    if loc is not None and iloc is not None:
+        raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_or_df, pd.DataFrame):
         return JournalFrame(cls_or_df, storage_options=storage_options, **filter_kwargs)
     else:
@@ -244,7 +249,7 @@ def journal(cls_or_df, entry=None, url=None, storage_options=None, **filter_kwar
             anchor = cls_or_df
         else:
             anchor = cls_or_df.__module__ + "." + cls_or_df.__name__
-        return Datablock.Journal(anchor, entry=entry, url=url, storage_options=storage_options, **filter_kwargs)
+        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, **filter_kwargs)
 
 
 
@@ -1931,7 +1936,9 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, entry: int = None, *, url=None, storage_options=None, **filter_kwargs):
+    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, **filter_kwargs):
+        if loc is not None and iloc is not None:
+            raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         if url is None:
             url = os.environ.get('DBX_ROOT')
         if storage_options is None:
@@ -1976,8 +1983,10 @@ class Datablock:
         else:
             df = None
         journal = JournalFrame(df, storage_options=storage_options, **filter_kwargs)
-        if entry is not None:
-            result = JournalEntry(journal.loc[entry].dropna(), storage_options=storage_options)
+        if loc is not None:
+            result = JournalEntry(journal.loc[loc].dropna(), storage_options=storage_options)
+        elif iloc is not None:
+            result = JournalEntry(journal.iloc[iloc].dropna(), storage_options=storage_options)
         else:
             result = journal
         return result
@@ -1985,8 +1994,7 @@ class Datablock:
     def journal(self, loc: int = None, *, iloc: int = None, **filter_kwargs):
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-        entry = loc if loc is not None else iloc
-        return self.Journal(self.anchor, entry, url=self._url_, storage_options=self.storage_options, **filter_kwargs)
+        return self.Journal(self.anchor, loc=loc, iloc=iloc, url=self._url_, storage_options=self.storage_options, **filter_kwargs)
 
     def lastbuilt(self):
         """Return the most recent 'build:end' JournalEntry, or None."""

@@ -3,9 +3,9 @@ Tests for dbx.journal() / Datablock.Journal():
 
 1. FileNotFoundError is raised when the journal directory does not exist.
 2. A JournalFrame is returned when the directory exists but has no parquet files.
-3. entry=N correctly returns the Nth JournalEntry.
+3. loc= and iloc= correctly return a JournalEntry.
 4. Regression: root must not be passed positionally (would silently land in
-   the 'entry' slot of Datablock.Journal before the fix).
+   the 'loc' slot of Datablock.Journal before the fix).
 """
 import os
 import datetime
@@ -111,23 +111,23 @@ class TestJournalEmptyDir:
 
 
 # ---------------------------------------------------------------------------
-# 3. entry= parameter returns a JournalEntry
+# 3. loc/iloc parameter returns a JournalEntry
 # ---------------------------------------------------------------------------
 
-class TestJournalEntryParam:
+class TestJournalLocIlocParam:
 
-    def test_entry_returns_journal_entry(self, tmp_path, monkeypatch):
-        """journal(cls, entry=0, url=...) should return the 0th JournalEntry."""
+    def test_loc_returns_journal_entry(self, tmp_path, monkeypatch):
+        """journal(cls, loc=0, url=...) should return the 0th JournalEntry."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="deadbeef", event="build")
 
-        result = journal(FakeBlock, entry=0, url=root)
+        result = journal(FakeBlock, loc=0, url=root)
         assert isinstance(result, JournalEntry)
 
-    def test_entry_none_returns_journalframe(self, tmp_path, monkeypatch):
-        """journal(cls, url=...) with no entry should return the full JournalFrame."""
+    def test_loc_none_returns_journalframe(self, tmp_path, monkeypatch):
+        """journal(cls, url=...) with no loc/iloc should return the full JournalFrame."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
@@ -137,15 +137,36 @@ class TestJournalEntryParam:
         assert isinstance(result, JournalFrame)
         assert len(result) == 1
 
-    def test_entry_value_matches_row(self, tmp_path, monkeypatch):
+    def test_loc_value_matches_row(self, tmp_path, monkeypatch):
         """The returned JournalEntry should contain the correct hash."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="myhash42", event="build")
 
-        entry = journal(FakeBlock, entry=0, url=root)
+        entry = journal(FakeBlock, loc=0, url=root)
         assert entry.get('hash') == "myhash42"
+
+    def test_iloc_returns_journal_entry(self, tmp_path, monkeypatch):
+        """journal(cls, iloc=0, url=...) should return the 0th JournalEntry via positional index."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        journal_dir = _journal_dir(root, FakeBlock)
+        _write_fake_journal_entry(journal_dir, hash_val="iloc_hash", event="build")
+
+        result = journal(FakeBlock, iloc=0, url=root)
+        assert isinstance(result, JournalEntry)
+        assert result.get('hash') == "iloc_hash"
+
+    def test_loc_and_iloc_raises(self, tmp_path, monkeypatch):
+        """Passing both loc and iloc should raise ValueError."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        journal_dir = _journal_dir(root, FakeBlock)
+        _write_fake_journal_entry(journal_dir, hash_val="both", event="build")
+
+        with pytest.raises(ValueError, match="loc.*iloc"):
+            journal(FakeBlock, loc=0, iloc=0, url=root)
 
 
 # ---------------------------------------------------------------------------

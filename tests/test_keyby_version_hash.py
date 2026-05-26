@@ -1,8 +1,12 @@
-"""Tests for keyby='version_hash' on Datablock.
+"""Tests for keyby='version_hash', 'tag_hash', and 'tag_version_hash' on Datablock.
 
-version_hash produces "version={version}/{hash}" when VERSION is set,
-otherwise falls back to plain hash — mirroring taghash but keyed on version.
+- version_hash:      "version={version}/{hash}", falls back to hash
+- tag_hash:          alias for 'taghash' — "{tag}/{shorthash}", falls back to hash
+- tag_version_hash:  "{tag}/version={version}/{shorthash}", skipping None parts,
+                     falls back to hash when both tag and version are None
 """
+import copy
+import pickle
 import pytest
 from dataclasses import dataclass
 from dbx.datablocks import Datablock
@@ -54,9 +58,9 @@ def _allow_dirty(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# version_hash
+# ===========================================================================
 
 class TestKeybyVersionHash:
 
@@ -73,7 +77,7 @@ class TestKeybyVersionHash:
         assert block.key == block.hash
 
     def test_key_changes_with_version(self, tmp_path):
-        """Two subclasses with different VERSIONs produce different keys even if hash matches."""
+        """Two subclasses with different VERSIONs produce different key prefixes."""
         class V1(Datablock):
             VERSION = "1"
             TOPICFILE = 'a.txt'
@@ -83,7 +87,6 @@ class TestKeybyVersionHash:
 
         b1 = V1(url=str(tmp_path), keyby='version_hash')
         b2 = V2(url=str(tmp_path), keyby='version_hash')
-        # Even if hashes happen to differ, the version prefix must differ
         assert b1.key.startswith("version=1/")
         assert b2.key.startswith("version=2/")
 
@@ -106,7 +109,6 @@ class TestKeybyVersionHash:
 
     def test_pickle_roundtrip(self, tmp_path):
         """keyby='version_hash' survives pickle serialization."""
-        import pickle
         block = VersionedBlock(url=str(tmp_path), keyby='version_hash')
         restored = pickle.loads(pickle.dumps(block))
         assert restored.keyby == 'version_hash'
@@ -114,9 +116,87 @@ class TestKeybyVersionHash:
 
     def test_deepcopy_roundtrip(self, tmp_path):
         """keyby='version_hash' survives deepcopy."""
-        import copy
         block = VersionedBlock(url=str(tmp_path), keyby='version_hash')
         restored = copy.deepcopy(block)
         assert restored.keyby == 'version_hash'
         assert restored.key == block.key
         assert restored.hash == block.hash
+
+
+# ===========================================================================
+# tag_hash (alias for taghash)
+# ===========================================================================
+
+class TestKeybyTagHash:
+
+    def test_tag_hash_matches_taghash(self, tmp_path):
+        """tag_hash and taghash must produce identical keys."""
+        a = VersionedBlock(url=str(tmp_path), keyby='taghash', tag='mytag')
+        b = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='mytag')
+        assert a.key == b.key
+
+    def test_tag_hash_without_tag_falls_back(self, tmp_path):
+        """tag_hash without tag= falls back to hash, just like taghash."""
+        block = VersionedBlock(url=str(tmp_path), keyby='tag_hash')
+        assert block.key == block.hash
+
+    def test_tag_hash_with_tag(self, tmp_path):
+        """tag_hash with tag= produces '{tag}/{shorthash}'."""
+        block = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='run1')
+        assert block.key == f"run1/{block.shorthash}"
+
+    def test_tag_hash_pickle_roundtrip(self, tmp_path):
+        block = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='t')
+        restored = pickle.loads(pickle.dumps(block))
+        assert restored.keyby == 'tag_hash'
+        assert restored.key == block.key
+
+
+# ===========================================================================
+# tag_version_hash
+# ===========================================================================
+
+class TestKeybyTagVersionHash:
+
+    def test_tag_and_version(self, tmp_path):
+        """Both tag and version present: '{tag}/version={version}/{shorthash}'."""
+        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp1')
+        expected = f"exp1/version=v3/{block.shorthash}"
+        assert block.key == expected
+
+    def test_tag_only(self, tmp_path):
+        """Tag present, no version: '{tag}/{shorthash}'."""
+        block = UnversionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp2')
+        assert block.version is None
+        expected = f"exp2/{block.shorthash}"
+        assert block.key == expected
+
+    def test_version_only(self, tmp_path):
+        """No tag, version present: 'version={version}/{shorthash}'."""
+        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash')
+        expected = f"version=v3/{block.shorthash}"
+        assert block.key == expected
+
+    def test_neither_tag_nor_version(self, tmp_path):
+        """Neither tag nor version: falls back to full hash."""
+        block = UnversionedBlock(url=str(tmp_path), keyby='tag_version_hash')
+        assert block.version is None
+        assert block.key == block.hash
+
+    def test_build_and_read(self, tmp_path):
+        """tag_version_hash block can build and read."""
+        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='b', spec=dict(x=7))
+        block.build()
+        assert block.valid()
+        assert block.read() == "x=7"
+
+    def test_pickle_roundtrip(self, tmp_path):
+        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='t')
+        restored = pickle.loads(pickle.dumps(block))
+        assert restored.keyby == 'tag_version_hash'
+        assert restored.key == block.key
+
+    def test_deepcopy_roundtrip(self, tmp_path):
+        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='t')
+        restored = copy.deepcopy(block)
+        assert restored.key == block.key

@@ -227,7 +227,7 @@ class TestDatablockSerialization:
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_keyby_variants(self, url, roundtrip):
         """All keyby modes survive the roundtrip."""
-        for keyby in ('hash', 'tag', 'taghash', 'version_hash'):
+        for keyby in ('hash', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash'):
             kwargs = dict(keyby=keyby)
             if keyby == 'tag':
                 kwargs['tag'] = 'test-tag'

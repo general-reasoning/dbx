@@ -315,13 +315,23 @@ class JournalEntry(pd.Series):
             return self.hash
         elif keyby == 'tag':
             return self.tag
-        elif keyby == 'taghash':
+        elif keyby in ('taghash', 'tag_hash'):
             if self.tag is None:
                 return self.hash
             return f"{self.tag}/{self.shorthash}"
         elif keyby == 'version_hash':
             if self.version is not None:
                 return f"version={self.version}/{self.hash}"
+            return self.hash
+        elif keyby == 'tag_version_hash':
+            parts = []
+            if self.tag is not None:
+                parts.append(self.tag)
+            if self.version is not None:
+                parts.append(f"version={self.version}")
+            if parts:
+                parts.append(self.shorthash)
+                return '/'.join(parts)
             return self.hash
         elif keyby == 'handle':
             h = self.get('handle')
@@ -778,8 +788,8 @@ class Datablock:
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'taghash')
-        if self.keyby not in (None, 'hash', 'handle', 'tag', 'taghash', 'version_hash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'handle', 'tag', 'taghash', 'version_hash', 'custom', got {self.keyby!r}")
+        if self.keyby not in (None, 'hash', 'handle', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'handle', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -1672,13 +1682,23 @@ class Datablock:
             return self.handle()
         elif self.keyby == 'tag':
             return self.tag
-        elif self.keyby == 'taghash':
+        elif self.keyby in ('taghash', 'tag_hash'):
             if self._tag_ is None:
                 return self.hash
             return f"{self.tag}/{self.shorthash}"
         elif self.keyby == 'version_hash':
             if self.version is not None:
                 return f"version={self.version}/{self.hash}"
+            return self.hash
+        elif self.keyby == 'tag_version_hash':
+            parts = []
+            if self._tag_ is not None:
+                parts.append(self.tag)
+            if self.version is not None:
+                parts.append(f"version={self.version}")
+            if parts:
+                parts.append(self.shorthash)
+                return '/'.join(parts)
             return self.hash
         else:  
             raise NotImplementedError(f"keyby {repr(self.keyby)} is not implemented: missing override?")

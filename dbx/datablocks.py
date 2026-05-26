@@ -321,7 +321,7 @@ class JournalEntry(pd.Series):
             return f"{self.tag}/{self.shorthash}"
         elif keyby == 'version_hash':
             if self.version is not None:
-                return f"{self.version}/{self.hash}"
+                return f"version={self.version}/{self.hash}"
             return self.hash
         elif keyby == 'handle':
             h = self.get('handle')
@@ -1678,7 +1678,7 @@ class Datablock:
             return f"{self.tag}/{self.shorthash}"
         elif self.keyby == 'version_hash':
             if self.version is not None:
-                return f"{self.version}/{self.hash}"
+                return f"version={self.version}/{self.hash}"
             return self.hash
         else:  
             raise NotImplementedError(f"keyby {repr(self.keyby)} is not implemented: missing override?")

@@ -1,6 +1,6 @@
 """Tests for keyby='version_hash' on Datablock.
 
-version_hash produces "{version}/{hash}" when VERSION is set,
+version_hash produces "version={version}/{hash}" when VERSION is set,
 otherwise falls back to plain hash — mirroring taghash but keyed on version.
 """
 import pytest
@@ -61,10 +61,10 @@ def _allow_dirty(monkeypatch):
 class TestKeybyVersionHash:
 
     def test_versioned_key_format(self, tmp_path):
-        """When VERSION is set, key should be '{version}/{hash}'."""
+        """When VERSION is set, key should be 'version={version}/{hash}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='version_hash')
-        assert block.key == f"{block.version}/{block.hash}"
-        assert block.key.startswith("v3/")
+        assert block.key == f"version={block.version}/{block.hash}"
+        assert block.key.startswith("version=v3/")
 
     def test_unversioned_falls_back_to_hash(self, tmp_path):
         """When VERSION is absent, key should be just the hash."""
@@ -84,8 +84,8 @@ class TestKeybyVersionHash:
         b1 = V1(url=str(tmp_path), keyby='version_hash')
         b2 = V2(url=str(tmp_path), keyby='version_hash')
         # Even if hashes happen to differ, the version prefix must differ
-        assert b1.key.startswith("1/")
-        assert b2.key.startswith("2/")
+        assert b1.key.startswith("version=1/")
+        assert b2.key.startswith("version=2/")
 
     def test_construction_succeeds(self, tmp_path):
         """keyby='version_hash' must not raise at construction time."""

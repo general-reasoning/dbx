@@ -319,6 +319,10 @@ class JournalEntry(pd.Series):
             if self.tag is None:
                 return self.hash
             return f"{self.tag}/{self.shorthash}"
+        elif keyby == 'version_hash':
+            if self.version is not None:
+                return f"{self.version}/{self.hash}"
+            return self.hash
         elif keyby == 'handle':
             h = self.get('handle')
             if h is not None:
@@ -774,8 +778,8 @@ class Datablock:
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'taghash')
-        if self.keyby not in (None, 'hash', 'handle', 'tag', 'taghash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'handle', 'tag', 'taghash', 'custom', got {self.keyby!r}")
+        if self.keyby not in (None, 'hash', 'handle', 'tag', 'taghash', 'version_hash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'handle', 'tag', 'taghash', 'version_hash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -1672,6 +1676,10 @@ class Datablock:
             if self._tag_ is None:
                 return self.hash
             return f"{self.tag}/{self.shorthash}"
+        elif self.keyby == 'version_hash':
+            if self.version is not None:
+                return f"{self.version}/{self.hash}"
+            return self.hash
         else:  
             raise NotImplementedError(f"keyby {repr(self.keyby)} is not implemented: missing override?")
     ### anchoracte: END

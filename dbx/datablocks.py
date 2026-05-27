@@ -890,6 +890,11 @@ class Datablock:
         """Wrapper around ``fsspec.url_to_fs`` that injects ``self.storage_options``."""
         return fsspec.url_to_fs(path, **self.storage_options)
 
+    @property
+    def is_local_fs(self):
+        """True when this block's storage is on a local filesystem."""
+        protocol = self.fs.protocol if isinstance(self.fs.protocol, str) else self.fs.protocol[0]
+        return protocol in ('file', 'local', '')
 
     def validtopic(self, topic=None):
         if topic is None:

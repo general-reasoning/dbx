@@ -479,7 +479,9 @@ def eval(name):
         return funcstr, argkwargstr
 
     Logger("eval").detailed(f" ====================> Evaluating term {repr(name)}")
-    if isinstance(name, Iterable) and not isinstance(name, str):
+    if isinstance(name, dict):
+        term = {k: eval(v) for k, v in name.items()}
+    elif isinstance(name, Iterable) and not isinstance(name, str):
         term = [eval(item) for item in name]
     elif isinstance(name, str):
         if name.startswith("@") or name.startswith("#") or name.startswith("$"):
@@ -714,6 +716,18 @@ class _CallableExecutorBase_:
         """Hook called in the main process right after all workers have been started."""
         pass
 
+    @staticmethod
+    def _eval_ctx_args_kwargs(ctx_args, ctx_kwargs):
+        """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``.
+
+        Called once per worker so that ``@``/``$``/``#``-prefixed strings are
+        evaluated inside the worker process rather than the main process.
+        Non-specline values pass through unchanged.
+        """
+        evaled_args = tuple(eval(a) for a in ctx_args)
+        evaled_kwargs = {k: eval(v) for k, v in ctx_kwargs.items()}
+        return evaled_args, evaled_kwargs
+
     # ------------------------------------------------------------------
     # Worker-side helper (called inside each worker)
     # ------------------------------------------------------------------
@@ -729,6 +743,7 @@ class _CallableExecutorBase_:
         """
         worker_label = self._worker_label(worker_idx)
         self.log.debug(f"Executing {len(items)} callables on {worker_label}")
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
         batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
         exception = None
         batch = []  # list of (item_idx, payload)
@@ -1173,6 +1188,13 @@ class RayCallableExecutor:
         self.shuffle_callables = shuffle_callables
         self.log = log
 
+    @staticmethod
+    def _eval_ctx_args_kwargs(ctx_args, ctx_kwargs):
+        """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``."""
+        evaled_args = tuple(eval(a) for a in ctx_args)
+        evaled_kwargs = {k: eval(v) for k, v in ctx_kwargs.items()}
+        return evaled_args, evaled_kwargs
+
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute all callables; streams chunked results if batch_size is set."""
         if self.batch_size is not None:
@@ -1299,6 +1321,7 @@ class RayCallableExecutor:
 
     def __exec_callables_batched__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
         self.log.debug(f"Executing batch of {len(callables)} callables on worker {thread_idx}")
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
         try:
             batch_size = self.batch_size or len(callables)
             for i in range(0, len(callables), batch_size):
@@ -1318,6 +1341,7 @@ class RayCallableExecutor:
 
     def __exec_callables_sequential__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
         self.log.debug(f"Executing {len(callables)} callables on worker {thread_idx}")
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
         batch_size = self.batch_size or 1
         exception = None
         for i in range(0, len(callables), batch_size):
@@ -1371,6 +1395,13 @@ class InlineCallableExecutor:
         self.shuffle_callables = shuffle_callables
         self.log = log
 
+    @staticmethod
+    def _eval_ctx_args_kwargs(ctx_args, ctx_kwargs):
+        """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``."""
+        evaled_args = tuple(eval(a) for a in ctx_args)
+        evaled_kwargs = {k: eval(v) for k, v in ctx_kwargs.items()}
+        return evaled_args, evaled_kwargs
+
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute all callables and return results as a flat list (same as exec_callables)."""
         return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
@@ -1380,6 +1411,7 @@ class InlineCallableExecutor:
         return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
 
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
         payloads = []
         if len(callables) > 0:
             label = "Inline"
@@ -1400,6 +1432,7 @@ class InlineCallableExecutor:
         return payloads
 
     def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
         if len(callables) > 0:
             label = "Inline Streaming"
             if self.tag:
@@ -1498,6 +1531,7 @@ class _TorchCallableExecutorMixin_:
         worker_label = self._worker_label(worker_idx)
         self.log.debug(f"Executing {len(items)} callables on {worker_label} (device={device})")
 
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
         device_ctx_args, device_ctx_kwargs = self._args_kwargs_to_device(
             ctx_args, ctx_kwargs, device,
         )

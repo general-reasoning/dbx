@@ -696,7 +696,7 @@ class Datablock:
         detailed: bool = None,
         capture_output: bool = False,
         revision: str = None,
-        keyby: str = 'taghash',
+        keyby: str = 'tag_version_hash',
         uuid16: bool = False,
         validate_cfg: bool = True,
         storage_options: dict = None,

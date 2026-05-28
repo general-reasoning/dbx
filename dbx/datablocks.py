@@ -205,6 +205,24 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
             
         log.info(f"DBX_USE_WORK_REPO: {wrkrepo_str}")
 
+    elif revision is not None and DBX_USE_WORK_REPO is not None:
+        # Work repos already exist (cloned at HEAD during import).
+        # Checkout the requested revision so that subsequent imports
+        # (e.g. project modules evaluated from a journal entry quote)
+        # pick up code from the correct commit.
+        #
+        # NOTE: modules already in sys.modules (including dbx itself)
+        # will NOT be refreshed — only not-yet-imported modules benefit.
+        dbx_wrkrepo, project_wrkrepo = dbx_repos(DBX_USE_WORK_REPO)
+        if dbx_rev is not None and dbx_wrkrepo is not None:
+            gitcheckout(dbx_wrkrepo, dbx_rev)
+            log.info(f"Checked out existing work repo {dbx_wrkrepo} to revision {dbx_rev}")
+        if project_rev is not None and project_wrkrepo is not None:
+            gitcheckout(project_wrkrepo, project_rev)
+            log.info(f"Checked out existing work repo {project_wrkrepo} to revision {project_rev}")
+        # Clear finder caches so the import machinery sees the new files.
+        importlib.invalidate_caches()
+
 
 @dataclass
 class LogVolume:

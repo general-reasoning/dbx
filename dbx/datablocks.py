@@ -1122,15 +1122,18 @@ class Datablock:
             if isinstance(c, Datablock):
                 yield s, c
 
-    def build_tree(self, *args, exclude_self: bool = False, **kwargs):
+    def build_tree(self, *args, exclude_self: bool = False, deep: bool = False, **kwargs):
         self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
         def skip_cb(s):
             self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (BUILD_TREE_EXEMPTIONS) --------")
         
         for s, c in self._iter_cfg_blocks('BUILD_TREE_EXEMPTIONS', skip_callback=skip_cb):
+            if not deep and c.valid():
+                self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s}: already valid --------")
+                continue
             self._write_journal_entry(event=f"build_tree:{s}:begin")
             self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: BEGIN --------------------------------")
-            c.build_tree(*args, **kwargs)   
+            c.build_tree(*args, deep=deep, **kwargs)   
             self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: END --------------------------------")
             self._write_journal_entry(event=f"build_tree:{s}:end")
         if not exclude_self:

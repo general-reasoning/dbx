@@ -1114,6 +1114,25 @@ class Datablock:
         self._write_journal_entry(event="flag", context=message, inline_context=inline)
         return self
 
+    def keep(self, msg=None):
+        """Drop a ``KEEP`` marker file into the anchorkeypath directory.
+
+        Parameters
+        ----------
+        msg : str, optional
+            If provided, written as the file content; otherwise the file
+            is empty.
+
+        Returns
+        -------
+        self
+        """
+        keeppath = os.path.join(self.anchorkeypath, 'KEEP')
+        self.fs.makedirs(self.anchorkeypath, exist_ok=True)
+        with self.fs.open(keeppath, 'w') as f:
+            f.write(msg or '')
+        return self
+
     def leave_breadcrumbs(self):
         if hasattr(self, "TOPICFILES"):
             for topic in self.TOPICFILES:

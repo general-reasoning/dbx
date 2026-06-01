@@ -1115,22 +1115,30 @@ class Datablock:
         return self
 
     def keep(self, msg=None):
-        """Drop a ``KEEP`` marker file into the anchorkeypath directory.
+        """Write a journal entry with event='keep'.
+
+        The journal parquet file is prepended with ``keep-`` so it can
+        be distinguished from regular journal entries, but it still
+        lives under the ``journal/`` directory and therefore is read
+        by :meth:`journal`.  The ``keep-`` prefixed parquet file itself
+        serves as the keep marker (no separate ``KEEP`` sentinel file
+        is created).
 
         Parameters
         ----------
         msg : str, optional
-            If provided, written as the file content; otherwise the file
-            is empty.
+            If provided, recorded as journal context.
 
         Returns
         -------
         self
         """
-        keeppath = os.path.join(self.anchorkeypath, 'KEEP')
-        self.fs.makedirs(self.anchorkeypath, exist_ok=True)
-        with self.fs.open(keeppath, 'w') as f:
-            f.write(msg or '')
+        self._write_journal_entry(
+            event="keep",
+            context=msg,
+            inline_context=bool(msg),
+            journal_prefix='keep-',
+        )
         return self
 
     def leave_breadcrumbs(self):
@@ -1876,20 +1884,20 @@ class Datablock:
             fs.makedirs(_dbxanchorpathx, exist_ok=True)
         return _dbxanchorpathx
 
-    def _dbxanchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True):
+    def _dbxanchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True, filename_prefix: str = ''):
         _dbxanchorpathx = Datablock._dbxanchorpathx(self._url_, self.anchor, x, fqcn=self.fqcn, storage_options=self.storage_options)
         _dbxanchorhashpathx = os.path.join(_dbxanchorpathx, self.hash)
         if ensure_dirpath:
             self.fs.makedirs(_dbxanchorhashpathx, exist_ok=True)
         if ext is None:
             ext = x
-        xpath = os.path.join(_dbxanchorhashpathx, f'{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
+        xpath = os.path.join(_dbxanchorhashpathx, f'{filename_prefix}{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
         return xpath
 
-    def _dbxjournalinstancepath(self, *, ensure_dirpath: bool = False):
+    def _dbxjournalinstancepath(self, *, ensure_dirpath: bool = False, filename_prefix: str = ''):
         """
         Return /root/anchor/.dbx/journal/hash/{fqcn}-{dt}.journal."""
-        return self._dbxanchorhashpathx('journal', 'parquet', ensure_dirpath=ensure_dirpath)
+        return self._dbxanchorhashpathx('journal', 'parquet', ensure_dirpath=ensure_dirpath, filename_prefix=filename_prefix)
 
     #PATHS: END
 
@@ -1946,7 +1954,7 @@ class Datablock:
         assert self.fs.exists(path), f"scopepath {path} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
-    def _write_journal_entry(self, event:str, *, context: str = None, inline_context: bool = False):
+    def _write_journal_entry(self, event:str, *, context: str = None, inline_context: bool = False, journal_prefix: str = ''):
         self._write_journal_dict('spec', self.spec)
         self._write_journal_dict('dfn', self.dfn)
         self._write_journal_dict('kwargs', self.kwargs)
@@ -1978,7 +1986,7 @@ class Datablock:
         else:
             has_log = False
         #
-        journal_path = self._dbxjournalinstancepath(ensure_dirpath=True)
+        journal_path = self._dbxjournalinstancepath(ensure_dirpath=True, filename_prefix=journal_prefix)
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build_datetime': self.build_dt,
                                          'version': self.version,

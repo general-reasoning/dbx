@@ -1109,7 +1109,7 @@ class Datablock:
     def __build__(self, *args, **kwargs):
         return self
 
-    def note(self, event: str, message: str | None = None, *, inline: bool = False):
+    def note(self, message: str | None = None, event: str = 'note', *, inline: bool = False):
         """Write a journal entry with the given *event* and optional *message*.
 
         The journal parquet file is prepended with ``{event}-`` so it can
@@ -1119,11 +1119,11 @@ class Datablock:
 
         Parameters
         ----------
-        event : str
-            The event name recorded in the journal (e.g. ``'keep'``,
-            ``'flag'``).
         message : str, optional
             If provided, recorded in the journal ``message`` field.
+        event : str, default 'note'
+            The event name recorded in the journal (e.g. ``'keep'``,
+            ``'note'``).
         inline : bool, default False
             When ``True`` the *message* string is stored directly in the
             journal record.  When ``False`` the message is written to a
@@ -1145,9 +1145,9 @@ class Datablock:
     def keep(self, message: str | None = None):
         """Write a journal entry with event='keep' and optional *message*.
 
-        Equivalent to ``self.note('keep', message, inline=True)``.
+        Equivalent to ``self.note(message, event='keep', inline=True)``.
         """
-        return self.note('keep', message, inline=True)
+        return self.note(message, event='keep', inline=True)
 
     def leave_breadcrumbs(self):
         if hasattr(self, "TOPICFILES"):

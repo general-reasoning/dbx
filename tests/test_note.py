@@ -1,5 +1,5 @@
 """
-Tests for Datablock.note(event, message=None, *, inline=False).
+Tests for Datablock.note(message=None, event='note', *, inline=False).
 
 Verifies:
   1. A journal entry with the given event is written
@@ -8,6 +8,7 @@ Verifies:
   4. inline=True stores message as the literal string
   5. Multiple notes from separate instances produce separate journal rows
   6. .note() returns self (fluent API)
+  7. Default event is 'note'
 """
 import os
 import pytest
@@ -49,27 +50,34 @@ class TestNoteJournalEntry:
 
     def test_note_creates_journal_entry(self, tmp_path):
         b = _make(tmp_path)
-        b.note("flag", "hello")
+        b.note("hello", event="flag")
         j = b.journal()
         rows = j[j['event'] == 'flag']
         assert len(rows) == 1
 
-    def test_note_event_value(self, tmp_path):
+    def test_note_default_event_is_note(self, tmp_path):
+        """note('msg') without explicit event should use event='note'."""
         b = _make(tmp_path)
-        b.note("myevent", "test msg")
+        b.note("default event test")
+        j = b.journal()
+        assert 'note' in j['event'].values
+
+    def test_note_custom_event(self, tmp_path):
+        b = _make(tmp_path)
+        b.note("test msg", event="myevent")
         j = b.journal()
         assert 'myevent' in j['event'].values
 
     def test_note_records_hash(self, tmp_path):
         b = _make(tmp_path)
-        b.note("flag", "check hash")
+        b.note("check hash", event="flag")
         j = b.journal()
         row = j[j['event'] == 'flag'].iloc[-1]
         assert row['hash'] == b.hash
 
-    def test_note_custom_event(self, tmp_path):
+    def test_note_review_event(self, tmp_path):
         b = _make(tmp_path)
-        b.note("review", "needs review")
+        b.note("needs review", event="review")
         j = b.journal()
         rows = j[j['event'] == 'review']
         assert len(rows) == 1
@@ -80,7 +88,7 @@ class TestNoteParquetPrefix:
 
     def test_parquet_filename_starts_with_event(self, tmp_path):
         b = _make(tmp_path)
-        b.note("flag", "hello")
+        b.note("hello", event="flag")
         dbx_dir = os.path.join(str(tmp_path), b.anchor, '.dbx')
         all_parquets = []
         for root, dirs, files in os.walk(dbx_dir):
@@ -95,9 +103,26 @@ class TestNoteParquetPrefix:
         flag_parquets = [f for f in all_parquets if f.startswith('flag-')]
         assert len(flag_parquets) >= 1, f"Expected flag- prefixed parquets, got: {all_parquets}"
 
+    def test_default_event_prefix_is_note(self, tmp_path):
+        b = _make(tmp_path)
+        b.note("saved")
+        dbx_dir = os.path.join(str(tmp_path), b.anchor, '.dbx')
+        all_parquets = []
+        for root, dirs, files in os.walk(dbx_dir):
+            if os.path.basename(root) != b.hash:
+                continue
+            parent = os.path.basename(os.path.dirname(root))
+            if parent != 'journal':
+                continue
+            for f in files:
+                if f.endswith('.parquet'):
+                    all_parquets.append(f)
+        note_parquets = [f for f in all_parquets if f.startswith('note-')]
+        assert len(note_parquets) >= 1, f"Expected note- prefixed parquets, got: {all_parquets}"
+
     def test_custom_event_prefix(self, tmp_path):
         b = _make(tmp_path)
-        b.note("checkpoint", "saved")
+        b.note("saved", event="checkpoint")
         dbx_dir = os.path.join(str(tmp_path), b.anchor, '.dbx')
         all_parquets = []
         for root, dirs, files in os.walk(dbx_dir):
@@ -118,7 +143,7 @@ class TestNoteMessageNotInline:
 
     def test_message_is_file_path(self, tmp_path):
         b = _make(tmp_path)
-        b.note("flag", "stored in file")
+        b.note("stored in file", event="flag")
         j = b.journal()
         row = j[j['event'] == 'flag'].iloc[-1]
         msg = row['message']
@@ -129,7 +154,7 @@ class TestNoteMessageNotInline:
 
     def test_message_file_contains_message(self, tmp_path):
         b = _make(tmp_path)
-        b.note("flag", "payload text")
+        b.note("payload text", event="flag")
         j = b.journal()
         row = j[j['event'] == 'flag'].iloc[-1]
         with open(row['message']) as f:
@@ -141,14 +166,14 @@ class TestNoteMessageInline:
 
     def test_message_is_literal_message(self, tmp_path):
         b = _make(tmp_path)
-        b.note("flag", "inline msg", inline=True)
+        b.note("inline msg", event="flag", inline=True)
         j = b.journal()
         row = j[j['event'] == 'flag'].iloc[-1]
         assert row['message'] == "inline msg"
 
     def test_no_message_file_written_for_inline(self, tmp_path):
         b = _make(tmp_path)
-        b.note("flag", "no file", inline=True)
+        b.note("no file", event="flag", inline=True)
         j = b.journal()
         row = j[j['event'] == 'flag'].iloc[-1]
         msg = row['message']
@@ -161,9 +186,17 @@ class TestNoteNoMessage:
 
     def test_no_message(self, tmp_path):
         b = _make(tmp_path)
-        b.note("ping")
+        b.note(event="ping")
         j = b.journal()
         row = j[j['event'] == 'ping'].iloc[-1]
+        import pandas as pd
+        assert pd.isna(row.get('message', None)) or row.get('message') is None
+
+    def test_no_message_default_event(self, tmp_path):
+        b = _make(tmp_path)
+        b.note()
+        j = b.journal()
+        row = j[j['event'] == 'note'].iloc[-1]
         import pandas as pd
         assert pd.isna(row.get('message', None)) or row.get('message') is None
 
@@ -175,17 +208,17 @@ class TestNoteMultipleInstances:
     def test_multiple_notes_from_separate_instances(self, tmp_path):
         for msg in ("first", "second", "third"):
             b = _make(tmp_path)
-            b.note("flag", msg)
+            b.note(msg, event="flag")
         j = _make(tmp_path).journal()
         flag_rows = j[j['event'] == 'flag']
         assert len(flag_rows) == 3
 
     def test_mixed_inline_modes_across_instances(self, tmp_path):
         b1 = _make(tmp_path)
-        b1.note("flag", "file-msg")
+        b1.note("file-msg", event="flag")
 
         b2 = _make(tmp_path)
-        b2.note("flag", "inline-msg", inline=True)
+        b2.note("inline-msg", event="flag", inline=True)
 
         j = _make(tmp_path).journal()
         rows = j[j['event'] == 'flag'].sort_values('datetime').reset_index(drop=True)
@@ -200,15 +233,20 @@ class TestNoteReturnsSelf:
 
     def test_returns_self(self, tmp_path):
         b = _make(tmp_path)
-        result = b.note("flag", "msg")
+        result = b.note("msg", event="flag")
         assert result is b
 
     def test_returns_self_inline(self, tmp_path):
         b = _make(tmp_path)
-        result = b.note("flag", "msg", inline=True)
+        result = b.note("msg", event="flag", inline=True)
         assert result is b
 
     def test_returns_self_no_message(self, tmp_path):
         b = _make(tmp_path)
-        result = b.note("ping")
+        result = b.note(event="ping")
+        assert result is b
+
+    def test_returns_self_bare(self, tmp_path):
+        b = _make(tmp_path)
+        result = b.note()
         assert result is b

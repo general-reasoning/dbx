@@ -1109,37 +1109,45 @@ class Datablock:
     def __build__(self, *args, **kwargs):
         return self
 
-    def flag(self, message: str, *, inline: bool = False):
-        """Write a journal entry with event='flag' and *message* as context."""
-        self._write_journal_entry(event="flag", context=message, inline_context=inline)
-        return self
+    def note(self, event: str, message: str | None = None, *, inline: bool = False):
+        """Write a journal entry with the given *event* and optional *message*.
 
-    def keep(self, msg=None):
-        """Write a journal entry with event='keep'.
-
-        The journal parquet file is prepended with ``keep-`` so it can
+        The journal parquet file is prepended with ``{event}-`` so it can
         be distinguished from regular journal entries, but it still
         lives under the ``journal/`` directory and therefore is read
-        by :meth:`journal`.  The ``keep-`` prefixed parquet file itself
-        serves as the keep marker (no separate ``KEEP`` sentinel file
-        is created).
+        by :meth:`journal`.
 
         Parameters
         ----------
-        msg : str, optional
-            If provided, recorded as journal context.
+        event : str
+            The event name recorded in the journal (e.g. ``'keep'``,
+            ``'flag'``).
+        message : str, optional
+            If provided, recorded in the journal ``message`` field.
+        inline : bool, default False
+            When ``True`` the *message* string is stored directly in the
+            journal record.  When ``False`` the message is written to a
+            separate text file and the journal stores the file path.
 
         Returns
         -------
         self
         """
         self._write_journal_entry(
-            event="keep",
-            context=msg,
-            inline_context=bool(msg),
-            journal_prefix='keep-',
+            event=event,
+            message=message,
+            inline_message=inline,
+            journal_prefix=f'{event}-',
         )
         return self
+
+
+    def keep(self, message: str | None = None):
+        """Write a journal entry with event='keep' and optional *message*.
+
+        Equivalent to ``self.note('keep', message, inline=True)``.
+        """
+        return self.note('keep', message, inline=True)
 
     def leave_breadcrumbs(self):
         if hasattr(self, "TOPICFILES"):
@@ -1367,7 +1375,7 @@ class Datablock:
         fs, _ = self._url_to_fs(anchorkeypath)
         assert fs.isdir(anchorkeypath), f"Nonexistent hashpath {anchorkeypath}"
         self.log.verbose(f"Copying files from {anchorkeypath}: BEGIN")
-        self._write_journal_entry(event="UNSAFE_copy_from:BEGIN", context=anchorkeypath, inline_context=True)
+        self._write_journal_entry(event="UNSAFE_copy_from:BEGIN", message=anchorkeypath, inline_message=True)
         try:
             if hasattr(self, 'TOPICFILES'):
                 topics = self.topics()
@@ -1387,13 +1395,13 @@ class Datablock:
                 )
         
             self.log.verbose(f"Copying files from {anchorkeypath}: END")
-            self._write_journal_entry(event="UNSAFE_copy_from:END", context=anchorkeypath, inline_context=True)
+            self._write_journal_entry(event="UNSAFE_copy_from:END", message=anchorkeypath, inline_message=True)
             if validate:
                 assert self.valid(), f"Invalid Datablock after copy: {self}"
         except Exception as e:
             self.log.error(f"UNSAFE_copy_from: Error when trying to copy files from {anchorkeypath}")
             self.log.error(f"EXCEPTION: {e}")
-            self._write_journal_entry(event="UNSAFE_copy_from:ERROR", context=anchorkeypath, inline_context=True)
+            self._write_journal_entry(event="UNSAFE_copy_from:ERROR", message=anchorkeypath, inline_message=True)
             raise e
         return self
 
@@ -1954,7 +1962,7 @@ class Datablock:
         assert self.fs.exists(path), f"scopepath {path} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
-    def _write_journal_entry(self, event:str, *, context: str = None, inline_context: bool = False, journal_prefix: str = ''):
+    def _write_journal_entry(self, event:str, *, message: str = None, inline_message: bool = False, journal_prefix: str = ''):
         self._write_journal_dict('spec', self.spec)
         self._write_journal_dict('dfn', self.dfn)
         self._write_journal_dict('kwargs', self.kwargs)
@@ -1962,8 +1970,8 @@ class Datablock:
         self._write_str('repr', self.__repr__())
         self._write_str('handle', self.handle())
         self._write_str('hashstr', self.hashstr)
-        if context is not None and not inline_context:
-            self._write_str('context', context)
+        if message is not None and not inline_message:
+            self._write_str('message', message)
         #
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
 
@@ -1974,11 +1982,11 @@ class Datablock:
         handle_path = self._dbxanchorhashpathx('quote', 'txt')
         repr_path = self._dbxanchorhashpathx('repr', 'txt')
         hashstr_path = self._dbxanchorhashpathx('hashstr', 'txt')
-        if context is not None and not inline_context:
-            context_path = self._dbxanchorhashpathx('context', 'txt')
-            context = context_path
+        if message is not None and not inline_message:
+            message_path = self._dbxanchorhashpathx('message', 'txt')
+            message = message_path
         else:
-            context_path = None
+            message_path = None
         #
         logpath = self._dbxanchorhashpathx('log', ensure_dirpath=True)
         if logpath is not None:
@@ -2007,7 +2015,7 @@ class Datablock:
                                          'handle': handle_path,
                                          'repr': repr_path,
                                          'hashstr': hashstr_path,
-                                         'context': context,
+                                         'message': message,
                                          'gitrepo': DBX_GIT_REPO,
                                          'wrkrepo': DBX_USE_WORK_REPO,
         }])
@@ -2053,6 +2061,9 @@ class Datablock:
                     continue
                 if 'revision' not in _df.columns:
                     _df = _df.rename(columns={'version': 'revision',})
+                # Backward compat: rename legacy 'context' column to 'message'
+                if 'context' in _df.columns and 'message' not in _df.columns:
+                    _df = _df.rename(columns={'context': 'message'})
 
                 dfs.append(_df)
             if len(dfs) > 0:

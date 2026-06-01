@@ -1,14 +1,15 @@
 """
-Tests for Datablock.keep(msg=None).
+Tests for Datablock.keep(message=None).
 
 Verifies:
   1. keep() writes a journal entry with event='keep'
   2. The journal parquet file is prefixed with 'keep-'
   3. No KEEP sentinel file is created in anchorkeypath
   4. journal() reads keep entries (glob matches keep-*.parquet)
-  5. msg is recorded as inline context when provided
+  5. message is recorded as inline message when provided
   6. keep() returns self (fluent API)
   7. keep() works before and after build without side-effects
+  8. keep() delegates to note('keep', ..., inline=True)
 """
 import os
 import pytest
@@ -120,7 +121,7 @@ class TestKeepReadByJournal:
     def test_journal_reads_keep_entries(self, url):
         """journal() should include keep entries (the glob matches keep-*.parquet)."""
         block = _make(url)
-        block.keep(msg='marker')
+        block.keep(message='marker')
         j = block.journal()
         assert len(j) > 0
         assert 'keep' in j['event'].values
@@ -130,31 +131,30 @@ class TestKeepReadByJournal:
         block = _make(url)
         block.build()
         block2 = _make(url)
-        block2.keep(msg='important')
+        block2.keep(message='important')
         j = block.journal(event='keep')
         assert len(j) >= 1
         assert all(j['event'] == 'keep')
 
 
-class TestKeepContext:
+class TestKeepMessage:
 
-    def test_keep_with_msg_records_inline_context(self, url):
-        """keep(msg=...) should record msg as inline context in the journal."""
+    def test_keep_with_message_records_inline(self, url):
+        """keep(message=...) should record message as inline in the journal."""
         block = _make(url)
-        block.keep(msg='do not delete')
+        block.keep(message='do not delete')
         j = block.journal()
         row = j[j['event'] == 'keep'].iloc[-1]
-        assert row['context'] == 'do not delete'
+        assert row['message'] == 'do not delete'
 
-    def test_keep_without_msg_has_no_context(self, url):
-        """keep() with no msg should have None/NaN context."""
+    def test_keep_without_message_has_no_message(self, url):
+        """keep() with no message should have None/NaN message."""
         block = _make(url)
         block.keep()
         j = block.journal()
         row = j[j['event'] == 'keep'].iloc[-1]
-        # context should be absent (NaN) since no msg was provided
         import pandas as pd
-        assert pd.isna(row.get('context', None)) or row.get('context') is None
+        assert pd.isna(row.get('message', None)) or row.get('message') is None
 
 
 class TestKeepReturnsSelf:
@@ -165,10 +165,10 @@ class TestKeepReturnsSelf:
         result = block.keep()
         assert result is block
 
-    def test_returns_self_with_msg(self, url):
-        """keep(msg=...) should return self for chaining."""
+    def test_returns_self_with_message(self, url):
+        """keep(message=...) should return self for chaining."""
         block = _make(url)
-        result = block.keep(msg='note')
+        result = block.keep(message='note')
         assert result is block
 
 
@@ -178,7 +178,7 @@ class TestKeepLifecycle:
         """keep() should work even before build."""
         block = _make(url)
         assert not block.valid()
-        block.keep(msg='pre-build marker')
+        block.keep(message='pre-build marker')
         j = block.journal()
         assert 'keep' in j['event'].values
 
@@ -188,7 +188,7 @@ class TestKeepLifecycle:
         block.build()
         assert block.valid()
         block2 = _make(url)
-        block2.keep(msg='post-build')
+        block2.keep(message='post-build')
         # Block still valid
         assert block.valid()
         j = block.journal()
@@ -198,7 +198,7 @@ class TestKeepLifecycle:
         """Calling keep() multiple times should produce multiple journal entries."""
         for msg in ('first', 'second', 'third'):
             b = _make(url)
-            b.keep(msg=msg)
+            b.keep(message=msg)
         j = _make(url).journal()
         keep_rows = j[j['event'] == 'keep']
         assert len(keep_rows) == 3

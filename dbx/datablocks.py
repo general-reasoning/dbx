@@ -1228,11 +1228,13 @@ class Datablock:
             return self
         
         def clear_path(path, *, recursive=False, throw=False):
+            if path is None:
+                return
             self.log.verbose(f"removing {path}")
             try:
                 if path.startswith("gs://"):
                     """
-                    Circumvent bugs in fsspec and helm.data.utils
+                    Circumvent bugs in fsspec.
                     """
                     from google.cloud import storage
 

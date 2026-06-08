@@ -592,10 +592,21 @@ def gitrevision(*, log=Logger()):
         def get_rev(path):
             if path is None:
                 return None
-            repo = git.Repo(path)
-            # Dirty check is now performed in gitwrkreposetup() before
-            # cloning, so we don't need to repeat it here.
-            return repo.head.commit.hexsha
+            try:
+                repo = git.Repo(path)
+                # Dirty check is now performed in gitwrkreposetup() before
+                # cloning, so we don't need to repeat it here.
+                return repo.head.commit.hexsha
+            except Exception as e:
+                # git ≥ 2.35.2 raises ValueError / GitCommandError when the
+                # work-repo temp dir is owned by a different process (common
+                # in DDP subprocesses spawned by Lightning's
+                # SubprocessScriptLauncher).  Fall back gracefully: the
+                # revision is for audit purposes only.
+                log.warning(
+                    f"gitrevision: could not read HEAD from {path!r}: {e}"
+                )
+                return None
 
         dbx_rev = get_rev(d_repo)
         project_rev = get_rev(project_repo)

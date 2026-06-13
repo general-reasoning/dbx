@@ -332,3 +332,110 @@ class TestJournalAnchorForms:
         # Both share the same anchor, journal should find both
         result = b1.journal()
         assert len(result) >= 2
+
+
+# ---------------------------------------------------------------------------
+# 7. build:start:datetime and build:end:datetime in journal entries
+# ---------------------------------------------------------------------------
+
+class TestJournalBuildDatetimes:
+
+    def test_build_end_has_both_datetimes(self, tmp_path, monkeypatch):
+        """The build:end journal entry should have both start and end datetimes set."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        block = BuildableBlock(url=root)
+        block.build()
+        j = block.journal(event='build:end')
+        assert len(j) == 1
+        entry = j.iloc[0]
+        assert entry['build:start:datetime'] is not None, "build:start:datetime must be set on build:end"
+        assert entry['build:end:datetime'] is not None, "build:end:datetime must be set on build:end"
+
+    def test_build_end_datetime_none_at_build_start(self, tmp_path, monkeypatch):
+        """_build_end_dt should be None when __pre_build__ runs (before __build__)."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        captured = {}
+
+        class InstrumentedBlock(Datablock):
+            TOPICFILE = 'output.txt'
+            def __pre_build__(self, *args, **kwargs):
+                # Capture the state right when __pre_build__ runs
+                captured['start_dt_at_pre_build'] = self._build_start_dt
+                captured['end_dt_at_pre_build'] = self._build_end_dt
+                return super().__pre_build__(*args, **kwargs)
+            def __build__(self):
+                self.dirpath(ensure=True)
+                with open(self.path(), 'w') as f:
+                    f.write('test')
+
+        block = InstrumentedBlock(url=root)
+        block.build()
+        # At pre_build time, _build_start_dt had not yet been set (set inside super().__pre_build__)
+        # and _build_end_dt was definitely None
+        assert captured['end_dt_at_pre_build'] is None, "_build_end_dt should be None at pre_build time"
+        # After build, both should be set
+        assert block._build_start_dt is not None
+        assert block._build_end_dt is not None
+
+    def test_start_datetime_before_end_datetime(self, tmp_path, monkeypatch):
+        """build:start:datetime should be earlier than build:end:datetime."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+
+        class SlowBlock(Datablock):
+            TOPICFILE = 'output.txt'
+            def __build__(self):
+                self.dirpath(ensure=True)
+                with open(self.path(), 'w') as f:
+                    f.write('slow')
+
+        block = SlowBlock(url=root)
+        block.build()
+        j = block.journal(event='build:end')
+        entry = j.iloc[0]
+        start = entry['build:start:datetime']
+        end = entry['build:end:datetime']
+        assert start <= end, f"start {start} should be <= end {end}"
+
+    def test_skipped_build_datetimes_are_none(self, tmp_path, monkeypatch):
+        """When a build is skipped (already valid), the block attrs stay None."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        block = BuildableBlock(url=root)
+        block.build()  # first build
+        # Create a fresh instance pointing to the same data
+        block2 = BuildableBlock(url=root)
+        block2.build()  # should skip — already valid
+        assert block2._build_start_dt is None, "start should be None when build skipped"
+        assert block2._build_end_dt is None, "end should be None when build skipped"
+
+    def test_backward_compat_build_datetime(self, tmp_path, monkeypatch):
+        """Old journal entries with 'build_datetime' should be renamed to 'build:end:datetime'."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
+        fake_jdir = Datablock._dbxanchorpathx(root, fake_anchor, 'journal', fqcn=fake_anchor)
+        # Write a legacy-style entry with 'build_datetime' column
+        hash_dir = os.path.join(fake_jdir, "legacy_hash")
+        import fsspec
+        fs, hdir = fsspec.url_to_fs(hash_dir)
+        fs.makedirs(hdir, exist_ok=True)
+        now = datetime.datetime.now()
+        dt = now.isoformat().replace(' ', '-').replace(':', '-')
+        df = pd.DataFrame([{
+            'hash': 'legacy_hash',
+            'datetime': dt,
+            'event': 'build:end',
+            'anchor': fake_anchor,
+            'url': root,
+            'build_datetime': '2025-01-01T00-00-00',
+        }])
+        path = os.path.join(hdir, f"legacy-journal.parquet")
+        df.to_parquet(path)
+
+        result = Datablock.Journal(fake_anchor, url=root)
+        assert 'build:end:datetime' in result.columns, "Legacy build_datetime should be renamed"
+        assert 'build_datetime' not in result.columns, "Old column name should not survive"
+        assert result.iloc[0]['build:end:datetime'] == '2025-01-01T00-00-00'

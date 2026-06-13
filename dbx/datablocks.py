@@ -841,7 +841,8 @@ class Datablock:
         self.parameters = self.__explicit_params__() + list(state_params.keys())
         
         self.dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-        self.build_dt = None
+        self._build_start_dt = None
+        self._build_end_dt = None
         
         # Redefine logger with hash (and tag if present)
         log_name = f"{self.anchor}/{self.key}"
@@ -1042,7 +1043,7 @@ class Datablock:
             if not self.valid():
                 self.__pre_build__(*args, **kwargs)
                 self.__build__(*args, **kwargs)
-                self.build_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+                self._build_end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
                 # Upload the captured log BEFORE __post_build__ writes the
                 # journal entry, so that the journal's fs.exists(logpath)
                 # check finds the file and records the path.
@@ -1110,6 +1111,7 @@ class Datablock:
             valid_cfg = self.valid_cfg()
             if not all(list(valid_cfg.values())):
                 raise ValueError(f"Not all upstream Datablocks in cfg are valid: {valid_cfg=}")
+        self._build_start_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         self._write_journal_entry(event="build:start",)
         return self
 
@@ -2009,7 +2011,8 @@ class Datablock:
         #
         journal_path = self._dbxjournalinstancepath(ensure_dirpath=True, filename_prefix=journal_prefix)
         df = pd.DataFrame.from_records([{'datetime': dt,
-                                         'build_datetime': self.build_dt,
+                                         'build:start:datetime': self._build_start_dt,
+                                         'build:end:datetime': self._build_end_dt,
                                          'version': self.version,
                                          'dbx_version': self.dbx_version,
                                          'revision': self.revision, 
@@ -2077,6 +2080,9 @@ class Datablock:
                 # Backward compat: rename legacy 'context' column to 'message'
                 if 'context' in _df.columns and 'message' not in _df.columns:
                     _df = _df.rename(columns={'context': 'message'})
+                # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
+                if 'build_datetime' in _df.columns and 'build:end:datetime' not in _df.columns:
+                    _df = _df.rename(columns={'build_datetime': 'build:end:datetime'})
 
                 dfs.append(_df)
             if len(dfs) > 0:

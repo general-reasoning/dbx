@@ -638,19 +638,33 @@ gitwrkreposetup(reason="datablocks import")
 
 class Datablock:
     """
-    ROOT = 'protocol://path/to/root'
-    TOPICFILES = {'topic', 'file.csv'} | TOPICFILE = 'file.csv'
-    # protocol://path --- module/class/ --- topic [--- file]
-    #        url            [anchor]        [topic]   [file]
-    # url:                'protocol://path/to/root'
-    # anchorpath:         '{root}/{anchor}'          (root = fsspec-relative path)
-    # anchorkeypath:      '{root}/{anchor}/{key}'
-    # dirpath:            '{root}/{anchor}/{key}/topic'
-    # path:               '{root}/{anchor}/{key}/topic/{TOPICFILE}'
-    #
-    # self.url  = original URL string
-    # self.fs   = fsspec filesystem object
-    # self.root = protocol-free path (via fsspec.url_to_fs)
+    Declare topics via TOPICS::
+
+        TOPICS = ['images', 'masks']                        # directory topics
+        TOPICS = {'images': 'images.csv', 'masks': None}    # file and directory topics
+        TOPICS = {'data': 'data.parquet'}                   # single file topic
+
+    Legacy (still supported)::
+
+        TOPICFILES = {'topic': 'file.csv'}
+        TOPICFILE  = 'file.csv'
+
+    Storage layout::
+
+        protocol://path --- module/class/ --- topic [--- file]
+               url            [anchor]        [topic]   [file]
+
+        url:                'protocol://path/to/root'
+        anchorpath:         '{root}/{anchor}'          (root = fsspec-relative path)
+        anchorkeypath:      '{root}/{anchor}/{key}'
+        dirpath:            '{root}/{anchor}/{key}/topic'
+        path:               '{root}/{anchor}/{key}/topic/{TOPICS[topic]}'
+
+    Attributes::
+
+        self.url  = original URL string
+        self.fs   = fsspec filesystem object
+        self.root = protocol-free path (via fsspec.url_to_fs)
     """
     VERBOSE_CONFIG = False
 

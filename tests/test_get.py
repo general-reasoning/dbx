@@ -4,9 +4,10 @@ Tests for Datablock.get() / __get__():
 1. get() downloads a single TOPICFILE to the target path.
 2. get() downloads a TOPICS directory to the target path.
 3. get() downloads a specific topic from TOPICFILES.
-4. get() with no path defaults to '.'.
+4. get() with no args downloads to {root}/{anchor}/{key}.
 5. get() on a block with no topics is a no-op.
 6. __get__ can be overridden by subclasses.
+7. get(root=...) mirrors anchorkeypath locally.
 """
 import os
 import pytest
@@ -173,3 +174,48 @@ class TestGetOverride:
         block.get('mytopic', path=dest)
         assert captured['topic'] == 'mytopic'
         assert captured['path'] == dest
+
+
+class TestGetDefaultRoot:
+
+    def test_default_root_creates_anchorkeypath(self, tmp_path, monkeypatch):
+        """get() with no path should download to {root}/{anchor}/{key}/."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        store = str(tmp_path / 'store')
+        block = SingleFileBlock(url=store)
+        block.build()
+
+        local_root = str(tmp_path / 'local')
+        block.get(root=local_root)
+        expected = os.path.join(local_root, block.anchor, block.key, 'output.txt')
+        assert os.path.isfile(expected), f"Expected file at {expected}"
+        with open(expected) as f:
+            assert f.read() == 'hello from single file'
+
+    def test_path_overrides_root(self, tmp_path, monkeypatch):
+        """When path is provided, root is ignored."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        store = str(tmp_path / 'store')
+        block = SingleFileBlock(url=store)
+        block.build()
+
+        dest = str(tmp_path / 'explicit')
+        local_root = str(tmp_path / 'should_not_be_used')
+        block.get(path=dest, root=local_root)
+        # File should be in dest, not in root
+        assert os.path.isfile(os.path.join(dest, 'output.txt'))
+        assert not os.path.exists(local_root)
+
+    def test_root_with_topic(self, tmp_path, monkeypatch):
+        """get(topic, root=...) should download into {root}/{anchor}/{key}/."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        store = str(tmp_path / 'store')
+        block = MultiTopicBlock(url=store)
+        block.build()
+
+        local_root = str(tmp_path / 'local')
+        block.get('alpha', root=local_root)
+        expected = os.path.join(local_root, block.anchor, block.key, 'alpha.txt')
+        assert os.path.isfile(expected)
+        with open(expected) as f:
+            assert f.read() == 'data for alpha'

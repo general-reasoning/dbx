@@ -1154,8 +1154,16 @@ class Datablock:
     def __build__(self, *args, **kwargs):
         return self
 
-    def get(self, topic=None, *, path='.'):
-        """Download datablock files to a local *path*.
+    def get(self, topic=None, *, path=None, root='.'):
+        """Download datablock files to a local directory.
+
+        By default, files are downloaded to a local directory that mirrors
+        the remote storage layout::
+
+            {root}/{anchor}/{key}/[topic/][file]
+
+        When *path* is provided, files are downloaded directly to *path*
+        and *root* is ignored.
 
         Delegates to :meth:`__get__` which can be overridden by
         subclasses to customise the download behaviour.
@@ -1166,13 +1174,19 @@ class Datablock:
             The topic to download.  When ``None``, downloads the
             default topic (single-topic blocks) or the top-level
             directory (TOPICS/TOPICFILES blocks).
-        path : str, default ``'.'``
-            Local destination directory.  Created if it does not exist.
+        path : str, optional
+            Explicit local destination directory.  When provided, *root*
+            is ignored.
+        root : str, default ``'.'``
+            Local root directory.  The destination is formed as
+            ``{root}/{anchor}/{key}``.
 
         Returns
         -------
         self
         """
+        if path is None:
+            path = os.path.join(root, self.anchor, self.key) if self.key else os.path.join(root, self.anchor)
         return self.__get__(topic, path=path)
 
     def __get__(self, topic=None, *, path='.'):

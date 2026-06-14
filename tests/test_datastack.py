@@ -206,18 +206,6 @@ class TestDatastackBuild(unittest.TestCase):
         for shard in shards:
             self.assertTrue(shard.valid(), f"Shard {shard.cfg.idx} was not built")
 
-    def test_v2_build(self):
-        """v2 build should build all shards."""
-        stack = SimpleStack(
-            url=self.tmpdir,
-            spec=dict(total_items=4, shard_size=2),
-            v2=True,
-        )
-        stack.build()
-        # Verify shards were built by checking files exist
-        shards = stack.shards()
-        for shard in shards:
-            self.assertTrue(shard.valid(), f"Shard {shard.cfg.idx} was not built")
 
     def test_build_returns_self(self):
         """build() should return the stack itself."""
@@ -396,7 +384,7 @@ class TestDatastackPreStack(unittest.TestCase):
 
             def __split__(self):
                 TrackedStack.pre_stack_called = True
-                return self
+                return super().__split__()
 
         TrackedStack.pre_stack_called = False
         stack = TrackedStack(url=self.tmpdir, spec=dict(total_items=3, shard_size=3))
@@ -442,11 +430,11 @@ class TestDatastackPreStack(unittest.TestCase):
             def shards(self):
                 return [self.__shard__(i) for i in range(self.n_shards)]
 
-            def __split__(self):
+            def __split__(self, *args, **kwargs):
                 call_order.append("pre_stack")
-                return self
+                return super().__split__(*args, **kwargs)
 
-            def __stack__(self):
+            def __stack__(self, results=None):
                 call_order.append("stack")
                 return self
 
@@ -462,11 +450,12 @@ class TestDatastackPreStack(unittest.TestCase):
         stack_idx = call_order.index("stack")
         self.assertLess(pre_idx, stack_idx)
 
-    def test_default_pre_stack_returns_self(self):
-        """Default __split__() should return self."""
+    def test_default_split_returns_callables(self):
+        """Default __split__() should return (callables, kwargs) tuple."""
         stack = SimpleStack(url=self.tmpdir)
-        result = stack.__split__()
-        self.assertIs(result, stack)
+        callables, kwargs = stack.__split__()
+        self.assertIsInstance(callables, list)
+        self.assertIsInstance(kwargs, dict)
 
 
 if __name__ == "__main__":

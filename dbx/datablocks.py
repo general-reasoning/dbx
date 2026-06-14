@@ -2293,8 +2293,8 @@ class Datastack(Datablock):
             }
         return cls._executors_cache
 
-    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False, v2: bool = False, **kwargs):
-        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, shuffle_callables=shuffle_callables, v2=v2, **kwargs)
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False, **kwargs):
+        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, shuffle_callables=shuffle_callables, **kwargs)
         # Early validation only — executor_cls is a property so deepcopy/setstate paths work.
         executors = self._get_executors_()
         key = (self.parallelization or "inline").lower()
@@ -2370,39 +2370,6 @@ class Datastack(Datablock):
         Shard formation (``__shard__``) and building both happen inside
         the worker callables, so they are fully parallelized.
         """
-
-        if self.v2:
-            return self.__build_v2__(*args, **kwargs)
-        else:
-            return self.__build_v1__(*args, **kwargs)
-
-    def __build_v1__(self, *args, **kwargs):
-        self.__split__()
-        makers = [self.ShardMaker(idx) for idx in range(self.n_shards)]
-        self.log.info(
-            f"Building {self.__class__.__name__}: {len(makers)} shards, "
-            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
-        )
-        executor_kwargs = dict(
-            n_workers=self.n_workers,
-            tag=f"BUILDING {len(makers)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]",
-        )
-        if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
-            executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec
-        if hasattr(self, 'shuffle_callables') and self.shuffle_callables:
-            executor_kwargs['shuffle_callables'] = self.shuffle_callables
-        if (hasattr(self, 'multiprocessing_start_method')
-                and self.multiprocessing_start_method is not None
-                and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
-            executor_kwargs['start_method'] = self.multiprocessing_start_method
-        executor = self.executor_cls(**executor_kwargs)
-        executor.exec_callables(makers, self, build=True)
-        self.log.info(f"Stacking {self.n_shards} shards of {self.__class__.__name__}")
-        self.__stack__()
-        self.log.info(f"Build complete: {self.__class__.__name__}")
-        return self
-
-    def __build_v2__(self, *args, **kwargs):
         callables, callable_kwargs = self.__split__(*args, **kwargs)
         self.log.info(
             f"Building {self.__class__.__name__}: shards using {len(callables)} callables, "
@@ -2428,29 +2395,11 @@ class Datastack(Datablock):
         return result
 
     def __split__(self, *args, **kwargs):
-        if self.v2:
-            return self.__split_v2__(*args, **kwargs)
-        else:
-            return self.__split_v1__(*args, **kwargs)
-
-    def __split_v1__(self, *args, **kwargs):
-        return self
-    
-    def __split_v2__(self, *args, **kwargs):
         callables = [self.ShardMaker(idx) for idx in range(self.n_shards)]
         callable_kwargs = dict(build=True)
         return callables, callable_kwargs
 
     def __stack__(self, results=None):
-        if self.v2:
-            return self.__stack_v2__(results)
-        else:
-            return self.__stack_v1__()
-
-    def __stack_v1__(self):
-        return self
-    
-    def __stack_v2__(self, results):
         return self
 
     def UNSAFE_clear_shards(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):

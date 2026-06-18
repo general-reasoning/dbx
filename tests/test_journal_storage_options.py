@@ -91,13 +91,6 @@ class TestJournalEntryStorageOptions:
         assert path.startswith('memory://')
         assert 'mod.Block' in path
 
-    def test_anchorhashpath_memory_fs(self):
-        entry = _make_entry(url='memory://bucket/data', anchor='mod.Block',
-                            hash_='abc123')
-        path = entry.anchorhashpath
-        assert path.startswith('memory://')
-        assert 'abc123' in path
-
     def test_read_passes_storage_options(self):
         """read() should forward storage_options to read_str."""
         so = {'k': 'v'}

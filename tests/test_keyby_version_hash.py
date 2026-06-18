@@ -1,8 +1,8 @@
 """Tests for keyby='version_hash', 'tag_hash', and 'tag_version_hash' on Datablock.
 
 - version_hash:      "version={version}/{hash}", falls back to hash
-- tag_hash:          alias for 'taghash' — "{tag}/{shorthash}", falls back to hash
-- tag_version_hash:  "{tag}/version={version}/{shorthash}", skipping None parts,
+- tag_hash:          alias for 'taghash' — "{tag}/{semihash}", falls back to hash
+- tag_version_hash:  "{tag}/version={version}/{semihash}", skipping None parts,
                      falls back to hash when both tag and version are None
 """
 import copy
@@ -141,9 +141,9 @@ class TestKeybyTagHash:
         assert block.key == block.hash
 
     def test_tag_hash_with_tag(self, tmp_path):
-        """tag_hash with tag= produces '{tag}/{shorthash}'."""
+        """tag_hash with tag= produces '{tag}/{semihash}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='run1')
-        assert block.key == f"run1/{block.shorthash}"
+        assert block.key == f"run1/{block.semihash}"
 
     def test_tag_hash_pickle_roundtrip(self, tmp_path):
         block = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='t')
@@ -159,22 +159,22 @@ class TestKeybyTagHash:
 class TestKeybyTagVersionHash:
 
     def test_tag_and_version(self, tmp_path):
-        """Both tag and version present: '{tag}/version={version}/{shorthash}'."""
+        """Both tag and version present: '{tag}/version={version}/{semihash}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp1')
-        expected = f"exp1/version=v3/{block.shorthash}"
+        expected = f"exp1/version=v3/{block.semihash}"
         assert block.key == expected
 
     def test_tag_only(self, tmp_path):
-        """Tag present, no version: '{tag}/{shorthash}'."""
+        """Tag present, no version: '{tag}/{semihash}'."""
         block = UnversionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp2')
         assert block.version is None
-        expected = f"exp2/{block.shorthash}"
+        expected = f"exp2/{block.semihash}"
         assert block.key == expected
 
     def test_version_only(self, tmp_path):
-        """No tag, version present: 'version={version}/{shorthash}'."""
+        """No tag, version present: 'version={version}/{hash}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash')
-        expected = f"version=v3/{block.shorthash}"
+        expected = f"version=v3/{block.hash}"
         assert block.key == expected
 
     def test_neither_tag_nor_version(self, tmp_path):

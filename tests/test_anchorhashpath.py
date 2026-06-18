@@ -63,20 +63,6 @@ class TestAnchorKeyPath(unittest.TestCase):
         expected_anchorkeypath = os.path.join(data['root'], expected_anchorkey)
         self.assertEqual(entry.anchorkeypath, expected_anchorkeypath)
 
-    def test_journal_entry_backward_compat_aliases(self):
-        """anchorhash and anchorhashpath still work as aliases on JournalEntry."""
-        data = {
-            'url': '/tmp/dbx_test',
-            'anchor': 'my.module.MyBlock',
-            'hash': '12345abcde'
-        }
-        series = pd.Series(data)
-        entry = JournalEntry(series)
-        self.assertEqual(entry.anchorhash, os.path.join(data['anchor'], data['hash']))
-        # anchorhashpath uses the same url-based resolution
-        fs, root = fsspec.url_to_fs(data['url'])
-        expected = fs_full_path(fs, os.path.join(root, entry.anchorhash))
-        self.assertEqual(entry.anchorhashpath, expected)
 
 if __name__ == "__main__":
     unittest.main()

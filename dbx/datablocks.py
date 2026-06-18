@@ -296,8 +296,8 @@ class JournalEntry(pd.Series):
         return self.get('hash')
     
     @property
-    def shorthash(self):
-        return self.hash[:8]
+    def semihash(self):
+        return self.get('semihash')
 
     @property
     def url(self):
@@ -336,7 +336,7 @@ class JournalEntry(pd.Series):
         elif keyby in ('taghash', 'tag_hash'):
             if self.tag is None:
                 return self.hash
-            return f"{self.tag}/{self.shorthash}"
+            return f"{self.tag}/{self.semihash}"
         elif keyby == 'version_hash':
             if self.version is not None:
                 return f"version={self.version}/{self.hash}"
@@ -348,7 +348,7 @@ class JournalEntry(pd.Series):
             if self.version is not None:
                 parts.append(f"version={self.version}")
             if parts:
-                parts.append(self.shorthash)
+                parts.append(self.semihash)
                 return '/'.join(parts)
             return self.hash
         elif keyby == 'handle':
@@ -382,20 +382,6 @@ class JournalEntry(pd.Series):
             return os.path.join(root, self.anchorkey) if root else self.anchorkey
         fs, root = fsspec.url_to_fs(url, **self.storage_options)
         return fs_full_path(fs, os.path.join(root, self.anchorkey))
-
-    # Backward-compatible aliases (always hash-based)
-    @property
-    def anchorhash(self):
-        return os.path.join(self.anchor, self.hash)
-
-    @property
-    def anchorhashpath(self):
-        url = self.get('url')
-        if url is None:
-            root = self.get('root')
-            return os.path.join(root, self.anchorhash) if root else self.anchorhash
-        fs, root = fsspec.url_to_fs(url, **self.storage_options)
-        return fs_full_path(fs, os.path.join(root, self.anchorhash))
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
@@ -478,6 +464,7 @@ class JournalEntry(pd.Series):
             repr=self.read('repr') or '',
             handle=self.read('handle') or '',
             hashstr=self.read('hashstr') or '',
+            semihash=self.semihash,
             anchor=self.anchor,
             tag=self.tag,
             key=self.key,
@@ -680,6 +667,7 @@ class Datablock:
         repr: str
         handle: str
         hashstr: str
+        semihash: str
         anchor: str
         tag: str
         key: str
@@ -826,6 +814,7 @@ class Datablock:
             self.spec = self._spec_
         self._anchor_ = state.get('anchor')
         self._hash_ = state.get('hash')
+        self._semihash_ = state.get('semihash')
         self._tag_ = state.get('tag')
         
         self._revision_ = state.get('revision')
@@ -1376,6 +1365,16 @@ class Datablock:
             self._write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
+    def UNSAFE_rename_from(self, anchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
+        if not UNSAFE_allowed("UNSAFE_rename_from", OVERRIDE=OVERRIDE):
+            return self
+        anchorkeypath = self._anchorkeypath(anchor)
+        self._write_journal_entry(event="UNSAFE_rename_from:BEGIN", message=anchor, inline_message=True)
+        result = self.UNSAFE_copy_from(anchorkeypath, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
+        self._write_journal_entry(event="UNSAFE_rename_from:END", message=anchor, inline_message=True)
+        return result
+
+
     def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
         """Copy topic data from an external directory into this Datablock.
 
@@ -1539,8 +1538,9 @@ class Datablock:
             dfn=self.dfn,
             quote=self.quote(deslash=True),
             repr=self.__repr__(deslash=True),
-            handle=self.handle(deslash=True),
+            handle=self.norm(deslash=True),
             hashstr=self.hashstr,
+            semihash=self.semihash,
             anchor=self.anchor,
             tag=self.tag,
             key=self.key,
@@ -1589,16 +1589,16 @@ class Datablock:
 
     def __expand_spec__(self, expansion='repr'):
         """
-            . expansion: 'repr'|'quote'|'handle'
+            . expansion: 'repr'|'quote'|'norm'
                 . specline:      str starting with '@', '$' or '#'
                 . datablock: Datablock object
                 . obj:       object
             'repr':
                 . FULL reduction
                     |obj:    repr(obj)
-            'handle':
+            'norm':
                 . DATABLOCK reduction
-                    |datablock: datablock.handle()
+                    |datablock: datablock.norm()
                     |specline:      repr(specline)
                     |obj:       repr(obj)
             'quote':
@@ -1616,11 +1616,11 @@ class Datablock:
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
                 _spec_[k] = repr(value)
-        elif expansion == 'handle':
+        elif expansion == 'norm':
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
                 if isinstance(value, Datablock):
-                    _spec_[k] = value.handle()
+                    _spec_[k] = value.norm()
                 elif self.is_specline(v):
                     _spec_[k] = v
                 elif isinstance(value, str):
@@ -1671,6 +1671,8 @@ class Datablock:
             _repr_ = f"{self.anchor}({kwargsrepr})"
         elif anchor == 'fqcn':
             _repr_ = f"{self.fqcn}({kwargsrepr})"
+        elif anchor is None:
+            _repr_ = f"({kwargsrepr})"
         else:
             raise ValueError(f"Unknown anchor: {repr(anchor)}")
         return _repr_
@@ -1688,19 +1690,33 @@ class Datablock:
         self.log.detailed(f"quote: ------------> {quote=}")
         return quote
 
-    def handle(self, *, deslash: bool = False):
+    def norm(self, *, deslash: bool = False):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        repr_spec = self.__expand_spec__('handle')
-        handle = self.__repr_from_kwargs__({
+        norm_spec = self.__expand_spec__('norm')
+        norm = self.__repr_from_kwargs__({
             **self._rootkwargs_,
-            **{'spec': repr_spec},
+            **{'spec': norm_spec},
         }, anchor='fqcn')
         if deslash:
-            handle = handle.replace('\\', '')
-        self.log.detailed(f"handle: ------------> {repr_spec=}")
-        self.log.detailed(f"handle: ------------>{handle=}")
-        return handle
+            norm = norm.replace('\\', '')
+        self.log.detailed(f"norm: ------------> {norm_spec=}")
+        self.log.detailed(f"norm: ------------>{norm=}")
+        return norm
+
+    def seminorm(self, *, deslash: bool = False):
+        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+        # computed using the older version of these methods
+        seminorm_spec = self.__expand_spec__('norm')
+        seminorm = self.__repr_from_kwargs__({
+            **self._rootkwargs_,
+            **{'spec': seminorm_spec},
+        }, anchor=None)
+        if deslash:
+            seminorm = seminorm.replace('\\', '')
+        self.log.detailed(f"seminorm: ------------> {seminorm_spec=}")
+        self.log.detailed(f"seminorm: ------------>{seminorm=}")
+        return seminorm
 
     def __repr__(self, *, deslash: bool = True):
         repr_spec = self.__expand_spec__('repr')
@@ -1791,12 +1807,32 @@ class Datablock:
         else:
             topics = ["topics:None"]
         hashstr = os.path.join(
-            self.handle(),
+            self.norm(),
             f"version={self.version}",
             *topics,
         )
         return hashstr
-    
+
+    @property
+    def semihashstr(self):
+        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+        # computed using the older version of these methods
+        if hasattr(self, "TOPICFILES"):
+            topics = [f"topic:{topic}={file}" for topic, file in self.TOPICFILES.items()]
+        elif hasattr(self, "TOPICS"):
+            if isinstance(self.TOPICS, dict):
+                topics = [f"topic:{topic}={file}" for topic, file in self.TOPICS.items()]
+            else:
+                topics = [f"topic:{topic}" for topic in self.TOPICS]
+        else:
+            topics = ["topics:None"]
+        semihashstr = os.path.join(
+            self.seminorm(),
+            f"version={self.version}",
+            *topics,
+        )
+        return semihashstr
+
     @property
     def hash(self): 
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hash
@@ -1812,8 +1848,18 @@ class Datablock:
         return self._hash
 
     @property
-    def shorthash(self):
-        return self.hash[:8]
+    def semihash(self):
+        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hash
+        # computed with the older code.
+        if not hasattr(self, '_semihash'): 
+            if self._semihash_ is not None:
+                self._semihash = self._semihash_
+            else:
+                sha = hashlib.sha256()
+                sha.update(self.semihashstr.encode())
+                self._semihash = sha.hexdigest()[:8]
+                self.log.detailed(f"semihash: ---------===---------\u003e {self.semihashstr=} ---\u003e semihash: {self._semihash}")
+        return self._semihash
 
     ### anchorage: begin
     @property
@@ -1837,33 +1883,37 @@ class Datablock:
     def key(self):
         """Return the key component based on self.keyby."""
         if self.keyby is None:
-            return None
+            key = None
         elif self.keyby == 'hash':
-            return self.hash
+            key = self.hash
         elif self.keyby == 'handle':
-            return self.handle()
+            key = self.norm()
         elif self.keyby == 'tag':
-            return self.tag
+            key = self.tag
         elif self.keyby in ('taghash', 'tag_hash'):
             if self._tag_ is None:
-                return self.hash
-            return f"{self.tag}/{self.shorthash}"
+                key = self.hash
+            else:
+                key = f"{self.tag}/{self.semihash}"
         elif self.keyby == 'version_hash':
             if self.version is not None:
-                return f"version={self.version}/{self.hash}"
-            return self.hash
+                key = f"version={self.version}/{self.hash}"
+            else:
+                key = self.hash
         elif self.keyby == 'tag_version_hash':
             parts = []
             if self._tag_ is not None:
                 parts.append(self.tag)
             if self.version is not None:
                 parts.append(f"version={self.version}")
-            if parts:
-                parts.append(self.shorthash)
-                return '/'.join(parts)
-            return self.hash
+            if self._tag_ is not None:
+                parts.append(self.semihash)
+            else:
+                parts.append(self.hash)
+            key = '/'.join(parts)
         else:  
             raise NotImplementedError(f"keyby {repr(self.keyby)} is not implemented: missing override?")
+        return key
     ### anchoracte: END
     #IDS: END
 
@@ -1958,8 +2008,6 @@ class Datablock:
             return self.fs.ls(dirpath)
         return dirpath
 
-
-
     def paths(self):
         if self.has_topics:
             paths = {topic: self.path(topic) for topic in self.topics()}
@@ -1967,22 +2015,29 @@ class Datablock:
             paths = self.path()
         return paths
 
-
     def anchorpath(self):
-        return fs_full_path(self.fs, os.path.join(self.root, self.anchor))
+        return self._anchorpath()
 
     @property
     def anchorkey(self):
-        key = self.key
-        return os.path.join(self.anchor, key) if key else self.anchor
+        return self._anchorkey()
 
     @property
     def anchorkeypath(self):
-        raw = os.path.join(
-            self.root,
-            self.anchorkey,
-        ) if self.anchorkey else self.root
-        return fs_full_path(self.fs, raw)
+        return self._anchorkeypath()
+
+    def _anchorpath(self, anchor=None):
+        anchor = anchor or self.anchor
+        return fs_full_path(self.fs, os.path.join(self.root, anchor))
+
+    def _anchorkey(self, anchor=None):
+        anchor = anchor or self.anchor
+        return os.path.join(anchor, self.key) if self.key else anchor
+
+    def _anchorkeypath(self, anchor=None):
+        anchorkey = self._anchorkey(anchor)
+        bare = os.path.join(self.root, anchorkey) if anchorkey else self.root
+        return fs_full_path(self.fs, bare)
     
     @staticmethod
     def _dbxanchorpathx(url, anchor, x, *, fqcn, ensure: bool = False, storage_options=None):
@@ -2069,7 +2124,7 @@ class Datablock:
         self._write_journal_dict('kwargs', self.kwargs)
         self._write_str('quote', self.quote())
         self._write_str('repr', self.__repr__())
-        self._write_str('handle', self.handle())
+        self._write_str('handle', self.norm())
         self._write_str('hashstr', self.hashstr)
         if message is not None and not inline_message:
             self._write_str('message', message)
@@ -2117,6 +2172,7 @@ class Datablock:
                                          'handle': handle_path,
                                          'repr': repr_path,
                                          'hashstr': hashstr_path,
+                                         'semihash': self.semihash,
                                          'message': message,
                                          'gitrepo': DBX_GIT_REPO,
                                          'wrkrepo': DBX_USE_WORK_REPO,
@@ -2443,10 +2499,73 @@ class Datastack(Datablock):
         self._write_journal_entry(event="UNSAFE_clear_shards:end")
         return self
 
+    def UNSAFE_rename_from_shards(self, anchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
+        if not UNSAFE_allowed("UNSAFE_rename_from_shards", OVERRIDE=OVERRIDE):
+            return self
+
+        shard_list = self.shards()
+        self.log.info(
+            f"UNSAFE_rename_from_shards: renaming {len(shard_list)} shards, "
+            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
+        )
+        self._write_journal_entry(event="UNSAFE_rename_from_shards:begin", message=anchor, inline_message=True)
+
+        tag = f"RENAMING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]"
+        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
+        if (hasattr(self, 'multiprocessing_start_method')
+                and self.multiprocessing_start_method is not None
+                and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
+            executor_kwargs['start_method'] = self.multiprocessing_start_method
+        executor = callable_executor(self.parallelization, **executor_kwargs)
+
+        callables = [functools.partial(_rename_from_shard_callable, shard, anchor, overwrite, topicpaths, validate, copy_dirpath) for shard in shard_list]
+        executor.exec_callables(callables)
+
+        self.log.info(f"UNSAFE_rename_from_shards complete: {self.__class__.__name__}")
+        self._write_journal_entry(event="UNSAFE_rename_from_shards:end", message=anchor, inline_message=True)
+        return self
+
+    def UNSAFE_rename_shards_from(self, anchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
+        if not UNSAFE_allowed("UNSAFE_rename_shards_from", OVERRIDE=OVERRIDE):
+            return self
+
+        shard_list = self.shards()
+        self.log.info(
+            f"UNSAFE_rename_shards_from: renaming {len(shard_list)} shards, "
+            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
+        )
+        self._write_journal_entry(event="UNSAFE_rename_shards_from:begin", message=anchor, inline_message=True)
+
+        tag = f"RENAMING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]"
+        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
+        if (hasattr(self, 'multiprocessing_start_method')
+                and self.multiprocessing_start_method is not None
+                and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
+            executor_kwargs['start_method'] = self.multiprocessing_start_method
+        executor = callable_executor(self.parallelization, **executor_kwargs)
+
+        callables = [functools.partial(_rename_shards_from_callable, shard, anchor, overwrite, topicpaths, validate, copy_dirpath) for shard in shard_list]
+        executor.exec_callables(callables)
+
+        self.log.info(f"UNSAFE_rename_shards_from: COMPLETE: {self.__class__.__name__}")
+        self._write_journal_entry(event="UNSAFE_rename_shards_from:end", message=anchor, inline_message=True)
+        return self
+
+
 
 def _clear_shard_callable(shard, topics, clear_dirpath):
     """Module-level callable for UNSAFE_clear_shards (must be picklable)."""
     shard.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
+    return shard
+
+def _rename_from_shard_callable(shard, anchor, overwrite=False, topicpaths=None, validate=True, copy_dirpath=False):
+    """Module-level callable for UNSAFE_rename_from_shards (must be picklable)."""
+    shard.UNSAFE_rename_from(anchor, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
+    return shard
+
+def _rename_shards_from_callable(shard, anchor, overwrite=False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
+    """Module-level callable for UNSAFE_rename_shards (must be picklable)."""
+    shard.UNSAFE_rename_shards_from(anchor, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
     return shard
 
 
@@ -3064,7 +3183,7 @@ class UNSAFE_datablock_journal_puller:
         
     def __call__(self, journal, datablocks=None):
         if datablocks is not None:
-            datablock_handles = [datablock.handle() for datablock in datablocks]
+            datablock_handles = [datablock.norm() for datablock in datablocks]
         else:
             datablock_handles = None
         try:
@@ -3073,10 +3192,10 @@ class UNSAFE_datablock_journal_puller:
             entry = journal(journal.index[self.idx])
             spec = entry.read('spec')
             dbk = eval(quotefn(self.datablock_classname, spec=spec))
-            anchorhashpath = entry.anchorhashpath
+            anchorhashpath = entry.anchorkeypath
             if datablock_handles is not None:
-                if dbk.handle() in datablock_handles:
-                    self.log.debug(f"Skipping datablock {dbk.handle()}: not in datablocks")
+                if dbk.norm() in datablock_handles:
+                    self.log.debug(f"Skipping datablock {dbk.norm()}: not in datablocks")
                     return None
             self.log.debug(f"Copying from {anchorhashpath} to {dbk}: BEGIN")
             dbk.UNSAFE_copy_from(anchorhashpath)

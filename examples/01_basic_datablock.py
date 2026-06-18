@@ -50,7 +50,7 @@ def main():
     ))
 
     print(f"Anchor:  {block.anchor}")
-    print(f"Hash:    {block.shorthash}")
+    print(f"Hash:    {block.semihash}")
     print(f"Key:     {block.key[:16]}...")
     print(f"Valid:   {block.valid()}")
 

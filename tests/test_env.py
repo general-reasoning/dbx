@@ -4,9 +4,9 @@ Tests for the env() specline factory and getenv() function.
 Verifies:
 1. env() basics: returns a specline string, idempotent.
 2. getenv() resolves environment variables.
-3. Datablock with url=env('X'): handle/hashstr contain specline.
+3. Datablock with url=env('X'): norm/hashstr contain specline.
 4. Relocatability: changing the env var does not change the hash.
-5. Spec fields with env(): specline kept in handle, resolved in cfg.
+5. Spec fields with env(): specline kept in norm, resolved in cfg.
 6. Quote round-trip via eval.
 """
 import os
@@ -112,7 +112,7 @@ class TestEnvInRoot:
 
     def test_handle_contains_specline(self):
         block = EnvBlock(url=env('TEST_ROOT'))
-        handle = block.handle()
+        handle = block.norm()
         assert "$dbx.getenv('TEST_ROOT')" in handle
         assert '/tmp/test_root_value' not in handle
 
@@ -185,7 +185,7 @@ class TestEnvInSpec:
         monkeypatch.setenv('SPEC_PATH', '/data/resolved')
         block = EnvSpecBlock(url='/tmp/dbx_test_env',
                              spec=dict(data_path=env('SPEC_PATH')))
-        handle = block.handle()
+        handle = block.norm()
         assert "$dbx.getenv('SPEC_PATH')" in handle
         assert '/data/resolved' not in handle
 
@@ -216,8 +216,8 @@ class TestEnvInSpec:
                              spec=dict(data_path=env('MY_DATA')))
         assert block.root == '/tmp/combined'
         assert block.cfg.data_path == '/data/combined'
-        assert "$dbx.getenv('MY_ROOT')" in block.handle()
-        assert "$dbx.getenv('MY_DATA')" in block.handle()
+        assert "$dbx.getenv('MY_ROOT')" in block.norm()
+        assert "$dbx.getenv('MY_DATA')" in block.norm()
 
 
 # ---------------------------------------------------------------------------

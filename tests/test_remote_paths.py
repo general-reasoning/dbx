@@ -258,16 +258,16 @@ class TestJournalEntryPaths:
         assert 'my.module.MyBlock' in akp
         assert 'abc123def456' in akp
 
-    def test_anchorhashpath_from_url(self):
+    def test_anchorkeypath_from_url_with_hash(self):
         data = {
             'url': 'memory://bucket/root',
             'anchor': 'my.module.MyBlock',
             'hash': 'abc123def456',
         }
         entry = JournalEntry(pd.Series(data))
-        ahp = entry.anchorhashpath
-        assert ahp.startswith('memory://')
-        assert 'abc123def456' in ahp
+        akp = entry.anchorkeypath
+        assert akp.startswith('memory://')
+        assert 'abc123def456' in akp
 
     def test_anchorkeypath_local_url_no_prefix(self):
         """JournalEntry with local url should produce bare paths."""

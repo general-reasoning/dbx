@@ -14,11 +14,11 @@ class TestAnchorKeyPath(unittest.TestCase):
             pass
         
         block = MyBlock(url="/tmp/dbx_test")
-        # Default keyby='taghash'; with no tag set, key falls back to hash
+        # Default keyby='taghash'; with no tag set, key falls back to superhash
         self.assertTrue(hasattr(block, 'anchorkey'))
         self.assertTrue(hasattr(block, 'anchorkeypath'))
         
-        expected_anchorkey = os.path.join(block.anchor, block.hash)
+        expected_anchorkey = os.path.join(block.anchor, block.superhash)
         self.assertEqual(block.anchorkey, expected_anchorkey)
         
         # anchorkeypath uses fs_full_path: for local fs, returns bare path
@@ -34,7 +34,8 @@ class TestAnchorKeyPath(unittest.TestCase):
         data = {
             'url': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
-            'hash': '12345abcde'
+            'hash': '12345abcde',
+            'superhash': 'ab12cd34',
         }
         series = pd.Series(data)
         entry = JournalEntry(series)
@@ -42,7 +43,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         self.assertTrue(hasattr(entry, 'anchorkey'))
         self.assertTrue(hasattr(entry, 'anchorkeypath'))
         
-        expected_anchorkey = os.path.join(data['anchor'], data['hash'])
+        expected_anchorkey = os.path.join(data['anchor'], data['superhash'])
         self.assertEqual(entry.anchorkey, expected_anchorkey)
         
         fs, root = fsspec.url_to_fs(data['url'])
@@ -54,12 +55,13 @@ class TestAnchorKeyPath(unittest.TestCase):
         data = {
             'root': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
-            'hash': '12345abcde'
+            'hash': '12345abcde',
+            'superhash': 'ab12cd34',
         }
         series = pd.Series(data)
         entry = JournalEntry(series)
         
-        expected_anchorkey = os.path.join(data['anchor'], data['hash'])
+        expected_anchorkey = os.path.join(data['anchor'], data['superhash'])
         expected_anchorkeypath = os.path.join(data['root'], expected_anchorkey)
         self.assertEqual(entry.anchorkeypath, expected_anchorkeypath)
 

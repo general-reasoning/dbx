@@ -85,7 +85,7 @@ def main():
     )
 
     print(f"Shards: {stack.n_shards}")
-    print(f"Hash:   {stack.semihash}")
+    print(f"Hash:   {stack.superhash}")
 
     stack.build()
 

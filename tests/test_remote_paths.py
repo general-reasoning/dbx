@@ -251,23 +251,25 @@ class TestJournalEntryPaths:
             'url': 'memory://bucket/root',
             'anchor': 'my.module.MyBlock',
             'hash': 'abc123def456',
+            'superhash': 'ab12cd34',
         }
         entry = JournalEntry(pd.Series(data))
         akp = entry.anchorkeypath
         assert akp.startswith('memory://')
         assert 'my.module.MyBlock' in akp
-        assert 'abc123def456' in akp
+        assert 'ab12cd34' in akp
 
     def test_anchorkeypath_from_url_with_hash(self):
         data = {
             'url': 'memory://bucket/root',
             'anchor': 'my.module.MyBlock',
             'hash': 'abc123def456',
+            'superhash': 'ab12cd34',
         }
         entry = JournalEntry(pd.Series(data))
         akp = entry.anchorkeypath
         assert akp.startswith('memory://')
-        assert 'abc123def456' in akp
+        assert 'ab12cd34' in akp
 
     def test_anchorkeypath_local_url_no_prefix(self):
         """JournalEntry with local url should produce bare paths."""
@@ -275,6 +277,7 @@ class TestJournalEntryPaths:
             'url': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
             'hash': 'abc123def456',
+            'superhash': 'ab12cd34',
         }
         entry = JournalEntry(pd.Series(data))
         assert not entry.anchorkeypath.startswith('file://')

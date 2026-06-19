@@ -44,11 +44,11 @@ class TestDfn:
 
     def test_dfn_contains_explicit_params(self):
         """dfn should include explicit Datablock.__init__ params like root, tag, keyby."""
-        block = SimpleBlock(url='/tmp/test', tag='mytag', keyby='handle')
+        block = SimpleBlock(url='/tmp/test', tag='mytag', keyby='norm')
         d = block.dfn
         assert d['url'] == '/tmp/test'
         assert d['tag'] == 'mytag'
-        assert d['keyby'] == 'handle'
+        assert d['keyby'] == 'norm'
 
     def test_dfn_contains_dynamic_kwargs(self):
         """dfn should also include user-supplied **kwargs."""
@@ -101,7 +101,7 @@ class TestKwargs:
 
     def test_kwargs_excludes_explicit_params(self):
         """kwargs should not contain root, tag, revision, keyby, etc."""
-        block = SimpleBlock(url='/tmp/test', tag='t', keyby='handle', my_param=42)
+        block = SimpleBlock(url='/tmp/test', tag='t', keyby='norm', my_param=42)
         kw = block.kwargs
         assert 'url' not in kw
         assert 'tag' not in kw

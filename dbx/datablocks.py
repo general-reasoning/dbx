@@ -292,12 +292,12 @@ class JournalEntry(pd.Series):
         return self.get('anchor')
 
     @property
-    def hash(self):
-        return self.get('hash')
+    def superhash(self):
+        return self.get('superhash')
     
     @property
-    def semihash(self):
-        return self.get('semihash')
+    def hash(self):
+        return self.get('hash')
 
     @property
     def url(self):
@@ -328,19 +328,23 @@ class JournalEntry(pd.Series):
         """Reconstruct the key from journal fields, mirroring Datablock.key."""
         keyby = self.keyby
         if keyby is None:
-            return None
+            key = None
         elif keyby == 'hash':
-            return self.hash
+            key = self.hash
+        elif keyby == 'superhash':
+            key = self.superhash
         elif keyby == 'tag':
-            return self.tag
+            key = self.tag
         elif keyby in ('taghash', 'tag_hash'):
             if self.tag is None:
-                return self.hash
-            return f"{self.tag}/{self.semihash}"
+                key = self.superhash
+            else:
+                key = f"{self.tag}/{self.hash}"
         elif keyby == 'version_hash':
             if self.version is not None:
-                return f"version={self.version}/{self.hash}"
-            return self.hash
+                key = f"version={self.version}/{self.hash}"
+            else:
+                key = self.superhash
         elif keyby == 'tag_version_hash':
             parts = []
             if self.tag is not None:
@@ -348,16 +352,19 @@ class JournalEntry(pd.Series):
             if self.version is not None:
                 parts.append(f"version={self.version}")
             if parts:
-                parts.append(self.semihash)
-                return '/'.join(parts)
-            return self.hash
-        elif keyby == 'handle':
-            h = self.get('handle')
+                parts.append(self.hash)
+                key = '/'.join(parts)
+            else:
+                key = self.superhash
+        elif keyby == 'norm':
+            h = self.get('norm')
             if h is not None:
-                return h
-            return self.hash  # fallback if handle not stored
+                key = h
+            else:
+                key = self.superhash  # fallback if handle not stored
         else:
-            return self.hash  # fallback
+            key = self.superhash  # fallback
+        return key
 
     @property
     def anchorkey(self):
@@ -464,7 +471,7 @@ class JournalEntry(pd.Series):
             repr=self.read('repr') or '',
             handle=self.read('handle') or '',
             hashstr=self.read('hashstr') or '',
-            semihash=self.semihash,
+            superhash=self.superhash,
             anchor=self.anchor,
             tag=self.tag,
             key=self.key,
@@ -665,9 +672,11 @@ class Datablock:
         spec: dict
         quote: str
         repr: str
-        handle: str
+        norm: str
         hashstr: str
-        semihash: str
+        supernorm: str
+        superhashstr: str
+        superhash: str
         anchor: str
         tag: str
         key: str
@@ -814,14 +823,14 @@ class Datablock:
             self.spec = self._spec_
         self._anchor_ = state.get('anchor')
         self._hash_ = state.get('hash')
-        self._semihash_ = state.get('semihash')
+        self._superhash_ = state.get('superhash')
         self._tag_ = state.get('tag')
         
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'taghash')
-        if self.keyby not in (None, 'hash', 'handle', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'handle', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'custom', got {self.keyby!r}")
+        if self.keyby not in (None, 'hash', 'superhash', 'norm', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'superhash', 'norm', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -1538,9 +1547,11 @@ class Datablock:
             dfn=self.dfn,
             quote=self.quote(deslash=True),
             repr=self.__repr__(deslash=True),
-            handle=self.norm(deslash=True),
+            norm=self.norm(deslash=True),
             hashstr=self.hashstr,
-            semihash=self.semihash,
+            supernorm=self.supernorm(deslash=True),
+            superhashstr=self.superhashstr,
+            superhash=self.superhash,
             anchor=self.anchor,
             tag=self.tag,
             key=self.key,
@@ -1697,26 +1708,26 @@ class Datablock:
         norm = self.__repr_from_kwargs__({
             **self._rootkwargs_,
             **{'spec': norm_spec},
-        }, anchor='fqcn')
+        }, anchor=None)
         if deslash:
             norm = norm.replace('\\', '')
         self.log.detailed(f"norm: ------------> {norm_spec=}")
         self.log.detailed(f"norm: ------------>{norm=}")
         return norm
 
-    def seminorm(self, *, deslash: bool = False):
+    def supernorm(self, *, deslash: bool = False):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        seminorm_spec = self.__expand_spec__('norm')
-        seminorm = self.__repr_from_kwargs__({
+        supernorm_spec = self.__expand_spec__('norm')
+        supernorm = self.__repr_from_kwargs__({
             **self._rootkwargs_,
-            **{'spec': seminorm_spec},
-        }, anchor=None)
+            **{'spec': supernorm_spec},
+        }, anchor='fqcn')
         if deslash:
-            seminorm = seminorm.replace('\\', '')
-        self.log.detailed(f"seminorm: ------------> {seminorm_spec=}")
-        self.log.detailed(f"seminorm: ------------>{seminorm=}")
-        return seminorm
+            supernorm = supernorm.replace('\\', '')
+        self.log.detailed(f"supernorm: ------------> {supernorm_spec=}")
+        self.log.detailed(f"supernorm: ------------>{supernorm=}")
+        return supernorm
 
     def __repr__(self, *, deslash: bool = True):
         repr_spec = self.__expand_spec__('repr')
@@ -1814,7 +1825,7 @@ class Datablock:
         return hashstr
 
     @property
-    def semihashstr(self):
+    def superhashstr(self):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if hasattr(self, "TOPICFILES"):
@@ -1826,12 +1837,12 @@ class Datablock:
                 topics = [f"topic:{topic}" for topic in self.TOPICS]
         else:
             topics = ["topics:None"]
-        semihashstr = os.path.join(
-            self.seminorm(),
+        superhashstr = os.path.join(
+            self.supernorm(),
             f"version={self.version}",
             *topics,
         )
-        return semihashstr
+        return superhashstr
 
     @property
     def hash(self): 
@@ -1848,18 +1859,18 @@ class Datablock:
         return self._hash
 
     @property
-    def semihash(self):
+    def superhash(self):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hash
         # computed with the older code.
-        if not hasattr(self, '_semihash'): 
-            if self._semihash_ is not None:
-                self._semihash = self._semihash_
+        if not hasattr(self, '_superhash'): 
+            if self._superhash_ is not None:
+                self._superhash = self._superhash_
             else:
                 sha = hashlib.sha256()
-                sha.update(self.semihashstr.encode())
-                self._semihash = sha.hexdigest()[:8]
-                self.log.detailed(f"semihash: ---------===---------\u003e {self.semihashstr=} ---\u003e semihash: {self._semihash}")
-        return self._semihash
+                sha.update(self.superhashstr.encode())
+                self._superhash = sha.hexdigest()[:8]
+                self.log.detailed(f"superhash: ---------===---------\u003e {self.superhashstr=} ---\u003e superhash: {self._superhash}")
+        return self._superhash
 
     ### anchorage: begin
     @property
@@ -1886,20 +1897,22 @@ class Datablock:
             key = None
         elif self.keyby == 'hash':
             key = self.hash
-        elif self.keyby == 'handle':
+        elif self.keyby == 'superhash':
+            key = self.superhash
+        elif self.keyby == 'norm':
             key = self.norm()
         elif self.keyby == 'tag':
             key = self.tag
         elif self.keyby in ('taghash', 'tag_hash'):
             if self._tag_ is None:
-                key = self.hash
+                key = self.superhash
             else:
-                key = f"{self.tag}/{self.semihash}"
+                key = f"{self.tag}/{self.hash}"
         elif self.keyby == 'version_hash':
             if self.version is not None:
                 key = f"version={self.version}/{self.hash}"
             else:
-                key = self.hash
+                key = self.superhash
         elif self.keyby == 'tag_version_hash':
             parts = []
             if self._tag_ is not None:
@@ -1907,9 +1920,9 @@ class Datablock:
             if self.version is not None:
                 parts.append(f"version={self.version}")
             if self._tag_ is not None:
-                parts.append(self.semihash)
-            else:
                 parts.append(self.hash)
+            else:
+                parts.append(self.superhash)
             key = '/'.join(parts)
         else:  
             raise NotImplementedError(f"keyby {repr(self.keyby)} is not implemented: missing override?")
@@ -2124,7 +2137,7 @@ class Datablock:
         self._write_journal_dict('kwargs', self.kwargs)
         self._write_str('quote', self.quote())
         self._write_str('repr', self.__repr__())
-        self._write_str('handle', self.norm())
+        self._write_str('norm', self.norm())
         self._write_str('hashstr', self.hashstr)
         if message is not None and not inline_message:
             self._write_str('message', message)
@@ -2135,9 +2148,11 @@ class Datablock:
         dfn_path = self._dbxanchorhashpathx('dfn', 'yaml')
         kwargs_path = self._dbxanchorhashpathx('kwargs', 'yaml')
         quote_path = self._dbxanchorhashpathx('quote', 'txt')
-        handle_path = self._dbxanchorhashpathx('quote', 'txt')
+        norm_path = self._dbxanchorhashpathx('norm', 'txt')
         repr_path = self._dbxanchorhashpathx('repr', 'txt')
         hashstr_path = self._dbxanchorhashpathx('hashstr', 'txt')
+        supernorm_path = self._dbxanchorhashpathx('supernorm', 'txt')
+        superhashstr_path = self._dbxanchorhashpathx('superhashstr', 'txt')
         if message is not None and not inline_message:
             message_path = self._dbxanchorhashpathx('message', 'txt')
             message = message_path
@@ -2160,6 +2175,7 @@ class Datablock:
                                          'url': self._url_,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
+                                         'superhash': self.superhash,
                                          'keyby': self.keyby,
                                          'uuid': self.uuid,
                                          'tag': self.tag, 
@@ -2169,10 +2185,11 @@ class Datablock:
                                          'dfn': dfn_path,
                                          'kwargs': kwargs_path,
                                          'quote': quote_path,
-                                         'handle': handle_path,
+                                         'norm': norm_path,
+                                         'supernorm': supernorm_path,
                                          'repr': repr_path,
                                          'hashstr': hashstr_path,
-                                         'semihash': self.semihash,
+                                         'superhashstr': superhashstr_path,
                                          'message': message,
                                          'gitrepo': DBX_GIT_REPO,
                                          'wrkrepo': DBX_USE_WORK_REPO,

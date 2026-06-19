@@ -1383,7 +1383,6 @@ class Datablock:
         self._write_journal_entry(event="UNSAFE_rename_from:END", message=anchor, inline_message=True)
         return result
 
-
     def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
         """Copy topic data from an external directory into this Datablock.
 
@@ -2516,33 +2515,7 @@ class Datastack(Datablock):
         self._write_journal_entry(event="UNSAFE_clear_shards:end")
         return self
 
-    def UNSAFE_rename_from_shards(self, anchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
-        if not UNSAFE_allowed("UNSAFE_rename_from_shards", OVERRIDE=OVERRIDE):
-            return self
-
-        shard_list = self.shards()
-        self.log.info(
-            f"UNSAFE_rename_from_shards: renaming {len(shard_list)} shards, "
-            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
-        )
-        self._write_journal_entry(event="UNSAFE_rename_from_shards:begin", message=anchor, inline_message=True)
-
-        tag = f"RENAMING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]"
-        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
-        if (hasattr(self, 'multiprocessing_start_method')
-                and self.multiprocessing_start_method is not None
-                and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
-            executor_kwargs['start_method'] = self.multiprocessing_start_method
-        executor = callable_executor(self.parallelization, **executor_kwargs)
-
-        callables = [functools.partial(_rename_from_shard_callable, shard, anchor, overwrite, topicpaths, validate, copy_dirpath) for shard in shard_list]
-        executor.exec_callables(callables)
-
-        self.log.info(f"UNSAFE_rename_from_shards complete: {self.__class__.__name__}")
-        self._write_journal_entry(event="UNSAFE_rename_from_shards:end", message=anchor, inline_message=True)
-        return self
-
-    def UNSAFE_rename_shards_from(self, anchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
+    def UNSAFE_rename_shards_from(self, shardanchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
         if not UNSAFE_allowed("UNSAFE_rename_shards_from", OVERRIDE=OVERRIDE):
             return self
 
@@ -2551,7 +2524,7 @@ class Datastack(Datablock):
             f"UNSAFE_rename_shards_from: renaming {len(shard_list)} shards, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
         )
-        self._write_journal_entry(event="UNSAFE_rename_shards_from:begin", message=anchor, inline_message=True)
+        self._write_journal_entry(event="UNSAFE_rename_shards_from:begin", message=shardanchor, inline_message=True)
 
         tag = f"RENAMING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]"
         executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
@@ -2561,13 +2534,12 @@ class Datastack(Datablock):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
         executor = callable_executor(self.parallelization, **executor_kwargs)
 
-        callables = [functools.partial(_rename_shards_from_callable, shard, anchor, overwrite, topicpaths, validate, copy_dirpath) for shard in shard_list]
+        callables = [functools.partial(_rename_shard_from_callable, shard, shardanchor, overwrite, topicpaths, validate, copy_dirpath) for shard in shard_list]
         executor.exec_callables(callables)
 
-        self.log.info(f"UNSAFE_rename_shards_from: COMPLETE: {self.__class__.__name__}")
-        self._write_journal_entry(event="UNSAFE_rename_shards_from:end", message=anchor, inline_message=True)
+        self.log.info(f"UNSAFE_rename_shards_from complete: {self.__class__.__name__}")
+        self._write_journal_entry(event="UNSAFE_rename_shards_from:end", message=shardanchor, inline_message=True)
         return self
-
 
 
 def _clear_shard_callable(shard, topics, clear_dirpath):
@@ -2575,14 +2547,9 @@ def _clear_shard_callable(shard, topics, clear_dirpath):
     shard.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
     return shard
 
-def _rename_from_shard_callable(shard, anchor, overwrite=False, topicpaths=None, validate=True, copy_dirpath=False):
-    """Module-level callable for UNSAFE_rename_from_shards (must be picklable)."""
-    shard.UNSAFE_rename_from(anchor, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
-    return shard
-
-def _rename_shards_from_callable(shard, anchor, overwrite=False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
-    """Module-level callable for UNSAFE_rename_shards (must be picklable)."""
-    shard.UNSAFE_rename_shards_from(anchor, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
+def _rename_shard_from_callable(shard, shardanchor, overwrite=False, topicpaths=None, validate=True, copy_dirpath=False):
+    """Module-level callable for UNSAFE_rename_shard_from (must be picklable)."""
+    shard.UNSAFE_rename_from(shardanchor, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
     return shard
 
 

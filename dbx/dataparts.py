@@ -33,6 +33,13 @@ import numpy as np
 import fsspec
 import pandas as pd
 try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    _PYARROW_AVAILABLE = True
+except ImportError:
+    _PYARROW_AVAILABLE = False
+import random as _random
+try:
     import torch
     _TORCH_AVAILABLE = True
 except ImportError:
@@ -280,8 +287,6 @@ class FDCapture:
     """
     def __init__(self, log_file):
         self.log_file = log_file
-        import os
-        import threading
         
         self.saved_stdout_fd = os.dup(1)
         self.saved_stderr_fd = os.dup(2)
@@ -321,8 +326,6 @@ class FDCapture:
         self.t_err.start()
 
     def close(self):
-        import sys
-        import os
         sys.stdout.flush()
         sys.stderr.flush()
         
@@ -587,12 +590,11 @@ def write_tensor(tensor, path, *, storage_options=None, log=Logger(), debug: boo
 
 
 def read_tensor(path, *, storage_options=None, log=Logger(), debug: bool = False):
-    import torch as _torch
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "rb") as f:
         array = np.load(f)
         log.detailed(f"READ {path}")
-        tensor = _torch.from_numpy(array)
+        tensor = torch.from_numpy(array)
     return tensor
 
 
@@ -602,9 +604,8 @@ def write_tensors(path, *, log=Logger(), debug: bool = False, **tensors):
 
 
 def read_tensors(path, *keys, log=Logger(), debug: bool = False):
-    import torch as _torch
     arrays = read_npz(path, *keys, log=log, debug=debug)
-    tensors = {k: _torch.from_numpy(v) for k, v in arrays.items()}
+    tensors = {k: torch.from_numpy(v) for k, v in arrays.items()}
     return tensors
 
 
@@ -647,8 +648,6 @@ def write_frame(frame: pd.DataFrame, path, *, storage_options=None, log=Logger()
 
     Extra keyword arguments are forwarded to the underlying writer.
     """
-    import pyarrow as pa
-    import pyarrow.parquet as pq
 
     fs, fpath = fsspec.url_to_fs(path, **(storage_options or {}))
     if path.endswith('.csv'):
@@ -667,7 +666,6 @@ def read_frame(path, *, storage_options=None, log=Logger(), **kwargs) -> pd.Data
     Format is inferred from the file extension (see :func:`write_frame`).
     Extra keyword arguments are forwarded to the underlying reader.
     """
-    import pyarrow.parquet as pq
 
     fs, fpath = fsspec.url_to_fs(path, **(storage_options or {}))
     if path.endswith('.csv'):
@@ -938,7 +936,6 @@ class _CallableExecutorBase_:
             # evenly across workers.  Irrelevant when work_stealing=True.
             shuffle = getattr(self, 'shuffle_callables', False) and not work_stealing
             if shuffle:
-                import random as _random
                 perm = list(range(len(callables)))
                 _random.Random(0).shuffle(perm)
                 callables = [callables[i] for i in perm]

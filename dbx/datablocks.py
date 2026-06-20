@@ -39,11 +39,13 @@ import signal
 import socket
 import subprocess
 import sys
+import shutil
 import tempfile
 import threading
 import time as time_module
 import traceback as tb
 from typing import Union, Optional, Sequence, Callable
+import types
 import uuid
 import yaml
 
@@ -1063,8 +1065,7 @@ class Datablock:
             self.log.verbose(f"-------------------- Capturing stdout/stderr to {logpath} ------------------")
 
             # Write to a local temp file; upload to remote logpath at the end.
-            import tempfile as _tempfile
-            _local_log = _tempfile.NamedTemporaryFile(
+            _local_log = tempfile.NamedTemporaryFile(
                 mode='w', suffix='.log', prefix='dbx_capture_', delete=False, encoding='utf-8',
             )
             _fd_capture = FDCapture(_local_log)
@@ -1087,8 +1088,7 @@ class Datablock:
                     except Exception as upload_exc:
                         self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
                     finally:
-                        import os as _os
-                        _os.unlink(_local_log.name)
+                        os.unlink(_local_log.name)
                 self.__post_build__(*args, **kwargs)
             else:
                 self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
@@ -1103,8 +1103,7 @@ class Datablock:
                 except Exception as upload_exc:
                     self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
                 finally:
-                    import os as _os
-                    _os.unlink(_local_log.name)
+                    os.unlink(_local_log.name)
             self.__post_build__(*args, event="build:keyboard_interrupt", **kwargs)
             raise(e)
         except Exception as e:
@@ -1118,8 +1117,7 @@ class Datablock:
                 except Exception as upload_exc:
                     self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
                 finally:
-                    import os as _os
-                    _os.unlink(_local_log.name)
+                    os.unlink(_local_log.name)
             self.__post_build__(*args, event="build:exception", **kwargs)
             raise(e)
         finally:
@@ -1132,8 +1130,7 @@ class Datablock:
                 except Exception as upload_exc:
                     self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
                 finally:
-                    import os as _os
-                    _os.unlink(_local_log.name)
+                    os.unlink(_local_log.name)
         return self
 
     def __pre_build__(self, *args, **kwargs):
@@ -2907,7 +2904,6 @@ wait
         
         if hasattr(self, 'tmpdir') and os.path.exists(self.tmpdir):
             try:
-                import shutil
                 shutil.rmtree(self.tmpdir)
             except Exception as e:
                 self.log.debug(f"Failed to cleanup temp dir {self.tmpdir}: {e}")
@@ -2933,7 +2929,7 @@ class Remote:
             
             # Module objects are often not stable when wrapped in new actors via Ray.
             # We return them directly (by value/pickle) to avoid crashing the worker process.
-            import types
+
             if isinstance(val, types.ModuleType):
                 return val
             
@@ -2971,7 +2967,7 @@ class Remote:
 
         def environ(self, name):
             """Helper for verification of remote environment."""
-            import os
+
             return os.environ.get(name)
 
     class RemoteDBX(RemoteObject):

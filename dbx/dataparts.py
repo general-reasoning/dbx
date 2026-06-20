@@ -424,6 +424,7 @@ def UNSAFE_allowed(what: str, *, OVERRIDE: bool = False):
     return True
 
 
+
 def get_named_const_and_cxt(name):
     bits = name.split(".")
     modbits = bits[:-1]
@@ -713,23 +714,6 @@ class _CallableExecutorBase_:
         """Hook called in the main process right after all workers have been started."""
         pass
 
-    # ------------------------------------------------------------------
-    # Device helpers
-    # ------------------------------------------------------------------
-    def _device_for_worker(self, worker_idx: int):
-        """Return the device assigned to *worker_idx* (round-robin), or ``None``."""
-        devices = getattr(self, 'devices', None)
-        if not devices:
-            return None
-        return devices[worker_idx % len(devices)]
-
-    @staticmethod
-    def _maybe_to_device(item, device):
-        """Call ``item.to(device)`` if *device* is not None and *item* has ``.to()``."""
-        if device is not None and hasattr(item, 'to') and callable(item.to):
-            return item.to(device)
-        return item
-
     @staticmethod
     def _eval_ctx_args_kwargs(ctx_args, ctx_kwargs):
         """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``.
@@ -760,14 +744,12 @@ class _CallableExecutorBase_:
         ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
         batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
         exception = None
-        device = self._device_for_worker(worker_idx)
         batch = []  # list of (item_idx, payload)
         for i, item in enumerate(items):
             exception = None
             try:
                 if abort_event.is_set():
                     break
-                item = self._maybe_to_device(item, device)
                 payload = item(*ctx_args, **ctx_kwargs)
                 batch.append((offset + i, payload))
             except Exception as e:
@@ -842,7 +824,6 @@ class _CallableExecutorBase_:
         self.log.debug(f"Work-stealing worker started on {worker_label}")
         ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
         batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
-        device = self._device_for_worker(worker_idx)
         exception = None
         batch = []  # list of (item_idx, payload)
         n_executed = 0
@@ -860,7 +841,6 @@ class _CallableExecutorBase_:
             item_idx, item = work_item
             exception = None
             try:
-                item = self._maybe_to_device(item, device)
                 payload = item(*ctx_args, **ctx_kwargs)
                 batch.append((item_idx, payload))
                 n_executed += 1
@@ -1190,7 +1170,6 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
                  worker_done_timeout_sec: int = 1000,
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
-                 devices: list | None = None,
                  log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
@@ -1198,7 +1177,6 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
-        self.devices = devices
         self.log = log
 
     @property
@@ -1251,7 +1229,6 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
                  start_method: str = 'spawn', worker_done_timeout_sec: int = 1000,
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
-                 devices: list | None = None,
                  log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
@@ -1259,7 +1236,6 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
-        self.devices = devices
         self.log = log
         # Use 'spawn' by default to avoid fork-safety issues with HTTP clients
         # (e.g. Azure SDK, fsspec AzureBlobFileSystem) and CUDA contexts.

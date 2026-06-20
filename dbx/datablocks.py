@@ -637,8 +637,9 @@ def gitcheckout(repopath, revision):
     repo.git.checkout(revision)
     return repopath
 
-
-gitwrkreposetup(reason="datablocks import")
+# Work-repo setup is deferred to build/eval time (the first call to
+# gitwrkreposetup with a specific revision).  Cloning eagerly at import
+# time adds latency to every read-only operation (e.g. .topics(), .read()).
 
 
 class Datablock:
@@ -1143,6 +1144,10 @@ class Datablock:
         return self
 
     def __pre_build__(self, *args, **kwargs):
+        # Lazy work-repo setup: deferred from import time so that read-only
+        # operations don't pay the clone cost.  Runs at most once.
+        if os.environ.get('DBX_USE_WORK_REPO') == 'True':
+            gitwrkreposetup(reason="deferred from import (pre-build)")
         if self.validate_cfg:
             valid_cfg = self.valid_cfg()
             if not all(list(valid_cfg.values())):
@@ -1276,6 +1281,10 @@ class Datablock:
                 yield s, c
 
     def build_tree(self, *args, exclude_self: bool = False, deep: bool = False, **kwargs):
+        # Lazy work-repo setup: deferred from import time so that read-only
+        # operations don't pay the clone cost.  Runs at most once.
+        if os.environ.get('DBX_USE_WORK_REPO') == 'True':
+            gitwrkreposetup(reason="deferred from import (build_tree)")
         self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
         def skip_cb(s):
             self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (BUILD_TREE_EXEMPTIONS) --------")

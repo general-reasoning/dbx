@@ -1603,16 +1603,20 @@ class _TorchCallableExecutorMixin_:
     or ``MultiprocessingCallableExecutor`` and override ``_run_items`` so that
     each callable is:
 
-    1. validated (must have a ``.to()`` method),
-    2. moved to the worker's device via ``callable.to(device)``,
-    3. executed,
-    4. moved back via ``callable.to('cpu')``.
+    1. moved to the worker's device via ``callable.to(device)`` if
+       the callable has a ``.to()`` method (otherwise left unchanged),
+    2. executed,
+    3. moved back via ``callable.to('cpu')`` (again, only if ``.to()`` exists).
 
     Context args / kwargs that have a ``.to()`` method are also moved to the
     worker's device.
+
+    When *n_workers* exceeds ``len(devices)``, devices are assigned to
+    workers round-robin.
     """
 
-    def __init__(self, *, devices: list[str] = 'cuda', batch_size: int = None,
+    def __init__(self, *, devices: list[str] = 'cuda', n_workers: int = None,
+                 batch_size: int = None,
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
                  tag: str = "", log: Logger = Logger()):
@@ -1623,8 +1627,10 @@ class _TorchCallableExecutorMixin_:
             )
         if isinstance(devices, str):
             devices = [devices]
+        if n_workers is None:
+            n_workers = len(devices)
         # Initialise the concrete executor base (Thread or Process variant).
-        super().__init__(n_workers=len(devices), batch_size=batch_size, tag=tag,
+        super().__init__(n_workers=n_workers, batch_size=batch_size, tag=tag,
                          worker_done_timeout_sec=worker_done_timeout_sec,
                          shuffle_callables=shuffle_callables,
                          work_stealing=work_stealing, log=log)
@@ -1633,20 +1639,15 @@ class _TorchCallableExecutorMixin_:
     # ------------------------------------------------------------------
     # Device helpers
     # ------------------------------------------------------------------
+    def _device_for_worker(self, worker_idx: int) -> str:
+        """Return the device for *worker_idx* (round-robin over ``self.devices``)."""
+        return self.devices[worker_idx % len(self.devices)]
+
     @staticmethod
-    def _validate_callable(item):
-        """Raise ``TypeError`` if *item* lacks a ``.to()`` method; return *item*.
-
-        Designed to be chained::
-
-            self._validate_callable(c).to(device)(...)
-        """
-        if not hasattr(item, 'to') or not callable(getattr(item, 'to')):
-            raise TypeError(
-                f"{type(item).__name__} does not implement .to(device). "
-                f"Callables used with TorchMultithreadingCallableExecutor / "
-                f"TorchMultiprocessingCallableExecutor must define a .to() method."
-            )
+    def _maybe_to_device(item, device):
+        """Call ``item.to(device)`` if *item* has a ``.to()`` method, else return unchanged."""
+        if hasattr(item, 'to') and callable(item.to):
+            return item.to(device)
         return item
 
     @staticmethod
@@ -1657,11 +1658,11 @@ class _TorchCallableExecutorMixin_:
         return device_args, device_kwargs
 
     # ------------------------------------------------------------------
-    # Override worker loop
+    # Override worker loops
     # ------------------------------------------------------------------
     def _run_items(self, items, ctx_args, ctx_kwargs, offset, worker_idx,
                    result_queue, done_queue, abort_event):
-        device = self.devices[worker_idx]
+        device = self._device_for_worker(worker_idx)
         worker_label = self._worker_label(worker_idx)
         self.log.debug(f"Executing {len(items)} callables on {worker_label} (device={device})")
 
@@ -1678,8 +1679,9 @@ class _TorchCallableExecutorMixin_:
             try:
                 if abort_event.is_set():
                     break
-                payload = self._validate_callable(item).to(device)(*device_ctx_args, **device_ctx_kwargs)
-                item.to('cpu')
+                item = self._maybe_to_device(item, device)
+                payload = item(*device_ctx_args, **device_ctx_kwargs)
+                self._maybe_to_device(item, 'cpu')
                 batch.append((offset + i, payload))
             except Exception as e:
                 exception = e
@@ -1706,8 +1708,94 @@ class _TorchCallableExecutorMixin_:
         else:
             self.log.debug(f"Abandoning callables on {worker_label} due to exception")
         self.log.debug(f"Waiting on done_queue on {worker_label}")
+        _timeout = getattr(self, 'worker_done_timeout_sec', 1000)
         while True:
-            if done_queue.get() is None:
+            try:
+                sentinel = done_queue.get(timeout=_timeout)
+            except Exception:
+                self.log.info(
+                    f"done_queue timeout ({_timeout}s) on {worker_label}, "
+                    f"exiting without sentinel"
+                )
+                break
+            if sentinel is None:
+                self.log.debug(f"Done signal received on {worker_label}")
+                break
+
+    def _run_items_stealing(self, work_queue, ctx_args, ctx_kwargs, worker_idx,
+                            result_queue, done_queue, abort_event):
+        device = self._device_for_worker(worker_idx)
+        worker_label = self._worker_label(worker_idx)
+        self.log.debug(f"Work-stealing worker started on {worker_label} (device={device})")
+
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
+        device_ctx_args, device_ctx_kwargs = self._args_kwargs_to_device(
+            ctx_args, ctx_kwargs, device,
+        )
+
+        batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
+        exception = None
+        batch = []
+        n_executed = 0
+        while True:
+            if abort_event.is_set():
+                break
+            try:
+                work_item = work_queue.get(timeout=1)
+            except Exception:
+                continue
+            if work_item is None:
+                break
+            item_idx, item = work_item
+            exception = None
+            try:
+                item = self._maybe_to_device(item, device)
+                payload = item(*device_ctx_args, **device_ctx_kwargs)
+                self._maybe_to_device(item, 'cpu')
+                batch.append((item_idx, payload))
+                n_executed += 1
+            except Exception as e:
+                exception = e
+                self.log.info(f"ERROR executing callable {item_idx} on {worker_label} (device={device})")
+            finally:
+                self._after_item(item)
+            if exception is not None:
+                if batch:
+                    result_queue.put((True, worker_idx, batch))
+                    batch = []
+                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
+                try:
+                    result_queue.put((False, worker_idx, item_idx, (exception, tbstr)))
+                except Exception:
+                    safe_exc = RuntimeError(
+                        f"[unpicklable {type(exception).__name__}] {exception}"
+                    )
+                    result_queue.put((False, worker_idx, item_idx, (safe_exc, tbstr)))
+                break
+            if len(batch) >= batch_size:
+                result_queue.put((True, worker_idx, batch))
+                batch = []
+        if batch and exception is None:
+            result_queue.put((True, worker_idx, batch))
+
+        del device_ctx_args, device_ctx_kwargs
+        gc.collect()
+        if exception is None:
+            self.log.debug(f"Done executing {n_executed} callables (work-stealing) on {worker_label}")
+        else:
+            self.log.debug(f"Abandoning work-stealing on {worker_label} due to exception")
+        self.log.debug(f"Waiting on done_queue on {worker_label}")
+        _timeout = getattr(self, 'worker_done_timeout_sec', 1000)
+        while True:
+            try:
+                sentinel = done_queue.get(timeout=_timeout)
+            except Exception:
+                self.log.info(
+                    f"done_queue timeout ({_timeout}s) on {worker_label}, "
+                    f"exiting without sentinel"
+                )
+                break
+            if sentinel is None:
                 self.log.debug(f"Done signal received on {worker_label}")
                 break
 

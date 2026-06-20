@@ -810,6 +810,87 @@ class _CallableExecutorBase_:
         """Hook called after each item is processed (e.g. to del block and gc)."""
         pass
 
+    # ------------------------------------------------------------------
+    # Worker-side helper for work-stealing mode
+    # ------------------------------------------------------------------
+    def _run_items_stealing(self, work_queue, ctx_args, ctx_kwargs, worker_idx,
+                            result_queue, done_queue, abort_event):
+        """Pull callables one-at-a-time from *work_queue* and execute them.
+
+        Each item on *work_queue* is a ``(global_idx, callable)`` tuple.
+        A ``None`` sentinel signals that no more work is available.
+
+        Uses the same wire protocol and batch_size handling as ``_run_items``.
+        """
+        worker_label = self._worker_label(worker_idx)
+        self.log.debug(f"Work-stealing worker started on {worker_label}")
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
+        batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
+        exception = None
+        batch = []  # list of (item_idx, payload)
+        n_executed = 0
+        while True:
+            if abort_event.is_set():
+                break
+            try:
+                work_item = work_queue.get(timeout=1)
+            except Exception:
+                # Queue.get timed out — check abort and retry
+                continue
+            if work_item is None:
+                # Sentinel: no more work
+                break
+            item_idx, item = work_item
+            exception = None
+            try:
+                payload = item(*ctx_args, **ctx_kwargs)
+                batch.append((item_idx, payload))
+                n_executed += 1
+            except Exception as e:
+                exception = e
+                self.log.info(f"ERROR executing callable {item_idx} on {worker_label}")
+            finally:
+                self._after_item(item)
+            if exception is not None:
+                # Flush any accumulated results before reporting the error
+                if batch:
+                    result_queue.put((True, worker_idx, batch))
+                    batch = []
+                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
+                try:
+                    result_queue.put((False, worker_idx, item_idx, (exception, tbstr)))
+                except Exception:
+                    safe_exc = RuntimeError(
+                        f"[unpicklable {type(exception).__name__}] {exception}"
+                    )
+                    result_queue.put((False, worker_idx, item_idx, (safe_exc, tbstr)))
+                break
+            if len(batch) >= batch_size:
+                result_queue.put((True, worker_idx, batch))
+                batch = []
+        # Flush any remaining results
+        if batch and exception is None:
+            result_queue.put((True, worker_idx, batch))
+        gc.collect()
+        if exception is None:
+            self.log.debug(f"Done executing {n_executed} callables (work-stealing) on {worker_label}")
+        else:
+            self.log.debug(f"Abandoning work-stealing on {worker_label} due to exception")
+        self.log.debug(f"Waiting on done_queue on {worker_label}")
+        _timeout = getattr(self, 'worker_done_timeout_sec', 1000)
+        while True:
+            try:
+                sentinel = done_queue.get(timeout=_timeout)
+            except Exception:
+                self.log.info(
+                    f"done_queue timeout ({_timeout}s) on {worker_label}, "
+                    f"exiting without sentinel"
+                )
+                break
+            if sentinel is None:
+                self.log.debug(f"Done signal received on {worker_label}")
+                break
+
     def _worker_label(self, worker_idx) -> str:
         return f"worker {worker_idx}"
 
@@ -824,6 +905,8 @@ class _CallableExecutorBase_:
             desc = f"{desc} [bs={self.batch_size}]"
         if hasattr(self, '_n_workers'):
             desc = f"{desc} [nw={self._n_workers}]"
+        if getattr(self, 'work_stealing', False):
+            desc = f"{desc} [ws]"
         return desc
 
     # ------------------------------------------------------------------
@@ -836,6 +919,10 @@ class _CallableExecutorBase_:
         sending them back to the main process, amortising IPC overhead.  The
         progress bar advances in bursts of *batch_size* to reflect this.
 
+        When *work_stealing* is enabled, callables are placed in a shared
+        queue and workers pull one at a time, keeping all workers busy even
+        when individual callable durations vary widely.
+
         Always returns a plain list regardless of *batch_size*.  Use
         :meth:`exec_callables_streaming` explicitly when you need a generator.
         """
@@ -844,11 +931,12 @@ class _CallableExecutorBase_:
             result_queue = self._make_queue()
             done_queue   = self._make_queue()
             abort_event  = self._make_event()
-            progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=False))
+            work_stealing = getattr(self, 'work_stealing', False)
+
             # Optionally shuffle callables to distribute heterogeneous
             # workloads (e.g. mix of already-built and unbuilt shards)
-            # evenly across workers.
-            shuffle = getattr(self, 'shuffle_callables', False)
+            # evenly across workers.  Irrelevant when work_stealing=True.
+            shuffle = getattr(self, 'shuffle_callables', False) and not work_stealing
             if shuffle:
                 import random as _random
                 perm = list(range(len(callables)))
@@ -856,16 +944,36 @@ class _CallableExecutorBase_:
                 callables = [callables[i] for i in perm]
             else:
                 perm = None
-            callable_lists   = np.array_split(callables, self._n_workers)
-            callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
-            workers = [
-                self._make_worker(
-                    target=self._run_items,
-                    args=(cl, ctx_args, ctx_kwargs, off, idx,
-                          result_queue, done_queue, abort_event),
-                )
-                for idx, (cl, off) in enumerate(zip(callable_lists, callable_offsets))
-            ]
+
+            if work_stealing:
+                # -- Work-stealing mode: shared queue, dynamic dispatch --
+                work_queue = self._make_queue()
+                for i, c in enumerate(callables):
+                    work_queue.put((i, c))
+                # Add sentinels so each worker knows when to stop
+                for _ in range(self._n_workers):
+                    work_queue.put(None)
+                workers = [
+                    self._make_worker(
+                        target=self._run_items_stealing,
+                        args=(work_queue, ctx_args, ctx_kwargs, idx,
+                              result_queue, done_queue, abort_event),
+                    )
+                    for idx in range(self._n_workers)
+                ]
+            else:
+                # -- Pre-partitioned mode (original behaviour) --
+                callable_lists   = np.array_split(callables, self._n_workers)
+                callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
+                workers = [
+                    self._make_worker(
+                        target=self._run_items,
+                        args=(cl, ctx_args, ctx_kwargs, off, idx,
+                              result_queue, done_queue, abort_event),
+                    )
+                    for idx, (cl, off) in enumerate(zip(callable_lists, callable_offsets))
+                ]
+
             done_count = 0
             exc = None
             pexc = None
@@ -949,16 +1057,35 @@ class _CallableExecutorBase_:
             result_queue = self._make_queue()
             done_queue   = self._make_queue()
             abort_event  = self._make_event()
-            callable_lists   = np.array_split(callables, self._n_workers)
-            callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
-            workers = [
-                self._make_worker(
-                    target=self._run_items,
-                    args=(cl, ctx_args, ctx_kwargs, off, idx,
-                          result_queue, done_queue, abort_event),
-                )
-                for idx, (cl, off) in enumerate(zip(callable_lists, callable_offsets))
-            ]
+            work_stealing = getattr(self, 'work_stealing', False)
+
+            if work_stealing:
+                # -- Work-stealing mode --
+                work_queue = self._make_queue()
+                for i, c in enumerate(callables):
+                    work_queue.put((i, c))
+                for _ in range(self._n_workers):
+                    work_queue.put(None)
+                workers = [
+                    self._make_worker(
+                        target=self._run_items_stealing,
+                        args=(work_queue, ctx_args, ctx_kwargs, idx,
+                              result_queue, done_queue, abort_event),
+                    )
+                    for idx in range(self._n_workers)
+                ]
+            else:
+                # -- Pre-partitioned mode --
+                callable_lists   = np.array_split(callables, self._n_workers)
+                callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
+                workers = [
+                    self._make_worker(
+                        target=self._run_items,
+                        args=(cl, ctx_args, ctx_kwargs, off, idx,
+                              result_queue, done_queue, abort_event),
+                    )
+                    for idx, (cl, off) in enumerate(zip(callable_lists, callable_offsets))
+                ]
             done_count = 0
             e = None
             try:
@@ -1045,12 +1172,14 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000,
                  shuffle_callables: bool = False,
+                 work_stealing: bool = False,
                  log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
+        self.work_stealing = work_stealing
         self.log = log
 
     @property
@@ -1102,12 +1231,14 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
                  start_method: str = 'spawn', worker_done_timeout_sec: int = 1000,
                  shuffle_callables: bool = False,
+                 work_stealing: bool = False,
                  log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
+        self.work_stealing = work_stealing
         self.log = log
         # Use 'spawn' by default to avoid fork-safety issues with HTTP clients
         # (e.g. Azure SDK, fsspec AzureBlobFileSystem) and CUDA contexts.
@@ -1170,6 +1301,7 @@ class RayCallableExecutor:
     def __init__(self, *, n_workers: int = 1, workers=None, worker_factory=None,
                  batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
+                 work_stealing: bool = False,
                  log: Logger = Logger()):
         if workers is not None:
             self.workers = workers
@@ -1186,6 +1318,7 @@ class RayCallableExecutor:
         self.tag = tag
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
+        self.work_stealing = work_stealing
         self.log = log
 
     @staticmethod
@@ -1387,12 +1520,14 @@ class InlineCallableExecutor:
     """
     def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
+                 work_stealing: bool = False,
                  log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
+        self.work_stealing = work_stealing
         self.log = log
 
     @staticmethod
@@ -1482,6 +1617,7 @@ class _TorchCallableExecutorMixin_:
 
     def __init__(self, *, devices: list[str] = 'cuda', batch_size: int = None,
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
+                 work_stealing: bool = False,
                  tag: str = "", log: Logger = Logger()):
         if not _TORCH_AVAILABLE:
             raise ImportError(
@@ -1493,7 +1629,8 @@ class _TorchCallableExecutorMixin_:
         # Initialise the concrete executor base (Thread or Process variant).
         super().__init__(n_workers=len(devices), batch_size=batch_size, tag=tag,
                          worker_done_timeout_sec=worker_done_timeout_sec,
-                         shuffle_callables=shuffle_callables, log=log)
+                         shuffle_callables=shuffle_callables,
+                         work_stealing=work_stealing, log=log)
         self.devices = devices
 
     # ------------------------------------------------------------------

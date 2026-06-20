@@ -49,8 +49,8 @@ def _dirty(repo_dir: str):
 
 class TestDirtyCheck:
 
-    def test_dirty_repo_raises(self, tmp_path, monkeypatch):
-        """gitwrkreposetup must raise ValueError for a dirty source repo."""
+    def test_dirty_repo_warns_without_revision(self, tmp_path, monkeypatch):
+        """Import-time setup (revision=None) with dirty repo should warn, not raise."""
         repo_dir = _make_clean_repo(str(tmp_path))
         _dirty(repo_dir)
 
@@ -61,8 +61,26 @@ class TestDirtyCheck:
         monkeypatch.setenv('DBX_USE_WORK_REPO', 'True')
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
+        # Should NOT raise — only warns when revision is None
+        gitwrkreposetup(reason="test")
+
+    def test_dirty_repo_raises_with_revision(self, tmp_path, monkeypatch):
+        """Build-time setup (revision set) with dirty repo must raise ValueError."""
+        repo_dir = _make_clean_repo(str(tmp_path))
+        # Get the HEAD commit hash to use as a valid revision
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo_dir
+        ).decode().strip()
+        _dirty(repo_dir)
+
+        monkeypatch.setattr(datablocks, 'DBX_GIT_REPO', repo_dir)
+        monkeypatch.setattr(datablocks, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(datablocks, 'DBX_WORK_ROOT', None)
+        monkeypatch.setenv('DBX_USE_WORK_REPO', 'True')
+        monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
+
         with pytest.raises(ValueError, match="Dirty git repo"):
-            gitwrkreposetup(reason="test")
+            gitwrkreposetup(revision=head, reason="test")
 
     def test_clean_repo_succeeds(self, tmp_path, monkeypatch):
         """gitwrkreposetup must not raise for a clean source repo."""

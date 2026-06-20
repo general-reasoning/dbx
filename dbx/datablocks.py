@@ -170,15 +170,24 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         # --- Early dirty check on the ORIGINAL repos ----------------------
         # Must happen *before* cloning: the clone uses HEAD, so any
         # uncommitted changes would be silently lost.
+        #
+        # When revision is None (e.g. import-time wrkrepo setup) we only
+        # warn — the caller may never write a journal or build anything.
+        # When a specific revision IS requested the caller needs definitive
+        # code identity, so a dirty tree is a hard error.
         def _check_dirty(path):
             if path is None:
                 return
             repo = git.Repo(path)
             if repo.is_dirty() and not os.environ.get('DBX_DIRTY_REPO_OK'):
-                raise ValueError(
+                msg = (
                     f"Dirty git repo: {path}: commit your changes before "
                     f"creating a work-repo clone (uncommitted changes would be lost)"
                 )
+                if revision is not None:
+                    raise ValueError(msg)
+                else:
+                    log.info(f"WARNING: {msg}")
         _check_dirty(dbx_repo)
         _check_dirty(project_repo)
         # ------------------------------------------------------------------

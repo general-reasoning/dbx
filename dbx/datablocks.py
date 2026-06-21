@@ -2320,13 +2320,18 @@ class Datastack(Datablock):
     and stored on ``self``, but do **not** affect the hash):
 
         parallelization : str | None
-            Which DatablocksBuilder to use:
-                None / 'inline'       → InlineDatablocksBuilder  (sequential)
-                'multithreading'      → MultithreadingDatablocksBuilder
-                'multiprocessing'     → MultiprocessingDatablocksBuilder
-                'ray'                 → RayDatablocksBuilder
+            Which CallableExecutor to use:
+                None / 'inline'           → InlineCallableExecutor  (sequential)
+                'multithreading'          → MultithreadingCallableExecutor
+                'multiprocessing'         → MultiprocessingCallableExecutor
+                'ray'                     → RayCallableExecutor
+                'torch_multithreading'    → TorchMultithreadingCallableExecutor
+                'torch_multiprocessing'   → TorchMultiprocessingCallableExecutor
         n_workers : int
-            Passed straight through to the selected builder.
+            Passed straight through to the selected executor.
+        devices : list[str] | str | None
+            Required for torch parallelizations.  Devices are assigned to
+            workers round-robin when ``n_workers > len(devices)``.
 
     Example
     -------
@@ -2373,15 +2378,17 @@ class Datastack(Datablock):
         """Lazily resolve executor classes (defined in dataparts)."""
         if not hasattr(cls, '_executors_cache'):
             cls._executors_cache = {
-                "inline":          InlineCallableExecutor,
-                "multithreading":  MultithreadingCallableExecutor,
-                "multiprocessing": MultiprocessingCallableExecutor,
-                "ray":             RayCallableExecutor,
+                "inline":                InlineCallableExecutor,
+                "multithreading":        MultithreadingCallableExecutor,
+                "multiprocessing":       MultiprocessingCallableExecutor,
+                "ray":                   RayCallableExecutor,
+                "torch_multithreading":  TorchMultithreadingCallableExecutor,
+                "torch_multiprocessing": TorchMultiprocessingCallableExecutor,
             }
         return cls._executors_cache
 
-    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False, **kwargs):
-        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, shuffle_callables=shuffle_callables, **kwargs)
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False, **kwargs):
+        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, devices=devices, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, shuffle_callables=shuffle_callables, **kwargs)
         # Early validation only — executor_cls is a property so deepcopy/setstate paths work.
         executors = self._get_executors_()
         key = (self.parallelization or "inline").lower()
@@ -2474,6 +2481,9 @@ class Datastack(Datablock):
                 and self.multiprocessing_start_method is not None
                 and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
+        # Torch executors require a 'devices' parameter.
+        if getattr(self, 'devices', None) is not None:
+            executor_kwargs['devices'] = self.devices
         executor = self.executor_cls(**executor_kwargs)
         callable_results = executor.exec_callables(callables, self, **callable_kwargs)
         self.log.info(f"Stacking the results of {len(callable_results)} callables of {self.__class__.__name__}")

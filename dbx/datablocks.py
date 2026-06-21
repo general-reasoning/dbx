@@ -2482,7 +2482,7 @@ class Datastack(Datablock):
         )
         executor_kwargs = dict(
             n_workers=self.n_workers,
-            tag=f"EXECUTING {len(callables)} callables [{self.__class__.__name__}, n_workers={self.n_workers}]",
+            tag=f"EXECUTING {len(callables)} callables [{self.__class__.__name__}]",
         )
         if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
             executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec

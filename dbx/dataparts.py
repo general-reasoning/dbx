@@ -1362,6 +1362,8 @@ class RayCallableExecutor:
             if self.batch_size is not None:
                 label = f"{label} [bs={self.batch_size}]"
             label = f"{label} [nw={self.n_workers}]"
+            if getattr(self, 'work_stealing', False):
+                label = f"{label} [ws]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             e = None
             while len(done_idxs) < len(callables):
@@ -1401,6 +1403,8 @@ class RayCallableExecutor:
             if self.batch_size is not None:
                 label = f"{label} [bs={self.batch_size}]"
             label = f"{label} [nw={self.n_workers}]"
+            if getattr(self, 'work_stealing', False):
+                label = f"{label} [ws]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             
             # Split callables among workers
@@ -1551,6 +1555,8 @@ class InlineCallableExecutor:
                 label = f"{label}: {self.tag}"
             if self.batch_size is not None:
                 label = f"{label} [bs={self.batch_size}]"
+            if getattr(self, 'work_stealing', False):
+                label = f"{label} [ws]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             for i, item in enumerate(callables):
                 try:
@@ -1571,6 +1577,8 @@ class InlineCallableExecutor:
                 label = f"{label}: {self.tag}"
             if self.batch_size is not None:
                 label = f"{label} [bs={self.batch_size}]"
+            if getattr(self, 'work_stealing', False):
+                label = f"{label} [ws]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             batch = []
             for i, item in enumerate(callables):

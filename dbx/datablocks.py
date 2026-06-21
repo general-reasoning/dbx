@@ -2383,8 +2383,8 @@ class Datastack(Datablock):
             }
         return cls._executors_cache
 
-    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False, **kwargs):
-        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, devices=devices, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, shuffle_callables=shuffle_callables, **kwargs)
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False, work_stealing: bool = False, **kwargs):
+        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, devices=devices, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, shuffle_callables=shuffle_callables, work_stealing=work_stealing, **kwargs)
         # Early validation only — executor_cls is a property so deepcopy/setstate paths work.
         executors = self._get_executors_()
         key = (self.parallelization or "inline").lower()
@@ -2495,6 +2495,8 @@ class Datastack(Datablock):
         # Torch executors require a 'devices' parameter.
         if getattr(self, 'devices', None) is not None:
             executor_kwargs['devices'] = self.devices
+        if getattr(self, 'work_stealing', False):
+            executor_kwargs['work_stealing'] = True
         executor = self.executor_cls(**executor_kwargs)
         callable_results = executor.exec_callables(callables, self, **callable_kwargs)
         self.log.info(f"Stacking the results of {len(callable_results)} callables of {self.__class__.__name__}")

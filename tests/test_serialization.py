@@ -118,17 +118,17 @@ class SimpleStack(Datastack):
         shard_size: int = 2
 
     @property
-    def n_shards(self):
+    def n_blocks(self):
         return math.ceil(self.cfg.total_items / self.cfg.shard_size)
 
-    def __shard__(self, idx):
+    def __block__(self, idx):
         return StackShard(url=self.url, spec=dict(idx=idx))
 
-    def shards(self):
-        return [self.__shard__(i) for i in range(self.n_shards)]
+    def blocks(self):
+        return [self.__block__(i) for i in range(self.n_blocks)]
 
     def __read__(self, topic=None):
-        return f"stack:{self.n_shards}"
+        return f"stack:{self.n_blocks}"
 
 
 # ---------------------------------------------------------------------------
@@ -293,20 +293,20 @@ class TestDatastackSerialization:
         assert restored.executor_cls is MultiprocessingCallableExecutor
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
-    def test_n_shards_preserved(self, url, roundtrip):
+    def test_n_blocks_preserved(self, url, roundtrip):
         stack = SimpleStack(url=url, spec=dict(total_items=10, shard_size=3))
         restored = roundtrip(stack)
-        assert restored.n_shards == stack.n_shards
+        assert restored.n_blocks == stack.n_blocks
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_build_after_roundtrip(self, url, roundtrip):
-        """A roundtripped Datastack can still build all its shards."""
+        """A roundtripped Datastack can still build all its blocks."""
         stack = SimpleStack(url=url, spec=dict(total_items=4, shard_size=2))
         restored = roundtrip(stack)
         restored.build()
-        shards = restored.shards()
-        for shard in shards:
-            assert shard.valid(), f"Shard {shard.cfg.idx} invalid after build"
+        blocks = restored.blocks()
+        for blk in blocks:
+            assert blk.valid(), f"Block {blk.cfg.idx} invalid after build"
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_tag_on_stack(self, url, roundtrip):
@@ -344,7 +344,7 @@ class TestDatastackSetPreservation:
         clone = stack.set(spec=dict(total_items=10, shard_size=5))
         assert clone.executor_cls is MultiprocessingCallableExecutor
         assert clone.cfg.total_items == 10
-        assert clone.n_shards == 2
+        assert clone.n_blocks == 2
 
     def test_set_then_build(self, url):
         """set() clone can build successfully."""
@@ -356,8 +356,8 @@ class TestDatastackSetPreservation:
         )
         clone = stack.set(tag="built-clone")
         clone.build()
-        for shard in clone.shards():
-            assert shard.valid()
+        for blk in clone.blocks():
+            assert blk.valid()
 
 
 # ===========================================================================

@@ -1,9 +1,9 @@
-"""Tests for UNSAFE_rename_from and UNSAFE_rename_shards_from.
+"""Tests for UNSAFE_rename_from and UNSAFE_rename_blocks_from.
 
 Verifies:
 1. UNSAFE_rename_from copies data from a source anchor into the block.
-2. UNSAFE_rename_shards_from dispatches UNSAFE_rename_from to each shard
-   via _rename_shard_from_callable (validates the callable name fix).
+2. UNSAFE_rename_blocks_from dispatches UNSAFE_rename_from to each block
+   via _rename_block_from_callable (validates the callable name fix).
 """
 import os
 import pytest
@@ -62,14 +62,14 @@ class RenameStack(Datastack):
         n_shards: int = 2
 
     @property
-    def n_shards(self):
+    def n_blocks(self):
         return self.cfg.n_shards
 
-    def __shard__(self, idx):
+    def __block__(self, idx):
         return RenameShard(url=self.url, spec=dict(idx=idx))
 
-    def shards(self):
-        return [self.__shard__(i) for i in range(self.n_shards)]
+    def blocks(self):
+        return [self.__block__(i) for i in range(self.n_blocks)]
 
 
 @pytest.fixture(autouse=True)
@@ -130,23 +130,23 @@ class TestUNSAFERenameFrom:
 
 
 # ---------------------------------------------------------------------------
-# UNSAFE_rename_shards_from (Datastack)
+# UNSAFE_rename_blocks_from (Datastack)
 # ---------------------------------------------------------------------------
 
-class TestUNSAFERenameShardsFrom:
+class TestUNSAFERenameBlocksFrom:
 
-    def test_rename_shards_from_calls_rename_from_on_each_shard(self, tmp_path):
-        """UNSAFE_rename_shards_from should call UNSAFE_rename_from on each shard.
+    def test_rename_blocks_from_calls_rename_from_on_each_block(self, tmp_path):
+        """UNSAFE_rename_blocks_from should call UNSAFE_rename_from on each block.
 
         This test validates that:
-        - _rename_shard_from_callable is correctly referenced (no NameError)
-        - Each shard's UNSAFE_rename_from is called with the right anchor
+        - _rename_block_from_callable is correctly referenced (no NameError)
+        - Each block's UNSAFE_rename_from is called with the right anchor
         """
         stack = RenameStack(url=str(tmp_path), spec=dict(n_shards=3))
         old_anchor = 'old.module.Shard'
 
         with patch.object(RenameShard, 'UNSAFE_rename_from', return_value=None) as mock_rename:
-            result = stack.UNSAFE_rename_shards_from(old_anchor, OVERRIDE=True)
+            result = stack.UNSAFE_rename_blocks_from(old_anchor, OVERRIDE=True)
 
         assert result is stack
         assert mock_rename.call_count == 3
@@ -154,31 +154,31 @@ class TestUNSAFERenameShardsFrom:
             assert c[0][0] == old_anchor  # first positional arg is the anchor
             assert c[1]['OVERRIDE'] is True
 
-    def test_rename_shards_from_forwards_overwrite(self, tmp_path):
-        """overwrite should be forwarded to each shard's UNSAFE_rename_from."""
+    def test_rename_blocks_from_forwards_overwrite(self, tmp_path):
+        """overwrite should be forwarded to each block's UNSAFE_rename_from."""
         stack = RenameStack(url=str(tmp_path), spec=dict(n_shards=2))
 
         with patch.object(RenameShard, 'UNSAFE_rename_from', return_value=None) as mock_rename:
-            stack.UNSAFE_rename_shards_from('old.anchor', OVERRIDE=True, overwrite=True)
+            stack.UNSAFE_rename_blocks_from('old.anchor', OVERRIDE=True, overwrite=True)
 
         for c in mock_rename.call_args_list:
             assert c[1]['overwrite'] is True
 
-    def test_rename_shards_from_forwards_copy_dirpath(self, tmp_path):
-        """copy_dirpath should be forwarded to each shard's UNSAFE_rename_from."""
+    def test_rename_blocks_from_forwards_copy_dirpath(self, tmp_path):
+        """copy_dirpath should be forwarded to each block's UNSAFE_rename_from."""
         stack = RenameStack(url=str(tmp_path), spec=dict(n_shards=2))
 
         with patch.object(RenameShard, 'UNSAFE_rename_from', return_value=None) as mock_rename:
-            stack.UNSAFE_rename_shards_from('old.anchor', OVERRIDE=True, copy_dirpath=True)
+            stack.UNSAFE_rename_blocks_from('old.anchor', OVERRIDE=True, copy_dirpath=True)
 
         for c in mock_rename.call_args_list:
             assert c[1]['copy_dirpath'] is True
 
-    def test_rename_shards_from_returns_self(self, tmp_path):
-        """UNSAFE_rename_shards_from should return the stack itself."""
+    def test_rename_blocks_from_returns_self(self, tmp_path):
+        """UNSAFE_rename_blocks_from should return the stack itself."""
         stack = RenameStack(url=str(tmp_path), spec=dict(n_shards=2))
 
         with patch.object(RenameShard, 'UNSAFE_rename_from', return_value=None):
-            result = stack.UNSAFE_rename_shards_from('old.anchor', OVERRIDE=True)
+            result = stack.UNSAFE_rename_blocks_from('old.anchor', OVERRIDE=True)
 
         assert result is stack

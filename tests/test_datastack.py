@@ -1,14 +1,14 @@
 """
-Tests for Datastack — the abstract shard-orchestrating Datablock.
+Tests for Datastack — the abstract block-orchestrating Datablock.
 
 Coverage
 --------
-1. Subclass must implement shards().
-2. Default __build__ invokes the correct builder on the shards.
+1. Subclass must implement blocks().
+2. Default __build__ invokes the correct builder on the blocks.
 3. All four parallelization strategies are accepted.
 4. Invalid parallelization string is rejected.
-5. Inline build actually builds every shard.
-6. Multithreading build actually builds every shard.
+5. Inline build actually builds every block.
+6. Multithreading build actually builds every block.
 7. n_workers is forwarded to the builder.
 8. Datastack itself is a proper Datablock (has hash, root, etc.).
 """
@@ -22,10 +22,10 @@ from dbx.datablocks import Datablock, Datastack
 
 
 # ---------------------------------------------------------------------------
-# Minimal concrete shard
+# Minimal concrete block
 # ---------------------------------------------------------------------------
 class CounterShard(Datablock):
-    """Trivial shard that records that it was built."""
+    """Trivial block that records that it was built."""
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -52,7 +52,7 @@ class CounterShard(Datablock):
 # Concrete Datastack for testing
 # ---------------------------------------------------------------------------
 class SimpleStack(Datastack):
-    """A stack that produces N shards based on total_items / shard_size."""
+    """A stack that produces N blocks based on total_items / shard_size."""
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -62,20 +62,20 @@ class SimpleStack(Datastack):
     TOPICFILE = "stack_meta.txt"
 
     @property
-    def n_shards(self):
+    def n_blocks(self):
         return math.ceil(self.cfg.total_items / self.cfg.shard_size)
 
-    def __shard__(self, idx):
+    def __block__(self, idx):
         return CounterShard(
             url=self.url,
             spec=dict(idx=idx),
         )
 
-    def shards(self):
-        return [self.__shard__(i) for i in range(self.n_shards)]
+    def blocks(self):
+        return [self.__block__(i) for i in range(self.n_blocks)]
 
     def __read__(self, topic=None):
-        return f"stack with {len(self.shards())} shards"
+        return f"stack with {len(self.blocks())} blocks"
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +84,8 @@ class SimpleStack(Datastack):
 class TestDatastackAbstract(unittest.TestCase):
     """Verify the abstract contract."""
 
-    def test_shards_not_implemented(self):
-        """Direct Datastack subclass without shards() should raise."""
+    def test_blocks_not_implemented(self):
+        """Direct Datastack subclass without blocks() should raise."""
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
         class BadStack(Datastack):
             TOPICFILE = "bad.txt"
@@ -93,7 +93,7 @@ class TestDatastackAbstract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             stack = BadStack(url=tmp)
             with self.assertRaises(NotImplementedError):
-                stack.shards()
+                stack.blocks()
 
     def test_invalid_parallelization_rejected(self):
         """Unknown parallelization string raises ValueError."""
@@ -125,38 +125,38 @@ class TestDatastackIsDatablock(unittest.TestCase):
         self.assertEqual(stack.cfg.shard_size, 2)
 
 
-class TestDatastackShards(unittest.TestCase):
-    """Verify shards() returns the correct child Datablocks."""
+class TestDatastackBlocks(unittest.TestCase):
+    """Verify blocks() returns the correct child Datablocks."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
-    def test_shard_count(self):
+    def test_block_count(self):
         stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, shard_size=3))
-        shards = stack.shards()
-        self.assertEqual(len(shards), 4)  # ceil(10/3) = 4
+        blocks = stack.blocks()
+        self.assertEqual(len(blocks), 4)  # ceil(10/3) = 4
 
-    def test_shard_count_exact(self):
+    def test_block_count_exact(self):
         stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=9, shard_size=3))
-        shards = stack.shards()
-        self.assertEqual(len(shards), 3)  # 9/3 = 3
+        blocks = stack.blocks()
+        self.assertEqual(len(blocks), 3)  # 9/3 = 3
 
-    def test_shards_are_datablocks(self):
+    def test_blocks_are_datablocks(self):
         stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=4, shard_size=2))
-        for shard in stack.shards():
-            self.assertIsInstance(shard, Datablock)
-            self.assertIsInstance(shard, CounterShard)
+        for blk in stack.blocks():
+            self.assertIsInstance(blk, Datablock)
+            self.assertIsInstance(blk, CounterShard)
 
-    def test_shard_configs(self):
+    def test_block_configs(self):
         stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, shard_size=3))
-        shards = stack.shards()
-        indices = [s.cfg.idx for s in shards]
+        blocks = stack.blocks()
+        indices = [s.cfg.idx for s in blocks]
         self.assertEqual(indices, [0, 1])
 
 
 class TestDatastackBuild(unittest.TestCase):
-    """Verify __build__ orchestrates shard building correctly."""
+    """Verify __build__ orchestrates block building correctly."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -164,21 +164,21 @@ class TestDatastackBuild(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_inline_build(self):
-        """Default (inline) build should build all shards."""
+        """Default (inline) build should build all blocks."""
         stack = SimpleStack(
             url=self.tmpdir,
             spec=dict(total_items=6, shard_size=2),
         )
         stack.build()
-        # All 3 shards should have been built
-        shards = stack.shards()
-        for shard in shards:
-            self.assertTrue(shard.valid(), f"Shard {shard.cfg.idx} was not built")
-            content = shard.read()
-            self.assertEqual(content, f"built:{shard.cfg.idx}")
+        # All 3 blocks should have been built
+        blocks = stack.blocks()
+        for blk in blocks:
+            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
+            content = blk.read()
+            self.assertEqual(content, f"built:{blk.cfg.idx}")
 
     def test_multithreading_build(self):
-        """Multithreading build should build all shards."""
+        """Multithreading build should build all blocks."""
         stack = SimpleStack(
             url=self.tmpdir,
             spec=dict(total_items=6, shard_size=2),
@@ -186,14 +186,14 @@ class TestDatastackBuild(unittest.TestCase):
             n_workers=2,
         )
         stack.build()
-        shards = stack.shards()
-        for shard in shards:
-            self.assertTrue(shard.valid(), f"Shard {shard.cfg.idx} was not built")
-            content = shard.read()
-            self.assertEqual(content, f"built:{shard.cfg.idx}")
+        blocks = stack.blocks()
+        for blk in blocks:
+            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
+            content = blk.read()
+            self.assertEqual(content, f"built:{blk.cfg.idx}")
 
     def test_multiprocessing_build(self):
-        """Multiprocessing build should build all shards (no cross-process state)."""
+        """Multiprocessing build should build all blocks (no cross-process state)."""
         stack = SimpleStack(
             url=self.tmpdir,
             spec=dict(total_items=4, shard_size=2),
@@ -201,10 +201,10 @@ class TestDatastackBuild(unittest.TestCase):
             n_workers=2,
         )
         stack.build()
-        # Verify shards were built by checking files exist
-        shards = stack.shards()
-        for shard in shards:
-            self.assertTrue(shard.valid(), f"Shard {shard.cfg.idx} was not built")
+        # Verify blocks were built by checking files exist
+        blocks = stack.blocks()
+        for blk in blocks:
+            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
 
 
     def test_build_returns_self(self):
@@ -259,8 +259,8 @@ class TestDatastackParallelization(unittest.TestCase):
         self.assertEqual(stack.n_workers, 8)
 
 
-class TestDatastackClearShards(unittest.TestCase):
-    """Verify UNSAFE_clear_shards() removes shard data correctly."""
+class TestDatastackClearBlocks(unittest.TestCase):
+    """Verify UNSAFE_clear_blocks() removes block data correctly."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -277,44 +277,44 @@ class TestDatastackClearShards(unittest.TestCase):
         return stack
 
     def test_inline_clear(self):
-        """UNSAFE_clear_shards with inline parallelization removes shard files."""
+        """UNSAFE_clear_blocks with inline parallelization removes block files."""
         stack = self._build_stack()
-        # All shards valid after build
-        for shard in stack.shards():
-            self.assertTrue(shard.valid())
+        # All blocks valid after build
+        for blk in stack.blocks():
+            self.assertTrue(blk.valid())
         # Clear
-        stack.UNSAFE_clear_shards(OVERRIDE=True)
-        # All shards invalid after clear
-        for shard in stack.shards():
-            self.assertFalse(shard.valid())
+        stack.UNSAFE_clear_blocks(OVERRIDE=True)
+        # All blocks invalid after clear
+        for blk in stack.blocks():
+            self.assertFalse(blk.valid())
 
     def test_multithreading_clear(self):
-        """UNSAFE_clear_shards with multithreading removes shard files."""
+        """UNSAFE_clear_blocks with multithreading removes block files."""
         stack = self._build_stack(parallelization='multithreading', n_workers=2)
-        for shard in stack.shards():
-            self.assertTrue(shard.valid())
-        stack.UNSAFE_clear_shards(OVERRIDE=True)
-        for shard in stack.shards():
-            self.assertFalse(shard.valid())
+        for blk in stack.blocks():
+            self.assertTrue(blk.valid())
+        stack.UNSAFE_clear_blocks(OVERRIDE=True)
+        for blk in stack.blocks():
+            self.assertFalse(blk.valid())
 
     def test_rebuild_after_clear(self):
-        """Shards can be rebuilt after clearing."""
+        """Blocks can be rebuilt after clearing."""
         stack = self._build_stack()
-        stack.UNSAFE_clear_shards(OVERRIDE=True)
-        for shard in stack.shards():
-            self.assertFalse(shard.valid())
+        stack.UNSAFE_clear_blocks(OVERRIDE=True)
+        for blk in stack.blocks():
+            self.assertFalse(blk.valid())
         # Rebuild
-        for shard in stack.shards():
-            shard.build()
-        for shard in stack.shards():
-            self.assertTrue(shard.valid())
-            content = shard.read()
-            self.assertEqual(content, f"built:{shard.cfg.idx}")
+        for blk in stack.blocks():
+            blk.build()
+        for blk in stack.blocks():
+            self.assertTrue(blk.valid())
+            content = blk.read()
+            self.assertEqual(content, f"built:{blk.cfg.idx}")
 
     def test_returns_self(self):
-        """UNSAFE_clear_shards should return the stack itself."""
+        """UNSAFE_clear_blocks should return the stack itself."""
         stack = self._build_stack()
-        result = stack.UNSAFE_clear_shards(OVERRIDE=True)
+        result = stack.UNSAFE_clear_blocks(OVERRIDE=True)
         self.assertIs(result, stack)
 
 
@@ -353,7 +353,7 @@ class TestCallableExecutorFactory(unittest.TestCase):
 
 
 class TestDatastackPreStack(unittest.TestCase):
-    """Verify __split__() hook is called before shards are built."""
+    """Verify __split__() hook is called before blocks are built."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
@@ -373,14 +373,14 @@ class TestDatastackPreStack(unittest.TestCase):
             TOPICFILE = "tracked_meta.txt"
 
             @property
-            def n_shards(self):
+            def n_blocks(self):
                 return math.ceil(self.cfg.total_items / self.cfg.shard_size)
 
-            def __shard__(self, idx):
+            def __block__(self, idx):
                 return CounterShard(url=self.url, spec=dict(idx=idx))
 
-            def shards(self):
-                return [self.__shard__(i) for i in range(self.n_shards)]
+            def blocks(self):
+                return [self.__block__(i) for i in range(self.n_blocks)]
 
             def __split__(self):
                 TrackedStack.pre_stack_called = True
@@ -421,14 +421,14 @@ class TestDatastackPreStack(unittest.TestCase):
             TOPICFILE = "ordered_meta.txt"
 
             @property
-            def n_shards(self):
+            def n_blocks(self):
                 return self.cfg.n
 
-            def __shard__(self, idx):
+            def __block__(self, idx):
                 return OrderedShard(url=self.url, spec=dict(idx=idx))
 
-            def shards(self):
-                return [self.__shard__(i) for i in range(self.n_shards)]
+            def blocks(self):
+                return [self.__block__(i) for i in range(self.n_blocks)]
 
             def __split__(self, *args, **kwargs):
                 call_order.append("pre_stack")
@@ -441,7 +441,7 @@ class TestDatastackPreStack(unittest.TestCase):
         call_order.clear()
         stack = OrderedStack(url=self.tmpdir, spec=dict(n=2))
         stack.build()
-        # pre_stack must come first, then shards, then stack
+        # pre_stack must come first, then blocks, then stack
         self.assertEqual(call_order[0], "pre_stack")
         self.assertIn("shard:0", call_order)
         self.assertIn("shard:1", call_order)

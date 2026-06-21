@@ -1,10 +1,10 @@
 # Datastack
 
-`Datastack` builds N child `Datablock`s (shards) in parallel.
+`Datastack` builds N child `Datablock`s (blocks) in parallel.
 
-## Implementing a Shard
+## Implementing a Block
 
-A shard is a plain `Datablock`.  Implement `CONFIG`, `TOPICFILE`, and `__build__`:
+A block is a plain `Datablock`.  Implement `CONFIG`, `TOPICFILE`, and `__build__`:
 
 ```python
 class MyShard(Datablock):
@@ -22,7 +22,7 @@ class MyShard(Datablock):
         df.to_parquet(self.path())
 ```
 
-The shard knows nothing about parallelism — it just builds one piece of work.
+The block knows nothing about parallelism — it just builds one piece of work.
 
 ## Implementing a Stack
 
@@ -35,11 +35,11 @@ class MyStack(Datastack):
         shard_size: int = 100
 
     @property
-    def n_shards(self) -> int:                          # REQUIRED
+    def n_blocks(self) -> int:                          # REQUIRED
         return math.ceil(self.cfg.n_items / self.cfg.shard_size)
 
-    def __shard__(self, idx: int) -> Datablock:         # REQUIRED
-        """Return shard `idx`.  This runs INSIDE the worker."""
+    def __block__(self, idx: int) -> Datablock:         # REQUIRED
+        """Return block `idx`.  This runs INSIDE the worker."""
         return MyShard(
             url=self.url,
             spec=dict(
@@ -51,10 +51,10 @@ class MyStack(Datastack):
 
     # Optional hooks:
     # def __split__(self):  ...   # pre-build (e.g. partition input data)
-    # def __stack__(self):  ...   # post-build (e.g. concatenate shard outputs)
+    # def __stack__(self):  ...   # post-build (e.g. concatenate block outputs)
 ```
 
-**Required:** `n_shards` (property) and `__shard__(idx)` (method).
+**Required:** `n_blocks` (property) and `__block__(idx)` (method).
 **Optional:** `__split__()` and `__stack__()`.
 
 ## CONFIG vs Runtime Parameters
@@ -85,17 +85,17 @@ This stores `self.gpu_batch_size` and `self.device` without touching the hash.
 
 `stack.build(*args, **kwargs)` passes `*args, **kwargs` to
 `Datastack.__build__(*args, **kwargs)`, but `__build__` does **not** forward
-them to individual shard builds.  This is deliberate: shards build inside
+them to individual block builds.  This is deliberate: blocks build inside
 workers (threads/processes/actors) where those args may not be serializable.
 
-Shared state reaches shards through three mechanisms:
+Shared state reaches blocks through three mechanisms:
 
 1. **Through `spec`** (all backends) — Pass shared config fields from the
-   stack's spec into each shard's spec during `__shard__()`.  This is the
+   stack's spec into each block's spec during `__block__()`.  This is the
    primary mechanism and always works because spec values are simple data.
 
    ```python
-   def __shard__(self, idx):
+   def __block__(self, idx):
        return MyShard(url=self.url, spec=dict(
            idx=idx,
            source_path=self.cfg.source_path,  # forwarded from stack config
@@ -104,13 +104,13 @@ Shared state reaches shards through three mechanisms:
 
 2. **Through `__split__()` + ad hoc attributes** (multithreading only) —
    Compute expensive shared state once and store it on `self`.  Since
-   `__shard__` receives `self`, it can read these attributes:
+   `__block__` receives `self`, it can read these attributes:
 
    ```python
    def __split__(self):
        self._index = build_expensive_index(self.cfg.source_path)
 
-   def __shard__(self, idx):
+   def __block__(self, idx):
        chunk = self._index[idx]
        return MyShard(url=self.url, spec=dict(idx=idx, keys=chunk))
    ```
@@ -129,7 +129,7 @@ Shared state reaches shards through three mechanisms:
        index = build_expensive_index(self.cfg.source_path)
        write_frame(index, os.path.join(self._url_, '_split_index.parquet'))
 
-   def __shard__(self, idx):
+   def __block__(self, idx):
        return MyShard(url=self.url, spec=dict(
            idx=idx,
            index_path=os.path.join(self._url_, '_split_index.parquet'),
@@ -138,12 +138,12 @@ Shared state reaches shards through three mechanisms:
 
 ## The `__split__()` and `__stack__()` Hooks
 
-### `__split__()` — Precomputing Shard Boundaries
+### `__split__()` — Precomputing Block Boundaries
 
-`__split__()` runs **once** in the main process before any shards are built.
-Use it to evaluate expensive source data and precompute each shard's input
+`__split__()` runs **once** in the main process before any blocks are built.
+Use it to evaluate expensive source data and precompute each block's input
 boundaries.  For example, when building features from a collection of slides,
-each shard processes one slide's tile-bag.  Rather than letting every shard
+each block processes one slide's tile-bag.  Rather than letting every block
 re-resolve the full collection, `__split__` resolves it once:
 
 ```python
@@ -153,8 +153,8 @@ def __split__(self):
     # Precompute each shard's boundaries and write a manifest to disk
     # so workers (including multiprocessing) can read it back.
     manifest = []
-    for idx in range(self.n_shards):
-        bag = source_clip.shard(idx)
+    for idx in range(self.n_blocks):
+        bag = source_clip.block(idx)
         manifest.append({
             'idx': idx,
             'tag': bag.tag,
@@ -163,17 +163,17 @@ def __split__(self):
         })
     write_frame(
         pd.DataFrame(manifest),
-        os.path.join(self._url_, '_shard_manifest.parquet'),
+        os.path.join(self._url_, '_block_manifest.parquet'),
     )
 ```
 
 The resulting manifest survives serialization (it's on disk) and gives each
-shard a lightweight handle to its input without re-evaluating the full
-source collection.  `__shard__` reads back just its row:
+block a lightweight handle to its input without re-evaluating the full
+source collection.  `__block__` reads back just its row:
 
 ```python
-def __shard__(self, idx):
-    manifest = read_frame(os.path.join(self._url_, '_shard_manifest.parquet'))
+def __block__(self, idx):
+    manifest = read_frame(os.path.join(self._url_, '_block_manifest.parquet'))
     row = manifest.iloc[idx]
     return MyBag(url=self.url, spec=dict(
         idx=idx,
@@ -181,22 +181,22 @@ def __shard__(self, idx):
     ), tag=row['tag'])
 ```
 
-### Reusing Heavy Resources Across Shards
+### Reusing Heavy Resources Across Blocks
 
-Between `__split__()` and `__stack__()`, `Datastack.__build__` fans out shard
+Between `__split__()` and `__stack__()`, `Datastack.__build__` fans out block
 construction to an **executor** — a pool of workers (threads, processes, or
 Ray actors, controlled by the `parallelization=` kwarg).  Each worker receives
-a chunk of `ShardMaker` callables and a copy of the `stack` object.  In
+a chunk of `BlockMaker` callables and a copy of the `stack` object.  In
 multiprocessing, `stack` is pickled once per worker and deserialized into a
-single instance that is **reused for every ShardMaker call in that worker's
+single instance that is **reused for every BlockMaker call in that worker's
 chunk** (see "Context Distribution" below).
 
-This creates a natural place to cache expensive resources: if a shard needs a
-GPU model, you want to load it **once** and reuse it across all shards in the
+This creates a natural place to cache expensive resources: if a block needs a
+GPU model, you want to load it **once** and reuse it across all blocks in the
 same worker.  The strategy differs by execution mode:
 
 **Inline mode** — `__split__` creates the resource in the main process and
-stores it on `self`.  Since there's no serialization, `ShardMaker.__call__`
+stores it on `self`.  Since there's no serialization, `BlockMaker.__call__`
 reads it directly:
 
 ```python
@@ -209,18 +209,18 @@ def __split__(self):
 ```
 
 **Multiprocessing mode** — `self._shared_evaluator` is dropped by pickling,
-so `ShardMaker.__call__` lazily creates the evaluator **once per worker** and
+so `BlockMaker.__call__` lazily creates the evaluator **once per worker** and
 caches it on the `stack` context object (which is shared across all
-ShardMaker calls within a worker — see "Approach 2" below):
+BlockMaker calls within a worker — see "Approach 2" below):
 
 ```python
-class ShardMaker(Datastack.ShardMaker):
+class BlockMaker(Datastack.BlockMaker):
     def __init__(self, idx, *, device="cuda"):
         super().__init__(idx)
         self.device = device
 
     def __call__(self, stack, *, build=True):
-        shard = stack.__shard__(self.idx, device=self.device)
+        block = stack.__block__(self.idx, device=self.device)
         if build:
             # Reuse evaluator: inline gets it from __split__,
             # multiprocessing gets it from worker-local cache.
@@ -232,11 +232,11 @@ class ShardMaker(Datastack.ShardMaker):
                         device=self.device, log=stack.log,
                     )
                 evaluator = stack._worker_evaluator
-            shard.build(evaluator=evaluator)
-        del shard; gc.collect()
+            block.build(evaluator=evaluator)
+        del block; gc.collect()
 ```
 
-The shard's `__build__` accepts the evaluator as an optional kwarg, with a
+The block's `__build__` accepts the evaluator as an optional kwarg, with a
 fallback for standalone builds:
 
 ```python
@@ -251,22 +251,22 @@ class MyBag(Datablock):
 | Execution mode  | Where evaluator is created    | How many loads             |
 |-----------------|-------------------------------|---------------------------|
 | Inline          | `__split__()` in main process | 1 total                   |
-| Multiprocessing | `ShardMaker.__call__` lazily  | 1 per worker (not per shard) |
+| Multiprocessing | `BlockMaker.__call__` lazily  | 1 per worker (not per block) |
 
 ### `__stack__()` — Building a Unified Index
 
-`__stack__()` runs **once** in the main process after all shards finish.
-Use it to aggregate shard outputs into a unified index that supports random
-access over the full collection without materializing every shard:
+`__stack__()` runs **once** in the main process after all blocks finish.
+Use it to aggregate block outputs into a unified index that supports random
+access over the full collection without materializing every block:
 
 ```python
 def __stack__(self):
-    # Collect per-shard metadata into a unified index.
+    # Collect per-block metadata into a unified index.
     index = []
-    for i in range(self.n_shards):
-        bag = self.shard(i)
+    for i in range(self.n_blocks):
+        bag = self.block(i)
         index.append({
-            'shard_idx': i,
+            'block_idx': i,
             'tag': bag.tag,
             'n_samples': len(bag),
             'path': bag._url_,
@@ -285,12 +285,12 @@ that `len(clip)` works without loading every bag:
 ```python
 # databits.py — Clip.__stack__
 def __stack__(self):
-    bag_lens = [len(self.shard(i)) for i in range(self.n_shards)]
+    bag_lens = [len(self.block(i)) for i in range(self.n_blocks)]
     dbx.write_npz(self.path('bag_lens', ensure_dirpath=True), bag_lens=bag_lens)
 ```
 
 **When to extend `__stack__`:** If your downstream code needs to enumerate
-shards, look up tags, or compute dataset-level statistics (total samples,
+blocks, look up tags, or compute dataset-level statistics (total samples,
 feature dimensions, label distributions), do it in `__stack__` and persist the
 result.  This avoids repeating the aggregation on every read.
 
@@ -312,16 +312,16 @@ stack.build()
 flowchart LR
     subgraph "stack.build() → __build__"
         A["__split__()"] --> B
-        B["ShardMaker(0..N-1)"] --> C
+        B["BlockMaker(0..N-1)"] --> C
         C["executor.exec_callables(\n  makers, stack, build=True)"] --> D
         D["__stack__()"]
     end
 
     subgraph "each worker"
         E["maker(stack, build=True)"] --> F
-        F["stack.__shard__(idx)"] --> G
-        G["shard.build()"] --> H
-        H["del shard; gc.collect()"]
+        F["stack.__block__(idx)"] --> G
+        G["block.build()"] --> H
+        H["del block; gc.collect()"]
     end
 
     C -.-> E
@@ -330,8 +330,8 @@ flowchart LR
     style G fill:#2f855a,stroke:#68d391,color:#e2e8f0
 ```
 
-`ShardMaker` is a lightweight callable holding just an index.  It defers both
-shard construction (`__shard__`) and building into the worker — the main process
+`BlockMaker` is a lightweight callable holding just an index.  It defers both
+block construction (`__block__`) and building into the worker — the main process
 never instantiates N full Datablocks.
 
 ## Context Distribution
@@ -364,12 +364,12 @@ two approaches exist:
 
 | Approach | Use when | Tradeoff |
 |----------|----------|----------|
-| TorchDatablocksBuilder | Simple per-shard GPU work, no `__split__`/`__stack__` needed | Bypasses Datastack lifecycle |
-| ShardMaker device pinning | Full Datastack lifecycle + multi-GPU + resource caching | Overrides `__build__` entirely |
+| TorchDatablocksBuilder | Simple per-block GPU work, no `__split__`/`__stack__` needed | Bypasses Datastack lifecycle |
+| BlockMaker device pinning | Full Datastack lifecycle + multi-GPU + resource caching | Overrides `__build__` entirely |
 
 ### Approach 1: TorchDatablocksBuilder (executor-level)
 
-The executor handles `.to(device)` automatically.  Each shard must implement
+The executor handles `.to(device)` automatically.  Each block must implement
 a `.to(device)` method:
 
 ```python
@@ -394,9 +394,9 @@ The executor lifecycle: `.to(device)` → build → `.to('cpu')`.  One thread pe
 device.  This is the simplest approach but bypasses Datastack's `__split__`/`__stack__`
 hooks.
 
-### Approach 2: ShardMaker device pinning (stack-level)
+### Approach 2: BlockMaker device pinning (stack-level)
 
-Override `ShardMaker` to carry a device assignment and lazily cache expensive
+Override `BlockMaker` to carry a device assignment and lazily cache expensive
 resources per worker.  The executor splits makers into **contiguous chunks**
 via `np.array_split` — one chunk per worker.  Assign the device per worker
 chunk, not per shard index, to avoid GPU thrashing.
@@ -404,12 +404,12 @@ chunk, not per shard index, to avoid GPU thrashing.
 > [!NOTE]
 > **Why worker-local caching works:** Within a worker, `_run_items` passes
 > the **same** `ctx_args` (containing `stack`) to every callable in the
-> chunk.  So any attribute set on `stack` by the first ShardMaker persists
+> chunk.  So any attribute set on `stack` by the first BlockMaker persists
 > for all subsequent ones — enabling lazy init with `hasattr` guards.
 
 ```python
 class MyClip(Datastack):
-    class ShardMaker(Datastack.ShardMaker):
+    class BlockMaker(Datastack.BlockMaker):
         def __init__(self, idx, *, device="cuda"):
             super().__init__(idx)
             self.device = device          # survives pickling
@@ -421,10 +421,10 @@ class MyClip(Datastack):
             else:
                 if not hasattr(stack, '_worker_source_clip'):
                     stack._worker_source_clip = stack.cfg.source_clip  # eval ONCE
-                source = stack._worker_source_clip.shard(self.idx)     # lazy
+                source = stack._worker_source_clip.block(self.idx)     # lazy
 
-            shard = stack.__shard__(self.idx, device=self.device)
-            shard.keyby = stack.keyby
+            block = stack.__block__(self.idx, device=self.device)
+            block.keyby = stack.keyby
             if build:
                 kwargs = {'source': source}
                 # Evaluator: shared (inline) or worker-local cache (mp).
@@ -436,8 +436,8 @@ class MyClip(Datastack):
                             device=self.device, log=stack.log,
                         )
                     kwargs['evaluator'] = stack._worker_evaluator
-                shard.build(**kwargs)
-            del shard; gc.collect()
+                block.build(**kwargs)
+            del block; gc.collect()
 
     def __build__(self, *args, **kwargs):
         self.__split__()
@@ -449,21 +449,21 @@ class MyClip(Datastack):
         if inline:
             self._shared_evaluator = self.cfg.factory.evaluator(device=devices[0])
             self._precomputed_sources = [
-                self.cfg.source_clip.shard(i) for i in range(self.n_shards)
+                self.cfg.source_clip.block(i) for i in range(self.n_blocks)
             ]
 
         # Mirror the executor's chunking to assign device per worker.
-        chunks = np.array_split(range(self.n_shards), n_workers)
+        chunks = np.array_split(range(self.n_blocks), n_workers)
         shard_device = {}
         for w, chunk in enumerate(chunks):
             for idx in chunk:
                 shard_device[idx] = devices[w]
 
-        makers = [self.ShardMaker(idx, device=shard_device[idx])
-                  for idx in range(self.n_shards)]
+        makers = [self.BlockMaker(idx, device=shard_device[idx])
+                  for idx in range(self.n_blocks)]
         executor = self.executor_cls(
             n_workers=n_workers,
-            tag=f"BUILDING {len(makers)} shards [{self.__class__.__name__}]",
+            tag=f"BUILDING {len(makers)} blocks [{self.__class__.__name__}]",
         )
         try:
             executor.exec_callables(makers, self, build=True)
@@ -482,15 +482,15 @@ class MyClip(Datastack):
 > base implementation doesn't provide.
 
 This eliminates two common performance traps:
-- **O(N²) source formation** — without caching, each shard re-evaluates its
+- **O(N²) source formation** — without caching, each block re-evaluates its
   quoted spec, re-forming the entire source collection.  With worker-local
-  caching, the source clip is evaluated once per worker, then `.shard(idx)`
+  caching, the source clip is evaluated once per worker, then `.block(idx)`
   lazily resolves individual items.
-- **Per-shard model reload** — without caching, each shard instantiates its own
+- **Per-block model reload** — without caching, each block instantiates its own
   evaluator (loading model weights from disk).  With worker-local caching, one
   evaluator is created per worker and reused for the entire chunk.
 
-The shard's `__build__` accepts optional injected resources with fallbacks:
+The block's `__build__` accepts optional injected resources with fallbacks:
 
 ```python
 class MyBag(Datablock):
@@ -511,10 +511,10 @@ class MyBag(Datablock):
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| `AttributeError` on `self._foo` in worker | Ad-hoc attrs dropped by `__getstate__` | Store on `ShardMaker`, use `spec`, or write to disk |
+| `AttributeError` on `self._foo` in worker | Ad-hoc attrs dropped by `__getstate__` | Store on `BlockMaker`, use `spec`, or write to disk |
 | Hash changes when `device` added to CONFIG | Runtime params in CONFIG affect identity | Keep them as `__init__` kwargs only |
-| Per-shard model reload in multiprocessing | No evaluator caching across shards in a worker | Worker-local caching via `hasattr` on `stack` |
-| O(N²) source formation | Each shard re-evaluates quoted spec for source clip | Cache source clip on `stack`, use `.shard(idx)` |
+| Per-block model reload in multiprocessing | No evaluator caching across blocks in a worker | Worker-local caching via `hasattr` on `stack` |
+| O(N²) source formation | Each block re-evaluates quoted spec for source clip | Cache source clip on `stack`, use `.block(idx)` |
 | OOM with multi-GPU | Round-robin `idx % n_devices` → workers switch GPUs | Use worker-chunk alignment |
 | CUDA context errors in multiprocessing | Shared evaluator across process boundaries | Each worker loads its own evaluator |
 | `spawn` vs `fork` deadlocks | `fork` + CUDA = deadlocks | Default is `spawn`; use `multiprocessing_start_method` |

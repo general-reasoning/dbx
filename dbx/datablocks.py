@@ -8,7 +8,7 @@ This module defines the central abstractions of dbx:
   Builds are journaled as Parquet entries for full reproducibility.
 
 - :class:`Datastack` — a Datablock that orchestrates the parallel
-  construction of child Datablocks (shards).
+  construction of child Datablocks (blocks).
 
 - :class:`Remote` / :func:`remote` — Ray-based remote execution of
   dbx pipelines.
@@ -2304,11 +2304,11 @@ class Datablock:
 
 class Datastack(Datablock):
     """Abstract Datablock that orchestrates the building of multiple child
-    Datablocks (shards).
+    Datablocks (blocks).
 
     Subclasses must implement:
 
-        shards() -> list[Datablock]
+        blocks() -> list[Datablock]
             Return the list of child Datablocks to be built.
 
     Parallelisation is controlled by two ``__init__``-only parameters
@@ -2339,7 +2339,7 @@ class Datastack(Datablock):
                 path: str = None
                 shard_size: int = 100
 
-            def shards(self):
+            def blocks(self):
                 n = self._total_items()
                 return [
                     MyShard(url=self.url, spec=dict(path=self.cfg.path, idx=i))
@@ -2351,22 +2351,22 @@ class Datastack(Datablock):
         stack.build()
     """
 
-    class ShardMaker:
-        """Lightweight callable that forms and optionally builds a shard.
+    class BlockMaker:
+        """Lightweight callable that forms and optionally builds a block.
 
         Designed to be dispatched to a CallableExecutor so that both
-        shard *formation* (``__shard__``) and *building* happen inside
+        block *formation* (``__block__``) and *building* happen inside
         the worker, parallelizing the expensive Datablock instantiation.
         """
         def __init__(self, idx: int):
             self.idx = idx
 
         def __call__(self, stack, *, build=True):
-            shard = stack.__shard__(self.idx)
-            shard.keyby = stack.keyby
+            block = stack.__block__(self.idx)
+            block.keyby = stack.keyby
             if build:
-                shard.build()
-            del shard
+                block.build()
+            del block
             gc.collect()
 
     @classmethod
@@ -2414,55 +2414,70 @@ class Datastack(Datablock):
     # -- Abstract interface -------------------------------------------------------
 
     @property
-    def n_shards(self) -> int:
-        """Return the number of shards.
+    def n_blocks(self) -> int:
+        """Return the number of blocks.
 
         Subclasses **must** override this property.
         """
         raise NotImplementedError(
-            f"{self.__class__.__name__} must implement n_shards"
+            f"{self.__class__.__name__} must implement n_blocks"
         )
 
-    def __shard__(self, idx: int):
+    def __block__(self, idx: int):
         """Return a single child :class:`Datablock` for the given index.
 
         Subclasses **must** override this method.
         """
         raise NotImplementedError(
-            f"{self.__class__.__name__} must implement __shard__(idx)"
+            f"{self.__class__.__name__} must implement __block__(idx)"
         )
 
-    def shard(self, idx: int):
-        """Return the shard at *idx*, lazily forming ``_shards_`` if needed."""
-        if not hasattr(self, '_shards_') or self._shards_ is None:
-            self._shards_ = [None] * self.n_shards
-        if self._shards_[idx] is None:
-            s = self.__shard__(idx)
+    def block(self, idx: int):
+        """Return the block at *idx*, lazily forming ``_blocks_`` if needed.
+
+        Does **not** require :attr:`n_blocks` to be available — a block can
+        be formed by index alone via :meth:`__block__`.  When ``n_blocks``
+        *is* available it is used for bounds-checking.
+        """
+        if not hasattr(self, '_blocks_') or self._blocks_ is None:
+            self._blocks_ = {}
+        # Bounds-check when the count is known.
+        try:
+            n = self.n_blocks
+            if idx < 0 or idx >= n:
+                raise IndexError(
+                    f"Block index {idx} out of range for "
+                    f"{self.__class__.__name__} with {n} blocks"
+                )
+        except NotImplementedError:
+            pass
+        if idx not in self._blocks_:
+            s = self.__block__(idx)
             s.keyby = self.keyby
-            self._shards_[idx] = s
-        return self._shards_[idx]
+            self._blocks_[idx] = s
+        return self._blocks_[idx]
 
-    def shards(self) -> list:
-        """Return all shards, forming them via :meth:`shard` if needed."""
-        n = self.n_shards
-        indices = tqdm.tqdm(range(n), desc=f"Forming {n} shards") if n > 100 else range(n)
-        return [self.shard(idx) for idx in indices]
+    def blocks(self) -> list:
+        """Return all blocks, forming them via :meth:`block` if needed."""
+        n = self.n_blocks
+        indices = tqdm.tqdm(range(n), desc=f"Forming {n} blocks") if n > 100 else range(n)
+        return [self.block(idx) for idx in indices]
 
-    def valid_shards(self) -> list[bool]:
-        """Return a list of booleans, one per shard, indicating validity."""
-        return [s.valid() for s in self.shards()]
+    def valid_blocks(self) -> list[bool]:
+        """Return a list of booleans, one per block, indicating validity."""
+        return [s.valid() for s in self.blocks()]
 
     # -- Default build logic ------------------------------------------------------
 
     def __build__(self, *args, **kwargs):
-        """Build all shards using ShardMaker + the configured executor.
+        """Build all blocks using BlockMaker + the configured executor.
 
-        Shard formation (``__shard__``) and building both happen inside
+        Block formation (``__block__``) and building both happen inside
         the worker callables, so they are fully parallelized.
         """
         callables, callable_kwargs = self.__split__(*args, **kwargs)
         self.log.info(
-            f"Building {self.__class__.__name__}: shards using {len(callables)} callables, "
+            f"Building {self.__class__.__name__}: blocks using {len(callables)} callables, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
         )
         executor_kwargs = dict(
@@ -2488,40 +2503,40 @@ class Datastack(Datablock):
         return result
 
     def __split__(self, *args, **kwargs):
-        callables = [self.ShardMaker(idx) for idx in range(self.n_shards)]
+        callables = [self.BlockMaker(idx) for idx in range(self.n_blocks)]
         callable_kwargs = dict(build=True)
         return callables, callable_kwargs
 
     def __stack__(self, results=None):
         return self
 
-    def UNSAFE_clear_shards(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
-        """Clear all shard data, parallelized using the stack's builder settings.
+    def UNSAFE_clear_blocks(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
+        """Clear all block data, parallelized using the stack's builder settings.
 
         The interactive UNSAFE confirmation prompt is shown **once** at the
-        stack level.  Individual ``shard.UNSAFE_clear()`` calls are invoked
+        stack level.  Individual ``block.UNSAFE_clear()`` calls are invoked
         with ``OVERRIDE=True`` so they do not re-prompt.
 
         Parameters
         ----------
         *topics : str
-            Forwarded to each shard's ``UNSAFE_clear()``.
+            Forwarded to each block's ``UNSAFE_clear()``.
         OVERRIDE : bool
             If ``True``, skip the interactive confirmation.
         clear_dirpath : bool
-            Forwarded to each shard's ``UNSAFE_clear()``.
+            Forwarded to each block's ``UNSAFE_clear()``.
         """
-        if not UNSAFE_allowed("UNSAFE_clear_shards", OVERRIDE=OVERRIDE):
+        if not UNSAFE_allowed("UNSAFE_clear_blocks", OVERRIDE=OVERRIDE):
             return self
 
-        shard_list = self.shards()
+        block_list = self.blocks()
         self.log.info(
-            f"UNSAFE_clear_shards: clearing {len(shard_list)} shards, "
+            f"UNSAFE_clear_blocks: clearing {len(block_list)} blocks, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
         )
-        self._write_journal_entry(event="UNSAFE_clear_shards:begin")
+        self._write_journal_entry(event="UNSAFE_clear_blocks:begin")
 
-        tag = f"CLEARING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]"
+        tag = f"CLEARING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={self.n_workers}]"
         executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
         if (hasattr(self, 'multiprocessing_start_method')
                 and self.multiprocessing_start_method is not None
@@ -2529,25 +2544,25 @@ class Datastack(Datablock):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
         executor = callable_executor(self.parallelization, **executor_kwargs)
 
-        callables = [functools.partial(_clear_shard_callable, shard, topics, clear_dirpath) for shard in shard_list]
+        callables = [functools.partial(_clear_block_callable, blk, topics, clear_dirpath) for blk in block_list]
         executor.exec_callables(callables)
 
-        self.log.info(f"UNSAFE_clear_shards complete: {self.__class__.__name__}")
-        self._write_journal_entry(event="UNSAFE_clear_shards:end")
+        self.log.info(f"UNSAFE_clear_blocks complete: {self.__class__.__name__}")
+        self._write_journal_entry(event="UNSAFE_clear_blocks:end")
         return self
 
-    def UNSAFE_rename_shards_from(self, shardanchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
-        if not UNSAFE_allowed("UNSAFE_rename_shards_from", OVERRIDE=OVERRIDE):
+    def UNSAFE_rename_blocks_from(self, blockanchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
+        if not UNSAFE_allowed("UNSAFE_rename_blocks_from", OVERRIDE=OVERRIDE):
             return self
 
-        shard_list = self.shards()
+        block_list = self.blocks()
         self.log.info(
-            f"UNSAFE_rename_shards_from: renaming {len(shard_list)} shards, "
+            f"UNSAFE_rename_blocks_from: renaming {len(block_list)} blocks, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
         )
-        self._write_journal_entry(event="UNSAFE_rename_shards_from:begin", message=shardanchor, inline_message=True)
+        self._write_journal_entry(event="UNSAFE_rename_blocks_from:begin", message=blockanchor, inline_message=True)
 
-        tag = f"RENAMING {len(shard_list)} shards [{self.__class__.__name__}, n_workers={self.n_workers}]"
+        tag = f"RENAMING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={self.n_workers}]"
         executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
         if (hasattr(self, 'multiprocessing_start_method')
                 and self.multiprocessing_start_method is not None
@@ -2555,23 +2570,23 @@ class Datastack(Datablock):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
         executor = callable_executor(self.parallelization, **executor_kwargs)
 
-        callables = [functools.partial(_rename_shard_from_callable, shard, shardanchor, overwrite, topicpaths, validate, copy_dirpath) for shard in shard_list]
+        callables = [functools.partial(_rename_block_from_callable, blk, blockanchor, overwrite, topicpaths, validate, copy_dirpath) for blk in block_list]
         executor.exec_callables(callables)
 
-        self.log.info(f"UNSAFE_rename_shards_from complete: {self.__class__.__name__}")
-        self._write_journal_entry(event="UNSAFE_rename_shards_from:end", message=shardanchor, inline_message=True)
+        self.log.info(f"UNSAFE_rename_blocks_from complete: {self.__class__.__name__}")
+        self._write_journal_entry(event="UNSAFE_rename_blocks_from:end", message=blockanchor, inline_message=True)
         return self
 
 
-def _clear_shard_callable(shard, topics, clear_dirpath):
-    """Module-level callable for UNSAFE_clear_shards (must be picklable)."""
-    shard.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
-    return shard
+def _clear_block_callable(block, topics, clear_dirpath):
+    """Module-level callable for UNSAFE_clear_blocks (must be picklable)."""
+    block.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
+    return block
 
-def _rename_shard_from_callable(shard, shardanchor, overwrite=False, topicpaths=None, validate=True, copy_dirpath=False):
-    """Module-level callable for UNSAFE_rename_shard_from (must be picklable)."""
-    shard.UNSAFE_rename_from(shardanchor, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
-    return shard
+def _rename_block_from_callable(block, blockanchor, overwrite=False, topicpaths=None, validate=True, copy_dirpath=False):
+    """Module-level callable for UNSAFE_rename_blocks_from (must be picklable)."""
+    block.UNSAFE_rename_from(blockanchor, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
+    return block
 
 
 def quotefn(fn, *args, tag="$", **kwargs):

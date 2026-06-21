@@ -1,9 +1,9 @@
-"""02_datastack_sharding.py — Datastack with parallel shard builds.
+"""02_datastack_sharding.py — Datastack with parallel block builds.
 
 Demonstrates:
-- Defining a Datastack subclass that produces N shards
-- Each shard is a Datablock that processes a slice of work
-- Building all shards with inline execution
+- Defining a Datastack subclass that produces N blocks
+- Each block is a Datablock that processes a slice of work
+- Building all blocks with inline execution
 """
 
 import math
@@ -20,7 +20,7 @@ from dbx import Datablock, Datastack, write_frame, read_frame
 
 
 class ChunkBlock(Datablock):
-    """A single shard that generates a slice of a sequence."""
+    """A single block that generates a slice of a sequence."""
 
     TOPICFILES = {'data': 'chunk.parquet'}
 
@@ -42,7 +42,7 @@ class ChunkBlock(Datablock):
 
 
 class SquaresStack(Datastack):
-    """Stack that shards a range into chunks and computes squares."""
+    """Stack that splits a range into chunks and computes squares."""
 
     TOPICFILES = {'manifest': 'manifest.parquet'}
 
@@ -52,23 +52,23 @@ class SquaresStack(Datastack):
         chunk_size: int = 25
 
     @property
-    def n_shards(self):
+    def n_blocks(self):
         return math.ceil(self.cfg.total / self.cfg.chunk_size)
 
-    def __shard__(self, idx):
+    def __block__(self, idx):
         start = idx * self.cfg.chunk_size
         end = min(start + self.cfg.chunk_size, self.cfg.total)
         return ChunkBlock(url=self.url, spec=dict(start=start, end=end))
 
     def __stack__(self):
-        """Concatenate all shard outputs into a manifest."""
+        """Concatenate all block outputs into a manifest."""
         frames = []
-        for idx in range(self.n_shards):
-            shard = self.shard(idx)
-            frames.append(shard.read('data'))
+        for idx in range(self.n_blocks):
+            blk = self.block(idx)
+            frames.append(blk.read('data'))
         manifest = pd.concat(frames, ignore_index=True)
         write_frame(manifest, self.path('manifest', ensure_dirpath=True))
-        self.log.info(f"Stacked {self.n_shards} shards → {len(manifest)} rows")
+        self.log.info(f"Stacked {self.n_blocks} blocks → {len(manifest)} rows")
         return self
 
     def __read__(self, topic='manifest'):
@@ -84,7 +84,7 @@ def main():
         spec=dict(total=50, chunk_size=10),
     )
 
-    print(f"Shards: {stack.n_shards}")
+    print(f"Blocks: {stack.n_blocks}")
     print(f"Hash:   {stack.superhash}")
 
     stack.build()

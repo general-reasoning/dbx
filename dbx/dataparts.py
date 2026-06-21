@@ -899,12 +899,19 @@ class _CallableExecutorBase_:
         desc = f"{prefix}{label}"
         if hasattr(self, 'tag') and self.tag:
             desc = f"{desc}: {self.tag}"
+        meta = []
         if hasattr(self, 'batch_size') and self.batch_size is not None:
-            desc = f"{desc} [bs={self.batch_size}]"
+            meta.append(f"bs={self.batch_size}")
         if hasattr(self, '_n_workers'):
-            desc = f"{desc} [nw={self._n_workers}]"
+            meta.append(f"nw={self._n_workers}")
         if getattr(self, 'work_stealing', False):
-            desc = f"{desc} [ws]"
+            meta.append("ws")
+        if meta:
+            suffix = ': '.join(meta)
+            if desc.endswith(']'):
+                desc = f"{desc[:-1]}: {suffix}]"
+            else:
+                desc = f"{desc} [{suffix}]"
         return desc
 
     # ------------------------------------------------------------------
@@ -1359,11 +1366,17 @@ class RayCallableExecutor:
             label = "Ray Batched"
             if self.tag:
                 label = f"{label}: {self.tag}"
+            meta = []
             if self.batch_size is not None:
-                label = f"{label} [bs={self.batch_size}]"
-            label = f"{label} [nw={self.n_workers}]"
+                meta.append(f"bs={self.batch_size}")
+            meta.append(f"nw={self.n_workers}")
             if getattr(self, 'work_stealing', False):
-                label = f"{label} [ws]"
+                meta.append("ws")
+            suffix = ': '.join(meta)
+            if label.endswith(']'):
+                label = f"{label[:-1]}: {suffix}]"
+            else:
+                label = f"{label} [{suffix}]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             e = None
             while len(done_idxs) < len(callables):
@@ -1400,11 +1413,17 @@ class RayCallableExecutor:
             label = "Ray Streaming"
             if self.tag:
                 label = f"{label}: {self.tag}"
+            meta = []
             if self.batch_size is not None:
-                label = f"{label} [bs={self.batch_size}]"
-            label = f"{label} [nw={self.n_workers}]"
+                meta.append(f"bs={self.batch_size}")
+            meta.append(f"nw={self.n_workers}")
             if getattr(self, 'work_stealing', False):
-                label = f"{label} [ws]"
+                meta.append("ws")
+            suffix = ': '.join(meta)
+            if label.endswith(']'):
+                label = f"{label[:-1]}: {suffix}]"
+            else:
+                label = f"{label} [{suffix}]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             
             # Split callables among workers
@@ -1553,10 +1572,17 @@ class InlineCallableExecutor:
             label = "Inline"
             if self.tag:
                 label = f"{label}: {self.tag}"
+            meta = []
             if self.batch_size is not None:
-                label = f"{label} [bs={self.batch_size}]"
+                meta.append(f"bs={self.batch_size}")
             if getattr(self, 'work_stealing', False):
-                label = f"{label} [ws]"
+                meta.append("ws")
+            if meta:
+                suffix = ': '.join(meta)
+                if label.endswith(']'):
+                    label = f"{label[:-1]}: {suffix}]"
+                else:
+                    label = f"{label} [{suffix}]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             for i, item in enumerate(callables):
                 try:
@@ -1575,10 +1601,17 @@ class InlineCallableExecutor:
             label = "Inline Streaming"
             if self.tag:
                 label = f"{label}: {self.tag}"
+            meta = []
             if self.batch_size is not None:
-                label = f"{label} [bs={self.batch_size}]"
+                meta.append(f"bs={self.batch_size}")
             if getattr(self, 'work_stealing', False):
-                label = f"{label} [ws]"
+                meta.append("ws")
+            if meta:
+                suffix = ': '.join(meta)
+                if label.endswith(']'):
+                    label = f"{label[:-1]}: {suffix}]"
+                else:
+                    label = f"{label} [{suffix}]"
             progress_bar = tqdm.tqdm(total=len(callables), desc=label)
             batch = []
             for i, item in enumerate(callables):

@@ -16,6 +16,6 @@ class TestKeybyTagRequiresTag:
         assert block.key == 'my_tag'
 
     def test_keyby_taghash_without_tag_succeeds(self, tmp_path):
-        """keyby='taghash' (default) without tag= must still work (falls back to superhash)."""
+        """keyby='taghash' (default) without tag= must still work (falls back to hash)."""
         block = Datablock(url=str(tmp_path), keyby='taghash')
-        assert block.key == block.superhash
+        assert block.key == block.hash

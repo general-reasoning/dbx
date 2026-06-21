@@ -1,9 +1,9 @@
 """Tests for keyby='version_hash', 'tag_hash', and 'tag_version_hash' on Datablock.
 
-- version_hash:      "version={version}/{hash}", falls back to superhash
-- tag_hash:          alias for 'taghash' — "{tag}/{hash}", falls back to superhash
-- tag_version_hash:  "{tag}/version={version}/{hash}", skipping None parts,
-                     falls back to superhash when both tag and version are None
+- version_hash:      "version={version}/{hash[:8]}", falls back to hash
+- tag_hash:          alias for 'taghash' — "{tag}/{hash[:8]}", falls back to hash
+- tag_version_hash:  "{tag}/version={version}/{hash[:8]}", skipping None parts,
+                     falls back to hash when both tag and version are None
 """
 import copy
 import pickle
@@ -65,16 +65,16 @@ def _allow_dirty(monkeypatch):
 class TestKeybyVersionHash:
 
     def test_versioned_key_format(self, tmp_path):
-        """When VERSION is set, key should be 'version={version}/{hash}'."""
+        """When VERSION is set, key should be 'version={version}/{hash[:8]}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='version_hash')
-        assert block.key == f"version={block.version}/{block.hash}"
+        assert block.key == f"version={block.version}/{block.hash[:8]}"
         assert block.key.startswith("version=v3/")
 
     def test_unversioned_falls_back_to_hash(self, tmp_path):
         """When VERSION is absent, key should be just the hash."""
         block = UnversionedBlock(url=str(tmp_path), keyby='version_hash')
         assert block.version is None
-        assert block.key == block.superhash
+        assert block.key == block.hash
 
     def test_key_changes_with_version(self, tmp_path):
         """Two subclasses with different VERSIONs produce different key prefixes."""
@@ -138,12 +138,12 @@ class TestKeybyTagHash:
     def test_tag_hash_without_tag_falls_back(self, tmp_path):
         """tag_hash without tag= falls back to hash, just like taghash."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_hash')
-        assert block.key == block.superhash
+        assert block.key == block.hash
 
     def test_tag_hash_with_tag(self, tmp_path):
-        """tag_hash with tag= produces '{tag}/{hash}'."""
+        """tag_hash with tag= produces '{tag}/{hash[:8]}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='run1')
-        assert block.key == f"run1/{block.hash}"
+        assert block.key == f"run1/{block.hash[:8]}"
 
     def test_tag_hash_pickle_roundtrip(self, tmp_path):
         block = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='t')
@@ -159,29 +159,29 @@ class TestKeybyTagHash:
 class TestKeybyTagVersionHash:
 
     def test_tag_and_version(self, tmp_path):
-        """Both tag and version present: '{tag}/version={version}/{hash}'."""
+        """Both tag and version present: '{tag}/version={version}/{hash[:8]}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp1')
-        expected = f"exp1/version=v3/{block.hash}"
+        expected = f"exp1/version=v3/{block.hash[:8]}"
         assert block.key == expected
 
     def test_tag_only(self, tmp_path):
-        """Tag present, no version: '{tag}/{hash}'."""
+        """Tag present, no version: '{tag}/{hash[:8]}'."""
         block = UnversionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp2')
         assert block.version is None
-        expected = f"exp2/{block.hash}"
+        expected = f"exp2/{block.hash[:8]}"
         assert block.key == expected
 
     def test_version_only(self, tmp_path):
-        """No tag, version present: 'version={version}/{hash}'."""
+        """No tag, version present: 'version={version}/{hash[:8]}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash')
-        expected = f"version=v3/{block.superhash}"
+        expected = f"version=v3/{block.hash[:8]}"
         assert block.key == expected
 
     def test_neither_tag_nor_version(self, tmp_path):
         """Neither tag nor version: falls back to full hash."""
         block = UnversionedBlock(url=str(tmp_path), keyby='tag_version_hash')
         assert block.version is None
-        assert block.key == block.superhash
+        assert block.key == block.hash
 
     def test_build_and_read(self, tmp_path):
         """tag_version_hash block can build and read."""

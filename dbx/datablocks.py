@@ -344,18 +344,20 @@ class JournalEntry(pd.Series):
             key = self.hash
         elif keyby == 'superhash':
             key = self.superhash
+        elif self.keyby == 'norm':
+            key = self.norm()
         elif keyby == 'tag':
             key = self.tag
         elif keyby in ('taghash', 'tag_hash'):
             if self.tag is None:
-                key = self.superhash
+                key = self.hash
             else:
-                key = f"{self.tag}/{self.hash}"
+                key = f"{self.tag}/{self.hash[:8]}"
         elif keyby == 'version_hash':
             if self.version is not None:
-                key = f"version={self.version}/{self.hash}"
+                key = f"version={self.version}/{self.hash[:8]}"
             else:
-                key = self.superhash
+                key = self.hash
         elif keyby == 'tag_version_hash':
             parts = []
             if self.tag is not None:
@@ -363,18 +365,12 @@ class JournalEntry(pd.Series):
             if self.version is not None:
                 parts.append(f"version={self.version}")
             if parts:
+                parts.append(self.hash[:8])
+            else:
                 parts.append(self.hash)
-                key = '/'.join(parts)
-            else:
-                key = self.superhash
-        elif keyby == 'norm':
-            h = self.get('norm')
-            if h is not None:
-                key = h
-            else:
-                key = self.superhash  # fallback if handle not stored
+            key = '/'.join(parts)
         else:
-            key = self.superhash  # fallback
+            key = self.hash  # fallback
         return key
 
     @property
@@ -1919,24 +1915,24 @@ class Datablock:
             key = self.tag
         elif self.keyby in ('taghash', 'tag_hash'):
             if self._tag_ is None:
-                key = self.superhash
+                key = self.hash
             else:
-                key = f"{self.tag}/{self.hash}"
+                key = f"{self.tag}/{self.hash[:8]}"
         elif self.keyby == 'version_hash':
             if self.version is not None:
-                key = f"version={self.version}/{self.hash}"
+                key = f"version={self.version}/{self.hash[:8]}"
             else:
-                key = self.superhash
+                key = self.hash
         elif self.keyby == 'tag_version_hash':
             parts = []
             if self._tag_ is not None:
                 parts.append(self.tag)
             if self.version is not None:
                 parts.append(f"version={self.version}")
-            if self._tag_ is not None:
-                parts.append(self.hash)
+            if parts:
+                parts.append(self.hash[:8])
             else:
-                parts.append(self.superhash)
+                parts.append(self.hash)
             key = '/'.join(parts)
         else:  
             raise NotImplementedError(f"keyby {repr(self.keyby)} is not implemented: missing override?")

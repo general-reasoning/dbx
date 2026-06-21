@@ -257,7 +257,7 @@ class TestJournalEntryPaths:
         akp = entry.anchorkeypath
         assert akp.startswith('memory://')
         assert 'my.module.MyBlock' in akp
-        assert 'ab12cd34' in akp
+        assert 'abc123def456' in akp
 
     def test_anchorkeypath_from_url_with_hash(self):
         data = {
@@ -269,7 +269,7 @@ class TestJournalEntryPaths:
         entry = JournalEntry(pd.Series(data))
         akp = entry.anchorkeypath
         assert akp.startswith('memory://')
-        assert 'ab12cd34' in akp
+        assert 'abc123def456' in akp
 
     def test_anchorkeypath_local_url_no_prefix(self):
         """JournalEntry with local url should produce bare paths."""

@@ -1159,6 +1159,10 @@ class Datablock:
     def __build__(self, *args, **kwargs):
         return self
 
+    def getall(self, *, path=None, root='.'):
+        for topic in self.topics():
+            self.get(topic, path=path, root=root)
+
     def get(self, topic=None, *, path=None, root='.'):
         """Download datablock files to a local directory.
 

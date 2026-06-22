@@ -270,3 +270,163 @@ class TestLsNoTopic:
         """A block with no TOPICFILE/TOPICFILES has path()=None → ls() returns []."""
         block = _make(NoTopicBlock, tmp_path)
         assert block.ls() == []
+
+
+# ---------------------------------------------------------------------------
+# 7. List-TOPICS directory mode (no custom path() override)
+# ---------------------------------------------------------------------------
+
+class ListTopicsDirBlock(Datablock):
+    """TOPICS as a list — each topic is a directory.
+
+    Unlike TopicsBlock above, this does NOT override path(), so it
+    exercises the default path() → dirpath() flow for list-TOPICS.
+    """
+    TOPICS = ['gold_table', 'cell_catalog', 'cell_assignments']
+
+    @dataclass
+    class CONFIG(Datablock.CONFIG):
+        pass
+
+    def __build__(self):
+        for topic in self.TOPICS:
+            d = self.dirpath(topic, ensure=True)
+            for i in range(2):
+                with open(os.path.join(d, f'part_{i}.parquet'), 'w') as f:
+                    f.write(f'{topic}:part_{i}')
+
+
+class TestLsListTopicsDir:
+    """ls(topic) on list-TOPICS must list only that topic's directory."""
+
+    def test_ls_topic_lists_only_requested_topic(self, tmp_path):
+        """ls('cell_assignments') must NOT return sibling topics."""
+        block = _make(ListTopicsDirBlock, tmp_path)
+        block.__build__()
+        result = block.ls('cell_assignments')
+        basenames = [os.path.basename(p) for p in result]
+        # Should contain the files inside cell_assignments, not sibling dirs
+        assert 'part_0.parquet' in basenames
+        assert 'part_1.parquet' in basenames
+        # Must NOT contain sibling topic directories
+        assert 'gold_table' not in basenames
+        assert 'cell_catalog' not in basenames
+
+    def test_ls_each_topic_is_isolated(self, tmp_path):
+        """Each topic's ls() should return only its own contents."""
+        block = _make(ListTopicsDirBlock, tmp_path)
+        block.__build__()
+        for topic in block.TOPICS:
+            result = block.ls(topic)
+            assert len(result) == 2, f"Expected 2 files in {topic}, got {len(result)}"
+            basenames = [os.path.basename(p) for p in result]
+            assert 'part_0.parquet' in basenames
+            assert 'part_1.parquet' in basenames
+
+    def test_ls_no_topic_lists_all_topics(self, tmp_path):
+        """ls() with no topic should list the anchorkeypath (all topic dirs)."""
+        block = _make(ListTopicsDirBlock, tmp_path)
+        block.__build__()
+        result = block.ls()
+        basenames = [os.path.basename(p) for p in result]
+        for topic in block.TOPICS:
+            assert topic in basenames
+
+    def test_ls_topic_detail(self, tmp_path):
+        """ls(topic, detail=True) should return dicts for topic contents."""
+        block = _make(ListTopicsDirBlock, tmp_path)
+        block.__build__()
+        result = block.ls('gold_table', detail=True)
+        assert len(result) == 2
+        for entry in result:
+            assert isinstance(entry, dict)
+            assert 'name' in entry
+
+
+# ---------------------------------------------------------------------------
+# 8. Dict-TOPICS with None values (directory topics)
+# ---------------------------------------------------------------------------
+
+class DictTopicsNoneBlock(Datablock):
+    """TOPICS as a dict where all values are None — each topic is a directory."""
+    TOPICS = {
+        'gold_table': None,
+        'cell_catalog': None,
+        'cell_assignments': None,
+    }
+
+    @dataclass
+    class CONFIG(Datablock.CONFIG):
+        pass
+
+    def __build__(self):
+        for topic in self.TOPICS:
+            d = self.dirpath(topic, ensure=True)
+            for i in range(2):
+                with open(os.path.join(d, f'part_{i}.parquet'), 'w') as f:
+                    f.write(f'{topic}:part_{i}')
+
+
+class DictTopicsMixedNoneBlock(Datablock):
+    """TOPICS as a dict with mixed file and None (directory) values."""
+    TOPICS = {
+        'summary': 'summary.json',
+        'cell_assignments': None,
+    }
+
+    @dataclass
+    class CONFIG(Datablock.CONFIG):
+        pass
+
+    def __build__(self):
+        # File topic
+        self.dirpath('summary', ensure=True)
+        with open(self.path('summary'), 'w') as f:
+            f.write('{"status": "ok"}')
+        # Directory topic
+        d = self.dirpath('cell_assignments', ensure=True)
+        for i in range(3):
+            with open(os.path.join(d, f'shard_{i}.parquet'), 'w') as f:
+                f.write(f'shard_{i}')
+
+
+class TestLsDictTopicsNone:
+    """ls(topic) on dict-TOPICS with None values must list that topic dir."""
+
+    def test_ls_topic_lists_only_requested_topic(self, tmp_path):
+        """ls('cell_assignments') must NOT return sibling topics."""
+        block = _make(DictTopicsNoneBlock, tmp_path)
+        block.__build__()
+        result = block.ls('cell_assignments')
+        basenames = [os.path.basename(p) for p in result]
+        assert 'part_0.parquet' in basenames
+        assert 'part_1.parquet' in basenames
+        assert 'gold_table' not in basenames
+        assert 'cell_catalog' not in basenames
+
+    def test_ls_each_topic_is_isolated(self, tmp_path):
+        """Each topic's ls() should return only its own contents."""
+        block = _make(DictTopicsNoneBlock, tmp_path)
+        block.__build__()
+        for topic in block.TOPICS:
+            result = block.ls(topic)
+            assert len(result) == 2, f"Expected 2 files in {topic}, got {len(result)}"
+
+    def test_ls_mixed_file_topic(self, tmp_path):
+        """ls() on a file-valued topic should list the containing dir."""
+        block = _make(DictTopicsMixedNoneBlock, tmp_path)
+        block.__build__()
+        result = block.ls('summary')
+        basenames = [os.path.basename(p) for p in result]
+        assert 'summary.json' in basenames
+
+    def test_ls_mixed_dir_topic(self, tmp_path):
+        """ls() on a None-valued topic should list the topic dir contents."""
+        block = _make(DictTopicsMixedNoneBlock, tmp_path)
+        block.__build__()
+        result = block.ls('cell_assignments')
+        basenames = [os.path.basename(p) for p in result]
+        assert len(result) == 3
+        assert 'shard_0.parquet' in basenames
+        # Must NOT contain sibling topic
+        assert 'summary' not in basenames

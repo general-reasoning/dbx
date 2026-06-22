@@ -633,9 +633,8 @@ def gitcheckout(repopath, revision):
     repo.git.checkout(revision)
     return repopath
 
-# Work-repo setup is deferred to build/eval time (the first call to
-# gitwrkreposetup with a specific revision).  Cloning eagerly at import
-# time adds latency to every read-only operation (e.g. .topics(), .read()).
+
+gitwrkreposetup(reason="datablocks import")
 
 
 class Datablock:
@@ -1140,10 +1139,6 @@ class Datablock:
         return self
 
     def __pre_build__(self, *args, **kwargs):
-        # Lazy work-repo setup: deferred from import time so that read-only
-        # operations don't pay the clone cost.  Runs at most once.
-        if os.environ.get('DBX_USE_WORK_REPO') == 'True':
-            gitwrkreposetup(reason="deferred from import (pre-build)")
         if self.validate_cfg:
             valid_cfg = self.valid_cfg()
             if not all(list(valid_cfg.values())):
@@ -1281,10 +1276,6 @@ class Datablock:
                 yield s, c
 
     def build_tree(self, *args, exclude_self: bool = False, deep: bool = False, **kwargs):
-        # Lazy work-repo setup: deferred from import time so that read-only
-        # operations don't pay the clone cost.  Runs at most once.
-        if os.environ.get('DBX_USE_WORK_REPO') == 'True':
-            gitwrkreposetup(reason="deferred from import (build_tree)")
         self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
         def skip_cb(s):
             self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (BUILD_TREE_EXEMPTIONS) --------")
@@ -1981,9 +1972,10 @@ class Datablock:
     def ls(self, topic=None, *, detail=False):
         """List the contents at ``.path(topic)`` using *fsspec*.
 
-        If the path points to a file (i.e. a TOPICFILE is defined), the
-        parent directory is listed.  If the path is a directory (no
-        TOPICFILE), it is listed directly.
+        If the path points to a file (i.e. a dict-TOPICS entry with a
+        non-None filename), the parent directory is listed.  If the path
+        is a directory (list-TOPICS, or dict-TOPICS with ``None``), it
+        is listed directly.
 
         Parameters
         ----------
@@ -1999,16 +1991,31 @@ class Datablock:
             Listing of the path contents.
         """
         p = self.path(topic)
+        path_is_dir = False
         if p is None:
+            # path() returned None — directory-only topic (list-TOPICS,
+            # or dict-TOPICS with a None value).
             p = self.dirpath(topic)
+            path_is_dir = True
+        elif topic is not None and self._topics_is_list:
+            # List-TOPICS: path(topic) returns dirpath(topic) directly.
+            path_is_dir = True
         if p is None:
             return []
-        # If path points to a file, list the containing directory
         if not self.fs.exists(p):
             return []
-        if self.fs.isfile(p):
+        # Only fall back to the parent directory when the path genuinely
+        # points to a file (dict-TOPICS with a non-None filename).
+        # Skip this for directory-only topics where fs.isfile() may
+        # return a false positive (e.g. Azure virtual directories).
+        if not path_is_dir and self.fs.isfile(p):
             p = os.path.dirname(p)
-        return self.fs.ls(p, detail=detail)
+        results = self.fs.ls(p, detail=detail)
+        if detail:
+            for entry in results:
+                entry['name'] = fs_full_path(self.fs, entry['name'])
+            return results
+        return [fs_full_path(self.fs, x) for x in results]
 
     
     def dirpath(

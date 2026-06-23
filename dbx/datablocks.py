@@ -1956,6 +1956,12 @@ class Datablock:
                     ensure_path(dirpath, storage_options=self.storage_options)
                 return dirpath
             topicfiles = self._topicfiles[topic]
+            if topicfiles is None:
+                # Dict-TOPICS with None value: directory-only topic,
+                # same semantics as list-TOPICS.
+                if ensure_dirpath and dirpath is not None:
+                    ensure_path(dirpath, storage_options=self.storage_options)
+                return dirpath
         if ensure_dirpath and dirpath is not None:
             ensure_path(dirpath, storage_options=self.storage_options)
         if isinstance(topicfiles, dict): 
@@ -1997,8 +2003,9 @@ class Datablock:
             # or dict-TOPICS with a None value).
             p = self.dirpath(topic)
             path_is_dir = True
-        elif topic is not None and self._topics_is_list:
-            # List-TOPICS: path(topic) returns dirpath(topic) directly.
+        elif topic is not None and (self._topics_is_list or
+              (self._topicfiles is not None and self._topicfiles.get(topic) is None)):
+            # Directory-only topic: list-TOPICS, or dict-TOPICS with None value.
             path_is_dir = True
         if p is None:
             return []
@@ -2010,6 +2017,11 @@ class Datablock:
         # return a false positive (e.g. Azure virtual directories).
         if not path_is_dir and self.fs.isfile(p):
             p = os.path.dirname(p)
+        # Azure adlfs virtual directories: fs.ls("dir") may return only
+        # the directory marker itself; a trailing "/" forces a prefix
+        # listing that returns the directory's *contents*.
+        if path_is_dir and not p.endswith('/'):
+            p = p + '/'
         results = self.fs.ls(p, detail=detail)
         if detail:
             for entry in results:
@@ -2039,7 +2051,10 @@ class Datablock:
         if ensure:
             self.fs.makedirs(dirpath, exist_ok=True)
         if list:
-            return self.fs.ls(dirpath)
+            # Trailing "/" ensures Azure adlfs lists directory *contents*
+            # rather than returning the virtual-directory marker itself.
+            _lspath = dirpath if dirpath.endswith('/') else dirpath + '/'
+            return self.fs.ls(_lspath)
         return dirpath
 
     def paths(self):

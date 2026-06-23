@@ -1,9 +1,9 @@
 """
 Tests for Datablock.get() / __get__():
 
-1. get() downloads a single TOPICFILE to the target path.
+1. get() downloads a single TOPICS to the target path.
 2. get() downloads a TOPICS directory to the target path.
-3. get() downloads a specific topic from TOPICFILES.
+3. get() downloads a specific topic from TOPICS.
 4. get() with no args downloads to {root}/{anchor}/{key}.
 5. get() on a block with no topics is a no-op.
 6. __get__ can be overridden by subclasses.
@@ -20,24 +20,24 @@ from dbx.datablocks import Datablock
 # ---------------------------------------------------------------------------
 
 class SingleFileBlock(Datablock):
-    """Block with a single TOPICFILE."""
-    TOPICFILE = 'output.txt'
+    """Block with a single TOPICS."""
+    TOPICS = {'output': 'output.txt'}
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write('hello from single file')
 
 
 class MultiTopicBlock(Datablock):
-    """Block with TOPICFILES (dict of topic -> filename)."""
-    TOPICFILES = {
+    """Block with TOPICS (dict of topic -> filename)."""
+    TOPICS = {
         'alpha': 'alpha.txt',
         'beta': 'beta.txt',
     }
 
     def __build__(self):
-        for topic in self.TOPICFILES:
+        for topic in self.TOPICS:
             self.dirpath(topic, ensure=True)
             with open(self.path(topic), 'w') as f:
                 f.write(f'data for {topic}')
@@ -55,7 +55,7 @@ class TopicsDirBlock(Datablock):
 
 
 class NoTopicBlock(Datablock):
-    """Block with no TOPICFILE(S) — produces no artifacts."""
+    """Block with no TOPICS(S) — produces no artifacts."""
     def __build__(self):
         pass
 
@@ -67,7 +67,7 @@ class NoTopicBlock(Datablock):
 class TestGetSingleFile:
 
     def test_downloads_topicfile(self, tmp_path, monkeypatch):
-        """get() should copy the TOPICFILE to the destination."""
+        """get() should copy the TOPICS to the destination."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path / 'store')
         block = SingleFileBlock(url=root)

@@ -22,7 +22,7 @@ from dbx import Datablock, Datastack, write_frame, read_frame
 class ChunkBlock(Datablock):
     """A single block that generates a slice of a sequence."""
 
-    TOPICFILES = {'data': 'chunk.parquet'}
+    TOPICS = {'data': 'chunk.parquet'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -44,7 +44,7 @@ class ChunkBlock(Datablock):
 class SquaresStack(Datastack):
     """Stack that splits a range into chunks and computes squares."""
 
-    TOPICFILES = {'manifest': 'manifest.parquet'}
+    TOPICS = {'manifest': 'manifest.parquet'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):

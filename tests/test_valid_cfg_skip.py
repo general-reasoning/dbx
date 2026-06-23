@@ -24,49 +24,49 @@ def setup_env(monkeypatch):
 
 class Upstream(Datablock):
     """An upstream block that is never built (always invalid)."""
-    TOPICFILE = 'data.txt'
+    TOPICS = {'data': 'data.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         pass
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write('upstream')
 
 
 class DownstreamNoSkip(Datablock):
     """Depends on an upstream block via spec — validate_cfg=True (default)."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         src: str = "'invalid'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write('downstream')
 
 
 class DownstreamWithSkip(Datablock):
     """Depends on an upstream block via spec — validate_cfg=False skips validation."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         src: str = "'invalid'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write('downstream')
 
 
 class TwoDeps(Datablock):
     """Two upstream deps — when validate_cfg=False, all cfg validation is skipped."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -74,8 +74,8 @@ class TwoDeps(Datablock):
         optional: str = "'invalid'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write('two-deps')
 
 

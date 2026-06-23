@@ -30,29 +30,29 @@ def setup_env(monkeypatch):
 
 class EnvBlock(Datablock):
     """Minimal block for testing env in root."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         label: str = "'hello'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
 
 class EnvSpecBlock(Datablock):
     """Block with an env-valued spec field."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         data_path: str = "'/default'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(f"path:{self.cfg.data_path}")
 
 

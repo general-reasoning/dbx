@@ -41,15 +41,15 @@ def url(tmp_path):
 
 class SimpleBlock(Datablock):
     """Minimal single-topic Datablock for serialization tests."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         label: str = "'test'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
     def __read__(self, topic=None):
@@ -59,15 +59,15 @@ class SimpleBlock(Datablock):
 
 class TaggedBlock(Datablock):
     """Datablock with an explicit tag."""
-    TOPICFILE = 'tagged.txt'
+    TOPICS = {'tagged': 'tagged.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         value: int = 42
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(f"v={self.cfg.value}")
 
     def __read__(self, topic=None):
@@ -77,31 +77,31 @@ class TaggedBlock(Datablock):
 
 class MultiTopicBlock(Datablock):
     """Multi-topic Datablock."""
-    TOPICFILES = {'alpha': 'alpha.txt', 'beta': 'beta.txt'}
+    TOPICS = {'alpha': 'alpha.txt', 'beta': 'beta.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         n: int = 5
 
     def __build__(self):
-        for topic in self.TOPICFILES:
+        for topic in self.TOPICS:
             self.dirpath(topic, ensure=True)
             with open(self.path(topic), 'w') as f:
                 f.write(f"{topic}:{self.cfg.n}")
 
 
-class StackShard(Datablock):
-    """Trivial shard for Datastack tests."""
-    TOPICFILE = 'shard.txt'
+class StackBlock(Datablock):
+    """Trivial block for Datastack tests."""
+    TOPICS = {'block': 'block.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         idx: int = 0
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
-            f.write(f"shard:{self.cfg.idx}")
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
+            f.write(f"block:{self.cfg.idx}")
 
     def __read__(self, topic=None):
         with open(self.path(), 'r') as f:
@@ -110,19 +110,19 @@ class StackShard(Datablock):
 
 class SimpleStack(Datastack):
     """Concrete Datastack for serialization tests."""
-    TOPICFILE = 'stack_meta.txt'
+    TOPICS = {'stack_meta': 'stack_meta.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         total_items: int = 6
-        shard_size: int = 2
+        block_size: int = 2
 
     @property
     def n_blocks(self):
-        return math.ceil(self.cfg.total_items / self.cfg.shard_size)
+        return math.ceil(self.cfg.total_items / self.cfg.block_size)
 
     def __block__(self, idx):
-        return StackShard(url=self.url, spec=dict(idx=idx))
+        return StackBlock(url=self.url, spec=dict(idx=idx))
 
     def blocks(self):
         return [self.__block__(i) for i in range(self.n_blocks)]
@@ -205,7 +205,7 @@ class TestDatablockSerialization:
         block = MultiTopicBlock(url=url, spec=dict(n=10))
         restored = roundtrip(block)
         _assert_identity_preserved(block, restored)
-        assert restored.TOPICFILES == block.TOPICFILES
+        assert restored.TOPICS == block.TOPICS
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_valid_false_before_build(self, url, roundtrip):
@@ -263,7 +263,7 @@ class TestDatastackSerialization:
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_identity_preserved(self, url, roundtrip):
-        stack = SimpleStack(url=url, spec=dict(total_items=6, shard_size=2))
+        stack = SimpleStack(url=url, spec=dict(total_items=6, block_size=2))
         restored = roundtrip(stack)
         _assert_identity_preserved(stack, restored)
 
@@ -294,14 +294,14 @@ class TestDatastackSerialization:
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_n_blocks_preserved(self, url, roundtrip):
-        stack = SimpleStack(url=url, spec=dict(total_items=10, shard_size=3))
+        stack = SimpleStack(url=url, spec=dict(total_items=10, block_size=3))
         restored = roundtrip(stack)
         assert restored.n_blocks == stack.n_blocks
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_build_after_roundtrip(self, url, roundtrip):
         """A roundtripped Datastack can still build all its blocks."""
-        stack = SimpleStack(url=url, spec=dict(total_items=4, shard_size=2))
+        stack = SimpleStack(url=url, spec=dict(total_items=4, block_size=2))
         restored = roundtrip(stack)
         restored.build()
         blocks = restored.blocks()
@@ -339,9 +339,9 @@ class TestDatastackSetPreservation:
             url=url,
             parallelization='multiprocessing',
             n_workers=2,
-            spec=dict(total_items=6, shard_size=2),
+            spec=dict(total_items=6, block_size=2),
         )
-        clone = stack.set(spec=dict(total_items=10, shard_size=5))
+        clone = stack.set(spec=dict(total_items=10, block_size=5))
         assert clone.executor_cls is MultiprocessingCallableExecutor
         assert clone.cfg.total_items == 10
         assert clone.n_blocks == 2
@@ -352,7 +352,7 @@ class TestDatastackSetPreservation:
             url=url,
             parallelization='multithreading',
             n_workers=2,
-            spec=dict(total_items=4, shard_size=2),
+            spec=dict(total_items=4, block_size=2),
         )
         clone = stack.set(tag="built-clone")
         clone.build()
@@ -366,15 +366,15 @@ class TestDatastackSetPreservation:
 
 class OuterBlock(Datablock):
     """A Datablock whose spec contains another Datablock (the deepcopy trigger)."""
-    TOPICFILE = 'outer.txt'
+    TOPICS = {'outer': 'outer.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         name: str = "'outer'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(f"outer:{self.cfg.name}")
 
     def __read__(self, topic=None):

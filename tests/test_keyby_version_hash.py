@@ -19,15 +19,15 @@ from dbx.datablocks import Datablock
 class VersionedBlock(Datablock):
     """Datablock with a VERSION class attribute."""
     VERSION = "v3"
-    TOPICFILE = 'out.txt'
+    TOPICS = {'out': 'out.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         x: int = 1
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(f"x={self.cfg.x}")
 
     def __read__(self, topic=None):
@@ -37,15 +37,15 @@ class VersionedBlock(Datablock):
 
 class UnversionedBlock(Datablock):
     """Datablock without a VERSION — version property returns None."""
-    TOPICFILE = 'out.txt'
+    TOPICS = {'out': 'out.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         y: int = 2
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(f"y={self.cfg.y}")
 
     def __read__(self, topic=None):
@@ -80,10 +80,10 @@ class TestKeybyVersionHash:
         """Two subclasses with different VERSIONs produce different key prefixes."""
         class V1(Datablock):
             VERSION = "1"
-            TOPICFILE = 'a.txt'
+            TOPICS = {'a': 'a.txt'}
         class V2(Datablock):
             VERSION = "2"
-            TOPICFILE = 'a.txt'
+            TOPICS = {'a': 'a.txt'}
 
         b1 = V1(url=str(tmp_path), keyby='version_hash')
         b2 = V2(url=str(tmp_path), keyby='version_hash')

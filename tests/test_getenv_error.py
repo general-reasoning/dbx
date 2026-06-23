@@ -25,15 +25,15 @@ def setup_env(monkeypatch):
 
 class MinBlock(Datablock):
     """Minimal Datablock for testing."""
-    TOPICFILE = 'out.txt'
+    TOPICS = {'out': 'out.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         label: str = "'x'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
 

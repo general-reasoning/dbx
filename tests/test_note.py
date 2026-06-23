@@ -31,7 +31,7 @@ def setup_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 class NoteBlock(Datablock):
-    TOPICFILE = 'out.txt'
+    TOPICS = {'out': 'out.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):

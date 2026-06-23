@@ -37,15 +37,15 @@ def url(tmp_path):
 # ---------------------------------------------------------------------------
 
 class SimpleBlock(Datablock):
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         label: str = "'test'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with self.fs.open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with self.fs.open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
 

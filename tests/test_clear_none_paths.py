@@ -1,11 +1,11 @@
-"""Tests that UNSAFE_clear() handles None paths as a no-op.
+"""Tests that UNSAFE_clear() handles directory topics correctly.
 
-When TOPICFILES[topic] = None the artifact is a directory, not a file.
-path(topic) returns None in that case.  clear_path(None) must be a
-silent no-op — not an AttributeError on NoneType.startswith().
+When TOPICS[topic] = None the artifact is a directory, not a file.
+path(topic) returns dirpath(topic) in that case.  UNSAFE_clear must
+handle these directory paths correctly.
 
-Also covers mixed TOPICFILES where some topics have files and some are
-directory-only (path → None).
+Also covers mixed TOPICS where some topics have files and some are
+directory-only (path → dirpath).
 """
 import os
 import pytest
@@ -28,38 +28,38 @@ def setup_env(monkeypatch):
 # ---------------------------------------------------------------------------
 
 class AllDirTopics(Datablock):
-    """Every topic is a directory (TOPICFILES value is None).
-    path(topic) returns None for all topics.
+    """Every topic is a directory (TOPICS value is None).
+    path(topic) returns dirpath(topic) for all topics.
     """
-    TOPICFILES = {'images': None, 'masks': None}
+    TOPICS = {'images': None, 'masks': None}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         pass
 
     def __build__(self):
-        for topic in self.TOPICFILES:
+        for topic in self.TOPICS:
             dirpath = self.dirpath(topic, ensure=True)
             with open(os.path.join(dirpath, 'data.bin'), 'wb') as f:
                 f.write(b'\x00' * 16)
 
     def validtopic(self, topic=None):
         if topic is None:
-            return all(self.validtopic(t) for t in self.TOPICFILES)
+            return all(self.validtopic(t) for t in self.TOPICS)
         d = self.dirpath(topic)
         return os.path.isdir(d) and bool(os.listdir(d))
 
     def valid(self, topic=None):
         if topic is not None:
             return self.validtopic(topic)
-        return all(self.validtopic(t) for t in self.TOPICFILES)
+        return all(self.validtopic(t) for t in self.TOPICS)
 
 
 class MixedTopics(Datablock):
     """Some topics are files, some are directories (None).
-    path('logs') returns a filepath; path('checkpoints') returns None.
+    path('logs') returns a filepath; path('checkpoints') returns dirpath.
     """
-    TOPICFILES = {'logs': 'train.log', 'checkpoints': None}
+    TOPICS = {'logs': 'train.log', 'checkpoints': None}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -77,8 +77,8 @@ class MixedTopics(Datablock):
 
     def validtopic(self, topic=None):
         if topic is None:
-            return all(self.validtopic(t) for t in self.TOPICFILES)
-        if self.TOPICFILES[topic] is not None:
+            return all(self.validtopic(t) for t in self.TOPICS)
+        if self.TOPICS[topic] is not None:
             p = self.path(topic)
             return p is not None and os.path.isfile(p)
         else:
@@ -88,11 +88,11 @@ class MixedTopics(Datablock):
     def valid(self, topic=None):
         if topic is not None:
             return self.validtopic(topic)
-        return all(self.validtopic(t) for t in self.TOPICFILES)
+        return all(self.validtopic(t) for t in self.TOPICS)
 
 
 class NoTopicfileBlock(Datablock):
-    """No TOPICFILE or TOPICFILES at all — path() returns None."""
+    """No TOPICS or TOPICS at all — path() returns None."""
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -115,12 +115,12 @@ def _make_block(cls, tmp_path, **kwargs):
 # ---------------------------------------------------------------------------
 
 class TestClearAllDirTopics:
-    """TOPICFILES = {'images': None, 'masks': None} — path() always None."""
+    """TOPICS = {'images': None, 'masks': None} — path() always None."""
 
-    def test_path_returns_none_for_dir_topics(self, tmp_path):
+    def test_path_returns_dirpath_for_dir_topics(self, tmp_path):
         block = _make_block(AllDirTopics, tmp_path)
-        for topic in block.TOPICFILES:
-            assert block.path(topic) is None
+        for topic in block.TOPICS:
+            assert block.path(topic) == block.dirpath(topic)
 
     def test_clear_all_does_not_raise(self, tmp_path):
         """UNSAFE_clear() must not crash when path(topic) is None."""
@@ -145,7 +145,7 @@ class TestClearAllDirTopics:
         block.__build__()
         assert block.valid()
         block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             assert not os.path.exists(block.dirpath(topic))
 
     def test_clear_returns_self(self, tmp_path):
@@ -160,12 +160,13 @@ class TestClearAllDirTopics:
 # ---------------------------------------------------------------------------
 
 class TestClearMixedTopics:
-    """TOPICFILES = {'logs': 'train.log', 'checkpoints': None}."""
+    """TOPICS = {'logs': 'train.log', 'checkpoints': None}."""
 
-    def test_path_returns_none_only_for_dir_topic(self, tmp_path):
+    def test_path_returns_dirpath_only_for_dir_topic(self, tmp_path):
         block = _make_block(MixedTopics, tmp_path)
         assert block.path('logs') is not None
-        assert block.path('checkpoints') is None
+        assert block.path('logs') != block.dirpath('logs')  # file topic: path != dirpath
+        assert block.path('checkpoints') == block.dirpath('checkpoints')  # dir topic: path == dirpath
 
     def test_clear_all_does_not_raise(self, tmp_path):
         """Clearing all topics must handle the None-path topic gracefully."""
@@ -212,18 +213,18 @@ class TestClearMixedTopics:
 
 
 # ---------------------------------------------------------------------------
-# Tests: no TOPICFILE at all (path() returns None)
+# Tests: no TOPICS at all (path() returns None)
 # ---------------------------------------------------------------------------
 
 class TestClearNoTopicfile:
-    """Datablock with no TOPICFILE/TOPICFILES — path() is None."""
+    """Datablock with no TOPICS/TOPICS — path() is None."""
 
     def test_path_returns_none(self, tmp_path):
         block = _make_block(NoTopicfileBlock, tmp_path)
         assert block.path() is None
 
     def test_clear_does_not_raise(self, tmp_path):
-        """UNSAFE_clear on a block with no TOPICFILE should be a no-op."""
+        """UNSAFE_clear on a block with no TOPICS should be a no-op."""
         block = _make_block(NoTopicfileBlock, tmp_path)
         block.__build__()
         # path() is None here — clear_path(None) must not crash

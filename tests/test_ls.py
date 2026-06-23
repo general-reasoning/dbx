@@ -7,7 +7,7 @@ Verifies:
 3. ls() returns [] when no path exists (pre-build).
 4. ls(detail=True) returns dicts with 'name', 'size', 'type' keys.
 5. ls() on a TOPICS-only block works with overridden path().
-6. ls() on a dir-valued topic (TOPICFILES[topic]=None) lists dir contents.
+6. ls() on a dir-valued topic (TOPICS[topic]=None) lists dir contents.
 7. ls() on a no-topic block returns [].
 """
 import os
@@ -32,43 +32,43 @@ def setup_env(monkeypatch):
 
 class SingleTopicBlock(Datablock):
     """Minimal single-topic Datablock."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         label: str = "'hello'"
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
 
 class MultiTopicBlock(Datablock):
     """Multi-topic Datablock."""
-    TOPICFILES = {'alpha': 'alpha.txt', 'beta': 'beta.txt'}
+    TOPICS = {'alpha': 'alpha.txt', 'beta': 'beta.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         n: str = "'3'"
 
     def __build__(self):
-        for topic in self.TOPICFILES:
+        for topic in self.TOPICS:
             self.dirpath(topic, ensure=True)
             with open(self.path(topic), 'w') as f:
                 f.write(f"{topic}:{self.cfg.n}")
 
 
 class DirTopicBlock(Datablock):
-    """TOPICFILES[topic]=None — artifact is a directory."""
-    TOPICFILES = {'images': None, 'masks': None}
+    """TOPICS[topic]=None — artifact is a directory."""
+    TOPICS = {'images': None, 'masks': None}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         pass
 
     def __build__(self):
-        for topic in self.TOPICFILES:
+        for topic in self.TOPICS:
             dirpath = self.dirpath(topic, ensure=True)
             for i in range(3):
                 with open(os.path.join(dirpath, f'file_{i}.bin'), 'wb') as f:
@@ -105,7 +105,7 @@ class TopicsBlock(Datablock):
 
 
 class NoTopicBlock(Datablock):
-    """Datablock with no TOPICFILE or TOPICFILES."""
+    """Datablock with no TOPICS or TOPICS."""
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -169,7 +169,7 @@ class TestLsMultiTopic:
     def test_ls_each_topic(self, tmp_path):
         block = _make(MultiTopicBlock, tmp_path)
         block.build()
-        for topic, filename in block.TOPICFILES.items():
+        for topic, filename in block.TOPICS.items():
             result = block.ls(topic)
             basenames = [os.path.basename(p) for p in result]
             assert filename in basenames
@@ -231,7 +231,7 @@ class TestLsTopicsOnly:
 
 
 # ---------------------------------------------------------------------------
-# 5. Dir-valued topics (TOPICFILES[topic]=None)
+# 5. Dir-valued topics (TOPICS[topic]=None)
 # ---------------------------------------------------------------------------
 
 class TestLsDirTopic:
@@ -267,7 +267,7 @@ class TestLsDirTopic:
 class TestLsNoTopic:
 
     def test_ls_returns_empty_list(self, tmp_path):
-        """A block with no TOPICFILE/TOPICFILES has path()=None → ls() returns []."""
+        """A block with no TOPICS/TOPICS has path()=None → ls() returns []."""
         block = _make(NoTopicBlock, tmp_path)
         assert block.ls() == []
 

@@ -939,7 +939,7 @@ class _CallableExecutorBase_:
             work_stealing = getattr(self, 'work_stealing', False)
 
             # Optionally shuffle callables to distribute heterogeneous
-            # workloads (e.g. mix of already-built and unbuilt shards)
+            # workloads (e.g. mix of already-built and unbuilt blocks)
             # evenly across workers.  Irrelevant when work_stealing=True.
             shuffle = getattr(self, 'shuffle_callables', False) and not work_stealing
             if shuffle:

@@ -19,15 +19,15 @@ from dbx.datablocks import Datablock, Datastack
 
 class RenameBlock(Datablock):
     """Block for rename tests."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         value: str = 'default'
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write(self.cfg.value)
 
     def __read__(self, topic=None):
@@ -35,18 +35,18 @@ class RenameBlock(Datablock):
             return f.read()
 
 
-class RenameShard(Datablock):
-    """Shard block for rename tests."""
-    TOPICFILE = 'shard.txt'
+class RenameStackBlock(Datablock):
+    """Block for stack rename tests."""
+    TOPICS = {'block': 'block.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         idx: int = 0
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
-            f.write(f"shard:{self.cfg.idx}")
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
+            f.write(f"block:{self.cfg.idx}")
 
     def __read__(self, topic=None):
         with open(self.path(), 'r') as f:
@@ -55,18 +55,18 @@ class RenameShard(Datablock):
 
 class RenameStack(Datastack):
     """Stack for rename tests."""
-    TOPICFILE = 'stack.txt'
+    TOPICS = {'stack': 'stack.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
-        n_shards: int = 2
+        n_blocks_total: int = 2
 
     @property
     def n_blocks(self):
-        return self.cfg.n_shards
+        return self.cfg.n_blocks_total
 
     def __block__(self, idx):
-        return RenameShard(url=self.url, spec=dict(idx=idx))
+        return RenameStackBlock(url=self.url, spec=dict(idx=idx))
 
     def blocks(self):
         return [self.__block__(i) for i in range(self.n_blocks)]
@@ -142,10 +142,10 @@ class TestUNSAFERenameBlocksFrom:
         - _rename_block_from_callable is correctly referenced (no NameError)
         - Each block's UNSAFE_rename_from is called with the right anchor
         """
-        stack = RenameStack(url=str(tmp_path), spec=dict(n_shards=3))
+        stack = RenameStack(url=str(tmp_path), spec=dict(n_blocks_total=3))
         old_anchor = 'old.module.Shard'
 
-        with patch.object(RenameShard, 'UNSAFE_rename_from', return_value=None) as mock_rename:
+        with patch.object(RenameStackBlock, 'UNSAFE_rename_from', return_value=None) as mock_rename:
             result = stack.UNSAFE_rename_blocks_from(old_anchor, OVERRIDE=True)
 
         assert result is stack
@@ -156,9 +156,9 @@ class TestUNSAFERenameBlocksFrom:
 
     def test_rename_blocks_from_forwards_overwrite(self, tmp_path):
         """overwrite should be forwarded to each block's UNSAFE_rename_from."""
-        stack = RenameStack(url=str(tmp_path), spec=dict(n_shards=2))
+        stack = RenameStack(url=str(tmp_path), spec=dict(n_blocks_total=2))
 
-        with patch.object(RenameShard, 'UNSAFE_rename_from', return_value=None) as mock_rename:
+        with patch.object(RenameStackBlock, 'UNSAFE_rename_from', return_value=None) as mock_rename:
             stack.UNSAFE_rename_blocks_from('old.anchor', OVERRIDE=True, overwrite=True)
 
         for c in mock_rename.call_args_list:
@@ -166,9 +166,9 @@ class TestUNSAFERenameBlocksFrom:
 
     def test_rename_blocks_from_forwards_copy_dirpath(self, tmp_path):
         """copy_dirpath should be forwarded to each block's UNSAFE_rename_from."""
-        stack = RenameStack(url=str(tmp_path), spec=dict(n_shards=2))
+        stack = RenameStack(url=str(tmp_path), spec=dict(n_blocks_total=2))
 
-        with patch.object(RenameShard, 'UNSAFE_rename_from', return_value=None) as mock_rename:
+        with patch.object(RenameStackBlock, 'UNSAFE_rename_from', return_value=None) as mock_rename:
             stack.UNSAFE_rename_blocks_from('old.anchor', OVERRIDE=True, copy_dirpath=True)
 
         for c in mock_rename.call_args_list:
@@ -176,9 +176,9 @@ class TestUNSAFERenameBlocksFrom:
 
     def test_rename_blocks_from_returns_self(self, tmp_path):
         """UNSAFE_rename_blocks_from should return the stack itself."""
-        stack = RenameStack(url=str(tmp_path), spec=dict(n_shards=2))
+        stack = RenameStack(url=str(tmp_path), spec=dict(n_blocks_total=2))
 
-        with patch.object(RenameShard, 'UNSAFE_rename_from', return_value=None):
+        with patch.object(RenameStackBlock, 'UNSAFE_rename_from', return_value=None):
             result = stack.UNSAFE_rename_blocks_from('old.anchor', OVERRIDE=True)
 
         assert result is stack

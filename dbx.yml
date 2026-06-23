@@ -10,3 +10,4 @@ dependencies:
     - ray[default]
     - fsspec
     - pandas
+    - mosaicml-streaming

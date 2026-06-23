@@ -7,7 +7,7 @@
 A block is a plain `Datablock`.  Implement `CONFIG`, `TOPICFILE`, and `__build__`:
 
 ```python
-class MyShard(Datablock):
+class MyBlock(Datablock):
     TOPICFILE = 'output.parquet'
 
     @dataclass
@@ -40,7 +40,7 @@ class MyStack(Datastack):
 
     def __block__(self, idx: int) -> Datablock:         # REQUIRED
         """Return block `idx`.  This runs INSIDE the worker."""
-        return MyShard(
+        return MyBlock(
             url=self.url,
             spec=dict(
                 idx=idx,
@@ -81,7 +81,7 @@ class MyBag(Datablock):
 
 This stores `self.gpu_batch_size` and `self.device` without touching the hash.
 
-## How Shared State Reaches Shards
+## How Shared State Reaches Blocks
 
 `stack.build(*args, **kwargs)` passes `*args, **kwargs` to
 `Datastack.__build__(*args, **kwargs)`, but `__build__` does **not** forward
@@ -96,7 +96,7 @@ Shared state reaches blocks through three mechanisms:
 
    ```python
    def __block__(self, idx):
-       return MyShard(url=self.url, spec=dict(
+       return MyBlock(url=self.url, spec=dict(
            idx=idx,
            source_path=self.cfg.source_path,  # forwarded from stack config
        ))
@@ -112,7 +112,7 @@ Shared state reaches blocks through three mechanisms:
 
    def __block__(self, idx):
        chunk = self._index[idx]
-       return MyShard(url=self.url, spec=dict(idx=idx, keys=chunk))
+       return MyBlock(url=self.url, spec=dict(idx=idx, keys=chunk))
    ```
 
    > [!WARNING]
@@ -122,7 +122,7 @@ Shared state reaches blocks through three mechanisms:
    > attributes like `self._index` are **silently dropped**.
 
 3. **Through `__split__()` + filesystem** (all backends) — Write shared
-   state to disk in `__split__()`, then have each shard read it back:
+   state to disk in `__split__()`, then have each block read it back:
 
    ```python
    def __split__(self):
@@ -130,7 +130,7 @@ Shared state reaches blocks through three mechanisms:
        write_frame(index, os.path.join(self._url_, '_split_index.parquet'))
 
    def __block__(self, idx):
-       return MyShard(url=self.url, spec=dict(
+       return MyBlock(url=self.url, spec=dict(
            idx=idx,
            index_path=os.path.join(self._url_, '_split_index.parquet'),
        ))
@@ -150,7 +150,7 @@ re-resolve the full collection, `__split__` resolves it once:
 def __split__(self):
     # Evaluate the source clip ONCE — resolves quoted specs, forms folds, etc.
     source_clip = self.cfg.source_clip
-    # Precompute each shard's boundaries and write a manifest to disk
+    # Precompute each block's boundaries and write a manifest to disk
     # so workers (including multiprocessing) can read it back.
     manifest = []
     for idx in range(self.n_blocks):
@@ -373,7 +373,7 @@ The executor handles `.to(device)` automatically.  Each block must implement
 a `.to(device)` method:
 
 ```python
-class MyGpuShard(Datablock):
+class MyGpuBlock(Datablock):
     TOPICFILE = 'features.pt'
 
     def to(self, device):
@@ -385,7 +385,7 @@ class MyGpuShard(Datablock):
         features = model(load_data(self.cfg.idx).to(self._device))
         torch.save(features.cpu(), self.path())
 
-shards = [MyGpuShard(url=..., spec=dict(idx=i)) for i in range(n)]
+shards = [MyGpuBlock(url=..., spec=dict(idx=i)) for i in range(n)]
 builder = TorchMultithreadingDatablocksBuilder(devices=['cuda:0', 'cuda:1'])
 builder.build_blocks(shards)
 ```
@@ -399,7 +399,7 @@ hooks.
 Override `BlockMaker` to carry a device assignment and lazily cache expensive
 resources per worker.  The executor splits makers into **contiguous chunks**
 via `np.array_split` — one chunk per worker.  Assign the device per worker
-chunk, not per shard index, to avoid GPU thrashing.
+chunk, not per block index, to avoid GPU thrashing.
 
 > [!NOTE]
 > **Why worker-local caching works:** Within a worker, `_run_items` passes
@@ -454,12 +454,12 @@ class MyClip(Datastack):
 
         # Mirror the executor's chunking to assign device per worker.
         chunks = np.array_split(range(self.n_blocks), n_workers)
-        shard_device = {}
+        block_device = {}
         for w, chunk in enumerate(chunks):
             for idx in chunk:
-                shard_device[idx] = devices[w]
+                block_device[idx] = devices[w]
 
-        makers = [self.BlockMaker(idx, device=shard_device[idx])
+        makers = [self.BlockMaker(idx, device=block_device[idx])
                   for idx in range(self.n_blocks)]
         executor = self.executor_cls(
             n_workers=n_workers,

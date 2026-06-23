@@ -55,20 +55,20 @@ def _clear_memory_fs():
 
 class MemSingleTopic(Datablock):
     """Single-topic Datablock that writes via fsspec (works on any backend)."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with self.fs.open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with self.fs.open(path, 'w') as f:
             f.write('hello from memory')
 
 
 class MemMultiTopic(Datablock):
     """Multi-topic Datablock that writes via fsspec."""
-    TOPICFILES = {'alpha': 'a.txt', 'beta': 'b.txt'}
+    TOPICS = {'alpha': 'a.txt', 'beta': 'b.txt'}
 
     def __build__(self):
-        for topic in self.TOPICFILES:
+        for topic in self.TOPICS:
             self.dirpath(topic, ensure=True)
             with self.fs.open(self.path(topic), 'w') as f:
                 f.write(f'{topic}:data')
@@ -122,12 +122,12 @@ class TestPathsOnMemory:
 
     def test_multi_topic_dirpath_has_protocol(self, mem_url):
         block = MemMultiTopic(url=mem_url)
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             assert block.dirpath(topic).startswith('memory://')
 
     def test_multi_topic_path_has_protocol(self, mem_url):
         block = MemMultiTopic(url=mem_url)
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             assert block.path(topic).startswith('memory://')
 
     def test_local_paths_bare(self, tmp_path):

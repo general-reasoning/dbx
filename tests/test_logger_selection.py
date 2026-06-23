@@ -105,7 +105,7 @@ def test_datablock_logger_has_working_stack_depth(monkeypatch, tmp_path):
     monkeypatch.setenv('DBX_LOG_SELECTED', 'True')
 
     class SimpleBlock(Datablock):
-        TOPICFILE = 'out.txt'
+        TOPICS = {'out': 'out.txt'}
         def __build__(self, *a, **kw): return self
         def __read__(self, topic=None): return None
 

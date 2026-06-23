@@ -34,37 +34,35 @@ def setup_env(monkeypatch):
 
 class SingleTopicBlock(Datablock):
     """Minimal single-topic Datablock that writes a marker file on build."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         label: str = "'hello'"
 
     def __build__(self):
-        path = self.path()
-        self.dirpath(ensure=True)
+        path = self.path(ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
 
 class MultiTopicBlock(Datablock):
     """Multi-topic Datablock that writes a file per topic on build."""
-    TOPICFILES = {'alpha': 'alpha.txt', 'beta': 'beta.txt'}
+    TOPICS = {'alpha': 'alpha.txt', 'beta': 'beta.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         n: str = "'3'"
 
     def __build__(self):
-        for topic in self.TOPICFILES:
-            path = self.path(topic)
-            self.dirpath(topic, ensure=True)
+        for topic in self.TOPICS:
+            path = self.path(topic, ensure_dirpath=True)
             with open(path, 'w') as f:
                 f.write(f"{topic}:{self.cfg.n}")
 
 
 class NoTopicBlock(Datablock):
-    """Datablock with no TOPICFILE or TOPICFILES — valid() should be True immediately."""
+    """Datablock with no TOPICS or TOPICS — valid() should be True immediately."""
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -76,20 +74,20 @@ class NoTopicBlock(Datablock):
 
 
 class DirTopicBlock(Datablock):
-    """Datablock where TOPICFILES[topic]=None — artifact is a whole directory.
+    """Datablock where TOPICS[topic]=None — artifact is a whole directory.
 
     path(topic) returns None (validpath → True by convention), but the
     dirpath(topic) is the real artifact.  UNSAFE_clear must remove it
     recursively.
     """
-    TOPICFILES = {'images': None, 'masks': None}
+    TOPICS = {'images': None, 'masks': None}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         pass
 
     def __build__(self):
-        for topic in self.TOPICFILES:
+        for topic in self.TOPICS:
             dirpath = self.dirpath(topic, ensure=True)
             # Write one or more files inside the topic directory.
             with open(os.path.join(dirpath, 'data.bin'), 'wb') as f:
@@ -98,19 +96,19 @@ class DirTopicBlock(Datablock):
     def validtopic(self, topic=None):
         """For dir-valued topics, validity = dirpath exists and is non-empty."""
         if topic is None:
-            return all(self.validtopic(t) for t in self.TOPICFILES)
+            return all(self.validtopic(t) for t in self.TOPICS)
         d = self.dirpath(topic)
         return os.path.isdir(d) and bool(os.listdir(d))
 
     def valid(self, topic=None):
         if topic is not None:
             return self.validtopic(topic)
-        return all(self.validtopic(t) for t in self.TOPICFILES)
+        return all(self.validtopic(t) for t in self.TOPICS)
 
 
 class CountingBlock(Datablock):
     """Tracks how many times __build__ is called (to verify skip-if-valid)."""
-    TOPICFILE = 'counter.txt'
+    TOPICS = {'counter': 'counter.txt'}
     _build_count = 0
 
     @dataclass
@@ -119,23 +117,21 @@ class CountingBlock(Datablock):
 
     def __build__(self):
         CountingBlock._build_count += 1
-        path = self.path()
-        self.dirpath(ensure=True)
+        path = self.path(ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(str(CountingBlock._build_count))
 
 
 class NestedBlock(Datablock):
     """Datablock containing another Datablock to test valid_tree and valid_cfg."""
-    TOPICFILE = 'nested.txt'
+    TOPICS = {'nested': 'nested.txt'}
     
     @dataclass
     class CONFIG(Datablock.CONFIG):
         child: SingleTopicBlock = None
         
     def __build__(self):
-        path = self.path()
-        self.dirpath(ensure=True)
+        path = self.path(ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write("nested")
 
@@ -164,12 +160,12 @@ class TestInitialState:
         assert block.valid() is False
 
     def test_no_topic_is_always_valid(self, tmp_path):
-        """A Datablock with no TOPICFILE(S) should report valid() == True immediately."""
+        """A Datablock with no TOPICS(S) should report valid() == True immediately."""
         block = _make_block(NoTopicBlock, tmp_path)
         assert block.valid() is True
 
     def test_no_topic_path_returns_none(self, tmp_path):
-        """path() should return None when no TOPICFILE is defined."""
+        """path() should return None when no TOPICS is defined."""
         block = _make_block(NoTopicBlock, tmp_path)
         assert block.path() is None
 
@@ -209,7 +205,7 @@ class TestBuild:
     def test_build_creates_all_topic_files(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
         block.build()
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             path = block.path(topic)
             assert os.path.isfile(path)
 
@@ -283,10 +279,10 @@ class TestUNSAFEClear:
     def test_default_removes_multi_topic_files_preserves_dirs(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
         block.build()
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             assert os.path.exists(block.path(topic))
         block.UNSAFE_clear(OVERRIDE=True)
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             assert not os.path.exists(block.path(topic))
             assert os.path.isdir(block.dirpath(topic))
 
@@ -313,7 +309,7 @@ class TestUNSAFEClear:
         block = _make_block(MultiTopicBlock, tmp_path)
         block.build()
         block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             assert not os.path.exists(block.dirpath(topic))
 
     def test_clear_dirpath_specific_topic_removes_dir(self, tmp_path):
@@ -364,7 +360,7 @@ class TestLeaveBreadcrumbs:
     def test_breadcrumbs_create_all_topic_files(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
         block.leave_breadcrumbs()
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             path = block.path(topic)
             assert os.path.isfile(path)
             assert os.path.getsize(path) == 0
@@ -447,7 +443,7 @@ class TestUNSAFECopyFrom:
         dst = _make_block(MultiTopicBlock, dst_root)
         dst.UNSAFE_copy_from(src.anchorkeypath)
         assert dst.valid() is True
-        for topic in dst.TOPICFILES:
+        for topic in dst.TOPICS:
             assert os.path.isfile(dst.path(topic))
 
     def test_copy_default_preserves_only_files(self, tmp_path):
@@ -491,7 +487,7 @@ class TestUNSAFECopyFrom:
         src = _make_block(MultiTopicBlock, src_root)
         src.build()
         # Add extra files in each topic dirpath
-        for topic in src.TOPICFILES:
+        for topic in src.TOPICS:
             extra = os.path.join(src.dirpath(topic), "bonus.txt")
             with open(extra, "w") as f:
                 f.write(f"bonus_{topic}")
@@ -499,7 +495,7 @@ class TestUNSAFECopyFrom:
         dst = _make_block(MultiTopicBlock, dst_root)
         dst.UNSAFE_copy_from(src.anchorkeypath, copy_dirpath=True)
         assert dst.valid() is True
-        for topic in dst.TOPICFILES:
+        for topic in dst.TOPICS:
             assert os.path.exists(os.path.join(dst.dirpath(topic), "bonus.txt"))
 
     def test_copy_returns_self(self, tmp_path):
@@ -528,20 +524,20 @@ class TestUNSAFECopyFrom:
 
 
 # ---------------------------------------------------------------------------
-# 7. TOPICFILES[topic]=None — directory-valued topics
+# 7. TOPICS[topic]=None — directory-valued topics
 # ---------------------------------------------------------------------------
 
 class TestDirTopicClear:
-    """TOPICFILES[topic]=None means the artifact is a directory, not a file.
+    """TOPICS[topic]=None means the artifact is a directory, not a file.
 
     UNSAFE_clear() must remove it recursively (the fix on datablocks.py
-    lines 897 and 910: is_dir = TOPICFILES.get(topic) is None).
+    lines 897 and 910: is_dir = TOPICS.get(topic) is None).
     """
 
     def test_build_creates_topic_dirs(self, tmp_path):
         block = _make_block(DirTopicBlock, tmp_path)
         block.__build__()
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             assert os.path.isdir(block.dirpath(topic))
             assert os.listdir(block.dirpath(topic))
 
@@ -557,7 +553,7 @@ class TestDirTopicClear:
         block.__build__()
         assert block.valid()
         block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
-        for topic in block.TOPICFILES:
+        for topic in block.TOPICS:
             assert not os.path.exists(block.dirpath(topic))
 
     def test_clear_specific_topic_removes_only_that_dir(self, tmp_path):

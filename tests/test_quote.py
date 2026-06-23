@@ -24,7 +24,7 @@ def setup_env(monkeypatch):
 
 class SimpleBlock(Datablock):
     """Minimal block with a single string spec field."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -36,7 +36,7 @@ class SimpleBlock(Datablock):
 
 class IntSpecBlock(Datablock):
     """Block with an integer spec field (non-string value)."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -48,7 +48,7 @@ class IntSpecBlock(Datablock):
 
 class MixedSpecBlock(Datablock):
     """Block with both string and non-string spec fields."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):

@@ -22,7 +22,7 @@
 | Feature | Description |
 |---|---|
 | `Datablock` | Config-addressed unit of computation with topic-based output paths |
-| `Datastack` | Orchestrates parallel builds of child Datablocks (shards) |
+| `Datastack` | Orchestrates parallel builds of child Datablocks (blocks) |
 | `CONFIG` | Dataclass-based configuration schema with lazy evaluation and specline support |
 | Journaling | Automatic Parquet-based provenance tracking for every build |
 | `env()` | Relocatable environment variable references that stay symbolic in handles |
@@ -135,21 +135,21 @@ Every Datablock maps to a deterministic directory tree:
 
 ### Datastack
 
-A `Datastack` manages a collection of child Datablocks (shards) and builds them in parallel:
+A `Datastack` manages a collection of child Datablocks (blocks) and builds them in parallel:
 
 ```python
 class MyStack(Datastack):
     @dataclass
     class CONFIG(Datablock.CONFIG):
         n_items: int = 1000
-        shard_size: int = 100
+        block_size: int = 100
 
     @property
-    def n_shards(self):
-        return math.ceil(self.cfg.n_items / self.cfg.shard_size)
+    def n_blocks(self):
+        return math.ceil(self.cfg.n_items / self.cfg.block_size)
 
-    def __shard__(self, idx):
-        return MyShard(url=self.root, spec=dict(idx=idx, ...))
+    def __block__(self, idx):
+        return MyBlock(url=self.root, spec=dict(idx=idx, ...))
 
 stack = MyStack(url='/data', spec=dict(n_items=1000),
                 parallelization='multithreading', n_workers=4)

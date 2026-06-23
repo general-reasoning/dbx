@@ -44,6 +44,6 @@ All notable changes to this project will be documented in this file.
 ### Added
 - Initial release on PyPI.
 - `Datablock` base class with config-addressed storage, journaling, and fsspec-based IO.
-- `Datastack` for sharded parallel builds (inline, multithreading, multiprocessing, Ray, Torch).
+- `Datastack` for parallel block builds (inline, multithreading, multiprocessing, Ray, Torch).
 - `JournalEntry` / `JournalFrame` for structured build-event history.
 - Environment-variable configuration (`DBX_ROOT`, `DBX_STORAGE_OPTIONS`, `DBX_DIRTY_REPO_OK`).

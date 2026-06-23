@@ -67,7 +67,7 @@ class CallableWithoutTo:
 
 class BlockWithTo(Datablock):
     """Datablock that implements .to(device) as TorchXXX builders require."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -78,8 +78,7 @@ class BlockWithTo(Datablock):
         return self
 
     def __build__(self, *args, **kwargs):
-        path = self.path()
-        self.dirpath(ensure=True)
+        path = self.path(ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}:device={getattr(self, 'device', 'none')}")
         return self
@@ -87,15 +86,14 @@ class BlockWithTo(Datablock):
 
 class BlockWithoutTo(Datablock):
     """Datablock that does NOT implement .to(device)."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         label: str = "'world'"
 
     def __build__(self, *args, **kwargs):
-        path = self.path()
-        self.dirpath(ensure=True)
+        path = self.path(ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
         return self

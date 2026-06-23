@@ -1,7 +1,7 @@
 """01_basic_datablock.py — Minimal Datablock example.
 
 Demonstrates:
-- Defining a Datablock subclass with TOPICFILES and CONFIG
+- Defining a Datablock subclass with TOPICS and CONFIG
 - Building and reading a Datablock
 - Inspecting the content hash and paths
 """
@@ -22,7 +22,7 @@ from dbx import Datablock, write_frame, read_frame
 class WordCount(Datablock):
     """Count word frequencies in a text and store as Parquet."""
 
-    TOPICFILES = {'counts': 'counts.parquet'}
+    TOPICS = {'counts': 'counts.parquet'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):

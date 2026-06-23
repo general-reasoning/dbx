@@ -40,7 +40,7 @@ def setup_env(monkeypatch):
 
 class CapturedBlock(Datablock):
     """Block that prints to stdout/stderr during build and captures output."""
-    TOPICFILE = 'result.txt'
+    TOPICS = {'result': 'result.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -53,8 +53,7 @@ class CapturedBlock(Datablock):
         CapturedBlock.build_log.append('__build__')
         print("stdout message from build")
         print("stderr message from build", file=sys.stderr)
-        path = self.path()
-        self.dirpath(ensure=True)
+        path = self.path(ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write("built")
 
@@ -69,7 +68,7 @@ class CapturedBlock(Datablock):
 
 class FailingCapturedBlock(Datablock):
     """Block that fails during build, with capture_output enabled."""
-    TOPICFILE = 'result.txt'
+    TOPICS = {'result': 'result.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -82,7 +81,7 @@ class FailingCapturedBlock(Datablock):
 
 class SlowCapturedBlock(Datablock):
     """Block that prints a lot during build."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -91,8 +90,7 @@ class SlowCapturedBlock(Datablock):
     def __build__(self):
         for i in range(100):
             print(f"line {i}")
-        path = self.path()
-        self.dirpath(ensure=True)
+        path = self.path(ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write("done")
 

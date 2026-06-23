@@ -1,9 +1,9 @@
 """
 Tests for TOPICS as a dict (dict-TOPICS mode).
 
-When TOPICS is a dict, it should behave exactly like TOPICFILES:
+When TOPICS is a dict, it should behave exactly like TOPICS:
 - Keys are topic names, values are filenames (str) or None (directory topics).
-- path(topic) returns the file path when value is a string, None when value is None.
+- path(topic) returns the file path when value is a string, dirpath when value is None.
 - dirpath(topic) returns the directory path.
 - valid()/validtopic() work correctly for both file and dir topics.
 - UNSAFE_clear handles file vs dir topics correctly.
@@ -89,12 +89,12 @@ class TestDictTopicsPaths:
         p = block.path('alpha')
         assert p.endswith('alpha.csv')
 
-    def test_path_returns_none_for_none_value(self, tmp_path, monkeypatch):
-        """path(topic) should return None when TOPICS[topic] is None."""
+    def test_path_returns_dirpath_for_none_value(self, tmp_path, monkeypatch):
+        """path(topic) should return dirpath when TOPICS[topic] is None."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsMixedBlock(url=str(tmp_path))
         p = block.path('checkpoints')
-        assert p is None
+        assert p == block.dirpath('checkpoints')
 
     def test_dirpath_returns_directory(self, tmp_path, monkeypatch):
         """dirpath(topic) should return the topic directory."""

@@ -47,7 +47,7 @@ def _record_build(label):
 # ---------------------------------------------------------------------------
 
 class Leaf(Datablock):
-    TOPICFILE = 'leaf.txt'
+    TOPICS = {'leaf': 'leaf.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -55,13 +55,13 @@ class Leaf(Datablock):
 
     def __build__(self):
         _record_build(self.cfg.label)
-        self.dirpath(ensure=True)
-        with self.fs.open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with self.fs.open(path, 'w') as f:
             f.write(f"leaf:{self.cfg.label}")
 
 
 class Mid(Datablock):
-    TOPICFILE = 'mid.txt'
+    TOPICS = {'mid': 'mid.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -70,13 +70,13 @@ class Mid(Datablock):
 
     def __build__(self):
         _record_build(self.cfg.label)
-        self.dirpath(ensure=True)
-        with self.fs.open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with self.fs.open(path, 'w') as f:
             f.write(f"mid:{self.cfg.label}")
 
 
 class Root(Datablock):
-    TOPICFILE = 'root.txt'
+    TOPICS = {'root': 'root.txt'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -85,8 +85,8 @@ class Root(Datablock):
 
     def __build__(self):
         _record_build(self.cfg.label)
-        self.dirpath(ensure=True)
-        with self.fs.open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with self.fs.open(path, 'w') as f:
             f.write(f"root:{self.cfg.label}")
 
 
@@ -219,7 +219,7 @@ class TestBuildTreeDeep:
         # Invalidate just the leaf
         os.remove(leaf.path())
         assert not leaf.valid()
-        # But mid is still valid (its own TOPICFILE exists)
+        # But mid is still valid (its own TOPICS exists)
         assert mid.valid()
 
         _reset_counts()

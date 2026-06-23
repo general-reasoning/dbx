@@ -24,25 +24,25 @@ from dbx.datablocks import Datablock, Datastack
 # ---------------------------------------------------------------------------
 # Minimal concrete block
 # ---------------------------------------------------------------------------
-class CounterShard(Datablock):
+class CounterBlock(Datablock):
     """Trivial block that records that it was built."""
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         idx: int = None
 
-    TOPICFILE = "shard.txt"
+    TOPICS = {'block': 'block.txt'}
 
     def __build__(self, *args, **kwargs):
         # Write a small marker file so we can verify the build happened
-        path = self.path(ensure_dirpath=True)
+        path = self.path('block', ensure_dirpath=True)
         fs, _ = __import__('fsspec').url_to_fs(path)
         with fs.open(path, "w") as f:
             f.write(f"built:{self.cfg.idx}")
         return self
 
     def __read__(self, topic=None):
-        path = self.path()
+        path = self.path('block')
         fs, _ = __import__('fsspec').url_to_fs(path)
         with fs.open(path, "r") as f:
             return f.read()
@@ -52,21 +52,21 @@ class CounterShard(Datablock):
 # Concrete Datastack for testing
 # ---------------------------------------------------------------------------
 class SimpleStack(Datastack):
-    """A stack that produces N blocks based on total_items / shard_size."""
+    """A stack that produces N blocks based on total_items / block_size."""
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
         total_items: int = 10
-        shard_size: int = 3
+        block_size: int = 3
 
-    TOPICFILE = "stack_meta.txt"
+    TOPICS = {'stack_meta': 'stack_meta.txt'}
 
     @property
     def n_blocks(self):
-        return math.ceil(self.cfg.total_items / self.cfg.shard_size)
+        return math.ceil(self.cfg.total_items / self.cfg.block_size)
 
     def __block__(self, idx):
-        return CounterShard(
+        return CounterBlock(
             url=self.url,
             spec=dict(idx=idx),
         )
@@ -88,7 +88,7 @@ class TestDatastackAbstract(unittest.TestCase):
         """Direct Datastack subclass without blocks() should raise."""
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
         class BadStack(Datastack):
-            TOPICFILE = "bad.txt"
+            TOPICS = {'bad': 'bad.txt'}
 
         with tempfile.TemporaryDirectory() as tmp:
             stack = BadStack(url=tmp)
@@ -116,13 +116,13 @@ class TestDatastackIsDatablock(unittest.TestCase):
         self.assertIsInstance(stack, Datablock)
 
     def test_has_hash(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, shard_size=3))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, block_size=3))
         self.assertIsNotNone(stack.hash)
 
     def test_has_cfg(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, shard_size=2))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, block_size=2))
         self.assertEqual(stack.cfg.total_items, 6)
-        self.assertEqual(stack.cfg.shard_size, 2)
+        self.assertEqual(stack.cfg.block_size, 2)
 
 
 class TestDatastackBlocks(unittest.TestCase):
@@ -133,23 +133,23 @@ class TestDatastackBlocks(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_block_count(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, shard_size=3))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, block_size=3))
         blocks = stack.blocks()
         self.assertEqual(len(blocks), 4)  # ceil(10/3) = 4
 
     def test_block_count_exact(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=9, shard_size=3))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=9, block_size=3))
         blocks = stack.blocks()
         self.assertEqual(len(blocks), 3)  # 9/3 = 3
 
     def test_blocks_are_datablocks(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=4, shard_size=2))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=4, block_size=2))
         for blk in stack.blocks():
             self.assertIsInstance(blk, Datablock)
-            self.assertIsInstance(blk, CounterShard)
+            self.assertIsInstance(blk, CounterBlock)
 
     def test_block_configs(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, shard_size=3))
+        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, block_size=3))
         blocks = stack.blocks()
         indices = [s.cfg.idx for s in blocks]
         self.assertEqual(indices, [0, 1])
@@ -167,7 +167,7 @@ class TestDatastackBuild(unittest.TestCase):
         """Default (inline) build should build all blocks."""
         stack = SimpleStack(
             url=self.tmpdir,
-            spec=dict(total_items=6, shard_size=2),
+            spec=dict(total_items=6, block_size=2),
         )
         stack.build()
         # All 3 blocks should have been built
@@ -181,7 +181,7 @@ class TestDatastackBuild(unittest.TestCase):
         """Multithreading build should build all blocks."""
         stack = SimpleStack(
             url=self.tmpdir,
-            spec=dict(total_items=6, shard_size=2),
+            spec=dict(total_items=6, block_size=2),
             parallelization='multithreading',
             n_workers=2,
         )
@@ -196,7 +196,7 @@ class TestDatastackBuild(unittest.TestCase):
         """Multiprocessing build should build all blocks (no cross-process state)."""
         stack = SimpleStack(
             url=self.tmpdir,
-            spec=dict(total_items=4, shard_size=2),
+            spec=dict(total_items=4, block_size=2),
             parallelization='multiprocessing',
             n_workers=2,
         )
@@ -211,7 +211,7 @@ class TestDatastackBuild(unittest.TestCase):
         """build() should return the stack itself."""
         stack = SimpleStack(
             url=self.tmpdir,
-            spec=dict(total_items=3, shard_size=3),
+            spec=dict(total_items=3, block_size=3),
         )
         result = stack.build()
         self.assertIs(result, stack)
@@ -270,7 +270,7 @@ class TestDatastackClearBlocks(unittest.TestCase):
     def _build_stack(self, **kwargs):
         stack = SimpleStack(
             url=self.tmpdir,
-            spec=dict(total_items=6, shard_size=2),
+            spec=dict(total_items=6, block_size=2),
             **kwargs,
         )
         stack.build()
@@ -370,14 +370,14 @@ class TestDatastackPreStack(unittest.TestCase):
                 total_items: int = 3
                 shard_size: int = 3
 
-            TOPICFILE = "tracked_meta.txt"
+            TOPICS = {'tracked_meta': 'tracked_meta.txt'}
 
             @property
             def n_blocks(self):
                 return math.ceil(self.cfg.total_items / self.cfg.shard_size)
 
             def __block__(self, idx):
-                return CounterShard(url=self.url, spec=dict(idx=idx))
+                return CounterBlock(url=self.url, spec=dict(idx=idx))
 
             def blocks(self):
                 return [self.__block__(i) for i in range(self.n_blocks)]
@@ -391,19 +391,19 @@ class TestDatastackPreStack(unittest.TestCase):
         stack.build()
         self.assertTrue(TrackedStack.pre_stack_called)
 
-    def test_pre_stack_called_before_shards(self):
-        """__split__() should be called before any shard is built."""
+    def test_pre_stack_called_before_blocks(self):
+        """__split__() should be called before any block is built."""
         call_order = []
 
-        class OrderedShard(Datablock):
+        class OrderedBlock(Datablock):
             @dataclass
             class CONFIG(Datablock.CONFIG):
                 idx: int = None
 
-            TOPICFILE = "shard.txt"
+            TOPICS = {'block': 'block.txt'}
 
             def __build__(self, *args, **kwargs):
-                call_order.append(f"shard:{self.cfg.idx}")
+                call_order.append(f"block:{self.cfg.idx}")
                 path = self.path(ensure_dirpath=True)
                 fs, _ = __import__('fsspec').url_to_fs(path)
                 with fs.open(path, "w") as f:
@@ -418,14 +418,14 @@ class TestDatastackPreStack(unittest.TestCase):
             class CONFIG(Datablock.CONFIG):
                 n: int = 2
 
-            TOPICFILE = "ordered_meta.txt"
+            TOPICS = {'ordered_meta': 'ordered_meta.txt'}
 
             @property
             def n_blocks(self):
                 return self.cfg.n
 
             def __block__(self, idx):
-                return OrderedShard(url=self.url, spec=dict(idx=idx))
+                return OrderedBlock(url=self.url, spec=dict(idx=idx))
 
             def blocks(self):
                 return [self.__block__(i) for i in range(self.n_blocks)]
@@ -443,8 +443,8 @@ class TestDatastackPreStack(unittest.TestCase):
         stack.build()
         # pre_stack must come first, then blocks, then stack
         self.assertEqual(call_order[0], "pre_stack")
-        self.assertIn("shard:0", call_order)
-        self.assertIn("shard:1", call_order)
+        self.assertIn("block:0", call_order)
+        self.assertIn("block:1", call_order)
         self.assertEqual(call_order[-1], "stack")
         pre_idx = call_order.index("pre_stack")
         stack_idx = call_order.index("stack")

@@ -258,11 +258,11 @@ class TestJournalFqcnSubdirectories:
 
 class BuildableBlock(Datablock):
     """Block that actually builds a file so a journal entry gets written."""
-    TOPICFILE = 'output.txt'
+    TOPICS = {'output': 'output.txt'}
 
     def __build__(self):
-        self.dirpath(ensure=True)
-        with open(self.path(), 'w') as f:
+        path = self.path(ensure_dirpath=True)
+        with open(path, 'w') as f:
             f.write('built')
 
 
@@ -316,13 +316,13 @@ class TestJournalAnchorForms:
         root = str(tmp_path)
 
         class CfgBlock(Datablock):
-            TOPICFILE = 'out.txt'
+            TOPICS = {'out': 'out.txt'}
             @dataclass
             class CONFIG(Datablock.CONFIG):
                 label: str = 'a'
             def __build__(self):
-                self.dirpath(ensure=True)
-                with open(self.path(), 'w') as f:
+                path = self.path(ensure_dirpath=True)
+                with open(path, 'w') as f:
                     f.write(self.cfg.label)
 
         b1 = CfgBlock(url=root, spec={'label': 'first'})
@@ -359,15 +359,15 @@ class TestJournalBuildDatetimes:
         captured = {}
 
         class InstrumentedBlock(Datablock):
-            TOPICFILE = 'output.txt'
+            TOPICS = {'output': 'output.txt'}
             def __pre_build__(self, *args, **kwargs):
                 # Capture the state right when __pre_build__ runs
                 captured['start_dt_at_pre_build'] = self._build_start_dt
                 captured['end_dt_at_pre_build'] = self._build_end_dt
                 return super().__pre_build__(*args, **kwargs)
             def __build__(self):
-                self.dirpath(ensure=True)
-                with open(self.path(), 'w') as f:
+                path = self.path(ensure_dirpath=True)
+                with open(path, 'w') as f:
                     f.write('test')
 
         block = InstrumentedBlock(url=root)
@@ -385,10 +385,10 @@ class TestJournalBuildDatetimes:
         root = str(tmp_path)
 
         class SlowBlock(Datablock):
-            TOPICFILE = 'output.txt'
+            TOPICS = {'output': 'output.txt'}
             def __build__(self):
-                self.dirpath(ensure=True)
-                with open(self.path(), 'w') as f:
+                path = self.path(ensure_dirpath=True)
+                with open(path, 'w') as f:
                     f.write('slow')
 
         block = SlowBlock(url=root)

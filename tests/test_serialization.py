@@ -48,12 +48,12 @@ class SimpleBlock(Datablock):
         label: str = "'test'"
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
-    def __read__(self, topic=None):
-        with open(self.path(), 'r') as f:
+    def __read__(self, topic):
+        with open(self.path('output'), 'r') as f:
             return f.read()
 
 
@@ -66,12 +66,12 @@ class TaggedBlock(Datablock):
         value: int = 42
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('tagged', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"v={self.cfg.value}")
 
-    def __read__(self, topic=None):
-        with open(self.path(), 'r') as f:
+    def __read__(self, topic):
+        with open(self.path('tagged'), 'r') as f:
             return f.read()
 
 
@@ -99,12 +99,12 @@ class StackBlock(Datablock):
         idx: int = 0
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('block', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"block:{self.cfg.idx}")
 
-    def __read__(self, topic=None):
-        with open(self.path(), 'r') as f:
+    def __read__(self, topic):
+        with open(self.path('block'), 'r') as f:
             return f.read()
 
 
@@ -127,7 +127,7 @@ class SimpleStack(Datastack):
     def blocks(self):
         return [self.__block__(i) for i in range(self.n_blocks)]
 
-    def __read__(self, topic=None):
+    def __read__(self, topic):
         return f"stack:{self.n_blocks}"
 
 
@@ -212,8 +212,8 @@ class TestDatablockSerialization:
         """A fresh block is invalid; the clone should also be invalid."""
         block = SimpleBlock(url=url)
         restored = roundtrip(block)
-        assert block.valid() is False
-        assert restored.valid() is False
+        assert block.valid(topic=None) is False
+        assert restored.valid(topic=None) is False
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_build_after_roundtrip(self, url, roundtrip):
@@ -221,7 +221,7 @@ class TestDatablockSerialization:
         block = SimpleBlock(url=url, spec=dict(label="'rt'"))
         restored = roundtrip(block)
         restored.build()
-        assert restored.valid() is True
+        assert restored.valid(topic=None) is True
         assert restored.read() == "built:'rt'"
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
@@ -306,7 +306,7 @@ class TestDatastackSerialization:
         restored.build()
         blocks = restored.blocks()
         for blk in blocks:
-            assert blk.valid(), f"Block {blk.cfg.idx} invalid after build"
+            assert blk.valid(topic=None), f"Block {blk.cfg.idx} invalid after build"
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_tag_on_stack(self, url, roundtrip):
@@ -357,7 +357,7 @@ class TestDatastackSetPreservation:
         clone = stack.set(tag="built-clone")
         clone.build()
         for blk in clone.blocks():
-            assert blk.valid()
+            assert blk.valid(topic=None)
 
 
 # ===========================================================================
@@ -373,12 +373,12 @@ class OuterBlock(Datablock):
         name: str = "'outer'"
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('outer', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"outer:{self.cfg.name}")
 
-    def __read__(self, topic=None):
-        with open(self.path(), 'r') as f:
+    def __read__(self, topic):
+        with open(self.path('outer'), 'r') as f:
             return f.read()
 
 

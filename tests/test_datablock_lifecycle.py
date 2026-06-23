@@ -1,5 +1,5 @@
 """
-Lifecycle tests for Datablock: .build(), .leave_breadcrumbs(), .valid(), .UNSAFE_clear().
+Lifecycle tests for Datablock: .build(), .leave_breadcrumbs(), .valid(topic=None), .UNSAFE_clear().
 
 Verifies the canonical lifecycle:
     1. A fresh Datablock starts with valid() == False
@@ -61,16 +61,6 @@ class MultiTopicBlock(Datablock):
                 f.write(f"{topic}:{self.cfg.n}")
 
 
-class NoTopicBlock(Datablock):
-    """Datablock with no TOPICS or TOPICS — valid() should be True immediately."""
-
-    @dataclass
-    class CONFIG(Datablock.CONFIG):
-        pass
-
-    def __build__(self):
-        # Nothing to write — no topic files.
-        self.dirpath(ensure=True)
 
 
 class DirTopicBlock(Datablock):
@@ -100,7 +90,7 @@ class DirTopicBlock(Datablock):
         d = self.dirpath(topic)
         return os.path.isdir(d) and bool(os.listdir(d))
 
-    def valid(self, topic=None):
+    def valid(self, topic):
         if topic is not None:
             return self.validtopic(topic)
         return all(self.validtopic(t) for t in self.TOPICS)
@@ -153,27 +143,13 @@ class TestInitialState:
 
     def test_single_topic_starts_invalid(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
 
     def test_multi_topic_starts_invalid(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
 
-    def test_no_topic_is_always_valid(self, tmp_path):
-        """A Datablock with no TOPICS(S) should report valid() == True immediately."""
-        block = _make_block(NoTopicBlock, tmp_path)
-        assert block.valid() is True
 
-    def test_no_topic_path_returns_none(self, tmp_path):
-        """path() should return None when no TOPICS is defined."""
-        block = _make_block(NoTopicBlock, tmp_path)
-        assert block.path() is None
-
-    def test_no_topic_has_no_topics(self, tmp_path):
-        """has_topics() and has_topic() should both be False."""
-        block = _make_block(NoTopicBlock, tmp_path)
-        assert block.has_topics() is False
-        assert block.has_topic() is False
 
 
 # ---------------------------------------------------------------------------
@@ -184,20 +160,20 @@ class TestBuild:
 
     def test_build_makes_single_topic_valid(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
     def test_build_makes_multi_topic_valid(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
     def test_build_creates_topic_file(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
         block.build()
-        path = block.path()
+        path = block.path('output')
         assert os.path.isfile(path)
         with open(path) as f:
             assert "built:" in f.read()
@@ -235,18 +211,18 @@ class TestUNSAFEClear:
     def test_clear_after_build_makes_invalid(self, tmp_path):
         """The core lifecycle: invalid → build → valid → clear → invalid."""
         block = _make_block(SingleTopicBlock, tmp_path)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
         block.UNSAFE_clear(OVERRIDE=True)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
 
     def test_clear_after_build_multi_topic(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
         block.UNSAFE_clear(OVERRIDE=True)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
 
     def test_clear_returns_self(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
@@ -258,23 +234,23 @@ class TestUNSAFEClear:
         """After clearing, build() should work again."""
         block = _make_block(SingleTopicBlock, tmp_path)
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
         block.UNSAFE_clear(OVERRIDE=True)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
     # -- clear_dirpath=False (default): removes files, preserves dirs ----------
 
     def test_default_removes_single_topic_file(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
         block.build()
-        path = block.path()
+        path = block.path('output')
         assert os.path.exists(path)
         block.UNSAFE_clear(OVERRIDE=True)
         assert not os.path.exists(path)
         # directory should still exist
-        assert os.path.isdir(block.dirpath())
+        assert os.path.isdir(block.dirpath('output'))
 
     def test_default_removes_multi_topic_files_preserves_dirs(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
@@ -300,10 +276,10 @@ class TestUNSAFEClear:
     def test_clear_dirpath_removes_single_topic_dir(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
         block.build()
-        dirpath = block.dirpath()
-        assert os.path.isdir(dirpath)
+        topic_dir = block.dirpath('output')
+        assert os.path.isdir(topic_dir)
         block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
-        assert not os.path.exists(dirpath)
+        assert not os.path.exists(topic_dir)
 
     def test_clear_dirpath_removes_multi_topic_dirs(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
@@ -325,11 +301,11 @@ class TestUNSAFEClear:
         """Full cycle with clear_dirpath=True."""
         block = _make_block(MultiTopicBlock, tmp_path)
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
         block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
 
 # ---------------------------------------------------------------------------
@@ -340,20 +316,20 @@ class TestLeaveBreadcrumbs:
 
     def test_breadcrumbs_make_single_topic_valid(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.leave_breadcrumbs()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
     def test_breadcrumbs_make_multi_topic_valid(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.leave_breadcrumbs()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
     def test_breadcrumbs_create_empty_files(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
         block.leave_breadcrumbs()
-        path = block.path()
+        path = block.path('output')
         assert os.path.isfile(path)
         assert os.path.getsize(path) == 0
 
@@ -374,9 +350,9 @@ class TestLeaveBreadcrumbs:
         """Breadcrumbs should be clearable just like built artifacts."""
         block = _make_block(SingleTopicBlock, tmp_path)
         block.leave_breadcrumbs()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
         block.UNSAFE_clear(OVERRIDE=True)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
 
 # ---------------------------------------------------------------------------
 # 5. Full lifecycle: invalid → build → valid → clear → invalid → rebuild
@@ -387,27 +363,27 @@ class TestFullLifecycle:
     def test_single_topic_full_cycle(self, tmp_path):
         block = _make_block(SingleTopicBlock, tmp_path)
         # Step 1: starts invalid
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         # Step 2: build makes it valid
         block.build()
-        assert block.valid() is True
-        assert os.path.isfile(block.path())
+        assert block.valid(topic=None) is True
+        assert os.path.isfile(block.path('output'))
         # Step 3: clear makes it invalid
         block.UNSAFE_clear(OVERRIDE=True)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         # Step 4: rebuild
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
     def test_multi_topic_full_cycle(self, tmp_path):
         block = _make_block(MultiTopicBlock, tmp_path)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
         block.UNSAFE_clear(OVERRIDE=True)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
 
 # ---------------------------------------------------------------------------
@@ -423,14 +399,14 @@ class TestUNSAFECopyFrom:
         dst_root = tmp_path / "dst"
         src = _make_block(SingleTopicBlock, src_root)
         src.build()
-        assert src.valid() is True
+        assert src.valid(topic=None) is True
 
         dst = _make_block(SingleTopicBlock, dst_root)
-        assert dst.valid() is False
+        assert dst.valid(topic=None) is False
         dst.UNSAFE_copy_from(src.anchorkeypath)
-        assert dst.valid() is True
+        assert dst.valid(topic=None) is True
         # The file content should match
-        with open(dst.path()) as f:
+        with open(dst.path('output')) as f:
             content = f.read()
         assert "built:" in content
 
@@ -442,7 +418,7 @@ class TestUNSAFECopyFrom:
 
         dst = _make_block(MultiTopicBlock, dst_root)
         dst.UNSAFE_copy_from(src.anchorkeypath)
-        assert dst.valid() is True
+        assert dst.valid(topic=None) is True
         for topic in dst.TOPICS:
             assert os.path.isfile(dst.path(topic))
 
@@ -452,16 +428,16 @@ class TestUNSAFECopyFrom:
         dst_root = tmp_path / "dst"
         src = _make_block(SingleTopicBlock, src_root)
         src.build()
-        # Add an extra file in the source dirpath that isn't the topic file
-        extra = os.path.join(src.dirpath(), "extra.txt")
+        # Add an extra file in the source topic dirpath that isn't the topic file
+        extra = os.path.join(src.dirpath('output'), "extra.txt")
         with open(extra, "w") as f:
             f.write("extra")
 
         dst = _make_block(SingleTopicBlock, dst_root)
         dst.UNSAFE_copy_from(src.anchorkeypath)
-        assert dst.valid() is True
+        assert dst.valid(topic=None) is True
         # The extra file should NOT have been copied
-        assert not os.path.exists(os.path.join(dst.dirpath(), "extra.txt"))
+        assert not os.path.exists(os.path.join(dst.dirpath('output'), "extra.txt"))
 
     # -- copy_dirpath=True: copies entire directories --------------------------
 
@@ -470,16 +446,16 @@ class TestUNSAFECopyFrom:
         dst_root = tmp_path / "dst"
         src = _make_block(SingleTopicBlock, src_root)
         src.build()
-        # Add an extra file in the source dirpath
-        extra = os.path.join(src.dirpath(), "extra.txt")
+        # Add an extra file in the source topic dirpath
+        extra = os.path.join(src.dirpath('output'), "extra.txt")
         with open(extra, "w") as f:
             f.write("extra")
 
         dst = _make_block(SingleTopicBlock, dst_root)
         dst.UNSAFE_copy_from(src.anchorkeypath, copy_dirpath=True)
-        assert dst.valid() is True
+        assert dst.valid(topic=None) is True
         # The extra file SHOULD have been copied with copy_dirpath=True
-        assert os.path.exists(os.path.join(dst.dirpath(), "extra.txt"))
+        assert os.path.exists(os.path.join(dst.dirpath('output'), "extra.txt"))
 
     def test_copy_dirpath_multi_topic(self, tmp_path):
         src_root = tmp_path / "src"
@@ -494,7 +470,7 @@ class TestUNSAFECopyFrom:
 
         dst = _make_block(MultiTopicBlock, dst_root)
         dst.UNSAFE_copy_from(src.anchorkeypath, copy_dirpath=True)
-        assert dst.valid() is True
+        assert dst.valid(topic=None) is True
         for topic in dst.TOPICS:
             assert os.path.exists(os.path.join(dst.dirpath(topic), "bonus.txt"))
 
@@ -516,11 +492,11 @@ class TestUNSAFECopyFrom:
 
         dst = _make_block(SingleTopicBlock, dst_root)
         dst.UNSAFE_copy_from(src.anchorkeypath)
-        assert dst.valid() is True
+        assert dst.valid(topic=None) is True
         dst.UNSAFE_clear(OVERRIDE=True)
-        assert dst.valid() is False
+        assert dst.valid(topic=None) is False
         dst.UNSAFE_copy_from(src.anchorkeypath)
-        assert dst.valid() is True
+        assert dst.valid(topic=None) is True
 
 
 # ---------------------------------------------------------------------------
@@ -543,15 +519,15 @@ class TestDirTopicClear:
 
     def test_valid_after_build(self, tmp_path):
         block = _make_block(DirTopicBlock, tmp_path)
-        assert not block.valid()
+        assert not block.valid(topic=None)
         block.__build__()
-        assert block.valid()
+        assert block.valid(topic=None)
 
     def test_clear_all_removes_topic_dirs_recursively(self, tmp_path):
         """UNSAFE_clear() with no topics should remove each dir-valued topic dir."""
         block = _make_block(DirTopicBlock, tmp_path)
         block.__build__()
-        assert block.valid()
+        assert block.valid(topic=None)
         block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
         for topic in block.TOPICS:
             assert not os.path.exists(block.dirpath(topic))
@@ -560,7 +536,7 @@ class TestDirTopicClear:
         """UNSAFE_clear('images') should only remove images/, not masks/."""
         block = _make_block(DirTopicBlock, tmp_path)
         block.__build__()
-        assert block.valid()
+        assert block.valid(topic=None)
         block.UNSAFE_clear('images', OVERRIDE=True, clear_dirpath=True)
         assert not os.path.exists(block.dirpath('images'))
         assert os.path.isdir(block.dirpath('masks'))
@@ -582,8 +558,8 @@ class TestValidTree:
         )
         
         # Initially both are invalid
-        assert parent.valid() is False
-        assert child.valid() is False
+        assert parent.valid(topic=None) is False
+        assert child.valid(topic=None) is False
         
         assert parent.valid_cfg() == {'child': False}
         assert parent.valid_cfg(reduce=True) is False
@@ -605,8 +581,8 @@ class TestValidTree:
         
         # Build child only
         child.build()
-        assert child.valid() is True
-        assert parent.valid() is False
+        assert child.valid(topic=None) is True
+        assert parent.valid(topic=None) is False
         
         assert parent.valid_cfg() == {'child': True}
         assert parent.valid_cfg(reduce=True) is True
@@ -620,12 +596,12 @@ class TestValidTree:
         
         # Build parent
         parent.build()
-        assert parent.valid() is True
+        assert parent.valid(topic=None) is True
         
         # Clear child (parent remains valid but its upstream is invalid)
         child.UNSAFE_clear(OVERRIDE=True)
-        assert child.valid() is False
-        assert parent.valid() is True
+        assert child.valid(topic=None) is False
+        assert parent.valid(topic=None) is True
         
         assert parent.valid_cfg() == {'child': False}
         assert parent.valid_tree() == {

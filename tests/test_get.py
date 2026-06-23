@@ -74,7 +74,7 @@ class TestGetSingleFile:
         block.build()
 
         dest = str(tmp_path / 'download')
-        block.get(path=dest)
+        block.get(topic=None, path=dest)
         downloaded = os.path.join(dest, 'output.txt')
         assert os.path.exists(downloaded)
         with open(downloaded) as f:
@@ -88,7 +88,7 @@ class TestGetSingleFile:
         block.build()
 
         dest = str(tmp_path / 'download')
-        result = block.get(path=dest)
+        result = block.get(topic=None, path=dest)
         assert result is block
 
     def test_creates_dest_dir(self, tmp_path, monkeypatch):
@@ -100,7 +100,7 @@ class TestGetSingleFile:
 
         dest = str(tmp_path / 'nested' / 'deep' / 'download')
         assert not os.path.exists(dest)
-        block.get(path=dest)
+        block.get(topic=None, path=dest)
         assert os.path.isdir(dest)
 
 
@@ -150,7 +150,7 @@ class TestGetNoTopic:
         block.build()
 
         dest = str(tmp_path / 'download')
-        result = block.get(path=dest)
+        result = block.get(topic=None, path=dest)
         assert result is block
 
 
@@ -163,7 +163,7 @@ class TestGetOverride:
         captured = {}
 
         class CustomGetBlock(SingleFileBlock):
-            def __get__(self, topic=None, *, path='.'):
+            def __get__(self, topic, *, path='.'):
                 captured['topic'] = topic
                 captured['path'] = path
                 return self
@@ -186,7 +186,7 @@ class TestGetDefaultRoot:
         block.build()
 
         local_root = str(tmp_path / 'local')
-        block.get(root=local_root)
+        block.get(topic=None, root=local_root)
         expected = os.path.join(local_root, block.anchor, block.key, 'output.txt')
         assert os.path.isfile(expected), f"Expected file at {expected}"
         with open(expected) as f:
@@ -201,7 +201,7 @@ class TestGetDefaultRoot:
 
         dest = str(tmp_path / 'explicit')
         local_root = str(tmp_path / 'should_not_be_used')
-        block.get(path=dest, root=local_root)
+        block.get(topic=None, path=dest, root=local_root)
         # File should be in dest, not in root
         assert os.path.isfile(os.path.join(dest, 'output.txt'))
         assert not os.path.exists(local_root)

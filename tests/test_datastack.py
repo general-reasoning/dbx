@@ -41,7 +41,7 @@ class CounterBlock(Datablock):
             f.write(f"built:{self.cfg.idx}")
         return self
 
-    def __read__(self, topic=None):
+    def __read__(self, topic):
         path = self.path('block')
         fs, _ = __import__('fsspec').url_to_fs(path)
         with fs.open(path, "r") as f:
@@ -74,7 +74,7 @@ class SimpleStack(Datastack):
     def blocks(self):
         return [self.__block__(i) for i in range(self.n_blocks)]
 
-    def __read__(self, topic=None):
+    def __read__(self, topic):
         return f"stack with {len(self.blocks())} blocks"
 
 
@@ -173,7 +173,7 @@ class TestDatastackBuild(unittest.TestCase):
         # All 3 blocks should have been built
         blocks = stack.blocks()
         for blk in blocks:
-            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
+            self.assertTrue(blk.valid(topic=None), f"Block {blk.cfg.idx} was not built")
             content = blk.read()
             self.assertEqual(content, f"built:{blk.cfg.idx}")
 
@@ -188,7 +188,7 @@ class TestDatastackBuild(unittest.TestCase):
         stack.build()
         blocks = stack.blocks()
         for blk in blocks:
-            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
+            self.assertTrue(blk.valid(topic=None), f"Block {blk.cfg.idx} was not built")
             content = blk.read()
             self.assertEqual(content, f"built:{blk.cfg.idx}")
 
@@ -204,7 +204,7 @@ class TestDatastackBuild(unittest.TestCase):
         # Verify blocks were built by checking files exist
         blocks = stack.blocks()
         for blk in blocks:
-            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
+            self.assertTrue(blk.valid(topic=None), f"Block {blk.cfg.idx} was not built")
 
 
     def test_build_returns_self(self):
@@ -281,33 +281,33 @@ class TestDatastackClearBlocks(unittest.TestCase):
         stack = self._build_stack()
         # All blocks valid after build
         for blk in stack.blocks():
-            self.assertTrue(blk.valid())
+            self.assertTrue(blk.valid(topic=None))
         # Clear
         stack.UNSAFE_clear_blocks(OVERRIDE=True)
         # All blocks invalid after clear
         for blk in stack.blocks():
-            self.assertFalse(blk.valid())
+            self.assertFalse(blk.valid(topic=None))
 
     def test_multithreading_clear(self):
         """UNSAFE_clear_blocks with multithreading removes block files."""
         stack = self._build_stack(parallelization='multithreading', n_workers=2)
         for blk in stack.blocks():
-            self.assertTrue(blk.valid())
+            self.assertTrue(blk.valid(topic=None))
         stack.UNSAFE_clear_blocks(OVERRIDE=True)
         for blk in stack.blocks():
-            self.assertFalse(blk.valid())
+            self.assertFalse(blk.valid(topic=None))
 
     def test_rebuild_after_clear(self):
         """Blocks can be rebuilt after clearing."""
         stack = self._build_stack()
         stack.UNSAFE_clear_blocks(OVERRIDE=True)
         for blk in stack.blocks():
-            self.assertFalse(blk.valid())
+            self.assertFalse(blk.valid(topic=None))
         # Rebuild
         for blk in stack.blocks():
             blk.build()
         for blk in stack.blocks():
-            self.assertTrue(blk.valid())
+            self.assertTrue(blk.valid(topic=None))
             content = blk.read()
             self.assertEqual(content, f"built:{blk.cfg.idx}")
 
@@ -410,7 +410,7 @@ class TestDatastackPreStack(unittest.TestCase):
                     f.write(f"built:{self.cfg.idx}")
                 return self
 
-            def __read__(self, topic=None):
+            def __read__(self, topic):
                 return "x"
 
         class OrderedStack(Datastack):

@@ -53,7 +53,7 @@ class CapturedBlock(Datablock):
         CapturedBlock.build_log.append('__build__')
         print("stdout message from build")
         print("stderr message from build", file=sys.stderr)
-        path = self.path(ensure_dirpath=True)
+        path = self.path('result', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write("built")
 
@@ -90,7 +90,7 @@ class SlowCapturedBlock(Datablock):
     def __build__(self):
         for i in range(100):
             print(f"line {i}")
-        path = self.path(ensure_dirpath=True)
+        path = self.path('result', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write("done")
 
@@ -236,7 +236,7 @@ class TestCaptureOutputSkipPath:
         block = _make_block(CapturedBlock, tmp_path)
         CapturedBlock.build_log = []
         block.build()
-        assert block.valid()
+        assert block.valid(topic=None)
 
         # Build again — should skip
         CapturedBlock.build_log = []

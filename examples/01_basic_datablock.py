@@ -52,11 +52,11 @@ def main():
     print(f"Anchor:  {block.anchor}")
     print(f"Hash:    {block.superhash}")
     print(f"Key:     {block.key[:16]}...")
-    print(f"Valid:   {block.valid()}")
+    print(f"Valid:   {block.valid(topic=None)}")
 
     block.build()
 
-    print(f"Valid:   {block.valid()}")
+    print(f"Valid:   {block.valid(topic=None)}")
     print(f"Path:    {block.path('counts')}")
 
     # Read results

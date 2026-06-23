@@ -58,7 +58,7 @@ class MemSingleTopic(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
             f.write('hello from memory')
 
@@ -118,7 +118,7 @@ class TestPathsOnMemory:
 
     def test_path_has_protocol(self, mem_url):
         block = MemSingleTopic(url=mem_url)
-        assert block.path().startswith('memory://')
+        assert block.path('output').startswith('memory://')
 
     def test_multi_topic_dirpath_has_protocol(self, mem_url):
         block = MemMultiTopic(url=mem_url)
@@ -134,7 +134,7 @@ class TestPathsOnMemory:
         """On local fs, paths should remain bare (no file:// prefix)."""
         block = MemSingleTopic(url=str(tmp_path))
         assert not block.anchorkeypath.startswith('file://')
-        assert not block.path().startswith('file://')
+        assert not block.path('output').startswith('file://')
 
 
 # ---------------------------------------------------------------------------
@@ -162,35 +162,35 @@ class TestBuildOnMemory:
 
     def test_single_topic_lifecycle(self, mem_url):
         block = MemSingleTopic(url=mem_url)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
     def test_multi_topic_lifecycle(self, mem_url):
         block = MemMultiTopic(url=mem_url)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
     def test_built_file_is_readable(self, mem_url):
         block = MemSingleTopic(url=mem_url)
         block.build()
-        with block.fs.open(block.path(), 'r') as f:
+        with block.fs.open(block.path('output'), 'r') as f:
             content = f.read()
         assert content == 'hello from memory'
 
     def test_clear_after_build(self, mem_url):
         block = MemSingleTopic(url=mem_url)
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
         block.UNSAFE_clear(OVERRIDE=True)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
 
     def test_leave_breadcrumbs_on_memory(self, mem_url):
         block = MemSingleTopic(url=mem_url)
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.leave_breadcrumbs()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
     def test_dirpath_ensure_on_memory(self, mem_url):
         block = MemSingleTopic(url=mem_url)

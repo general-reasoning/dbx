@@ -26,12 +26,12 @@ class RenameBlock(Datablock):
         value: str = 'default'
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(self.cfg.value)
 
-    def __read__(self, topic=None):
-        with open(self.path(), 'r') as f:
+    def __read__(self, topic):
+        with open(self.path('output'), 'r') as f:
             return f.read()
 
 
@@ -44,12 +44,12 @@ class RenameStackBlock(Datablock):
         idx: int = 0
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"block:{self.cfg.idx}")
 
-    def __read__(self, topic=None):
-        with open(self.path(), 'r') as f:
+    def __read__(self, topic):
+        with open(self.path('output'), 'r') as f:
             return f.read()
 
 

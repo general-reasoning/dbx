@@ -37,7 +37,7 @@ class EnvBlock(Datablock):
         label: str = "'hello'"
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
@@ -51,7 +51,7 @@ class EnvSpecBlock(Datablock):
         data_path: str = "'/default'"
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"path:{self.cfg.data_path}")
 
@@ -128,9 +128,9 @@ class TestEnvInRoot:
     def test_build_with_env_root(self, tmp_path, monkeypatch):
         monkeypatch.setenv('TEST_BUILD_ROOT', str(tmp_path))
         block = EnvBlock(url=env('TEST_BUILD_ROOT'))
-        assert block.valid() is False
+        assert block.valid(topic=None) is False
         block.build()
-        assert block.valid() is True
+        assert block.valid(topic=None) is True
 
 
 # ---------------------------------------------------------------------------
@@ -205,8 +205,8 @@ class TestEnvInSpec:
         block = EnvSpecBlock(url=str(tmp_path),
                              spec=dict(data_path=env('SPEC_PATH')))
         block.build()
-        assert block.valid() is True
-        with open(block.path(), 'r') as f:
+        assert block.valid(topic=None) is True
+        with open(block.path('output'), 'r') as f:
             assert f.read() == 'path:/data/build_test'
 
     def test_combined_env_root_and_spec(self, monkeypatch):

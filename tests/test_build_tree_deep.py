@@ -55,7 +55,7 @@ class Leaf(Datablock):
 
     def __build__(self):
         _record_build(self.cfg.label)
-        path = self.path(ensure_dirpath=True)
+        path = self.path('leaf', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
             f.write(f"leaf:{self.cfg.label}")
 
@@ -70,7 +70,7 @@ class Mid(Datablock):
 
     def __build__(self):
         _record_build(self.cfg.label)
-        path = self.path(ensure_dirpath=True)
+        path = self.path('mid', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
             f.write(f"mid:{self.cfg.label}")
 
@@ -85,7 +85,7 @@ class Root(Datablock):
 
     def __build__(self):
         _record_build(self.cfg.label)
-        path = self.path(ensure_dirpath=True)
+        path = self.path('root', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
             f.write(f"root:{self.cfg.label}")
 
@@ -149,7 +149,7 @@ class TestBuildTreeDeep:
         assert _build_counts.get("'L'", 0) == 1, "Leaf should be built"
         assert _build_counts.get("'M'", 0) == 1, "Mid should be built"
         assert _build_counts.get("'R'", 0) == 1, "Root should be built"
-        assert root.valid()
+        assert root.valid(topic=None)
 
     def test_shallow_builds_all_when_none_valid(self, url):
         """When nothing is valid, shallow (default) builds everything too."""
@@ -161,7 +161,7 @@ class TestBuildTreeDeep:
         assert _build_counts.get("'L'", 0) == 1
         assert _build_counts.get("'M'", 0) == 1
         assert _build_counts.get("'R'", 0) == 1
-        assert root.valid()
+        assert root.valid(topic=None)
 
     def test_shallow_skips_valid_subtree(self, url):
         """When the entire tree is already valid, shallow skips all children."""
@@ -169,7 +169,7 @@ class TestBuildTreeDeep:
 
         # Build everything first
         root.build_tree(deep=True)
-        assert root.valid()
+        assert root.valid(topic=None)
 
         # Now rebuild in shallow mode — no child should be rebuilt
         _reset_counts()
@@ -187,7 +187,7 @@ class TestBuildTreeDeep:
 
         # Build everything first
         root.build_tree(deep=True)
-        assert root.valid()
+        assert root.valid(topic=None)
 
         # Rebuild with deep=True — it should descend into every node.
         # However build() itself also skips valid blocks, so __build__
@@ -195,8 +195,8 @@ class TestBuildTreeDeep:
         # the subtree (doesn't skip it).  We verify by checking that
         # the recursive call was made, even if build() is a no-op.
         # To test the actual descent, we invalidate just the leaf.
-        os.remove(leaf.path())
-        assert not leaf.valid()
+        os.remove(leaf.path('leaf'))
+        assert not leaf.valid(topic=None)
 
         _reset_counts()
         root.build_tree(deep=True)
@@ -212,15 +212,15 @@ class TestBuildTreeDeep:
 
         # Build everything
         root.build_tree(deep=True)
-        assert root.valid()
-        assert mid.valid()
-        assert leaf.valid()
+        assert root.valid(topic=None)
+        assert mid.valid(topic=None)
+        assert leaf.valid(topic=None)
 
         # Invalidate just the leaf
-        os.remove(leaf.path())
-        assert not leaf.valid()
+        os.remove(leaf.path('leaf'))
+        assert not leaf.valid(topic=None)
         # But mid is still valid (its own TOPICS exists)
-        assert mid.valid()
+        assert mid.valid(topic=None)
 
         _reset_counts()
         root.build_tree()  # shallow
@@ -237,9 +237,9 @@ class TestBuildTreeDeep:
         root.build_tree(deep=True)
 
         # Invalidate mid (but leave leaf valid)
-        os.remove(mid.path())
-        assert not mid.valid()
-        assert leaf.valid()
+        os.remove(mid.path('mid'))
+        assert not mid.valid(topic=None)
+        assert leaf.valid(topic=None)
 
         _reset_counts()
         root.build_tree()  # shallow

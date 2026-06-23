@@ -32,7 +32,7 @@ class MinBlock(Datablock):
         label: str = "'x'"
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('out', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 

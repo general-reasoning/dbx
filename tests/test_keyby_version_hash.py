@@ -26,12 +26,12 @@ class VersionedBlock(Datablock):
         x: int = 1
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('out', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"x={self.cfg.x}")
 
-    def __read__(self, topic=None):
-        with open(self.path(), 'r') as f:
+    def __read__(self, topic):
+        with open(self.path('out'), 'r') as f:
             return f.read()
 
 
@@ -44,12 +44,12 @@ class UnversionedBlock(Datablock):
         y: int = 2
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('out', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"y={self.cfg.y}")
 
-    def __read__(self, topic=None):
-        with open(self.path(), 'r') as f:
+    def __read__(self, topic):
+        with open(self.path('out'), 'r') as f:
             return f.read()
 
 
@@ -104,7 +104,7 @@ class TestKeybyVersionHash:
         """A version_hash block can be built and read normally."""
         block = VersionedBlock(url=str(tmp_path), keyby='version_hash', spec=dict(x=42))
         block.build()
-        assert block.valid()
+        assert block.valid(topic=None)
         assert block.read() == "x=42"
 
     def test_pickle_roundtrip(self, tmp_path):
@@ -187,7 +187,7 @@ class TestKeybyTagVersionHash:
         """tag_version_hash block can build and read."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='b', spec=dict(x=7))
         block.build()
-        assert block.valid()
+        assert block.valid(topic=None)
         assert block.read() == "x=7"
 
     def test_pickle_roundtrip(self, tmp_path):

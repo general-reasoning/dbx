@@ -174,15 +174,13 @@ class TestLsMultiTopic:
             basenames = [os.path.basename(p) for p in result]
             assert filename in basenames
 
-    def test_ls_no_topic_lists_anchorkeypath(self, tmp_path):
-        """ls() without topic on a multi-topic block lists anchorkeypath."""
+    def test_ls_requires_topic(self, tmp_path):
+        """ls() without topic on a multi-topic block returns [] (no default topic)."""
         block = _make(MultiTopicBlock, tmp_path)
         block.build()
         result = block.ls()
-        # anchorkeypath contains subdirectories for each topic
-        basenames = [os.path.basename(p) for p in result]
-        assert 'alpha' in basenames
-        assert 'beta' in basenames
+        # With multiple topics, ls() without a topic has no default
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -323,14 +321,12 @@ class TestLsListTopicsDir:
             assert 'part_0.parquet' in basenames
             assert 'part_1.parquet' in basenames
 
-    def test_ls_no_topic_lists_all_topics(self, tmp_path):
-        """ls() with no topic should list the anchorkeypath (all topic dirs)."""
+    def test_ls_no_topic_returns_empty(self, tmp_path):
+        """ls() with no topic on multi-topic block returns []."""
         block = _make(ListTopicsDirBlock, tmp_path)
         block.__build__()
         result = block.ls()
-        basenames = [os.path.basename(p) for p in result]
-        for topic in block.TOPICS:
-            assert topic in basenames
+        assert result == []
 
     def test_ls_topic_detail(self, tmp_path):
         """ls(topic, detail=True) should return dicts for topic contents."""

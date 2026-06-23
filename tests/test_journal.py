@@ -261,7 +261,7 @@ class BuildableBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write('built')
 
@@ -321,7 +321,7 @@ class TestJournalAnchorForms:
             class CONFIG(Datablock.CONFIG):
                 label: str = 'a'
             def __build__(self):
-                path = self.path(ensure_dirpath=True)
+                path = self.path('output', ensure_dirpath=True)
                 with open(path, 'w') as f:
                     f.write(self.cfg.label)
 
@@ -366,7 +366,7 @@ class TestJournalBuildDatetimes:
                 captured['end_dt_at_pre_build'] = self._build_end_dt
                 return super().__pre_build__(*args, **kwargs)
             def __build__(self):
-                path = self.path(ensure_dirpath=True)
+                path = self.path('output', ensure_dirpath=True)
                 with open(path, 'w') as f:
                     f.write('test')
 
@@ -387,7 +387,7 @@ class TestJournalBuildDatetimes:
         class SlowBlock(Datablock):
             TOPICS = {'output': 'output.txt'}
             def __build__(self):
-                path = self.path(ensure_dirpath=True)
+                path = self.path('output', ensure_dirpath=True)
                 with open(path, 'w') as f:
                     f.write('slow')
 

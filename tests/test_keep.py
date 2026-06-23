@@ -44,7 +44,7 @@ class SimpleBlock(Datablock):
         label: str = "'test'"
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
@@ -177,7 +177,7 @@ class TestKeepLifecycle:
     def test_keep_before_build(self, url):
         """keep() should work even before build."""
         block = _make(url)
-        assert not block.valid()
+        assert not block.valid(topic=None)
         block.keep(message='pre-build marker')
         j = block.journal()
         assert 'keep' in j['event'].values
@@ -186,11 +186,11 @@ class TestKeepLifecycle:
         """keep() should work after build without disturbing existing files."""
         block = _make(url)
         block.build()
-        assert block.valid()
+        assert block.valid(topic=None)
         block2 = _make(url)
         block2.keep(message='post-build')
         # Block still valid
-        assert block.valid()
+        assert block.valid(topic=None)
         j = block.journal()
         assert 'keep' in j['event'].values
 

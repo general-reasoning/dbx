@@ -107,7 +107,7 @@ def test_datablock_logger_has_working_stack_depth(monkeypatch, tmp_path):
     class SimpleBlock(Datablock):
         TOPICS = {'out': 'out.txt'}
         def __build__(self, *a, **kw): return self
-        def __read__(self, topic=None): return None
+        def __read__(self, topic): return None
 
     block = SimpleBlock(url=str(tmp_path))
     assert block.log.stack_depth is not None

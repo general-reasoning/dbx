@@ -162,15 +162,15 @@ class TestBuildOnMemory:
 
     def test_single_topic_lifecycle(self, mem_url):
         block = MemSingleTopic(url=mem_url)
-        assert block.valid(topic=None) is False
+        assert block.valid() is False
         block.build()
-        assert block.valid(topic=None) is True
+        assert block.valid() is True
 
     def test_multi_topic_lifecycle(self, mem_url):
         block = MemMultiTopic(url=mem_url)
-        assert block.valid(topic=None) is False
+        assert block.valid() is False
         block.build()
-        assert block.valid(topic=None) is True
+        assert block.valid() is True
 
     def test_built_file_is_readable(self, mem_url):
         block = MemSingleTopic(url=mem_url)
@@ -182,15 +182,15 @@ class TestBuildOnMemory:
     def test_clear_after_build(self, mem_url):
         block = MemSingleTopic(url=mem_url)
         block.build()
-        assert block.valid(topic=None) is True
+        assert block.valid() is True
         block.UNSAFE_clear(OVERRIDE=True)
-        assert block.valid(topic=None) is False
+        assert block.valid() is False
 
     def test_leave_breadcrumbs_on_memory(self, mem_url):
         block = MemSingleTopic(url=mem_url)
-        assert block.valid(topic=None) is False
+        assert block.valid() is False
         block.leave_breadcrumbs()
-        assert block.valid(topic=None) is True
+        assert block.valid() is True
 
     def test_dirpath_ensure_on_memory(self, mem_url):
         block = MemSingleTopic(url=mem_url)

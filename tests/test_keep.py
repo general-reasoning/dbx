@@ -177,7 +177,7 @@ class TestKeepLifecycle:
     def test_keep_before_build(self, url):
         """keep() should work even before build."""
         block = _make(url)
-        assert not block.valid(topic=None)
+        assert not block.valid()
         block.keep(message='pre-build marker')
         j = block.journal()
         assert 'keep' in j['event'].values
@@ -186,11 +186,11 @@ class TestKeepLifecycle:
         """keep() should work after build without disturbing existing files."""
         block = _make(url)
         block.build()
-        assert block.valid(topic=None)
+        assert block.valid()
         block2 = _make(url)
         block2.keep(message='post-build')
         # Block still valid
-        assert block.valid(topic=None)
+        assert block.valid()
         j = block.journal()
         assert 'keep' in j['event'].values
 

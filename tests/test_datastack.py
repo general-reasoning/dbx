@@ -173,7 +173,7 @@ class TestDatastackBuild(unittest.TestCase):
         # All 3 blocks should have been built
         blocks = stack.blocks()
         for blk in blocks:
-            self.assertTrue(blk.valid(topic=None), f"Block {blk.cfg.idx} was not built")
+            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
             content = blk.read('block')
             self.assertEqual(content, f"built:{blk.cfg.idx}")
 
@@ -188,7 +188,7 @@ class TestDatastackBuild(unittest.TestCase):
         stack.build()
         blocks = stack.blocks()
         for blk in blocks:
-            self.assertTrue(blk.valid(topic=None), f"Block {blk.cfg.idx} was not built")
+            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
             content = blk.read('block')
             self.assertEqual(content, f"built:{blk.cfg.idx}")
 
@@ -204,7 +204,7 @@ class TestDatastackBuild(unittest.TestCase):
         # Verify blocks were built by checking files exist
         blocks = stack.blocks()
         for blk in blocks:
-            self.assertTrue(blk.valid(topic=None), f"Block {blk.cfg.idx} was not built")
+            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
 
 
     def test_build_returns_self(self):
@@ -281,33 +281,33 @@ class TestDatastackClearBlocks(unittest.TestCase):
         stack = self._build_stack()
         # All blocks valid after build
         for blk in stack.blocks():
-            self.assertTrue(blk.valid(topic=None))
+            self.assertTrue(blk.valid())
         # Clear
         stack.UNSAFE_clear_blocks(OVERRIDE=True)
         # All blocks invalid after clear
         for blk in stack.blocks():
-            self.assertFalse(blk.valid(topic=None))
+            self.assertFalse(blk.valid())
 
     def test_multithreading_clear(self):
         """UNSAFE_clear_blocks with multithreading removes block files."""
         stack = self._build_stack(parallelization='multithreading', n_workers=2)
         for blk in stack.blocks():
-            self.assertTrue(blk.valid(topic=None))
+            self.assertTrue(blk.valid())
         stack.UNSAFE_clear_blocks(OVERRIDE=True)
         for blk in stack.blocks():
-            self.assertFalse(blk.valid(topic=None))
+            self.assertFalse(blk.valid())
 
     def test_rebuild_after_clear(self):
         """Blocks can be rebuilt after clearing."""
         stack = self._build_stack()
         stack.UNSAFE_clear_blocks(OVERRIDE=True)
         for blk in stack.blocks():
-            self.assertFalse(blk.valid(topic=None))
+            self.assertFalse(blk.valid())
         # Rebuild
         for blk in stack.blocks():
             blk.build()
         for blk in stack.blocks():
-            self.assertTrue(blk.valid(topic=None))
+            self.assertTrue(blk.valid())
             content = blk.read('block')
             self.assertEqual(content, f"built:{blk.cfg.idx}")
 

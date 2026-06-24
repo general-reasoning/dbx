@@ -121,7 +121,7 @@ class TestDictTopicsBuildValid:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsFileBlock(url=str(tmp_path))
         block.build()
-        assert block.valid(topic=None)
+        assert block.valid()
         for topic in block.TOPICS:
             assert block.validtopic(topic)
             assert os.path.isfile(block.path(topic))
@@ -131,7 +131,7 @@ class TestDictTopicsBuildValid:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsMixedBlock(url=str(tmp_path))
         block.build()
-        assert block.valid(topic=None)
+        assert block.valid()
         # File topic
         assert block.validtopic('logs')
         assert os.path.isfile(block.path('logs'))
@@ -144,7 +144,7 @@ class TestDictTopicsBuildValid:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsDirOnlyBlock(url=str(tmp_path))
         block.build()
-        assert block.valid(topic=None)
+        assert block.valid()
         for topic in block.TOPICS:
             assert block.validtopic(topic)
 
@@ -160,9 +160,9 @@ class TestDictTopicsClear:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsFileBlock(url=str(tmp_path))
         block.build()
-        assert block.valid(topic=None)
+        assert block.valid()
         block.UNSAFE_clear(OVERRIDE=True)
-        assert not block.valid(topic=None)
+        assert not block.valid()
 
     def test_clear_specific_topic(self, tmp_path, monkeypatch):
         """UNSAFE_clear('alpha') should remove only that topic."""
@@ -178,9 +178,9 @@ class TestDictTopicsClear:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsMixedBlock(url=str(tmp_path))
         block.build()
-        assert block.valid(topic=None)
+        assert block.valid()
         block.UNSAFE_clear(OVERRIDE=True)
-        assert not block.valid(topic=None)
+        assert not block.valid()
 
 
 # ---------------------------------------------------------------------------

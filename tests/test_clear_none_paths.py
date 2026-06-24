@@ -43,15 +43,11 @@ class AllDirTopics(Datablock):
             with open(os.path.join(dirpath, 'data.bin'), 'wb') as f:
                 f.write(b'\x00' * 16)
 
-    def validtopic(self, topic=None):
-        if topic is None:
-            return all(self.validtopic(t) for t in self.TOPICS)
+    def validtopic(self, topic):
         d = self.dirpath(topic)
         return os.path.isdir(d) and bool(os.listdir(d))
 
-    def valid(self, topic):
-        if topic is not None:
-            return self.validtopic(topic)
+    def valid(self):
         return all(self.validtopic(t) for t in self.TOPICS)
 
 
@@ -75,9 +71,7 @@ class MixedTopics(Datablock):
         with open(os.path.join(ckpt_dir, 'model.pt'), 'wb') as f:
             f.write(b'\x01' * 32)
 
-    def validtopic(self, topic=None):
-        if topic is None:
-            return all(self.validtopic(t) for t in self.TOPICS)
+    def validtopic(self, topic):
         if self.TOPICS[topic] is not None:
             p = self.path(topic)
             return p is not None and os.path.isfile(p)
@@ -85,9 +79,7 @@ class MixedTopics(Datablock):
             d = self.dirpath(topic)
             return os.path.isdir(d) and bool(os.listdir(d))
 
-    def valid(self, topic):
-        if topic is not None:
-            return self.validtopic(topic)
+    def valid(self):
         return all(self.validtopic(t) for t in self.TOPICS)
 
 
@@ -117,7 +109,7 @@ class TestClearAllDirTopics:
         """UNSAFE_clear() must not crash when path(topic) is None."""
         block = _make_block(AllDirTopics, tmp_path)
         block.__build__()
-        assert block.valid(topic=None)
+        assert block.valid()
         # This used to raise: AttributeError: 'NoneType' has no attribute 'startswith'
         block.UNSAFE_clear(OVERRIDE=True)
         # Should return self
@@ -127,14 +119,14 @@ class TestClearAllDirTopics:
         """UNSAFE_clear('images') must not crash when path('images') is None."""
         block = _make_block(AllDirTopics, tmp_path)
         block.__build__()
-        assert block.valid(topic=None)
+        assert block.valid()
         block.UNSAFE_clear('images', OVERRIDE=True)
 
     def test_clear_with_clear_dirpath_removes_dirs(self, tmp_path):
         """clear_dirpath=True should remove the actual topic directories."""
         block = _make_block(AllDirTopics, tmp_path)
         block.__build__()
-        assert block.valid(topic=None)
+        assert block.valid()
         block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
         for topic in block.TOPICS:
             assert not os.path.exists(block.dirpath(topic))
@@ -163,7 +155,7 @@ class TestClearMixedTopics:
         """Clearing all topics must handle the None-path topic gracefully."""
         block = _make_block(MixedTopics, tmp_path)
         block.__build__()
-        assert block.valid(topic=None)
+        assert block.valid()
         block.UNSAFE_clear(OVERRIDE=True)
 
     def test_clear_file_topic_removes_file(self, tmp_path):
@@ -179,7 +171,7 @@ class TestClearMixedTopics:
         """Clearing the dir-based topic (path=None) must not crash."""
         block = _make_block(MixedTopics, tmp_path)
         block.__build__()
-        assert block.valid('checkpoints')
+        assert block.validtopic('checkpoints')
         block.UNSAFE_clear('checkpoints', OVERRIDE=True)
 
     def test_clear_dir_topic_with_clear_dirpath(self, tmp_path):
@@ -197,8 +189,8 @@ class TestClearMixedTopics:
         """Full cycle: build → clear → rebuild."""
         block = _make_block(MixedTopics, tmp_path)
         block.__build__()
-        assert block.valid(topic=None)
+        assert block.valid()
         block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
         block.__build__()
-        assert block.valid(topic=None)
+        assert block.valid()
 

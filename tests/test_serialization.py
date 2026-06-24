@@ -212,8 +212,8 @@ class TestDatablockSerialization:
         """A fresh block is invalid; the clone should also be invalid."""
         block = SimpleBlock(url=url)
         restored = roundtrip(block)
-        assert block.valid(topic=None) is False
-        assert restored.valid(topic=None) is False
+        assert block.valid() is False
+        assert restored.valid() is False
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_build_after_roundtrip(self, url, roundtrip):
@@ -221,7 +221,7 @@ class TestDatablockSerialization:
         block = SimpleBlock(url=url, spec=dict(label="'rt'"))
         restored = roundtrip(block)
         restored.build()
-        assert restored.valid(topic=None) is True
+        assert restored.valid() is True
         assert restored.read('output') == "built:'rt'"
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
@@ -306,7 +306,7 @@ class TestDatastackSerialization:
         restored.build()
         blocks = restored.blocks()
         for blk in blocks:
-            assert blk.valid(topic=None), f"Block {blk.cfg.idx} invalid after build"
+            assert blk.valid(), f"Block {blk.cfg.idx} invalid after build"
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_tag_on_stack(self, url, roundtrip):
@@ -357,7 +357,7 @@ class TestDatastackSetPreservation:
         clone = stack.set(tag="built-clone")
         clone.build()
         for blk in clone.blocks():
-            assert blk.valid(topic=None)
+            assert blk.valid()
 
 
 # ===========================================================================

@@ -128,9 +128,9 @@ class TestEnvInRoot:
     def test_build_with_env_root(self, tmp_path, monkeypatch):
         monkeypatch.setenv('TEST_BUILD_ROOT', str(tmp_path))
         block = EnvBlock(url=env('TEST_BUILD_ROOT'))
-        assert block.valid(topic=None) is False
+        assert block.valid() is False
         block.build()
-        assert block.valid(topic=None) is True
+        assert block.valid() is True
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ class TestEnvInSpec:
         block = EnvSpecBlock(url=str(tmp_path),
                              spec=dict(data_path=env('SPEC_PATH')))
         block.build()
-        assert block.valid(topic=None) is True
+        assert block.valid() is True
         with open(block.path('output'), 'r') as f:
             assert f.read() == 'path:/data/build_test'
 

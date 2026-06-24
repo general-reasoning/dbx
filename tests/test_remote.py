@@ -125,7 +125,7 @@ class TestRemote(unittest.TestCase):
                 kwargs.setdefault('built', False)
                 super().__init__(**kwargs)
 
-            def valid(self, topic=None):
+            def valid(self):
                 # Always return False to force build() to call __build__()
                 return False
 

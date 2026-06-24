@@ -995,9 +995,7 @@ class Datablock:
             result = results
         return result
     
-    def valid(self, topic):
-        if topic is not None:
-            return self.validtopic(topic)
+    def valid(self):
         return self.validtopics(reduce=True)
     
     def topics(self):
@@ -1045,7 +1043,7 @@ class Datablock:
             _fd_capture = FDCapture(_local_log)
         _log_uploaded = False
         try:
-            if not self.valid(topic=None):
+            if not self.valid():
                 self.__pre_build__(*args, **kwargs)
                 self.__build__(*args, **kwargs)
                 self._build_end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
@@ -1247,7 +1245,7 @@ class Datablock:
             self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (BUILD_TREE_EXEMPTIONS) --------")
         
         for s, c in self._iter_cfg_blocks('BUILD_TREE_EXEMPTIONS', skip_callback=skip_cb):
-            if not deep and c.valid(topic=None):
+            if not deep and c.valid():
                 self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s}: already valid --------")
                 continue
             self._write_journal_entry(event=f"build_tree:{s}:begin")
@@ -1262,7 +1260,7 @@ class Datablock:
     def valid_cfg(self, *, reduce=False):
         if not self.validate_cfg:
             return True if reduce else {}
-        results = {s: c.valid(topic=None) for s, c in self._iter_cfg_blocks('VALIDATE_CFG_EXEMPTIONS')}
+        results = {s: c.valid() for s, c in self._iter_cfg_blocks('VALIDATE_CFG_EXEMPTIONS')}
         if reduce:
             return all(list(results.values())) if results else True
         else:
@@ -1273,7 +1271,7 @@ class Datablock:
         if not self.validate_cfg:
             return {}
         return {
-            s: {'valid': c.valid(topic=None), 'tree': c.valid_tree()}
+            s: {'valid': c.valid(), 'tree': c.valid_tree()}
             for s, c in self._iter_cfg_blocks('VALIDATE_CFG_EXEMPTIONS')
         }
     
@@ -1363,7 +1361,7 @@ class Datablock:
             When None, source paths are derived from the Datablock's own
             TOPICS definitions.
         validate : bool, default True
-            If True, asserts that ``self.valid(topic=None)`` returns True after
+            If True, asserts that ``self.valid()`` returns True after
             the copy completes.  Set to False to skip post-copy validation.
         copy_dirpath : bool, default False
             If False (default), copies individual topic files via
@@ -1424,7 +1422,7 @@ class Datablock:
                 fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
 
         if not overwrite:
-            assert not self.valid(topic=None), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
+            assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
         fs, _ = self._url_to_fs(anchorkeypath)
         assert fs.isdir(anchorkeypath), f"Nonexistent hashpath {anchorkeypath}"
         self.log.verbose(f"Copying files from {anchorkeypath}: BEGIN")
@@ -1444,7 +1442,7 @@ class Datablock:
             self.log.verbose(f"Copying files from {anchorkeypath}: END")
             self._write_journal_entry(event="UNSAFE_copy_from:END", message=anchorkeypath, inline_message=True)
             if validate:
-                assert self.valid(topic=None), f"Invalid Datablock after copy: {self}"
+                assert self.valid(), f"Invalid Datablock after copy: {self}"
         except Exception as e:
             self.log.error(f"UNSAFE_copy_from: Error when trying to copy files from {anchorkeypath}")
             self.log.error(f"EXCEPTION: {e}")
@@ -2398,7 +2396,7 @@ class Datastack(Datablock):
 
     def valid_blocks(self) -> list[bool]:
         """Return a list of booleans, one per block, indicating validity."""
-        return [s.valid(topic=None) for s in self.blocks()]
+        return [s.valid() for s in self.blocks()]
 
     # -- Default build logic ------------------------------------------------------
 
@@ -3154,8 +3152,8 @@ class UNSAFE_datablock_journal_puller:
             self.log.debug(f"Copying from {anchorhashpath} to {dbk}: BEGIN")
             dbk.UNSAFE_copy_from(anchorhashpath)
             self.log.debug(f"Copying from {anchorhashpath} to {dbk}: END")
-            self.log.debug(f"VALID: {dbk.valid(topic=None)}")
-            if self.clear and dbk.valid(topic=None):
+            self.log.debug(f"VALID: {dbk.valid()}")
+            if self.clear and dbk.valid():
                 dbk = entry.inst()
                 self.log.warning(f"Clearning datablock {_dbk_}")
                 dbk.UNSAFE_clear()
@@ -3166,7 +3164,7 @@ class UNSAFE_datablock_journal_puller:
                 raise(e)
             else:
                 self.log.debug(f"Copying from {anchorhashpath} to {dbk}: EXCEPTION:\n{e}\nSkipping")
-                self.log.debug(f"VALID: {dbk.valid(topic=None)}")
+                self.log.debug(f"VALID: {dbk.valid()}")
         return dbk, copied
     
 
@@ -3221,7 +3219,7 @@ def UNSAFE_pull_datablocks_from_journal(datablock_classname, *, n_workers: int =
         results = [result for result in _results_ if result is not None]
     dbks, copied = zip(*results)
     pulled = sum([int(c) for c in copied])
-    valids = sum([int(dbk.valid(topic=None)) for dbk in dbks])
+    valids = sum([int(dbk.valid()) for dbk in dbks])
     log.info(f"Pulled {pulled} out of {len(copied)} datablocks.  Skipped {len(copied)-pulled}. Valids: {valids}")
     log.info(f"Done")
     return dbks, copied

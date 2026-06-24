@@ -338,7 +338,7 @@ class TestTorchMultithreadingBuilder:
         result = builder.build_blocks(blocks)
         assert result is blocks
         for block in blocks:
-            assert block.valid(topic=None), f"Block {block.cfg.label} should be valid after build"
+            assert block.valid(), f"Block {block.cfg.label} should be valid after build"
 
     def test_build_blocks_without_to_raises(self, tmp_path):
         """Blocks without .to() should fail — _TorchBlockCallable_ validates."""

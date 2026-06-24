@@ -236,7 +236,7 @@ class TestCaptureOutputSkipPath:
         block = _make_block(CapturedBlock, tmp_path)
         CapturedBlock.build_log = []
         block.build()
-        assert block.valid(topic=None)
+        assert block.valid()
 
         # Build again — should skip
         CapturedBlock.build_log = []

@@ -137,7 +137,7 @@ class TestValidateCfg:
         )
         # Should NOT raise — cfg validation is skipped
         down.build()
-        assert down.valid(topic=None)
+        assert down.valid()
 
     def test_no_skip_build_raises_on_invalid_upstream(self, tmp_path):
         """Without validate_cfg=False, build() raises when upstream is invalid."""
@@ -174,7 +174,7 @@ class TestValidateCfg:
             validate_cfg=False,
         )
         down.build()
-        assert down.valid(topic=None)
+        assert down.valid()
 
     def test_default_build_raises_on_invalid_deps(self, tmp_path):
         """Default validate_cfg=True, build fails if deps are invalid."""

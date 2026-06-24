@@ -104,7 +104,7 @@ class TestKeybyVersionHash:
         """A version_hash block can be built and read normally."""
         block = VersionedBlock(url=str(tmp_path), keyby='version_hash', spec=dict(x=42))
         block.build()
-        assert block.valid(topic=None)
+        assert block.valid()
         assert block.read('out') == "x=42"
 
     def test_pickle_roundtrip(self, tmp_path):
@@ -187,7 +187,7 @@ class TestKeybyTagVersionHash:
         """tag_version_hash block can build and read."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='b', spec=dict(x=7))
         block.build()
-        assert block.valid(topic=None)
+        assert block.valid()
         assert block.read('out') == "x=7"
 
     def test_pickle_roundtrip(self, tmp_path):

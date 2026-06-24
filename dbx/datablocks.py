@@ -148,7 +148,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         nonlocal log
         if repo is None:
             return None
-        log.info(f"SETTING UP WORK REPO for {name} from {repo=} {reason} with revision {rev}")
+        log.verbose(f"SETTING UP WORK REPO for {name} from {repo=} {reason} with revision {rev}")
         wrkroot = tempfile.TemporaryDirectory()
         package = os.path.basename(repo)
         wrkrepo = os.path.join(wrkroot.name, package)
@@ -156,9 +156,9 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         assert wrkrepo == _pkgpath
         if rev is not None:
             gitcheckout(wrkrepo, rev)
-            log.info(f"Checked out {wrkrepo} to revision {rev}")
+            log.verbose(f"Checked out {wrkrepo} to revision {rev}")
         else:
-            log.info(f"Using {wrkrepo} at HEAD")
+            log.verbose(f"Using {wrkrepo} at HEAD")
         sys.path.insert(0, wrkrepo)
         return wrkroot, wrkrepo
 
@@ -214,7 +214,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         if 'DBX_USE_WORK_REPO' in os.environ:
             del os.environ['DBX_USE_WORK_REPO']
             
-        log.info(f"DBX_USE_WORK_REPO: {wrkrepo_str}")
+        log.verbose(f"DBX_USE_WORK_REPO: {wrkrepo_str}")
 
     elif revision is not None and DBX_USE_WORK_REPO is not None:
         # Work repos already exist (cloned at HEAD during import).
@@ -227,10 +227,10 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         dbx_wrkrepo, project_wrkrepo = dbx_repos(DBX_USE_WORK_REPO)
         if dbx_rev is not None and dbx_wrkrepo is not None:
             gitcheckout(dbx_wrkrepo, dbx_rev)
-            log.info(f"Checked out existing work repo {dbx_wrkrepo} to revision {dbx_rev}")
+            log.verbose(f"Checked out existing work repo {dbx_wrkrepo} to revision {dbx_rev}")
         if project_rev is not None and project_wrkrepo is not None:
             gitcheckout(project_wrkrepo, project_rev)
-            log.info(f"Checked out existing work repo {project_wrkrepo} to revision {project_rev}")
+            log.verbose(f"Checked out existing work repo {project_wrkrepo} to revision {project_rev}")
         # Clear finder caches so the import machinery sees the new files.
         importlib.invalidate_caches()
 

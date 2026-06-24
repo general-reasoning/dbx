@@ -4,11 +4,11 @@
 
 ## Implementing a Block
 
-A block is a plain `Datablock`.  Implement `CONFIG`, `TOPICFILE`, and `__build__`:
+A block is a plain `Datablock`.  Implement `CONFIG`, `TOPICS`, and `__build__`:
 
 ```python
 class MyBlock(Datablock):
-    TOPICFILE = 'output.parquet'
+    TOPICS = {'output': 'output.parquet'}
 
     @dataclass
     class CONFIG(Datablock.CONFIG):
@@ -67,7 +67,7 @@ CONFIG:
 |--------------------|-----------------------|---------------|-------------------------------|
 | source, model spec | `CONFIG` dataclass    | **Yes**       | `tilebag`, `evaluator_factory`|
 | `device`           | `__init__` kwarg      | No            | `"cuda:0"`, `"cpu"`           |
-| `gpu_batch_size`   | `__init__` kwarg      | No            | `64`, `1024`                  |
+| `device_batch_size`| `__init__` kwarg      | No            | `64`, `1024`                  |
 | `n_workers`        | `__init__` kwarg      | No            | `4`                           |
 | `parallelization`  | `__init__` kwarg      | No            | `"multiprocessing"`           |
 
@@ -75,11 +75,11 @@ CONFIG:
 
 ```python
 class MyBag(Datablock):
-    def __init__(self, *args, gpu_batch_size: int = 64, device: str = "cuda", **kwargs):
-        Datablock.__init__(self, *args, gpu_batch_size=gpu_batch_size, device=device, **kwargs)
+    def __init__(self, *args, device_batch_size: int = 64, device: str = "cuda", **kwargs):
+        Datablock.__init__(self, *args, device_batch_size=device_batch_size, device=device, **kwargs)
 ```
 
-This stores `self.gpu_batch_size` and `self.device` without touching the hash.
+This stores `self.device_batch_size` and `self.device` without touching the hash.
 
 ## How Shared State Reaches Blocks
 
@@ -374,7 +374,7 @@ a `.to(device)` method:
 
 ```python
 class MyGpuBlock(Datablock):
-    TOPICFILE = 'features.pt'
+    TOPICS = {'features': 'features.pt'}
 
     def to(self, device):
         self._device = device

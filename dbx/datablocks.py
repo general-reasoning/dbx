@@ -2407,9 +2407,10 @@ class Datastack(Datablock):
         the worker callables, so they are fully parallelized.
         """
         callables, callable_kwargs = self.__split__(*args, **kwargs)
+        work_stealing_state = getattr(self, 'work_stealing', False)
         self.log.info(
             f"Building {self.__class__.__name__}: blocks using {len(callables)} callables, "
-            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
+            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
         )
         executor_kwargs = dict(
             n_workers=self.n_workers,

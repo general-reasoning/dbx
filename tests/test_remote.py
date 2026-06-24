@@ -119,12 +119,13 @@ class TestRemote(unittest.TestCase):
     def test_remote_datablocks_builder(self):
         """Verify that RayDatablocksBuilder can build multiple Datablock remotely."""
         class TestBlock(Datablock):
+            TOPICS = {'test': 'test.txt'}
             def __init__(self, **kwargs):
                 # Pass built=False to super to ensure it's tracked in parameters
                 kwargs.setdefault('built', False)
                 super().__init__(**kwargs)
 
-            def valid(self):
+            def valid(self, topic=None):
                 # Always return False to force build() to call __build__()
                 return False
 

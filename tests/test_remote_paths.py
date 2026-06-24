@@ -114,7 +114,7 @@ class TestPathsOnMemory:
 
     def test_dirpath_has_protocol(self, mem_url):
         block = MemSingleTopic(url=mem_url)
-        assert block.dirpath().startswith('memory://')
+        assert block.dirpath('output').startswith('memory://')
 
     def test_path_has_protocol(self, mem_url):
         block = MemSingleTopic(url=mem_url)
@@ -194,13 +194,13 @@ class TestBuildOnMemory:
 
     def test_dirpath_ensure_on_memory(self, mem_url):
         block = MemSingleTopic(url=mem_url)
-        dp = block.dirpath(ensure=True)
+        dp = block.dirpath('output', ensure=True)
         assert block.fs.isdir(dp)
 
     def test_ls_on_memory(self, mem_url):
         block = MemSingleTopic(url=mem_url)
         block.build()
-        files = block.ls()
+        files = block.ls('output')
         assert len(files) >= 1
 
 

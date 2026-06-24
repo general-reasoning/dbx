@@ -105,7 +105,7 @@ class TestKeybyVersionHash:
         block = VersionedBlock(url=str(tmp_path), keyby='version_hash', spec=dict(x=42))
         block.build()
         assert block.valid(topic=None)
-        assert block.read() == "x=42"
+        assert block.read('out') == "x=42"
 
     def test_pickle_roundtrip(self, tmp_path):
         """keyby='version_hash' survives pickle serialization."""
@@ -188,7 +188,7 @@ class TestKeybyTagVersionHash:
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='b', spec=dict(x=7))
         block.build()
         assert block.valid(topic=None)
-        assert block.read() == "x=7"
+        assert block.read('out') == "x=7"
 
     def test_pickle_roundtrip(self, tmp_path):
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='t')

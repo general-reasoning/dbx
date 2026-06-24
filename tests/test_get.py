@@ -24,7 +24,7 @@ class SingleFileBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write('hello from single file')
 
@@ -54,10 +54,6 @@ class TopicsDirBlock(Datablock):
                 f.write(f'contents of {topic}')
 
 
-class NoTopicBlock(Datablock):
-    """Block with no TOPICS(S) — produces no artifacts."""
-    def __build__(self):
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +70,7 @@ class TestGetSingleFile:
         block.build()
 
         dest = str(tmp_path / 'download')
-        block.get(topic=None, path=dest)
+        block.get('output', path=dest)
         downloaded = os.path.join(dest, 'output.txt')
         assert os.path.exists(downloaded)
         with open(downloaded) as f:
@@ -88,7 +84,7 @@ class TestGetSingleFile:
         block.build()
 
         dest = str(tmp_path / 'download')
-        result = block.get(topic=None, path=dest)
+        result = block.get('output', path=dest)
         assert result is block
 
     def test_creates_dest_dir(self, tmp_path, monkeypatch):
@@ -100,7 +96,7 @@ class TestGetSingleFile:
 
         dest = str(tmp_path / 'nested' / 'deep' / 'download')
         assert not os.path.exists(dest)
-        block.get(topic=None, path=dest)
+        block.get('output', path=dest)
         assert os.path.isdir(dest)
 
 
@@ -140,18 +136,7 @@ class TestGetTopicsDir:
         assert 'data.txt' in found_files
 
 
-class TestGetNoTopic:
 
-    def test_no_topic_block_is_noop(self, tmp_path, monkeypatch):
-        """get() on a block with no topics should be a safe no-op."""
-        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        root = str(tmp_path / 'store')
-        block = NoTopicBlock(url=root)
-        block.build()
-
-        dest = str(tmp_path / 'download')
-        result = block.get(topic=None, path=dest)
-        assert result is block
 
 
 class TestGetOverride:
@@ -186,7 +171,7 @@ class TestGetDefaultRoot:
         block.build()
 
         local_root = str(tmp_path / 'local')
-        block.get(topic=None, root=local_root)
+        block.get('output', root=local_root)
         expected = os.path.join(local_root, block.anchor, block.key, 'output.txt')
         assert os.path.isfile(expected), f"Expected file at {expected}"
         with open(expected) as f:
@@ -201,7 +186,7 @@ class TestGetDefaultRoot:
 
         dest = str(tmp_path / 'explicit')
         local_root = str(tmp_path / 'should_not_be_used')
-        block.get(topic=None, path=dest, root=local_root)
+        block.get('output', path=dest, root=local_root)
         # File should be in dest, not in root
         assert os.path.isfile(os.path.join(dest, 'output.txt'))
         assert not os.path.exists(local_root)

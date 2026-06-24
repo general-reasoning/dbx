@@ -46,6 +46,7 @@ def _write_fake_journal_entry(journal_dir: str, hash_val: str = "abc123", event:
 
 # A minimal Datablock subclass to use as the anchor
 class FakeBlock(Datablock):
+    TOPICS = {'fake': 'fake.txt'}
     def __build__(self):
         pass
 
@@ -192,6 +193,7 @@ class TestJournalRootPassedCorrectly:
 
 # A second Datablock subclass for classname-filtering tests
 class OtherBlock(Datablock):
+    TOPICS = {'other': 'other.txt'}
     def __build__(self):
         pass
 
@@ -321,7 +323,7 @@ class TestJournalAnchorForms:
             class CONFIG(Datablock.CONFIG):
                 label: str = 'a'
             def __build__(self):
-                path = self.path('output', ensure_dirpath=True)
+                path = self.path('out', ensure_dirpath=True)
                 with open(path, 'w') as f:
                     f.write(self.cfg.label)
 

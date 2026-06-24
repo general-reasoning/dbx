@@ -41,7 +41,7 @@ class SingleTopicBlock(Datablock):
         label: str = "'hello'"
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
@@ -83,10 +83,8 @@ class DirTopicBlock(Datablock):
             with open(os.path.join(dirpath, 'data.bin'), 'wb') as f:
                 f.write(b'\x00' * 16)
 
-    def validtopic(self, topic=None):
+    def validtopic(self, topic):
         """For dir-valued topics, validity = dirpath exists and is non-empty."""
-        if topic is None:
-            return all(self.validtopic(t) for t in self.TOPICS)
         d = self.dirpath(topic)
         return os.path.isdir(d) and bool(os.listdir(d))
 
@@ -107,7 +105,7 @@ class CountingBlock(Datablock):
 
     def __build__(self):
         CountingBlock._build_count += 1
-        path = self.path(ensure_dirpath=True)
+        path = self.path('counter', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(str(CountingBlock._build_count))
 
@@ -121,7 +119,7 @@ class NestedBlock(Datablock):
         child: SingleTopicBlock = None
         
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('nested', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write("nested")
 

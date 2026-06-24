@@ -174,7 +174,7 @@ class TestDatastackBuild(unittest.TestCase):
         blocks = stack.blocks()
         for blk in blocks:
             self.assertTrue(blk.valid(topic=None), f"Block {blk.cfg.idx} was not built")
-            content = blk.read()
+            content = blk.read('block')
             self.assertEqual(content, f"built:{blk.cfg.idx}")
 
     def test_multithreading_build(self):
@@ -189,7 +189,7 @@ class TestDatastackBuild(unittest.TestCase):
         blocks = stack.blocks()
         for blk in blocks:
             self.assertTrue(blk.valid(topic=None), f"Block {blk.cfg.idx} was not built")
-            content = blk.read()
+            content = blk.read('block')
             self.assertEqual(content, f"built:{blk.cfg.idx}")
 
     def test_multiprocessing_build(self):
@@ -308,7 +308,7 @@ class TestDatastackClearBlocks(unittest.TestCase):
             blk.build()
         for blk in stack.blocks():
             self.assertTrue(blk.valid(topic=None))
-            content = blk.read()
+            content = blk.read('block')
             self.assertEqual(content, f"built:{blk.cfg.idx}")
 
     def test_returns_self(self):
@@ -404,7 +404,7 @@ class TestDatastackPreStack(unittest.TestCase):
 
             def __build__(self, *args, **kwargs):
                 call_order.append(f"block:{self.cfg.idx}")
-                path = self.path(ensure_dirpath=True)
+                path = self.path('block', ensure_dirpath=True)
                 fs, _ = __import__('fsspec').url_to_fs(path)
                 with fs.open(path, "w") as f:
                     f.write(f"built:{self.cfg.idx}")

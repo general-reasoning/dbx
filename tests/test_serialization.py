@@ -222,7 +222,7 @@ class TestDatablockSerialization:
         restored = roundtrip(block)
         restored.build()
         assert restored.valid(topic=None) is True
-        assert restored.read() == "built:'rt'"
+        assert restored.read('output') == "built:'rt'"
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_keyby_variants(self, url, roundtrip):

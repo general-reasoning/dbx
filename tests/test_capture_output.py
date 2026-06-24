@@ -90,7 +90,7 @@ class SlowCapturedBlock(Datablock):
     def __build__(self):
         for i in range(100):
             print(f"line {i}")
-        path = self.path('result', ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write("done")
 

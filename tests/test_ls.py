@@ -39,7 +39,7 @@ class SingleTopicBlock(Datablock):
         label: str = "'hello'"
 
     def __build__(self):
-        path = self.path(ensure_dirpath=True)
+        path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
             f.write(f"built:{self.cfg.label}")
 
@@ -104,12 +104,6 @@ class TopicsBlock(Datablock):
                 f.write(f"built:{topic}")
 
 
-class NoTopicBlock(Datablock):
-    """Datablock with no TOPICS or TOPICS."""
-
-    @dataclass
-    class CONFIG(Datablock.CONFIG):
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -128,13 +122,13 @@ class TestLsSingleTopic:
 
     def test_ls_empty_before_build(self, tmp_path):
         block = _make(SingleTopicBlock, tmp_path)
-        result = block.ls()
+        result = block.ls('output')
         assert result == []
 
     def test_ls_after_build(self, tmp_path):
         block = _make(SingleTopicBlock, tmp_path)
         block.build()
-        result = block.ls()
+        result = block.ls('output')
         # path() points to the file; ls() should list its parent dir
         assert len(result) >= 1
         basenames = [os.path.basename(p) for p in result]
@@ -143,7 +137,7 @@ class TestLsSingleTopic:
     def test_ls_returns_full_paths(self, tmp_path):
         block = _make(SingleTopicBlock, tmp_path)
         block.build()
-        result = block.ls()
+        result = block.ls('output')
         for p in result:
             assert os.path.isabs(p)
 
@@ -175,12 +169,11 @@ class TestLsMultiTopic:
             assert filename in basenames
 
     def test_ls_requires_topic(self, tmp_path):
-        """ls() without topic on a multi-topic block returns [] (no default topic)."""
+        """ls() without topic raises TypeError (topic is required)."""
         block = _make(MultiTopicBlock, tmp_path)
         block.build()
-        result = block.ls()
-        # With multiple topics, ls() without a topic has no default
-        assert result == []
+        with pytest.raises(TypeError):
+            block.ls()
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +185,7 @@ class TestLsDetail:
     def test_ls_detail_returns_dicts(self, tmp_path):
         block = _make(SingleTopicBlock, tmp_path)
         block.build()
-        result = block.ls(detail=True)
+        result = block.ls('output', detail=True)
         assert len(result) >= 1
         for entry in result:
             assert isinstance(entry, dict)
@@ -262,13 +255,6 @@ class TestLsDirTopic:
 # 6. No-topic block
 # ---------------------------------------------------------------------------
 
-class TestLsNoTopic:
-
-    def test_ls_returns_empty_list(self, tmp_path):
-        """A block with no TOPICS/TOPICS has path()=None → ls() returns []."""
-        block = _make(NoTopicBlock, tmp_path)
-        assert block.ls() == []
-
 
 # ---------------------------------------------------------------------------
 # 7. List-TOPICS directory mode (no custom path() override)
@@ -321,12 +307,12 @@ class TestLsListTopicsDir:
             assert 'part_0.parquet' in basenames
             assert 'part_1.parquet' in basenames
 
-    def test_ls_no_topic_returns_empty(self, tmp_path):
-        """ls() with no topic on multi-topic block returns []."""
+    def test_ls_no_topic_raises(self, tmp_path):
+        """ls() with no topic raises TypeError (topic is required)."""
         block = _make(ListTopicsDirBlock, tmp_path)
         block.__build__()
-        result = block.ls()
-        assert result == []
+        with pytest.raises(TypeError):
+            block.ls()
 
     def test_ls_topic_detail(self, tmp_path):
         """ls(topic, detail=True) should return dicts for topic contents."""

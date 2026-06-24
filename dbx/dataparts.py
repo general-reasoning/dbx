@@ -53,12 +53,14 @@ tqdm.tqdm.monitor_interval = 0
 __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'eval')
 
 
-def getenv(key: str) -> str:
+def getenv(key: str, default: str|None = None) -> str:
     """Return the value of environment variable *key*.
 
     Intended to be referenced in speclines so that handles contain the
     symbolic ``$dbx.getenv('KEY')`` rather than the resolved path.
     """
+    if default is not None:
+        return os.environ.get(key, default)
     try:
         return os.environ[key]
     except KeyError:
@@ -69,7 +71,7 @@ def getenv(key: str) -> str:
         ) from None
 
 
-def env(key: str) -> str:
+def env(key: str, default: str|None = None) -> str:
     """Return a specline that lazily resolves an environment variable.
 
     Usage::
@@ -84,7 +86,9 @@ def env(key: str) -> str:
     if isinstance(key, str) and key.startswith('$'):
         # Already a specline — idempotent.
         return key
-    return f"$dbx.getenv('{key}')"
+    if default is None:
+        return f"$dbx.getenv('{key}')"
+    return f"$dbx.getenv('{key}', '{default}')"
 
 
 class Logger:

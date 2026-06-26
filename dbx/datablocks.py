@@ -484,8 +484,10 @@ class JournalEntry(pd.Series):
             spec=self.read('spec', safe=True) or {},
             quote=self.read('quote') or '',
             repr=self.read('repr') or '',
-            handle=self.read('handle') or '',
+            norm=self.read('norm') or '',
             hashstr=self.read('hashstr') or '',
+            supernorm=self.read('supernorm') or '',
+            superhashstr=self.read('superhashstr') or '',
             superhash=self.superhash,
             anchor=self.anchor,
             tag=self.tag,
@@ -684,7 +686,6 @@ class Datablock:
         spec: dict
         quote: str
         repr: str
-        handle: str
         norm: str
         hashstr: str
         supernorm: str

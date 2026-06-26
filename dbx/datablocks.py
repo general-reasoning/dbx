@@ -337,6 +337,10 @@ class JournalEntry(pd.Series):
     @property
     def key(self):
         """Reconstruct the key from journal fields, mirroring Datablock.key."""
+        recorded_key = self.get('key')
+        if recorded_key is not None and not (isinstance(recorded_key, float) and pd.isna(recorded_key)):
+            return recorded_key
+            
         keyby = self.keyby
         if keyby is None:
             key = None
@@ -389,6 +393,10 @@ class JournalEntry(pd.Series):
 
     @property
     def anchorkeypath(self):
+        recorded_path = self.get('anchorkeypath')
+        if recorded_path is not None and not (isinstance(recorded_path, float) and pd.isna(recorded_path)):
+            return recorded_path
+            
         url = self.get('url')
         if url is None:
             # Legacy fallback when only 'root' is available
@@ -2118,6 +2126,8 @@ class Datablock:
                                          'hash': self.hash,
                                          'superhash': self.superhash,
                                          'keyby': self.keyby,
+                                         'key': self.key,
+                                         'anchorkeypath': self.anchorkeypath,
                                          'uuid': self.uuid,
                                          'tag': self.tag, 
                                          'log': logpath if has_log else None,

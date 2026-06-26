@@ -684,6 +684,7 @@ class Datablock:
         spec: dict
         quote: str
         repr: str
+        handle: str
         norm: str
         hashstr: str
         supernorm: str

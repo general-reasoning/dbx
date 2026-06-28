@@ -1824,14 +1824,7 @@ class Datablock:
 
     @property
     def tag(self):
-        if not hasattr(self, '_tag'): 
-            if self._tag_ is not None:
-                self._tag = self._tag_
-                self.log.selected(f"tag: ---------------------------------===---------> {self._tag_=} ---> tag: {self._tag}")
-            else:
-                self._tag = self.anchorkey
-                self.log.selected(f"tag: ---------------------------------===---------> {self.anchorkey=} ---> tag: {self._tag}")
-        return self._tag
+        return self._tag_
 
     @property
     def key(self):

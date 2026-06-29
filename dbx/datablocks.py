@@ -1459,9 +1459,13 @@ class Datablock:
                 )
             for topic in tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic"):
                 if copy_dirpath or self._topicfiles is None:
+                    self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
                     copy_topic_dir(topic)
+                    self.log.verbose(f"Using copy_topic_dir for topic {topic}: END")
                 else:
+                    self.log.verbose(f"Using copy_topic_file for topic {topic}: BEGIN")
                     copy_topic_file(topic)
+                    self.log.verbose(f"Using copy_topic_file for topic {topic}: END")
         
             self.log.verbose(f"Copying files from {anchorkeypath}: END")
             self._write_journal_entry(event="UNSAFE_copy_from:END", message=anchorkeypath, inline_message=True)

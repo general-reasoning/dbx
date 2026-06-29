@@ -328,7 +328,7 @@ class JournalEntry(pd.Series):
 
     @property
     def keyby(self):
-        return self.get('keyby', 'taghash')
+        return self.get('keyby', 'tag_version_shorthash')
 
     @property
     def tag(self):
@@ -362,13 +362,13 @@ class JournalEntry(pd.Series):
                 key = f"version={self.version}/{self.hash[:8]}"
             else:
                 key = self.hash
-        elif keyby == 'tag_version_hash':
+        elif keyby in ('tag_version_hash', 'tag_version_shorthash'):
             parts = []
             if self.tag is not None:
                 parts.append(self.tag)
             if self.version is not None:
                 parts.append(f"version={self.version}")
-            if parts:
+            if keyby == 'tag_version_shorthash' or parts:
                 parts.append(self.hash[:8])
             else:
                 parts.append(self.hash)
@@ -754,7 +754,7 @@ class Datablock:
         detailed: bool = None,
         capture_output: bool = False,
         revision: str = None,
-        keyby: str = 'tag_version_hash',
+        keyby: str = 'tag_version_shorthash',
         uuid16: bool = False,
         validate_cfg: bool = True,
         storage_options: dict = None,
@@ -846,9 +846,9 @@ class Datablock:
         
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
-        self.keyby = state.get('keyby', 'taghash')
-        if self.keyby not in (None, 'hash', 'superhash', 'norm', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'superhash', 'norm', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'custom', got {self.keyby!r}")
+        self.keyby = state.get('keyby', 'tag_version_shorthash')
+        if self.keyby not in (None, 'hash', 'superhash', 'norm', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'superhash', 'norm', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -1936,16 +1936,22 @@ class Datablock:
                 key = f"version={self.version}/{self.hash[:8]}"
             else:
                 key = self.hash
-        elif self.keyby == 'tag_version_hash':
+        elif self.keyby == 'tag_version_hash' or self.keyby == 'tag_version_shorthash':
             parts = []
             if self._tag_ is not None:
                 parts.append(self.tag)
             if self.version is not None:
                 parts.append(f"version={self.version}")
             if parts:
-                parts.append(self.hash[:8])
+                if self.keyby == 'tag_version_shorthash':
+                    parts.append(self.hash[:8])
+                else:
+                    parts.append(self.hash)
             else:
-                parts.append(self.hash)
+                if self.keyby == 'tag_version_shorthash':
+                    parts.append(self.hash[:8])
+                else:
+                    parts.append(self.hash)
             key = '/'.join(parts)
         else:  
             raise NotImplementedError(f"keyby {repr(self.keyby)} is not implemented: missing override?")

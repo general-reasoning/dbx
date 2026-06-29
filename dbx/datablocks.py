@@ -1730,7 +1730,7 @@ class Datablock:
         self,
         other_norm: 'str | None' = None,
         *,
-        other_journal_entry_path: 'str | None' = None,
+        journal_entry_path: 'str | None' = None,
     ) -> dict:
         """Diff this datablock's norm against another norm string key-by-key.
 
@@ -1744,15 +1744,15 @@ class Datablock:
         ----------
         other_norm:
             Norm string to compare against.  If ``None``, read from
-            ``other_journal_entry_path``.
-        other_journal_entry_path:
+            ``journal_entry_path``.
+        journal_entry_path:
             Path to a journal ``.parquet`` file (as stored in
             ``JournalFrame.entry_path``).  Used as fallback source for
             *other_norm* when *other_norm* is ``None``.
         """
-        if other_norm is None and other_journal_entry_path is not None:
-            fs, _ = fsspec.url_to_fs(other_journal_entry_path, **(self.storage_options or {}))
-            with fs.open(other_journal_entry_path, 'rb') as f:
+        if other_norm is None and journal_entry_path is not None:
+            fs, _ = fsspec.url_to_fs(journal_entry_path, **(self.storage_options or {}))
+            with fs.open(journal_entry_path, 'rb') as f:
                 _df = pd.read_parquet(f)
             _entry = JournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
             other_norm = _entry.read('norm') or ''

@@ -159,22 +159,22 @@ class TestKeybyTagHash:
 class TestKeybyTagVersionHash:
 
     def test_tag_and_version(self, tmp_path):
-        """Both tag and version present: '{tag}/version={version}/{hash[:8]}'."""
+        """Both tag and version present: '{tag}/version={version}/{hash}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp1')
-        expected = f"exp1/version=v3/{block.hash[:8]}"
+        expected = f"exp1/version=v3/{block.hash}"
         assert block.key == expected
 
     def test_tag_only(self, tmp_path):
-        """Tag present, no version: '{tag}/{hash[:8]}'."""
+        """Tag present, no version: '{tag}/{hash}'."""
         block = UnversionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp2')
         assert block.version is None
-        expected = f"exp2/{block.hash[:8]}"
+        expected = f"exp2/{block.hash}"
         assert block.key == expected
 
     def test_version_only(self, tmp_path):
-        """No tag, version present: 'version={version}/{hash[:8]}'."""
+        """No tag, version present: 'version={version}/{hash}'."""
         block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash')
-        expected = f"version=v3/{block.hash[:8]}"
+        expected = f"version=v3/{block.hash}"
         assert block.key == expected
 
     def test_neither_tag_nor_version(self, tmp_path):

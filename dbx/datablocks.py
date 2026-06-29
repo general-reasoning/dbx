@@ -1241,9 +1241,14 @@ class Datablock:
             self.leave_breadcrumbs_at_path(self.path(topic))
         return self
 
+    TREE_SKIP_VALIDATION = {}
+
     def _iter_cfg_blocks(self, exemptions_attr=None, skip_callback=None):
         """Yield (key, Datablock) pairs from self.cfg that are not in the given exemptions list."""
         exemptions = set(getattr(self, exemptions_attr, ())) if exemptions_attr else set()
+        # TREE_SKIP_VALIDATION is an alias for VALIDATE_CFG_EXEMPTIONS; merge both
+        if exemptions_attr == 'VALIDATE_CFG_EXEMPTIONS':
+            exemptions |= set(getattr(self, 'TREE_SKIP_VALIDATION', ()))
         for s in self.spec.keys():
             if s in exemptions:
                 if skip_callback:

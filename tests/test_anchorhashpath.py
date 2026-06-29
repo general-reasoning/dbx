@@ -43,7 +43,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         self.assertTrue(hasattr(entry, 'anchorkey'))
         self.assertTrue(hasattr(entry, 'anchorkeypath'))
         
-        expected_anchorkey = os.path.join(data['anchor'], data['hash'])
+        expected_anchorkey = os.path.join(data['anchor'], data['hash'][:8])
         self.assertEqual(entry.anchorkey, expected_anchorkey)
         
         fs, root = fsspec.url_to_fs(data['url'])
@@ -61,7 +61,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         series = pd.Series(data)
         entry = JournalEntry(series)
         
-        expected_anchorkey = os.path.join(data['anchor'], data['hash'])
+        expected_anchorkey = os.path.join(data['anchor'], data['hash'][:8])
         expected_anchorkeypath = os.path.join(data['root'], expected_anchorkey)
         self.assertEqual(entry.anchorkeypath, expected_anchorkeypath)
 

@@ -1451,6 +1451,30 @@ class Datablock:
                 self.log.detailed(f"Copying directory {src_path} to {dst_path}")
                 if use_server_side:
                     self.fs.cp(src_path, dst_path, recursive=True)
+                elif getattr(self, 'parallelization', None):
+                    # Parallelize on top-level directory contents; each item is copied independently.
+                    # _fscopy_item_callable is a module-level function (picklable for multiprocessing).
+                    items = src_fs.ls(src_path, detail=False)
+                    if items:
+                        _storage_options = getattr(self, 'storage_options', {})
+                        _n_workers = getattr(self, 'n_workers', 1)
+                        _tag = f"fscopy {len(items)} items [{_src_path}]"
+                        _executor_kwargs = dict(n_workers=_n_workers, tag=_tag)
+                        if (hasattr(self, 'multiprocessing_start_method')
+                                and self.multiprocessing_start_method is not None
+                                and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
+                            _executor_kwargs['start_method'] = self.multiprocessing_start_method
+                        _executor = callable_executor(self.parallelization, **_executor_kwargs)
+                        _callables = [
+                            functools.partial(
+                                _fscopy_item_callable,
+                                src_item,
+                                dst_path.rstrip('/') + '/' + src_item.rstrip('/').rsplit('/', 1)[-1],
+                                _storage_options,
+                            )
+                            for src_item in items
+                        ]
+                        _executor.exec_callables(_callables)
                 else:
                     fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
 
@@ -2644,6 +2668,47 @@ def _rename_block_from_callable(block, blockanchor, overwrite=False, topicpaths=
     """Module-level callable for UNSAFE_rename_blocks_from (must be picklable)."""
     block.UNSAFE_rename_from(blockanchor, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
     return block
+
+
+def _fscopy_item_callable(src_item, dst_item, storage_options):
+    """Module-level callable for parallel directory copy in UNSAFE_copy_from.
+
+    Copies a single item (file or subdirectory) from *src_item* to *dst_item*.
+    When both endpoints are remote, a per-item temporary directory is used and
+    removed immediately after the upload, so disk space is never accumulated
+    across all parallel workers.
+    """
+    import shutil
+    import fsspec
+    src_fs, _ = fsspec.url_to_fs(src_item, **(storage_options or {}))
+    dst_fs, _ = fsspec.url_to_fs(dst_item, **(storage_options or {}))
+
+    # Ensure the destination parent directory exists
+    dst_parent = dst_item.rstrip('/').rsplit('/', 1)[0]
+    if dst_parent:
+        try:
+            dst_fs.makedirs(dst_parent, exist_ok=True)
+        except Exception:
+            pass
+
+    src_proto = getattr(src_fs, 'protocol', ())
+    dst_proto = getattr(dst_fs, 'protocol', ())
+    if 'file' in src_proto or 'file' in dst_proto:
+        if 'file' in src_proto:
+            dst_fs.put(src_item, dst_item, recursive=True)
+        else:
+            src_fs.get(src_item, dst_item, recursive=True)
+    else:
+        # Both endpoints are remote: stage through a per-item temp dir and
+        # delete it immediately once the upload is done.
+        tmpdir = tempfile.mkdtemp()
+        try:
+            basename = src_item.rstrip('/').rsplit('/', 1)[-1] or 'item'
+            local_tmp = os.path.join(tmpdir, basename)
+            src_fs.get(src_item, local_tmp, recursive=True)
+            dst_fs.put(local_tmp, dst_item, recursive=True)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def quotefn(fn, *args, tag="$", **kwargs):

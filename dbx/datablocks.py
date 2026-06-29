@@ -411,12 +411,16 @@ class JournalEntry(pd.Series):
                 path = getattr(self, thing)
                 _, _ext = os.path.splitext(path)
                 ext = _ext[1:]
-                if raw or ext == 'txt' or ext == 'log':
-                    result = read_str(getattr(self, thing), storage_options=self.storage_options)
-                elif ext == 'yaml':
-                    result = read_yaml(getattr(self, thing), safe=safe, storage_options=self.storage_options)
-                else:
-                    raise ValueError(f"Uknown journal entry field extention for {thing}: {ext}")
+                try:
+                    if raw or ext == 'txt' or ext == 'log':
+                        result = read_str(getattr(self, thing), storage_options=self.storage_options)
+                    elif ext == 'yaml':
+                        result = read_yaml(getattr(self, thing), safe=safe, storage_options=self.storage_options)
+                    else:
+                        raise ValueError(f"Uknown journal entry field extention for {thing}: {ext}")
+                except FileNotFoundError:
+                    self.logger.warning(f"read: {thing}: file not found, returning None: {path}")
+                    result = None
             else:
                 result = None
             self.logger.detailed(f"read: {thing}: >>\n{result}")
@@ -2082,6 +2086,7 @@ class Datablock:
         self._write_str('quote', self.quote())
         self._write_str('repr', self.__repr__())
         self._write_str('norm', self.norm())
+        self._write_str('supernorm', self.supernorm())
         self._write_str('hashstr', self.hashstr)
         if message is not None and not inline_message:
             self._write_str('message', message)

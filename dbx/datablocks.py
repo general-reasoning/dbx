@@ -1432,7 +1432,7 @@ class Datablock:
                 self.log.detailed(f"Copying file {src_path} to {dst_path}")
                 fscopy(src_path=src_path, dst_path=dst_path, recursive=False)
 
-        def copy_topic_dir(topic, use_fs_if_possible: bool = False):
+        def copy_topic_dir(topic):
             """Copy the entire .dirpath(topic) directory."""
             if topicpaths is not None:
                 _src_path = topicpaths[topic]
@@ -1440,19 +1440,12 @@ class Datablock:
                 _src_path = topic
             src_path = os.path.join(anchorkeypath, _src_path)
             src_fs, _ = self._url_to_fs(src_path)
-            dest_fs, _ = self._url_to_fs(self.dirpath(topic))
-            use_server_side = (use_fs_if_possible and src_fs == dest_fs
-                               and 'file' not in getattr(src_fs, 'protocol', ()))
-            # Ensure dst dir pre-exists only for server-side copy (Azure) or list-mode topics.
-            # For dict-mode fscopy, pre-creating dst causes fsspec to copy src INTO dst instead of AS dst.
-            ensure = use_server_side or (self._topicfiles is None)
-            dst_path = self.dirpath(topic, ensure=ensure)
+            # Do not pre-create dst for dict-mode: fscopy must create it so contents land at dst,
+            # not src-dir-name inside dst.
+            dst_path = self.dirpath(topic, ensure=self._topicfiles is None)
             if src_fs.exists(src_path):
                 self.log.detailed(f"Copying directory {src_path} to {dst_path}")
-                if use_server_side:
-                    self.fs.cp(src_path, dst_path, recursive=True)
-                else:
-                    fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
+                fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
 
         if not overwrite:
             assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
@@ -1469,7 +1462,7 @@ class Datablock:
             for topic in tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic"):
                 if copy_dirpath or self._topicfiles is None:
                     self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
-                    copy_topic_dir(topic, use_fs_if_possible=True)
+                    copy_topic_dir(topic)
                     self.log.verbose(f"Using copy_topic_dir for topic {topic}: END")
                 else:
                     self.log.verbose(f"Using copy_topic_file for topic {topic}: BEGIN")

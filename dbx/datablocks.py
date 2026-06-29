@@ -1421,6 +1421,11 @@ class Datablock:
             if topicpaths is not None:
                 _src_path = topicpaths[topic]
             else:
+                if self._topicfiles is None:
+                    raise ValueError(
+                        f"Cannot copy topic file for {topic!r}: TOPICS is not a dict "
+                        f"(no filename mapping). Use copy_dirpath=True for list-mode topics."
+                    )
                 _src_path = os.path.join(topic, self._topicfiles[topic])
             if dst_path is not None:
                 src_path = os.path.join(anchorkeypath, _src_path)
@@ -1453,7 +1458,7 @@ class Datablock:
                     f"{self.__class__.__name__}.UNSAFE_copy_from() requires TOPICS"
                 )
             for topic in tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic"):
-                if copy_dirpath:
+                if copy_dirpath or self._topicfiles is None:
                     copy_topic_dir(topic)
                 else:
                     copy_topic_file(topic)

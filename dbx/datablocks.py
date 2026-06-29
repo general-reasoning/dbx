@@ -2621,32 +2621,6 @@ class Datastack(Datablock):
         self._write_journal_entry(event="UNSAFE_rename_blocks_from:end", message=blockanchor, inline_message=True)
         return self
 
-    def UNSAFE_copy_blocks_from(self, blockanchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
-        if not UNSAFE_allowed("UNSAFE_copy_blocks_from", OVERRIDE=OVERRIDE):
-            return self
-
-        block_list = self.blocks()
-        self.log.info(
-            f"UNSAFE_copy_blocks_from: copying {len(block_list)} blocks, "
-            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
-        )
-        self._write_journal_entry(event="UNSAFE_copy_blocks_from:begin", message=blockanchor, inline_message=True)
-
-        tag = f"COPYING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={self.n_workers}]"
-        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
-        if (hasattr(self, 'multiprocessing_start_method')
-                and self.multiprocessing_start_method is not None
-                and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
-            executor_kwargs['start_method'] = self.multiprocessing_start_method
-        executor = callable_executor(self.parallelization, **executor_kwargs)
-
-        callables = [functools.partial(_copy_block_from_callable, blk, blockanchor, overwrite, topicpaths, validate, copy_dirpath) for blk in block_list]
-        executor.exec_callables(callables)
-
-        self.log.info(f"UNSAFE_copy_blocks_from complete: {self.__class__.__name__}")
-        self._write_journal_entry(event="UNSAFE_copy_blocks_from:end", message=blockanchor, inline_message=True)
-        return self
-
 
 def _clear_block_callable(block, topics, clear_dirpath):
     """Module-level callable for UNSAFE_clear_blocks (must be picklable)."""
@@ -2656,11 +2630,6 @@ def _clear_block_callable(block, topics, clear_dirpath):
 def _rename_block_from_callable(block, blockanchor, overwrite=False, topicpaths=None, validate=True, copy_dirpath=False):
     """Module-level callable for UNSAFE_rename_blocks_from (must be picklable)."""
     block.UNSAFE_rename_from(blockanchor, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
-    return block
-
-def _copy_block_from_callable(block, blockanchor, overwrite=False, topicpaths=None, validate=True, copy_dirpath=False):
-    """Module-level callable for UNSAFE_copy_blocks_from (must be picklable)."""
-    block.UNSAFE_copy_from(blockanchor, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
     return block
 
 

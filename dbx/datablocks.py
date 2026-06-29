@@ -1454,7 +1454,8 @@ class Datablock:
                 elif getattr(self, 'parallelization', None):
                     # Parallelize on top-level directory contents; each item is copied independently.
                     # _fscopy_item_callable is a module-level function (picklable for multiprocessing).
-                    items = src_fs.ls(src_path, detail=False)
+                    items = [src_fs.unstrip_protocol(p)
+                             for p in src_fs.ls(src_path, detail=False)]
                     if items:
                         _storage_options = getattr(self, 'storage_options', {})
                         _n_workers = getattr(self, 'n_workers', 1)

@@ -1726,41 +1726,37 @@ class Datablock:
             result[key] = value
         return result
 
-    @staticmethod
     def diffnorm(
-        norm_a: 'str | None' = None,
-        norm_b: 'str | None' = None,
+        self,
+        other_norm: 'str | None' = None,
         *,
-        journal_entry_a: 'JournalEntry | None' = None,
-        journal_entry_b: 'JournalEntry | None' = None,
+        other_journal_entry: 'JournalEntry | None' = None,
     ) -> dict:
-        """Diff two norm strings key-by-key.
+        """Diff this datablock's norm against another norm string key-by-key.
 
-        Norms can be supplied directly as strings or read from
-        ``JournalEntry`` objects.  Returns a ``dict`` mapping each key
-        whose value differs to a ``(value_a, value_b)`` tuple.  Keys
-        present on only one side map to ``(value, None)`` or
-        ``(None, value)``.
+        Uses ``self.norm()`` as the reference (self) side.  The other side
+        can be supplied as a raw string or read from a :class:`JournalEntry`.
+        Returns a ``dict`` mapping each differing key to a
+        ``(self_value, other_value)`` tuple.  Keys present on only one side
+        carry ``None`` for the missing value.
 
         Parameters
         ----------
-        norm_a, norm_b:
-            Norm strings to compare.  If ``None``, the norm is read from
-            the corresponding ``journal_entry_*``.
-        journal_entry_a, journal_entry_b:
-            :class:`JournalEntry` objects used as fallback norm sources.
+        other_norm:
+            Norm string to compare against.  If ``None``, read from
+            ``other_journal_entry``.
+        other_journal_entry:
+            :class:`JournalEntry` used as fallback source for *other_norm*.
         """
-        if norm_a is None and journal_entry_a is not None:
-            norm_a = journal_entry_a.read('norm') or ''
-        if norm_b is None and journal_entry_b is not None:
-            norm_b = journal_entry_b.read('norm') or ''
-        parsed_a = Datablock._parse_norm(norm_a or '')
-        parsed_b = Datablock._parse_norm(norm_b or '')
-        all_keys = sorted(set(parsed_a) | set(parsed_b))
+        if other_norm is None and other_journal_entry is not None:
+            other_norm = other_journal_entry.read('norm') or ''
+        parsed_self  = Datablock._parse_norm(self.norm())
+        parsed_other = Datablock._parse_norm(other_norm or '')
+        all_keys = sorted(set(parsed_self) | set(parsed_other))
         return {
-            key: (parsed_a.get(key), parsed_b.get(key))
+            key: (parsed_self.get(key), parsed_other.get(key))
             for key in all_keys
-            if parsed_a.get(key) != parsed_b.get(key)
+            if parsed_self.get(key) != parsed_other.get(key)
         }
 
     def __repr__(self, *, deslash: bool = True):

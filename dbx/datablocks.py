@@ -1679,8 +1679,89 @@ class Datablock:
         if deslash:
             supernorm = supernorm.replace('\\', '')
         self.log.detailed(f"supernorm: ------------> {supernorm_spec=}")
-        self.log.detailed(f"supernorm: ------------>{supernorm=}")
+        self.log.detailed(f"supernorm: ------------>{{supernorm=}}")
         return supernorm
+
+    @staticmethod
+    def _parse_norm(norm: str) -> dict:
+        """Parse a norm string like 'anchor(k1=v1, k2=v2)' into {k: v} dict.
+
+        Handles nested parens/braces/brackets and quoted strings correctly by
+        tracking depth so that only top-level commas are used as separators.
+        """
+        norm = norm.strip()
+        paren_start = norm.find('(')
+        if paren_start == -1:
+            return {}
+        inner = norm[paren_start + 1:]
+        if inner.endswith(')'):
+            inner = inner[:-1]
+        # Split on top-level commas (respecting nesting and quotes)
+        tokens = []
+        depth = 0
+        quote_char = None
+        start = 0
+        for i, c in enumerate(inner):
+            if quote_char is not None:
+                if c == quote_char and (i == 0 or inner[i - 1] != '\\'):
+                    quote_char = None
+            elif c in ('"', "'"):
+                quote_char = c
+            elif c in ('(', '[', '{'):
+                depth += 1
+            elif c in (')', ']', '}'):
+                depth -= 1
+            elif c == ',' and depth == 0:
+                tokens.append(inner[start:i].strip())
+                start = i + 1
+        if start < len(inner):
+            tokens.append(inner[start:].strip())
+        result = {}
+        for token in tokens:
+            eq_idx = token.find('=')
+            if eq_idx == -1:
+                continue
+            key = token[:eq_idx].strip()
+            value = token[eq_idx + 1:].strip()
+            result[key] = value
+        return result
+
+    @staticmethod
+    def diffnorm(
+        norm_a: 'str | None' = None,
+        norm_b: 'str | None' = None,
+        *,
+        journal_entry_a: 'JournalEntry | None' = None,
+        journal_entry_b: 'JournalEntry | None' = None,
+    ) -> dict:
+        """Diff two norm strings key-by-key.
+
+        Norms can be supplied directly as strings or read from
+        ``JournalEntry`` objects.  Returns a ``dict`` mapping each key
+        whose value differs to a ``(value_a, value_b)`` tuple.  Keys
+        present on only one side map to ``(value, None)`` or
+        ``(None, value)``.
+
+        Parameters
+        ----------
+        norm_a, norm_b:
+            Norm strings to compare.  If ``None``, the norm is read from
+            the corresponding ``journal_entry_*``.
+        journal_entry_a, journal_entry_b:
+            :class:`JournalEntry` objects used as fallback norm sources.
+        """
+        if norm_a is None and journal_entry_a is not None:
+            norm_a = journal_entry_a.read('norm') or ''
+        if norm_b is None and journal_entry_b is not None:
+            norm_b = journal_entry_b.read('norm') or ''
+        parsed_a = Datablock._parse_norm(norm_a or '')
+        parsed_b = Datablock._parse_norm(norm_b or '')
+        all_keys = sorted(set(parsed_a) | set(parsed_b))
+        return {
+            key: (parsed_a.get(key), parsed_b.get(key))
+            for key in all_keys
+            if parsed_a.get(key) != parsed_b.get(key)
+        }
 
     def __repr__(self, *, deslash: bool = True):
         repr_spec = self.__expand_spec__('repr')
@@ -2194,7 +2275,7 @@ class Datablock:
                 # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
                 if 'build_datetime' in _df.columns and 'build:end:datetime' not in _df.columns:
                     _df = _df.rename(columns={'build_datetime': 'build:end:datetime'})
-
+                _df['entry_path'] = fs_full_path(fs, file)
                 dfs.append(_df)
             if len(dfs) > 0:
                 df = pd.concat(dfs)

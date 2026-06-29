@@ -2723,11 +2723,23 @@ def _fscopy_item_callable(src_item, dst_item, storage_options):
                                 dst_fs.makedirs(remote_parent, exist_ok=True)
                             except Exception:
                                 pass
-                        with open(local_f, 'rb') as lf, dst_fs.open(remote_f, 'wb', overwrite=True) as rf:
+                        # adlfs bug: commit_block_list doesn't pass overwrite=True,
+                        # so delete first to avoid ResourceExistsError on commit.
+                        try:
+                            dst_fs.rm(remote_f)
+                        except Exception:
+                            pass
+                        with open(local_f, 'rb') as lf, dst_fs.open(remote_f, 'wb') as rf:
                             shutil.copyfileobj(lf, rf)
             else:
-                # Single file: stream directly to destination
-                with open(local_tmp, 'rb') as lf, dst_fs.open(dst_item, 'wb', overwrite=True) as rf:
+                # Single file: stream directly to destination.
+                # adlfs bug: commit_block_list doesn't pass overwrite=True,
+                # so delete first to avoid ResourceExistsError on commit.
+                try:
+                    dst_fs.rm(dst_item)
+                except Exception:
+                    pass
+                with open(local_tmp, 'rb') as lf, dst_fs.open(dst_item, 'wb') as rf:
                     shutil.copyfileobj(lf, rf)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)

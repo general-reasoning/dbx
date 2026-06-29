@@ -1362,7 +1362,7 @@ class Datablock:
         self._write_journal_entry(event="UNSAFE_rename_from:END", message=anchor, inline_message=True)
         return result
 
-    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
+    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False, use_fs_if_possible: bool = False):
         """Copy topic data from an external directory into this Datablock.
 
         Parameters
@@ -1440,12 +1440,19 @@ class Datablock:
                 _src_path = topic
             src_path = os.path.join(anchorkeypath, _src_path)
             src_fs, _ = self._url_to_fs(src_path)
-            # Do not pre-create dst for dict-mode: fscopy must create it so contents land at dst,
-            # not src-dir-name inside dst.
-            dst_path = self.dirpath(topic, ensure=self._topicfiles is None)
+            dest_fs, _ = self._url_to_fs(self.dirpath(topic))
+            use_server_side = (use_fs_if_possible and src_fs == dest_fs
+                               and 'file' not in getattr(src_fs, 'protocol', ()))
+            # Ensure dst dir pre-exists only for server-side copy (Azure) or list-mode topics.
+            # For dict-mode fscopy, pre-creating dst causes fsspec to copy src INTO dst instead of AS dst.
+            ensure = use_server_side or (self._topicfiles is None)
+            dst_path = self.dirpath(topic, ensure=ensure)
             if src_fs.exists(src_path):
                 self.log.detailed(f"Copying directory {src_path} to {dst_path}")
-                fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
+                if use_server_side:
+                    self.fs.cp(src_path, dst_path, recursive=True)
+                else:
+                    fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
 
         if not overwrite:
             assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"

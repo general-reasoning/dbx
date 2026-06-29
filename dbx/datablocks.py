@@ -1441,7 +1441,8 @@ class Datablock:
             src_path = os.path.join(anchorkeypath, _src_path)
             src_fs, _ = self._url_to_fs(src_path)
             dest_fs, _ = self._url_to_fs(self.dirpath(topic))
-            use_server_side = use_fs_if_possible and src_fs == dest_fs
+            use_server_side = (use_fs_if_possible and src_fs == dest_fs
+                               and 'file' not in getattr(src_fs, 'protocol', ()))
             # Ensure dst dir pre-exists only for server-side copy (Azure) or list-mode topics.
             # For dict-mode fscopy, pre-creating dst causes fsspec to copy src INTO dst instead of AS dst.
             ensure = use_server_side or (self._topicfiles is None)

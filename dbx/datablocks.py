@@ -1434,7 +1434,7 @@ class Datablock:
 
         def copy_topic_dir(topic):
             """Copy the entire .dirpath(topic) directory."""
-            dst_path = self.dirpath(topic, ensure=self._topicfiles is None)
+            dst_path = self.dirpath(topic, ensure=True)
             if topicpaths is not None:
                 _src_path = topicpaths[topic]
             else:

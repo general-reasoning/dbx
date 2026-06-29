@@ -2088,6 +2088,7 @@ class Datablock:
         self._write_str('norm', self.norm())
         self._write_str('supernorm', self.supernorm())
         self._write_str('hashstr', self.hashstr)
+        self._write_str('superhashstr', self.superhashstr)
         if message is not None and not inline_message:
             self._write_str('message', message)
         #

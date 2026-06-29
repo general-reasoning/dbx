@@ -2702,12 +2702,33 @@ def _fscopy_item_callable(src_item, dst_item, storage_options):
     else:
         # Both endpoints are remote: stage through a per-item temp dir and
         # delete it immediately once the upload is done.
+        # NOTE: dst_fs.put(local_path, remote_path) triggers a recursive call chain
+        # in adlfs (_put → super._put → _put_file → ...).  Use dst_fs.open('wb')
+        # streaming instead, which goes through the write API and avoids that path.
         tmpdir = tempfile.mkdtemp()
         try:
             basename = src_item.rstrip('/').rsplit('/', 1)[-1] or 'item'
             local_tmp = os.path.join(tmpdir, basename)
             src_fs.get(src_item, local_tmp, recursive=True)
-            dst_fs.put(local_tmp, dst_item, recursive=True)
+            if os.path.isdir(local_tmp):
+                # Directory: walk and stream each file, preserving structure
+                for dirpath, _dirs, files in os.walk(local_tmp):
+                    for fname in files:
+                        local_f = os.path.join(dirpath, fname)
+                        rel = os.path.relpath(local_f, local_tmp).replace(os.sep, '/')
+                        remote_f = dst_item.rstrip('/') + '/' + rel
+                        remote_parent = remote_f.rsplit('/', 1)[0]
+                        if remote_parent:
+                            try:
+                                dst_fs.makedirs(remote_parent, exist_ok=True)
+                            except Exception:
+                                pass
+                        with open(local_f, 'rb') as lf, dst_fs.open(remote_f, 'wb') as rf:
+                            shutil.copyfileobj(lf, rf)
+            else:
+                # Single file: stream directly to destination
+                with open(local_tmp, 'rb') as lf, dst_fs.open(dst_item, 'wb') as rf:
+                    shutil.copyfileobj(lf, rf)
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 

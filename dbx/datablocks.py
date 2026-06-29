@@ -246,12 +246,12 @@ class LogVolume:
 
 
 
-def journal(cls_or_df, loc=None, *, iloc=None, url=None, storage_options=None, **filter_kwargs):
+def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
 
     Parameters
     ----------
-    cls_or_df : type | str | pd.DataFrame
+    cls_anchor_or_df : type | str | pd.DataFrame
         A Datablock class, an anchor string, or a raw DataFrame.
     loc : int, optional
         If given, return a single :class:`JournalEntry` at this label index.
@@ -271,13 +271,13 @@ def journal(cls_or_df, loc=None, *, iloc=None, url=None, storage_options=None, *
     """
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-    if isinstance(cls_or_df, pd.DataFrame):
-        return JournalFrame(cls_or_df, storage_options=storage_options, **filter_kwargs)
+    if isinstance(cls_anchor_or_df, pd.DataFrame):
+        return JournalFrame(cls_anchor_or_df, storage_options=storage_options, **filter_kwargs)
     else:
-        if isinstance(cls_or_df, str):
-            anchor = cls_or_df
+        if isinstance(cls_anchor_or_df, str):
+            anchor = cls_anchor_or_df
         else:
-            anchor = cls_or_df.__module__ + "." + cls_or_df.__name__
+            anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
         return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, **filter_kwargs)
 
 

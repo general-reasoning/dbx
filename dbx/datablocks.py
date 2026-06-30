@@ -2013,6 +2013,7 @@ class Datablock:
         topic,
         *,
         ensure_dirpath: bool = False,
+        bare: bool = False,
     ):
         """Return the path for *topic*.
 
@@ -2038,6 +2039,8 @@ class Datablock:
         else:
             path = None
         self.log.detailed(f"{self.anchor}: path: {path}")
+        if bare and path:
+            path = self.fs._strip_protocol(path)
         return path
 
     def ls(self, topic, *, detail=False):

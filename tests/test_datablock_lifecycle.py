@@ -92,6 +92,43 @@ class DirTopicBlock(Datablock):
         return all(self.validtopic(t) for t in self.TOPICS)
 
 
+class MixedTopicBlock(Datablock):
+    """TOPICS dict where some values are None (directory artifact) and some are
+    filenames — mirrors the PoseGridReel pattern:
+        {'gold_table': None, 'cell_catalog': 'cell_catalog.parquet', 'shards': None}
+    """
+    TOPICS = {
+        'gold_table': None,
+        'cell_catalog': 'cell_catalog.parquet',
+        'shards': None,
+    }
+
+    @dataclass
+    class CONFIG(Datablock.CONFIG):
+        pass
+
+    def __build__(self):
+        # Directory topics: populate the dirpath
+        for topic in ('gold_table', 'shards'):
+            dirpath = self.dirpath(topic, ensure=True)
+            with open(os.path.join(dirpath, 'data.bin'), 'wb') as f:
+                f.write(b'\x00' * 8)
+        # File topic
+        path = self.path('cell_catalog', ensure_dirpath=True)
+        with open(path, 'w') as f:
+            f.write('catalog')
+
+    def validtopic(self, topic):
+        if self.TOPICS[topic] is None:
+            d = self.dirpath(topic)
+            return os.path.isdir(d) and bool(os.listdir(d))
+        return os.path.isfile(self.path(topic))
+
+    def valid(self):
+        return all(self.validtopic(t) for t in self.TOPICS)
+
+
+
 class CountingBlock(Datablock):
     """Tracks how many times __build__ is called (to verify skip-if-valid)."""
     TOPICS = {'counter': 'counter.txt'}
@@ -493,6 +530,29 @@ class TestUNSAFECopyFrom:
         assert dst.valid() is False
         dst.UNSAFE_copy_from(src.anchorkeypath)
         assert dst.valid() is True
+
+    def test_copy_mixed_topics(self, tmp_path):
+        """TOPICS dict with a mix of None (dir) and filename values.
+
+        Regression test: UNSAFE_copy_from used to call copy_topic_file for
+        None-valued topics, crashing with TypeError on os.path.join(topic, None).
+        """
+        src_root = tmp_path / "src"
+        dst_root = tmp_path / "dst"
+        src = _make_block(MixedTopicBlock, src_root)
+        src.build()
+        assert src.valid() is True
+
+        dst = _make_block(MixedTopicBlock, dst_root)
+        assert dst.valid() is False
+        dst.UNSAFE_copy_from(src.anchorkeypath)
+        assert dst.valid() is True
+        # Dir-valued topics should be populated
+        for topic in ('gold_table', 'shards'):
+            d = dst.dirpath(topic)
+            assert os.path.isdir(d) and os.listdir(d), f"{topic} dir missing or empty"
+        # File-valued topic
+        assert os.path.isfile(dst.path('cell_catalog'))
 
 
 # ---------------------------------------------------------------------------

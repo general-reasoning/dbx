@@ -1492,7 +1492,16 @@ class Datablock:
                     f"{self.__class__.__name__}.UNSAFE_copy_from() requires TOPICS"
                 )
             for topic in tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic"):
-                if copy_dirpath or self._topicfiles is None:
+                # Use directory copy when:
+                #  - copy_dirpath is explicitly requested, OR
+                #  - TOPICS is a list (self._topicfiles is None → every topic IS a dir), OR
+                #  - TOPICS is a dict but this topic maps to None (directory-only topic)
+                use_dir = (
+                    copy_dirpath
+                    or self._topicfiles is None
+                    or (isinstance(self._topicfiles, dict) and self._topicfiles.get(topic) is None)
+                )
+                if use_dir:
                     self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
                     copy_topic_dir(topic)
                     self.log.verbose(f"Using copy_topic_dir for topic {topic}: END")

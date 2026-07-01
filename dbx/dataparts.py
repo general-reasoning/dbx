@@ -1035,6 +1035,17 @@ class _CallableExecutorBase_:
                 self.log.debug("Feeding done_queue")
                 for _ in workers:
                     done_queue.put(None)
+                # A worker that already started a result_queue.put() before the
+                # abort/timeout above may be blocked writing into a full pipe.
+                # Since nothing else drains result_queue past this point, that
+                # worker would otherwise never return, and w.join() below would
+                # hang forever (the documented multiprocessing Queue/Process.join
+                # deadlock). Keep draining until every worker has exited.
+                while any(w.is_alive() for w in workers):
+                    try:
+                        result_queue.get(timeout=1)
+                    except Exception:
+                        pass
                 self.log.debug("Joining workers")
                 for w in workers:
                     w.join()
@@ -1147,6 +1158,15 @@ class _CallableExecutorBase_:
             finally:
                 for _ in workers:
                     done_queue.put(None)
+                # See exec_callables: drain result_queue until every worker has
+                # exited, otherwise a worker blocked writing a result into a
+                # full pipe (because we stopped reading above) would hang
+                # w.join() forever.
+                while any(w.is_alive() for w in workers):
+                    try:
+                        result_queue.get(timeout=1)
+                    except Exception:
+                        pass
                 for w in workers:
                     w.join()
                 if e is not None:

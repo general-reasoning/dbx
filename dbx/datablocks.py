@@ -1353,7 +1353,7 @@ class Datablock:
             self._write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
-    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False):
+    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True):
         """Copy topic data from an external directory into this Datablock.
 
         Parameters
@@ -1377,6 +1377,12 @@ class Datablock:
             If False (default), copies individual topic files via
             ``self.path(topic)``.  If True, copies entire topic
             directories via ``self.dirpath(topic)`` recursively.
+        show_progress : bool, default True
+            If True (default), show a per-topic tqdm progress bar. Set to
+            False when a caller (e.g. :meth:`UNSAFE_copy_blocks_from`) is
+            already reporting aggregate progress across many blocks, so
+            each block's own (typically 1-topic, so always instantly
+            "100%") bar doesn't flood the output.
         """
         def fscopy(*, src_path, dst_path, recursive: bool = False):
             # fsspec does not implement .copy, so use put/get or temporary directory
@@ -1494,7 +1500,8 @@ class Datablock:
                 raise NotImplementedError(
                     f"{self.__class__.__name__}.UNSAFE_copy_from() requires TOPICS"
                 )
-            for topic in tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic"):
+            topics_iter = tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic") if show_progress else topics
+            for topic in topics_iter:
                 # Use directory copy when:
                 #  - always_copy_whole_dirpath is explicitly requested, OR
                 #  - TOPICS is a list (self._topicfiles is None → every topic IS a dir), OR
@@ -2707,8 +2714,14 @@ def _clear_block_callable(block, topics, clear_dirpath):
 
 
 def _copy_block_from_callable(block, anchorkeypath, overwrite=False, topicpaths=None, validate=True, always_copy_whole_dirpath=False):
-    """Module-level callable for UNSAFE_copy_blocks_from (must be picklable)."""
-    block.UNSAFE_copy_from(anchorkeypath, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath)
+    """Module-level callable for UNSAFE_copy_blocks_from (must be picklable).
+
+    show_progress=False: UNSAFE_copy_blocks_from's executor already
+    reports real aggregate per-block progress; each block's own
+    (typically 1-topic, so always instantly "100%") bar would just
+    flood the output otherwise.
+    """
+    block.UNSAFE_copy_from(anchorkeypath, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=False)
     return block
 
 

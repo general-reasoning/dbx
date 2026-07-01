@@ -203,17 +203,22 @@ def read_mds_shard(shard_dir, fs, cache_limit='2gb', tmpdir=None):
         local_dir = shard_dir.removeprefix('file://')
         cleanup = None
     else:
-        # Download every file in the shard directory flat into local_dir.
-        # We list + download individually rather than using fs.get(recursive=True)
-        # because some fsspec backends reproduce the remote directory name as a
-        # subdirectory inside the target, which would misplace the shard files.
         local_dir = tempfile.mkdtemp(prefix='mds_read_', dir=tmpdir)
         cleanup = local_dir
-        for remote_file in fs.ls(shard_dir, detail=False):
-            fname = os.path.basename(remote_file)
-            fs.get(remote_file, os.path.join(local_dir, fname))
 
     try:
+        if not is_local:
+            # Download every file in the shard directory flat into local_dir.
+            # We list + download individually rather than using fs.get(recursive=True)
+            # because some fsspec backends reproduce the remote directory name as a
+            # subdirectory inside the target, which would misplace the shard files.
+            # This must stay inside the try/finally: a failed fs.ls/fs.get (network
+            # error, throttling, missing file) must still trigger cleanup below, or
+            # local_dir leaks permanently.
+            for remote_file in fs.ls(shard_dir, detail=False):
+                fname = os.path.basename(remote_file)
+                fs.get(remote_file, os.path.join(local_dir, fname))
+
         index_path = os.path.join(local_dir, 'index.json')
         if not os.path.exists(index_path):
             return []

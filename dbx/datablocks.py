@@ -1441,7 +1441,19 @@ class Datablock:
             if src_fs.exists(src_path):
                 self.log.detailed(f"Copying directory {src_path} to {dst_path}")
                 if use_server_side:
-                    self.fs.cp(src_path, dst_path, recursive=True)
+                    # fsspec's generic recursive _copy() (which .cp(recursive=True)
+                    # delegates to for remote-to-remote copies) expands the source
+                    # directory to include the bare directory itself alongside its
+                    # file contents, then blindly _cp_file()s every entry. Azure's
+                    # blob-to-blob "copy from URL" API has no notion of copying a
+                    # directory, so that entry always raises InvalidInput -- even
+                    # though the real files copy fine. Expand to files only
+                    # (find(..., withdirs=False)) and cp_file() each one ourselves.
+                    src_bare = src_fs._strip_protocol(src_path)
+                    dst_bare = dest_fs._strip_protocol(dst_path)
+                    for file_path in src_fs.find(src_bare, withdirs=False):
+                        rel = file_path[len(src_bare):].lstrip('/')
+                        self.fs.cp_file(file_path, os.path.join(dst_bare, rel))
                 elif getattr(self, 'parallelization', None):
                     # Parallelize on top-level directory contents; each item is copied independently.
                     # _fscopy_item_callable is a module-level function (picklable for multiprocessing).

@@ -425,7 +425,7 @@ class TestFullLifecycle:
 
 class TestUNSAFECopyFrom:
 
-    # -- copy_dirpath=False (default): copies individual files -----------------
+    # -- always_copy_whole_dirpath=False (default): copies individual files -----------------
 
     def test_copy_single_topic_file(self, tmp_path):
         src_root = tmp_path / "src"
@@ -456,7 +456,7 @@ class TestUNSAFECopyFrom:
             assert os.path.isfile(dst.path(topic))
 
     def test_copy_default_preserves_only_files(self, tmp_path):
-        """Default copy_dirpath=False copies files, not extra dir contents."""
+        """Default always_copy_whole_dirpath=False copies files, not extra dir contents."""
         src_root = tmp_path / "src"
         dst_root = tmp_path / "dst"
         src = _make_block(SingleTopicBlock, src_root)
@@ -472,9 +472,9 @@ class TestUNSAFECopyFrom:
         # The extra file should NOT have been copied
         assert not os.path.exists(os.path.join(dst.dirpath('output'), "extra.txt"))
 
-    # -- copy_dirpath=True: copies entire directories --------------------------
+    # -- always_copy_whole_dirpath=True: copies entire directories --------------------------
 
-    def test_copy_dirpath_single_topic(self, tmp_path):
+    def test_always_copy_whole_dirpath_single_topic(self, tmp_path):
         src_root = tmp_path / "src"
         dst_root = tmp_path / "dst"
         src = _make_block(SingleTopicBlock, src_root)
@@ -485,12 +485,12 @@ class TestUNSAFECopyFrom:
             f.write("extra")
 
         dst = _make_block(SingleTopicBlock, dst_root)
-        dst.UNSAFE_copy_from(src.anchorkeypath, copy_dirpath=True)
+        dst.UNSAFE_copy_from(src.anchorkeypath, always_copy_whole_dirpath=True)
         assert dst.valid() is True
-        # The extra file SHOULD have been copied with copy_dirpath=True
+        # The extra file SHOULD have been copied with always_copy_whole_dirpath=True
         assert os.path.exists(os.path.join(dst.dirpath('output'), "extra.txt"))
 
-    def test_copy_dirpath_multi_topic(self, tmp_path):
+    def test_always_copy_whole_dirpath_multi_topic(self, tmp_path):
         src_root = tmp_path / "src"
         dst_root = tmp_path / "dst"
         src = _make_block(MultiTopicBlock, src_root)
@@ -502,7 +502,7 @@ class TestUNSAFECopyFrom:
                 f.write(f"bonus_{topic}")
 
         dst = _make_block(MultiTopicBlock, dst_root)
-        dst.UNSAFE_copy_from(src.anchorkeypath, copy_dirpath=True)
+        dst.UNSAFE_copy_from(src.anchorkeypath, always_copy_whole_dirpath=True)
         assert dst.valid() is True
         for topic in dst.TOPICS:
             assert os.path.exists(os.path.join(dst.dirpath(topic), "bonus.txt"))

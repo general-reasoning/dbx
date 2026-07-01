@@ -1353,16 +1353,7 @@ class Datablock:
             self._write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
-    def UNSAFE_rename_from(self, anchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
-        if not UNSAFE_allowed("UNSAFE_rename_from", OVERRIDE=OVERRIDE):
-            return self
-        anchorkeypath = self._anchorkeypath(anchor)
-        self._write_journal_entry(event="UNSAFE_rename_from:BEGIN", message=anchor, inline_message=True)
-        result = self.UNSAFE_copy_from(anchorkeypath, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
-        self._write_journal_entry(event="UNSAFE_rename_from:END", message=anchor, inline_message=True)
-        return result
-
-    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False, use_fs_if_possible: bool = False):
+    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False):
         """Copy topic data from an external directory into this Datablock.
 
         Parameters
@@ -1382,7 +1373,7 @@ class Datablock:
         validate : bool, default True
             If True, asserts that ``self.valid()`` returns True after
             the copy completes.  Set to False to skip post-copy validation.
-        copy_dirpath : bool, default False
+        always_copy_whole_dirpath : bool, default False
             If False (default), copies individual topic files via
             ``self.path(topic)``.  If True, copies entire topic
             directories via ``self.dirpath(topic)`` recursively.
@@ -1424,7 +1415,7 @@ class Datablock:
                 if self._topicfiles is None:
                     raise ValueError(
                         f"Cannot copy topic file for {topic!r}: TOPICS is not a dict "
-                        f"(no filename mapping). Use copy_dirpath=True for list-mode topics."
+                        f"(no filename mapping). Use always_copy_whole_dirpath=True for list-mode topics."
                     )
                 _src_path = os.path.join(topic, self._topicfiles[topic])
             if dst_path is not None:
@@ -1441,7 +1432,7 @@ class Datablock:
             src_path = os.path.join(anchorkeypath, _src_path)
             src_fs, _ = self._url_to_fs(src_path)
             dest_fs, _ = self._url_to_fs(self.dirpath(topic))
-            use_server_side = (use_fs_if_possible and src_fs == dest_fs
+            use_server_side = (src_fs == dest_fs
                                and 'file' not in getattr(src_fs, 'protocol', ()))
             # Ensure dst dir pre-exists only for server-side copy (Azure) or list-mode topics.
             # For dict-mode fscopy, pre-creating dst causes fsspec to copy src INTO dst instead of AS dst.
@@ -1493,11 +1484,11 @@ class Datablock:
                 )
             for topic in tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic"):
                 # Use directory copy when:
-                #  - copy_dirpath is explicitly requested, OR
+                #  - always_copy_whole_dirpath is explicitly requested, OR
                 #  - TOPICS is a list (self._topicfiles is None → every topic IS a dir), OR
                 #  - TOPICS is a dict but this topic maps to None (directory-only topic)
                 use_dir = (
-                    copy_dirpath
+                    always_copy_whole_dirpath
                     or self._topicfiles is None
                     or (isinstance(self._topicfiles, dict) and self._topicfiles.get(topic) is None)
                 )
@@ -2645,30 +2636,55 @@ class Datastack(Datablock):
         self._write_journal_entry(event="UNSAFE_clear_blocks:end")
         return self
 
-    def UNSAFE_rename_blocks_from(self, blockanchor, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, copy_dirpath: bool = False):
-        if not UNSAFE_allowed("UNSAFE_rename_blocks_from", OVERRIDE=OVERRIDE):
+    def UNSAFE_copy_blocks_from(self, anchorkeypath_callable, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False):
+        """Copy each block's data from a per-block anchor path, parallelized using the stack's builder settings.
+
+        Parameters
+        ----------
+        anchorkeypath_callable : callable
+            Called as ``anchorkeypath_callable(block)`` for each block to obtain
+            the ``anchorkeypath`` forwarded to that block's ``UNSAFE_copy_from()``.
+        OVERRIDE : bool
+            If ``True``, skip the interactive confirmation.
+        overwrite, topicpaths, validate, always_copy_whole_dirpath :
+            Forwarded to each block's ``UNSAFE_copy_from()``.
+        """
+        if not UNSAFE_allowed("UNSAFE_copy_blocks_from", OVERRIDE=OVERRIDE):
             return self
 
         block_list = self.blocks()
+        work_stealing_state = getattr(self, 'work_stealing', False)
         self.log.info(
-            f"UNSAFE_rename_blocks_from: renaming {len(block_list)} blocks, "
-            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
+            f"UNSAFE_copy_blocks_from: copying {len(block_list)} blocks, "
+            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
         )
-        self._write_journal_entry(event="UNSAFE_rename_blocks_from:begin", message=blockanchor, inline_message=True)
+        self._write_journal_entry(event="UNSAFE_copy_blocks_from:begin")
 
-        tag = f"RENAMING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={self.n_workers}]"
+        blocks_iter = tqdm.tqdm(block_list, desc="UNSAFE_copy_blocks_from", unit="block", disable=not self.log_volume.info)
+        callables = [
+            functools.partial(_copy_block_from_callable, blk, anchorkeypath_callable(blk), overwrite, topicpaths, validate, always_copy_whole_dirpath)
+            for blk in blocks_iter
+        ]
+
+        tag = f"COPYING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={self.n_workers}]"
         executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
+        if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
+            executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec
+        if hasattr(self, 'shuffle_callables') and self.shuffle_callables:
+            executor_kwargs['shuffle_callables'] = self.shuffle_callables
         if (hasattr(self, 'multiprocessing_start_method')
                 and self.multiprocessing_start_method is not None
-                and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
+                and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
-        executor = callable_executor(self.parallelization, **executor_kwargs)
-
-        callables = [functools.partial(_rename_block_from_callable, blk, blockanchor, overwrite, topicpaths, validate, copy_dirpath) for blk in block_list]
+        if getattr(self, 'devices', None) is not None:
+            executor_kwargs['devices'] = self.devices
+        if getattr(self, 'work_stealing', False):
+            executor_kwargs['work_stealing'] = True
+        executor = self.executor_cls(**executor_kwargs)
         executor.exec_callables(callables)
 
-        self.log.info(f"UNSAFE_rename_blocks_from complete: {self.__class__.__name__}")
-        self._write_journal_entry(event="UNSAFE_rename_blocks_from:end", message=blockanchor, inline_message=True)
+        self.log.info(f"UNSAFE_copy_blocks_from complete: {self.__class__.__name__}")
+        self._write_journal_entry(event="UNSAFE_copy_blocks_from:end")
         return self
 
 
@@ -2677,9 +2693,10 @@ def _clear_block_callable(block, topics, clear_dirpath):
     block.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
     return block
 
-def _rename_block_from_callable(block, blockanchor, overwrite=False, topicpaths=None, validate=True, copy_dirpath=False):
-    """Module-level callable for UNSAFE_rename_blocks_from (must be picklable)."""
-    block.UNSAFE_rename_from(blockanchor, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, copy_dirpath=copy_dirpath)
+
+def _copy_block_from_callable(block, anchorkeypath, overwrite=False, topicpaths=None, validate=True, always_copy_whole_dirpath=False):
+    """Module-level callable for UNSAFE_copy_blocks_from (must be picklable)."""
+    block.UNSAFE_copy_from(anchorkeypath, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath)
     return block
 
 

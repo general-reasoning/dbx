@@ -49,8 +49,13 @@ def _dirty(repo_dir: str):
 
 class TestDirtyCheck:
 
-    def test_dirty_repo_warns_without_revision(self, tmp_path, monkeypatch):
-        """Import-time setup (revision=None) with dirty repo should warn, not raise."""
+    def test_dirty_repo_raises_without_revision(self, tmp_path, monkeypatch):
+        """Import-time setup (revision=None) with dirty repo must raise ValueError.
+
+        setup_wrkrepo() clones from HEAD unconditionally once the dirty check
+        passes, so a dirty repo would silently discard uncommitted changes if
+        this only warned.
+        """
         repo_dir = _make_clean_repo(str(tmp_path))
         _dirty(repo_dir)
 
@@ -61,8 +66,8 @@ class TestDirtyCheck:
         monkeypatch.setenv('DBX_USE_WORK_REPO', 'True')
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
-        # Should NOT raise — only warns when revision is None
-        gitwrkreposetup(reason="test")
+        with pytest.raises(ValueError, match="Dirty git repo"):
+            gitwrkreposetup(reason="test")
 
     def test_dirty_repo_raises_with_revision(self, tmp_path, monkeypatch):
         """Build-time setup (revision set) with dirty repo must raise ValueError."""

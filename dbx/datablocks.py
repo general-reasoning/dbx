@@ -2270,6 +2270,11 @@ class Datablock:
         else:
             has_log = False
         #
+        _TOPICS = getattr(self, 'TOPICS', None)
+        topics_dict = {topic: (_TOPICS.get(topic) if isinstance(_TOPICS, dict) else None)
+                        for topic in self.topics()}
+        paths_dict = self.paths()
+        #
         journal_path = self._dbxjournalinstancepath(ensure_dirpath=True, filename_prefix=journal_prefix)
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build:start:datetime': self._build_start_dt,
@@ -2285,7 +2290,9 @@ class Datablock:
                                          'key': self.key,
                                          'anchorkeypath': self.anchorkeypath,
                                          'uuid': self.uuid,
-                                         'tag': self.tag, 
+                                         'tag': self.tag,
+                                         'topics': str(topics_dict),
+                                         'paths': str(paths_dict),
                                          'log': logpath if has_log else None,
                                          'event': event,
                                          'spec': spec_path,

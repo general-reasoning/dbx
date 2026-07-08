@@ -83,8 +83,8 @@ class TopicsBlock(Datablock):
     class CONFIG(Datablock.CONFIG):
         pass
 
-    def path(self, topic=None, *, ensure_dirpath=False):
-        kp = self.anchorkeypath
+    def path(self, topic=None, *, ensure_dirpath=False, local=False):
+        kp = self.localanchorkeypath if local else self.anchorkeypath
         if ensure_dirpath:
             os.makedirs(kp, exist_ok=True)
         if topic is None:

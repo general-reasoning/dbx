@@ -255,7 +255,7 @@ def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=
         If given, return a single :class:`JournalEntry` at this positional index.
         Mutually exclusive with *loc*.
     url : str, optional
-        Storage URL.  Defaults to ``DBX_ROOT``.
+        Storage URL.  Defaults to ``DBX_ROOT`` or its alias ``DBX_URL``.
     storage_options : dict, optional
         Storage options for fsspec.  Defaults to ``default_storage_options()``.
     **filter_kwargs
@@ -736,6 +736,8 @@ class Datablock:
                 return attr()
             return attr
 
+    TREE_SKIP_VALIDATION = {}
+
     def __init__(
         self,
         *,
@@ -754,6 +756,7 @@ class Datablock:
         uuid16: bool = False,
         validate_cfg: bool = True,
         storage_options: dict = None,
+        local: str|None = None,
         **kwargs,
     ):# Initialize early logger for __post_init__ if needed, though usually hash is needed
         self.log = Logger(
@@ -784,6 +787,7 @@ class Datablock:
             'uuid16': uuid16,
             'validate_cfg': validate_cfg,
             'storage_options': storage_options,
+            'local': local,
         }
         self.log.detailed(f"__init__: ------------------------------------------------> initial:         {state=}")
         state.update(kwargs)
@@ -823,13 +827,31 @@ class Datablock:
         # Resolve specline URLs (e.g. "$dbx.getenv('KEY')") to real paths.
         self._url_ = eval(self.url) if self.url is not None else None
         if self._url_ is None:
-            self._url_ = os.environ.get('DBX_ROOT')
+            self._url_ = os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
         if self._url_ is None:
-            raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT")
+            raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT or its alias DBX_URL")
+
+        self.local = state.get('local')
+
         self.storage_options = state.get('storage_options')
         if self.storage_options is None:
             self.storage_options = default_storage_options()
+
         self.fs, self.root = fsspec.url_to_fs(self._url_, **self.storage_options)
+        _url_protocol = self.fs.protocol if isinstance(self.fs.protocol, str) else self.fs.protocol[0]
+        if _url_protocol in ('file', 'local', ''):
+            # url/root is already local storage: local=True and local=False
+            # must be identical, so DBX_LOCAL/local= are never consulted.
+            self._local_ = self._url_
+            self.localfs, self.localroot = self.fs, self.root
+        else:
+            # Resolve specline LOCALs (e.g. "$dbx.getenv('KEY')") to real paths.
+            self._local_ = eval(self.local) if self.local is not None else None
+            if self._local_ is None:
+                self._local_ = os.environ.get('DBX_LOCAL') or '/tmp/dbx'
+            if self._local_ is None:
+                raise ValueError(f"No local for {self.__class__.__name__}: pass local= or set DBX_LOCAL")
+            self.localfs, self.localroot = fsspec.url_to_fs(self._local_, **self.storage_options)
         self._spec_ = state.get('spec')
         if self._spec_ is None:
             self.spec = asdict(self.CONFIG())
@@ -851,8 +873,6 @@ class Datablock:
             )
         self._uuid16_ = state.get('uuid16', False)
         self.validate_cfg = state.get('validate_cfg', True)
-        
-
         
         explicit_keys = set(self.__explicit_params__())
         state_params = {k: v for k, v in state.items() if k not in explicit_keys}
@@ -913,8 +933,9 @@ class Datablock:
                 _state[k] = getattr(self, f"_{k}_")
             elif hasattr(self, k):
                 _state[k] = getattr(self, k)
-        # Override: serialize the raw specline, not the resolved _url_.
+        # Override: serialize the raw specline, not the resolved _url_ and _local_.
         _state['url'] = self.url
+        _state['local'] = self.local
         
         #TODO: why does 'log' end up in self.parameters?
         for k in self.parameters:
@@ -938,7 +959,6 @@ class Datablock:
     def replace(self, **kw):
         return self.set(**kw)
     
-
     def __post_init__(self):
         ...
 
@@ -1121,21 +1141,21 @@ class Datablock:
             if not all(list(valid_cfg.values())):
                 raise ValueError(f"Not all upstream Datablocks in cfg are valid: {valid_cfg=}")
         self._build_start_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-        self._write_journal_entry(event="build:start",)
+        self.write_journal_entry(event="build:start",)
         return self
 
     def __post_build__(self, *args, event="build:end", **kwargs):
-        self._write_journal_entry(event=event,)
+        self.write_journal_entry(event=event,)
         return self
     
     def __build__(self, *args, **kwargs):
         return self
 
-    def getall(self, *, path=None, root='.'):
+    def getall(self, *, path=None, root='.', local: bool = False):
         for topic in self.topics():
-            self.get(topic, path=path, root=root)
+            self.get(topic, path=path, root=root, local=local)
 
-    def get(self, topic, *, path=None, root='.'):
+    def get(self, topic, *, path=None, root='.', local: bool = False):
         """Download datablock files to a local directory.
 
         By default, files are downloaded to a local directory that mirrors
@@ -1161,22 +1181,44 @@ class Datablock:
         root : str, default ``'.'``
             Local root directory.  The destination is formed as
             ``{root}/{anchor}/{key}``.
+        local : bool, default False
+            When True, download to ``self.path(topic, local=True)`` instead,
+            ignoring *path* and *root*.
 
         Returns
         -------
         self
         """
+        if local:
+            return self.__get__(topic, path=self.path(topic, local=True), local=True)
         if path is None:
             path = os.path.join(root, self.anchor, self.key) if self.key else os.path.join(root, self.anchor)
         return self.__get__(topic, path=path)
 
-    def __get__(self, topic, *, path='.'):
-        """Default implementation: copy files from ``self.path(topic)`` to *path* using ``self.fs``."""
+    def __get__(self, topic, *, path='.', local: bool = False):
+        """Default implementation: copy files from ``self.path(topic)`` to *path* using ``self.fs``.
+
+        When *local* is True, *path* is the exact destination (mirroring the
+        shape of ``self.path(topic, local=True)``) rather than a directory to
+        copy the source's basename into.
+        """
         src = self.path(topic)
         if src is None:
             src = self.dirpath(topic)
         if src is None or not self.fs.exists(src):
             self.log.warning(f"get: no path for topic={topic!r}, nothing to download")
+            return self
+        if local:
+            if src == path:
+                # url is already local storage: local=True resolves to the
+                # same path as the source, so there is nothing to copy.
+                return self
+            if self.fs.isdir(src):
+                self.localfs.makedirs(path, exist_ok=True)
+                self.fs.get(src, path, recursive=True)
+            else:
+                self.localfs.makedirs(os.path.dirname(path), exist_ok=True)
+                self.fs.get(src, path)
             return self
         os.makedirs(path, exist_ok=True)
         if self.fs.isdir(src):
@@ -1184,7 +1226,6 @@ class Datablock:
         else:
             self.fs.get(src, os.path.join(path, os.path.basename(src)))
         return self
-
 
     def note(self, message: str | None = None, event: str = 'note', *, inline: bool = False):
         """Write a journal entry with the given *event* and optional *message*.
@@ -1210,14 +1251,13 @@ class Datablock:
         -------
         self
         """
-        self._write_journal_entry(
+        self.write_journal_entry(
             event=event,
             message=message,
             inline_message=inline,
             journal_prefix=f'{event}-',
         )
         return self
-
 
     def keep(self, message: str | None = None):
         """Write a journal entry with event='keep' and optional *message*.
@@ -1236,8 +1276,6 @@ class Datablock:
             self.dirpath(topic, ensure=True)
             self.leave_breadcrumbs_at_path(self.path(topic))
         return self
-
-    TREE_SKIP_VALIDATION = {}
 
     def _iter_cfg_blocks(self, exemptions_attr=None, skip_callback=None):
         """Yield (key, Datablock) pairs from self.cfg that are not in the given exemptions list."""
@@ -1263,11 +1301,11 @@ class Datablock:
             if not deep and c.valid():
                 self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s}: already valid --------")
                 continue
-            self._write_journal_entry(event=f"build_tree:{s}:begin")
+            self.write_journal_entry(event=f"build_tree:{s}:begin")
             self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: BEGIN --------------------------------")
             c.build_tree(*args, deep=deep, **kwargs)   
             self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: END --------------------------------")
-            self._write_journal_entry(event=f"build_tree:{s}:end")
+            self.write_journal_entry(event=f"build_tree:{s}:end")
         if not exclude_self:
             self.build(*args, **kwargs)
         return self
@@ -1338,7 +1376,7 @@ class Datablock:
                     else:
                         is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is None)
                         clear_path(self.path(topic), recursive=is_dir)
-            self._write_journal_entry(event="UNSAFE_clear")
+            self.write_journal_entry(event="UNSAFE_clear")
         else:
             for topic in topics:
                 if clear_dirpath:
@@ -1346,7 +1384,7 @@ class Datablock:
                 else:
                     is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is None)
                     clear_path(self.path(topic), recursive=is_dir)
-            self._write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
+            self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
     def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True):
@@ -1489,7 +1527,7 @@ class Datablock:
         fs, _ = self._url_to_fs(anchorkeypath)
         assert fs.isdir(anchorkeypath), f"Nonexistent hashpath {anchorkeypath}"
         self.log.verbose(f"Copying files from {anchorkeypath}: BEGIN")
-        self._write_journal_entry(event="UNSAFE_copy_from:BEGIN", message=anchorkeypath, inline_message=True)
+        self.write_journal_entry(event="UNSAFE_copy_from:BEGIN", message=anchorkeypath, inline_message=True)
         try:
             topics = self.topics()
             if not topics:
@@ -1517,13 +1555,13 @@ class Datablock:
                     self.log.verbose(f"Using copy_topic_file for topic {topic}: END")
         
             self.log.verbose(f"Copying files from {anchorkeypath}: END")
-            self._write_journal_entry(event="UNSAFE_copy_from:END", message=anchorkeypath, inline_message=True)
+            self.write_journal_entry(event="UNSAFE_copy_from:END", message=anchorkeypath, inline_message=True)
             if validate:
                 assert self.valid(), f"Invalid Datablock after copy: {self}"
         except Exception as e:
             self.log.error(f"UNSAFE_copy_from: Error when trying to copy files from {anchorkeypath}")
             self.log.error(f"EXCEPTION: {e}")
-            self._write_journal_entry(event="UNSAFE_copy_from:ERROR", message=anchorkeypath, inline_message=True)
+            self.write_journal_entry(event="UNSAFE_copy_from:ERROR", message=anchorkeypath, inline_message=True)
             raise e
         return self
 
@@ -2029,6 +2067,7 @@ class Datablock:
         *,
         ensure_dirpath: bool = False,
         bare: bool = False,
+        local: bool = False,
     ):
         """Return the path for *topic*.
 
@@ -2037,7 +2076,7 @@ class Datablock:
         directory path (same as ``dirpath(topic)``).
         """
 
-        dirpath = self.dirpath(topic)
+        dirpath = self.dirpath(topic, local=local)
         if ensure_dirpath and dirpath is not None:
             ensure_path(dirpath, storage_options=self.storage_options)
 
@@ -2055,10 +2094,11 @@ class Datablock:
             path = None
         self.log.detailed(f"{self.anchor}: path: {path}")
         if bare and path:
-            path = self.fs._strip_protocol(path)
+            fs = self.localfs if local else self.fs
+            path = fs._strip_protocol(path)
         return path
 
-    def ls(self, topic, *, detail=False):
+    def ls(self, topic, *, detail=False, local: bool = False):
         """List the contents at ``.path(topic)`` using *fsspec*.
 
         If the path points to a file (i.e. a dict-TOPICS entry with a
@@ -2079,10 +2119,11 @@ class Datablock:
         list[str] | list[dict]
             Listing of the path contents.
         """
-        p = self.path(topic)
+        fs = self.localfs if local else self.fs
+        p = self.path(topic, local=local)
         if p is None:
             return []
-        if not self.fs.exists(p):
+        if not fs.exists(p):
             return []
         # Determine if the path is a directory topic
         path_is_dir = (topic is not None and (
@@ -2093,19 +2134,19 @@ class Datablock:
         # points to a file (dict-TOPICS with a non-None filename).
         # Skip this for directory-only topics where fs.isfile() may
         # return a false positive (e.g. Azure virtual directories).
-        if not path_is_dir and self.fs.isfile(p):
+        if not path_is_dir and fs.isfile(p):
             p = os.path.dirname(p)
         # Azure adlfs virtual directories: fs.ls("dir") may return only
         # the directory marker itself; a trailing "/" forces a prefix
         # listing that returns the directory's *contents*.
         if path_is_dir and not p.endswith('/'):
             p = p + '/'
-        results = self.fs.ls(p, detail=detail)
+        results = fs.ls(p, detail=detail)
         if detail:
             for entry in results:
-                entry['name'] = fs_full_path(self.fs, entry['name'])
+                entry['name'] = fs_full_path(fs, entry['name'])
             return results
-        return [fs_full_path(self.fs, x) for x in results]
+        return [fs_full_path(fs, x) for x in results]
 
     
     def dirpath(
@@ -2114,16 +2155,18 @@ class Datablock:
         *,
         ensure: bool = False,
         list: bool = False,
-    ):  
-        anchorkeypath = self.anchorkeypath
+        local: bool = False,
+    ):
+        anchorkeypath = self.localanchorkeypath if local else self.anchorkeypath
+        fs = self.localfs if local else self.fs
         dirpath = os.path.join(anchorkeypath, topic)
         if ensure:
-            self.fs.makedirs(dirpath, exist_ok=True)
+            fs.makedirs(dirpath, exist_ok=True)
         if list:
             # Trailing "/" ensures Azure adlfs lists directory *contents*
             # rather than returning the virtual-directory marker itself.
             _lspath = dirpath if dirpath.endswith('/') else dirpath + '/'
-            return self.fs.ls(_lspath)
+            return fs.ls(_lspath)
         return dirpath
 
     def paths(self):
@@ -2142,18 +2185,28 @@ class Datablock:
     def anchorkeypath(self):
         return self._anchorkeypath()
 
-    def _anchorpath(self, anchor=None):
+    @property
+    def localanchorpath(self):
+        return self._anchorpath(local=True)
+
+    @property
+    def localanchorkeypath(self):
+        return self._anchorkeypath(local=True)
+
+    def _anchorpath(self, anchor=None, *, local: bool = False):
         anchor = anchor or self.anchor
-        return fs_full_path(self.fs, os.path.join(self.root, anchor))
+        fs, root = (self.localfs, self.localroot) if local else (self.fs, self.root)
+        return fs_full_path(fs, os.path.join(root, anchor))
 
     def _anchorkey(self, anchor=None):
         anchor = anchor or self.anchor
         return os.path.join(anchor, self.key) if self.key else anchor
 
-    def _anchorkeypath(self, anchor=None):
+    def _anchorkeypath(self, anchor=None, *, local: bool = False):
         anchorkey = self._anchorkey(anchor)
-        bare = os.path.join(self.root, anchorkey) if anchorkey else self.root
-        return fs_full_path(self.fs, bare)
+        fs, root = (self.localfs, self.localroot) if local else (self.fs, self.root)
+        bare = os.path.join(root, anchorkey) if anchorkey else root
+        return fs_full_path(fs, bare)
     
     @staticmethod
     def _dbxanchorpathx(url, anchor, x, *, fqcn, ensure: bool = False, storage_options=None):
@@ -2234,7 +2287,7 @@ class Datablock:
         assert self.fs.exists(path), f"scopepath {path} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
-    def _write_journal_entry(self, event:str, *, message: str = None, inline_message: bool = False, journal_prefix: str = ''):
+    def write_journal_entry(self, event:str, *, message: str = None, inline_message: bool = False, journal_prefix: str = ''):
         self._write_journal_dict('spec', self.spec)
         self._write_journal_dict('dfn', self.dfn)
         self._write_journal_dict('kwargs', self.kwargs)
@@ -2320,7 +2373,7 @@ class Datablock:
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         if url is None:
-            url = os.environ.get('DBX_ROOT')
+            url = os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
         if storage_options is None:
             storage_options = default_storage_options()
 
@@ -2641,7 +2694,7 @@ class Datastack(Datablock):
             f"UNSAFE_clear_blocks: clearing {len(block_list)} blocks, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
         )
-        self._write_journal_entry(event="UNSAFE_clear_blocks:begin")
+        self.write_journal_entry(event="UNSAFE_clear_blocks:begin")
 
         tag = f"CLEARING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={self.n_workers}]"
         executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
@@ -2655,7 +2708,7 @@ class Datastack(Datablock):
         executor.exec_callables(callables)
 
         self.log.info(f"UNSAFE_clear_blocks complete: {self.__class__.__name__}")
-        self._write_journal_entry(event="UNSAFE_clear_blocks:end")
+        self.write_journal_entry(event="UNSAFE_clear_blocks:end")
         return self
 
     def UNSAFE_copy_blocks_from(self, anchorkeypath_callable, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False):
@@ -2680,7 +2733,7 @@ class Datastack(Datablock):
             f"UNSAFE_copy_blocks_from: copying {len(block_list)} blocks, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
         )
-        self._write_journal_entry(event="UNSAFE_copy_blocks_from:begin")
+        self.write_journal_entry(event="UNSAFE_copy_blocks_from:begin")
 
         blocks_iter = tqdm.tqdm(block_list, desc="UNSAFE_copy_blocks_from", unit="block", disable=not self.log_volume.info)
         callables = [
@@ -2706,7 +2759,7 @@ class Datastack(Datablock):
         executor.exec_callables(callables)
 
         self.log.info(f"UNSAFE_copy_blocks_from complete: {self.__class__.__name__}")
-        self._write_journal_entry(event="UNSAFE_copy_blocks_from:end")
+        self.write_journal_entry(event="UNSAFE_copy_blocks_from:end")
         return self
 
 

@@ -184,29 +184,29 @@ class TestDictTopicsClear:
 
 
 # ---------------------------------------------------------------------------
-# 4. get() with dict-TOPICS
+# 4. pulltopic() with dict-TOPICS
 # ---------------------------------------------------------------------------
 
 class TestDictTopicsGet:
 
     def test_get_file_topic(self, tmp_path, monkeypatch):
-        """get(topic) should download a file topic."""
+        """pulltopic(topic) should download a file topic straight to path."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path / 'store')
         block = DictTopicsFileBlock(url=root)
         block.build()
-        dest = str(tmp_path / 'download')
-        block.get('alpha', path=dest)
-        assert os.path.isfile(os.path.join(dest, 'alpha.csv'))
+        dest = str(tmp_path / 'download' / 'alpha.csv')
+        block.pulltopic('alpha', path=dest)
+        assert os.path.isfile(dest)
 
     def test_get_dir_topic(self, tmp_path, monkeypatch):
-        """get(topic) should download a directory topic."""
+        """pulltopic(topic) should download a directory topic."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path / 'store')
         block = DictTopicsDirOnlyBlock(url=root)
         block.build()
         dest = str(tmp_path / 'download')
-        block.get('images', path=dest)
+        block.pulltopic('images', path=dest)
         # Should have downloaded the directory contents
         found = []
         for dirpath, _, filenames in os.walk(dest):

@@ -1173,81 +1173,120 @@ class Datablock:
     def __build__(self, *args, **kwargs):
         return self
 
-    def getall(self, *, path=None, root='.', local: bool = False):
+    def pull(self, src, dest):
+        """Copy *src* (a path on this block's ``fs``) to *dest* (a local path).
+
+        A no-op when *src* and *dest* already refer to the same location
+        (e.g. when this block's storage is itself local, so local staging
+        aliases the canonical path). Copies files and directories alike.
+        """
+        if src is None or not self.fs.exists(src):
+            self.log.warning(f"pull: source {src!r} does not exist, nothing to download")
+            return self
+        if src == dest:
+            return self
+        if self.fs.isdir(src):
+            self.localfs.makedirs(dest, exist_ok=True)
+            self.fs.get(src, dest, recursive=True)
+        else:
+            self.localfs.makedirs(os.path.dirname(dest), exist_ok=True)
+            self.fs.get(src, dest)
+        return self
+
+    def push(self, src, dest):
+        """Copy *src* (a local path) to *dest* (a path on this block's ``fs``).
+
+        A no-op when *src* and *dest* already refer to the same location
+        (e.g. when this block's storage is itself local, so local staging
+        aliases the canonical path). Copies files and directories alike.
+        """
+        if src is None or not self.localfs.exists(src):
+            self.log.warning(f"push: source {src!r} does not exist, nothing to upload")
+            return self
+        if src == dest:
+            return self
+        if self.localfs.isdir(src):
+            self.fs.makedirs(dest, exist_ok=True)
+            self.fs.put(src, dest, recursive=True)
+        else:
+            self.fs.makedirs(os.path.dirname(dest), exist_ok=True)
+            self.fs.put(src, dest)
+        return self
+
+    def pulltopics(self, *, path=None, root='.'):
         for topic in self.topics():
-            self.get(topic, path=path, root=root, local=local)
+            topic_path = None if path is None else os.path.join(path, topic)
+            self.pulltopic(topic, path=topic_path, root=root)
+        return self
 
-    def get(self, topic, *, path=None, root='.', local: bool = False):
-        """Download datablock files to a local directory.
+    def pulltopic(self, topic, *, path=None, root='.'):
+        """Download topic *topic* to a local destination.
 
-        By default, files are downloaded to a local directory that mirrors
-        the remote storage layout::
-
-            {root}/{anchor}/{key}/[topic/][file]
-
-        When *path* is provided, files are downloaded directly to *path*
-        and *root* is ignored.
-
-        Delegates to :meth:`__get__` which can be overridden by
-        subclasses to customise the download behaviour.
+        By default (*path* is ``None``), pulls to local staging
+        (``self.path(topic, local=True)``) — the topic's canonical path
+        when this block's url is itself local, otherwise the DBX_LOCAL
+        staging path. When *path* is given, pulls to
+        ``os.path.join(root, path)`` instead.
 
         Parameters
         ----------
-        topic : str, optional
-            The topic to download.  When ``None``, downloads the
-            default topic (single-topic blocks) or the top-level
-            directory (multi-TOPICS blocks).
+        topic : str
+            The topic to download.
         path : str, optional
-            Explicit local destination directory.  When provided, *root*
-            is ignored.
+            Destination path, joined with *root*. When ``None``, pulls
+            to local staging instead.
         root : str, default ``'.'``
-            Local root directory.  The destination is formed as
-            ``{root}/{anchor}/{key}``.
-        local : bool, default False
-            When True, download to ``self.path(topic, local=True)`` instead,
-            ignoring *path* and *root*.
+            Prefix joined with *path* when *path* is given.
 
         Returns
         -------
         self
         """
-        if local:
-            return self.__get__(topic, path=self.path(topic, local=True), local=True)
-        if path is None:
-            path = os.path.join(root, self.anchor, self.key) if self.key else os.path.join(root, self.anchor)
-        return self.__get__(topic, path=path)
-
-    def __get__(self, topic, *, path='.', local: bool = False):
-        """Default implementation: copy files from ``self.path(topic)`` to *path* using ``self.fs``.
-
-        When *local* is True, *path* is the exact destination (mirroring the
-        shape of ``self.path(topic, local=True)``) rather than a directory to
-        copy the source's basename into.
-        """
         src = self.path(topic)
         if src is None:
             src = self.dirpath(topic)
-        if src is None or not self.fs.exists(src):
-            self.log.warning(f"get: no path for topic={topic!r}, nothing to download")
+        if src is None:
+            self.log.warning(f"pulltopic: no path for topic={topic!r}, nothing to download")
             return self
-        if local:
-            if src == path:
-                # url is already local storage: local=True resolves to the
-                # same path as the source, so there is nothing to copy.
-                return self
-            if self.fs.isdir(src):
-                self.localfs.makedirs(path, exist_ok=True)
-                self.fs.get(src, path, recursive=True)
-            else:
-                self.localfs.makedirs(os.path.dirname(path), exist_ok=True)
-                self.fs.get(src, path)
-            return self
-        os.makedirs(path, exist_ok=True)
-        if self.fs.isdir(src):
-            self.fs.get(src, path, recursive=True)
-        else:
-            self.fs.get(src, os.path.join(path, os.path.basename(src)))
+        dest = self.path(topic, local=True) if path is None else os.path.join(root, path)
+        return self.pull(src, dest)
+
+    def pushtopics(self, *, path=None, root='.'):
+        for topic in self.topics():
+            topic_path = None if path is None else os.path.join(path, topic)
+            self.pushtopic(topic, path=topic_path, root=root)
         return self
+
+    def pushtopic(self, topic, *, path=None, root='.'):
+        """Upload topic *topic* from a local source to this block's canonical storage.
+
+        By default (*path* is ``None``), uploads from local staging
+        (``self.path(topic, local=True)``) — the counterpart of
+        :meth:`pulltopic`'s default. When *path* is given, uploads from
+        ``os.path.join(root, path)`` instead.
+
+        Parameters
+        ----------
+        topic : str
+            The topic to upload.
+        path : str, optional
+            Source path, joined with *root*. When ``None``, uploads
+            from local staging instead.
+        root : str, default ``'.'``
+            Prefix joined with *path* when *path* is given.
+
+        Returns
+        -------
+        self
+        """
+        dst = self.path(topic)
+        if dst is None:
+            dst = self.dirpath(topic)
+        if dst is None:
+            self.log.warning(f"pushtopic: no path for topic={topic!r}, nothing to upload")
+            return self
+        src = self.path(topic, local=True) if path is None else os.path.join(root, path)
+        return self.push(src, dst)
 
     def note(self, message: str | None = None, event: str = 'note', *, inline: bool = False):
         """Write a journal entry with the given *event* and optional *message*.

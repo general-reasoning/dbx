@@ -2169,6 +2169,46 @@ class Datablock:
             return fs.ls(_lspath)
         return dirpath
 
+    def linklocal(self, topic, target):
+        """Symlink *target* — a plain local filesystem path required by
+        external tooling (e.g. TensorBoard) — to wherever *topic* resolves
+        under local staging (``path(topic, local=True)``/``dirpath(topic,
+        local=True)``).  When this block's url is itself local this is the
+        topic's canonical path; otherwise it is the DBX_LOCAL staging path,
+        so writers always see a real local path regardless of where
+        url/DBX_ROOT points.
+
+        For directory topics (list-TOPICS, or dict-TOPICS with a ``None``
+        value) *target* is linked to the topic directory itself. For file
+        topics *target* is linked to the topic file path, with its parent
+        directory created so a writer can create the file through the
+        link. Idempotent: a no-op if *target* already links to the
+        resolved path.
+        """
+        is_dir_topic = topic is not None and (
+            self._topics_is_list or
+            (self._topicfiles is not None and self._topicfiles.get(topic) is None)
+        )
+        local_path = self.path(topic, local=True)
+        if is_dir_topic:
+            self.localfs.makedirs(local_path, exist_ok=True)
+        else:
+            self.localfs.makedirs(os.path.dirname(local_path), exist_ok=True)
+
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        if os.path.lexists(target):
+            if os.path.islink(target) and os.readlink(target) == local_path:
+                return self
+            try:
+                os.remove(target)
+            except OSError:
+                return self
+        try:
+            os.symlink(local_path, target)
+        except OSError:
+            pass
+        return self
+
     def paths(self):
         topics = self.topics()
         paths = {topic: self.path(topic) for topic in topics}

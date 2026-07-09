@@ -757,6 +757,7 @@ class Datablock:
         validate_cfg: bool = True,
         storage_options: dict = None,
         local: str|None = None,
+        local_must_exist: bool = False,
         **kwargs,
     ):# Initialize early logger for __post_init__ if needed, though usually hash is needed
         self.log = Logger(
@@ -788,6 +789,7 @@ class Datablock:
             'validate_cfg': validate_cfg,
             'storage_options': storage_options,
             'local': local,
+            'local_must_exist': local_must_exist,
         }
         self.log.detailed(f"__init__: ------------------------------------------------> initial:         {state=}")
         state.update(kwargs)
@@ -832,6 +834,7 @@ class Datablock:
             raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT or its alias DBX_URL")
 
         self.local = state.get('local')
+        self.local_must_exist = bool(state.get('local_must_exist', False))
 
         self.storage_options = state.get('storage_options')
         if self.storage_options is None:
@@ -851,6 +854,14 @@ class Datablock:
                 self._local_ = os.environ.get('DBX_LOCAL') or '/tmp/dbx'
             if self._local_ is None:
                 raise ValueError(f"No local for {self.__class__.__name__}: pass local= or set DBX_LOCAL")
+            if self.local_must_exist and not os.path.isdir(self._local_):
+                raise FileNotFoundError(
+                    f"local={self._local_!r} for {self.__class__.__name__} does not "
+                    f"exist (local_must_exist=True) -- provision/mount it before "
+                    f"running (e.g. a dedicated scratch disk that must actually be "
+                    f"attached), or construct with local_must_exist=False to let it "
+                    f"be auto-created on demand instead."
+                )
             self.localfs, self.localroot = fsspec.url_to_fs(self._local_, **self.storage_options)
         self._spec_ = state.get('spec')
         if self._spec_ is None:
@@ -1060,6 +1071,17 @@ class Datablock:
         if hasattr(self, 'TOPICS') and isinstance(self.TOPICS, dict):
             return self.TOPICS
         return None
+
+    def _is_dir_topic(self, topic):
+        """True when *topic* resolves to a directory rather than a file.
+
+        True for list-TOPICS entries and for dict-TOPICS entries whose
+        filename is ``None``.
+        """
+        return topic is not None and (
+            self._topics_is_list or
+            (self._topicfiles is not None and self._topicfiles.get(topic) is None)
+        )
 
     def build(self, *args, **kwargs):
         if self.capture_output:
@@ -2126,10 +2148,7 @@ class Datablock:
         if not fs.exists(p):
             return []
         # Determine if the path is a directory topic
-        path_is_dir = (topic is not None and (
-            self._topics_is_list or
-            (self._topicfiles is not None and self._topicfiles.get(topic) is None)
-        ))
+        path_is_dir = self._is_dir_topic(topic)
         # Only fall back to the parent directory when the path genuinely
         # points to a file (dict-TOPICS with a non-None filename).
         # Skip this for directory-only topics where fs.isfile() may
@@ -2169,7 +2188,7 @@ class Datablock:
             return fs.ls(_lspath)
         return dirpath
 
-    def linklocal(self, topic, target):
+    def linklocal(self, topic, target: str|None = None):
         """Symlink *target* — a plain local filesystem path required by
         external tooling (e.g. TensorBoard) — to wherever *topic* resolves
         under local staging (``path(topic, local=True)``/``dirpath(topic,
@@ -2182,31 +2201,45 @@ class Datablock:
         value) *target* is linked to the topic directory itself. For file
         topics *target* is linked to the topic file path, with its parent
         directory created so a writer can create the file through the
-        link. Idempotent: a no-op if *target* already links to the
-        resolved path.
+        link. A no-op when *target* is ``None`` or already links to the
+        resolved path; repointing a stale link and refusing to clobber a
+        non-symlink at *target* are both logged.
         """
-        is_dir_topic = topic is not None and (
-            self._topics_is_list or
-            (self._topicfiles is not None and self._topicfiles.get(topic) is None)
-        )
+        if target is None:
+            return self
         local_path = self.path(topic, local=True)
-        if is_dir_topic:
+        if self._is_dir_topic(topic):
             self.localfs.makedirs(local_path, exist_ok=True)
         else:
             self.localfs.makedirs(os.path.dirname(local_path), exist_ok=True)
 
         os.makedirs(os.path.dirname(target), exist_ok=True)
         if os.path.lexists(target):
-            if os.path.islink(target) and os.readlink(target) == local_path:
+            if not os.path.islink(target):
+                self.log.warning(
+                    f"linklocal: {target} exists and is not a symlink; "
+                    f"refusing to replace it with a link to {local_path}"
+                )
                 return self
+            existing = os.readlink(target)
+            if existing == local_path:
+                return self
+            self.log.info(
+                f"linklocal: {target} was stale (linked to {existing}), "
+                f"repointing to {local_path}"
+            )
             try:
                 os.remove(target)
-            except OSError:
+            except OSError as e:
+                self.log.warning(
+                    f"linklocal: failed to remove stale symlink {target} -> {existing} ({e}); "
+                    f"leaving it in place"
+                )
                 return self
         try:
             os.symlink(local_path, target)
-        except OSError:
-            pass
+        except OSError as e:
+            self.log.warning(f"linklocal: failed to symlink {target} -> {local_path} ({e})")
         return self
 
     def paths(self):

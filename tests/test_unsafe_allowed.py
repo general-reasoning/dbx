@@ -86,7 +86,7 @@ class TestUNSAFEClear:
         """UNSAFE_clear(OVERRIDE=True) must not prompt and must attempt clearing."""
         block = self._make_block()
         # Patch out the actual filesystem removal so we don't touch disk
-        with patch.object(block, '_write_journal_entry'), \
+        with patch.object(block, 'write_journal_entry'), \
              patch('fsspec.url_to_fs') as mock_url_to_fs:
             mock_fs = MagicMock()
             mock_url_to_fs.return_value = (mock_fs, None)
@@ -109,7 +109,7 @@ class TestUNSAFEClear:
         block = self._make_block()
         mock_fs = MagicMock()
         with patch('builtins.input', return_value='y'), \
-             patch.object(block, '_write_journal_entry'), \
+             patch.object(block, 'write_journal_entry'), \
              patch.object(block, 'fs', mock_fs):
             result = block.UNSAFE_clear()
         assert result is block
@@ -120,7 +120,7 @@ class TestUNSAFEClear:
         """With OVERRIDE=True, input() must never be called."""
         block = self._make_block()
         with patch('builtins.input') as mock_input, \
-             patch.object(block, '_write_journal_entry'), \
+             patch.object(block, 'write_journal_entry'), \
              patch('fsspec.url_to_fs') as mock_url_to_fs:
             mock_fs = MagicMock()
             mock_url_to_fs.return_value = (mock_fs, None)

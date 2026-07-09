@@ -1173,44 +1173,66 @@ class Datablock:
     def __build__(self, *args, **kwargs):
         return self
 
-    def pull(self, src, dest):
+    def _transfer_callback(self, desc, *, show_progress: bool):
+        """An fsspec transfer callback: a tqdm byte-progress bar when
+        *show_progress*, otherwise fsspec's default no-op callback."""
+        if not show_progress:
+            return fsspec.callbacks.NoOpCallback()
+        return fsspec.callbacks.TqdmCallback(tqdm_kwargs=dict(desc=desc, unit='B', unit_scale=True))
+
+    def pull(self, src, dest, *, show_progress: bool = False):
         """Copy *src* (a path on this block's ``fs``) to *dest* (a local path).
 
         A no-op when *src* and *dest* already refer to the same location
         (e.g. when this block's storage is itself local, so local staging
         aliases the canonical path). Copies files and directories alike.
+
+        show_progress : bool, default False
+            If True, show a tqdm byte-progress bar for the transfer —
+            useful for large (e.g. multi-GB checkpoint) files.
         """
         if src is None or not self.fs.exists(src):
             self.log.warning(f"pull: source {src!r} does not exist, nothing to download")
             return self
         if src == dest:
             return self
+        callback = self._transfer_callback(f"pull {os.path.basename(src.rstrip('/'))}", show_progress=show_progress)
         if self.fs.isdir(src):
             self.localfs.makedirs(dest, exist_ok=True)
-            self.fs.get(src, dest, recursive=True)
+            self.fs.get(src, dest, recursive=True, callback=callback)
         else:
             self.localfs.makedirs(os.path.dirname(dest), exist_ok=True)
-            self.fs.get(src, dest)
+            self.fs.get(src, dest, callback=callback)
         return self
 
-    def push(self, src, dest):
+    def push(self, src, dest, *, free_src: bool = False, show_progress: bool = False):
         """Copy *src* (a local path) to *dest* (a path on this block's ``fs``).
 
         A no-op when *src* and *dest* already refer to the same location
         (e.g. when this block's storage is itself local, so local staging
         aliases the canonical path). Copies files and directories alike.
+
+        free_src : bool, default False
+            If True, remove *src* after a successful upload (skipped
+            when *src*/*dest* coincide, since there is nothing to free).
+        show_progress : bool, default False
+            If True, show a tqdm byte-progress bar for the transfer —
+            useful for large (e.g. multi-GB checkpoint) files.
         """
         if src is None or not self.localfs.exists(src):
             self.log.warning(f"push: source {src!r} does not exist, nothing to upload")
             return self
         if src == dest:
             return self
+        callback = self._transfer_callback(f"push {os.path.basename(src.rstrip('/'))}", show_progress=show_progress)
         if self.localfs.isdir(src):
             self.fs.makedirs(dest, exist_ok=True)
-            self.fs.put(src, dest, recursive=True)
+            self.fs.put(src, dest, recursive=True, callback=callback)
         else:
             self.fs.makedirs(os.path.dirname(dest), exist_ok=True)
-            self.fs.put(src, dest)
+            self.fs.put(src, dest, callback=callback)
+        if free_src:
+            self.localfs.rm(src, recursive=self.localfs.isdir(src))
         return self
 
     def pulltopics(self, *, path=None, root='.'):
@@ -1287,6 +1309,72 @@ class Datablock:
             return self
         src = self.path(topic, local=True) if path is None else os.path.join(root, path)
         return self.push(src, dst)
+
+    def synclocal(self, topic, *, suffix=None, key=None, validate=None, latest: bool = False,
+                  show_progress: bool = False):
+        """Sync entries of directory-topic *topic* to local staging.
+
+        Lists ``dirpath(topic)``, optionally keeping only entries whose
+        name ends with *suffix*, and sorts them ascending by
+        ``key(basename)`` (lexical order when *key* is omitted) — e.g.
+        a checkpoints topic with filenames like ``ckpt_step_{n}.pt``,
+        sorted by the numeric step parsed out of the name. Generalizes
+        the find-latest-checkpoint-and-pull-it-if-missing pattern.
+
+        When *latest* is False (default), every matching entry missing
+        from local staging is pulled there, and the full list of local
+        paths (in sorted order) is returned.
+
+        When *latest* is True, only the single latest (last-sorted)
+        entry is synced: pulled to local staging if missing, then, if
+        *validate* is given and rejects it (e.g. a truncated/corrupt
+        checkpoint), the next-latest entry is tried instead, and so on.
+        Returns the local path of the first entry to validate, or
+        ``None`` if none did (or there were no matching entries).
+
+        Parameters
+        ----------
+        topic : str
+            The directory topic to sync.
+        suffix : str, optional
+            Only consider entries whose name ends with *suffix*.
+        key : callable, optional
+            ``key(basename) -> sortable``. Defaults to lexical order;
+            pass one to sort e.g. by an embedded step number instead.
+        validate : callable, optional
+            ``validate(local_path) -> bool``. Only consulted when
+            *latest* is True.
+        latest : bool, default False
+            See above.
+        show_progress : bool, default False
+            Forwarded to the underlying :meth:`pull` calls.
+
+        Returns
+        -------
+        list[str] or str or None
+        """
+        entries = [(os.path.basename(e.rstrip('/')), e) for e in self.ls(topic)]
+        if suffix is not None:
+            entries = [(name, path) for name, path in entries if name.endswith(suffix)]
+        sort_key = key or (lambda name: name)
+        entries.sort(key=lambda item: sort_key(item[0]))
+
+        local_dir = self.dirpath(topic, local=True)
+
+        def sync_one(name, remote_path):
+            local_path = os.path.join(local_dir, name)
+            if not self.localfs.exists(local_path):
+                self.pull(remote_path, local_path, show_progress=show_progress)
+            return local_path
+
+        if not latest:
+            return [sync_one(name, remote_path) for name, remote_path in entries]
+
+        for name, remote_path in reversed(entries):
+            local_path = sync_one(name, remote_path)
+            if validate is None or validate(local_path):
+                return local_path
+        return None
 
     def note(self, message: str | None = None, event: str = 'note', *, inline: bool = False):
         """Write a journal entry with the given *event* and optional *message*.

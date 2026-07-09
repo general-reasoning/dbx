@@ -152,6 +152,55 @@ class TestPullPush:
         assert result is block
         assert not os.path.exists(str(tmp_path / 'dest'))
 
+    def test_push_free_src_removes_source_on_success(self, tmp_path):
+        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        src = str(tmp_path / 'local' / 'output.txt')
+        os.makedirs(os.path.dirname(src))
+        with open(src, 'w') as f:
+            f.write('uploaded content')
+        dest = block.path('output')
+        block.push(src, dest, free_src=True)
+        assert os.path.isfile(dest)
+        assert not os.path.exists(src)
+
+    def test_push_free_src_false_keeps_source(self, tmp_path):
+        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        src = str(tmp_path / 'local' / 'output.txt')
+        os.makedirs(os.path.dirname(src))
+        with open(src, 'w') as f:
+            f.write('uploaded content')
+        dest = block.path('output')
+        block.push(src, dest, free_src=False)
+        assert os.path.isfile(dest)
+        assert os.path.isfile(src)
+
+    def test_push_free_src_skipped_when_noop(self, tmp_path):
+        """No source to free when src/dest coincide (nothing was copied)."""
+        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block.build()
+        dest = block.path('output')
+        block.push(dest, dest, free_src=True)
+        assert os.path.isfile(dest)
+
+    def test_pull_show_progress(self, tmp_path):
+        """show_progress=True must not change the outcome, just report it."""
+        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block.build()
+        src = block.path('output')
+        dest = str(tmp_path / 'download' / 'output.txt')
+        block.pull(src, dest, show_progress=True)
+        assert os.path.isfile(dest)
+
+    def test_push_show_progress(self, tmp_path):
+        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        src = str(tmp_path / 'local' / 'output.txt')
+        os.makedirs(os.path.dirname(src))
+        with open(src, 'w') as f:
+            f.write('uploaded content')
+        dest = block.path('output')
+        block.push(src, dest, show_progress=True)
+        assert os.path.isfile(dest)
+
 
 # ---------------------------------------------------------------------------
 # pulltopic(): default (local staging) destination

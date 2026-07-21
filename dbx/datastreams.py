@@ -268,6 +268,12 @@ def read_mds_shard(shard_dir, fs, cache_limit='2gb', tmpdir=None):
                         with open(zip_path, 'rb') as zfp:
                             compressed = zfp.read()
                         raw_bytes = mds_decompress(reader.compression, compressed)
+                        # basename may include subdirectories (e.g. a
+                        # merged index whose shard basenames are rewritten
+                        # to be relative to some ancestor directory, not
+                        # just a flat filename) -- the staging dir only
+                        # has its own root created by mkdtemp.
+                        os.makedirs(os.path.dirname(raw_path), exist_ok=True)
                         with open(raw_path, 'wb') as rfp:
                             rfp.write(raw_bytes)
 

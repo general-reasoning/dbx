@@ -2250,6 +2250,7 @@ class Datablock:
                 val1 = d1.get(key)
                 val2 = d2.get(key)
                 if isinstance(val1, dict) and isinstance(val2, dict):
+                    self.log.verbose(f"RECURSIVE CALL!")
                     valdiff = diffdict(val1, val2)
                     if len(valdiff) > 0:
                         diff[key] = valdiff

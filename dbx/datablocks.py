@@ -2193,11 +2193,36 @@ class Datablock:
             result[key] = value
         return result
 
+    def _journal_entry(self, journal: dict) -> 'JournalEntry':
+        """Select a single :class:`JournalEntry` from a *journal* selector dict.
+
+        Exactly one of the keys ``entry_path``, ``iloc``, or ``loc`` must be
+        present:
+
+        - ``entry_path`` : path to a journal ``.parquet`` file (as stored in
+          ``JournalFrame.entry_path``); the entry is read directly from it.
+        - ``iloc`` / ``loc`` : positional/label selector forwarded to
+          :meth:`journal`.
+        """
+        selectors = {k: journal[k] for k in ('entry_path', 'iloc', 'loc') if k in journal}
+        if len(selectors) != 1:
+            raise ValueError(
+                "journal must contain exactly one of 'entry_path', 'iloc', or "
+                f"'loc'; got {sorted(selectors)}"
+            )
+        (key, value), = selectors.items()
+        if key == 'entry_path':
+            fs, _ = fsspec.url_to_fs(value, **(self.storage_options or {}))
+            with fs.open(value, 'rb') as f:
+                _df = pd.read_parquet(f)
+            return JournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
+        return self.journal(**{key: value})
+
     def diffnorm(
         self,
         other_norm: 'str | None' = None,
         *,
-        journal_entry_path: 'str | None' = None,
+        journal: 'dict | None' = None,
     ) -> dict:
         """Diff this datablock's norm against another norm string key-by-key.
 
@@ -2210,18 +2235,16 @@ class Datablock:
         Parameters
         ----------
         other_norm:
-            Norm string to compare against.  If ``None``, read from
-            ``journal_entry_path``.
-        journal_entry_path:
-            Path to a journal ``.parquet`` file (as stored in
-            ``JournalFrame.entry_path``).  Used as fallback source for
-            *other_norm* when *other_norm* is ``None``.
+            Norm string to compare against.  If ``None``, read from the
+            journal entry selected by *journal*.
+        journal:
+            Selector dict for the journal entry whose ``norm`` is the other
+            side, used as the fallback source for *other_norm* when it is
+            ``None``.  Exactly one of ``entry_path``, ``iloc``, or ``loc``
+            must be present (see :meth:`_journal_entry`).
         """
-        if other_norm is None and journal_entry_path is not None:
-            fs, _ = fsspec.url_to_fs(journal_entry_path, **(self.storage_options or {}))
-            with fs.open(journal_entry_path, 'rb') as f:
-                _df = pd.read_parquet(f)
-            _entry = JournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
+        if other_norm is None and journal is not None:
+            _entry = self._journal_entry(journal)
             other_norm = _entry.read('norm') or ''
         parsed_self  = Datablock._parse_norm(self.norm())
         parsed_other = Datablock._parse_norm(other_norm or '')

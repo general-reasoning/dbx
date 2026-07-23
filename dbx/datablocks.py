@@ -1717,7 +1717,7 @@ class Datablock:
             raise e
         return self
 
-    def UNSAFE_copy_from_journal(self, *, iloc=None, loc=None, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
+    def UNSAFE_copy_from_journal(self, journal: dict, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
         """Copy topic data using the ``anchorkeypath`` recorded in a journal entry.
 
         Thin wrapper around :meth:`UNSAFE_copy_from`: it extracts a single
@@ -1726,18 +1726,17 @@ class Datablock:
 
         Parameters
         ----------
-        iloc : int, optional
-            Positional index into the journal frame.
-        loc : int, optional
-            Label index into the journal frame.
+        journal : dict
+            Keyword arguments passed to :meth:`journal` to select the entry
+            whose ``anchorkeypath`` is used as the copy source, e.g.
+            ``{'iloc': 0}``, ``{'loc': 3}``, or filter kwargs like
+            ``{'event': 'build:end'}``. Must resolve to a single
+            :class:`JournalEntry`.
 
-        Exactly one of ``iloc`` or ``loc`` must be given; supplying both or
-        neither is an error.  All remaining keyword arguments (including
-        ``**kwargs``) are forwarded to :meth:`UNSAFE_copy_from`.
+        All remaining keyword arguments (including ``**kwargs``) are
+        forwarded to :meth:`UNSAFE_copy_from`.
         """
-        if (iloc is None) == (loc is None):
-            raise ValueError("Specify exactly one of 'iloc' and 'loc', not both or neither.")
-        entry = self.journal(loc=loc, iloc=iloc)
+        entry = self.journal(**journal)
         return self.UNSAFE_copy_from(
             entry.anchorkeypath,
             overwrite=overwrite,

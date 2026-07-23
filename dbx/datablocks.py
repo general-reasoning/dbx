@@ -15,6 +15,7 @@ This module defines the central abstractions of dbx:
 
 - :class:`SlurmRayCluster` — Slurm integration for launching Ray clusters.
 """
+import ast
 import atexit
 import collections
 from collections.abc import Iterable, Sequence
@@ -277,6 +278,60 @@ def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=
         return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, **filter_kwargs)
 
 
+def _ls_path(fs, p, path_is_dir, *, detail=False):
+    """List the contents at *p* on *fs*.
+
+    Shared by :meth:`Datablock.ls` and :meth:`JournalEntry.ls`.  When *p*
+    genuinely points to a file (``path_is_dir`` is False and *fs* reports
+    a file) its parent directory is listed instead.  Directory paths get a
+    trailing "/" so Azure adlfs returns the directory's *contents* rather
+    than the virtual-directory marker.  Returns ``[]`` when *p* is absent.
+    """
+    if p is None or not fs.exists(p):
+        return []
+    # Only fall back to the parent directory when the path genuinely points
+    # to a file; fs.isfile() may be a false positive on Azure virtual dirs.
+    if not path_is_dir and fs.isfile(p):
+        p = os.path.dirname(p)
+    if path_is_dir and not p.endswith('/'):
+        p = p + '/'
+    results = fs.ls(p, detail=detail)
+    if detail:
+        for entry in results:
+            entry['name'] = fs_full_path(fs, entry['name'])
+        return results
+    return [fs_full_path(fs, x) for x in results]
+
+
+def _list_path(fs, p, path_is_dir):
+    """Detailed, recursive listing of every file under *p* on *fs*.
+
+    Shared by :meth:`Datablock.list` and :meth:`JournalEntry.list`.
+    Directory entries are excluded; a single-file path returns just that
+    file.  Each returned dict has its ``name`` normalized to a
+    fully-qualified path.  Returns ``[]`` when *p* is absent.
+    """
+    if p is None or not fs.exists(p):
+        return []
+    if not path_is_dir and fs.isfile(p):
+        info = dict(fs.info(p))
+        info['name'] = fs_full_path(fs, info.get('name', p))
+        return [info]
+    if path_is_dir and not p.endswith('/'):
+        p = p + '/'
+    detail = fs.find(p, withdirs=False, detail=True)
+    results = []
+    for name, info in detail.items():
+        info = dict(info)
+        info['name'] = fs_full_path(fs, info.get('name', name))
+        results.append(info)
+    return results
+
+
+def _topicsize(entries):
+    """Sum the ``size`` of every file detail dict in *entries*."""
+    return sum((entry.get('size') or 0) for entry in entries)
+
 
 class JournalEntry(pd.Series):
     """A single row from a Datablock journal, with convenience accessors.
@@ -400,6 +455,71 @@ class JournalEntry(pd.Series):
             return os.path.join(root, self.anchorkey) if root else self.anchorkey
         fs, root = fsspec.url_to_fs(url, **self.storage_options)
         return fs_full_path(fs, os.path.join(root, self.anchorkey))
+
+    def _parse_dict_field(self, field):
+        """Parse a journal column recorded as ``str(dict)`` back into a dict."""
+        raw = self.get(field)
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        return ast.literal_eval(raw)
+
+    @property
+    def paths(self):
+        """Recorded ``{topic: path}`` mapping (parsed from the ``paths`` column)."""
+        return self._parse_dict_field('paths')
+
+    @property
+    def topics(self):
+        """Recorded ``{topic: filename_or_None}`` mapping (parsed from ``topics``).
+
+        A ``None`` value marks a directory topic (list-TOPICS, or dict-TOPICS
+        with a ``None`` filename).
+        """
+        return self._parse_dict_field('topics')
+
+    def _fs(self):
+        url = self.get('url')
+        if url is None:
+            url = self.get('root')  # legacy fallback
+        fs, _ = fsspec.url_to_fs(url, **self.storage_options)
+        return fs
+
+    def _topic_path(self, topic):
+        paths = self.paths
+        if topic not in paths:
+            raise KeyError(
+                f"topic {topic!r} not recorded in this journal entry's paths; "
+                f"available topics: {sorted(paths)}"
+            )
+        return paths[topic]
+
+    def _is_dir_topic(self, topic):
+        """A directory topic when the recorded TOPICS filename is ``None``."""
+        return self.topics.get(topic) is None
+
+    def ls(self, topic, *, detail=False):
+        """List the contents at this entry's recorded path for *topic*.
+
+        Mirrors :meth:`Datablock.ls`, but resolves the path from the
+        journal entry's recorded :attr:`paths` rather than a live block.
+        """
+        return _ls_path(self._fs(), self._topic_path(topic), self._is_dir_topic(topic), detail=detail)
+
+    def list(self, topic):
+        """Detailed, recursive listing of every file under this entry's path for *topic*.
+
+        Mirrors :meth:`Datablock.list`, resolving the path from :attr:`paths`.
+        """
+        return _list_path(self._fs(), self._topic_path(topic), self._is_dir_topic(topic))
+
+    def topicsize(self, topic):
+        """Total size in bytes of all files under this entry's path for *topic*.
+
+        Mirrors :meth:`Datablock.topicsize`, resolving the path from :attr:`paths`.
+        """
+        return _topicsize(self.list(topic))
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
@@ -2303,29 +2423,7 @@ class Datablock:
         """
         fs = self.localfs if local else self.fs
         p = self.path(topic, local=local)
-        if p is None:
-            return []
-        if not fs.exists(p):
-            return []
-        # Determine if the path is a directory topic
-        path_is_dir = self._is_dir_topic(topic)
-        # Only fall back to the parent directory when the path genuinely
-        # points to a file (dict-TOPICS with a non-None filename).
-        # Skip this for directory-only topics where fs.isfile() may
-        # return a false positive (e.g. Azure virtual directories).
-        if not path_is_dir and fs.isfile(p):
-            p = os.path.dirname(p)
-        # Azure adlfs virtual directories: fs.ls("dir") may return only
-        # the directory marker itself; a trailing "/" forces a prefix
-        # listing that returns the directory's *contents*.
-        if path_is_dir and not p.endswith('/'):
-            p = p + '/'
-        results = fs.ls(p, detail=detail)
-        if detail:
-            for entry in results:
-                entry['name'] = fs_full_path(fs, entry['name'])
-            return results
-        return [fs_full_path(fs, x) for x in results]
+        return _ls_path(fs, p, self._is_dir_topic(topic), detail=detail)
 
     def list(self, topic, *, local: bool = False):
         """Detailed, recursive listing of every file under ``.path(topic)``.
@@ -2352,26 +2450,7 @@ class Datablock:
         """
         fs = self.localfs if local else self.fs
         p = self.path(topic, local=local)
-        if p is None or not fs.exists(p):
-            return []
-        path_is_dir = self._is_dir_topic(topic)
-        # Only treat as a single file for genuine dict-TOPICS file entries;
-        # fs.isfile() can be a false positive on Azure virtual directories.
-        if not path_is_dir and fs.isfile(p):
-            info = dict(fs.info(p))
-            info['name'] = fs_full_path(fs, info.get('name', p))
-            return [info]
-        # Directory topic: trailing "/" forces Azure adlfs to descend into
-        # the directory's contents rather than the virtual-dir marker.
-        if path_is_dir and not p.endswith('/'):
-            p = p + '/'
-        detail = fs.find(p, withdirs=False, detail=True)
-        results = []
-        for name, info in detail.items():
-            info = dict(info)
-            info['name'] = fs_full_path(fs, info.get('name', name))
-            results.append(info)
-        return results
+        return _list_path(fs, p, self._is_dir_topic(topic))
 
     def topicsize(self, topic, *, local: bool = False):
         """Total size in bytes of all files under ``.path(topic)``.
@@ -2387,7 +2466,7 @@ class Datablock:
             When *True* size the local cache of the topic instead of the
             (possibly remote) canonical path.
         """
-        return sum((entry.get('size') or 0) for entry in self.list(topic, local=local))
+        return _topicsize(self.list(topic, local=local))
 
 
     def dirpath(

@@ -1,12 +1,12 @@
 """
-Tests for Datablock.list(topic) and Datablock.topicsize(topic).
+Tests for Datablock.list(topic) and Datablock.size(topic).
 
 Verifies:
-1. list() returns [] and topicsize() returns 0 before build.
+1. list() returns [] and size() returns 0 before build.
 2. list() on a single-file topic returns that file's detail dict.
-3. topicsize() on a single-file topic equals the file's byte length.
+3. size() on a single-file topic equals the file's byte length.
 4. list() on a directory topic recurses over all files (incl. nested).
-5. topicsize() on a directory topic sums all (nested) file sizes.
+5. size() on a directory topic sums all (nested) file sizes.
 6. list() excludes directory entries (files only).
 7. local=True operates on the local cache.
 """
@@ -67,7 +67,7 @@ class TestBeforeBuild:
 
     def test_topicsize_zero(self, tmp_path):
         block = _make(SingleTopicBlock, tmp_path)
-        assert block.topicsize('output') == 0
+        assert block.size('output') == 0
 
 
 class TestSingleFileTopic:
@@ -84,7 +84,7 @@ class TestSingleFileTopic:
     def test_topicsize_matches_bytes(self, tmp_path):
         block = _make(SingleTopicBlock, tmp_path)
         block.build()
-        assert block.topicsize('output') == 10
+        assert block.size('output') == 10
 
 
 class TestDirTopic:
@@ -104,7 +104,7 @@ class TestDirTopic:
         block = _make(DirTopicBlock, tmp_path)
         block.__build__()
         # 3 * 16 + 32 = 80
-        assert block.topicsize('images') == 80
+        assert block.size('images') == 80
 
 
 class TestLocal:
@@ -115,4 +115,4 @@ class TestLocal:
         block.build()
         result = block.list('output', local=True)
         assert len(result) == 1
-        assert block.topicsize('output', local=True) == 10
+        assert block.size('output', local=True) == 10

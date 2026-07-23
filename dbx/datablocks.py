@@ -328,7 +328,7 @@ def _list_path(fs, p, path_is_dir):
     return results
 
 
-def _topicsize(entries):
+def _size(entries):
     """Sum the ``size`` of every file detail dict in *entries*."""
     return sum((entry.get('size') or 0) for entry in entries)
 
@@ -514,12 +514,12 @@ class JournalEntry(pd.Series):
         """
         return _list_path(self._fs(), self._topic_path(topic), self._is_dir_topic(topic))
 
-    def topicsize(self, topic):
+    def size(self, topic):
         """Total size in bytes of all files under this entry's path for *topic*.
 
-        Mirrors :meth:`Datablock.topicsize`, resolving the path from :attr:`paths`.
+        Mirrors :meth:`Datablock.size`, resolving the path from :attr:`paths`.
         """
-        return _topicsize(self.list(topic))
+        return _size(self.list(topic))
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
@@ -1689,6 +1689,30 @@ class Datablock:
                 src_fs.get(src_path, tmp_path, recursive=recursive)
                 dst_fs.put(tmp_path, dst_path, recursive=recursive)
 
+    def _UNSAFE_copy_file(self, src_path, dst_path):
+        """Copy a single file, preferring a fast server-side blob copy.
+
+        When *src_path* and *dst_path* resolve to the same non-local
+        filesystem (e.g. two Azure blob paths in the same account), this
+        does a direct blob-to-blob copy with no data transiting the local
+        machine. Otherwise it falls back to :meth:`_UNSAFE_copy_fs`
+        (get+put, possibly via a local temporary directory), which is the
+        only option when a real cross-filesystem or local-disk hop is
+        required. Mirrors the ``use_server_side`` branch already used by
+        :meth:`_UNSAFE_copy_topic_dir` for whole-directory copies, exposed
+        here for single-file copies (e.g. a subclass copying a subset of a
+        topic's files instead of the whole directory).
+        """
+        src_fs, _ = self._url_to_fs(src_path)
+        dst_fs, _ = self._url_to_fs(dst_path)
+        if src_fs == dst_fs and 'file' not in getattr(src_fs, 'protocol', ()):
+            dst_dir = os.path.dirname(dst_path)
+            if dst_dir:
+                dst_fs.makedirs(dst_dir, exist_ok=True)
+            dst_fs.cp_file(src_path, dst_path)
+        else:
+            self._UNSAFE_copy_fs(src_path=src_path, dst_path=dst_path, recursive=False)
+
     def _UNSAFE_copy_topic_file(self, topic, anchorkeypath, *, topicpaths=None):
         """Copy the individual .path(topic) file."""
         dst_path = self.path(topic)
@@ -1801,7 +1825,7 @@ class Datablock:
             self._UNSAFE_copy_topic_file(topic, anchorkeypath, topicpaths=topicpaths)
             self.log.verbose(f"Using copy_topic_file for topic {topic}: END")
 
-    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
+    def UNSAFE_copy_from(self, anchorkeypath, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
         """Copy topic data from an external directory into this Datablock.
 
         Parameters
@@ -1809,6 +1833,10 @@ class Datablock:
         anchorkeypath : str
             Filesystem path to the source anchor+key directory containing
             the topic subdirectories (e.g. ``ckpts/``, ``logs/``).
+        OVERRIDE : bool, default False
+            If True, skip the interactive confirmation prompt (see
+            :func:`UNSAFE_allowed`) -- same convention as
+            :meth:`UNSAFE_clear`/:meth:`UNSAFE_copy_blocks_from`.
         overwrite : bool, default False
             If False (default), asserts that this Datablock is not already
             valid before copying.  Set to True to overwrite existing data.
@@ -1837,6 +1865,8 @@ class Datablock:
             override :meth:`_UNSAFE_copy_topic` to accept additional
             per-topic options.
         """
+        if not UNSAFE_allowed("UNSAFE_copy_from", OVERRIDE=OVERRIDE):
+            return self
         if not overwrite:
             assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
         fs, _ = self._url_to_fs(anchorkeypath)
@@ -1867,7 +1897,7 @@ class Datablock:
             raise e
         return self
 
-    def UNSAFE_copy_from_journal(self, journal: dict, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
+    def UNSAFE_copy_from_journal(self, journal: dict, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
         """Copy topic data using the ``anchorkeypath`` recorded in a journal entry.
 
         Thin wrapper around :meth:`UNSAFE_copy_from`: it extracts a single
@@ -1882,6 +1912,9 @@ class Datablock:
             ``{'iloc': 0}``, ``{'loc': 3}``, or filter kwargs like
             ``{'event': 'build:end'}``. Must resolve to a single
             :class:`JournalEntry`.
+        OVERRIDE : bool, default False
+            If True, skip the interactive confirmation prompt. Forwarded to
+            :meth:`UNSAFE_copy_from`.
 
         All remaining keyword arguments (including ``**kwargs``) are
         forwarded to :meth:`UNSAFE_copy_from`.
@@ -1889,6 +1922,7 @@ class Datablock:
         entry = self.journal(**journal)
         return self.UNSAFE_copy_from(
             entry.anchorkeypath,
+            OVERRIDE=OVERRIDE,
             overwrite=overwrite,
             topicpaths=topicpaths,
             validate=validate,
@@ -2482,7 +2516,7 @@ class Datablock:
         p = self.path(topic, local=local)
         return _list_path(fs, p, self._is_dir_topic(topic))
 
-    def topicsize(self, topic, *, local: bool = False):
+    def size(self, topic, *, local: bool = False):
         """Total size in bytes of all files under ``.path(topic)``.
 
         Sums the ``size`` of every file reported by :meth:`list`.  Returns
@@ -2496,7 +2530,7 @@ class Datablock:
             When *True* size the local cache of the topic instead of the
             (possibly remote) canonical path.
         """
-        return _topicsize(self.list(topic, local=local))
+        return _size(self.list(topic, local=local))
 
 
     def dirpath(
@@ -3180,8 +3214,12 @@ def _copy_block_from_callable(block, anchorkeypath, overwrite=False, topicpaths=
     reports real aggregate per-block progress; each block's own
     (typically 1-topic, so always instantly "100%") bar would just
     flood the output otherwise.
+
+    OVERRIDE=True: UNSAFE_copy_blocks_from already confirmed once at the
+    top level; without this, each block's own UNSAFE_copy_from would
+    re-prompt (or hang waiting on stdin in a worker process) once per block.
     """
-    block.UNSAFE_copy_from(anchorkeypath, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=False)
+    block.UNSAFE_copy_from(anchorkeypath, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=False)
     return block
 
 
@@ -3887,7 +3925,9 @@ class UNSAFE_datablock_journal_puller:
                     self.log.debug(f"Skipping datablock {dbk.norm()}: not in datablocks")
                     return None
             self.log.debug(f"Copying from {anchorhashpath} to {dbk}: BEGIN")
-            dbk.UNSAFE_copy_from(anchorhashpath)
+            # OVERRIDE=True: this puller runs unattended over many datablocks;
+            # an interactive per-item confirmation would hang or spam prompts.
+            dbk.UNSAFE_copy_from(anchorhashpath, OVERRIDE=True)
             self.log.debug(f"Copying from {anchorhashpath} to {dbk}: END")
             self.log.debug(f"VALID: {dbk.valid()}")
             if self.clear and dbk.valid():

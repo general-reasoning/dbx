@@ -2327,7 +2327,69 @@ class Datablock:
             return results
         return [fs_full_path(fs, x) for x in results]
 
-    
+    def list(self, topic, *, local: bool = False):
+        """Detailed, recursive listing of every file under ``.path(topic)``.
+
+        Parallels :meth:`ls`, but recurses and returns full ``fsspec``
+        detail dicts for all files (directory entries excluded) beneath the
+        topic's path.  For a dict-TOPICS single-file topic the file itself
+        is returned.  Returns an empty list when the path is absent.
+
+        Parameters
+        ----------
+        topic : str
+            The topic whose files to list.
+        local : bool, optional
+            When *True* operate on the local cache of the topic
+            (``.path(topic, local=True)``) rather than the (possibly
+            remote) canonical path.
+
+        Returns
+        -------
+        list[dict]
+            One ``fsspec`` detail dict per file, with ``name`` normalized
+            to a fully-qualified path.
+        """
+        fs = self.localfs if local else self.fs
+        p = self.path(topic, local=local)
+        if p is None or not fs.exists(p):
+            return []
+        path_is_dir = self._is_dir_topic(topic)
+        # Only treat as a single file for genuine dict-TOPICS file entries;
+        # fs.isfile() can be a false positive on Azure virtual directories.
+        if not path_is_dir and fs.isfile(p):
+            info = dict(fs.info(p))
+            info['name'] = fs_full_path(fs, info.get('name', p))
+            return [info]
+        # Directory topic: trailing "/" forces Azure adlfs to descend into
+        # the directory's contents rather than the virtual-dir marker.
+        if path_is_dir and not p.endswith('/'):
+            p = p + '/'
+        detail = fs.find(p, withdirs=False, detail=True)
+        results = []
+        for name, info in detail.items():
+            info = dict(info)
+            info['name'] = fs_full_path(fs, info.get('name', name))
+            results.append(info)
+        return results
+
+    def topicsize(self, topic, *, local: bool = False):
+        """Total size in bytes of all files under ``.path(topic)``.
+
+        Sums the ``size`` of every file reported by :meth:`list`.  Returns
+        0 when the topic has no files.
+
+        Parameters
+        ----------
+        topic : str
+            The topic whose files to size.
+        local : bool, optional
+            When *True* size the local cache of the topic instead of the
+            (possibly remote) canonical path.
+        """
+        return sum((entry.get('size') or 0) for entry in self.list(topic, local=local))
+
+
     def dirpath(
         self,
         topic,

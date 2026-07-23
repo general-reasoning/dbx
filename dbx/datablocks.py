@@ -1536,7 +1536,7 @@ class Datablock:
             self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
-    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True):
+    def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
         """Copy topic data from an external directory into this Datablock.
 
         Parameters
@@ -1566,6 +1566,9 @@ class Datablock:
             already reporting aggregate progress across many blocks, so
             each block's own (typically 1-topic, so always instantly
             "100%") bar doesn't flood the output.
+        **kwargs
+            Ignored here; accepted so overriding implementations can
+            make use of additional keyword arguments.
         """
         def fscopy(*, src_path, dst_path, recursive: bool = False):
             # fsspec does not implement .copy, so use put/get or temporary directory
@@ -1713,6 +1716,37 @@ class Datablock:
             self.write_journal_entry(event="UNSAFE_copy_from:ERROR", message=anchorkeypath, inline_message=True)
             raise e
         return self
+
+    def UNSAFE_copy_from_journal(self, *, iloc=None, loc=None, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
+        """Copy topic data using the ``anchorkeypath`` recorded in a journal entry.
+
+        Thin wrapper around :meth:`UNSAFE_copy_from`: it extracts a single
+        journal entry (via :meth:`journal`) and forwards that entry's
+        ``anchorkeypath`` as the copy source.
+
+        Parameters
+        ----------
+        iloc : int, optional
+            Positional index into the journal frame.
+        loc : int, optional
+            Label index into the journal frame.
+
+        Exactly one of ``iloc`` or ``loc`` must be given; supplying both or
+        neither is an error.  All remaining keyword arguments (including
+        ``**kwargs``) are forwarded to :meth:`UNSAFE_copy_from`.
+        """
+        if (iloc is None) == (loc is None):
+            raise ValueError("Specify exactly one of 'iloc' and 'loc', not both or neither.")
+        entry = self.journal(loc=loc, iloc=iloc)
+        return self.UNSAFE_copy_from(
+            entry.anchorkeypath,
+            overwrite=overwrite,
+            topicpaths=topicpaths,
+            validate=validate,
+            always_copy_whole_dirpath=always_copy_whole_dirpath,
+            show_progress=show_progress,
+            **kwargs,
+        )
 
     # ALIAS
     def UNSAFE_pull(self, *args, **kwargs):

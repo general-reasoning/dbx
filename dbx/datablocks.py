@@ -2243,17 +2243,26 @@ class Datablock:
             ``None``.  Exactly one of ``entry_path``, ``iloc``, or ``loc``
             must be present (see :meth:`_journal_entry`).
         """
+        def diffdict(d1, d2):
+            all_keys = sorted(set(d1) | set(d2))
+            diff = {}
+            for key in all_keys:
+                val1 = d1.get(key)
+                val2 = d2.get(key)
+                if isinstance(val1, dict) and isinstance(val2, dict):
+                    valdiff = diffdict(val1, val2)
+                    if len(valdiff) > 0:
+                        diff[key] = valdiff
+                else:
+                    if val1 != val2:
+                        diff[key] = (val1, val2)
+            return diff
         if other_norm is None and journal is not None:
             _entry = self._journal_entry(journal)
             other_norm = _entry.read('norm') or ''
         parsed_self  = Datablock._parse_norm(self.norm())
         parsed_other = Datablock._parse_norm(other_norm or '')
-        all_keys = sorted(set(parsed_self) | set(parsed_other))
-        return {
-            key: (parsed_self.get(key), parsed_other.get(key))
-            for key in all_keys
-            if parsed_self.get(key) != parsed_other.get(key)
-        }
+        return diffdict(parsed_self, parsed_other)
 
     def __repr__(self, *, deslash: bool = True):
         repr_spec = self.__expand_spec__('repr')

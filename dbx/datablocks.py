@@ -1656,6 +1656,151 @@ class Datablock:
             self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
+    def _UNSAFE_copy_fs(self, *, src_path, dst_path, recursive: bool = False):
+        """Copy a single file or directory between two fsspec paths.
+
+        fsspec does not implement a generic cross-filesystem ``.copy()``, so
+        this dispatches to put/get directly when either side is local, and
+        falls back to a temporary local directory when both are remote.
+        """
+        src_fs, _ = self._url_to_fs(src_path)
+        dst_fs, _ = self._url_to_fs(dst_path)
+
+        # Ensure destination directory exists
+        dst_dir = os.path.dirname(dst_path)
+        if dst_dir:
+            dst_fs.makedirs(dst_dir, exist_ok=True)
+
+        if 'file' in src_fs.protocol or 'file' in dst_fs.protocol:
+            # At least one is local filesystem, use put/get directly
+            if 'file' in src_fs.protocol:
+                # Source is local, destination is remote
+                dst_fs.put(src_path, dst_path, recursive=recursive)
+            else:
+                # Source is remote, destination is local
+                src_fs.get(src_path, dst_path, recursive=recursive)
+        else:
+            # Both are remote, use temporary directory
+            with tempfile.TemporaryDirectory() as tmpdir:
+                basename = os.path.basename(src_path.rstrip('/'))
+                if not basename:
+                    basename = "root"
+                tmp_path = os.path.join(tmpdir, basename)
+                src_fs.get(src_path, tmp_path, recursive=recursive)
+                dst_fs.put(tmp_path, dst_path, recursive=recursive)
+
+    def _UNSAFE_copy_topic_file(self, topic, anchorkeypath, *, topicpaths=None):
+        """Copy the individual .path(topic) file."""
+        dst_path = self.path(topic)
+        if topicpaths is not None:
+            _src_path = topicpaths[topic]
+        else:
+            if self._topicfiles is None:
+                raise ValueError(
+                    f"Cannot copy topic file for {topic!r}: TOPICS is not a dict "
+                    f"(no filename mapping). Use always_copy_whole_dirpath=True for list-mode topics."
+                )
+            _src_path = os.path.join(topic, self._topicfiles[topic])
+        if dst_path is not None:
+            src_path = os.path.join(anchorkeypath, _src_path)
+            self.log.detailed(f"Copying file {src_path} to {dst_path}")
+            self._UNSAFE_copy_fs(src_path=src_path, dst_path=dst_path, recursive=False)
+
+    def _UNSAFE_copy_topic_dir(self, topic, anchorkeypath, *, topicpaths=None):
+        """Copy the entire .dirpath(topic) directory."""
+        if topicpaths is not None:
+            _src_path = topicpaths[topic]
+        else:
+            _src_path = topic
+        src_path = os.path.join(anchorkeypath, _src_path)
+        src_fs, _ = self._url_to_fs(src_path)
+        dest_fs, _ = self._url_to_fs(self.dirpath(topic))
+        use_server_side = (src_fs == dest_fs
+                           and 'file' not in getattr(src_fs, 'protocol', ()))
+        # Ensure dst dir pre-exists only for server-side copy (Azure) or list-mode topics.
+        # For dict-mode fscopy, pre-creating dst causes fsspec to copy src INTO dst instead of AS dst.
+        ensure = use_server_side or (self._topicfiles is None)
+        dst_path = self.dirpath(topic, ensure=ensure)
+        if not src_fs.exists(src_path):
+            return
+        self.log.detailed(f"Copying directory {src_path} to {dst_path}")
+        if use_server_side:
+            # fsspec's generic recursive _copy() (which .cp(recursive=True)
+            # delegates to for remote-to-remote copies) expands the source
+            # directory to include the bare directory itself alongside its
+            # file contents, then blindly _cp_file()s every entry. Azure's
+            # blob-to-blob "copy from URL" API has no notion of copying a
+            # directory, so that entry always raises InvalidInput -- even
+            # though the real files copy fine. Expand to files only
+            # (find(..., withdirs=False)) and cp_file() each one ourselves.
+            src_bare = src_fs._strip_protocol(src_path)
+            dst_bare = dest_fs._strip_protocol(dst_path)
+            for file_path in src_fs.find(src_bare, withdirs=False):
+                rel = file_path[len(src_bare):].lstrip('/')
+                self.fs.cp_file(file_path, os.path.join(dst_bare, rel))
+        elif getattr(self, 'parallelization', None):
+            # Parallelize on top-level directory contents; each item is copied independently.
+            # _fscopy_item_callable is a module-level function (picklable for multiprocessing).
+            items = [src_fs.unstrip_protocol(p)
+                     for p in src_fs.ls(src_path, detail=False)]
+            if items:
+                _storage_options = getattr(self, 'storage_options', {})
+                _n_workers = getattr(self, 'n_workers', 1)
+                _tag = f"fscopy {len(items)} items [{_src_path}]"
+                _executor_kwargs = dict(n_workers=_n_workers, tag=_tag)
+                if (hasattr(self, 'multiprocessing_start_method')
+                        and self.multiprocessing_start_method is not None
+                        and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
+                    _executor_kwargs['start_method'] = self.multiprocessing_start_method
+                _executor = callable_executor(self.parallelization, **_executor_kwargs)
+                _callables = [
+                    functools.partial(
+                        _fscopy_item_callable,
+                        src_item,
+                        dst_path.rstrip('/') + '/' + src_item.rstrip('/').rsplit('/', 1)[-1],
+                        _storage_options,
+                    )
+                    for src_item in items
+                ]
+                _executor.exec_callables(_callables)
+        else:
+            self._UNSAFE_copy_fs(src_path=src_path, dst_path=dst_path, recursive=True)
+
+    def _UNSAFE_copy_topic(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False, **kwargs):
+        """Copy one topic's data from anchorkeypath into this Datablock.
+
+        Dispatches to :meth:`_UNSAFE_copy_topic_dir` or
+        :meth:`_UNSAFE_copy_topic_file` depending on TOPICS shape. Overriding
+        this in a subclass is the extension point for customizing how a
+        *specific* topic gets copied (e.g. copying only a subset of files
+        instead of the whole directory) while leaving the rest of
+        :meth:`UNSAFE_copy_from` (overwrite check, journal entries,
+        post-copy validation) untouched -- see
+        ``IJEPAsaurUSStill._UNSAFE_copy_topic`` in soundworld for an example
+        that restricts the ``ckpts`` topic to a subset of checkpoints.
+        ``**kwargs`` is accepted (and ignored here) so subclasses can declare
+        extra keyword-only parameters on their override without changing
+        this base signature; :meth:`UNSAFE_copy_from` forwards its own
+        ``**kwargs`` to every topic's call.
+        """
+        # Use directory copy when:
+        #  - always_copy_whole_dirpath is explicitly requested, OR
+        #  - TOPICS is a list (self._topicfiles is None -> every topic IS a dir), OR
+        #  - TOPICS is a dict but this topic maps to None (directory-only topic)
+        use_dir = (
+            always_copy_whole_dirpath
+            or self._topicfiles is None
+            or (isinstance(self._topicfiles, dict) and self._topicfiles.get(topic) is None)
+        )
+        if use_dir:
+            self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
+            self._UNSAFE_copy_topic_dir(topic, anchorkeypath, topicpaths=topicpaths)
+            self.log.verbose(f"Using copy_topic_dir for topic {topic}: END")
+        else:
+            self.log.verbose(f"Using copy_topic_file for topic {topic}: BEGIN")
+            self._UNSAFE_copy_topic_file(topic, anchorkeypath, topicpaths=topicpaths)
+            self.log.verbose(f"Using copy_topic_file for topic {topic}: END")
+
     def UNSAFE_copy_from(self, anchorkeypath, *, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
         """Copy topic data from an external directory into this Datablock.
 
@@ -1687,113 +1832,11 @@ class Datablock:
             each block's own (typically 1-topic, so always instantly
             "100%") bar doesn't flood the output.
         **kwargs
-            Ignored here; accepted so overriding implementations can
-            make use of additional keyword arguments.
+            Forwarded to :meth:`_UNSAFE_copy_topic` for every topic; ignored
+            by the base implementation but available to subclasses that
+            override :meth:`_UNSAFE_copy_topic` to accept additional
+            per-topic options.
         """
-        def fscopy(*, src_path, dst_path, recursive: bool = False):
-            # fsspec does not implement .copy, so use put/get or temporary directory
-            src_fs, _ = self._url_to_fs(src_path)
-            dst_fs, _ = self._url_to_fs(dst_path)
-            
-            # Ensure destination directory exists
-            dst_dir = os.path.dirname(dst_path)
-            if dst_dir:
-                dst_fs.makedirs(dst_dir, exist_ok=True)
-            
-            if 'file' in src_fs.protocol or 'file' in dst_fs.protocol:
-                # At least one is local filesystem, use put/get directly
-                if 'file' in src_fs.protocol:
-                    # Source is local, destination is remote
-                    dst_fs.put(src_path, dst_path, recursive=recursive)
-                else:
-                    # Source is remote, destination is local
-                    src_fs.get(src_path, dst_path, recursive=recursive)
-            else:
-                # Both are remote, use temporary directory
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    basename = os.path.basename(src_path.rstrip('/'))
-                    if not basename:
-                        basename = "root"
-                    tmp_path = os.path.join(tmpdir, basename)
-                    src_fs.get(src_path, tmp_path, recursive=recursive)
-                    dst_fs.put(tmp_path, dst_path, recursive=recursive)
-
-        def copy_topic_file(topic):
-            """Copy the individual .path(topic) file."""
-            dst_path = self.path(topic)
-            if topicpaths is not None:
-                _src_path = topicpaths[topic]
-            else:
-                if self._topicfiles is None:
-                    raise ValueError(
-                        f"Cannot copy topic file for {topic!r}: TOPICS is not a dict "
-                        f"(no filename mapping). Use always_copy_whole_dirpath=True for list-mode topics."
-                    )
-                _src_path = os.path.join(topic, self._topicfiles[topic])
-            if dst_path is not None:
-                src_path = os.path.join(anchorkeypath, _src_path)
-                self.log.detailed(f"Copying file {src_path} to {dst_path}")
-                fscopy(src_path=src_path, dst_path=dst_path, recursive=False)
-
-        def copy_topic_dir(topic):
-            """Copy the entire .dirpath(topic) directory."""
-            if topicpaths is not None:
-                _src_path = topicpaths[topic]
-            else:
-                _src_path = topic
-            src_path = os.path.join(anchorkeypath, _src_path)
-            src_fs, _ = self._url_to_fs(src_path)
-            dest_fs, _ = self._url_to_fs(self.dirpath(topic))
-            use_server_side = (src_fs == dest_fs
-                               and 'file' not in getattr(src_fs, 'protocol', ()))
-            # Ensure dst dir pre-exists only for server-side copy (Azure) or list-mode topics.
-            # For dict-mode fscopy, pre-creating dst causes fsspec to copy src INTO dst instead of AS dst.
-            ensure = use_server_side or (self._topicfiles is None)
-            dst_path = self.dirpath(topic, ensure=ensure)
-            if src_fs.exists(src_path):
-                self.log.detailed(f"Copying directory {src_path} to {dst_path}")
-                if use_server_side:
-                    # fsspec's generic recursive _copy() (which .cp(recursive=True)
-                    # delegates to for remote-to-remote copies) expands the source
-                    # directory to include the bare directory itself alongside its
-                    # file contents, then blindly _cp_file()s every entry. Azure's
-                    # blob-to-blob "copy from URL" API has no notion of copying a
-                    # directory, so that entry always raises InvalidInput -- even
-                    # though the real files copy fine. Expand to files only
-                    # (find(..., withdirs=False)) and cp_file() each one ourselves.
-                    src_bare = src_fs._strip_protocol(src_path)
-                    dst_bare = dest_fs._strip_protocol(dst_path)
-                    for file_path in src_fs.find(src_bare, withdirs=False):
-                        rel = file_path[len(src_bare):].lstrip('/')
-                        self.fs.cp_file(file_path, os.path.join(dst_bare, rel))
-                elif getattr(self, 'parallelization', None):
-                    # Parallelize on top-level directory contents; each item is copied independently.
-                    # _fscopy_item_callable is a module-level function (picklable for multiprocessing).
-                    items = [src_fs.unstrip_protocol(p)
-                             for p in src_fs.ls(src_path, detail=False)]
-                    if items:
-                        _storage_options = getattr(self, 'storage_options', {})
-                        _n_workers = getattr(self, 'n_workers', 1)
-                        _tag = f"fscopy {len(items)} items [{_src_path}]"
-                        _executor_kwargs = dict(n_workers=_n_workers, tag=_tag)
-                        if (hasattr(self, 'multiprocessing_start_method')
-                                and self.multiprocessing_start_method is not None
-                                and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
-                            _executor_kwargs['start_method'] = self.multiprocessing_start_method
-                        _executor = callable_executor(self.parallelization, **_executor_kwargs)
-                        _callables = [
-                            functools.partial(
-                                _fscopy_item_callable,
-                                src_item,
-                                dst_path.rstrip('/') + '/' + src_item.rstrip('/').rsplit('/', 1)[-1],
-                                _storage_options,
-                            )
-                            for src_item in items
-                        ]
-                        _executor.exec_callables(_callables)
-                else:
-                    fscopy(src_path=src_path, dst_path=dst_path, recursive=True)
-
         if not overwrite:
             assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
         fs, _ = self._url_to_fs(anchorkeypath)
@@ -1808,24 +1851,11 @@ class Datablock:
                 )
             topics_iter = tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic") if show_progress else topics
             for topic in topics_iter:
-                # Use directory copy when:
-                #  - always_copy_whole_dirpath is explicitly requested, OR
-                #  - TOPICS is a list (self._topicfiles is None → every topic IS a dir), OR
-                #  - TOPICS is a dict but this topic maps to None (directory-only topic)
-                use_dir = (
-                    always_copy_whole_dirpath
-                    or self._topicfiles is None
-                    or (isinstance(self._topicfiles, dict) and self._topicfiles.get(topic) is None)
+                self._UNSAFE_copy_topic(
+                    topic, anchorkeypath, topicpaths=topicpaths,
+                    always_copy_whole_dirpath=always_copy_whole_dirpath, **kwargs,
                 )
-                if use_dir:
-                    self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
-                    copy_topic_dir(topic)
-                    self.log.verbose(f"Using copy_topic_dir for topic {topic}: END")
-                else:
-                    self.log.verbose(f"Using copy_topic_file for topic {topic}: BEGIN")
-                    copy_topic_file(topic)
-                    self.log.verbose(f"Using copy_topic_file for topic {topic}: END")
-        
+
             self.log.verbose(f"Copying files from {anchorkeypath}: END")
             self.write_journal_entry(event="UNSAFE_copy_from:END", message=anchorkeypath, inline_message=True)
             if validate:

@@ -57,7 +57,7 @@ def _make(url, **kw):
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestKeepJournalEntry:
+class TestKeepDatajournalEntry:
 
     def test_keep_writes_journal_entry(self, url):
         """keep() should create a journal entry with event='keep'."""

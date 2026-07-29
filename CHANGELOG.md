@@ -2,6 +2,38 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Breaking Changes
+- **Renamed `JournalFrame` → `Datajournal` and `JournalEntry` → `DatajournalEntry`.**
+  No aliases are kept; update any `from dbx.datablocks import JournalEntry`. The
+  `journal()` function, `Datablock.journal()` / `Datablock.Journal()`, and every journal
+  column name are unchanged. (Entries in earlier releases below still use the old names,
+  which is what those releases shipped.)
+- **`norm()` now quotes strings and reprs spec values once**, which **changes the
+  hash of every Datablock** that does not opt out. The old rendering was ambiguous:
+  top-level string kwargs were bare (`url=abfss://…`), and non-string spec values were
+  repr'd twice (int `5` → `'5'`) while strings were repr'd once, so `n=5` and `n='5'`
+  produced the *same* hash. Set **`LEGACY_NORM = True`** on any class whose artifacts
+  are already built and keyed, to keep the exact bytes its hashes were computed from.
+  New classes should leave it alone (default `False`).
+
+### Added
+- **`Datablock.cite()` recorded alongside `quote()`**: new `Bid.cite` field, a `cite.txt`
+  written by `write_journal_entry()`, and a `JournalEntry.cite` property (returns `None`
+  on journals written before the column existed, rather than raising).
+- **`diffnorm()` descends recursively** into nested blocks and spec dicts, returning a
+  *sparse* nested dict so a changed leaf appears at the end of a short path instead of
+  as two multi-kilobyte strings. New options: `recursive=False` (previous flat
+  behaviour), `deslash=True` (strip escapes from the reported values), `report=True`
+  (flat `path` + self/other text), `maxlen` (truncation, report only).
+- **`Datablock.format_diffnorm(diff)`** — renders a `diffnorm` dict as text.
+
+### Fixed
+- **`diffnorm(journal=...)` silently dropped extra selector keys**: `dict(event='build:end',
+  iloc=0)` ignored `event` and returned the newest entry of *any* event. Extra keys are now
+  forwarded to `journal()` as column filters; combining them with `entry_path` raises.
+
 ## [0.0.3] — 2026-05-12
 
 ### Breaking Changes

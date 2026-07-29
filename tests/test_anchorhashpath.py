@@ -2,7 +2,7 @@ import os
 import unittest
 import pandas as pd
 import fsspec
-from dbx.datablocks import Datablock, JournalEntry
+from dbx.datablocks import Datablock, DatajournalEntry
 from dbx.dataparts import fs_full_path
 
 class TestAnchorKeyPath(unittest.TestCase):
@@ -30,7 +30,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         self.assertFalse(block.anchorkeypath.startswith('file://'))
 
     def test_journal_entry_anchorkeypath_with_url(self):
-        """JournalEntry.anchorkeypath should derive root from url."""
+        """DatajournalEntry.anchorkeypath should derive root from url."""
         data = {
             'url': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
@@ -38,7 +38,7 @@ class TestAnchorKeyPath(unittest.TestCase):
             'superhash': 'ab12cd34',
         }
         series = pd.Series(data)
-        entry = JournalEntry(series)
+        entry = DatajournalEntry(series)
         
         self.assertTrue(hasattr(entry, 'anchorkey'))
         self.assertTrue(hasattr(entry, 'anchorkeypath'))
@@ -51,7 +51,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         self.assertEqual(entry.anchorkeypath, expected_anchorkeypath)
 
     def test_journal_entry_anchorkeypath_legacy_root(self):
-        """JournalEntry.anchorkeypath still works with legacy 'root' field."""
+        """DatajournalEntry.anchorkeypath still works with legacy 'root' field."""
         data = {
             'root': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
@@ -59,7 +59,7 @@ class TestAnchorKeyPath(unittest.TestCase):
             'superhash': 'ab12cd34',
         }
         series = pd.Series(data)
-        entry = JournalEntry(series)
+        entry = DatajournalEntry(series)
         
         expected_anchorkey = os.path.join(data['anchor'], data['hash'][:8])
         expected_anchorkeypath = os.path.join(data['root'], expected_anchorkey)

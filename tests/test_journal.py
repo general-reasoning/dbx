@@ -2,8 +2,8 @@
 Tests for dbx.journal() / Datablock.Journal():
 
 1. FileNotFoundError is raised when the journal directory does not exist.
-2. A JournalFrame is returned when the directory exists but has no parquet files.
-3. loc= and iloc= correctly return a JournalEntry.
+2. A Datajournal is returned when the directory exists but has no parquet files.
+3. loc= and iloc= correctly return a DatajournalEntry.
 4. Regression: root must not be passed positionally (would silently land in
    the 'loc' slot of Datablock.Journal before the fix).
 """
@@ -13,7 +13,7 @@ import pytest
 import pandas as pd
 
 import dbx.datablocks as dbxmod
-from dbx.datablocks import journal, Datablock, JournalFrame, JournalEntry
+from dbx.datablocks import journal, Datablock, Datajournal, DatajournalEntry
 
 
 # ---------------------------------------------------------------------------
@@ -92,13 +92,13 @@ class TestJournalMissingDir:
 
 
 # ---------------------------------------------------------------------------
-# 2. Empty journal dir → JournalFrame(None)
+# 2. Empty journal dir → Datajournal(None)
 # ---------------------------------------------------------------------------
 
 class TestJournalEmptyDir:
 
     def test_returns_journalframe_when_no_parquets(self, tmp_path, monkeypatch):
-        """An existing but empty journal dir should return a JournalFrame wrapping None."""
+        """An existing but empty journal dir should return a Datajournal wrapping None."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         # Create the journal directory with no parquet files
@@ -108,38 +108,38 @@ class TestJournalEmptyDir:
         fs.makedirs(jdir, exist_ok=True)
 
         result = journal(FakeBlock, url=root)
-        assert isinstance(result, JournalFrame)
+        assert isinstance(result, Datajournal)
 
 
 # ---------------------------------------------------------------------------
-# 3. loc/iloc parameter returns a JournalEntry
+# 3. loc/iloc parameter returns a DatajournalEntry
 # ---------------------------------------------------------------------------
 
 class TestJournalLocIlocParam:
 
     def test_loc_returns_journal_entry(self, tmp_path, monkeypatch):
-        """journal(cls, loc=0, url=...) should return the 0th JournalEntry."""
+        """journal(cls, loc=0, url=...) should return the 0th DatajournalEntry."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="deadbeef", event="build")
 
         result = journal(FakeBlock, loc=0, url=root)
-        assert isinstance(result, JournalEntry)
+        assert isinstance(result, DatajournalEntry)
 
     def test_loc_none_returns_journalframe(self, tmp_path, monkeypatch):
-        """journal(cls, url=...) with no loc/iloc should return the full JournalFrame."""
+        """journal(cls, url=...) with no loc/iloc should return the full Datajournal."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="cafebabe", event="build")
 
         result = journal(FakeBlock, url=root)
-        assert isinstance(result, JournalFrame)
+        assert isinstance(result, Datajournal)
         assert len(result) == 1
 
     def test_loc_value_matches_row(self, tmp_path, monkeypatch):
-        """The returned JournalEntry should contain the correct hash."""
+        """The returned DatajournalEntry should contain the correct hash."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
@@ -149,14 +149,14 @@ class TestJournalLocIlocParam:
         assert entry.get('hash') == "myhash42"
 
     def test_iloc_returns_journal_entry(self, tmp_path, monkeypatch):
-        """journal(cls, iloc=0, url=...) should return the 0th JournalEntry via positional index."""
+        """journal(cls, iloc=0, url=...) should return the 0th DatajournalEntry via positional index."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="iloc_hash", event="build")
 
         result = journal(FakeBlock, iloc=0, url=root)
-        assert isinstance(result, JournalEntry)
+        assert isinstance(result, DatajournalEntry)
         assert result.get('hash') == "iloc_hash"
 
     def test_loc_and_iloc_raises(self, tmp_path, monkeypatch):
@@ -239,7 +239,7 @@ class TestJournalFqcnSubdirectories:
         _write_journal_in_hash_dir(other_jdir, other_anchor, hash_val="bbb")
 
         result = Datablock.Journal(fake_anchor, url=root)
-        assert isinstance(result, JournalFrame)
+        assert isinstance(result, Datajournal)
         assert len(result) == 2
 
     def test_single_fqcn_found(self, tmp_path, monkeypatch):
@@ -277,7 +277,7 @@ class TestJournalAnchorForms:
         block = BuildableBlock(url=root)
         block.build()
         result = block.journal()
-        assert isinstance(result, JournalFrame)
+        assert isinstance(result, Datajournal)
         assert len(result) >= 1
 
     def test_custom_anchor_journal(self, tmp_path, monkeypatch):
@@ -287,7 +287,7 @@ class TestJournalAnchorForms:
         block = BuildableBlock(url=root, anchor='my.custom.anchor')
         block.build()
         result = block.journal()
-        assert isinstance(result, JournalFrame)
+        assert isinstance(result, Datajournal)
         assert len(result) >= 1
 
     def test_static_journal_default_anchor(self, tmp_path, monkeypatch):
@@ -298,7 +298,7 @@ class TestJournalAnchorForms:
         block.build()
         anchor = block.anchor
         result = Datablock.Journal(anchor, url=root)
-        assert isinstance(result, JournalFrame)
+        assert isinstance(result, Datajournal)
         assert len(result) >= 1
 
     def test_static_journal_custom_anchor(self, tmp_path, monkeypatch):
@@ -308,7 +308,7 @@ class TestJournalAnchorForms:
         block = BuildableBlock(url=root, anchor='custom.anchor')
         block.build()
         result = Datablock.Journal('custom.anchor', url=root)
-        assert isinstance(result, JournalFrame)
+        assert isinstance(result, Datajournal)
         assert len(result) >= 1
 
     def test_multiple_builds_all_found(self, tmp_path, monkeypatch):

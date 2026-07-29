@@ -15,8 +15,17 @@ Note: These tests require a clean git repository if DBX_GIT_REPO is set.
 """
 
 import os
-import ray
 import unittest
+
+import pytest
+
+# Ray is an optional dependency (it is not in requirements.txt), and every test
+# in this module needs a live Ray cluster. importorskip skips the whole module
+# when ray is absent instead of failing collection -- which previously took the
+# entire suite down with a ModuleNotFoundError before any test ran. Install ray
+# and these run as normal.
+ray = pytest.importorskip('ray', reason='ray is an optional dependency')
+
 import numpy as np
 import threading
 import queue

@@ -11,6 +11,11 @@ Verifies:
 4. journal={'entry_path': <parquet path>} reads that file's norm.
 5. Comparing a block to its own just-built entry yields no diff.
 6. Supplying none / more than one selector raises ValueError.
+
+``NormBlock`` does not set ``LEGACY_NORM``, so its int spec value renders as
+``{'x': 2}`` -- repr'd once. A ``LEGACY_NORM = True`` block would render the
+same value ``{'x': '2'}``, repr'd twice, which is indistinguishable from the
+string ``'2'``. See :attr:`Datablock.LEGACY_NORM`.
 """
 import pytest
 from dataclasses import dataclass
@@ -50,7 +55,10 @@ class TestRawOtherNorm:
     def test_diffs_against_string(self, tmp_path):
         a, b = _built_pair(tmp_path)
         diff = b.diffnorm(a.norm())
-        assert diff == {'spec': ("{'x': '2'}", "{'x': '1'}")}
+        assert diff == {'spec': {'x': ('2', '1')}}
+        # recursive=False restores the flat, whole-subtree-per-key comparison
+        assert b.diffnorm(a.norm(), recursive=False) == {
+            'spec': ("{'x': 2}", "{'x': 1}")}
 
     def test_identical_norm_no_diff(self, tmp_path):
         a, b = _built_pair(tmp_path)
@@ -61,17 +69,17 @@ class TestJournalSelectors:
 
     def test_iloc(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        assert b.diffnorm(journal={'iloc': -1}) == {'spec': ("{'x': '2'}", "{'x': '1'}")}
+        assert b.diffnorm(journal={'iloc': -1}) == {'spec': {'x': ('2', '1')}}
 
     def test_loc(self, tmp_path):
         a, b = _built_pair(tmp_path)
         loc = a.journal().index[-1]
-        assert b.diffnorm(journal={'loc': loc}) == {'spec': ("{'x': '2'}", "{'x': '1'}")}
+        assert b.diffnorm(journal={'loc': loc}) == {'spec': {'x': ('2', '1')}}
 
     def test_entry_path(self, tmp_path):
         a, b = _built_pair(tmp_path)
         entry_path = a.journal()['entry_path'].iloc[-1]
-        assert b.diffnorm(journal={'entry_path': entry_path}) == {'spec': ("{'x': '2'}", "{'x': '1'}")}
+        assert b.diffnorm(journal={'entry_path': entry_path}) == {'spec': {'x': ('2', '1')}}
 
     def test_self_against_own_entry(self, tmp_path):
         a, b = _built_pair(tmp_path)

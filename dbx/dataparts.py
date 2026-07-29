@@ -536,8 +536,20 @@ def exec(s=None, **kwargs):
 
 
 def pprint(argstr=None, **kwargs):
-    """Execute a dbx expression and pretty-print the result."""
-    _pprint_.pprint(exec(argstr, **kwargs))
+    """Execute a dbx expression and pretty-print the result.
+
+    Strings are printed RAW rather than passed to ``pprint.pprint``. pprint
+    re-wraps a long str into implicitly-concatenated literals at width=80,
+    which destroys any newlines and indentation the string itself carried: a
+    multi-line ``quote()``/``cite()`` specline came out looking unindented,
+    with each run of indent spaces shown as its own quoted chunk. Those
+    methods return text meant to be read and copied, so print it as text.
+    """
+    r = exec(argstr, **kwargs)
+    if isinstance(r, str):
+        print(r)
+    else:
+        _pprint_.pprint(r)
 
 
 def write_str(text, path, *, storage_options=None, log=Logger(), debug: bool = False):

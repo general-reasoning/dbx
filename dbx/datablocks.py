@@ -251,25 +251,25 @@ def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=
     cls_anchor_or_df : type | str | pd.DataFrame
         A Datablock class, an anchor string, or a raw DataFrame.
     loc : int, optional
-        If given, return a single :class:`JournalEntry` at this label index.
+        If given, return a single :class:`DatajournalEntry` at this label index.
     iloc : int, optional
-        If given, return a single :class:`JournalEntry` at this positional index.
+        If given, return a single :class:`DatajournalEntry` at this positional index.
         Mutually exclusive with *loc*.
     url : str, optional
         Storage URL.  Defaults to ``DBX_ROOT`` or its alias ``DBX_URL``.
     storage_options : dict, optional
         Storage options for fsspec.  Defaults to ``default_storage_options()``.
     **filter_kwargs
-        Forwarded to :class:`JournalFrame` for filtering.
+        Forwarded to :class:`Datajournal` for filtering.
 
     Returns
     -------
-    JournalFrame or JournalEntry
+    Datajournal or DatajournalEntry
     """
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):
-        return JournalFrame(cls_anchor_or_df, storage_options=storage_options, **filter_kwargs)
+        return Datajournal(cls_anchor_or_df, storage_options=storage_options, **filter_kwargs)
     else:
         if isinstance(cls_anchor_or_df, str):
             anchor = cls_anchor_or_df
@@ -281,7 +281,7 @@ def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=
 def _ls_path(fs, p, path_is_dir, *, detail=False):
     """List the contents at *p* on *fs*.
 
-    Shared by :meth:`Datablock.ls` and :meth:`JournalEntry.ls`.  When *p*
+    Shared by :meth:`Datablock.ls` and :meth:`DatajournalEntry.ls`.  When *p*
     genuinely points to a file (``path_is_dir`` is False and *fs* reports
     a file) its parent directory is listed instead.  Directory paths get a
     trailing "/" so Azure adlfs returns the directory's *contents* rather
@@ -306,7 +306,7 @@ def _ls_path(fs, p, path_is_dir, *, detail=False):
 def _list_path(fs, p, path_is_dir):
     """Detailed, recursive listing of every file under *p* on *fs*.
 
-    Shared by :meth:`Datablock.list` and :meth:`JournalEntry.list`.
+    Shared by :meth:`Datablock.list` and :meth:`DatajournalEntry.list`.
     Directory entries are excluded; a single-file path returns just that
     file.  Each returned dict has its ``name`` normalized to a
     fully-qualified path.  Returns ``[]`` when *p* is absent.
@@ -333,7 +333,7 @@ def _size(entries):
     return sum((entry.get('size') or 0) for entry in entries)
 
 
-class JournalEntry(pd.Series):
+class DatajournalEntry(pd.Series):
     """A single row from a Datablock journal, with convenience accessors.
 
     Inherits from :class:`pandas.Series` so all standard pandas
@@ -341,13 +341,13 @@ class JournalEntry(pd.Series):
     (``anchor``, ``hash``, ``url``, ``revision``, …).
     """
     def __init__(self, series: pd.Series, *, storage_options: dict = None,
-                 logger: Logger = Logger(name="JournalEntry")):
+                 logger: Logger = Logger(name="DatajournalEntry")):
         super().__init__(series)
         self.storage_options = storage_options or {}
         self.logger = logger
 
     def __tag__(self):
-        return f"JournalEntry:{self.anchor}/{self.hash}"
+        return f"DatajournalEntry:{self.anchor}/{self.hash}"
 
     @property
     def anchor(self):
@@ -376,6 +376,18 @@ class JournalEntry(pd.Series):
     @property
     def version(self):
         return self.get('version')
+
+    @property
+    def cite(self):
+        """Path to this entry's ``cite.txt``, or None.
+
+        Declared explicitly (unlike ``quote``/``norm``/``repr``, which resolve
+        through pandas' attribute fallback to the column of the same name)
+        because journals written before ``cite`` existed have no such column:
+        the fallback would raise AttributeError, whereas ``.get`` returns None
+        and :meth:`read` degrades to None.
+        """
+        return self.get('cite')
 
     @property
     def keyby(self):
@@ -561,7 +573,7 @@ class JournalEntry(pd.Series):
             thingstr = thingstr.replace('\\', '')
         r = None
         # Call this here because a new revision may need to be checked out
-        gitwrkreposetup(revision=revision, gitrepo=gitrepo, reason=f"because of evaluating a JournalEntry field {thing}")
+        gitwrkreposetup(revision=revision, gitrepo=gitrepo, reason=f"because of evaluating a DatajournalEntry field {thing}")
         try:
             if eval:
                 __eval__ = globals()['eval']
@@ -603,6 +615,7 @@ class JournalEntry(pd.Series):
             kwargs=self.read('kwargs', safe=True) or {},
             spec=self.read('spec', safe=True) or {},
             quote=self.read('quote') or '',
+            cite=self.read('cite') or '',
             repr=self.read('repr') or '',
             norm=self.read('norm') or '',
             hashstr=self.read('hashstr') or '',
@@ -617,7 +630,7 @@ class JournalEntry(pd.Series):
     
 
 
-class JournalFrame(pd.DataFrame):
+class Datajournal(pd.DataFrame):
     _metadata = ['storage_options', 'logger']
 
     def __init__(self, df: pd.DataFrame|None, *, storage_options: dict = None,
@@ -670,7 +683,7 @@ class JournalFrame(pd.DataFrame):
         entry = self.loc[entry]
         if dropna:
             entry = entry.dropna()
-        return JournalEntry(entry, storage_options=self.storage_options)
+        return DatajournalEntry(entry, storage_options=self.storage_options)
     
     def __call__(self, entry:int):
         return self.get(entry, dropna=True)
@@ -690,12 +703,12 @@ class JournalFrame(pd.DataFrame):
         for hash, row in unique_rows.iterrows():
             try:
                 entry = None
-                entry = JournalEntry(row, storage_options=self.storage_options)
+                entry = DatajournalEntry(row, storage_options=self.storage_options)
                 th = None
                 th = entry.read(thing, raw=raw, safe=safe)
                 entries.append(th)
             except Exception as exc: 
-                self.logger.silent(f"JournalFrame: EXCEPTION when reading {thing}: {row=}, {entry=}, {th=}:\nEXCEPTION: {exc}")
+                self.logger.silent(f"Datajournal: EXCEPTION when reading {thing}: {row=}, {entry=}, {th=}:\nEXCEPTION: {exc}")
                 entries.append(pd.Series())
             datetimes.append(row.datetime if 'datetime' in row.index else None)
             hashes.append(hash)
@@ -796,6 +809,25 @@ class Datablock:
     """
     VERBOSE_CONFIG = False
 
+    # Set to True on a subclass whose artifacts were already built and are
+    # identified by hashes computed BEFORE string kwargs were quoted in norm().
+    #
+    # The unquoted form is ambiguous in two ways that can collide two distinct
+    # blocks onto one hash:
+    #
+    #   * top-level kwargs -- `url=abfss://c@a.net/x, anchor=A` is a flat
+    #     string, so a url whose own text contains ', anchor=' is
+    #     indistinguishable from a different url plus a different anchor;
+    #   * spec values -- a non-string was rendered `repr()`-then-dict-repr'd
+    #     (int 5 -> "'5'") while a string was dict-repr'd once ('5' -> "'5'"),
+    #     so `n=5` and `n='5'` produced the SAME norm.
+    #
+    # LEGACY_NORM=False (the default, i.e. every NEW subclass) quotes strings
+    # and reprs spec values exactly once, which removes both collisions -- and
+    # necessarily changes the hash. Existing subclasses set it to True so their
+    # already-computed hashes, keys and storage paths stay valid.
+    LEGACY_NORM = False
+
     @dataclass
     class Bid: #BlockId
         hash: str
@@ -805,6 +837,7 @@ class Datablock:
         kwargs: dict
         spec: dict
         quote: str
+        cite: str
         repr: str
         norm: str
         hashstr: str
@@ -879,7 +912,8 @@ class Datablock:
         local: str|None = None,
         local_must_exist: bool = False,
         **kwargs,
-    ):# Initialize early logger for __post_init__ if needed, though usually hash is needed
+    ):
+        # Initialize early logger for __post_init__ if needed, though usually hash is needed
         self.log = Logger(
             f"{self.fqcn}",
             debug=debug,
@@ -1911,7 +1945,7 @@ class Datablock:
             whose ``anchorkeypath`` is used as the copy source, e.g.
             ``{'iloc': 0}``, ``{'loc': 3}``, or filter kwargs like
             ``{'event': 'build:end'}``. Must resolve to a single
-            :class:`JournalEntry`.
+            :class:`DatajournalEntry`.
         OVERRIDE : bool, default False
             If True, skip the interactive confirmation prompt. Forwarded to
             :meth:`UNSAFE_copy_from`.
@@ -1966,6 +2000,7 @@ class Datablock:
             spec=self.spec,
             dfn=self.dfn,
             quote=self.quote(deslash=True),
+            cite=self.cite(),
             repr=self.__repr__(deslash=True),
             norm=self.norm(deslash=True),
             hashstr=self.hashstr,
@@ -2056,15 +2091,34 @@ class Datablock:
                     _spec_[k] = v
                 elif isinstance(value, str):
                     _spec_[k] = value
-                else:
+                elif self.LEGACY_NORM:
+                    # This dict is embedded in norm() via its own repr, so a
+                    # value stored here as repr(value) is repr'd TWICE: int 5
+                    # -> "'5'" -- byte-identical to the string '5' stored raw
+                    # by the branch above. Kept for LEGACY_NORM blocks because
+                    # the collision is baked into their existing hashes.
                     _spec_[k] = repr(value)
-        elif expansion == 'quote':
+                else:
+                    # Stored as the value itself, so the embedding repr's it
+                    # exactly once: 5 -> "5", '5' -> "'5'". No collision.
+                    _spec_[k] = value
+        elif expansion == 'quote' or expansion == 'cite':
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
                 if self.is_specline(v):
                     _spec_[k] = v
                 elif isinstance(value, Datablock):
-                    _spec_[k] = value.quote()
+                    # Nested blocks are ALWAYS single-line and un-deslashed,
+                    # whatever the user-facing defaults are. A nested specline
+                    # is stored as a string VALUE in this spec, so the outer
+                    # repr() escapes any newline it contains to backslash-n --
+                    # and `deslash` then strips the backslash, leaving a bare
+                    # "n" and an unevaluable specline. `pretty` and `deslash`
+                    # are presentation options for the OUTERMOST call only.
+                    if expansion == 'quote':
+                        _spec_[k] = value.quote(pretty=False, deslash=0)
+                    else:
+                        _spec_[k] = value.cite(pretty=False, deslash=0)
                 elif isinstance(value, str):
                     _spec_[k] = value
                 else:
@@ -2095,8 +2149,23 @@ class Datablock:
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
     
-    def __repr_from_kwargs__(self, kwargs, anchor='anchor'):
-        kwargstrs = [f"{k}={v}" for k, v in kwargs.items()]
+    def __repr_from_kwargs__(self, kwargs, anchor='anchor', *, quote_strs: bool = False):
+        """Render ``kwargs`` as a ``k=v, ...`` argument list.
+
+        ``quote_strs`` reprs string-valued kwargs, so ``url=abfss://x`` becomes
+        ``url='abfss://x'``. It is named for what it does rather than for
+        `rootkwargs`, because this method is called with the root kwargs, the
+        `spec` dict AND the tailkwargs, and it quotes strings in all of them
+        (``tag``, ``local``, ``keyby``, ... as well as ``url``/``anchor``).
+
+        It defaults to False because :meth:`norm` and :meth:`supernorm` feed
+        :attr:`hashstr`: for a :attr:`LEGACY_NORM` block the unquoted form IS
+        the identity, and quoting it would orphan every artifact already
+        stored under the old hash.
+        """
+        def quotestr(v):
+            return repr(v) if quote_strs and isinstance(v, str) else v
+        kwargstrs = [f"{k}={quotestr(v)}" for k, v in kwargs.items()]
         kwargsrepr = ', '.join(kwargstrs)
         if anchor == 'anchor':
             _repr_ = f"{self.anchor}({kwargsrepr})"
@@ -2108,18 +2177,226 @@ class Datablock:
             raise ValueError(f"Unknown anchor: {repr(anchor)}")
         return _repr_
     
-    def quote(self, *, deslash: bool = False):
-        quoted_spec = self.__expand_spec__('quote')
-        def cite(x):
+    @staticmethod
+    def _split_top_level(text, seps=(', ',)):
+        """Split ``text`` at ``seps`` occurrences that are NOT nested or quoted.
+
+        Depth-aware over ``() [] {}`` and quote-aware over ``' "`` (honouring
+        backslash escapes), so a separator inside a nested specline or a URL is
+        left alone. Used only to choose where to break a citation for display;
+        the pieces are re-joined verbatim, so a missed boundary costs
+        readability, never correctness.
+        """
+        out, buf, depth, quote, esc = [], [], 0, None, False
+        i = 0
+        while i < len(text):
+            c = text[i]
+            if esc:
+                buf.append(c); esc = False; i += 1; continue
+            if c == '\\':
+                buf.append(c); esc = True; i += 1; continue
+            if quote is not None:
+                buf.append(c)
+                if c == quote:
+                    quote = None
+                i += 1
+                continue
+            if c in '\'"':
+                quote = c; buf.append(c); i += 1; continue
+            if c in '([{':
+                depth += 1; buf.append(c); i += 1; continue
+            if c in ')]}':
+                depth -= 1; buf.append(c); i += 1; continue
+            if depth == 0:
+                hit = next((sp for sp in seps if text.startswith(sp, i)), None)
+                if hit is not None:
+                    buf.append(hit)
+                    out.append(''.join(buf)); buf = []
+                    i += len(hit)
+                    continue
+            buf.append(c); i += 1
+        if buf:
+            out.append(''.join(buf))
+        return out
+
+    def _cite_chunks(self, specline, indent):
+        """Render a nested specline as indented implicit-concatenation chunks.
+
+        A nested block lives in the spec as a STRING, so putting real newlines
+        in it only makes the outer repr() show ``\\n`` escapes -- unreadable in a
+        different way from one 4000-character line. Python's implicit string
+        concatenation escapes that bind: ``('a' 'b')`` is one string, so the
+        pieces can sit on their own indented lines and still evaluate to
+        exactly the original specline. Correctness is structural here -- the
+        chunks are ``repr``-ed and concatenated verbatim, so only the choice of
+        break points is a judgement call.
+        """
+        # Break after the opening "$fqcn(", then at each top-level kwarg, then
+        # inside spec={...} at each entry.
+        head, _, rest = specline.partition('(')
+        pieces = [head + '(']
+        for kw in self._split_top_level(rest):
+            if kw.startswith('spec={'):
+                inner = kw[len('spec={'):]
+                closing = inner.rfind('}')
+                entries = inner[:closing] if closing != -1 else inner
+                tail = inner[closing:] if closing != -1 else ''
+                pieces.append('spec={')
+                pieces.extend(self._split_top_level(entries))
+                pieces.append(tail)
+            else:
+                pieces.append(kw)
+        pieces = [p for p in pieces if p]
+        body = f"\n{indent}".join(repr(p) for p in pieces)
+        return f"(\n{indent}{body}\n{indent})"
+
+    # Tailkwargs that quote()/cite() keep when `tailkwargs=False` (the default).
+    #
+    # The other ~25 tailkwargs are purely operational -- log verbosity, worker
+    # counts, cache limits, start methods, timeouts -- and none of them change
+    # what the block IS, so they are noise in a citation and they dominate it.
+    #
+    # `tag` is the one that cannot be dropped silently. It is NOT part of the
+    # identity hash (norm() is built from _rootkwargs_ + spec), but
+    # keyby='tag_version_shorthash' puts it in the artifact PATH, so a citation
+    # without it re-evaluates to the same hash at a DIFFERENT key -- i.e. it
+    # points at storage that does not hold the artifact you cited.
+    CITE_KEEP_TAILKWARGS = ('tag',)
+
+    def quote(self, *, deslash: int = 0, cite: bool = False, pretty: bool = False,
+              tailkwargs: bool = True):
+        """Return an evaluable ``$fqcn(...)`` specline for this block.
+
+        ``tailkwargs=True`` (the default HERE) keeps every operational kwarg,
+        because quote() is the **evaluable** form and those kwargs are part of
+        reconstructing a working block -- ``local`` in particular decides where
+        local artifacts are staged, so dropping it sends ``find_latest_ckpt``
+        to a different directory even though the hash and key still match.
+        :meth:`cite` defaults the other way: it is presentation-only, so it
+        shows just ``CITE_KEEP_TAILKWARGS`` (``tag``) and omits the rest as
+        noise.
+
+        ``pretty=True`` wraps one kwarg per line. It stays OFF by default
+        because the result is a specline that gets ``eval``-ed on the way back
+        in (see ``dataparts.eval``), so formatting must be opt-in rather than
+        silently changing what every caller emits.
+        """
+        mode = 'quote' if not cite else 'cite'
+        quoted_spec = self.__expand_spec__(mode)
+        def quotestr(x):
             return repr(x) if isinstance(x, str) else x
-        kwargstrs = [f"{k}={cite(v)}" for k, v in {**self._rootkwargs_, **{'spec': quoted_spec}, **self._tailkwargs_}.items()]
-        kwargsrepr = ', '.join(kwargstrs)
-        quote = f"${self.fqcn}({kwargsrepr})"
-        if deslash:
-            quote = quote.replace('\\', '')
+        kwargs = {**self._rootkwargs_, **{'spec': quoted_spec},}
+        if tailkwargs:
+            kwargs.update(**self._tailkwargs_)
+        else:
+            kwargs.update({
+                k: v for k, v in self._tailkwargs_.items()
+                if k in self.CITE_KEEP_TAILKWARGS
+            })
+        kwargstrs = [f"{k}={quotestr(v)}" for k, v in kwargs.items()]
+        if pretty:
+            # A FIXED 4-space indent, and the spec dict broken one entry per
+            # line -- the two things that made the previous attempt unreadable:
+            #
+            #  * Aligning the indent to len("$fully.qualified.ClassName(")
+            #    is 40-60 columns for these classes, so every continuation line
+            #    began with a huge run of spaces. That is the "weird trailing
+            #    whitespace": a lone line of blanks once anything re-wraps it.
+            #  * Splitting only the top-level kwargs leaves the entire CONFIG
+            #    on one enormous `spec={...}` line, which is exactly the part
+            #    you wanted to read -- hence "no indentation".
+            #
+            # Do NOT pformat the joined string: pformat(str) returns that
+            # string's *repr*, which turns the whole argument list into one
+            # quoted positional ("takes 1 positional argument but 2 were
+            # given"). Nested blocks are quoted NON-pretty (the defaults
+            # above), because a nested specline is stored as a string value and
+            # the outer repr would escape its newlines to backslash-n -- which
+            # `deslash` then strips to a bare "n", corrupting the specline.
+            IND = '    '
+            parts = []
+            for k, v in kwargs.items():
+                if k == 'spec' and isinstance(v, dict):
+                    rows = []
+                    for sk, sv in v.items():
+                        if isinstance(sv, str) and self.is_specline(sv):
+                            # Nested block: indented concatenation chunks, so it
+                            # is readable without ceasing to be one string.
+                            val = self._cite_chunks(sv, IND * 3)
+                        else:
+                            val = repr(sv)
+                        rows.append(f"{IND * 2}{sk!r}: {val},\n")
+                    parts.append(f"{IND}spec={{\n{''.join(rows)}{IND}}}")
+                else:
+                    parts.append(f"{IND}{k}={quotestr(v)}")
+            quote = f"{self.fqcn}(\n" + ",\n".join(parts) + ",\n)"
+        else:
+            quote = f"{self.fqcn}({', '.join(kwargstrs)})"
+        if deslash != 0:
+            for i in range(deslash):
+                quote = quote.replace('\\', '')
+        if not cite:
+            quote = f"${quote}"
         self.log.detailed(f"quote: ------------> {quoted_spec=}")
         self.log.detailed(f"quote: ------------> {quote=}")
         return quote
+
+    def cite(self, *, deslash: int = 2, pretty: bool = True,
+             tailkwargs: bool = False, _indent: str = ''):
+        """Human-readable rendering of the block graph. **Presentation only.**
+
+        Deliberately NOT evaluable -- :meth:`quote` is the evaluable form. That
+        distinction is what makes this readable at any depth: because the output
+        never has to survive ``eval``, a nested block is emitted as a real
+        indented block rather than as a quoted specline string.
+
+        The difference matters most where it used to hurt. Representing a child
+        as a string means the parent's ``repr`` escapes it, and a
+        grandchild ends up inside a string inside a string -- doubling
+        backslashes at every level until the deep entries are unreadable no
+        matter how they are wrapped. Recursing over the *object graph* instead
+        removes the quoting entirely, so depth costs nothing but indentation.
+
+        ``tailkwargs=False`` (default) shows only :attr:`CITE_KEEP_TAILKWARGS`.
+        ``deslash`` is retained for compatibility and applied last; it is
+        normally a no-op here, since the recursive form emits no escaped
+        strings to begin with.
+        """
+        IND = '    '
+        inner = _indent + IND
+        lines = [f"${self.fqcn}("]
+        for k, v in self._rootkwargs_.items():
+            lines.append(f"{inner}{k}={v!r},")
+
+        lines.append(f"{inner}spec={{")
+        for sk in sorted(self.CONFIG.__dataclass_fields__):
+            # getattr resolves a specline to the Datablock it names, so nested
+            # children are detected by TYPE rather than by sniffing for a '$'.
+            val = getattr(self.cfg, sk)
+            if isinstance(val, Datablock):
+                rendered = val.cite(
+                    deslash=0, pretty=pretty, tailkwargs=tailkwargs,
+                    _indent=inner + IND,
+                )
+                lines.append(f"{inner}{IND}{sk!r}: {rendered},")
+            else:
+                lines.append(f"{inner}{IND}{sk!r}: {val!r},")
+        lines.append(f"{inner}}},")
+
+        tail = (self._tailkwargs_ if tailkwargs else
+                {k: v for k, v in self._tailkwargs_.items()
+                 if k in self.CITE_KEEP_TAILKWARGS})
+        for k, v in tail.items():
+            lines.append(f"{inner}{k}={v!r},")
+        lines.append(f"{_indent})")
+
+        cite = '\n'.join(lines)
+        if not pretty:
+            cite = ' '.join(l.strip() for l in lines)
+        for _ in range(max(deslash, 0)):
+            cite = cite.replace('\\', '')
+        self.log.detailed(f"cite: ------------> {cite=}")
+        return cite
 
     def norm(self, *, deslash: bool = False):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
@@ -2128,7 +2405,7 @@ class Datablock:
         norm = self.__repr_from_kwargs__({
             **self._rootkwargs_,
             **{'spec': norm_spec},
-        }, anchor=None)
+        }, anchor=None, quote_strs=not self.LEGACY_NORM)
         if deslash:
             norm = norm.replace('\\', '')
         self.log.detailed(f"norm: ------------> {norm_spec=}")
@@ -2142,7 +2419,7 @@ class Datablock:
         supernorm = self.__repr_from_kwargs__({
             **self._rootkwargs_,
             **{'spec': supernorm_spec},
-        }, anchor='fqcn')
+        }, anchor='fqcn', quote_strs=not self.LEGACY_NORM)
         if deslash:
             supernorm = supernorm.replace('\\', '')
         self.log.detailed(f"supernorm: ------------> {supernorm_spec=}")
@@ -2193,18 +2470,140 @@ class Datablock:
             result[key] = value
         return result
 
-    def _journal_entry(self, journal: dict) -> 'JournalEntry':
-        """Select a single :class:`JournalEntry` from a *journal* selector dict.
+    @staticmethod
+    def _split_top_level_items(inner: str, sep: str = ','):
+        """Split *inner* at ``sep`` occurrences that are not nested or quoted.
+
+        Unlike :meth:`_split_top_level` (which retains the separators so a
+        citation can be re-joined verbatim), this drops them: it is for
+        *parsing* a rendered norm back into its parts.
+        """
+        out, buf, depth, quote, esc = [], [], 0, None, False
+        for c in inner:
+            if esc:
+                buf.append(c); esc = False; continue
+            if c == '\\':
+                buf.append(c); esc = True; continue
+            if quote is not None:
+                buf.append(c)
+                if c == quote:
+                    quote = None
+                continue
+            if c in ('"', "'"):
+                quote = c; buf.append(c); continue
+            if c in ('(', '[', '{'):
+                depth += 1
+            elif c in (')', ']', '}'):
+                depth -= 1
+            elif c == sep and depth == 0:
+                out.append(''.join(buf)); buf = []
+                continue
+            buf.append(c)
+        if buf:
+            out.append(''.join(buf))
+        return out
+
+    @classmethod
+    def _parse_dictstr(cls, text: str) -> dict:
+        """Parse a rendered dict literal ``{'k': v, ...}`` into ``{k: vstr}``.
+
+        Values are left as their source text -- they may be nested norms, or
+        reprs of objects that :func:`ast.literal_eval` would reject, so nothing
+        here evaluates them. Returns ``{}`` when *text* is not a dict literal or
+        has no ``key: value`` pairs, which the callers treat as "leaf, not
+        structure".
+        """
+        text = text.strip()
+        if not (text.startswith('{') and text.endswith('}')):
+            return {}
+        out = {}
+        for item in cls._split_top_level_items(text[1:-1]):
+            if not item.strip():
+                continue
+            parts = cls._split_top_level_items(item, sep=':')
+            if len(parts) < 2:
+                return {}
+            key, value = parts[0].strip(), ':'.join(parts[1:]).strip()
+            unquoted = cls._unquote_str(key)
+            out[unquoted if unquoted is not None else key] = value
+        return out
+
+    @staticmethod
+    def _unquote_str(text: str):
+        """Return the content of *text* if it is one quoted string literal, else None."""
+        text = text.strip()
+        if len(text) < 2 or text[0] != text[-1] or text[0] not in ('"', "'"):
+            return None
+        try:
+            value = ast.literal_eval(text)
+        except Exception:
+            return None
+        return value if isinstance(value, str) else None
+
+    @staticmethod
+    def _is_normstr(text: str) -> bool:
+        """True if *text* looks like ``(k=v, ...)`` or ``fqcn(k=v, ...)``."""
+        text = text.strip()
+        if not text.endswith(')'):
+            return False
+        head, _, _ = text.partition('(')
+        if head is text:
+            return False
+        return head == '' or all(p.isidentifier() for p in head.split('.'))
+
+    @classmethod
+    def _structure_normval(cls, value):
+        """Recursively expand a norm VALUE into nested dicts where it is structural.
+
+        A norm is flat text, so a nested block arrives as one long string --
+        which is why a diff of two nearly-identical trees used to come back as
+        a pair of multi-kilobyte blobs. Here each value is expanded when it is
+        a dict literal or a nested norm (possibly wrapped in one layer of
+        quoting, since a child norm is stored as a string VALUE in the parent's
+        spec dict), and left exactly as-is when it is a leaf.
+
+        Anything that does not parse into at least one key stays a leaf, so a
+        tuple like ``'(0.75, 1.5)'`` -- which is parenthesised but has no
+        ``k=v`` pairs -- is not mistaken for a block.
+        """
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        inner = cls._unquote_str(text)
+        if inner is not None:
+            structured = cls._structure_normval(inner)
+            # Only adopt the unquoted form if it actually held structure;
+            # otherwise keep the original text so leaves stay unambiguous.
+            return structured if isinstance(structured, dict) else value
+        if text.startswith('{') and text.endswith('}'):
+            parsed = cls._parse_dictstr(text)
+            if parsed:
+                return {k: cls._structure_normval(v) for k, v in parsed.items()}
+            return value
+        if cls._is_normstr(text):
+            parsed = Datablock._parse_norm(text)
+            if parsed:
+                return {k: cls._structure_normval(v) for k, v in parsed.items()}
+        return value
+
+    def _journal_entry(self, journal: dict) -> 'DatajournalEntry':
+        """Select a single :class:`DatajournalEntry` from a *journal* selector dict.
 
         Exactly one of the keys ``entry_path``, ``iloc``, or ``loc`` must be
         present:
 
         - ``entry_path`` : path to a journal ``.parquet`` file (as stored in
-          ``JournalFrame.entry_path``); the entry is read directly from it.
+          ``Datajournal.entry_path``); the entry is read directly from it.
         - ``iloc`` / ``loc`` : positional/label selector forwarded to
           :meth:`journal`.
+
+        Any OTHER key is forwarded to :meth:`journal` as a column filter, so
+        ``dict(event='build:end', iloc=0)`` means "the first ``build:end``
+        entry" -- these used to be dropped silently, which made that selector
+        return the newest entry of ANY event instead.
         """
         selectors = {k: journal[k] for k in ('entry_path', 'iloc', 'loc') if k in journal}
+        filters = {k: v for k, v in journal.items() if k not in selectors}
         if len(selectors) != 1:
             raise ValueError(
                 "journal must contain exactly one of 'entry_path', 'iloc', or "
@@ -2212,25 +2611,37 @@ class Datablock:
             )
         (key, value), = selectors.items()
         if key == 'entry_path':
+            if filters:
+                raise ValueError(
+                    f"journal={{'entry_path': ...}} names one file, so the extra "
+                    f"filters {sorted(filters)} cannot be applied; drop them or "
+                    f"select with 'iloc'/'loc' instead"
+                )
             fs, _ = fsspec.url_to_fs(value, **(self.storage_options or {}))
             with fs.open(value, 'rb') as f:
                 _df = pd.read_parquet(f)
-            return JournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
-        return self.journal(**{key: value})
+            return DatajournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
+        return self.journal(**{key: value}, **filters)
 
     def diffnorm(
         self,
         other_norm: 'str | None' = None,
         *,
         journal: 'dict | None' = None,
-    ) -> dict:
-        """Diff this datablock's norm against another norm string key-by-key.
+        recursive: bool = True,
+        deslash: bool = False,
+        report: bool = False,
+        maxlen: 'int | None' = 160,
+    ) -> 'dict | str':
+        """Diff this datablock's norm against another norm, key by key.
 
-        Uses ``self.norm()`` as the reference (self) side.  The other side
-        can be supplied as a raw string or read from a :class:`JournalEntry`.
-        Returns a ``dict`` mapping each differing key to a
-        ``(self_value, other_value)`` tuple.  Keys present on only one side
-        carry ``None`` for the missing value.
+        Uses ``self.norm()`` as the reference (self) side. The other side can be
+        supplied as a raw string or read from a :class:`DatajournalEntry`. Returns a
+        **sparse** dict: only differing keys appear, and a difference inside a
+        nested block appears as a nested dict, so the leaf that actually changed
+        is at the end of a short path instead of buried in two long strings.
+        Leaf differences are ``(self_value, other_value)`` tuples; a key present
+        on one side only carries ``None`` for the other.
 
         Parameters
         ----------
@@ -2241,37 +2652,94 @@ class Datablock:
             Selector dict for the journal entry whose ``norm`` is the other
             side, used as the fallback source for *other_norm* when it is
             ``None``.  Exactly one of ``entry_path``, ``iloc``, or ``loc``
-            must be present (see :meth:`_journal_entry`).
+            must be present; any other key filters the journal (see
+            :meth:`_journal_entry`).
+        recursive:
+            Descend into nested blocks and spec dicts (default). ``False``
+            restores the flat one-key-per-top-level-kwarg comparison, where a
+            single changed leaf shows up as two whole rendered subtrees.
+        deslash:
+            Strip backslashes from the reported values. A nested norm is a
+            string inside a string inside a string, so its quotes are escaped
+            once per level of depth and the deep leaves are unreadable as-is.
+            Applied to the OUTPUT only, never before parsing -- deslashing
+            first would destroy the ``\\'`` escapes the parser needs.
+        report:
+            Return a flat, readable ``path -> self/other`` text block instead
+            of the dict. One path per difference, so nothing has to be read
+            around.
+        maxlen:
+            Truncate values longer than this in the *report* only; the dict
+            always carries the full values. ``None`` disables truncation.
         """
+        def clean(value):
+            if deslash and isinstance(value, str):
+                return value.replace('\\', '')
+            return value
+
         def diffdict(d1, d2):
-            all_keys = sorted(set(d1) | set(d2))
             diff = {}
-            for key in all_keys:
+            for key in sorted(set(d1) | set(d2)):
                 val1 = d1.get(key)
                 val2 = d2.get(key)
                 if isinstance(val1, dict) and isinstance(val2, dict):
-                    self.log.verbose(f"RECURSIVE CALL!")
                     valdiff = diffdict(val1, val2)
                     if len(valdiff) > 0:
                         diff[key] = valdiff
-                else:
-                    if val1 != val2:
-                        diff[key] = (val1, val2)
+                elif val1 != val2:
+                    diff[key] = (clean(val1), clean(val2))
             return diff
+
         if other_norm is None and journal is not None:
             _entry = self._journal_entry(journal)
             other_norm = _entry.read('norm') or ''
         parsed_self  = Datablock._parse_norm(self.norm())
         parsed_other = Datablock._parse_norm(other_norm or '')
-        return diffdict(parsed_self, parsed_other)
+        if recursive:
+            parsed_self = {k: self._structure_normval(v) for k, v in parsed_self.items()}
+            parsed_other = {k: self._structure_normval(v) for k, v in parsed_other.items()}
+        diff = diffdict(parsed_self, parsed_other)
+        if not report:
+            return diff
+        return self.format_diffnorm(diff, maxlen=maxlen)
+
+    @classmethod
+    def format_diffnorm(cls, diff: dict, *, maxlen: 'int | None' = 160) -> str:
+        """Render a :meth:`diffnorm` result as one ``path`` + self/other per difference."""
+        def crop(value):
+            text = value if isinstance(value, str) else repr(value)
+            if maxlen is not None and len(text) > maxlen:
+                text = f"{text[:maxlen]}... (+{len(text) - maxlen} chars)"
+            return text
+
+        def walk(node, path):
+            for key, value in node.items():
+                here = path + [str(key)]
+                if isinstance(value, dict):
+                    walk(value, here)
+                else:
+                    self_val, other_val = value
+                    lines.append('.'.join(here))
+                    lines.append(f"    self : {crop(self_val)}")
+                    lines.append(f"    other: {crop(other_val)}")
+
+        lines = []
+        walk(diff, [])
+        if not lines:
+            return "no differences"
+        return '\n'.join(lines)
 
     def __repr__(self, *, deslash: bool = True):
+        # quote_strs is unconditional here, LEGACY_NORM or not: __repr__ is not
+        # an input to hashstr, so quoting can only make the rendering more
+        # faithful -- `url=abfss://x` is not evaluable at all, `url='abfss://x'`
+        # is. Only norm()/supernorm() have to honour the legacy form.
         repr_spec = self.__expand_spec__('repr')
         r = self.__repr_from_kwargs__({
             **self._rootkwargs_,
             **{'spec': repr_spec},
             **self._tailkwargs_,
-        }, anchor='fqcn')
+        }, anchor='fqcn', quote_strs=True)
         self.log.detailed(f"__repr__(): ------------> {repr_spec=}")
         self.log.detailed(f"__repr__(): ------------> __repr__={r}")
         if deslash:
@@ -2763,6 +3231,7 @@ class Datablock:
         self._write_journal_dict('dfn', self.dfn)
         self._write_journal_dict('kwargs', self.kwargs)
         self._write_str('quote', self.quote())
+        self._write_str('cite', self.cite())
         self._write_str('repr', self.__repr__())
         self._write_str('norm', self.norm())
         self._write_str('supernorm', self.supernorm())
@@ -2777,6 +3246,7 @@ class Datablock:
         dfn_path = self._dbxanchorhashpathx('dfn', 'yaml')
         kwargs_path = self._dbxanchorhashpathx('kwargs', 'yaml')
         quote_path = self._dbxanchorhashpathx('quote', 'txt')
+        cite_path = self._dbxanchorhashpathx('cite', 'txt')
         norm_path = self._dbxanchorhashpathx('norm', 'txt')
         repr_path = self._dbxanchorhashpathx('repr', 'txt')
         hashstr_path = self._dbxanchorhashpathx('hashstr', 'txt')
@@ -2823,6 +3293,7 @@ class Datablock:
                                          'dfn': dfn_path,
                                          'kwargs': kwargs_path,
                                          'quote': quote_path,
+                                         'cite': cite_path,
                                          'norm': norm_path,
                                          'supernorm': supernorm_path,
                                          'repr': repr_path,
@@ -2892,11 +3363,11 @@ class Datablock:
                 df = None
         else:
             df = None
-        journal = JournalFrame(df, storage_options=storage_options, **filter_kwargs)
+        journal = Datajournal(df, storage_options=storage_options, **filter_kwargs)
         if loc is not None:
-            result = JournalEntry(journal.loc[loc].dropna(), storage_options=storage_options)
+            result = DatajournalEntry(journal.loc[loc].dropna(), storage_options=storage_options)
         elif iloc is not None:
-            result = JournalEntry(journal.iloc[iloc].dropna(), storage_options=storage_options)
+            result = DatajournalEntry(journal.iloc[iloc].dropna(), storage_options=storage_options)
         else:
             result = journal
         return result
@@ -2907,14 +3378,14 @@ class Datablock:
         return self.Journal(self.anchor, loc=loc, iloc=iloc, url=self._url_, storage_options=self.storage_options, **filter_kwargs)
 
     def lastbuilt(self):
-        """Return the most recent 'build:end' JournalEntry, or None."""
+        """Return the most recent 'build:end' DatajournalEntry, or None."""
         j = self.journal(event='build:end')
         if len(j) == 0:
             return None
         return j.get(0, dropna=True)
 
     def running(self):
-        """Return the latest 'build:start' JournalEntry with no matching 'build:end', or None."""
+        """Return the latest 'build:start' DatajournalEntry with no matching 'build:end', or None."""
         j = self.journal()
         if len(j) == 0:
             return None
@@ -2924,7 +3395,7 @@ class Datablock:
         if not running_hashes:
             return None
         running_entries = j[(j['event'] == 'build:start') & (j['hash'].isin(running_hashes))]
-        return JournalEntry(running_entries.iloc[0].dropna(), storage_options=self.storage_options)
+        return DatajournalEntry(running_entries.iloc[0].dropna(), storage_options=self.storage_options)
 
     #JOURNAL: END
     

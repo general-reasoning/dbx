@@ -30,6 +30,13 @@ All notable changes to this project will be documented in this file.
 - **`Datablock.format_diffnorm(diff)`** — renders a `diffnorm` dict as text.
 
 ### Fixed
+- **A filtered `Datajournal` kept the row labels of the unfiltered journal**, so
+  `loc=`/`Datajournal.get()` — which index by label — raised `KeyError` for positions
+  whose rows the filter had removed. `lastbuilt()` is `journal(event='build:end').get(0)`,
+  so it failed for any block whose newest journal entry was some other event — the normal
+  state for a block whose artifact was copied in (`UNSAFE_copy_from:END`). Filtered
+  journals are now renumbered 0..N-1; frames you slice yourself keep pandas' label
+  semantics.
 - **`diffnorm(journal=...)` silently dropped extra selector keys**: `dict(event='build:end',
   iloc=0)` ignored `event` and returned the newest entry of *any* event. Extra keys are now
   forwarded to `journal()` as column filters; combining them with `entry_path` raises.

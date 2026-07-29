@@ -670,7 +670,21 @@ class Datajournal(pd.DataFrame):
                     df = df[df[k].isin(v)]
                 else:
                     df = df[df[k] == v]
-        
+
+        if filter_kwargs:
+            # Renumber 0..N-1, because filtering above kept the LABELS the rows
+            # had in the unfiltered journal. Those labels are what `loc=` and
+            # :meth:`get` index by, so without this a filtered journal raised
+            # KeyError for every position whose row the filter removed:
+            # journal(event='build:end', loc=0) and lastbuilt() both failed
+            # whenever the newest entry was some other event.
+            #
+            # Guarded on filter_kwargs so it only fires when this constructor
+            # did the filtering. A caller slicing a Datajournal with a boolean
+            # mask (see :meth:`running`) keeps pandas' label semantics, and
+            # subclass slicing does not reach __init__ at all.
+            df = df.reset_index(drop=True)
+
         # Initialize the DataFrame first
         super().__init__(df)
         
@@ -680,6 +694,12 @@ class Datajournal(pd.DataFrame):
             
 
     def get(self, entry:int, *, dropna: bool = False):
+        """Return the entry at LABEL *entry* (``.loc``, not ``.iloc``).
+
+        A Datajournal is numbered 0..N-1 newest-first, including one built with
+        filter kwargs, so a label is also a position -- but only for a journal
+        this class constructed. Index a frame you sliced yourself with ``.iloc``.
+        """
         entry = self.loc[entry]
         if dropna:
             entry = entry.dropna()

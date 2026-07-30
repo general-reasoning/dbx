@@ -17,7 +17,7 @@ diff would report ``{}`` for them and hide a real change.
 import pytest
 from dataclasses import dataclass
 
-from dbx.datablocks import Datablock
+from dbx.datablocks import ABSENT, Datablock
 
 
 @pytest.fixture(autouse=True)
@@ -74,21 +74,21 @@ class TestRecursiveDescent:
         b = _tree(tmp_path, label='CHANGED')
         diff = b.diffnorm(a.norm())
         assert diff == {'spec': {'mid': {'spec': {'leaf': {'spec': {
-            'label': ("'CHANGED'", "'leaf'")}}}}}}
+            'label': ('CHANGED', 'leaf')}}}}}}
 
     def test_only_the_differing_leaf_appears(self, tmp_path):
         """Sparse: siblings that match must not be carried along."""
         diff = _tree(tmp_path, seed=7).diffnorm(_tree(tmp_path).norm())
-        assert diff == {'spec': {'mid': {'spec': {'seed': ('7', '42')}}}}
+        assert diff == {'spec': {'mid': {'spec': {'seed': (7, 42)}}}}
         assert 'leaf' not in diff['spec']['mid']['spec']
 
     def test_two_changes_at_different_depths(self, tmp_path):
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED', epochs=99)
         diff = b.diffnorm(a.norm())
-        assert diff['spec']['epochs'] == ('99', '10')
+        assert diff['spec']['epochs'] == (99, 10)
         assert diff['spec']['mid']['spec']['leaf']['spec']['label'] == (
-            "'CHANGED'", "'leaf'")
+            'CHANGED', 'leaf')
 
     def test_flat_mode_keeps_the_whole_subtree(self, tmp_path):
         a = _tree(tmp_path)
@@ -96,7 +96,11 @@ class TestRecursiveDescent:
         flat = b.diffnorm(a.norm(), recursive=False)
         assert set(flat) == {'spec'}
         self_side, other_side = flat['spec']
-        assert isinstance(self_side, str) and len(self_side) > 200
+        assert not isinstance(self_side, tuple), "flat mode descended anyway"
+        assert len(repr(self_side)) > 200, "the whole subtree should be one value"
+        # raw=True is the un-deserialised form: one long string, as rendered.
+        raw_self = b.diffnorm(a.norm(), recursive=False, raw=True)['spec'][0]
+        assert isinstance(raw_self, str) and len(raw_self) > 200
 
     def test_no_difference_is_empty(self, tmp_path):
         a = _tree(tmp_path)
@@ -118,8 +122,8 @@ class TestTupleValuesStayLeaves:
         diff = b.diffnorm(a.norm())
         leafdiff = diff['spec']['mid']['spec']['leaf']['spec']
         assert 'ratio' in leafdiff
-        self_val, other_val = leafdiff['ratio']
-        assert '0.5' in self_val and '0.75' in other_val
+        # Evaluated back into real tuples, not left as text.
+        assert leafdiff['ratio'] == ((0.5, 2.0), (0.75, 1.5))
 
     def test_structure_normval_leaves_a_tuple_alone(self):
         assert Datablock._structure_normval("'(0.75, 1.5)'") == "'(0.75, 1.5)'"
@@ -144,9 +148,10 @@ class TestDeslash:
     def test_deslash_strips_escapes_from_reported_values(self, tmp_path):
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED')
-        raw = b.diffnorm(a.norm(), recursive=False)['spec'][0]
+        raw = b.diffnorm(a.norm(), recursive=False, raw=True)['spec'][0]
         assert '\\' in raw, "expected the flat form to carry escapes"
-        clean = b.diffnorm(a.norm(), recursive=False, deslash=True)['spec'][0]
+        clean = b.diffnorm(a.norm(), recursive=False, raw=True,
+                           deslash=True)['spec'][0]
         assert '\\' not in clean
 
     def test_deslash_does_not_break_parsing(self, tmp_path):
@@ -182,7 +187,7 @@ class TestReport:
         text = b.diffnorm(a.norm(), report=True, maxlen=40)
         assert '(+' in text and 'chars)' in text
         full = b.diffnorm(a.norm())['spec']['mid']['spec']['leaf']['spec']['label'][0]
-        assert len(full) > 400
+        assert full == 'x' * 400
 
     def test_maxlen_none_disables_truncation(self, tmp_path):
         a = _tree(tmp_path)
@@ -230,7 +235,7 @@ class TestJournalFilters:
         a.build()
         b = self.Solo(url=str(tmp_path), spec={'x': 2})
         assert b.diffnorm(journal={'event': 'build:end', 'iloc': 0}) == {
-            'spec': {'x': ('2', '1')}}
+            'spec': {'x': (2, 1)}}
 
     def test_a_filter_matching_nothing_is_visible(self, tmp_path):
         a = self.Solo(url=str(tmp_path), spec={'x': 1})
@@ -261,3 +266,174 @@ class TestSplitTopLevelItems:
     def test_parse_dictstr_rejects_a_non_dict(self):
         assert Datablock._parse_dictstr("(a=1)") == {}
         assert Datablock._parse_dictstr("{1, 2}") == {}
+
+
+class TestTypedLeaves:
+    """A norm is flat text, but the text records the type -- so recover it.
+
+    Reading ``('15.0', "'15.0'")`` off a diff, you cannot tell a float from a
+    string: both sides are strings, one of which happens to contain quotes.
+    Evaluated, the same pair reads ``(15.0, '15.0')`` -- which says the two sides
+    were rendered by different LEGACY_NORM settings, not that the value changed.
+    """
+
+    @dataclass
+    class _C(Datablock.CONFIG):
+        ori_extent: float = 15.0
+        n: object = 128
+        flag: bool = True
+        nothing: object = None
+        ratio: object = (0.75, 1.5)
+        label: str = 'abc'
+
+    def _blocks(self):
+        class L(Datablock):
+            LEGACY_NORM = True
+            TOPICS = {'o': 'o.txt'}
+            CONFIG = TestTypedLeaves._C
+            def __build__(self): pass
+        class M(Datablock):
+            TOPICS = {'o': 'o.txt'}
+            CONFIG = TestTypedLeaves._C
+            def __build__(self): pass
+        return M(url='/tmp/dbx-typed'), L(url='/tmp/dbx-typed')
+
+    def test_types_survive_into_the_diff(self):
+        modern, legacy = self._blocks()
+        diff = modern.diffnorm(legacy.norm())['spec']
+        assert diff['n'] == (128, '128')
+        assert diff['ori_extent'] == (15.0, '15.0')
+        assert diff['nothing'] == (None, 'None')
+        assert diff['ratio'] == ((0.75, 1.5), '(0.75, 1.5)')
+
+    def test_self_side_types_are_the_real_python_types(self):
+        modern, legacy = self._blocks()
+        diff = modern.diffnorm(legacy.norm())['spec']
+        assert isinstance(diff['n'][0], int)
+        assert isinstance(diff['ori_extent'][0], float)
+        assert diff['nothing'][0] is None
+        assert isinstance(diff['ratio'][0], tuple)
+        # ... and the legacy side is genuinely a string, which is the finding.
+        assert all(isinstance(diff[k][1], str)
+                   for k in ('n', 'ori_extent', 'nothing', 'ratio'))
+
+    def test_raw_gives_the_source_text_back(self):
+        modern, legacy = self._blocks()
+        diff = modern.diffnorm(legacy.norm(), raw=True)['spec']
+        assert diff['n'] == ('128', "'128'")
+        assert diff['ori_extent'] == ('15.0', "'15.0'")
+
+    def test_a_non_literal_leaf_is_left_alone(self):
+        """Urls, object reprs and speclines are not Python literals."""
+        assert Datablock._literal('abfss://c@a.net/x') == 'abfss://c@a.net/x'
+        assert Datablock._literal('<Foo object at 0x7f00>') == '<Foo object at 0x7f00>'
+        assert Datablock._literal('$pkg.mod.Cls(a=1)') == '$pkg.mod.Cls(a=1)'
+        assert Datablock._literal('2026-07-19 22:34:17') == '2026-07-19 22:34:17'
+
+    def test_literal_round_trips_the_scalars(self):
+        assert Datablock._literal('128') == 128
+        assert Datablock._literal('15.0') == 15.0
+        assert Datablock._literal('None') is None
+        assert Datablock._literal('True') is True
+        assert Datablock._literal("'15.0'") == '15.0'
+        assert Datablock._literal('(0.75, 1.5)') == (0.75, 1.5)
+        assert Datablock._literal("['a', 'b']") == ['a', 'b']
+
+
+class TestTypingNeverHidesADifference:
+    """Detection compares the TEXT; only the reporting is evaluated."""
+
+    @dataclass
+    class _C(Datablock.CONFIG):
+        n: object = 1
+
+    def _cls(self):
+        class M(Datablock):
+            TOPICS = {'o': 'o.txt'}
+            CONFIG = TestTypingNeverHidesADifference._C
+            def __build__(self): pass
+        return M
+
+    def test_int_versus_float_is_still_reported(self):
+        """``1 == 1.0`` in Python, so evaluating first would drop this entirely."""
+        M = self._cls()
+        diff = M(url='/tmp/dbx-typed', spec=dict(n=1)).diffnorm(
+            M(url='/tmp/dbx-typed', spec=dict(n=1.0)).norm())
+        assert diff == {'spec': {'n': ('1', '1.0')}}
+
+    def test_quoted_versus_bare_is_still_visible(self):
+        """The two sides evaluate to the same str, so the bytes are reported.
+
+        This is the `url=` kwarg across the LEGACY_NORM boundary: quoted on one
+        side, bare on the other. Showing the evaluated values would print the
+        same thing twice.
+        """
+        M = self._cls()
+        class L(M):
+            LEGACY_NORM = True
+        diff = M(url='/tmp/dbx-typed').diffnorm(L(url='/tmp/dbx-typed').norm())
+        assert diff['url'] == ("'/tmp/dbx-typed'", '/tmp/dbx-typed')
+
+
+class TestAbsentIsNotNone:
+    """A missing key and a key whose value is None are different findings."""
+
+    def test_absent_marker_is_distinct_from_a_none_value(self, tmp_path):
+        @dataclass
+        class CA(Datablock.CONFIG):
+            kept: object = None
+        @dataclass
+        class CB(CA):
+            added: object = None
+
+        class A(Datablock):
+            TOPICS = {'o': 'o.txt'}
+            CONFIG = CA
+            def __build__(self): pass
+        class B(A):
+            CONFIG = CB
+
+        diff = B(url=str(tmp_path)).diffnorm(A(url=str(tmp_path)).norm())
+        self_val, other_val = diff['spec']['added']
+        assert self_val is None, "a real None value"
+        assert other_val is ABSENT, "the key did not exist on the other side"
+        assert repr(other_val) == '<absent>'
+        assert not other_val
+
+    def test_absent_survives_raw(self, tmp_path):
+        @dataclass
+        class CA(Datablock.CONFIG):
+            kept: int = 1
+        @dataclass
+        class CB(CA):
+            added: int = 2
+
+        class A(Datablock):
+            TOPICS = {'o': 'o.txt'}
+            CONFIG = CA
+            def __build__(self): pass
+        class B(A):
+            CONFIG = CB
+
+        diff = B(url=str(tmp_path)).diffnorm(A(url=str(tmp_path)).norm(), raw=True)
+        assert diff['spec']['added'] == ('2', ABSENT)
+
+
+class TestReportShowsTypes:
+
+    def test_report_distinguishes_a_float_from_its_string(self):
+        @dataclass
+        class C(Datablock.CONFIG):
+            ori_extent: float = 15.0
+
+        class M(Datablock):
+            TOPICS = {'o': 'o.txt'}
+            CONFIG = C
+            def __build__(self): pass
+        class L(M):
+            LEGACY_NORM = True
+
+        text = M(url='/tmp/dbx-typed').diffnorm(
+            L(url='/tmp/dbx-typed').norm(), report=True)
+        assert 'self : 15.0' in text
+        assert "other: '15.0'" in text

@@ -27,6 +27,16 @@ All notable changes to this project will be documented in this file.
   as two multi-kilobyte strings. New options: `recursive=False` (previous flat
   behaviour), `deslash=True` (strip escapes from the reported values), `report=True`
   (flat `path` + self/other text), `maxlen` (truncation, report only).
+- **`diffnorm()` reports TYPED leaves.** A norm is flat text, but the text records the
+  type, so a non-`LEGACY_NORM` block's `ori_extent=15.0` comes back as the float `15.0`
+  while a legacy block's comes back as the string `'15.0'` — making a pair like
+  `(15.0, '15.0')` legible as "different `LEGACY_NORM` settings", not "the value changed".
+  Detection still compares the raw text, so `n=1` vs `n=1.0` is reported even though
+  `1 == 1.0` in Python; and where evaluation would erase the difference (bare vs quoted
+  `url=`) the bytes are shown instead. `raw=True` returns the source text.
+- **`ABSENT`** — a key present on only one side of a `diffnorm` now carries this marker
+  (`<absent>`) instead of `None`, which is no longer distinguishable from a value that
+  genuinely *is* `None` now that leaves are typed.
 - **`Datablock.format_diffnorm(diff)`** — renders a `diffnorm` dict as text.
 
 ### Fixed

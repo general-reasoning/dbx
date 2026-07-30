@@ -333,6 +333,31 @@ def _size(entries):
     return sum((entry.get('size') or 0) for entry in entries)
 
 
+class _Absent:
+    """Singleton marking a key present on only ONE side of a :meth:`Datablock.diffnorm`.
+
+    Needed because diffnorm reports typed values: a key whose value *is* ``None``
+    and a key that is missing entirely would otherwise both come back as
+    ``None``, which are very different findings -- "this setting changed to None"
+    versus "this setting did not exist when that build ran".
+    """
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self):
+        return '<absent>'
+
+    def __bool__(self):
+        return False
+
+
+ABSENT = _Absent()
+
+
 class DatajournalEntry(pd.Series):
     """A single row from a Datablock journal, with convenience accessors.
 
@@ -2561,6 +2586,29 @@ class Datablock:
         return value if isinstance(value, str) else None
 
     @staticmethod
+    def _literal(text):
+        """``ast.literal_eval`` *text*, returning it unchanged if it is not a literal.
+
+        This is the deserialiser for a norm leaf. A norm is flat text, so every
+        value in it arrives as a string -- but the text itself records the type:
+        a non-``LEGACY_NORM`` block renders ``ori_extent=15.0`` as ``15.0``,
+        while a legacy one renders it ``'15.0'``. Evaluating the leaf recovers
+        that distinction, so a reported pair ``(15.0, '15.0')`` reads as "float
+        on one side, string on the other" instead of two identical-looking
+        strings.
+
+        Falls back to the source text for anything that is not a Python literal:
+        a bare url (``abfss://...``), an object repr (``<Foo at 0x...>``), a
+        specline, a timestamp.
+        """
+        if not isinstance(text, str):
+            return text
+        try:
+            return ast.literal_eval(text)
+        except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+            return text
+
+    @staticmethod
     def _is_normstr(text: str) -> bool:
         """True if *text* looks like ``(k=v, ...)`` or ``fqcn(k=v, ...)``."""
         text = text.strip()
@@ -2650,6 +2698,7 @@ class Datablock:
         journal: 'dict | None' = None,
         recursive: bool = True,
         deslash: bool = False,
+        raw: bool = False,
         report: bool = False,
         maxlen: 'int | None' = 160,
     ) -> 'dict | str':
@@ -2660,8 +2709,17 @@ class Datablock:
         **sparse** dict: only differing keys appear, and a difference inside a
         nested block appears as a nested dict, so the leaf that actually changed
         is at the end of a short path instead of buried in two long strings.
-        Leaf differences are ``(self_value, other_value)`` tuples; a key present
-        on one side only carries ``None`` for the other.
+
+        Leaf differences are ``(self_value, other_value)`` tuples, **typed**: a
+        norm is flat text, but the text records the type, so ``15.0`` comes back
+        as a float and ``'15.0'`` as a string (see :meth:`_literal`). A pair like
+        ``(15.0, '15.0')`` therefore says one side was rendered by a
+        ``LEGACY_NORM`` block and the other was not -- NOT that the value
+        changed. A key present on one side only carries :data:`ABSENT`, which is
+        deliberately distinct from a value that genuinely *is* ``None``.
+
+        Detection compares the raw text, not the evaluated values, so ``n=1`` vs
+        ``n=1.0`` is still reported even though ``1 == 1.0`` in Python.
 
         Parameters
         ----------
@@ -2683,7 +2741,13 @@ class Datablock:
             string inside a string inside a string, so its quotes are escaped
             once per level of depth and the deep leaves are unreadable as-is.
             Applied to the OUTPUT only, never before parsing -- deslashing
-            first would destroy the ``\\'`` escapes the parser needs.
+            first would destroy the ``\\'`` escapes the parser needs. Mostly
+            redundant now that leaves are evaluated, since evaluating a string
+            literal already resolves its escapes.
+        raw:
+            Report leaves as the verbatim source text instead of evaluating
+            them, for when the exact bytes that went into the hash are what you
+            need to see.
         report:
             Return a flat, readable ``path -> self/other`` text block instead
             of the dict. One path per difference, so nothing has to be read
@@ -2692,7 +2756,12 @@ class Datablock:
             Truncate values longer than this in the *report* only; the dict
             always carries the full values. ``None`` disables truncation.
         """
-        def clean(value):
+        def present(value):
+            """Evaluate a leaf for reporting. Detection already happened on the text."""
+            if value is ABSENT:
+                return value
+            if not raw:
+                value = self._literal(value)
             if deslash and isinstance(value, str):
                 return value.replace('\\', '')
             return value
@@ -2700,14 +2769,27 @@ class Datablock:
         def diffdict(d1, d2):
             diff = {}
             for key in sorted(set(d1) | set(d2)):
-                val1 = d1.get(key)
-                val2 = d2.get(key)
+                val1 = d1[key] if key in d1 else ABSENT
+                val2 = d2[key] if key in d2 else ABSENT
                 if isinstance(val1, dict) and isinstance(val2, dict):
                     valdiff = diffdict(val1, val2)
                     if len(valdiff) > 0:
                         diff[key] = valdiff
-                elif val1 != val2:
-                    diff[key] = (clean(val1), clean(val2))
+                elif val1 is ABSENT or val2 is ABSENT or val1 != val2:
+                    one, two = present(val1), present(val2)
+                    if not raw and one is not ABSENT and two is not ABSENT:
+                        try:
+                            indistinguishable = bool(one == two)
+                        except Exception:
+                            indistinguishable = False
+                        if indistinguishable:
+                            # Evaluating erased the very thing that differs --
+                            # bare `/tmp/x` vs quoted `'/tmp/x'` both evaluate to
+                            # the same str, and `1` vs `1.0` compare equal in
+                            # Python. Report the bytes instead of two values that
+                            # print identically.
+                            one, two = val1, val2
+                    diff[key] = (one, two)
             return diff
 
         if other_norm is None and journal is not None:
@@ -2727,7 +2809,10 @@ class Datablock:
     def format_diffnorm(cls, diff: dict, *, maxlen: 'int | None' = 160) -> str:
         """Render a :meth:`diffnorm` result as one ``path`` + self/other per difference."""
         def crop(value):
-            text = value if isinstance(value, str) else repr(value)
+            # repr() unconditionally: leaves are typed, so a bare rendering would
+            # print the float 15.0 and the string '15.0' identically -- which is
+            # exactly the distinction the report exists to show.
+            text = repr(value)
             if maxlen is not None and len(text) > maxlen:
                 text = f"{text[:maxlen]}... (+{len(text) - maxlen} chars)"
             return text

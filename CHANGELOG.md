@@ -34,6 +34,12 @@ All notable changes to this project will be documented in this file.
   Detection still compares the raw text, so `n=1` vs `n=1.0` is reported even though
   `1 == 1.0` in Python; and where evaluation would erase the difference (bare vs quoted
   `url=`) the bytes are shown instead. `raw=True` returns the source text.
+- **`norm(legacy=...)` / `supernorm(legacy=...)` / `diffnorm(legacy=...)`** — temporarily
+  override `LEGACY_NORM` for one call, propagating to nested blocks so the whole subtree
+  renders the same way. `None` (default) means every block uses its own flag and is
+  byte-identical to before; `hashstr` never passes an override, so `hash` is unaffected.
+  `a.diffnorm(b.norm(legacy=False), legacy=False)` gives typed leaves even for classes
+  that still carry the marker.
 - **`ABSENT`** — a key present on only one side of a `diffnorm` now carries this marker
   (`<absent>`) instead of `None`, which is no longer distinguishable from a value that
   genuinely *is* `None` now that leaves are typed.

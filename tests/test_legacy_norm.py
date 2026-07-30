@@ -179,3 +179,128 @@ class TestQuoteStrsFlagIsOptIn:
         out = b.__repr_from_kwargs__({'a': 'x', 'n': 3}, anchor=None,
                                      quote_strs=True)
         assert out == "(a='x', n=3)"
+
+
+class TestLegacyOverride:
+    """``norm(legacy=...)`` renders the other era WITHOUT touching identity.
+
+    ``legacy=False`` on a legacy block answers "what would this be if I dropped
+    the marker", which is how typed values are read out of a diff for a class
+    that still carries one. The override must NOT leak into :attr:`hash`, which
+    is built from ``norm()`` with no override.
+    """
+
+    def test_none_is_byte_identical_to_no_argument(self):
+        for cls in (LegacyBlock, ModernBlock):
+            block = _pin(cls)
+            assert block.norm(legacy=None) == block.norm()
+            assert block.supernorm(legacy=None) == block.supernorm()
+
+    def test_forcing_the_blocks_own_setting_is_a_no_op(self):
+        assert _pin(LegacyBlock).norm(legacy=True) == _pin(LegacyBlock).norm()
+        assert _pin(ModernBlock).norm(legacy=False) == _pin(ModernBlock).norm()
+
+    def test_legacy_false_on_a_legacy_block_matches_a_modern_block(self):
+        assert _pin(LegacyBlock).norm(legacy=False) == _pin(ModernBlock).norm()
+
+    def test_legacy_true_on_a_modern_block_matches_a_legacy_block(self):
+        assert _pin(ModernBlock).norm(legacy=True) == _pin(LegacyBlock).norm()
+
+    def test_override_reaches_supernorm(self):
+        assert (_pin(LegacyBlock).supernorm(legacy=False)
+                != _pin(LegacyBlock).supernorm())
+
+    def test_override_does_not_change_hash(self):
+        """The load-bearing guard: identity must ignore the override."""
+        block = _pin(LegacyBlock)
+        before, superbefore = block.hash, block.superhash
+        block.norm(legacy=False)
+        block.supernorm(legacy=False)
+        assert block.hash == before
+        assert block.superhash == superbefore
+        # ... and a freshly built instance still pins the pre-quoting hash.
+        assert _pin(LegacyBlock).hash == (
+            '067daa07f7bc70c43d923133b42e018753a77a91d1de949abc199ad4b03f329f'
+        )
+
+    def test_hashstr_never_passes_an_override(self):
+        block = _pin(LegacyBlock)
+        assert block.norm() in block.hashstr
+        assert block.norm(legacy=False) not in block.hashstr
+
+
+class TestLegacyOverridePropagates:
+    """A subtree must render one way, or the nested norms stay in the old era."""
+
+    @dataclass
+    class _Child(Datablock.CONFIG):
+        n: int = 7
+
+    @dataclass
+    class _Parent(Datablock.CONFIG):
+        child: object = None
+        ori_extent: float = 15.0
+
+    def _tree(self):
+        class Child(Datablock):
+            LEGACY_NORM = True
+            TOPICS = {'o': 'o.txt'}
+            CONFIG = TestLegacyOverridePropagates._Child
+            def __build__(self): pass
+        class Parent(Datablock):
+            LEGACY_NORM = True
+            TOPICS = {'o': 'o.txt'}
+            CONFIG = TestLegacyOverridePropagates._Parent
+            def __build__(self): pass
+        child = Child(url=PIN_URL)
+        return Parent(url=PIN_URL, spec=dict(child=child, ori_extent=15.0))
+
+    def test_child_is_rendered_modern_too(self):
+        norm = self._tree().norm(legacy=False)
+        assert "'n': 7" in norm, norm
+        assert "'n': '7'" not in norm
+
+    def test_child_keeps_its_own_setting_by_default(self):
+        assert "'n': '7'" in self._tree().norm()
+
+    def test_the_parents_hash_is_untouched(self):
+        parent = self._tree()
+        before = parent.hash
+        parent.norm(legacy=False)
+        assert parent.hash == before
+
+
+class TestDiffnormLegacyOverride:
+
+    @dataclass
+    class _C(Datablock.CONFIG):
+        ori_extent: float = 15.0
+
+    def _cls(self):
+        class L(Datablock):
+            LEGACY_NORM = True
+            TOPICS = {'o': 'o.txt'}
+            CONFIG = TestDiffnormLegacyOverride._C
+            def __build__(self): pass
+        return L
+
+    def test_two_live_legacy_blocks_diff_with_typed_leaves(self):
+        """The intended use: render BOTH sides modern to get real types."""
+        L = self._cls()
+        a = L(url=PIN_URL, spec=dict(ori_extent=20.0))
+        b = L(url=PIN_URL, spec=dict(ori_extent=15.0))
+        assert a.diffnorm(b.norm(legacy=False), legacy=False) == {
+            'spec': {'ori_extent': (20.0, 15.0)}}
+        # Without the override both sides are legacy, so both are strings.
+        assert a.diffnorm(b.norm()) == {
+            'spec': {'ori_extent': ('20.0', '15.0')}}
+
+    def test_override_against_a_legacy_other_side_flags_every_scalar(self):
+        """Documented consequence: the other side is recorded text, not re-rendered."""
+        L = self._cls()
+        a = L(url=PIN_URL, spec=dict(ori_extent=15.0))
+        b = L(url=PIN_URL, spec=dict(ori_extent=15.0))
+        assert a.diffnorm(b.norm()) == {}, "same era, same value -> no diff"
+        mismatched = a.diffnorm(b.norm(), legacy=False)
+        assert 'ori_extent' in mismatched['spec']
+        assert mismatched['spec']['ori_extent'] == (15.0, '15.0')

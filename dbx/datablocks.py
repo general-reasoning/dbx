@@ -2098,8 +2098,14 @@ class Datablock:
                 self._revision = self._revision_
         return self._revision
 
-    def __expand_spec__(self, expansion='repr'):
+    def __expand_spec__(self, expansion='repr', *, legacy: 'bool | None' = None):
         """
+            . legacy: override LEGACY_NORM for the 'norm' expansion.
+                None (default) = each block uses its own flag, i.e. the
+                identity-bearing rendering. True/False forces the legacy or the
+                modern form, and PROPAGATES to nested blocks, so the whole
+                subtree is rendered the same way.
+
             . expansion: 'repr'|'quote'|'norm'
                 . specline:      str starting with '@', '$' or '#'
                 . datablock: Datablock object
@@ -2128,15 +2134,19 @@ class Datablock:
                 value = getattr(self.cfg, k)
                 _spec_[k] = repr(value)
         elif expansion == 'norm':
+            legacy_norm = self.LEGACY_NORM if legacy is None else legacy
             for k, v in spec.items():
                 value = getattr(self.cfg, k)
                 if isinstance(value, Datablock):
-                    _spec_[k] = value.norm()
+                    # Pass the override down, not the resolved flag: with
+                    # legacy=None each child keeps using its OWN flag, which is
+                    # what makes the default byte-identical to before.
+                    _spec_[k] = value.norm(legacy=legacy)
                 elif self.is_specline(v):
                     _spec_[k] = v
                 elif isinstance(value, str):
                     _spec_[k] = value
-                elif self.LEGACY_NORM:
+                elif legacy_norm:
                     # This dict is embedded in norm() via its own repr, so a
                     # value stored here as repr(value) is repr'd TWICE: int 5
                     # -> "'5'" -- byte-identical to the string '5' stored raw
@@ -2443,28 +2453,44 @@ class Datablock:
         self.log.detailed(f"cite: ------------> {cite=}")
         return cite
 
-    def norm(self, *, deslash: bool = False):
+    def norm(self, *, deslash: bool = False, legacy: 'bool | None' = None):
+        """The identity string that :attr:`hashstr` -- and hence :attr:`hash` -- is built from.
+
+        ``legacy`` temporarily overrides :attr:`LEGACY_NORM`, for the whole
+        subtree (nested blocks are rendered the same way). ``None`` (the
+        default) means every block uses its own flag, which is the ONLY
+        rendering that corresponds to :attr:`hash`; :attr:`hashstr` never passes
+        an override.
+
+        ``legacy=False`` on a legacy block answers "what would this norm be if I
+        dropped the marker" -- which is how you read typed values out of a
+        :meth:`diffnorm` for a class that still carries one. ``legacy=True`` on a
+        new block answers the reverse. Neither affects :attr:`hash`.
+        """
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        norm_spec = self.__expand_spec__('norm')
+        norm_spec = self.__expand_spec__('norm', legacy=legacy)
+        legacy_norm = self.LEGACY_NORM if legacy is None else legacy
         norm = self.__repr_from_kwargs__({
             **self._rootkwargs_,
             **{'spec': norm_spec},
-        }, anchor=None, quote_strs=not self.LEGACY_NORM)
+        }, anchor=None, quote_strs=not legacy_norm)
         if deslash:
             norm = norm.replace('\\', '')
         self.log.detailed(f"norm: ------------> {norm_spec=}")
         self.log.detailed(f"norm: ------------>{norm=}")
         return norm
 
-    def supernorm(self, *, deslash: bool = False):
+    def supernorm(self, *, deslash: bool = False, legacy: 'bool | None' = None):
+        """As :meth:`norm`, but anchored on the fqcn. ``legacy`` behaves the same way."""
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        supernorm_spec = self.__expand_spec__('norm')
+        supernorm_spec = self.__expand_spec__('norm', legacy=legacy)
+        legacy_norm = self.LEGACY_NORM if legacy is None else legacy
         supernorm = self.__repr_from_kwargs__({
             **self._rootkwargs_,
             **{'spec': supernorm_spec},
-        }, anchor='fqcn', quote_strs=not self.LEGACY_NORM)
+        }, anchor='fqcn', quote_strs=not legacy_norm)
         if deslash:
             supernorm = supernorm.replace('\\', '')
         self.log.detailed(f"supernorm: ------------> {supernorm_spec=}")
@@ -2699,6 +2725,7 @@ class Datablock:
         recursive: bool = True,
         deslash: bool = False,
         raw: bool = False,
+        legacy: 'bool | None' = None,
         report: bool = False,
         maxlen: 'int | None' = 160,
     ) -> 'dict | str':
@@ -2748,6 +2775,17 @@ class Datablock:
             Report leaves as the verbatim source text instead of evaluating
             them, for when the exact bytes that went into the hash are what you
             need to see.
+        legacy:
+            Override :attr:`LEGACY_NORM` when rendering the SELF side (see
+            :meth:`norm`). The other side cannot be re-rendered -- it is text
+            already written to a journal -- so ``legacy=False`` against a
+            legacy-era journal norm makes every scalar differ (``128`` vs
+            ``'128'``), which is correct but noisy. It earns its keep comparing
+            two LIVE blocks, where you render both the same way::
+
+                a.diffnorm(b.norm(legacy=False), legacy=False)
+
+            giving typed leaves throughout even for LEGACY_NORM classes.
         report:
             Return a flat, readable ``path -> self/other`` text block instead
             of the dict. One path per difference, so nothing has to be read
@@ -2795,7 +2833,7 @@ class Datablock:
         if other_norm is None and journal is not None:
             _entry = self._journal_entry(journal)
             other_norm = _entry.read('norm') or ''
-        parsed_self  = Datablock._parse_norm(self.norm())
+        parsed_self  = Datablock._parse_norm(self.norm(legacy=legacy))
         parsed_other = Datablock._parse_norm(other_norm or '')
         if recursive:
             parsed_self = {k: self._structure_normval(v) for k, v in parsed_self.items()}

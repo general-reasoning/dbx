@@ -70,7 +70,7 @@ class BlockWithTo(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'hello'"
 
     def to(self, device):
@@ -80,7 +80,7 @@ class BlockWithTo(Datablock):
     def __build__(self, *args, **kwargs):
         path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"built:{self.cfg.label}:device={getattr(self, 'device', 'none')}")
+            f.write(f"built:{self.var.label}:device={getattr(self, 'device', 'none')}")
         return self
 
 
@@ -89,13 +89,13 @@ class BlockWithoutTo(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'world'"
 
     def __build__(self, *args, **kwargs):
         path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"built:{self.cfg.label}")
+            f.write(f"built:{self.var.label}")
         return self
 
 
@@ -338,7 +338,7 @@ class TestTorchMultithreadingBuilder:
         result = builder.build_blocks(blocks)
         assert result is blocks
         for block in blocks:
-            assert block.valid(), f"Block {block.cfg.label} should be valid after build"
+            assert block.valid(), f"Block {block.var.label} should be valid after build"
 
     def test_build_blocks_without_to_raises(self, tmp_path):
         """Blocks without .to() should fail — _TorchBlockCallable_ validates."""

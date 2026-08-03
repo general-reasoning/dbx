@@ -28,7 +28,7 @@ class CounterBlock(Datablock):
     """Trivial block that records that it was built."""
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         idx: int = None
 
     TOPICS = {'block': 'block.txt'}
@@ -38,7 +38,7 @@ class CounterBlock(Datablock):
         path = self.path('block', ensure_dirpath=True)
         fs, _ = __import__('fsspec').url_to_fs(path)
         with fs.open(path, "w") as f:
-            f.write(f"built:{self.cfg.idx}")
+            f.write(f"built:{self.var.idx}")
         return self
 
     def __read__(self, topic):
@@ -55,7 +55,7 @@ class SimpleStack(Datastack):
     """A stack that produces N blocks based on total_items / block_size."""
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         total_items: int = 10
         block_size: int = 3
 
@@ -63,7 +63,7 @@ class SimpleStack(Datastack):
 
     @property
     def n_blocks(self):
-        return math.ceil(self.cfg.total_items / self.cfg.block_size)
+        return math.ceil(self.var.total_items / self.var.block_size)
 
     def __block__(self, idx):
         return CounterBlock(
@@ -119,10 +119,10 @@ class TestDatastackIsDatablock(unittest.TestCase):
         stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, block_size=3))
         self.assertIsNotNone(stack.hash)
 
-    def test_has_cfg(self):
+    def test_has_var(self):
         stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, block_size=2))
-        self.assertEqual(stack.cfg.total_items, 6)
-        self.assertEqual(stack.cfg.block_size, 2)
+        self.assertEqual(stack.var.total_items, 6)
+        self.assertEqual(stack.var.block_size, 2)
 
 
 class TestDatastackBlocks(unittest.TestCase):
@@ -151,7 +151,7 @@ class TestDatastackBlocks(unittest.TestCase):
     def test_block_configs(self):
         stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, block_size=3))
         blocks = stack.blocks()
-        indices = [s.cfg.idx for s in blocks]
+        indices = [s.var.idx for s in blocks]
         self.assertEqual(indices, [0, 1])
 
 
@@ -173,9 +173,9 @@ class TestDatastackBuild(unittest.TestCase):
         # All 3 blocks should have been built
         blocks = stack.blocks()
         for blk in blocks:
-            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
+            self.assertTrue(blk.valid(), f"Block {blk.var.idx} was not built")
             content = blk.read('block')
-            self.assertEqual(content, f"built:{blk.cfg.idx}")
+            self.assertEqual(content, f"built:{blk.var.idx}")
 
     def test_multithreading_build(self):
         """Multithreading build should build all blocks."""
@@ -188,9 +188,9 @@ class TestDatastackBuild(unittest.TestCase):
         stack.build()
         blocks = stack.blocks()
         for blk in blocks:
-            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
+            self.assertTrue(blk.valid(), f"Block {blk.var.idx} was not built")
             content = blk.read('block')
-            self.assertEqual(content, f"built:{blk.cfg.idx}")
+            self.assertEqual(content, f"built:{blk.var.idx}")
 
     def test_multiprocessing_build(self):
         """Multiprocessing build should build all blocks (no cross-process state)."""
@@ -204,7 +204,7 @@ class TestDatastackBuild(unittest.TestCase):
         # Verify blocks were built by checking files exist
         blocks = stack.blocks()
         for blk in blocks:
-            self.assertTrue(blk.valid(), f"Block {blk.cfg.idx} was not built")
+            self.assertTrue(blk.valid(), f"Block {blk.var.idx} was not built")
 
 
     def test_build_returns_self(self):
@@ -309,7 +309,7 @@ class TestDatastackClearBlocks(unittest.TestCase):
         for blk in stack.blocks():
             self.assertTrue(blk.valid())
             content = blk.read('block')
-            self.assertEqual(content, f"built:{blk.cfg.idx}")
+            self.assertEqual(content, f"built:{blk.var.idx}")
 
     def test_returns_self(self):
         """UNSAFE_clear_blocks should return the stack itself."""
@@ -366,7 +366,7 @@ class TestDatastackPreStack(unittest.TestCase):
             pre_stack_called = False
 
             @dataclass
-            class CONFIG(Datablock.CONFIG):
+            class VAR(Datablock.VAR):
                 total_items: int = 3
                 shard_size: int = 3
 
@@ -374,7 +374,7 @@ class TestDatastackPreStack(unittest.TestCase):
 
             @property
             def n_blocks(self):
-                return math.ceil(self.cfg.total_items / self.cfg.shard_size)
+                return math.ceil(self.var.total_items / self.var.shard_size)
 
             def __block__(self, idx):
                 return CounterBlock(url=self.url, spec=dict(idx=idx))
@@ -397,17 +397,17 @@ class TestDatastackPreStack(unittest.TestCase):
 
         class OrderedBlock(Datablock):
             @dataclass
-            class CONFIG(Datablock.CONFIG):
+            class VAR(Datablock.VAR):
                 idx: int = None
 
             TOPICS = {'block': 'block.txt'}
 
             def __build__(self, *args, **kwargs):
-                call_order.append(f"block:{self.cfg.idx}")
+                call_order.append(f"block:{self.var.idx}")
                 path = self.path('block', ensure_dirpath=True)
                 fs, _ = __import__('fsspec').url_to_fs(path)
                 with fs.open(path, "w") as f:
-                    f.write(f"built:{self.cfg.idx}")
+                    f.write(f"built:{self.var.idx}")
                 return self
 
             def __read__(self, topic):
@@ -415,14 +415,14 @@ class TestDatastackPreStack(unittest.TestCase):
 
         class OrderedStack(Datastack):
             @dataclass
-            class CONFIG(Datablock.CONFIG):
+            class VAR(Datablock.VAR):
                 n: int = 2
 
             TOPICS = {'ordered_meta': 'ordered_meta.txt'}
 
             @property
             def n_blocks(self):
-                return self.cfg.n
+                return self.var.n
 
             def __block__(self, idx):
                 return OrderedBlock(url=self.url, spec=dict(idx=idx))

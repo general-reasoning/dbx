@@ -7,11 +7,11 @@ class MockLogger(Logger):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.calls = []
-    
+
     def verbose(self, msg):
         self.calls.append(('verbose', msg))
         super().verbose(msg)
-        
+
     def detailed(self, msg):
         self.calls.append(('detailed', msg))
         super().detailed(msg)
@@ -28,49 +28,61 @@ def setup_env(monkeypatch):
     # Patch Logger in dbx.datablocks module
     monkeypatch.setattr('dbx.datablocks.Logger', MockLogger)
 
-def test_verbose_config_false():
-    """Verify that VERBOSE_CONFIG=False uses log.detailed for cfg formation."""
+def _calls(block, level):
+    return [msg for lvl, msg in block.log.calls
+            if lvl == level and 'Forming var from spec' in msg]
+
+def test_verbose_var_false():
+    """Verify that VERBOSE_VAR=False uses log.detailed for var formation."""
     class BlockFalse(MyBlock):
-        VERBOSE_CONFIG = False
-        
+        VERBOSE_VAR = False
+
     b = BlockFalse()
-    # Trigger cfg formation
-    _ = b.cfg
-    
+    # Trigger var formation
+    _ = b.var
+
     # Check if 'detailed' was used for BEGIN/END
-    detailed_calls = [msg for level, msg in b.log.calls if level == 'detailed' and 'Forming cfg from spec' in msg]
+    detailed_calls = _calls(b, 'detailed')
     assert len(detailed_calls) == 2
     assert any("BEGIN" in msg for msg in detailed_calls)
     assert any("END" in msg for msg in detailed_calls)
-    
-    # Check that 'verbose' was NOT used for this specific message
-    verbose_calls = [msg for level, msg in b.log.calls if level == 'verbose' and 'Forming cfg from spec' in msg]
-    assert len(verbose_calls) == 0
 
-def test_verbose_config_true():
-    """Verify that VERBOSE_CONFIG=True uses log.verbose for cfg formation."""
+    # Check that 'verbose' was NOT used for this specific message
+    assert len(_calls(b, 'verbose')) == 0
+
+def test_verbose_var_true():
+    """Verify that VERBOSE_VAR=True uses log.verbose for var formation."""
     class BlockTrue(MyBlock):
-        VERBOSE_CONFIG = True
-        
+        VERBOSE_VAR = True
+
     b = BlockTrue()
-    # Trigger cfg formation
-    _ = b.cfg
-    
+    # Trigger var formation
+    _ = b.var
+
     # Check if 'verbose' was used for BEGIN/END
-    verbose_calls = [msg for level, msg in b.log.calls if level == 'verbose' and 'Forming cfg from spec' in msg]
+    verbose_calls = _calls(b, 'verbose')
     assert len(verbose_calls) == 2
     assert any("BEGIN" in msg for msg in verbose_calls)
     assert any("END" in msg for msg in verbose_calls)
-    
-    # Check that 'detailed' was NOT used for this specific message
-    detailed_calls = [msg for level, msg in b.log.calls if level == 'detailed' and 'Forming cfg from spec' in msg]
-    assert len(detailed_calls) == 0
 
-def test_verbose_config_missing():
-    """Verify that missing VERBOSE_CONFIG defaults to False (log.detailed)."""
+    # Check that 'detailed' was NOT used for this specific message
+    assert len(_calls(b, 'detailed')) == 0
+
+def test_verbose_var_missing():
+    """Verify that missing VERBOSE_VAR defaults to False (log.detailed)."""
     b = MyBlock()
-    # MyBlock doesn't define VERBOSE_CONFIG, so it inherits False from Datablock
-    _ = b.cfg
-    
-    detailed_calls = [msg for level, msg in b.log.calls if level == 'detailed' and 'Forming cfg from spec' in msg]
-    assert len(detailed_calls) == 2
+    # MyBlock doesn't define VERBOSE_VAR, so it inherits False from Datablock
+    _ = b.var
+
+    assert len(_calls(b, 'detailed')) == 2
+
+def test_legacy_verbose_config_true():
+    """The deprecated VERBOSE_CONFIG spelling still selects log.verbose."""
+    class LegacyBlock(MyBlock):
+        VERBOSE_CONFIG = True
+
+    b = LegacyBlock()
+    _ = b.var
+
+    assert len(_calls(b, 'verbose')) == 2
+    assert len(_calls(b, 'detailed')) == 0

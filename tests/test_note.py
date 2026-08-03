@@ -34,7 +34,7 @@ class NoteBlock(Datablock):
     TOPICS = {'out': 'out.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
 

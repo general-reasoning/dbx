@@ -852,7 +852,9 @@ class Datablock:
         self.fs   = fsspec filesystem object
         self.root = protocol-free path (via fsspec.url_to_fs)
     """
-    VERBOSE_CONFIG = False
+    # Log var formation at .verbose instead of .detailed.
+    # VERBOSE_CONFIG is the deprecated spelling and is still honored.
+    VERBOSE_VAR = False
 
     # Set to True on a subclass whose artifacts were already built and are
     # identified by hashes computed BEFORE string kwargs were quoted in norm().
@@ -914,7 +916,7 @@ class Datablock:
             return d
 
     @dataclass
-    class CONFIG:
+    class VAR:
         class LazyLoader:
             def __init__(self, term):
                 self.term = term
@@ -930,10 +932,17 @@ class Datablock:
 
         def __getattribute__(self, name):
             attr = super().__getattribute__(name)
-            if isinstance(attr, Datablock.CONFIG.LazyLoader):
+            if isinstance(attr, Datablock.VAR.LazyLoader):
                 return attr()
             return attr
 
+    # DEPRECATED ALIAS: subclasses used to declare `class CONFIG(Datablock.CONFIG)`.
+    # The name is kept so those declarations still resolve; __setstate__ maps a
+    # subclass-declared CONFIG onto self.VAR (see _resolve_legacy_CONFIG).
+    CONFIG = VAR
+
+    # Spec keys whose upstream subtree valid_var()/valid_tree() must not descend
+    # into. Supersedes the retired VALIDATE_CFG_EXEMPTIONS.
     TREE_SKIP_VALIDATION = {}
 
     def __init__(
@@ -952,7 +961,15 @@ class Datablock:
         revision: str = None,
         keyby: str = 'tag_version_shorthash',
         uuid16: bool = False,
-        validate_cfg: bool = True,
+        validate_vars: bool = True,
+        # DEPRECATED alias of validate_vars. Kept as an explicit parameter so a
+        # dfn recorded before the rename still reconstructs faithfully. Left to
+        # **kwargs it would be SILENTLY IGNORED -- validation would stay on for
+        # a block whose dfn says validate_cfg=False -- and it would additionally
+        # persist as a dead dynamic kwarg, drifting quote()/cite() (and hence
+        # the journal) from an otherwise identical block. Identity is unaffected
+        # either way: norm() reads only url/anchor/hash and spec.
+        validate_cfg: bool = None,
         storage_options: dict = None,
         local: str|None = None,
         local_must_exist: bool = False,
@@ -985,7 +1002,7 @@ class Datablock:
             'revision': revision,
             'keyby': keyby,
             'uuid16': uuid16,
-            'validate_cfg': validate_cfg,
+            'validate_vars': validate_vars if validate_cfg is None else validate_cfg,
             'storage_options': storage_options,
             'local': local,
             'local_must_exist': local_must_exist,
@@ -1008,20 +1025,28 @@ class Datablock:
                 info=state.get('info', True),
             )
         self._working_params_ = []
-        
+        self._resolve_legacy_CONFIG()
+        self._reject_retired_attrs()
+
         # Backward compatibility for legacy pickles or explicit kwargs dict arguments
         old_kwargs = state.pop('kwargs', None)
         old_state = state.pop('state', None)
-        
+
         if old_kwargs is not None and isinstance(old_kwargs, dict):
             for k, v in old_kwargs.items():
                 if k not in state:
                     state[k] = v
-                    
+
         if old_state is not None and isinstance(old_state, dict):
             for k, v in old_state.items():
                 if k not in state:
                     state[k] = v
+
+        # `validate_cfg` was renamed `validate_vars`. State pickled before the
+        # rename carries only the old key; pop it so it is never re-serialized.
+        legacy_validate = state.pop('validate_cfg', None)
+        if legacy_validate is not None and state.get('validate_vars') is None:
+            state['validate_vars'] = legacy_validate
 
         # Explicit parameters
         self.url = state.get('url')
@@ -1064,7 +1089,7 @@ class Datablock:
             self.localfs, self.localroot = fsspec.url_to_fs(self._local_, **self.storage_options)
         self._spec_ = state.get('spec')
         if self._spec_ is None:
-            self.spec = asdict(self.CONFIG())
+            self.spec = asdict(self.VAR())
         else:
             self.spec = self._spec_
         self._anchor_ = state.get('anchor')
@@ -1082,7 +1107,7 @@ class Datablock:
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
             )
         self._uuid16_ = state.get('uuid16', False)
-        self.validate_cfg = state.get('validate_cfg', True)
+        self.validate_vars = state.get('validate_vars', True)
         
         explicit_keys = set(self.__explicit_params__())
         state_params = {k: v for k, v in state.items() if k not in explicit_keys}
@@ -1116,6 +1141,40 @@ class Datablock:
         )
         self.__post_init__()
         self.log.detailed(f"======--------------> bid: {self.bid}")
+
+    def _resolve_legacy_CONFIG(self):
+        """Honor a subclass that still declares ``class CONFIG`` instead of ``VAR``.
+
+        ``Datablock.CONFIG`` is only an alias of ``Datablock.VAR``, so a subclass
+        declaring ``CONFIG`` shadows the alias without overriding ``VAR``.  Walk
+        the MRO up to ``Datablock`` and take whichever name that subclass chain
+        declares first: a ``VAR`` override needs nothing, a ``CONFIG`` override
+        is bound to ``self.VAR`` so the rest of the code only ever reads ``VAR``.
+        """
+        for klass in type(self).__mro__:
+            if klass is Datablock:
+                break
+            if 'VAR' in klass.__dict__:
+                break
+            if 'CONFIG' in klass.__dict__:
+                self.VAR = klass.__dict__['CONFIG']
+                break
+
+    #: Attributes that no longer do anything, and the name that replaced each.
+    #: Ignoring one silently would re-enable the validation it was suppressing,
+    #: so a subclass still carrying it is an error rather than a warning.
+    RETIRED_ATTRS = {'VALIDATE_CFG_EXEMPTIONS': 'TREE_SKIP_VALIDATION'}
+
+    def _reject_retired_attrs(self):
+        for retired, replacement in self.RETIRED_ATTRS.items():
+            for klass in type(self).__mro__:
+                if klass is Datablock:
+                    break
+                if retired in klass.__dict__:
+                    raise AttributeError(
+                        f"{klass.__name__}.{retired} is retired and no longer "
+                        f"consulted -- rename it to {replacement}"
+                    )
 
     def __getstate__(self):
         # Serialization convention for explicit params (url, spec, anchor, …):
@@ -1357,10 +1416,10 @@ class Datablock:
         return self
 
     def __pre_build__(self, *args, **kwargs):
-        if self.validate_cfg:
-            valid_cfg = self.valid_cfg()
-            if not all(list(valid_cfg.values())):
-                raise ValueError(f"Not all upstream Datablocks in cfg are valid: {valid_cfg=}")
+        if self.validate_vars:
+            valid_var = self.valid_var()
+            if not all(list(valid_var.values())):
+                raise ValueError(f"Not all upstream Datablocks in var are valid: {valid_var=}")
         self._build_start_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         self.write_journal_entry(event="build:start",)
         return self
@@ -1625,18 +1684,15 @@ class Datablock:
             self.leave_breadcrumbs_at_path(self.path(topic))
         return self
 
-    def _iter_cfg_blocks(self, exemptions_attr=None, skip_callback=None):
-        """Yield (key, Datablock) pairs from self.cfg that are not in the given exemptions list."""
+    def _iter_var_blocks(self, exemptions_attr=None, skip_callback=None):
+        """Yield (key, Datablock) pairs from self.var that are not in the given exemptions list."""
         exemptions = set(getattr(self, exemptions_attr, ())) if exemptions_attr else set()
-        # TREE_SKIP_VALIDATION is an alias for VALIDATE_CFG_EXEMPTIONS; merge both
-        if exemptions_attr == 'VALIDATE_CFG_EXEMPTIONS':
-            exemptions |= set(getattr(self, 'TREE_SKIP_VALIDATION', ()))
         for s in self.spec.keys():
             if s in exemptions:
                 if skip_callback:
                     skip_callback(s)
                 continue
-            c = getattr(self.cfg, s)
+            c = getattr(self.var, s)
             if isinstance(c, Datablock):
                 yield s, c
 
@@ -1645,7 +1701,7 @@ class Datablock:
         def skip_cb(s):
             self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (BUILD_TREE_EXEMPTIONS) --------")
         
-        for s, c in self._iter_cfg_blocks('BUILD_TREE_EXEMPTIONS', skip_callback=skip_cb):
+        for s, c in self._iter_var_blocks('BUILD_TREE_EXEMPTIONS', skip_callback=skip_cb):
             if not deep and c.valid():
                 self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s}: already valid --------")
                 continue
@@ -1658,22 +1714,22 @@ class Datablock:
             self.build(*args, **kwargs)
         return self
     
-    def valid_cfg(self, *, reduce=False):
-        if not self.validate_cfg:
+    def valid_var(self, *, reduce=False):
+        if not self.validate_vars:
             return True if reduce else {}
-        results = {s: c.valid() for s, c in self._iter_cfg_blocks('VALIDATE_CFG_EXEMPTIONS')}
+        results = {s: c.valid() for s, c in self._iter_var_blocks('TREE_SKIP_VALIDATION')}
         if reduce:
             return all(list(results.values())) if results else True
         else:
             return results
 
     def valid_tree(self):
-        """Return a nested dictionary mapping cfg keys to their valid status and the valid status of their subtrees."""
-        if not self.validate_cfg:
+        """Return a nested dictionary mapping var keys to their valid status and the valid status of their subtrees."""
+        if not self.validate_vars:
             return {}
         return {
             s: {'valid': c.valid(), 'tree': c.valid_tree()}
-            for s, c in self._iter_cfg_blocks('VALIDATE_CFG_EXEMPTIONS')
+            for s, c in self._iter_var_blocks('TREE_SKIP_VALIDATION')
         }
     
     def read(self, topic):
@@ -2014,19 +2070,19 @@ class Datablock:
     def UNSAFE_pull(self, *args, **kwargs):
         return UNSAFE_copy_from(*args, **kwargs)
 
-    def _spec_to_cfg(self, spec):
-        config = self.CONFIG(**spec)
+    def _spec_to_var(self, spec):
+        var = self.VAR(**spec)
         replacements = {}
-        for field in fields(config):
-            term = getattr(config, field.name)
-            if issubclass(self.CONFIG, Datablock.CONFIG):
-                getter = Datablock.CONFIG.LazyLoader(term)
+        for field in fields(var):
+            term = getattr(var, field.name)
+            if issubclass(self.VAR, Datablock.VAR):
+                getter = Datablock.VAR.LazyLoader(term)
             else:
                 getter = eval(term)
             replacements[field.name] = getter
-        config = replace(config, **replacements)
-        self.log.detailed(f"Made {config=} from {spec=}")
-        return config
+        var = replace(var, **replacements)
+        self.log.detailed(f"Made {var=} from {spec=}")
+        return var
 
     def leave_breadcrumbs_at_path(self, path):
         with self.fs.open(path, "w") as f:
@@ -2124,19 +2180,19 @@ class Datablock:
                     |datablock: datablock.quote()
                     |obj:       repr(obj)  
         """
-        keys = sorted([field.name for field in self.CONFIG.__dataclass_fields__.values()])
-        spec = {k: self.spec[k] if k in self.spec else getattr(self.cfg, k) for k in keys}
+        keys = sorted([field.name for field in self.VAR.__dataclass_fields__.values()])
+        spec = {k: self.spec[k] if k in self.spec else getattr(self.var, k) for k in keys}
         _spec_ = {}
         if expansion == 'repr':
             #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
             # computed using the older version of these methods
             for k, v in spec.items():
-                value = getattr(self.cfg, k)
+                value = getattr(self.var, k)
                 _spec_[k] = repr(value)
         elif expansion == 'norm':
             legacy_norm = self.LEGACY_NORM if legacy is None else legacy
             for k, v in spec.items():
-                value = getattr(self.cfg, k)
+                value = getattr(self.var, k)
                 if isinstance(value, Datablock):
                     # Pass the override down, not the resolved flag: with
                     # legacy=None each child keeps using its OWN flag, which is
@@ -2159,7 +2215,7 @@ class Datablock:
                     _spec_[k] = value
         elif expansion == 'quote' or expansion == 'cite':
             for k, v in spec.items():
-                value = getattr(self.cfg, k)
+                value = getattr(self.var, k)
                 if self.is_specline(v):
                     _spec_[k] = v
                 elif isinstance(value, Datablock):
@@ -2357,7 +2413,7 @@ class Datablock:
             #    is 40-60 columns for these classes, so every continuation line
             #    began with a huge run of spaces. That is the "weird trailing
             #    whitespace": a lone line of blanks once anything re-wraps it.
-            #  * Splitting only the top-level kwargs leaves the entire CONFIG
+            #  * Splitting only the top-level kwargs leaves the entire VAR
             #    on one enormous `spec={...}` line, which is exactly the part
             #    you wanted to read -- hence "no indentation".
             #
@@ -2424,10 +2480,10 @@ class Datablock:
             lines.append(f"{inner}{k}={v!r},")
 
         lines.append(f"{inner}spec={{")
-        for sk in sorted(self.CONFIG.__dataclass_fields__):
+        for sk in sorted(self.VAR.__dataclass_fields__):
             # getattr resolves a specline to the Datablock it names, so nested
             # children are detected by TYPE rather than by sniffing for a '$'.
-            val = getattr(self.cfg, sk)
+            val = getattr(self.var, sk)
             if isinstance(val, Datablock):
                 rendered = val.cite(
                     deslash=0, pretty=pretty, tailkwargs=tailkwargs,
@@ -2916,17 +2972,23 @@ class Datablock:
         return self.__getstate__()
 
     @functools.cached_property
+    def var(self):
+        verbose = getattr(self, 'VERBOSE_VAR', False) or getattr(self, 'VERBOSE_CONFIG', False)
+        log_fn = self.log.verbose if verbose else self.log.detailed
+        log_fn(f"Forming var from spec: BEGIN")
+        var = self._spec_to_var(self.spec)
+        log_fn(f"Forming var from spec: END")
+        return var
+
+    # DEPRECATED ALIASES of .var
+    @property
     def cfg(self):
-        log_fn = self.log.verbose if getattr(self, 'VERBOSE_CONFIG', False) else self.log.detailed
-        log_fn(f"Forming cfg from spec: BEGIN")
-        cfg = self._spec_to_cfg(self.spec)
-        log_fn(f"Forming cfg from spec: END")
-        return cfg
+        return self.var
 
     @property
     def config(self):
-        return self.cfg
-    
+        return self.var
+
     @property
     def kwargs(self):
         """The dynamically-supplied keyword arguments of this Datablock instance.
@@ -3577,15 +3639,15 @@ class Datastack(Datablock):
 
         class MyStack(Datastack):
             @dataclass
-            class CONFIG(Datablock.CONFIG):
+            class VAR(Datablock.VAR):
                 path: str = None
                 block_size: int = 100
 
             def blocks(self):
                 n = self._total_items()
                 return [
-                    MyBlock(url=self.url, spec=dict(path=self.cfg.path, idx=i))
-                    for i in range(math.ceil(n / self.cfg.block_size))
+                    MyBlock(url=self.url, spec=dict(path=self.var.path, idx=i))
+                    for i in range(math.ceil(n / self.var.block_size))
                 ]
 
         stack = MyStack(root='/data', spec=dict(path='/input', block_size=100),

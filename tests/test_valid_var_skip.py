@@ -1,6 +1,6 @@
 """
-Tests for validate_cfg=False: allows a Datablock to skip cfg validation
-when checking upstream validity in valid_cfg().
+Tests for validate_vars=False: allows a Datablock to skip var validation
+when checking upstream validity in valid_var().
 """
 import os
 import pytest
@@ -27,7 +27,7 @@ class Upstream(Datablock):
     TOPICS = {'data': 'data.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):
@@ -37,11 +37,11 @@ class Upstream(Datablock):
 
 
 class DownstreamNoSkip(Datablock):
-    """Depends on an upstream block via spec — validate_cfg=True (default)."""
+    """Depends on an upstream block via spec — validate_vars=True (default)."""
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         src: str = "'invalid'"
 
     def __build__(self):
@@ -51,11 +51,11 @@ class DownstreamNoSkip(Datablock):
 
 
 class DownstreamWithSkip(Datablock):
-    """Depends on an upstream block via spec — validate_cfg=False skips validation."""
+    """Depends on an upstream block via spec — validate_vars=False skips validation."""
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         src: str = "'invalid'"
 
     def __build__(self):
@@ -65,11 +65,11 @@ class DownstreamWithSkip(Datablock):
 
 
 class TwoDeps(Datablock):
-    """Two upstream deps — when validate_cfg=False, all cfg validation is skipped."""
+    """Two upstream deps — when validate_vars=False, all var validation is skipped."""
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         required: str = "'invalid'"
         optional: str = "'invalid'"
 
@@ -103,44 +103,44 @@ def _make(cls, tmp_path, **extra_spec):
 class TestValidateCfg:
 
     def test_no_skip_reports_invalid_upstream(self, tmp_path):
-        """Without validate_cfg=False, an invalid upstream appears in valid_cfg()."""
+        """Without validate_vars=False, an invalid upstream appears in valid_var()."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamNoSkip(
             url=str(tmp_path / 'down'),
             spec={'src': up_spec},
         )
-        result = down.valid_cfg()
+        result = down.valid_var()
         assert 'src' in result
         assert result['src'] is False
 
-    def test_skip_returns_empty_from_valid_cfg(self, tmp_path):
-        """validate_cfg=False causes valid_cfg() to return empty results."""
+    def test_skip_returns_empty_from_valid_var(self, tmp_path):
+        """validate_vars=False causes valid_var() to return empty results."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamWithSkip(
             url=str(tmp_path / 'down'),
             spec={'src': up_spec},
-            validate_cfg=False,
+            validate_vars=False,
         )
-        result = down.valid_cfg()
+        result = down.valid_var()
         assert result == {}
 
     def test_skip_allows_build_with_invalid_upstream(self, tmp_path):
-        """With validate_cfg=False, build() succeeds even if the upstream is invalid."""
+        """With validate_vars=False, build() succeeds even if the upstream is invalid."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamWithSkip(
             url=str(tmp_path / 'down'),
             spec={'src': up_spec},
-            validate_cfg=False,
+            validate_vars=False,
         )
-        # Should NOT raise — cfg validation is skipped
+        # Should NOT raise — var validation is skipped
         down.build()
         assert down.valid()
 
     def test_no_skip_build_raises_on_invalid_upstream(self, tmp_path):
-        """Without validate_cfg=False, build() raises when upstream is invalid."""
+        """Without validate_vars=False, build() raises when upstream is invalid."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamNoSkip(
@@ -151,33 +151,33 @@ class TestValidateCfg:
             down.build()
 
     def test_skip_all_deps(self, tmp_path):
-        """validate_cfg=False skips all deps."""
+        """validate_vars=False skips all deps."""
         down = TwoDeps(
             url=str(tmp_path / 'down'),
             spec={
                 'required': _quote_upstream(tmp_path, 'req'),
                 'optional': _quote_upstream(tmp_path, 'opt'),
             },
-            validate_cfg=False,
+            validate_vars=False,
         )
-        result = down.valid_cfg()
+        result = down.valid_var()
         assert result == {}
 
     def test_skip_build_succeeds_with_invalid_deps(self, tmp_path):
-        """With validate_cfg=False, build succeeds even if all deps are invalid."""
+        """With validate_vars=False, build succeeds even if all deps are invalid."""
         down = TwoDeps(
             url=str(tmp_path / 'down'),
             spec={
                 'required': _quote_upstream(tmp_path, 'req'),
                 'optional': _quote_upstream(tmp_path, 'opt'),
             },
-            validate_cfg=False,
+            validate_vars=False,
         )
         down.build()
         assert down.valid()
 
     def test_default_build_raises_on_invalid_deps(self, tmp_path):
-        """Default validate_cfg=True, build fails if deps are invalid."""
+        """Default validate_vars=True, build fails if deps are invalid."""
         down = TwoDeps(
             url=str(tmp_path / 'down'),
             spec={
@@ -188,20 +188,20 @@ class TestValidateCfg:
         with pytest.raises(ValueError, match="Not all upstream Datablocks"):
             down.build()
 
-    def test_valid_cfg_reduce_with_skip(self, tmp_path):
-        """valid_cfg(reduce=True) should return True when validate_cfg=False."""
+    def test_valid_var_reduce_with_skip(self, tmp_path):
+        """valid_var(reduce=True) should return True when validate_vars=False."""
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamWithSkip(
             url=str(tmp_path / 'down'),
             spec={'src': up_spec},
-            validate_cfg=False,
+            validate_vars=False,
         )
-        assert down.valid_cfg(reduce=True) is True
+        assert down.valid_var(reduce=True) is True
 
-    def test_default_validate_cfg(self, tmp_path):
-        """Default validate_cfg=True: all spec keys are checked (baseline)."""
+    def test_default_validate_vars(self, tmp_path):
+        """Default validate_vars=True: all spec keys are checked (baseline)."""
         down = _make(DownstreamNoSkip, tmp_path)
-        result = down.valid_cfg()
+        result = down.valid_var()
         # 'src' default is a string literal, not a Datablock → not in results
         assert result == {}

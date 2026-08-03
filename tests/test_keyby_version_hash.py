@@ -22,13 +22,13 @@ class VersionedBlock(Datablock):
     TOPICS = {'out': 'out.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         x: int = 1
 
     def __build__(self):
         path = self.path('out', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"x={self.cfg.x}")
+            f.write(f"x={self.var.x}")
 
     def __read__(self, topic):
         with open(self.path('out'), 'r') as f:
@@ -40,13 +40,13 @@ class UnversionedBlock(Datablock):
     TOPICS = {'out': 'out.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         y: int = 2
 
     def __build__(self):
         path = self.path('out', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"y={self.cfg.y}")
+            f.write(f"y={self.var.y}")
 
     def __read__(self, topic):
         with open(self.path('out'), 'r') as f:

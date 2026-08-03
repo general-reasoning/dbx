@@ -29,7 +29,7 @@ class SingleTopicBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'hello'"
 
     def __build__(self):
@@ -43,7 +43,7 @@ class DirTopicBlock(Datablock):
     TOPICS = {'images': None}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):

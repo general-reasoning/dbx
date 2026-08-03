@@ -7,7 +7,7 @@ Verifies that Datablock and Datastack instances survive:
     3. manual __getstate__() → __setstate__() roundtrip
 
 Each path must preserve:
-    - Identity: hash, tag, anchor, url, cfg, keyby
+    - Identity: hash, tag, anchor, url, var, keyby
     - Functionality: valid(), build(), executor_cls (Datastack)
 """
 import copy
@@ -44,13 +44,13 @@ class SimpleBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'test'"
 
     def __build__(self):
         path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"built:{self.cfg.label}")
+            f.write(f"built:{self.var.label}")
 
     def __read__(self, topic):
         with open(self.path('output'), 'r') as f:
@@ -62,13 +62,13 @@ class TaggedBlock(Datablock):
     TOPICS = {'tagged': 'tagged.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         value: int = 42
 
     def __build__(self):
         path = self.path('tagged', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"v={self.cfg.value}")
+            f.write(f"v={self.var.value}")
 
     def __read__(self, topic):
         with open(self.path('tagged'), 'r') as f:
@@ -80,14 +80,14 @@ class MultiTopicBlock(Datablock):
     TOPICS = {'alpha': 'alpha.txt', 'beta': 'beta.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         n: int = 5
 
     def __build__(self):
         for topic in self.TOPICS:
             self.dirpath(topic, ensure=True)
             with open(self.path(topic), 'w') as f:
-                f.write(f"{topic}:{self.cfg.n}")
+                f.write(f"{topic}:{self.var.n}")
 
 
 class StackBlock(Datablock):
@@ -95,13 +95,13 @@ class StackBlock(Datablock):
     TOPICS = {'block': 'block.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         idx: int = 0
 
     def __build__(self):
         path = self.path('block', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"block:{self.cfg.idx}")
+            f.write(f"block:{self.var.idx}")
 
     def __read__(self, topic):
         with open(self.path('block'), 'r') as f:
@@ -113,13 +113,13 @@ class SimpleStack(Datastack):
     TOPICS = {'stack_meta': 'stack_meta.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         total_items: int = 6
         block_size: int = 2
 
     @property
     def n_blocks(self):
-        return math.ceil(self.cfg.total_items / self.cfg.block_size)
+        return math.ceil(self.var.total_items / self.var.block_size)
 
     def __block__(self, idx):
         return StackBlock(url=self.url, spec=dict(idx=idx))
@@ -143,10 +143,10 @@ def _assert_identity_preserved(original, restored):
     assert restored.keyby == original.keyby, "keyby mismatch"
     assert restored.fqcn == original.fqcn, "fqcn mismatch"
     assert restored.spec == original.spec, "spec mismatch"
-    # cfg fields
-    for field in vars(original.cfg):
-        assert getattr(restored.cfg, field) == getattr(original.cfg, field), \
-            f"cfg.{field} mismatch"
+    # var fields
+    for field in vars(original.var):
+        assert getattr(restored.var, field) == getattr(original.var, field), \
+            f"var.{field} mismatch"
 
 
 def _roundtrip_deepcopy(obj):
@@ -245,12 +245,12 @@ class TestDatablockSetPreservation:
         clone = block.set(tag="v2")
         assert clone.tag == "v2"
         assert clone.hash == block.hash  # spec unchanged, hash same
-        assert clone.cfg.label == "'orig'"
+        assert clone.var.label == "'orig'"
 
     def test_set_changes_spec(self, url):
         block = SimpleBlock(url=url, spec=dict(label="'a'"))
         clone = block.set(spec=dict(label="'b'"))
-        assert clone.cfg.label == "'b'"
+        assert clone.var.label == "'b'"
         assert clone.hash != block.hash  # spec changed
 
 
@@ -306,7 +306,7 @@ class TestDatastackSerialization:
         restored.build()
         blocks = restored.blocks()
         for blk in blocks:
-            assert blk.valid(), f"Block {blk.cfg.idx} invalid after build"
+            assert blk.valid(), f"Block {blk.var.idx} invalid after build"
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_tag_on_stack(self, url, roundtrip):
@@ -343,7 +343,7 @@ class TestDatastackSetPreservation:
         )
         clone = stack.set(spec=dict(total_items=10, block_size=5))
         assert clone.executor_cls is MultiprocessingCallableExecutor
-        assert clone.cfg.total_items == 10
+        assert clone.var.total_items == 10
         assert clone.n_blocks == 2
 
     def test_set_then_build(self, url):
@@ -369,13 +369,13 @@ class OuterBlock(Datablock):
     TOPICS = {'outer': 'outer.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         name: str = "'outer'"
 
     def __build__(self):
         path = self.path('outer', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"outer:{self.cfg.name}")
+            f.write(f"outer:{self.var.name}")
 
     def __read__(self, topic):
         with open(self.path('outer'), 'r') as f:

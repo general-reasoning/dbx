@@ -38,7 +38,7 @@ class LegacyBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = 'lbl'
         size: int = 3
 
@@ -52,7 +52,7 @@ class ModernBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = 'lbl'
         size: int = 3
 
@@ -124,7 +124,7 @@ class TestSpecValueCollision:
     """``n=5`` vs ``n='5'`` collided onto one norm under the legacy form."""
 
     @dataclass
-    class _C(Datablock.CONFIG):
+    class _C(Datablock.VAR):
         v: object = None
 
     def _pair(self, cls):
@@ -135,7 +135,7 @@ class TestSpecValueCollision:
         class L(Datablock):
             LEGACY_NORM = True
             TOPICS = {'output': 'output.txt'}
-            CONFIG = TestSpecValueCollision._C
+            VAR = TestSpecValueCollision._C
             def __build__(self): pass
         a, b = self._pair(L)
         assert a.norm() == b.norm()
@@ -144,7 +144,7 @@ class TestSpecValueCollision:
     def test_modern_distinguishes(self):
         class M(Datablock):
             TOPICS = {'output': 'output.txt'}
-            CONFIG = TestSpecValueCollision._C
+            VAR = TestSpecValueCollision._C
             def __build__(self): pass
         a, b = self._pair(M)
         assert a.norm() != b.norm()
@@ -233,11 +233,11 @@ class TestLegacyOverridePropagates:
     """A subtree must render one way, or the nested norms stay in the old era."""
 
     @dataclass
-    class _Child(Datablock.CONFIG):
+    class _Child(Datablock.VAR):
         n: int = 7
 
     @dataclass
-    class _Parent(Datablock.CONFIG):
+    class _Parent(Datablock.VAR):
         child: object = None
         ori_extent: float = 15.0
 
@@ -245,12 +245,12 @@ class TestLegacyOverridePropagates:
         class Child(Datablock):
             LEGACY_NORM = True
             TOPICS = {'o': 'o.txt'}
-            CONFIG = TestLegacyOverridePropagates._Child
+            VAR = TestLegacyOverridePropagates._Child
             def __build__(self): pass
         class Parent(Datablock):
             LEGACY_NORM = True
             TOPICS = {'o': 'o.txt'}
-            CONFIG = TestLegacyOverridePropagates._Parent
+            VAR = TestLegacyOverridePropagates._Parent
             def __build__(self): pass
         child = Child(url=PIN_URL)
         return Parent(url=PIN_URL, spec=dict(child=child, ori_extent=15.0))
@@ -273,14 +273,14 @@ class TestLegacyOverridePropagates:
 class TestDiffnormLegacyOverride:
 
     @dataclass
-    class _C(Datablock.CONFIG):
+    class _C(Datablock.VAR):
         ori_extent: float = 15.0
 
     def _cls(self):
         class L(Datablock):
             LEGACY_NORM = True
             TOPICS = {'o': 'o.txt'}
-            CONFIG = TestDiffnormLegacyOverride._C
+            VAR = TestDiffnormLegacyOverride._C
             def __build__(self): pass
         return L
 

@@ -6,7 +6,7 @@ Verifies:
 2. getenv() resolves environment variables.
 3. Datablock with url=env('X'): norm/hashstr contain specline.
 4. Relocatability: changing the env var does not change the hash.
-5. Spec fields with env(): specline kept in norm, resolved in cfg.
+5. Spec fields with env(): specline kept in norm, resolved in var.
 6. Quote round-trip via eval.
 """
 import os
@@ -33,13 +33,13 @@ class EnvBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'hello'"
 
     def __build__(self):
         path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"built:{self.cfg.label}")
+            f.write(f"built:{self.var.label}")
 
 
 class EnvSpecBlock(Datablock):
@@ -47,13 +47,13 @@ class EnvSpecBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         data_path: str = "'/default'"
 
     def __build__(self):
         path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"path:{self.cfg.data_path}")
+            f.write(f"path:{self.var.data_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -169,11 +169,11 @@ class TestEnvRelocatability:
 
 class TestEnvInSpec:
 
-    def test_cfg_resolves_to_real_path(self, monkeypatch):
+    def test_var_resolves_to_real_path(self, monkeypatch):
         monkeypatch.setenv('SPEC_PATH', '/data/resolved')
         block = EnvSpecBlock(url='/tmp/dbx_test_env',
                              spec=dict(data_path=env('SPEC_PATH')))
-        assert block.cfg.data_path == '/data/resolved'
+        assert block.var.data_path == '/data/resolved'
 
     def test_spec_stores_specline(self, monkeypatch):
         monkeypatch.setenv('SPEC_PATH', '/data/resolved')
@@ -215,7 +215,7 @@ class TestEnvInSpec:
         block = EnvSpecBlock(url=env('MY_ROOT'),
                              spec=dict(data_path=env('MY_DATA')))
         assert block.root == '/tmp/combined'
-        assert block.cfg.data_path == '/data/combined'
+        assert block.var.data_path == '/data/combined'
         assert "$dbx.getenv('MY_ROOT')" in block.norm()
         assert "$dbx.getenv('MY_DATA')" in block.norm()
 

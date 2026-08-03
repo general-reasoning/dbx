@@ -50,50 +50,50 @@ class Leaf(Datablock):
     TOPICS = {'leaf': 'leaf.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'leaf'"
 
     def __build__(self):
-        _record_build(self.cfg.label)
+        _record_build(self.var.label)
         path = self.path('leaf', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
-            f.write(f"leaf:{self.cfg.label}")
+            f.write(f"leaf:{self.var.label}")
 
 
 class Mid(Datablock):
     TOPICS = {'mid': 'mid.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'mid'"
         dep: str = "'none'"  # will be overridden with a quoted Leaf
 
     def __build__(self):
-        _record_build(self.cfg.label)
+        _record_build(self.var.label)
         path = self.path('mid', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
-            f.write(f"mid:{self.cfg.label}")
+            f.write(f"mid:{self.var.label}")
 
 
 class Root(Datablock):
     TOPICS = {'root': 'root.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'root'"
         child: str = "'none'"  # will be overridden with a quoted Mid
 
     def __build__(self):
-        _record_build(self.cfg.label)
+        _record_build(self.var.label)
         path = self.path('root', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
-            f.write(f"root:{self.cfg.label}")
+            f.write(f"root:{self.var.label}")
 
 
 class RootWithExemptions(Root):
     """Same as Root but exempts 'child' from build_tree traversal."""
     BUILD_TREE_EXEMPTIONS = ('child',)
-    VALIDATE_CFG_EXEMPTIONS = ('child',)
+    TREE_SKIP_VALIDATION = ('child',)
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ changed leaf three levels down came back as::
 
 -- two near-identical blobs to eyeball. The real-world case that prompted this
 was an ``IJEPAsaurUSStill`` whose only difference from a recorded build was that
-``num_workers`` and ``prefetch_factor`` had since been removed from CONFIG.
+``num_workers`` and ``prefetch_factor`` had since been removed from VAR.
 
 Structuring has to be conservative in one specific way: values that merely
 *look* parenthesised (a tuple like ``'(0.75, 1.5)'``) must stay leaves, or a
@@ -29,7 +29,7 @@ class Leaf(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = 'leaf'
         ratio: object = None
 
@@ -41,7 +41,7 @@ class Mid(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         leaf: object = None
         seed: int = 42
 
@@ -53,7 +53,7 @@ class Top(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         mid: object = None
         epochs: int = 10
 
@@ -203,7 +203,7 @@ class TestJournalFilters:
         TOPICS = {'output': 'output.txt'}
 
         @dataclass
-        class CONFIG(Datablock.CONFIG):
+        class VAR(Datablock.VAR):
             x: int = 1
 
         def __build__(self):
@@ -278,7 +278,7 @@ class TestTypedLeaves:
     """
 
     @dataclass
-    class _C(Datablock.CONFIG):
+    class _C(Datablock.VAR):
         ori_extent: float = 15.0
         n: object = 128
         flag: bool = True
@@ -290,11 +290,11 @@ class TestTypedLeaves:
         class L(Datablock):
             LEGACY_NORM = True
             TOPICS = {'o': 'o.txt'}
-            CONFIG = TestTypedLeaves._C
+            VAR = TestTypedLeaves._C
             def __build__(self): pass
         class M(Datablock):
             TOPICS = {'o': 'o.txt'}
-            CONFIG = TestTypedLeaves._C
+            VAR = TestTypedLeaves._C
             def __build__(self): pass
         return M(url='/tmp/dbx-typed'), L(url='/tmp/dbx-typed')
 
@@ -344,13 +344,13 @@ class TestTypingNeverHidesADifference:
     """Detection compares the TEXT; only the reporting is evaluated."""
 
     @dataclass
-    class _C(Datablock.CONFIG):
+    class _C(Datablock.VAR):
         n: object = 1
 
     def _cls(self):
         class M(Datablock):
             TOPICS = {'o': 'o.txt'}
-            CONFIG = TestTypingNeverHidesADifference._C
+            VAR = TestTypingNeverHidesADifference._C
             def __build__(self): pass
         return M
 
@@ -380,7 +380,7 @@ class TestAbsentIsNotNone:
 
     def test_absent_marker_is_distinct_from_a_none_value(self, tmp_path):
         @dataclass
-        class CA(Datablock.CONFIG):
+        class CA(Datablock.VAR):
             kept: object = None
         @dataclass
         class CB(CA):
@@ -388,10 +388,10 @@ class TestAbsentIsNotNone:
 
         class A(Datablock):
             TOPICS = {'o': 'o.txt'}
-            CONFIG = CA
+            VAR = CA
             def __build__(self): pass
         class B(A):
-            CONFIG = CB
+            VAR = CB
 
         diff = B(url=str(tmp_path)).diffnorm(A(url=str(tmp_path)).norm())
         self_val, other_val = diff['spec']['added']
@@ -402,7 +402,7 @@ class TestAbsentIsNotNone:
 
     def test_absent_survives_raw(self, tmp_path):
         @dataclass
-        class CA(Datablock.CONFIG):
+        class CA(Datablock.VAR):
             kept: int = 1
         @dataclass
         class CB(CA):
@@ -410,10 +410,10 @@ class TestAbsentIsNotNone:
 
         class A(Datablock):
             TOPICS = {'o': 'o.txt'}
-            CONFIG = CA
+            VAR = CA
             def __build__(self): pass
         class B(A):
-            CONFIG = CB
+            VAR = CB
 
         diff = B(url=str(tmp_path)).diffnorm(A(url=str(tmp_path)).norm(), raw=True)
         assert diff['spec']['added'] == ('2', ABSENT)
@@ -423,12 +423,12 @@ class TestReportShowsTypes:
 
     def test_report_distinguishes_a_float_from_its_string(self):
         @dataclass
-        class C(Datablock.CONFIG):
+        class C(Datablock.VAR):
             ori_extent: float = 15.0
 
         class M(Datablock):
             TOPICS = {'o': 'o.txt'}
-            CONFIG = C
+            VAR = C
             def __build__(self): pass
         class L(M):
             LEGACY_NORM = True

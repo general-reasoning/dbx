@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Breaking Changes
+- **Renamed `Datablock.CONFIG` → `Datablock.VAR` and `.cfg` / `.config` → `.var`.**
+  Both old names are kept as aliases, so existing subclasses keep working unchanged:
+  `Datablock.CONFIG` still resolves (it is an alias of `Datablock.VAR`), and a subclass
+  that declares `class CONFIG(Datablock.CONFIG)` has it bound to `self.VAR` in
+  `__setstate__`, so it survives construction, `deepcopy` and unpickling. `.cfg` and
+  `.config` are now read-only aliases of `.var`. `VERBOSE_CONFIG` is likewise renamed to
+  `VERBOSE_VAR`, with the old spelling still honored. Identity is unaffected — spec,
+  norm, hash and key are byte-identical either way.
+- **Renamed `validate_cfg=` → `validate_vars=` and `valid_cfg()` → `valid_var()`.**
+  `valid_cfg()` is gone, with no alias. `validate_cfg=` survives only as a deprecated
+  `__init__` parameter and state key, so a block reconstructed from a `dfn` recorded
+  before the rename still works. It is kept *explicit* rather than left to `**kwargs`
+  because a stray dynamic kwarg would be silently ignored — validation would stay on
+  for a block whose `dfn` says `validate_cfg=False` — and would then persist as a dead
+  parameter in `dfn`/`quote()`/`cite()`. It is never re-serialized: `__getstate__` emits
+  only `validate_vars`. Neither flag is part of a block's identity — `norm()` is built
+  from `url`/`anchor`/`hash` and `spec` alone.
+- **Retired `VALIDATE_CFG_EXEMPTIONS`** in favour of `TREE_SKIP_VALIDATION`, which
+  already did the same job. A subclass still declaring the old name now raises
+  `AttributeError` at construction naming the replacement, rather than being ignored —
+  silently dropping it would re-enable the validation it existed to suppress, surfacing
+  as a confusing "Not all upstream Datablocks in var are valid" at build time.
 - **Renamed `JournalFrame` → `Datajournal` and `JournalEntry` → `DatajournalEntry`.**
   No aliases are kept; update any `from dbx.datablocks import JournalEntry`. The
   `journal()` function, `Datablock.journal()` / `Datablock.Journal()`, and every journal

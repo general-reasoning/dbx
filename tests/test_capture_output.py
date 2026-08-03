@@ -43,7 +43,7 @@ class CapturedBlock(Datablock):
     TOPICS = {'result': 'result.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     # Track the order of operations
@@ -71,7 +71,7 @@ class FailingCapturedBlock(Datablock):
     TOPICS = {'result': 'result.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):
@@ -84,7 +84,7 @@ class SlowCapturedBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):

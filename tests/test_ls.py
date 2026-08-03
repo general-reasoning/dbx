@@ -35,13 +35,13 @@ class SingleTopicBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'hello'"
 
     def __build__(self):
         path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"built:{self.cfg.label}")
+            f.write(f"built:{self.var.label}")
 
 
 class MultiTopicBlock(Datablock):
@@ -49,14 +49,14 @@ class MultiTopicBlock(Datablock):
     TOPICS = {'alpha': 'alpha.txt', 'beta': 'beta.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         n: str = "'3'"
 
     def __build__(self):
         for topic in self.TOPICS:
             self.dirpath(topic, ensure=True)
             with open(self.path(topic), 'w') as f:
-                f.write(f"{topic}:{self.cfg.n}")
+                f.write(f"{topic}:{self.var.n}")
 
 
 class DirTopicBlock(Datablock):
@@ -64,7 +64,7 @@ class DirTopicBlock(Datablock):
     TOPICS = {'images': None, 'masks': None}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):
@@ -80,7 +80,7 @@ class TopicsBlock(Datablock):
     TOPICS = ['frames', 'poses']
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def path(self, topic=None, *, ensure_dirpath=False, local=False):
@@ -269,7 +269,7 @@ class ListTopicsDirBlock(Datablock):
     TOPICS = ['gold_table', 'cell_catalog', 'cell_assignments']
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):
@@ -338,7 +338,7 @@ class DictTopicsNoneBlock(Datablock):
     }
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):
@@ -357,7 +357,7 @@ class DictTopicsMixedNoneBlock(Datablock):
     }
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):

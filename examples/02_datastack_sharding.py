@@ -25,14 +25,14 @@ class ChunkBlock(Datablock):
     TOPICS = {'data': 'chunk.parquet'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         start: int = 0
         end: int = 10
 
     def __build__(self):
         df = pd.DataFrame({
-            'value': range(self.cfg.start, self.cfg.end),
-            'squared': [x ** 2 for x in range(self.cfg.start, self.cfg.end)],
+            'value': range(self.var.start, self.var.end),
+            'squared': [x ** 2 for x in range(self.var.start, self.var.end)],
         })
         write_frame(df, self.path('data', ensure_dirpath=True))
         return self
@@ -47,17 +47,17 @@ class SquaresStack(Datastack):
     TOPICS = {'manifest': 'manifest.parquet'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         total: int = 100
         chunk_size: int = 25
 
     @property
     def n_blocks(self):
-        return math.ceil(self.cfg.total / self.cfg.chunk_size)
+        return math.ceil(self.var.total / self.var.chunk_size)
 
     def __block__(self, idx):
-        start = idx * self.cfg.chunk_size
-        end = min(start + self.cfg.chunk_size, self.cfg.total)
+        start = idx * self.var.chunk_size
+        end = min(start + self.var.chunk_size, self.var.total)
         return ChunkBlock(url=self.url, spec=dict(start=start, end=end))
 
     def __stack__(self):

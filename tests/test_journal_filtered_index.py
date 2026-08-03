@@ -29,7 +29,7 @@ class Built(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         x: int = 1
 
     def __build__(self):

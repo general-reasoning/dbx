@@ -27,7 +27,7 @@ class SimpleBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'hello'"
 
     def __build__(self):
@@ -39,7 +39,7 @@ class IntSpecBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         count: str = "42"
 
     def __build__(self):
@@ -51,7 +51,7 @@ class MixedSpecBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         name: str = "'alice'"
         count: str = "7"
 
@@ -115,7 +115,7 @@ class TestCiteInQuote:
         assert 'hello' in q
 
     def test_int_spec_value_in_spec_dict(self, tmp_path):
-        """Spec values are always strings (CONFIG fields are str-typed),
+        """Spec values are always strings (VAR fields are str-typed),
         so they appear inside the quoted spec dict as strings."""
         block = _make_block(IntSpecBlock, tmp_path)
         q = block.quote()

@@ -320,12 +320,12 @@ class TestJournalAnchorForms:
         class CfgBlock(Datablock):
             TOPICS = {'out': 'out.txt'}
             @dataclass
-            class CONFIG(Datablock.CONFIG):
+            class VAR(Datablock.VAR):
                 label: str = 'a'
             def __build__(self):
                 path = self.path('out', ensure_dirpath=True)
                 with open(path, 'w') as f:
-                    f.write(self.cfg.label)
+                    f.write(self.var.label)
 
         b1 = CfgBlock(url=root, spec={'label': 'first'})
         b1.build()

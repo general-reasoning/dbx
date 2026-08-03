@@ -23,7 +23,7 @@
 |---|---|
 | `Datablock` | Config-addressed unit of computation with topic-based output paths |
 | `Datastack` | Orchestrates parallel builds of child Datablocks (blocks) |
-| `CONFIG` | Dataclass-based configuration schema with lazy evaluation and specline support |
+| `VAR` | Dataclass-based configuration schema with lazy evaluation and specline support |
 | Journaling | Automatic Parquet-based provenance tracking for every build |
 | `env()` | Relocatable environment variable references that stay symbolic in handles |
 | Callable Executors | Pluggable parallelism: inline, threading, multiprocessing, Ray |
@@ -66,11 +66,11 @@ class SampleBlock(Datablock):
     TOPICFILES = {'output': 'data.parquet'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         n_rows: int = 10
 
     def __build__(self):
-        df = pd.DataFrame({'x': range(self.cfg.n_rows)})
+        df = pd.DataFrame({'x': range(self.var.n_rows)})
         write_frame(df, self.path('output', ensure_dirpath=True))
         return self
 
@@ -102,19 +102,19 @@ A `Datablock` is the fundamental unit. Subclass it and implement:
 - **`__build__(self)`** — produce your outputs (write to `self.path(topic)`).
 - **`__read__(self, topic)`** — load and return the output for a topic.
 - **`TOPICFILES`** — dict mapping topic names to filenames.
-- **`CONFIG`** — dataclass defining your configuration schema.
+- **`VAR`** — dataclass defining your configuration schema.
 
 ```python
 class MyBlock(Datablock):
     TOPICFILES = {'features': 'features.parquet', 'model': 'model.pt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         input_path: str = None
         n_components: int = 64
 
     def __build__(self):
-        # self.cfg.input_path, self.cfg.n_components are available
+        # self.var.input_path, self.var.n_components are available
         # Write outputs to self.path('features'), self.path('model')
         ...
 ```
@@ -140,13 +140,13 @@ A `Datastack` manages a collection of child Datablocks (blocks) and builds them 
 ```python
 class MyStack(Datastack):
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         n_items: int = 1000
         block_size: int = 100
 
     @property
     def n_blocks(self):
-        return math.ceil(self.cfg.n_items / self.cfg.block_size)
+        return math.ceil(self.var.n_items / self.var.block_size)
 
     def __block__(self, idx):
         return MyBlock(url=self.root, spec=dict(idx=idx, ...))

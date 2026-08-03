@@ -40,13 +40,13 @@ class SimpleBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'test'"
 
     def __build__(self):
         path = self.path('output', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
-            f.write(f"built:{self.cfg.label}")
+            f.write(f"built:{self.var.label}")
 
 
 def _make(url, **kw):

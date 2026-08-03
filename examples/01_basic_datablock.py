@@ -1,7 +1,7 @@
 """01_basic_datablock.py — Minimal Datablock example.
 
 Demonstrates:
-- Defining a Datablock subclass with TOPICS and CONFIG
+- Defining a Datablock subclass with TOPICS and VAR
 - Building and reading a Datablock
 - Inspecting the content hash and paths
 """
@@ -25,11 +25,11 @@ class WordCount(Datablock):
     TOPICS = {'counts': 'counts.parquet'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         text: str = "the quick brown fox jumps over the lazy dog"
 
     def __build__(self):
-        words = self.cfg.text.lower().split()
+        words = self.var.text.lower().split()
         counts = pd.DataFrame({'word': words}).value_counts().reset_index()
         counts.columns = ['word', 'count']
         write_frame(counts, self.path('counts', ensure_dirpath=True))

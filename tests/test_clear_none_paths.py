@@ -34,7 +34,7 @@ class AllDirTopics(Datablock):
     TOPICS = {'images': None, 'masks': None}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):
@@ -58,7 +58,7 @@ class MixedTopics(Datablock):
     TOPICS = {'logs': 'train.log', 'checkpoints': None}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):

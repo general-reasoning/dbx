@@ -35,7 +35,7 @@ class Leaf(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = 'leaf'
         size: int = 3
 
@@ -44,11 +44,11 @@ class Leaf(Datablock):
 
 
 class Mid(Datablock):
-    """One level of nesting: a Datablock-valued CONFIG field."""
+    """One level of nesting: a Datablock-valued VAR field."""
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         leaf: object = None
         seed: int = 42
 
@@ -61,7 +61,7 @@ class Top(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         mid: object = None
         epochs: int = 10
 
@@ -113,8 +113,8 @@ class TestQuoteRoundTrip:
 
     def test_quote_preserves_the_nested_child(self, nested):
         back = dbx_eval(nested.quote())
-        assert back.cfg.mid.hash == nested.cfg.mid.hash
-        assert back.cfg.mid.cfg.leaf.hash == nested.cfg.mid.cfg.leaf.hash
+        assert back.var.mid.hash == nested.var.mid.hash
+        assert back.var.mid.var.leaf.hash == nested.var.mid.var.leaf.hash
 
     def test_pretty_does_not_emit_a_positional_argument(self, nested):
         """The pformat bug: the whole kwarg list became one quoted positional."""
@@ -243,12 +243,12 @@ class TestCiteChunks:
     def test_chunks_concatenate_to_the_original(self, nested):
         """Correctness is structural: the chunks are repr'd and concatenated
         verbatim, so a bad break point costs readability, never meaning."""
-        specline = nested.cfg.mid.quote()
+        specline = nested.var.mid.quote()
         rendered = nested._cite_chunks(specline, '    ')
         assert eval(rendered) == specline
 
     def test_chunks_are_indented(self, nested):
-        rendered = nested._cite_chunks(nested.cfg.mid.quote(), '    ')
+        rendered = nested._cite_chunks(nested.var.mid.quote(), '    ')
         assert rendered.startswith('(\n')
         assert '\n    ' in rendered
 
@@ -286,7 +286,7 @@ class Solo(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = 'solo'
 
     def __build__(self):

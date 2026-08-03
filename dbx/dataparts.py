@@ -81,7 +81,7 @@ def env(key: str, default: str|None = None) -> str:
 
     The returned string is a specline (``$``-prefixed) that the existing
     dbx eval/expand machinery keeps symbolic in handles and evaluates to
-    the real value in cfg / __init__.
+    the real value in var / __init__.
     """
     if isinstance(key, str) and key.startswith('$'):
         # Already a specline — idempotent.

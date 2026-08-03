@@ -4,21 +4,21 @@
 
 ## Implementing a Block
 
-A block is a plain `Datablock`.  Implement `CONFIG`, `TOPICS`, and `__build__`:
+A block is a plain `Datablock`.  Implement `VAR`, `TOPICS`, and `__build__`:
 
 ```python
 class MyBlock(Datablock):
     TOPICS = {'output': 'output.parquet'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         idx: int = 0
         size: int = 100
         source_path: str = None    # shared config forwarded from the stack
 
     def __build__(self):
-        start = self.cfg.idx * self.cfg.size
-        df = load_slice(self.cfg.source_path, start, start + self.cfg.size)
+        start = self.var.idx * self.var.size
+        df = load_slice(self.var.source_path, start, start + self.var.size)
         df.to_parquet(self.path())
 ```
 
@@ -29,14 +29,14 @@ The block knows nothing about parallelism — it just builds one piece of work.
 ```python
 class MyStack(Datastack):
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         source_path: str = None
         n_items: int = 1000
         shard_size: int = 100
 
     @property
     def n_blocks(self) -> int:                          # REQUIRED
-        return math.ceil(self.cfg.n_items / self.cfg.shard_size)
+        return math.ceil(self.var.n_items / self.var.shard_size)
 
     def __block__(self, idx: int) -> Datablock:         # REQUIRED
         """Return block `idx`.  This runs INSIDE the worker."""
@@ -44,8 +44,8 @@ class MyStack(Datastack):
             url=self.url,
             spec=dict(
                 idx=idx,
-                size=self.cfg.shard_size,
-                source_path=self.cfg.source_path,       # forward shared config
+                size=self.var.shard_size,
+                source_path=self.var.source_path,       # forward shared config
             ),
         )
 
@@ -57,15 +57,15 @@ class MyStack(Datastack):
 **Required:** `n_blocks` (property) and `__block__(idx)` (method).
 **Optional:** `__split__()` and `__stack__()`.
 
-## CONFIG vs Runtime Parameters
+## VAR vs Runtime Parameters
 
-A `Datablock`'s identity hash is derived from its `CONFIG`.  Parameters that
+A `Datablock`'s identity hash is derived from its `VAR`.  Parameters that
 change how data is *built* but not *what* data is built must stay **outside**
-CONFIG:
+VAR:
 
 | Parameter          | Where                 | Affects hash? | Example                       |
 |--------------------|-----------------------|---------------|-------------------------------|
-| source, model spec | `CONFIG` dataclass    | **Yes**       | `tilebag`, `evaluator_factory`|
+| source, model spec | `VAR` dataclass    | **Yes**       | `tilebag`, `evaluator_factory`|
 | `device`           | `__init__` kwarg      | No            | `"cuda:0"`, `"cpu"`           |
 | `device_batch_size`| `__init__` kwarg      | No            | `64`, `1024`                  |
 | `n_workers`        | `__init__` kwarg      | No            | `4`                           |
@@ -98,7 +98,7 @@ Shared state reaches blocks through three mechanisms:
    def __block__(self, idx):
        return MyBlock(url=self.url, spec=dict(
            idx=idx,
-           source_path=self.cfg.source_path,  # forwarded from stack config
+           source_path=self.var.source_path,  # forwarded from stack config
        ))
    ```
 
@@ -108,7 +108,7 @@ Shared state reaches blocks through three mechanisms:
 
    ```python
    def __split__(self):
-       self._index = build_expensive_index(self.cfg.source_path)
+       self._index = build_expensive_index(self.var.source_path)
 
    def __block__(self, idx):
        chunk = self._index[idx]
@@ -126,7 +126,7 @@ Shared state reaches blocks through three mechanisms:
 
    ```python
    def __split__(self):
-       index = build_expensive_index(self.cfg.source_path)
+       index = build_expensive_index(self.var.source_path)
        write_frame(index, os.path.join(self._url_, '_split_index.parquet'))
 
    def __block__(self, idx):
@@ -149,7 +149,7 @@ re-resolve the full collection, `__split__` resolves it once:
 ```python
 def __split__(self):
     # Evaluate the source clip ONCE — resolves quoted specs, forms folds, etc.
-    source_clip = self.cfg.source_clip
+    source_clip = self.var.source_clip
     # Precompute each block's boundaries and write a manifest to disk
     # so workers (including multiprocessing) can read it back.
     manifest = []
@@ -203,7 +203,7 @@ reads it directly:
 def __split__(self):
     # ... precompute manifest as above ...
     if self.parallelization in (None, 'inline'):
-        self._shared_evaluator = self.cfg.factory.evaluator(
+        self._shared_evaluator = self.var.factory.evaluator(
             device=self._devices[0], log=self.log,
         )
 ```
@@ -228,7 +228,7 @@ class BlockMaker(Datastack.BlockMaker):
                 evaluator = stack._shared_evaluator
             else:
                 if not hasattr(stack, '_worker_evaluator'):
-                    stack._worker_evaluator = stack.cfg.factory.evaluator(
+                    stack._worker_evaluator = stack.var.factory.evaluator(
                         device=self.device, log=stack.log,
                     )
                 evaluator = stack._worker_evaluator
@@ -243,7 +243,7 @@ fallback for standalone builds:
 class MyBag(Datablock):
     def __build__(self, evaluator=None):
         if evaluator is None:
-            evaluator = self.cfg.factory.evaluator(device=self.device)
+            evaluator = self.var.factory.evaluator(device=self.device)
         features = evaluator(self.load_tiles())
         self.write_features(features)
 ```
@@ -382,7 +382,7 @@ class MyGpuBlock(Datablock):
 
     def __build__(self):
         model = load_model().to(self._device)
-        features = model(load_data(self.cfg.idx).to(self._device))
+        features = model(load_data(self.var.idx).to(self._device))
         torch.save(features.cpu(), self.path())
 
 shards = [MyGpuBlock(url=..., spec=dict(idx=i)) for i in range(n)]
@@ -420,7 +420,7 @@ class MyClip(Datastack):
                 source = stack._precomputed_sources[self.idx]
             else:
                 if not hasattr(stack, '_worker_source_clip'):
-                    stack._worker_source_clip = stack.cfg.source_clip  # eval ONCE
+                    stack._worker_source_clip = stack.var.source_clip  # eval ONCE
                 source = stack._worker_source_clip.block(self.idx)     # lazy
 
             block = stack.__block__(self.idx, device=self.device)
@@ -432,7 +432,7 @@ class MyClip(Datastack):
                     kwargs['evaluator'] = stack._shared_evaluator
                 else:
                     if not hasattr(stack, '_worker_evaluator'):
-                        stack._worker_evaluator = stack.cfg.factory.evaluator(
+                        stack._worker_evaluator = stack.var.factory.evaluator(
                             device=self.device, log=stack.log,
                         )
                     kwargs['evaluator'] = stack._worker_evaluator
@@ -447,9 +447,9 @@ class MyClip(Datastack):
         # In inline mode, precompute everything in the main process.
         inline = (self.parallelization in (None, 'inline') and len(devices) == 1)
         if inline:
-            self._shared_evaluator = self.cfg.factory.evaluator(device=devices[0])
+            self._shared_evaluator = self.var.factory.evaluator(device=devices[0])
             self._precomputed_sources = [
-                self.cfg.source_clip.block(i) for i in range(self.n_blocks)
+                self.var.source_clip.block(i) for i in range(self.n_blocks)
             ]
 
         # Mirror the executor's chunking to assign device per worker.
@@ -496,9 +496,9 @@ The block's `__build__` accepts optional injected resources with fallbacks:
 class MyBag(Datablock):
     def __build__(self, evaluator=None, source=None):
         if evaluator is None:
-            evaluator = self.cfg.factory.evaluator(device=self.device)
+            evaluator = self.var.factory.evaluator(device=self.device)
         if source is None:
-            source = self.cfg.source      # fallback: evaluate quoted spec
+            source = self.var.source      # fallback: evaluate quoted spec
         # ... use evaluator and source ...
 ```
 
@@ -512,7 +512,7 @@ class MyBag(Datablock):
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | `AttributeError` on `self._foo` in worker | Ad-hoc attrs dropped by `__getstate__` | Store on `BlockMaker`, use `spec`, or write to disk |
-| Hash changes when `device` added to CONFIG | Runtime params in CONFIG affect identity | Keep them as `__init__` kwargs only |
+| Hash changes when `device` added to VAR | Runtime params in VAR affect identity | Keep them as `__init__` kwargs only |
 | Per-block model reload in multiprocessing | No evaluator caching across blocks in a worker | Worker-local caching via `hasattr` on `stack` |
 | O(N²) source formation | Each block re-evaluates quoted spec for source clip | Cache source clip on `stack`, use `.block(idx)` |
 | OOM with multi-GPU | Round-robin `idx % n_devices` → workers switch GPUs | Use worker-chunk alignment |

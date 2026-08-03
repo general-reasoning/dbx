@@ -37,13 +37,13 @@ class SingleTopicBlock(Datablock):
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         label: str = "'hello'"
 
     def __build__(self):
         path = self.path('output', ensure_dirpath=True)
         with open(path, 'w') as f:
-            f.write(f"built:{self.cfg.label}")
+            f.write(f"built:{self.var.label}")
 
 
 class MultiTopicBlock(Datablock):
@@ -51,14 +51,14 @@ class MultiTopicBlock(Datablock):
     TOPICS = {'alpha': 'alpha.txt', 'beta': 'beta.txt'}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         n: str = "'3'"
 
     def __build__(self):
         for topic in self.TOPICS:
             path = self.path(topic, ensure_dirpath=True)
             with open(path, 'w') as f:
-                f.write(f"{topic}:{self.cfg.n}")
+                f.write(f"{topic}:{self.var.n}")
 
 
 
@@ -73,7 +73,7 @@ class DirTopicBlock(Datablock):
     TOPICS = {'images': None, 'masks': None}
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):
@@ -104,7 +104,7 @@ class MixedTopicBlock(Datablock):
     }
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):
@@ -135,7 +135,7 @@ class CountingBlock(Datablock):
     _build_count = 0
 
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         pass
 
     def __build__(self):
@@ -146,11 +146,11 @@ class CountingBlock(Datablock):
 
 
 class NestedBlock(Datablock):
-    """Datablock containing another Datablock to test valid_tree and valid_cfg."""
+    """Datablock containing another Datablock to test valid_tree and valid_var."""
     TOPICS = {'nested': 'nested.txt'}
     
     @dataclass
-    class CONFIG(Datablock.CONFIG):
+    class VAR(Datablock.VAR):
         child: SingleTopicBlock = None
         
     def __build__(self):
@@ -600,7 +600,7 @@ class TestDirTopicClear:
 
 
 # ---------------------------------------------------------------------------
-# 8. valid_cfg() and valid_tree()
+# 8. valid_var() and valid_tree()
 # ---------------------------------------------------------------------------
 
 class TestValidTree:
@@ -617,8 +617,8 @@ class TestValidTree:
         assert parent.valid() is False
         assert child.valid() is False
         
-        assert parent.valid_cfg() == {'child': False}
-        assert parent.valid_cfg(reduce=True) is False
+        assert parent.valid_var() == {'child': False}
+        assert parent.valid_var(reduce=True) is False
         
         assert parent.valid_tree() == {
             'child': {
@@ -640,8 +640,8 @@ class TestValidTree:
         assert child.valid() is True
         assert parent.valid() is False
         
-        assert parent.valid_cfg() == {'child': True}
-        assert parent.valid_cfg(reduce=True) is True
+        assert parent.valid_var() == {'child': True}
+        assert parent.valid_var(reduce=True) is True
         
         assert parent.valid_tree() == {
             'child': {
@@ -659,7 +659,7 @@ class TestValidTree:
         assert child.valid() is False
         assert parent.valid() is True
         
-        assert parent.valid_cfg() == {'child': False}
+        assert parent.valid_var() == {'child': False}
         assert parent.valid_tree() == {
             'child': {
                 'valid': False,

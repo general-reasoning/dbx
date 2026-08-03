@@ -2,14 +2,14 @@
 
 ``__repr_from_kwargs__`` is shared by three callers, two of which are identity:
 
-    norm()      -> hashstr -> hash -> key -> storage path
-    supernorm() -> superhashstr -> superhash
+    norm()      -> signature -> hash -> key -> storage path
+    supernorm() -> supersignature -> superhash
     __repr__()  -> display / journal only
 
 so quoting strings there unconditionally would move every existing hash and
 orphan every artifact already stored under the old one. The split is:
 
-* ``__repr__`` always quotes -- it is not an input to ``hashstr``.
+* ``__repr__`` always quotes -- it is not an input to ``signature``.
 * ``norm``/``supernorm`` quote only when ``LEGACY_NORM`` is False (the default,
   i.e. every new subclass). Subclasses whose artifacts predate the change set
   it to True and keep the exact bytes their hashes were computed from.
@@ -223,10 +223,10 @@ class TestLegacyOverride:
             '067daa07f7bc70c43d923133b42e018753a77a91d1de949abc199ad4b03f329f'
         )
 
-    def test_hashstr_never_passes_an_override(self):
+    def test_signature_never_passes_an_override(self):
         block = _pin(LegacyBlock)
-        assert block.norm() in block.hashstr
-        assert block.norm(legacy=False) not in block.hashstr
+        assert block.norm() in block.signature
+        assert block.norm(legacy=False) not in block.signature
 
 
 class TestLegacyOverridePropagates:

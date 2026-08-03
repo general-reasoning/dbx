@@ -7,7 +7,7 @@ When TOPICS is a dict, it should behave exactly like TOPICS:
 - dirpath(topic) returns the directory path.
 - valid()/validtopic() work correctly for both file and dir topics.
 - UNSAFE_clear handles file vs dir topics correctly.
-- hashstr uses the topic:topic=file format.
+- signature uses the topic:topic=file format.
 """
 import os
 import pytest
@@ -215,24 +215,24 @@ class TestDictTopicsGet:
 
 
 # ---------------------------------------------------------------------------
-# 5. hashstr format
+# 5. signature format
 # ---------------------------------------------------------------------------
 
 class TestDictTopicsHash:
 
     def test_dict_topics_hash_uses_topicfiles_format(self, tmp_path, monkeypatch):
-        """Dict-TOPICS hashstr should use topic:topic=file format."""
+        """Dict-TOPICS signature should use topic:topic=file format."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsFileBlock(url=str(tmp_path))
-        assert 'topic:alpha=alpha.csv' in block.hashstr
-        assert 'topic:beta=beta.csv' in block.hashstr
+        assert 'topic:alpha=alpha.csv' in block.signature
+        assert 'topic:beta=beta.csv' in block.signature
 
     def test_list_topics_hash_unchanged(self, tmp_path, monkeypatch):
-        """List-TOPICS hashstr should still use topic:topic format (no =)."""
+        """List-TOPICS signature should still use topic:topic format (no =)."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = ListTopicsBlock(url=str(tmp_path))
-        assert 'topic:part_a' in block.hashstr
-        assert '=' not in block.hashstr.split('topic:part_a')[1].split('/')[0]
+        assert 'topic:part_a' in block.signature
+        assert '=' not in block.signature.split('topic:part_a')[1].split('/')[0]
 
 
 # ---------------------------------------------------------------------------

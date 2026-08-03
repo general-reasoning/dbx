@@ -27,6 +27,15 @@ All notable changes to this project will be documented in this file.
   `AttributeError` at construction naming the replacement, rather than being ignored —
   silently dropping it would re-enable the validation it existed to suppress, surfacing
   as a confusing "Not all upstream Datablocks in var are valid" at build time.
+- **Renamed `hashstr` → `signature` and `superhashstr` → `supersignature`**, in the
+  `Datablock` properties, the `Bid` fields, the journal columns, and the recorded
+  files (`signature.txt` / `supersignature.txt`). No aliases on `Datablock` or `Bid`.
+  The string itself is unchanged, so `hash`, `superhash` and `key` are byte-identical —
+  this renames the name, not the identity. Journals written before the change recorded
+  the columns as `hashstr` / `superhashstr`: `DatajournalEntry.signature` and
+  `.supersignature` fall back to them, treating a NaN as absent so that a journal
+  spanning the rename (both columns present, NaN-filled per row) reads correctly on
+  either side.
 - **Renamed `JournalFrame` → `Datajournal` and `JournalEntry` → `DatajournalEntry`.**
   No aliases are kept; update any `from dbx.datablocks import JournalEntry`. The
   `journal()` function, `Datablock.journal()` / `Datablock.Journal()`, and every journal
@@ -59,7 +68,7 @@ All notable changes to this project will be documented in this file.
 - **`norm(legacy=...)` / `supernorm(legacy=...)` / `diffnorm(legacy=...)`** — temporarily
   override `LEGACY_NORM` for one call, propagating to nested blocks so the whole subtree
   renders the same way. `None` (default) means every block uses its own flag and is
-  byte-identical to before; `hashstr` never passes an override, so `hash` is unaffected.
+  byte-identical to before; `signature` never passes an override, so `hash` is unaffected.
   `a.diffnorm(b.norm(legacy=False), legacy=False)` gives typed leaves even for classes
   that still carry the marker.
 - **`ABSENT`** — a key present on only one side of a `diffnorm` now carries this marker

@@ -4,7 +4,7 @@ Tests for the env() specline factory and getenv() function.
 Verifies:
 1. env() basics: returns a specline string, idempotent.
 2. getenv() resolves environment variables.
-3. Datablock with url=env('X'): norm/hashstr contain specline.
+3. Datablock with url=env('X'): norm/signature contain specline.
 4. Relocatability: changing the env var does not change the hash.
 5. Spec fields with env(): specline kept in norm, resolved in var.
 6. Quote round-trip via eval.
@@ -116,10 +116,10 @@ class TestEnvInRoot:
         assert "$dbx.getenv('TEST_ROOT')" in handle
         assert '/tmp/test_root_value' not in handle
 
-    def test_hashstr_contains_specline(self):
+    def test_signature_contains_specline(self):
         block = EnvBlock(url=env('TEST_ROOT'))
-        assert "$dbx.getenv('TEST_ROOT')" in block.hashstr
-        assert '/tmp/test_root_value' not in block.hashstr
+        assert "$dbx.getenv('TEST_ROOT')" in block.signature
+        assert '/tmp/test_root_value' not in block.signature
 
     def test_anchorkeypath_uses_resolved_path(self):
         block = EnvBlock(url=env('TEST_ROOT'))

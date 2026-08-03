@@ -414,6 +414,34 @@ class DatajournalEntry(pd.Series):
         """
         return self.get('cite')
 
+    def _renamed_column(self, name, legacy):
+        """Value of column *name*, falling back to the pre-rename *legacy* column.
+
+        A journal mixing entries from both eras has BOTH columns, with NaN in
+        whichever one that row predates -- so a plain ``.get(name, legacy)``
+        default is not enough; the NaN has to be treated as absent too.
+        """
+        def absent(v):
+            return v is None or (isinstance(v, float) and pd.isna(v))
+        value = self.get(name)
+        if absent(value):
+            value = self.get(legacy)
+        return None if absent(value) else value
+
+    @property
+    def signature(self):
+        """Path to this entry's ``signature.txt``, or None.
+
+        Declared explicitly for the same reason as :attr:`cite`, and because
+        journals written before the rename recorded this column as ``hashstr``.
+        """
+        return self._renamed_column('signature', 'hashstr')
+
+    @property
+    def supersignature(self):
+        """As :attr:`signature`, for the fqcn-anchored form (was ``superhashstr``)."""
+        return self._renamed_column('supersignature', 'superhashstr')
+
     @property
     def keyby(self):
         return self.get('keyby', 'tag_version_shorthash')
@@ -643,9 +671,9 @@ class DatajournalEntry(pd.Series):
             cite=self.read('cite') or '',
             repr=self.read('repr') or '',
             norm=self.read('norm') or '',
-            hashstr=self.read('hashstr') or '',
+            signature=self.read('signature') or '',
             supernorm=self.read('supernorm') or '',
-            superhashstr=self.read('superhashstr') or '',
+            supersignature=self.read('supersignature') or '',
             superhash=self.superhash,
             anchor=self.anchor,
             tag=self.tag,
@@ -887,9 +915,9 @@ class Datablock:
         cite: str
         repr: str
         norm: str
-        hashstr: str
+        signature: str
         supernorm: str
-        superhashstr: str
+        supersignature: str
         superhash: str
         anchor: str
         tag: str
@@ -2104,9 +2132,9 @@ class Datablock:
             cite=self.cite(),
             repr=self.__repr__(deslash=True),
             norm=self.norm(deslash=True),
-            hashstr=self.hashstr,
+            signature=self.signature,
             supernorm=self.supernorm(deslash=True),
-            superhashstr=self.superhashstr,
+            supersignature=self.supersignature,
             superhash=self.superhash,
             anchor=self.anchor,
             tag=self.tag,
@@ -2270,7 +2298,7 @@ class Datablock:
         (``tag``, ``local``, ``keyby``, ... as well as ``url``/``anchor``).
 
         It defaults to False because :meth:`norm` and :meth:`supernorm` feed
-        :attr:`hashstr`: for a :attr:`LEGACY_NORM` block the unquoted form IS
+        :attr:`signature`: for a :attr:`LEGACY_NORM` block the unquoted form IS
         the identity, and quoting it would orphan every artifact already
         stored under the old hash.
         """
@@ -2510,12 +2538,12 @@ class Datablock:
         return cite
 
     def norm(self, *, deslash: bool = False, legacy: 'bool | None' = None):
-        """The identity string that :attr:`hashstr` -- and hence :attr:`hash` -- is built from.
+        """The identity string that :attr:`signature` -- and hence :attr:`hash` -- is built from.
 
         ``legacy`` temporarily overrides :attr:`LEGACY_NORM`, for the whole
         subtree (nested blocks are rendered the same way). ``None`` (the
         default) means every block uses its own flag, which is the ONLY
-        rendering that corresponds to :attr:`hash`; :attr:`hashstr` never passes
+        rendering that corresponds to :attr:`hash`; :attr:`signature` never passes
         an override.
 
         ``legacy=False`` on a legacy block answers "what would this norm be if I
@@ -2930,7 +2958,7 @@ class Datablock:
 
     def __repr__(self, *, deslash: bool = True):
         # quote_strs is unconditional here, LEGACY_NORM or not: __repr__ is not
-        # an input to hashstr, so quoting can only make the rendering more
+        # an input to signature, so quoting can only make the rendering more
         # faithful -- `url=abfss://x` is not evaluable at all, `url='abfss://x'`
         # is. Only norm()/supernorm() have to honour the legacy form.
         repr_spec = self.__expand_spec__('repr')
@@ -3014,7 +3042,7 @@ class Datablock:
         return {k: v for k, v in self.__getstate__().items() if k not in explicit_keys}
     
     @property
-    def hashstr(self):
+    def signature(self):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if self._topicfiles is not None:
@@ -3023,15 +3051,15 @@ class Datablock:
             topics = [f"topic:{topic}" for topic in self.TOPICS]
         else:
             topics = ["topics:None"]
-        hashstr = os.path.join(
+        signature = os.path.join(
             self.norm(),
             f"version={self.version}",
             *topics,
         )
-        return hashstr
+        return signature
 
     @property
-    def superhashstr(self):
+    def supersignature(self):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if self._topicfiles is not None:
@@ -3040,12 +3068,12 @@ class Datablock:
             topics = [f"topic:{topic}" for topic in self.TOPICS]
         else:
             topics = ["topics:None"]
-        superhashstr = os.path.join(
+        supersignature = os.path.join(
             self.supernorm(),
             f"version={self.version}",
             *topics,
         )
-        return superhashstr
+        return supersignature
 
     @property
     def hash(self): 
@@ -3056,9 +3084,9 @@ class Datablock:
                 self._hash = self._hash_
             else:
                 sha = hashlib.sha256()
-                sha.update(self.hashstr.encode())
+                sha.update(self.signature.encode())
                 self._hash = sha.hexdigest()
-                self.log.detailed(f"hash: ---------===---------\u003e {self.hashstr=} ---\u003e hash: {self._hash}")
+                self.log.detailed(f"hash: ---------===---------\u003e {self.signature=} ---\u003e hash: {self._hash}")
         return self._hash
 
     @property
@@ -3070,9 +3098,9 @@ class Datablock:
                 self._superhash = self._superhash_
             else:
                 sha = hashlib.sha256()
-                sha.update(self.superhashstr.encode())
+                sha.update(self.supersignature.encode())
                 self._superhash = sha.hexdigest()[:8]
-                self.log.detailed(f"superhash: ---------===---------\u003e {self.superhashstr=} ---\u003e superhash: {self._superhash}")
+                self.log.detailed(f"superhash: ---------===---------\u003e {self.supersignature=} ---\u003e superhash: {self._superhash}")
         return self._superhash
 
     ### anchorage: begin
@@ -3440,8 +3468,8 @@ class Datablock:
         self._write_str('repr', self.__repr__())
         self._write_str('norm', self.norm())
         self._write_str('supernorm', self.supernorm())
-        self._write_str('hashstr', self.hashstr)
-        self._write_str('superhashstr', self.superhashstr)
+        self._write_str('signature', self.signature)
+        self._write_str('supersignature', self.supersignature)
         if message is not None and not inline_message:
             self._write_str('message', message)
         #
@@ -3454,9 +3482,9 @@ class Datablock:
         cite_path = self._dbxanchorhashpathx('cite', 'txt')
         norm_path = self._dbxanchorhashpathx('norm', 'txt')
         repr_path = self._dbxanchorhashpathx('repr', 'txt')
-        hashstr_path = self._dbxanchorhashpathx('hashstr', 'txt')
+        signature_path = self._dbxanchorhashpathx('signature', 'txt')
         supernorm_path = self._dbxanchorhashpathx('supernorm', 'txt')
-        superhashstr_path = self._dbxanchorhashpathx('superhashstr', 'txt')
+        supersignature_path = self._dbxanchorhashpathx('supersignature', 'txt')
         if message is not None and not inline_message:
             message_path = self._dbxanchorhashpathx('message', 'txt')
             message = message_path
@@ -3502,8 +3530,8 @@ class Datablock:
                                          'norm': norm_path,
                                          'supernorm': supernorm_path,
                                          'repr': repr_path,
-                                         'hashstr': hashstr_path,
-                                         'superhashstr': superhashstr_path,
+                                         'signature': signature_path,
+                                         'supersignature': supersignature_path,
                                          'message': message,
                                          'gitrepo': DBX_GIT_REPO,
                                          'wrkrepo': DBX_USE_WORK_REPO,

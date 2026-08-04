@@ -55,6 +55,14 @@ All notable changes to this project will be documented in this file.
   topic machinery has always tested for, so `{'masks': None}` stays valid and produces
   an identical `signature`, `hash` and `key`; the constant only says out loud what a
   bare `None` left the reader to infer.
+- **`NULL`** — a topic with no location at all: `TOPICS = {'data': 'data.parquet',
+  'cache': NULL}`. `path()` and `dirpath()` both return `None`, nothing is created,
+  listed, copied or cleared for it, and it is vacuously valid, so a topic with no
+  artifact on this filesystem cannot hold a block back. Distinct from `DIR`, which *is*
+  a location — a real directory that merely has no filename inside it. `NULL` is `()`
+  rather than another `None`-alike exactly so the two cannot collide; it is still
+  declared, so it appears in the `signature` (as `topic:cache=()`) and is part of the
+  block's identity.
 - **`Datablock.cite()` recorded alongside `quote()`**: new `Bid.cite` field, a `cite.txt`
   written by `write_journal_entry()`, and a `JournalEntry.cite` property (returns `None`
   on journals written before the column existed, rather than raising).

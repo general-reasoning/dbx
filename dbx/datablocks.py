@@ -369,6 +369,20 @@ ABSENT = _Absent()
 #: correctly against a topic whose filename is genuinely unset.
 DIR = None
 
+#: A topic with NO location at all -- neither a file nor a directory::
+#:
+#:     TOPICS = {'data': 'data.parquet', 'cache': NULL}
+#:
+#: ``path()`` and ``dirpath()`` both return ``None``, nothing on the filesystem
+#: is created, listed, copied or cleared for it, and it is vacuously valid --
+#: so a block is not held back by a topic that has no artifact here.
+#:
+#: Distinct from :data:`DIR`, which IS a location: a real directory that merely
+#: has no filename inside it. The empty tuple is used precisely so the two
+#: cannot collide -- it is falsy like ``None`` but never equal to it, and in
+#: CPython it is interned, so ``is NULL`` is an exact test.
+NULL = ()
+
 
 class DatajournalEntry(pd.Series):
     """A single row from a Datablock journal, with convenience accessors.
@@ -575,6 +589,10 @@ class DatajournalEntry(pd.Series):
     def _is_dir_topic(self, topic):
         """A directory topic when the recorded TOPICS filename is :data:`DIR`."""
         return self.topics.get(topic) is DIR
+
+    def _is_null_topic(self, topic):
+        """A :data:`NULL` topic -- recorded with no location at all."""
+        return self.topics.get(topic, DIR) is NULL
 
     def ls(self, topic, *, detail=False):
         """List the contents at this entry's recorded path for *topic*.
@@ -872,10 +890,13 @@ class Datablock:
         TOPICS = ['images', 'masks']                        # directory topics
         TOPICS = {'images': 'images.csv', 'masks': DIR}     # file and directory topics
         TOPICS = {'data': 'data.parquet'}                   # single file topic
+        TOPICS = {'data': 'data.parquet', 'cache': NULL}    # 'cache' has no location
 
     TOPICS must be a list or a dict.  Every topic has a name.  In the dict
     form a filename of :data:`DIR` (which is ``None``) marks a directory
-    topic, the same thing every entry of the list form is.
+    topic, the same thing every entry of the list form is; :data:`NULL` marks
+    a topic with no location at all, for which ``path()`` and ``dirpath()``
+    are ``None``, nothing is created or copied, and validity is vacuous.
 
     Storage layout::
 
@@ -1376,11 +1397,22 @@ class Datablock:
         """True when *topic* resolves to a directory rather than a file.
 
         True for list-TOPICS entries and for dict-TOPICS entries whose
-        filename is :data:`DIR`.
+        filename is :data:`DIR`.  A :data:`NULL` topic is neither.
         """
-        return topic is not None and (
+        return topic is not None and not self._is_null_topic(topic) and (
             self._topics_is_list or
             (self._topicfiles is not None and self._topicfiles.get(topic) is DIR)
+        )
+
+    def _is_null_topic(self, topic):
+        """True when *topic* is declared :data:`NULL` -- it has no location.
+
+        Only dict-TOPICS can declare one; every entry of a list-TOPICS is a
+        directory.
+        """
+        return (
+            self._topicfiles is not None
+            and self._topicfiles.get(topic, DIR) is NULL
         )
 
     def build(self, *args, **kwargs):
@@ -1722,6 +1754,8 @@ class Datablock:
                 f"{self.__class__.__name__}.leave_breadcrumbs() requires TOPICS"
             )
         for topic in topics:
+            if self._is_null_topic(topic):
+                continue
             self.dirpath(topic, ensure=True)
             self.leave_breadcrumbs_at_path(self.path(topic))
         return self
@@ -1984,6 +2018,10 @@ class Datablock:
         this base signature; :meth:`UNSAFE_copy_from` forwards its own
         ``**kwargs`` to every topic's call.
         """
+        if self._is_null_topic(topic):
+            # No location on either side -- there is nothing to copy.
+            self.log.verbose(f"Skipping NULL topic {topic}: it has no location")
+            return
         # Use directory copy when:
         #  - always_copy_whole_dirpath is explicitly requested, OR
         #  - TOPICS is a list (self._topicfiles is None -> every topic IS a dir), OR
@@ -3186,9 +3224,13 @@ class Datablock:
         """Return the path for *topic*.
 
         For dict-TOPICS with a string value, returns ``dirpath/filename``.
-        For dict-TOPICS with ``None`` value or list-TOPICS, returns the
+        For dict-TOPICS with a :data:`DIR` value or list-TOPICS, returns the
         directory path (same as ``dirpath(topic)``).
+        For a :data:`NULL` topic, returns ``None``: it has no location, and
+        ``ensure_dirpath`` creates nothing.
         """
+        if self._is_null_topic(topic):
+            return None
 
         dirpath = self.dirpath(topic, local=local)
         if ensure_dirpath and dirpath is not None:
@@ -3289,6 +3331,9 @@ class Datablock:
         list: bool = False,
         local: bool = False,
     ):
+        if self._is_null_topic(topic):
+            # No location: nothing to name, and nothing to create for `ensure`.
+            return None
         anchorkeypath = self.localanchorkeypath if local else self.anchorkeypath
         fs = self.localfs if local else self.fs
         dirpath = os.path.join(anchorkeypath, topic)
@@ -3310,7 +3355,7 @@ class Datablock:
         so writers always see a real local path regardless of where
         url/DBX_ROOT points.
 
-        For directory topics (list-TOPICS, or dict-TOPICS with a ``None``
+        For directory topics (list-TOPICS, or dict-TOPICS with a :data:`DIR`
         value) *target* is linked to the topic directory itself. For file
         topics *target* is linked to the topic file path, with its parent
         directory created so a writer can create the file through the
@@ -3321,6 +3366,12 @@ class Datablock:
         if target is None:
             return self
         local_path = self.path(topic, local=True)
+        if local_path is None:
+            self.log.warning(
+                f"linklocal: topic {topic!r} has no location (NULL); "
+                f"nothing to link {target} to"
+            )
+            return self
         if self._is_dir_topic(topic):
             self.localfs.makedirs(local_path, exist_ok=True)
         else:

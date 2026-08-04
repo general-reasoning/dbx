@@ -1748,6 +1748,14 @@ class Datablock:
         return self.note(message, event='keep', inline=True)
 
     def leave_breadcrumbs(self):
+        """Touch a breadcrumb for every topic that has a location.
+
+        A file topic's breadcrumb IS its file, so the block reads as valid.
+        A directory topic has no filename, so it gets ``{dirpath}.crumbs``
+        beside it rather than a stray entry inside a listing of it -- writing
+        to the directory path itself is what used to raise IsADirectoryError.
+        A :data:`NULL` topic has no location and is skipped.
+        """
         topics = self.topics()
         if not topics:
             raise NotImplementedError(
@@ -1756,8 +1764,9 @@ class Datablock:
         for topic in topics:
             if self._is_null_topic(topic):
                 continue
-            self.dirpath(topic, ensure=True)
-            self.leave_breadcrumbs_at_path(self.path(topic))
+            dirpath = self.dirpath(topic, ensure=True)
+            crumbs = None if self._is_dir_topic(topic) else self._topicfiles[topic]
+            self.leave_breadcrumbs_at_path(dirpath, crumbs=crumbs)
         return self
 
     def _iter_var_blocks(self, exemptions_attr=None, skip_callback=None):
@@ -2164,9 +2173,28 @@ class Datablock:
         self.log.detailed(f"Made {var=} from {spec=}")
         return var
 
-    def leave_breadcrumbs_at_path(self, path):
-        with self.fs.open(path, "w") as f:
-            f.write("")
+    def leave_breadcrumbs_at_path(self, path, crumbs=None):
+        """Bring a breadcrumb file into existence for the directory at *path*.
+
+        *path* is ALWAYS a directory path -- never a file path.  With *crumbs*
+        the breadcrumb is that named file inside it (``{path}/{crumbs}``);
+        without, it is ``{path}.crumbs`` alongside it, since a directory topic
+        has no filename to use.
+
+        Existing content is never clobbered: a breadcrumb is only touched when
+        nothing is there, which is the least this can do and still leave a mark.
+
+        Returns the breadcrumb path.
+        """
+        if crumbs is not None:
+            crumbpath = f"{path}/{crumbs}"
+            ensure_path(path, storage_options=self.storage_options)
+        else:
+            crumbpath = f"{path}.crumbs"
+        if not self.fs.exists(crumbpath):
+            self.fs.touch(crumbpath)
+        self.log.detailed(f"{self.anchor}: breadcrumb: {crumbpath}")
+        return crumbpath
     
     #IDS: BEGIN
     #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes

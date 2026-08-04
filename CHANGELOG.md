@@ -90,6 +90,16 @@ All notable changes to this project will be documented in this file.
 - **`Datablock.format_diffnorm(diff)`** — renders a `diffnorm` dict as text.
 
 ### Fixed
+- **`leave_breadcrumbs()` raised `IsADirectoryError` on any directory topic.** It passed
+  `path(topic)` to `leave_breadcrumbs_at_path()`, which opened it for writing — but for a
+  directory topic (list-TOPICS, or dict-TOPICS with `DIR`) `path()` *is* the directory, so
+  the call blew up and the method was unusable on such a block.
+  `leave_breadcrumbs_at_path(path, crumbs=None)` now always takes a **directory** path:
+  with `crumbs` the breadcrumb is `{path}/{crumbs}`, without it `{path}.crumbs` alongside.
+  A file topic passes its own filename, so its breadcrumb is still its own empty file and
+  the block still reads as valid; a directory topic gets the sibling marker rather than a
+  stray entry inside a listing of itself. Breadcrumbs are now touched only when nothing is
+  there, so they never clobber a real artifact. `NULL` topics are skipped.
 - **A filtered `Datajournal` kept the row labels of the unfiltered journal**, so
   `loc=`/`Datajournal.get()` — which index by label — raised `KeyError` for positions
   whose rows the filter had removed. `lastbuilt()` is `journal(event='build:end').get(0)`,

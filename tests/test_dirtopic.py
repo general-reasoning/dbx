@@ -1,8 +1,8 @@
 """
-``DIR`` — the self-documenting spelling of a directory topic in dict-TOPICS.
+``DIRTOPIC`` — the self-documenting spelling of a directory topic in dict-TOPICS.
 
-``DIR`` *is* ``None``, so this is a naming change and nothing else: a block
-written with ``DIR`` and one written with a bare ``None`` must be
+``DIRTOPIC`` *is* ``None``, so this is a naming change and nothing else: a block
+written with ``DIRTOPIC`` and one written with a bare ``None`` must be
 indistinguishable, down to the hash.  These tests pin that equivalence so the
 constant cannot quietly drift into a distinct sentinel, which would split every
 existing directory topic off its stored artifacts.
@@ -12,7 +12,7 @@ import os
 import pytest
 
 import dbx
-from dbx.datablocks import DIR, Datablock
+from dbx.datablocks import DIRTOPIC, Datablock
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +21,7 @@ def setup_env(monkeypatch):
 
 
 class WithDIR(Datablock):
-    TOPICS = {'logs': 'train.log', 'checkpoints': DIR}
+    TOPICS = {'logs': 'train.log', 'checkpoints': DIRTOPIC}
 
     def __build__(self):
         self.dirpath('checkpoints', ensure=True)
@@ -38,19 +38,19 @@ class WithNone(Datablock):
         WithDIR.__build__(self)
 
 
-class TestDIRIsNone:
+class TestDIRTOPICIsNone:
 
-    def test_dir_is_none(self):
-        assert DIR is None
+    def test_dirtopic_is_none(self):
+        assert DIRTOPIC is None
 
     def test_exported_from_the_package(self):
-        assert dbx.DIR is DIR
+        assert dbx.DIRTOPIC is DIRTOPIC
 
     def test_topics_dict_is_literally_the_same(self):
         assert WithDIR.TOPICS == WithNone.TOPICS
 
 
-class TestDIRBehavesAsADirectoryTopic:
+class TestDIRTOPICBehavesAsADirectoryTopic:
 
     @pytest.fixture
     def block(self, tmp_path):
@@ -71,7 +71,7 @@ class TestDIRBehavesAsADirectoryTopic:
         assert block.valid()
 
 
-class TestDIRDoesNotChangeIdentity:
+class TestDIRTOPICDoesNotChangeIdentity:
     """A rename that moved the hash would orphan every stored artifact."""
 
     def test_signature_is_unaffected_by_the_spelling(self, tmp_path):
@@ -82,11 +82,11 @@ class TestDIRDoesNotChangeIdentity:
         assert a.key == b.key
 
     def test_dir_topic_renders_as_none_in_the_signature(self, tmp_path):
-        """The recorded form is still `topic:name=None`, not `topic:name=DIR`."""
+        """The recorded form is still `topic:name=None`, not `topic:name=DIRTOPIC`."""
         assert 'topic:checkpoints=None' in WithDIR(url=str(tmp_path)).signature
 
 
-class TestDIRInTheJournal:
+class TestDIRTOPICInTheJournal:
 
     def test_journal_records_the_dir_topic_as_none(self, tmp_path):
         b = WithDIR(url=str(tmp_path))

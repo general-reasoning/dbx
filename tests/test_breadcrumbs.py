@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from dbx.datablocks import DIR, NULL, Datablock
+from dbx.datablocks import DIRTOPIC, SYNTOPIC, Datablock
 
 
 @pytest.fixture(autouse=True)
@@ -27,7 +27,7 @@ class FileTopics(Datablock):
 
 
 class DirTopic(Datablock):
-    TOPICS = {'masks': DIR}
+    TOPICS = {'masks': DIRTOPIC}
     def __build__(self): pass
 
 
@@ -37,7 +37,7 @@ class ListTopics(Datablock):
 
 
 class Mixed(Datablock):
-    TOPICS = {'output': 'output.txt', 'masks': DIR, 'cache': NULL}
+    TOPICS = {'output': 'output.txt', 'masks': DIRTOPIC, 'cache': SYNTOPIC}
     def __build__(self): pass
 
 
@@ -77,7 +77,7 @@ class TestWhereTheBreadcrumbLands:
         for topic in b.TOPICS:
             assert os.path.isfile(b.dirpath(topic) + '.crumbs')
 
-    def test_null_topic_gets_nothing(self, tmp_path):
+    def test_syntopic_gets_nothing(self, tmp_path):
         b = Mixed(url=str(tmp_path))
         b.leave_breadcrumbs()
         assert not os.path.exists(os.path.join(b.anchorkeypath, 'cache'))

@@ -50,19 +50,19 @@ All notable changes to this project will be documented in this file.
   New classes should leave it alone (default `False`).
 
 ### Added
-- **`DIR`** — the filename of a directory topic in a dict-valued `TOPICS`:
-  `TOPICS = {'images': 'images.csv', 'masks': DIR}`. It *is* `None`, the value the
+- **`DIRTOPIC`** — the filename of a directory topic in a dict-valued `TOPICS`:
+  `TOPICS = {'images': 'images.csv', 'masks': DIRTOPIC}`. It *is* `None`, the value the
   topic machinery has always tested for, so `{'masks': None}` stays valid and produces
   an identical `signature`, `hash` and `key`; the constant only says out loud what a
   bare `None` left the reader to infer.
-- **`NULL`** — a topic with no location at all: `TOPICS = {'data': 'data.parquet',
-  'cache': NULL}`. `path()` and `dirpath()` both return `None`, nothing is created,
-  listed, copied or cleared for it, and it is vacuously valid, so a topic with no
-  artifact on this filesystem cannot hold a block back. Distinct from `DIR`, which *is*
-  a location — a real directory that merely has no filename inside it. `NULL` is `()`
-  rather than another `None`-alike exactly so the two cannot collide; it is still
-  declared, so it appears in the `signature` (as `topic:cache=()`) and is part of the
-  block's identity.
+- **`SYNTOPIC`** — a *synthetic* topic, one the block presents but never stores, so it
+  has no location: `TOPICS = {'data': 'data.parquet', 'cache': SYNTOPIC}`. `path()` and
+  `dirpath()` are both `None`, nothing is created, listed, copied or cleared for it, and
+  it is vacuously valid — a topic that was never going to be written cannot be missing,
+  so it must not hold the block back. Distinct from `DIRTOPIC`, which *is* a location —
+  a real directory that merely has no filename inside it. `SYNTOPIC` is `()` rather than
+  another `None`-alike exactly so the two cannot collide; it is still declared, so it
+  appears in the `signature` (as `topic:cache=()`) and is part of the block's identity.
 - **`Datablock.cite()` recorded alongside `quote()`**: new `Bid.cite` field, a `cite.txt`
   written by `write_journal_entry()`, and a `JournalEntry.cite` property (returns `None`
   on journals written before the column existed, rather than raising).
@@ -92,14 +92,14 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - **`leave_breadcrumbs()` raised `IsADirectoryError` on any directory topic.** It passed
   `path(topic)` to `leave_breadcrumbs_at_path()`, which opened it for writing — but for a
-  directory topic (list-TOPICS, or dict-TOPICS with `DIR`) `path()` *is* the directory, so
+  directory topic (list-TOPICS, or dict-TOPICS with `DIRTOPIC`) `path()` *is* the directory, so
   the call blew up and the method was unusable on such a block.
   `leave_breadcrumbs_at_path(path, crumbs=None)` now always takes a **directory** path:
   with `crumbs` the breadcrumb is `{path}/{crumbs}`, without it `{path}.crumbs` alongside.
   A file topic passes its own filename, so its breadcrumb is still its own empty file and
   the block still reads as valid; a directory topic gets the sibling marker rather than a
   stray entry inside a listing of itself. Breadcrumbs are now touched only when nothing is
-  there, so they never clobber a real artifact. `NULL` topics are skipped.
+  there, so they never clobber a real artifact. `SYNTOPIC` topics are skipped.
 - **A filtered `Datajournal` kept the row labels of the unfiltered journal**, so
   `loc=`/`Datajournal.get()` — which index by label — raised `KeyError` for positions
   whose rows the filter had removed. `lastbuilt()` is `journal(event='build:end').get(0)`,

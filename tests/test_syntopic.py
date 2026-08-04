@@ -1,13 +1,14 @@
 """
-``NULL`` — a topic with no location at all.
+``SYNTOPIC`` — a synthetic topic, one the block never stores.
 
-``DIR`` and ``NULL`` are both "no filename", but they answer different
-questions: a ``DIR`` topic IS a location (a real directory that happens to
-hold no single named file), whereas a ``NULL`` topic has none.  Nothing on the
-filesystem is named, created, listed, copied or cleared for a ``NULL`` topic,
-and it cannot hold a block back from being valid.
+``DIRTOPIC`` and ``SYNTOPIC`` are both "no filename", but they answer different
+questions: a ``DIRTOPIC`` topic IS a location (a real directory that happens to
+hold no single named file), whereas a synthetic one has no location at all.
+Nothing on the filesystem is named, created, listed, copied or cleared for a
+``SYNTOPIC``, and — since a topic that was never going to be written cannot be
+missing — it cannot hold a block back from being valid.
 
-The two must never collapse into each other, which is why ``NULL`` is ``()``
+The two must never collapse into each other, which is why ``SYNTOPIC`` is ``()``
 and not another ``None``-alike — these tests pin that separation.
 """
 import os
@@ -15,7 +16,7 @@ import os
 import pytest
 
 import dbx
-from dbx.datablocks import DIR, NULL, Datablock
+from dbx.datablocks import DIRTOPIC, SYNTOPIC, Datablock
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +26,7 @@ def setup_env(monkeypatch):
 
 class Mixed(Datablock):
     """One of each kind of topic."""
-    TOPICS = {'data': 'data.txt', 'masks': DIR, 'cache': NULL}
+    TOPICS = {'data': 'data.txt', 'masks': DIRTOPIC, 'cache': SYNTOPIC}
 
     def __build__(self):
         with open(self.path('data', ensure_dirpath=True), 'w') as f:
@@ -40,25 +41,25 @@ def block(tmp_path):
     return Mixed(url=str(tmp_path))
 
 
-class TestNULLIsItsOwnMarker:
+class TestSYNTOPICIsItsOwnMarker:
 
-    def test_null_is_the_empty_tuple(self):
-        assert NULL == ()
+    def test_syntopic_is_the_empty_tuple(self):
+        assert SYNTOPIC == ()
 
     def test_exported_from_the_package(self):
-        assert dbx.NULL is NULL
+        assert dbx.SYNTOPIC is SYNTOPIC
 
-    def test_null_is_not_dir(self):
+    def test_syntopic_is_not_dirtopic(self):
         """The whole point: 'no location' and 'is a directory' must not merge."""
-        assert NULL is not DIR
-        assert NULL != DIR
+        assert SYNTOPIC is not DIRTOPIC
+        assert SYNTOPIC != DIRTOPIC
 
-    def test_null_is_falsy_like_dir(self):
+    def test_syntopic_is_falsy_like_dirtopic(self):
         """Existing `if not topicfile` style checks keep behaving."""
-        assert not NULL and not DIR
+        assert not SYNTOPIC and not DIRTOPIC
 
 
-class TestNULLHasNoLocation:
+class TestSYNTOPICHasNoLocation:
 
     def test_path_is_none(self, block):
         assert block.path('cache') is None
@@ -71,11 +72,11 @@ class TestNULLHasNoLocation:
         assert block.path('masks') == block.dirpath('masks')
 
     def test_it_is_neither_a_dir_topic_nor_a_file_topic(self, block):
-        assert block._is_null_topic('cache')
+        assert block._is_syntopic('cache')
         assert not block._is_dir_topic('cache')
         assert block._is_dir_topic('masks')
-        assert not block._is_null_topic('masks')
-        assert not block._is_null_topic('data')
+        assert not block._is_syntopic('masks')
+        assert not block._is_syntopic('data')
 
     def test_paths_records_it_as_none(self, block):
         assert block.paths()['cache'] is None
@@ -84,7 +85,7 @@ class TestNULLHasNoLocation:
         assert 'cache' in block.topics()
 
 
-class TestNULLCreatesNothing:
+class TestSYNTOPICCreatesNothing:
 
     def test_ensure_dirpath_creates_nothing(self, block):
         assert block.path('cache', ensure_dirpath=True) is None
@@ -95,42 +96,42 @@ class TestNULLCreatesNothing:
         assert not os.path.exists(os.path.join(block.anchorkeypath, 'cache'))
 
     def test_leave_breadcrumbs_skips_it(self, tmp_path):
-        # No DIR topic here: leave_breadcrumbs() opens path(topic) as a file,
-        # which already fails on a DIR topic independently of NULL.
-        class FileAndNull(Datablock):
-            TOPICS = {'data': 'data.txt', 'cache': NULL}
+        # No DIRTOPIC topic here: leave_breadcrumbs() opens path(topic) as a file,
+        # which already fails on a DIRTOPIC topic independently of SYNTOPIC.
+        class FileAndSyn(Datablock):
+            TOPICS = {'data': 'data.txt', 'cache': SYNTOPIC}
             def __build__(self): pass
 
-        b = FileAndNull(url=str(tmp_path))
+        b = FileAndSyn(url=str(tmp_path))
         b.leave_breadcrumbs()
         assert not os.path.exists(os.path.join(b.anchorkeypath, 'cache'))
         assert os.path.exists(b.path('data'))
 
 
-class TestNULLIsVacuouslyValid:
+class TestSYNTOPICIsVacuouslyValid:
 
-    def test_a_null_topic_does_not_block_validity(self, block):
+    def test_a_syntopic_does_not_block_validity(self, block):
         block.build()
         assert block.validtopic('cache')
         assert block.valid()
 
-    def test_a_block_of_only_null_topics_is_valid(self, tmp_path):
-        class AllNull(Datablock):
-            TOPICS = {'a': NULL, 'b': NULL}
+    def test_a_block_of_only_syntopics_is_valid(self, tmp_path):
+        class AllSyn(Datablock):
+            TOPICS = {'a': SYNTOPIC, 'b': SYNTOPIC}
 
             def __build__(self):
                 pass
 
-        b = AllNull(url=str(tmp_path))
+        b = AllSyn(url=str(tmp_path))
         b.build()
         assert b.valid()
 
     def test_a_missing_real_topic_still_invalidates(self, block):
-        """Guard: NULL must not make validity vacuous for the OTHER topics."""
+        """Guard: SYNTOPIC must not make validity vacuous for the OTHER topics."""
         assert not block.valid()
 
 
-class TestNULLIsInertOnTheFilesystem:
+class TestSYNTOPICIsInertOnTheFilesystem:
 
     def test_ls_and_list_are_empty(self, block):
         block.build()
@@ -151,14 +152,14 @@ class TestNULLIsInertOnTheFilesystem:
         block.UNSAFE_clear(OVERRIDE=True, clear_dirpath=True)
 
 
-class TestNULLInTheJournal:
+class TestSYNTOPICInTheJournal:
 
     def test_recorded_and_read_back(self, block):
         block.build()
         entry = block.journal(iloc=-1)
-        assert entry.topics['cache'] == NULL
+        assert entry.topics['cache'] == SYNTOPIC
         assert entry.paths['cache'] is None
-        assert entry._is_null_topic('cache')
+        assert entry._is_syntopic('cache')
         assert not entry._is_dir_topic('cache')
 
     def test_entry_listing_is_empty(self, block):
@@ -167,21 +168,21 @@ class TestNULLInTheJournal:
         assert entry.ls('cache') == []
         assert entry.size('cache') == 0
 
-    def test_dir_and_null_stay_distinct_through_the_journal(self, block):
+    def test_dirtopic_and_syntopic_stay_distinct_through_the_journal(self, block):
         """A round trip through str(dict) must not turn () into None."""
         block.build()
         topics = block.journal(iloc=-1).topics
-        assert topics['masks'] is DIR
-        assert topics['cache'] == NULL
+        assert topics['masks'] is DIRTOPIC
+        assert topics['cache'] == SYNTOPIC
         assert topics['masks'] is not topics['cache']
 
 
-class TestNULLInTheSignature:
+class TestSYNTOPICInTheSignature:
 
-    def test_a_null_topic_is_part_of_identity(self, tmp_path):
-        """Declaring a topic NULL is still a declaration; it must be recorded."""
+    def test_a_syntopic_is_part_of_identity(self, tmp_path):
+        """Declaring a topic SYNTOPIC is still a declaration; it must be recorded."""
         class WithCache(Datablock):
-            TOPICS = {'data': 'data.txt', 'cache': NULL}
+            TOPICS = {'data': 'data.txt', 'cache': SYNTOPIC}
             def __build__(self): pass
 
         class WithoutCache(Datablock):
@@ -197,14 +198,14 @@ class TestNULLInTheSignature:
         """Pinned so the recorded form is a decision, not an accident."""
         assert 'topic:cache=()' in Mixed(url=str(tmp_path)).signature
 
-    def test_null_and_dir_give_different_signatures(self, tmp_path):
-        class AsNull(Datablock):
-            TOPICS = {'x': NULL}
+    def test_syntopic_and_dirtopic_give_different_signatures(self, tmp_path):
+        class AsSyn(Datablock):
+            TOPICS = {'x': SYNTOPIC}
             def __build__(self): pass
 
-        class AsDir(Datablock):
-            TOPICS = {'x': DIR}
+        class AsDirTopic(Datablock):
+            TOPICS = {'x': DIRTOPIC}
             def __build__(self): pass
 
-        assert (AsNull(url=str(tmp_path), anchor='s').signature
-                != AsDir(url=str(tmp_path), anchor='s').signature)
+        assert (AsSyn(url=str(tmp_path), anchor='s').signature
+                != AsDirTopic(url=str(tmp_path), anchor='s').signature)

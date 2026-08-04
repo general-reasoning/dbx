@@ -361,27 +361,29 @@ ABSENT = _Absent()
 #: The filename of a directory topic in a dict-valued ``TOPICS``, i.e. no file
 #: at all -- the topic IS the directory::
 #:
-#:     TOPICS = {'images': 'images.csv', 'masks': DIR}
+#:     TOPICS = {'images': 'images.csv', 'masks': DIRTOPIC}
 #:
 #: It is literally ``None``, which is what the topic machinery has always
 #: tested for, so ``{'masks': None}`` stays valid and identical. The name only
 #: says out loud what a bare ``None`` leaves the reader to infer -- and reads
 #: correctly against a topic whose filename is genuinely unset.
-DIR = None
+DIRTOPIC = None
 
-#: A topic with NO location at all -- neither a file nor a directory::
+#: A SYNTHETIC topic: one the block presents but never stores, so it has no
+#: location -- neither a file nor a directory::
 #:
-#:     TOPICS = {'data': 'data.parquet', 'cache': NULL}
+#:     TOPICS = {'data': 'data.parquet', 'cache': SYNTOPIC}
 #:
-#: ``path()`` and ``dirpath()`` both return ``None``, nothing on the filesystem
-#: is created, listed, copied or cleared for it, and it is vacuously valid --
-#: so a block is not held back by a topic that has no artifact here.
+#: ``path()`` and ``dirpath()`` are both ``None``, nothing on the filesystem is
+#: created, listed, copied or cleared for it, and it is vacuously valid -- a
+#: topic that was never going to be written cannot be missing, so it must not
+#: hold the block back from being built or read as valid.
 #:
-#: Distinct from :data:`DIR`, which IS a location: a real directory that merely
-#: has no filename inside it. The empty tuple is used precisely so the two
-#: cannot collide -- it is falsy like ``None`` but never equal to it, and in
-#: CPython it is interned, so ``is NULL`` is an exact test.
-NULL = ()
+#: Distinct from :data:`DIRTOPIC`, which IS a location: a real directory that
+#: merely has no filename inside it. The empty tuple is used precisely so the
+#: two cannot collide -- it is falsy like ``None`` but never equal to it, and
+#: in CPython it is interned, so ``is SYNTOPIC`` is an exact test.
+SYNTOPIC = ()
 
 
 class DatajournalEntry(pd.Series):
@@ -565,8 +567,8 @@ class DatajournalEntry(pd.Series):
     def topics(self):
         """Recorded ``{topic: filename_or_DIR}`` mapping (parsed from ``topics``).
 
-        A :data:`DIR` (``None``) value marks a directory topic (list-TOPICS, or
-        dict-TOPICS with a :data:`DIR` filename).
+        A :data:`DIRTOPIC` (``None``) value marks a directory topic (list-TOPICS, or
+        dict-TOPICS with a :data:`DIRTOPIC` filename).
         """
         return self._parse_dict_field('topics')
 
@@ -587,12 +589,12 @@ class DatajournalEntry(pd.Series):
         return paths[topic]
 
     def _is_dir_topic(self, topic):
-        """A directory topic when the recorded TOPICS filename is :data:`DIR`."""
-        return self.topics.get(topic) is DIR
+        """A directory topic when the recorded TOPICS filename is :data:`DIRTOPIC`."""
+        return self.topics.get(topic) is DIRTOPIC
 
-    def _is_null_topic(self, topic):
-        """A :data:`NULL` topic -- recorded with no location at all."""
-        return self.topics.get(topic, DIR) is NULL
+    def _is_syntopic(self, topic):
+        """A :data:`SYNTOPIC` topic -- recorded as synthetic, with no location."""
+        return self.topics.get(topic, DIRTOPIC) is SYNTOPIC
 
     def ls(self, topic, *, detail=False):
         """List the contents at this entry's recorded path for *topic*.
@@ -887,15 +889,15 @@ class Datablock:
     """
     Declare topics via TOPICS::
 
-        TOPICS = ['images', 'masks']                        # directory topics
-        TOPICS = {'images': 'images.csv', 'masks': DIR}     # file and directory topics
-        TOPICS = {'data': 'data.parquet'}                   # single file topic
-        TOPICS = {'data': 'data.parquet', 'cache': NULL}    # 'cache' has no location
+        TOPICS = ['images', 'masks']                             # directory topics
+        TOPICS = {'images': 'images.csv', 'masks': DIRTOPIC}     # file and directory
+        TOPICS = {'data': 'data.parquet'}                        # single file topic
+        TOPICS = {'data': 'data.parquet', 'cache': SYNTOPIC}     # 'cache' is synthetic
 
-    TOPICS must be a list or a dict.  Every topic has a name.  In the dict
-    form a filename of :data:`DIR` (which is ``None``) marks a directory
-    topic, the same thing every entry of the list form is; :data:`NULL` marks
-    a topic with no location at all, for which ``path()`` and ``dirpath()``
+    TOPICS must be a list or a dict.  Every topic has a name.  In the dict form
+    a filename of :data:`DIRTOPIC` (which is ``None``) marks a directory topic,
+    the same thing every entry of the list form is; :data:`SYNTOPIC` marks a
+    synthetic topic -- one that is never stored, so ``path()`` and ``dirpath()``
     are ``None``, nothing is created or copied, and validity is vacuous.
 
     Storage layout::
@@ -1397,22 +1399,22 @@ class Datablock:
         """True when *topic* resolves to a directory rather than a file.
 
         True for list-TOPICS entries and for dict-TOPICS entries whose
-        filename is :data:`DIR`.  A :data:`NULL` topic is neither.
+        filename is :data:`DIRTOPIC`.  A :data:`SYNTOPIC` topic is neither.
         """
-        return topic is not None and not self._is_null_topic(topic) and (
+        return topic is not None and not self._is_syntopic(topic) and (
             self._topics_is_list or
-            (self._topicfiles is not None and self._topicfiles.get(topic) is DIR)
+            (self._topicfiles is not None and self._topicfiles.get(topic) is DIRTOPIC)
         )
 
-    def _is_null_topic(self, topic):
-        """True when *topic* is declared :data:`NULL` -- it has no location.
+    def _is_syntopic(self, topic):
+        """True when *topic* is declared :data:`SYNTOPIC` -- synthetic, so no location.
 
         Only dict-TOPICS can declare one; every entry of a list-TOPICS is a
         directory.
         """
         return (
             self._topicfiles is not None
-            and self._topicfiles.get(topic, DIR) is NULL
+            and self._topicfiles.get(topic, DIRTOPIC) is SYNTOPIC
         )
 
     def build(self, *args, **kwargs):
@@ -1754,7 +1756,7 @@ class Datablock:
         A directory topic has no filename, so it gets ``{dirpath}.crumbs``
         beside it rather than a stray entry inside a listing of it -- writing
         to the directory path itself is what used to raise IsADirectoryError.
-        A :data:`NULL` topic has no location and is skipped.
+        A :data:`SYNTOPIC` topic is synthetic, has no location, and is skipped.
         """
         topics = self.topics()
         if not topics:
@@ -1762,7 +1764,7 @@ class Datablock:
                 f"{self.__class__.__name__}.leave_breadcrumbs() requires TOPICS"
             )
         for topic in topics:
-            if self._is_null_topic(topic):
+            if self._is_syntopic(topic):
                 continue
             dirpath = self.dirpath(topic, ensure=True)
             crumbs = None if self._is_dir_topic(topic) else self._topicfiles[topic]
@@ -1863,7 +1865,7 @@ class Datablock:
                     if clear_dirpath:
                         clear_path(self.dirpath(topic), recursive=True)
                     else:
-                        is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is DIR)
+                        is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is DIRTOPIC)
                         clear_path(self.path(topic), recursive=is_dir)
             self.write_journal_entry(event="UNSAFE_clear")
         else:
@@ -1871,7 +1873,7 @@ class Datablock:
                 if clear_dirpath:
                     clear_path(self.dirpath(topic), recursive=True)
                 else:
-                    is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is DIR)
+                    is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is DIRTOPIC)
                     clear_path(self.path(topic), recursive=is_dir)
             self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
@@ -2027,18 +2029,18 @@ class Datablock:
         this base signature; :meth:`UNSAFE_copy_from` forwards its own
         ``**kwargs`` to every topic's call.
         """
-        if self._is_null_topic(topic):
+        if self._is_syntopic(topic):
             # No location on either side -- there is nothing to copy.
-            self.log.verbose(f"Skipping NULL topic {topic}: it has no location")
+            self.log.verbose(f"Skipping SYNTOPIC topic {topic}: it has no location")
             return
         # Use directory copy when:
         #  - always_copy_whole_dirpath is explicitly requested, OR
         #  - TOPICS is a list (self._topicfiles is None -> every topic IS a dir), OR
-        #  - TOPICS is a dict but this topic maps to DIR (directory-only topic)
+        #  - TOPICS is a dict but this topic maps to DIRTOPIC (directory-only topic)
         use_dir = (
             always_copy_whole_dirpath
             or self._topicfiles is None
-            or (isinstance(self._topicfiles, dict) and self._topicfiles.get(topic) is DIR)
+            or (isinstance(self._topicfiles, dict) and self._topicfiles.get(topic) is DIRTOPIC)
         )
         if use_dir:
             self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
@@ -3252,12 +3254,12 @@ class Datablock:
         """Return the path for *topic*.
 
         For dict-TOPICS with a string value, returns ``dirpath/filename``.
-        For dict-TOPICS with a :data:`DIR` value or list-TOPICS, returns the
+        For dict-TOPICS with a :data:`DIRTOPIC` value or list-TOPICS, returns the
         directory path (same as ``dirpath(topic)``).
-        For a :data:`NULL` topic, returns ``None``: it has no location, and
+        For a :data:`SYNTOPIC` topic, returns ``None``: it has no location, and
         ``ensure_dirpath`` creates nothing.
         """
-        if self._is_null_topic(topic):
+        if self._is_syntopic(topic):
             return None
 
         dirpath = self.dirpath(topic, local=local)
@@ -3269,8 +3271,8 @@ class Datablock:
             return dirpath
 
         topicfile = self._topicfiles[topic]
-        if topicfile is DIR:
-            # Dict-TOPICS with a DIR value: directory-only topic
+        if topicfile is DIRTOPIC:
+            # Dict-TOPICS with a DIRTOPIC value: directory-only topic
             return dirpath
         elif isinstance(topicfile, str):
             path = os.path.join(dirpath, topicfile)
@@ -3359,7 +3361,7 @@ class Datablock:
         list: bool = False,
         local: bool = False,
     ):
-        if self._is_null_topic(topic):
+        if self._is_syntopic(topic):
             # No location: nothing to name, and nothing to create for `ensure`.
             return None
         anchorkeypath = self.localanchorkeypath if local else self.anchorkeypath
@@ -3383,7 +3385,7 @@ class Datablock:
         so writers always see a real local path regardless of where
         url/DBX_ROOT points.
 
-        For directory topics (list-TOPICS, or dict-TOPICS with a :data:`DIR`
+        For directory topics (list-TOPICS, or dict-TOPICS with a :data:`DIRTOPIC`
         value) *target* is linked to the topic directory itself. For file
         topics *target* is linked to the topic file path, with its parent
         directory created so a writer can create the file through the
@@ -3396,7 +3398,7 @@ class Datablock:
         local_path = self.path(topic, local=True)
         if local_path is None:
             self.log.warning(
-                f"linklocal: topic {topic!r} has no location (NULL); "
+                f"linklocal: topic {topic!r} has no location (SYNTOPIC); "
                 f"nothing to link {target} to"
             )
             return self

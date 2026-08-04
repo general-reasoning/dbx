@@ -358,6 +358,18 @@ class _Absent:
 ABSENT = _Absent()
 
 
+#: The filename of a directory topic in a dict-valued ``TOPICS``, i.e. no file
+#: at all -- the topic IS the directory::
+#:
+#:     TOPICS = {'images': 'images.csv', 'masks': DIR}
+#:
+#: It is literally ``None``, which is what the topic machinery has always
+#: tested for, so ``{'masks': None}`` stays valid and identical. The name only
+#: says out loud what a bare ``None`` leaves the reader to infer -- and reads
+#: correctly against a topic whose filename is genuinely unset.
+DIR = None
+
+
 class DatajournalEntry(pd.Series):
     """A single row from a Datablock journal, with convenience accessors.
 
@@ -537,10 +549,10 @@ class DatajournalEntry(pd.Series):
 
     @property
     def topics(self):
-        """Recorded ``{topic: filename_or_None}`` mapping (parsed from ``topics``).
+        """Recorded ``{topic: filename_or_DIR}`` mapping (parsed from ``topics``).
 
-        A ``None`` value marks a directory topic (list-TOPICS, or dict-TOPICS
-        with a ``None`` filename).
+        A :data:`DIR` (``None``) value marks a directory topic (list-TOPICS, or
+        dict-TOPICS with a :data:`DIR` filename).
         """
         return self._parse_dict_field('topics')
 
@@ -561,8 +573,8 @@ class DatajournalEntry(pd.Series):
         return paths[topic]
 
     def _is_dir_topic(self, topic):
-        """A directory topic when the recorded TOPICS filename is ``None``."""
-        return self.topics.get(topic) is None
+        """A directory topic when the recorded TOPICS filename is :data:`DIR`."""
+        return self.topics.get(topic) is DIR
 
     def ls(self, topic, *, detail=False):
         """List the contents at this entry's recorded path for *topic*.
@@ -858,10 +870,12 @@ class Datablock:
     Declare topics via TOPICS::
 
         TOPICS = ['images', 'masks']                        # directory topics
-        TOPICS = {'images': 'images.csv', 'masks': None}    # file and directory topics
+        TOPICS = {'images': 'images.csv', 'masks': DIR}     # file and directory topics
         TOPICS = {'data': 'data.parquet'}                   # single file topic
 
-    TOPICS must be a list or a dict.  Every topic has a name.
+    TOPICS must be a list or a dict.  Every topic has a name.  In the dict
+    form a filename of :data:`DIR` (which is ``None``) marks a directory
+    topic, the same thing every entry of the list form is.
 
     Storage layout::
 
@@ -1362,11 +1376,11 @@ class Datablock:
         """True when *topic* resolves to a directory rather than a file.
 
         True for list-TOPICS entries and for dict-TOPICS entries whose
-        filename is ``None``.
+        filename is :data:`DIR`.
         """
         return topic is not None and (
             self._topics_is_list or
-            (self._topicfiles is not None and self._topicfiles.get(topic) is None)
+            (self._topicfiles is not None and self._topicfiles.get(topic) is DIR)
         )
 
     def build(self, *args, **kwargs):
@@ -1806,7 +1820,7 @@ class Datablock:
                     if clear_dirpath:
                         clear_path(self.dirpath(topic), recursive=True)
                     else:
-                        is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is None)
+                        is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is DIR)
                         clear_path(self.path(topic), recursive=is_dir)
             self.write_journal_entry(event="UNSAFE_clear")
         else:
@@ -1814,7 +1828,7 @@ class Datablock:
                 if clear_dirpath:
                     clear_path(self.dirpath(topic), recursive=True)
                 else:
-                    is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is None)
+                    is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is DIR)
                     clear_path(self.path(topic), recursive=is_dir)
             self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
@@ -1973,11 +1987,11 @@ class Datablock:
         # Use directory copy when:
         #  - always_copy_whole_dirpath is explicitly requested, OR
         #  - TOPICS is a list (self._topicfiles is None -> every topic IS a dir), OR
-        #  - TOPICS is a dict but this topic maps to None (directory-only topic)
+        #  - TOPICS is a dict but this topic maps to DIR (directory-only topic)
         use_dir = (
             always_copy_whole_dirpath
             or self._topicfiles is None
-            or (isinstance(self._topicfiles, dict) and self._topicfiles.get(topic) is None)
+            or (isinstance(self._topicfiles, dict) and self._topicfiles.get(topic) is DIR)
         )
         if use_dir:
             self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
@@ -3185,8 +3199,8 @@ class Datablock:
             return dirpath
 
         topicfile = self._topicfiles[topic]
-        if topicfile is None:
-            # Dict-TOPICS with None value: directory-only topic
+        if topicfile is DIR:
+            # Dict-TOPICS with a DIR value: directory-only topic
             return dirpath
         elif isinstance(topicfile, str):
             path = os.path.join(dirpath, topicfile)

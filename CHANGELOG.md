@@ -50,6 +50,11 @@ All notable changes to this project will be documented in this file.
   New classes should leave it alone (default `False`).
 
 ### Added
+- **`DIR`** — the filename of a directory topic in a dict-valued `TOPICS`:
+  `TOPICS = {'images': 'images.csv', 'masks': DIR}`. It *is* `None`, the value the
+  topic machinery has always tested for, so `{'masks': None}` stays valid and produces
+  an identical `signature`, `hash` and `key`; the constant only says out loud what a
+  bare `None` left the reader to infer.
 - **`Datablock.cite()` recorded alongside `quote()`**: new `Bid.cite` field, a `cite.txt`
   written by `write_journal_entry()`, and a `JournalEntry.cite` property (returns `None`
   on journals written before the column existed, rather than raising).

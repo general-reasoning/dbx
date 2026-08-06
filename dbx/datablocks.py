@@ -696,14 +696,14 @@ class DatajournalEntry(pd.Series):
     def instantiate(self, gitrepo=None, revision=None):
         if revision == 'journal_entry':
             revision = self.revision
-            self.logger.info(f"Instantiating {self.__tag__()} with revision from journal entry {revision}")
+            self.logger.verbose(f"Instantiating {self.__tag__()} with revision from journal entry {revision}")
         else:
-            self.logger.info(f"Instantiating {self.__tag__()} with revision {revision}")
+            self.logger.verbose(f"Instantiating {self.__tag__()} with revision {revision}")
         if gitrepo == 'journal_entry':
             gitrepo = self.gitrepo
-            self.logger.info(f"Instantiating {self.__tag__()} with gitrepo from journal entry {gitrepo}")
+            self.logger.verbose(f"Instantiating {self.__tag__()} with gitrepo from journal entry {gitrepo}")
         else:
-            self.logger.info(f"Instantiating {self.__tag__()} with gitrepo {gitrepo}")
+            self.logger.verbose(f"Instantiating {self.__tag__()} with gitrepo {gitrepo}")
         return self.eval('quote', eval=True, gitrepo=gitrepo, revision=revision)
 
     def inst(self, gitrepo=None, revision='journal_entry', *, remote=False, **remote_kwargs):
@@ -1047,7 +1047,7 @@ def pintrampoline(log=None):
         revision = getattr(entry, 'revision', None)
         if revision is None:
             raise ValueError(f"--pin-from={selector!r} produced {type(entry).__name__}, which has no .revision")
-        log.info(f"PIN: --pin-from resolved to revision {revision}")
+        log.verbose(f"PIN: --pin-from resolved to revision {revision}")
 
     dbx_pin, project_pin = gitpinrepos(revision, pin_root=pin_root, log=log)
     pins = [p for p in (dbx_pin, project_pin) if p]
@@ -1062,7 +1062,7 @@ def pintrampoline(log=None):
     env.pop('DBX_USE_WORK_REPO', None)
 
     argv = [sys.executable, sys.argv[0], *rest]
-    log.info(f"PIN: re-exec pinned to {revision}: PYTHONPATH={env['PYTHONPATH']}")
+    log.verbose(f"PIN: re-exec pinned to {revision}: PYTHONPATH={env['PYTHONPATH']}")
     sys.stdout.flush()
     sys.stderr.flush()
     os.execve(sys.executable, argv, env)

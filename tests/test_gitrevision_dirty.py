@@ -14,6 +14,7 @@ import pytest
 from unittest.mock import patch, MagicMock, PropertyMock
 import git as gitmod
 import dbx.datablocks as dbxmod
+import dbx.dataparts as dataparts_mod
 
 
 # ---------------------------------------------------------------------------
@@ -36,38 +37,38 @@ class TestGitrevisionNoDirtyCheck:
 
     def test_dirty_repo_returns_hexsha(self, monkeypatch):
         """gitrevision() must not raise even for dirty repos (check moved)."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/project')
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', '/fake/project')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
 
         mock_repo = _make_mock_repo(dirty=True, hexsha="deadbeef")
-        with patch('dbx.datablocks.git') as mock_git:
+        with patch('dbx.dataparts.git') as mock_git:
             mock_git.Repo.return_value = mock_repo
-            rev = dbxmod.gitrevision()
+            rev = dataparts_mod.gitrevision()
         assert rev == "deadbeef"
 
     def test_clean_repo_returns_hexsha(self, monkeypatch):
         """Clean repo should return a hexsha."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/project')
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', '/fake/project')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
 
         mock_repo = _make_mock_repo(dirty=False, hexsha="cafebabe")
-        with patch('dbx.datablocks.git') as mock_git:
+        with patch('dbx.dataparts.git') as mock_git:
             mock_git.Repo.return_value = mock_repo
-            rev = dbxmod.gitrevision()
+            rev = dataparts_mod.gitrevision()
         assert rev == "cafebabe"
 
     def test_wrkrepo_set_returns_hexsha(self, monkeypatch):
         """When wrkrepo is active, gitrevision still returns hexsha."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', '/tmp/wrk/project')
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/tmp/wrk/project')
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', '/tmp/wrk/project')
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', '/tmp/wrk/project')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
 
         mock_repo = _make_mock_repo(dirty=True, hexsha="deadc0de")
-        with patch('dbx.datablocks.git') as mock_git:
+        with patch('dbx.dataparts.git') as mock_git:
             mock_git.Repo.return_value = mock_repo
-            rev = dbxmod.gitrevision()
+            rev = dataparts_mod.gitrevision()
         assert rev == "deadc0de"
 
 
@@ -93,9 +94,9 @@ class TestGitwrkreposetupSetsEnvVar:
         subprocess.check_call(["git", "commit", "-m", "init"], cwd=repo_dir,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_WORK_ROOT', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', repo_dir)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_WORK_ROOT', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', repo_dir)
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
 
         import tempfile as _tempfile
@@ -109,14 +110,14 @@ class TestGitwrkreposetupSetsEnvVar:
         fake_tmpdir.name = str(clone_parent)
 
         with (
-            patch('dbx.datablocks.dbx_repos', return_value=(None, repo_dir)),
-            patch('dbx.datablocks.gitclone', return_value=expected_wrkrepo),
-            patch('dbx.datablocks.gitcheckout', return_value=expected_wrkrepo),
-            patch('dbx.datablocks.tempfile.TemporaryDirectory', return_value=fake_tmpdir),
-            patch('dbx.datablocks.sys') as mock_sys,
+            patch('dbx.dataparts.dbx_repos', return_value=(None, repo_dir)),
+            patch('dbx.dataparts.gitclone', return_value=expected_wrkrepo),
+            patch('dbx.dataparts.gitcheckout', return_value=expected_wrkrepo),
+            patch('dbx.dataparts.tempfile.TemporaryDirectory', return_value=fake_tmpdir),
+            patch('dbx.dataparts.sys') as mock_sys,
         ):
             mock_sys.path = []
-            dbxmod.gitwrkreposetup(revision='HEAD', reason="test")
+            dataparts_mod.gitwrkreposetup(revision='HEAD', reason="test")
 
         assert 'DBX_WORK_ROOT' in os.environ, \
             "DBX_WORK_ROOT should be set after gitwrkreposetup()"
@@ -127,12 +128,12 @@ class TestGitwrkreposetupSetsEnvVar:
 
     def test_dbxwrkroot_not_set_when_no_wrkrepo_needed(self, monkeypatch):
         """No revision and no env flag → no wrkrepo, no DBX_WORK_ROOT."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/gitrepo')
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', '/fake/gitrepo')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
         monkeypatch.delenv('DBX_USE_WORK_REPO', raising=False)
 
-        dbxmod.gitwrkreposetup(revision=None, reason="test")
+        dataparts_mod.gitwrkreposetup(revision=None, reason="test")
 
         assert 'DBX_WORK_ROOT' not in os.environ, \
             "DBX_WORK_ROOT should NOT be set when no wrkrepo is created"
@@ -160,22 +161,22 @@ class TestGitrevisionOwnershipErrors:
 
     def test_invalid_git_repo_returns_none(self, monkeypatch):
         """git.Repo() raises InvalidGitRepositoryError → gitrevision() returns None (rank2 scenario)."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/tmp/tmpbl7jey0b/autopath')
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', '/tmp/tmpbl7jey0b/autopath')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
 
-        with patch('dbx.datablocks.git') as mock_git:
+        with patch('dbx.dataparts.git') as mock_git:
             mock_git.Repo.side_effect = gitmod.exc.InvalidGitRepositoryError(
                 '/tmp/tmpbl7jey0b/autopath'
             )
-            rev = dbxmod.gitrevision()
+            rev = dataparts_mod.gitrevision()
 
         assert rev is None
 
     def test_dubious_ownership_hexsha_raises_returns_none(self, monkeypatch):
         """repo.head.commit.hexsha raises ValueError (safe-directory) → gitrevision() returns None (rank1 scenario)."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/tmp/tmpbl7jey0b/autopath')
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', '/tmp/tmpbl7jey0b/autopath')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
 
         mock_commit = MagicMock()
@@ -188,22 +189,22 @@ class TestGitrevisionOwnershipErrors:
         mock_repo = MagicMock()
         mock_repo.head.commit = mock_commit
 
-        with patch('dbx.datablocks.git') as mock_git:
+        with patch('dbx.dataparts.git') as mock_git:
             mock_git.Repo.return_value = mock_repo
-            rev = dbxmod.gitrevision()
+            rev = dataparts_mod.gitrevision()
 
         assert rev is None
 
     def test_invalid_repo_does_not_raise(self, monkeypatch):
         """gitrevision() must not propagate any exception from git.Repo()."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/tmp/some/invalid/path')
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', '/tmp/some/invalid/path')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
 
-        with patch('dbx.datablocks.git') as mock_git:
+        with patch('dbx.dataparts.git') as mock_git:
             mock_git.Repo.side_effect = Exception("unexpected git failure")
             # Must not raise — any exception from get_rev() is caught.
-            rev = dbxmod.gitrevision()
+            rev = dataparts_mod.gitrevision()
 
         assert rev is None
 
@@ -211,8 +212,8 @@ class TestGitrevisionOwnershipErrors:
         """When only the project repo raises, dbx_rev still forms the revision string."""
         # Provide a colon-separated path so dbx_repos() returns two distinct repos.
         # dbx_repos() puts the path containing '/dbx' first as d_repo.
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', '/fake/dbx:/fake/project')
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', '/fake/dbx:/fake/project')
         monkeypatch.delenv('DBX_WORK_ROOT', raising=False)
 
         good_repo = _make_mock_repo(hexsha='aabbccdd')
@@ -228,9 +229,9 @@ class TestGitrevisionOwnershipErrors:
                 return good_repo
             raise gitmod.exc.InvalidGitRepositoryError(path)
 
-        with patch('dbx.datablocks.git') as mock_git:
+        with patch('dbx.dataparts.git') as mock_git:
             mock_git.Repo.side_effect = repo_factory
-            rev = dbxmod.gitrevision()
+            rev = dataparts_mod.gitrevision()
 
         # dbx_rev='aabbccdd' is truthy → revision = f"{dbx_rev}:{project_rev}"
         assert rev == 'aabbccdd:None'

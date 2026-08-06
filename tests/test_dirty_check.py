@@ -11,6 +11,7 @@ import tempfile
 import pytest
 
 import dbx.datablocks as datablocks
+import dbx.dataparts as dataparts
 from dbx.datablocks import gitwrkreposetup
 
 
@@ -60,9 +61,9 @@ class TestDirtyCheck:
         _dirty(repo_dir)
 
         # Point DBX_GIT_REPO at the dirty repo and force work-repo creation.
-        monkeypatch.setattr(datablocks, 'DBX_GIT_REPO', repo_dir)
-        monkeypatch.setattr(datablocks, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(datablocks, 'DBX_WORK_ROOT', None)
+        monkeypatch.setattr(dataparts, 'DBX_GIT_REPO', repo_dir)
+        monkeypatch.setattr(dataparts, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts, 'DBX_WORK_ROOT', None)
         monkeypatch.setenv('DBX_USE_WORK_REPO', 'True')
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
@@ -78,9 +79,9 @@ class TestDirtyCheck:
         ).decode().strip()
         _dirty(repo_dir)
 
-        monkeypatch.setattr(datablocks, 'DBX_GIT_REPO', repo_dir)
-        monkeypatch.setattr(datablocks, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(datablocks, 'DBX_WORK_ROOT', None)
+        monkeypatch.setattr(dataparts, 'DBX_GIT_REPO', repo_dir)
+        monkeypatch.setattr(dataparts, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts, 'DBX_WORK_ROOT', None)
         monkeypatch.setenv('DBX_USE_WORK_REPO', 'True')
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
@@ -91,9 +92,9 @@ class TestDirtyCheck:
         """gitwrkreposetup must not raise for a clean source repo."""
         repo_dir = _make_clean_repo(str(tmp_path))
 
-        monkeypatch.setattr(datablocks, 'DBX_GIT_REPO', repo_dir)
-        monkeypatch.setattr(datablocks, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(datablocks, 'DBX_WORK_ROOT', None)
+        monkeypatch.setattr(dataparts, 'DBX_GIT_REPO', repo_dir)
+        monkeypatch.setattr(dataparts, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts, 'DBX_WORK_ROOT', None)
         monkeypatch.setenv('DBX_USE_WORK_REPO', 'True')
         monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
 
@@ -105,9 +106,9 @@ class TestDirtyCheck:
         repo_dir = _make_clean_repo(str(tmp_path))
         _dirty(repo_dir)
 
-        monkeypatch.setattr(datablocks, 'DBX_GIT_REPO', repo_dir)
-        monkeypatch.setattr(datablocks, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(datablocks, 'DBX_WORK_ROOT', None)
+        monkeypatch.setattr(dataparts, 'DBX_GIT_REPO', repo_dir)
+        monkeypatch.setattr(dataparts, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts, 'DBX_WORK_ROOT', None)
         monkeypatch.setenv('DBX_USE_WORK_REPO', 'True')
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 

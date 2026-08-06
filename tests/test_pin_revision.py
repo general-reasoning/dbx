@@ -21,6 +21,7 @@ import pytest
 import dbx._pinshim  # noqa: F401  -- imported here only so the tests can reach it
 
 import dbx.datablocks as dbxmod
+import dbx.dataparts as dataparts_mod
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +107,7 @@ class TestGitpinrepos:
 
     def test_clones_both_repos_at_requested_revisions(self, repos):
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbx_pin, proj_pin = dbxmod.gitpinrepos(
+        dbx_pin, proj_pin = dataparts_mod.gitpinrepos(
             revision, gitrepo=repos.gitrepo, pin_root=repos.pin_root)
 
         assert _head(dbx_pin) == repos.dbx_shas[0]
@@ -115,7 +116,7 @@ class TestGitpinrepos:
     def test_pin_root_is_a_pythonpath_entry(self, repos):
         """The returned path must CONTAIN the package, not be it."""
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbx_pin, proj_pin = dbxmod.gitpinrepos(
+        dbx_pin, proj_pin = dataparts_mod.gitpinrepos(
             revision, gitrepo=repos.gitrepo, pin_root=repos.pin_root)
 
         assert os.path.isfile(os.path.join(dbx_pin, "dbx", "__init__.py"))
@@ -123,7 +124,7 @@ class TestGitpinrepos:
 
     def test_pinned_revision_content_is_the_old_content(self, repos):
         """A pin is only useful if it actually carries the old code."""
-        dbx_pin, _ = dbxmod.gitpinrepos(
+        dbx_pin, _ = dataparts_mod.gitpinrepos(
             f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}",
             gitrepo=repos.gitrepo, pin_root=repos.pin_root)
 
@@ -134,25 +135,25 @@ class TestGitpinrepos:
         """Deliberately unlike gitwrkreposetup: the pin is for a FRESH interpreter,
         and mutating this one's sys.path cannot dislodge an imported dbx anyway."""
         before = list(sys.path)
-        dbxmod.gitpinrepos(f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}",
+        dataparts_mod.gitpinrepos(f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}",
                            gitrepo=repos.gitrepo, pin_root=repos.pin_root)
         assert sys.path == before
 
     def test_reuses_an_existing_pin(self, repos):
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        first = dbxmod.gitpinrepos(revision, gitrepo=repos.gitrepo, pin_root=repos.pin_root)
+        first = dataparts_mod.gitpinrepos(revision, gitrepo=repos.gitrepo, pin_root=repos.pin_root)
         marker = os.path.join(first[0], "REUSED")
         open(marker, "w").close()
 
-        second = dbxmod.gitpinrepos(revision, gitrepo=repos.gitrepo, pin_root=repos.pin_root)
+        second = dataparts_mod.gitpinrepos(revision, gitrepo=repos.gitrepo, pin_root=repos.pin_root)
 
         assert second == first
         assert os.path.isfile(marker), "existing pin was re-cloned instead of reused"
 
     def test_distinct_revisions_get_distinct_pins(self, repos):
-        old, _ = dbxmod.gitpinrepos(f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}",
+        old, _ = dataparts_mod.gitpinrepos(f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}",
                                     gitrepo=repos.gitrepo, pin_root=repos.pin_root)
-        new, _ = dbxmod.gitpinrepos(f"{repos.dbx_shas[1]}:{repos.proj_shas[1]}",
+        new, _ = dataparts_mod.gitpinrepos(f"{repos.dbx_shas[1]}:{repos.proj_shas[1]}",
                                     gitrepo=repos.gitrepo, pin_root=repos.pin_root)
 
         assert old != new
@@ -160,13 +161,13 @@ class TestGitpinrepos:
         assert _head(new) == repos.dbx_shas[1]
 
     def test_leaves_no_staging_directories(self, repos):
-        dbxmod.gitpinrepos(f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}",
+        dataparts_mod.gitpinrepos(f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}",
                            gitrepo=repos.gitrepo, pin_root=repos.pin_root)
         assert not [d for d in os.listdir(repos.pin_root) if '.staging-' in d]
 
     def test_unpinned_side_clones_at_head(self, repos):
         """A one-sided revision string pins the project and takes dbx at HEAD."""
-        dbx_pin, proj_pin = dbxmod.gitpinrepos(
+        dbx_pin, proj_pin = dataparts_mod.gitpinrepos(
             repos.proj_shas[0], gitrepo=repos.gitrepo, pin_root=repos.pin_root)
 
         assert _head(dbx_pin) == repos.dbx_shas[-1]
@@ -176,7 +177,7 @@ class TestGitpinrepos:
         """A TemporaryDirectory deletes its tree when collected, which would pull
         the clones out from under a worker still importing them."""
         import gc
-        dbx_pin, _ = dbxmod.gitpinrepos(
+        dbx_pin, _ = dataparts_mod.gitpinrepos(
             f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}", gitrepo=repos.gitrepo)
         gc.collect()
         assert os.path.isdir(dbx_pin)
@@ -189,10 +190,10 @@ class TestGitpinrepos:
 class TestRemotePinning:
 
     def test_revision_pins_both_repos_on_pythonpath(self, repos, stub_ray, monkeypatch):
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
 
-        dbxmod.remote(revision=revision, pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=revision, pin_root=repos.pin_root)
 
         env = stub_ray['init']['runtime_env']['env_vars']
         entries = env['PYTHONPATH'].split(os.pathsep)
@@ -202,10 +203,10 @@ class TestRemotePinning:
 
     def test_dbx_git_repo_points_at_the_pins(self, repos, stub_ray, monkeypatch):
         """So that anything the worker resolves later agrees with what it imported."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
 
-        dbxmod.remote(revision=revision, pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=revision, pin_root=repos.pin_root)
 
         env = stub_ray['init']['runtime_env']['env_vars']
         assert env['DBX_GIT_REPO'] == env['PYTHONPATH']
@@ -213,29 +214,29 @@ class TestRemotePinning:
     def test_worker_is_not_asked_to_check_out_again(self, repos, stub_ray, monkeypatch):
         """Both repos are already pinned; a revision passed to RemoteDBX would clone
         a second time, and for dbx could not take effect at all."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
 
-        dbxmod.remote(revision=revision, pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=revision, pin_root=repos.pin_root)
 
         assert stub_ray['actor_kwargs'] == {'revision': None}
 
     def test_existing_pythonpath_is_preserved_after_the_pins(self, repos, stub_ray, monkeypatch):
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
         monkeypatch.setenv('PYTHONPATH', '/somewhere/else')
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
 
-        dbxmod.remote(revision=revision, pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=revision, pin_root=repos.pin_root)
 
         env = stub_ray['init']['runtime_env']['env_vars']
         assert env['PYTHONPATH'].split(os.pathsep)[-1] == '/somewhere/else'
 
     def test_no_revision_leaves_pythonpath_alone(self, repos, stub_ray, monkeypatch):
         """Regression guard: the unpinned path must behave exactly as before."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
         monkeypatch.delenv('PYTHONPATH', raising=False)
 
-        dbxmod.remote()
+        dataparts_mod.remote()
 
         env = stub_ray['init']['runtime_env']['env_vars']
         assert 'PYTHONPATH' not in env
@@ -318,15 +319,15 @@ class TestRemotePinMode:
 
     @pytest.fixture(autouse=True)
     def _repo_globals(self, repos, monkeypatch):
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
-        monkeypatch.setattr(dbxmod, '_DBX_GIT_REPO_', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, '_DBX_GIT_REPO_', repos.gitrepo)
 
     def _env(self, stub_ray):
         return stub_ray['init']['runtime_env']
 
     def test_shim_ships_the_bootstrap_and_names_the_hook(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbxmod.remote(revision=rev, pin_mode='shim')
+        dataparts_mod.remote(revision=rev, pin_mode='shim')
         renv = self._env(stub_ray)
         assert renv['worker_process_setup_hook'] == 'dbxpinshim.setup'
         assert os.path.isfile(os.path.join(renv['working_dir'], 'dbxpinshim.py'))
@@ -336,57 +337,57 @@ class TestRemotePinMode:
 
     def test_pin_root_uses_pythonpath_and_no_hook(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbxmod.remote(revision=rev, pin_mode='pin_root', pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=rev, pin_mode='pin_root', pin_root=repos.pin_root)
         renv = self._env(stub_ray)
         assert 'worker_process_setup_hook' not in renv
         assert 'PYTHONPATH' in renv['env_vars']
 
     def test_auto_prefers_pin_root_on_this_host(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbxmod.remote(revision=rev, pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=rev, pin_root=repos.pin_root)
         assert 'worker_process_setup_hook' not in self._env(stub_ray)
 
     def test_auto_prefers_shim_off_host(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbxmod.remote(revision=rev, address='ray://head:10001')
+        dataparts_mod.remote(revision=rev, address='ray://head:10001')
         assert self._env(stub_ray)['worker_process_setup_hook'] == 'dbxpinshim.setup'
 
     def test_auto_falls_back_to_pin_root_without_the_hook(self, repos, stub_ray, monkeypatch):
         monkeypatch.setattr(stub_ray['ray'].runtime_env.RuntimeEnv, 'known_fields', {'env_vars'})
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbxmod.remote(revision=rev, address='ray://head:10001', pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=rev, address='ray://head:10001', pin_root=repos.pin_root)
         assert 'worker_process_setup_hook' not in self._env(stub_ray)
 
     def test_explicit_shim_without_the_hook_is_an_error(self, repos, stub_ray, monkeypatch):
         monkeypatch.setattr(stub_ray['ray'].runtime_env.RuntimeEnv, 'known_fields', {'env_vars'})
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         with pytest.raises(ValueError, match='worker_process_setup_hook'):
-            dbxmod.remote(revision=rev, pin_mode='shim')
+            dataparts_mod.remote(revision=rev, pin_mode='shim')
 
     def test_a_git_url_source_implies_shim(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbxmod.remote(revision=rev, pin_source='https://h/dbx.git https://h/proj.git')
+        dataparts_mod.remote(revision=rev, pin_source='https://h/dbx.git https://h/proj.git')
         renv = self._env(stub_ray)
         assert renv['worker_process_setup_hook'] == 'dbxpinshim.setup'
         assert renv['env_vars']['DBX_PIN_SOURCE'] == 'https://h/dbx.git https://h/proj.git'
 
     def test_pin_source_must_match_the_revision_arity(self, repos, stub_ray):
         with pytest.raises(ValueError, match='zipped together'):
-            dbxmod.remote(revision='a:b', pin_source='https://h/only-one.git')
+            dataparts_mod.remote(revision='a:b', pin_source='https://h/only-one.git')
 
     def test_shim_conflicts_with_an_explicit_working_dir(self, repos, stub_ray, tmp_path):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         with pytest.raises(ValueError, match='working_dir'):
-            dbxmod.remote(revision=rev, pin_mode='shim', working_dir=str(tmp_path))
+            dataparts_mod.remote(revision=rev, pin_mode='shim', working_dir=str(tmp_path))
 
     def test_pinned_revision_is_advertised_to_the_worker(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbxmod.remote(revision=rev, pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=rev, pin_root=repos.pin_root)
         assert self._env(stub_ray)['env_vars']['DBX_PINNED_REVISION'] == rev
 
     def test_gitrepo_overrides_the_clone_source(self, repos, stub_ray):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbxmod.remote(revision=rev, pin_mode='shim', gitrepo=repos.gitrepo)
+        dataparts_mod.remote(revision=rev, pin_mode='shim', gitrepo=repos.gitrepo)
         assert self._env(stub_ray)['env_vars']['DBX_PIN_SOURCE'] == \
             f"{repos.dbx_repo} {repos.proj_repo}"
 
@@ -399,31 +400,31 @@ class TestPinnedGuard:
 
     def test_matching_revision_is_a_no_op(self, monkeypatch, repos):
         monkeypatch.setenv('DBX_PINNED_REVISION', 'dbxsha:projsha')
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', repos.gitrepo)
-        dbxmod.gitwrkreposetup(revision='dbxsha:projsha')
-        assert dbxmod.DBX_USE_WORK_REPO is None, "pinned interpreter should not clone"
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', repos.gitrepo)
+        dataparts_mod.gitwrkreposetup(revision='dbxsha:projsha')
+        assert dataparts_mod.DBX_USE_WORK_REPO is None, "pinned interpreter should not clone"
 
     def test_conflicting_revision_is_refused_not_half_applied(self, monkeypatch, repos):
         """Rewinding the project under a dbx that cannot follow is how a wrong
         hash gets produced confidently."""
         warnings = []
         monkeypatch.setenv('DBX_PINNED_REVISION', 'dbxsha:projsha')
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', repos.gitrepo)
         log = dbxmod.Logger(name='t')
         monkeypatch.setattr(log, 'warning', lambda m, *a, **k: warnings.append(m))
-        dbxmod.gitwrkreposetup(revision='other:other', log=log)
-        assert dbxmod.DBX_USE_WORK_REPO is None
+        dataparts_mod.gitwrkreposetup(revision='other:other', log=log)
+        assert dataparts_mod.DBX_USE_WORK_REPO is None
         assert warnings and 'pinned to dbxsha:projsha' in warnings[0]
 
     def test_unpinned_interpreter_is_unaffected(self, monkeypatch, repos):
         monkeypatch.delenv('DBX_PINNED_REVISION', raising=False)
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', None)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', repos.gitrepo)
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        dbxmod.gitwrkreposetup(revision=f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}")
-        assert dbxmod.DBX_USE_WORK_REPO is not None, "unpinned setup should still clone"
+        dataparts_mod.gitwrkreposetup(revision=f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}")
+        assert dataparts_mod.DBX_USE_WORK_REPO is not None, "unpinned setup should still clone"
 
 
 # ---------------------------------------------------------------------------
@@ -450,23 +451,23 @@ class TestPinTrampoline:
     def test_no_flags_means_no_trampoline(self, execve, monkeypatch):
         monkeypatch.delenv('DBX_PINNED_REVISION', raising=False)
         monkeypatch.setattr(sys, 'argv', ['dbx.pprint', 'some.expr()'])
-        assert dbxmod.pintrampoline() is None
+        assert dataparts_mod.pintrampoline() is None
 
     def test_phase_two_does_not_trampoline_again(self, execve, monkeypatch):
         """Without this guard, exec'ing yourself is an infinite loop."""
         monkeypatch.setenv('DBX_PINNED_REVISION', 'dbxsha:projsha')
         monkeypatch.setattr(sys, 'argv', ['dbx.pprint', '--revision=dbxsha:projsha', 'e()'])
-        assert dbxmod.pintrampoline() is None
+        assert dataparts_mod.pintrampoline() is None
 
     def test_revision_flag_execs_with_pins_and_guard(self, execve, monkeypatch, repos):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         monkeypatch.delenv('DBX_PINNED_REVISION', raising=False)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', repos.gitrepo)
         monkeypatch.setattr(sys, 'argv',
                             ['dbx.pprint', f'--revision={rev}', f'--pin-root={repos.pin_root}', 'e()'])
 
         with pytest.raises(execve['sentinel']):
-            dbxmod.pintrampoline()
+            dataparts_mod.pintrampoline()
 
         assert execve['argv'][-1] == 'e()'
         assert not [a for a in execve['argv'] if a.startswith('--revision=')], \
@@ -481,17 +482,17 @@ class TestPinTrampoline:
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         monkeypatch.delenv('DBX_PINNED_REVISION', raising=False)
         monkeypatch.setenv('PYTHONPATH', '/somewhere/else')
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', repos.gitrepo)
         monkeypatch.setattr(sys, 'argv',
                             ['dbx.pprint', f'--revision={rev}', f'--pin-root={repos.pin_root}', 'e()'])
         with pytest.raises(execve['sentinel']):
-            dbxmod.pintrampoline()
+            dataparts_mod.pintrampoline()
         assert execve['env']['PYTHONPATH'].split(os.pathsep)[-1] == '/somewhere/else'
 
     def test_pin_from_reads_the_revision_off_a_selector(self, execve, monkeypatch, repos):
         rev = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
         monkeypatch.delenv('DBX_PINNED_REVISION', raising=False)
-        monkeypatch.setattr(dbxmod, 'DBX_GIT_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', repos.gitrepo)
         monkeypatch.setattr(dbxmod, '_selector_probe',
                             types.SimpleNamespace(revision=rev), raising=False)
         monkeypatch.setattr(sys, 'argv',
@@ -499,7 +500,7 @@ class TestPinTrampoline:
                              f'--pin-root={repos.pin_root}', 'e()'])
 
         with pytest.raises(execve['sentinel']):
-            dbxmod.pintrampoline()
+            dataparts_mod.pintrampoline()
 
         assert execve['env']['DBX_PINNED_REVISION'] == rev
 
@@ -509,7 +510,7 @@ class TestPinTrampoline:
         monkeypatch.setattr(sys, 'argv',
                             ['dbx.pprint', '--pin-from=dbx.datablocks._selector_probe', 'e()'])
         with pytest.raises(ValueError, match='no .revision'):
-            dbxmod.pintrampoline()
+            dataparts_mod.pintrampoline()
 
 
 # ---------------------------------------------------------------------------
@@ -552,18 +553,18 @@ class TestInstRemoteDispatch:
         assert recorded[0]['address'] == 'ray://h:10001'
 
     def test_an_existing_handle_is_passed_through(self, entry, recorded):
-        r = dbxmod.Remote(handle=object())
+        r = dataparts_mod.Remote(handle=object())
         entry.inst(remote=r)
         assert recorded[0]['handle'] is r
 
     def test_rinst_rejects_a_handle_plus_remote_kwargs(self, entry):
         """Fails before the quote is read, so a programming error costs no I/O."""
-        r = dbxmod.Remote(handle=object())
+        r = dataparts_mod.Remote(handle=object())
         with pytest.raises(ValueError, match='existing handle'):
             entry.rinst(handle=r, pin_root='/shared/pins')
 
     def test_rinst_rejects_a_handle_plus_gitrepo(self, entry):
-        r = dbxmod.Remote(handle=object())
+        r = dataparts_mod.Remote(handle=object())
         with pytest.raises(ValueError, match='gitrepo'):
             entry.rinst(gitrepo='/some/repo', handle=r)
 
@@ -618,7 +619,7 @@ class TestInstRemoteEqualsRinst:
         """remote=<Remote> is just handle=<Remote> spelled differently."""
         seen = []
 
-        class _Handle(dbxmod.Remote):
+        class _Handle(dataparts_mod.Remote):
             def run(self, func):
                 seen.append(func)
                 return 'PROXY'
@@ -644,10 +645,10 @@ class TestRemoteWorkingDir:
     """
 
     def test_pinning_hands_ray_an_empty_working_dir(self, repos, stub_ray, monkeypatch):
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
 
-        dbxmod.remote(revision=revision, pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=revision, pin_root=repos.pin_root)
 
         wd = stub_ray['init']['runtime_env']['working_dir']
         assert os.path.isdir(wd)
@@ -655,24 +656,24 @@ class TestRemoteWorkingDir:
 
     def test_no_working_dir_when_not_pinning(self, repos, stub_ray, monkeypatch):
         """Unpinned callers keep Ray's default behaviour, cwd and all."""
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
-        dbxmod.remote()
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        dataparts_mod.remote()
         assert 'working_dir' not in stub_ray['init']['runtime_env']
 
     def test_explicit_working_dir_is_honored(self, repos, stub_ray, monkeypatch, tmp_path):
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
         mine = str(tmp_path / "mine")
         os.makedirs(mine)
 
-        dbxmod.remote(working_dir=mine)
+        dataparts_mod.remote(working_dir=mine)
 
         assert stub_ray['init']['runtime_env']['working_dir'] == mine
 
     def test_working_dir_none_opts_out_even_when_pinning(self, repos, stub_ray, monkeypatch):
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
 
-        dbxmod.remote(revision=revision, pin_root=repos.pin_root, working_dir=None)
+        dataparts_mod.remote(revision=revision, pin_root=repos.pin_root, working_dir=None)
 
         assert 'working_dir' not in stub_ray['init']['runtime_env']
 
@@ -690,47 +691,47 @@ class TestRemoteSharedRepo:
 
     @pytest.fixture(autouse=True)
     def _repo_globals(self, repos, monkeypatch):
-        monkeypatch.setattr(dbxmod, 'DBX_USE_WORK_REPO', repos.gitrepo)
-        monkeypatch.setattr(dbxmod, '_DBX_GIT_REPO_', '/original/dbx:/original/proj')
+        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', repos.gitrepo)
+        monkeypatch.setattr(dataparts_mod, '_DBX_GIT_REPO_', '/original/dbx:/original/proj')
 
     def test_local_cluster_keeps_the_work_repo(self, stub_ray, repos):
-        dbxmod.remote()
+        dataparts_mod.remote()
         assert stub_ray['init']['runtime_env']['env_vars']['DBX_GIT_REPO'] == repos.gitrepo
 
     def test_address_switches_to_the_original_repo(self, stub_ray):
-        dbxmod.remote(address='ray://head:10001')
+        dataparts_mod.remote(address='ray://head:10001')
         env = stub_ray['init']['runtime_env']['env_vars']
         assert env['DBX_GIT_REPO'] == '/original/dbx:/original/proj'
 
     def test_address_is_passed_to_ray_init(self, stub_ray):
-        dbxmod.remote(address='ray://head:10001')
+        dataparts_mod.remote(address='ray://head:10001')
         assert stub_ray['init']['address'] == 'ray://head:10001'
 
     def test_slurm_still_switches_to_the_original_repo(self, stub_ray):
         # cancel() because Remote.__del__ cancels the Slurm job on teardown.
-        dbxmod.remote(slurm=types.SimpleNamespace(ray_address=None, cancel=lambda: None))
+        dataparts_mod.remote(slurm=types.SimpleNamespace(ray_address=None, cancel=lambda: None))
         env = stub_ray['init']['runtime_env']['env_vars']
         assert env['DBX_GIT_REPO'] == '/original/dbx:/original/proj'
 
     def test_shared_repo_true_forces_the_original_repo(self, stub_ray):
-        dbxmod.remote(shared_repo=True)
+        dataparts_mod.remote(shared_repo=True)
         env = stub_ray['init']['runtime_env']['env_vars']
         assert env['DBX_GIT_REPO'] == '/original/dbx:/original/proj'
 
     def test_shared_repo_false_forces_the_work_repo(self, stub_ray, repos):
-        dbxmod.remote(address='ray://head:10001', shared_repo=False)
+        dataparts_mod.remote(address='ray://head:10001', shared_repo=False)
         env = stub_ray['init']['runtime_env']['env_vars']
         assert env['DBX_GIT_REPO'] == repos.gitrepo
 
     def test_shared_repo_needs_an_original_repo_to_share(self, stub_ray, monkeypatch):
-        monkeypatch.setattr(dbxmod, '_DBX_GIT_REPO_', None)
+        monkeypatch.setattr(dataparts_mod, '_DBX_GIT_REPO_', None)
         with pytest.raises(ValueError, match='DBX_GIT_REPO'):
-            dbxmod.remote(shared_repo=True)
+            dataparts_mod.remote(shared_repo=True)
 
     def test_pins_still_win_over_the_repo_choice(self, stub_ray, repos):
         """A pinned worker imports from the pins, so DBX_GIT_REPO must name them."""
         revision = f"{repos.dbx_shas[0]}:{repos.proj_shas[0]}"
-        dbxmod.remote(revision=revision, shared_repo=False, pin_root=repos.pin_root)
+        dataparts_mod.remote(revision=revision, shared_repo=False, pin_root=repos.pin_root)
         env = stub_ray['init']['runtime_env']['env_vars']
         assert env['DBX_GIT_REPO'] == env['PYTHONPATH']
         assert env['DBX_GIT_REPO'] != repos.gitrepo

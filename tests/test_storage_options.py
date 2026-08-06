@@ -1,7 +1,8 @@
 """Tests for _parse_storage_options and DBX_STORAGE_OPTIONS env-var fallback."""
 import os
 import pytest
-from dbx.datablocks import Datablock, parse_storage_options
+from dbx.datablocks import Datablock
+from dbx.dataparts import parse_storage_options
 
 
 # ---------------------------------------------------------------------------

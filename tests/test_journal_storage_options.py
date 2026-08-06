@@ -6,12 +6,12 @@ from unittest.mock import patch, MagicMock
 
 import fsspec
 
+from dbx.dataparts import parse_storage_options
 from dbx.datablocks import (
     DatajournalEntry,
     Datajournal,
     Datablock,
     journal,
-    parse_storage_options,
     default_storage_options,
 )
 

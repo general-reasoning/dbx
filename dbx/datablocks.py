@@ -16,42 +16,19 @@ This module defines the central abstractions of dbx:
 - :class:`SlurmRayCluster` — Slurm integration for launching Ray clusters.
 """
 import ast
-import atexit
-import collections
-from collections.abc import Iterable, Sequence
 import copy
-from dataclasses import dataclass, fields, asdict, replace, is_dataclass
+from dataclasses import dataclass, fields, asdict, replace
 import datetime
 import functools
 import gc
 import hashlib
-import importlib
 import inspect
-import itertools
-import json
-import multiprocessing as mp
 import os
-from pathlib import Path
-import pickle
-import pprint as _pprint_
-import queue
-import re
-import signal
-import socket
-import subprocess
-import sys
 import shutil
 import tempfile
-import threading
-import time as time_module
-import traceback as tb
-from typing import Union, Optional, Sequence, Callable
-import types
+from typing import Optional, Union
 import uuid
-import yaml
 
-
-import git
 
 import tqdm
 
@@ -62,6 +39,9 @@ import tqdm
 # to deadlocks".  We drive all updates explicitly so the monitor is unneeded.
 tqdm.tqdm.monitor_interval = 0
 
+# numpy stays in this namespace even though nothing here calls it: journal
+# quotes are eval'd against these globals, and a numpy scalar in a spec
+# repr's as "np.float32(1.5)", so re-instantiating one needs the name.
 import numpy as np
 
 import fsspec
@@ -101,42 +81,6 @@ from .dataparts import (
     write_yaml,
 )
 __version__ = "0.0.2"
-
-
-def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, **filter_kwargs):
-    """Retrieve or wrap a Datablock journal.
-
-    Parameters
-    ----------
-    cls_anchor_or_df : type | str | pd.DataFrame
-        A Datablock class, an anchor string, or a raw DataFrame.
-    loc : int, optional
-        If given, return a single :class:`DatajournalEntry` at this label index.
-    iloc : int, optional
-        If given, return a single :class:`DatajournalEntry` at this positional index.
-        Mutually exclusive with *loc*.
-    url : str, optional
-        Storage URL.  Defaults to ``DBX_ROOT`` or its alias ``DBX_URL``.
-    storage_options : dict, optional
-        Storage options for fsspec.  Defaults to ``default_storage_options()``.
-    **filter_kwargs
-        Forwarded to :class:`Datajournal` for filtering.
-
-    Returns
-    -------
-    Datajournal or DatajournalEntry
-    """
-    if loc is not None and iloc is not None:
-        raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-    if isinstance(cls_anchor_or_df, pd.DataFrame):
-        return Datajournal(cls_anchor_or_df, storage_options=storage_options, **filter_kwargs)
-    else:
-        if isinstance(cls_anchor_or_df, str):
-            anchor = cls_anchor_or_df
-        else:
-            anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
-        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, **filter_kwargs)
-
 
 class _Absent:
     """Singleton marking a key present on only ONE side of a :meth:`Datablock.diffnorm`.
@@ -189,6 +133,41 @@ DIRTOPIC = None
 #: two cannot collide -- it is falsy like ``None`` but never equal to it, and
 #: in CPython it is interned, so ``is SYNTOPIC`` is an exact test.
 SYNTOPIC = ()
+
+
+def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, **filter_kwargs):
+    """Retrieve or wrap a Datablock journal.
+
+    Parameters
+    ----------
+    cls_anchor_or_df : type | str | pd.DataFrame
+        A Datablock class, an anchor string, or a raw DataFrame.
+    loc : int, optional
+        If given, return a single :class:`DatajournalEntry` at this label index.
+    iloc : int, optional
+        If given, return a single :class:`DatajournalEntry` at this positional index.
+        Mutually exclusive with *loc*.
+    url : str, optional
+        Storage URL.  Defaults to ``DBX_ROOT`` or its alias ``DBX_URL``.
+    storage_options : dict, optional
+        Storage options for fsspec.  Defaults to ``default_storage_options()``.
+    **filter_kwargs
+        Forwarded to :class:`Datajournal` for filtering.
+
+    Returns
+    -------
+    Datajournal or DatajournalEntry
+    """
+    if loc is not None and iloc is not None:
+        raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
+    if isinstance(cls_anchor_or_df, pd.DataFrame):
+        return Datajournal(cls_anchor_or_df, storage_options=storage_options, **filter_kwargs)
+    else:
+        if isinstance(cls_anchor_or_df, str):
+            anchor = cls_anchor_or_df
+        else:
+            anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
+        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, **filter_kwargs)
 
 
 class DatajournalEntry(pd.Series):
@@ -3901,8 +3880,6 @@ def _fscopy_item_callable(src_item, dst_item, storage_options):
     removed immediately after the upload, so disk space is never accumulated
     across all parallel workers.
     """
-    import shutil
-    import fsspec
     src_fs, _ = fsspec.url_to_fs(src_item, **(storage_options or {}))
     dst_fs, _ = fsspec.url_to_fs(dst_item, **(storage_options or {}))
 

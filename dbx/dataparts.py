@@ -1,27 +1,22 @@
 """
 Standalone utility functions and classes for dbx.
 
-This module contains components that do **not** depend on ``Datablock``:
+This module contains components that do **not** depend on ``Datablock``
+(the dependency runs one way: ``datablocks`` imports from here, never back):
 Logger, OutputTee, I/O helpers, term evaluator, callable executors, etc.
 """
 import atexit
-import collections
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 import datetime
-import functools
 import gc
-import hashlib
 import importlib
-import inspect
 import json
-import multiprocessing as mp
 import os
 import pickle
 import pprint as _pprint_
 import queue
 import re
-import signal
 import shutil
 import socket
 import subprocess
@@ -32,7 +27,6 @@ import time as time_module
 import traceback as tb
 import types
 from typing import Union, Optional, Sequence, Callable
-import uuid
 
 import numpy as np
 import fsspec
@@ -62,7 +56,6 @@ __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(_
 DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
 if DBX_GIT_REPO is None:
     try:
-        import git
         _repo = git.Repo('.', search_parent_directories=True)
         DBX_GIT_REPO = _repo.working_tree_dir
     except (ImportError, Exception):
@@ -70,7 +63,6 @@ if DBX_GIT_REPO is None:
 _DBX_GIT_REPO_ = DBX_GIT_REPO
 DBX_USE_WORK_REPO = None
 DBX_WORK_ROOT = None
-
 
 
 _DBX_PIN_ROOTS = []
@@ -292,10 +284,10 @@ class Logger:
             return
         frame = sys._getframe(self.stack_depth - 1)
         module = frame.f_globals.get('__name__')
-        qualname = frame.f_code.co_qualname  # e.g. "Datablock.tag" (Python 3.11+)
+        qualname = frame.f_code.co_qualname  # e.g. "MyClass.tag" (Python 3.11+)
         function = frame.f_code.co_name      # e.g. "tag"
-        fqn_full  = f"{module}.{qualname}"   # "dbx.datablocks.Datablock.tag"
-        fqn_short = f"{module}.{function}"   # "dbx.datablocks.tag"
+        fqn_full  = f"{module}.{qualname}"   # "pkg.mod.MyClass.tag"
+        fqn_short = f"{module}.{function}"   # "pkg.mod.tag"
         if fqn_full not in self._selection_ and fqn_short not in self._selection_:
             return
         self._print("SELECTED", self._fmt(msg, args))
@@ -305,7 +297,6 @@ class Logger:
 
     def silent(self, msg, *args, **kwargs):
         pass
-
 
 
 class OutputTee:
@@ -397,7 +388,6 @@ def ensure_path(path, *, storage_options=None):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     fs.makedirs(path, exist_ok=True)
 def fs_full_path(fs, path):
-
 
 
     """Return *path* with the protocol prefix restored for remote filesystems.
@@ -557,8 +547,7 @@ def exec(s=None, **kwargs):
     """
     if s is None:
         # Command line only: may re-exec this process pinned to a revision and
-        # never return. Imported late -- datablocks imports THIS module.
-        from .datablocks import pintrampoline, PIN_FLAGS
+        # never return.
         pintrampoline()
         argv = [a for a in sys.argv[1:] if not a.startswith(PIN_FLAGS)]
         if not argv:
@@ -595,7 +584,6 @@ def pprint(argstr=None, **kwargs):
         # Command line only. Tells the trampoline that phase 2 should render its
         # result the way THIS function would, rather than however the pinned
         # revision's pprint happens to. May re-exec and never return.
-        from .datablocks import pintrampoline
         pintrampoline(printer='pprint')
     r = exec(argstr, **kwargs)
     if isinstance(r, str):
@@ -1297,7 +1285,6 @@ def _mp_worker_fn(target, args):
     start method.  Sets TQDM_DISABLE so nested executors inside the worker
     do not produce progress bars.
     """
-    import os
     os.environ['TQDM_DISABLE'] = '1'
     target(*args)
 
@@ -2009,9 +1996,8 @@ class LogVolume:
 def ls_path(fs, p, path_is_dir, *, detail=False):
     """List the contents at *p* on *fs*.
 
-    Shared by :meth:`Datablock.ls` and :meth:`DatajournalEntry.ls`.  When *p*
-    genuinely points to a file (``path_is_dir`` is False and *fs* reports
-    a file) its parent directory is listed instead.  Directory paths get a
+    When *p* genuinely points to a file (``path_is_dir`` is False and *fs*
+    reports a file) its parent directory is listed instead.  Directory paths get a
     trailing "/" so Azure adlfs returns the directory's *contents* rather
     than the virtual-directory marker.  Returns ``[]`` when *p* is absent.
     """
@@ -2034,7 +2020,6 @@ def ls_path(fs, p, path_is_dir, *, detail=False):
 def list_path(fs, p, path_is_dir):
     """Detailed, recursive listing of every file under *p* on *fs*.
 
-    Shared by :meth:`Datablock.list` and :meth:`DatajournalEntry.list`.
     Directory entries are excluded; a single-file path returns just that
     file.  Each returned dict has its ``name`` normalized to a
     fully-qualified path.  Returns ``[]`` when *p* is absent.
@@ -2234,7 +2219,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     elif revision is not None and DBX_USE_WORK_REPO is not None:
         # Work repos already exist (cloned at HEAD during import).
         # Checkout the requested revision so that subsequent imports
-        # (e.g. project modules evaluated from a journal entry quote)
+        # (e.g. project modules named by an evaluated expression)
         # pick up code from the correct commit.
         #
         # NOTE: modules already in sys.modules (including dbx itself)
@@ -2323,7 +2308,7 @@ def pintrampoline(printer=None, log=None):
     thing that has to happen *after* the pin. So it must be stated::
 
         dbx.pprint --revision=<dbxsha>:<projsha>            "<expr>"
-        dbx.pprint --pin-from="dbx.journal(A, iloc=0)"      "<expr>"
+        dbx.pprint --pin-from="<expr yielding a revision>"  "<expr>"
 
     The second form evaluates only the selector, which must be read-only: phase 1
     and phase 2 both run it, so anything with side effects happens twice.
@@ -2438,8 +2423,8 @@ def gitpinrepos(revision, *, gitrepo=None, pin_root=None, log=None):
     Parameters
     ----------
     revision:
-        ``'dbx_rev:project_rev'``, as recorded in a journal entry. Either side
-        may be ``None``, meaning "clone at HEAD".
+        ``'dbx_rev:project_rev'``. Either side may be ``None``, meaning
+        "clone at HEAD".
     gitrepo:
         Source repos, in :func:`dbx_repos` form. Defaults to
         :data:`DBX_GIT_REPO`.
@@ -2799,9 +2784,10 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
     Instantiate a remote dbx interpreter and return a Remote handle to it.
 
     When *revision* is given, BOTH repos are pinned in the worker before it
-    imports anything, which is what makes a remote handle able to reproduce a
-    hash that a local :meth:`DatajournalEntry.inst` cannot -- see the
-    ``PYTHONPATH`` note below.
+    imports anything. That is what lets a remote handle reproduce values whose
+    identity depends on the code that produced them, which an in-process
+    instantiation cannot -- ``dbx`` is already imported here and cannot be
+    rewound. See the ``PYTHONPATH`` note below.
 
     Parameters
     ----------

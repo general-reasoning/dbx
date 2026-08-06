@@ -142,6 +142,23 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     global DBX_USE_WORK_REPO
     global DBX_WORK_ROOT
     
+    # A pinned interpreter came up with both repos already at `revision`, before
+    # its first `import dbx`. There is nothing left to check out, and -- for dbx
+    # -- nothing that COULD be: asking for a different revision here would rewind
+    # the project underneath a dbx that cannot follow it, which is precisely the
+    # split that produces a confidently wrong hash.
+    pinned = os.environ.get('DBX_PINNED_REVISION')
+    if pinned and revision is not None:
+        if revision == pinned:
+            log.verbose(f"already pinned to {pinned}; nothing to check out {reason}")
+        else:
+            log.warning(
+                f"IGNORING requested revision {revision} {reason}: this interpreter is "
+                f"pinned to {pinned} and dbx cannot be re-pinned in-process. Start a new "
+                f"process (or Remote) pinned to {revision} instead."
+            )
+        return
+
     dbx_repo, project_repo = dbx_repos(gitrepo)
     dbx_rev, project_rev = dbx_revisions(revision)
 
@@ -393,6 +410,13 @@ class DatajournalEntry(pd.Series):
     operations work.  Named properties expose journal-specific fields
     (``anchor``, ``hash``, ``url``, ``revision``, …).
     """
+    #: pandas carries only the attributes named here across operations that
+    #: rebuild the object -- pickling among them. Without this, an entry that
+    #: crosses a process boundary (a Ray proxy, a multiprocessing executor)
+    #: arrives with its data intact but no `logger`, and the next method to log
+    #: dies with AttributeError. Mirrors :attr:`Datajournal._metadata`.
+    _metadata = ['storage_options', 'logger']
+
     def __init__(self, series: pd.Series, *, storage_options: dict = None,
                  logger: Logger = Logger(name="DatajournalEntry")):
         super().__init__(series)
@@ -682,12 +706,89 @@ class DatajournalEntry(pd.Series):
             self.logger.info(f"Instantiating {self.__tag__()} with gitrepo {gitrepo}")
         return self.eval('quote', eval=True, gitrepo=gitrepo, revision=revision)
 
-    def inst(self, gitrepo=None, revision='journal_entry'):
+    def inst(self, gitrepo=None, revision='journal_entry', *, remote=False, **remote_kwargs):
+        """Rebuild this entry's Datablock by re-running its recorded ``quote``.
+
+        The default evaluates the quote in THIS interpreter. That can rewind the
+        project repo but never ``dbx``, which is already imported -- so a block
+        whose hash depends on ``dbx`` rendering that has since changed comes back
+        with a DIFFERENT hash, and therefore different paths, than the entry
+        records. :meth:`rinst` is the way around that.
+
+        ``remote=True`` instantiates on a Ray worker pinned to this entry's own
+        revision and returns a proxy (see :meth:`rinst`). Pass an existing
+        :class:`Remote` instead of ``True`` to reuse a worker; any other keyword
+        arguments are forwarded to :func:`remote`.
+        """
+        if remote is not False and remote is not None:
+            return self.rinst(gitrepo=gitrepo, revision=revision,
+                              handle=remote if isinstance(remote, Remote) else None,
+                              **remote_kwargs)
         if gitrepo is None:
             gitrepo = DBX_GIT_REPO
         if gitrepo is None:
             gitrepo = 'journal_entry'
         return self.instantiate(gitrepo=gitrepo, revision=revision)
+
+    def rinst(self, gitrepo=None, revision='journal_entry', *, handle=None, **remote_kwargs):
+        """Instantiate on a pinned Ray worker; return a proxy to the block THERE.
+
+        Exactly equivalent to :meth:`inst` with ``remote=``; that method does
+        nothing but translate ``remote=True`` to ``handle=None`` and
+        ``remote=<Remote>`` to ``handle=<Remote>``, then call this. Every other
+        argument, including *gitrepo*, means the same thing in both and reaches
+        :func:`remote` identically -- there is no behaviour reachable through one
+        that is not reachable through the other.
+
+        The block is constructed in a worker whose ``dbx`` and project repo were
+        both pinned -- before that interpreter started -- to *revision*, which
+        defaults to the one this entry recorded. Nothing but a handle comes back,
+        so the block never has to survive a trip into an interpreter running
+        different code. That is what makes the hash come out right::
+
+            i = entry.inst(remote=True)
+            i.hash        # == entry.hash, unlike the local inst()
+            i.norm()      # forwarded to the worker, result returned here
+
+        *handle* reuses an existing :func:`remote` worker instead of starting one
+        per call; it is the caller's job to ensure it was pinned compatibly.
+
+        The proxy forwards attribute and method access, but it is a
+        :class:`Remote`, not an ``IJEPAsaurUSPoseStill``: ``isinstance`` is false,
+        and implicit dunder protocols (``repr``, ``len``, ``[]``) are looked up on
+        the type by the interpreter and so are not forwarded.
+        """
+        if handle is not None:
+            ignored = sorted(remote_kwargs) + (['gitrepo'] if gitrepo is not None else [])
+            if ignored:
+                raise ValueError(
+                    f"rinst: {ignored} configure a NEW worker and cannot be passed alongside "
+                    f"an existing handle, whose pinning is already fixed"
+                )
+        if revision == 'journal_entry':
+            revision = self.revision
+
+        quote = self.read('quote', raw=True)
+        if quote is None:
+            raise ValueError(f"{self.__tag__()} records no quote to instantiate from")
+
+        if handle is None:
+            handle = remote(revision=revision, gitrepo=gitrepo, **remote_kwargs)
+
+        def _build():
+            # Runs in the worker. dbx.eval resolves the leading '$' of the quote,
+            # importing the project package -- from the pin, since the pin is on
+            # that interpreter's path from the moment it started.
+            import dbx
+            return dbx.eval(quote)
+
+        proxy = handle.run(_build)
+        # Keep the pinned worker alive for as long as the caller holds the block.
+        # The block lives in an actor of its own, but its class was imported from
+        # the pinned worker's path, and the pin clones are owned by this process.
+        if isinstance(proxy, Remote):
+            proxy._origin = handle
+        return proxy
 
     @property
     def bid(self):
@@ -880,6 +981,185 @@ def gitcheckout(repopath, revision):
     repo = git.Repo(repopath)
     repo.git.checkout(revision)
     return repopath
+
+
+#: Pin roots held for the lifetime of the process. A :class:`TemporaryDirectory`
+#: deletes its tree when it is garbage collected, which would pull the clones out
+#: from under a worker that is still importing from them.
+_DBX_PIN_ROOTS = []
+
+
+#: Command-line flags consumed by :func:`pintrampoline` rather than passed on.
+PIN_FLAGS = ('--revision=', '--pin-from=', '--pin-root=')
+
+
+def pintrampoline(log=None):
+    """Re-exec this process with dbx pinned, when the command line asks for it.
+
+    Returns normally when there is nothing to do; otherwise DOES NOT RETURN.
+
+    A CLI cannot pin dbx from the inside, for the same reason nothing else can:
+    by the time ``dbx.pprint`` is running, ``import dbx`` has already happened and
+    no checkout can dislodge it. So the process restarts itself --
+
+      phase 1  (this call)  learn the revision, build the clones, exec
+      phase 2  (the new image)  comes up with the pins already on sys.path
+
+    -- with ``DBX_PINNED_REVISION`` as the guard that stops phase 2 trampolining
+    again, and :func:`os.execve` rather than a subprocess so that stdout, exit
+    status and signals stay exactly as they were.
+
+    The revision cannot be inferred: the CLI argument is an arbitrary expression,
+    and knowing which entry it refers to would mean evaluating it -- which is the
+    thing that has to happen *after* the pin. So it must be stated::
+
+        dbx.pprint --revision=<dbxsha>:<projsha>            "<expr>"
+        dbx.pprint --pin-from="dbx.journal(A, iloc=0)"      "<expr>"
+
+    The second form evaluates only the selector, which must be read-only: phase 1
+    and phase 2 both run it, so anything with side effects happens twice.
+    """
+    if log is None:
+        log = Logger(name="pintrampoline")
+    if os.environ.get('DBX_PINNED_REVISION'):
+        return                                  # phase 2: already where we need to be
+
+    revision = selector = pin_root = None
+    rest = []
+    for arg in sys.argv[1:]:
+        if arg.startswith('--revision='):
+            revision = arg.split('=', 1)[1]
+        elif arg.startswith('--pin-from='):
+            selector = arg.split('=', 1)[1]
+        elif arg.startswith('--pin-root='):
+            pin_root = arg.split('=', 1)[1]
+        else:
+            rest.append(arg)
+    if revision is None and selector is None:
+        return                                  # unpinned: today's behaviour, untouched
+
+    if revision is None:
+        lb = selector.find('(')
+        lb = lb if lb != -1 else len(selector)
+        _, cxt = get_named_const_and_cxt(selector[:lb])
+        cxt['dbx'] = sys.modules['dbx']
+        entry = __eval__(selector, globals(), cxt)
+        revision = getattr(entry, 'revision', None)
+        if revision is None:
+            raise ValueError(f"--pin-from={selector!r} produced {type(entry).__name__}, which has no .revision")
+        log.info(f"PIN: --pin-from resolved to revision {revision}")
+
+    dbx_pin, project_pin = gitpinrepos(revision, pin_root=pin_root, log=log)
+    pins = [p for p in (dbx_pin, project_pin) if p]
+
+    env = dict(os.environ)
+    env['PYTHONPATH'] = os.pathsep.join(pins + ([env['PYTHONPATH']] if env.get('PYTHONPATH') else []))
+    env['DBX_GIT_REPO'] = ':'.join(pins)
+    env['DBX_PINNED_REVISION'] = revision
+    # The work repo exists to check out revisions in a running interpreter. The
+    # pins already did that, before startup, and for dbx they did the part a work
+    # repo never could.
+    env.pop('DBX_USE_WORK_REPO', None)
+
+    argv = [sys.executable, sys.argv[0], *rest]
+    log.info(f"PIN: re-exec pinned to {revision}: PYTHONPATH={env['PYTHONPATH']}")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(sys.executable, argv, env)
+
+
+def pinshimdir(log=None):
+    """Materialise :mod:`dbx._pinshim` as an importable ``dbxpinshim`` module dir.
+
+    Returned path is meant for Ray's ``runtime_env['working_dir']``, which Ray
+    uploads -- so unlike :func:`gitpinrepos` output it needs no shared
+    filesystem. A few KB.
+    """
+    if log is None:
+        log = Logger(name="pinshimdir")
+    holder = tempfile.TemporaryDirectory(prefix='dbx-pinshim-')
+    _DBX_PIN_ROOTS.append(holder)
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_pinshim.py')
+    dst = os.path.join(holder.name, 'dbxpinshim.py')
+    shutil.copyfile(src, dst)
+    log.verbose(f"SHIM staged {src} -> {dst}")
+    return holder.name
+
+
+def pinhook_available(ray=None):
+    """Whether this Ray supports ``runtime_env['worker_process_setup_hook']``.
+
+    The hook is the only pre-import foothold in a worker, so without it the
+    self-clone strategy is simply unavailable and pinning falls back to shipping
+    clone paths (which needs a shared filesystem).
+    """
+    if ray is None:
+        import ray
+    known = getattr(getattr(ray, 'runtime_env', None), 'RuntimeEnv', None)
+    return 'worker_process_setup_hook' in getattr(known, 'known_fields', ())
+
+
+def gitpinrepos(revision, *, gitrepo=None, pin_root=None, log=None):
+    """Clone the repos at *revision* and return ``(dbx_path, project_path)``.
+
+    The companion of :func:`gitwrkreposetup` for the one thing that function
+    cannot do: pin ``dbx`` itself. It deliberately does NOT touch ``sys.path``,
+    because in this interpreter ``dbx`` is already imported and no path change
+    can dislodge it. The clones are meant to be handed to a *fresh* interpreter
+    via ``PYTHONPATH`` -- see :func:`remote`.
+
+    Each returned path is the clone's root, i.e. the directory *containing* the
+    ``dbx`` / project package, so it can go on ``PYTHONPATH`` as-is.
+
+    Parameters
+    ----------
+    revision:
+        ``'dbx_rev:project_rev'``, as recorded in a journal entry. Either side
+        may be ``None``, meaning "clone at HEAD".
+    gitrepo:
+        Source repos, in :func:`dbx_repos` form. Defaults to
+        :data:`DBX_GIT_REPO`.
+    pin_root:
+        Where to put the clones. Must be visible to whoever will import from
+        them: the default is a process-lifetime temporary directory, which is
+        enough for workers on the same node, but a multi-node cluster needs a
+        path on shared storage regardless of where Ray itself runs.
+    """
+    if log is None:
+        log = Logger(name="gitpinrepos")
+    dbx_repo, project_repo = dbx_repos(gitrepo)
+    dbx_rev, project_rev = dbx_revisions(revision)
+
+    if pin_root is None:
+        root = tempfile.TemporaryDirectory()
+        _DBX_PIN_ROOTS.append(root)
+        pin_root = root.name
+    else:
+        os.makedirs(pin_root, exist_ok=True)
+
+    def pin(repo, rev, name):
+        if repo is None:
+            return None
+        if rev is None:
+            # Cloning takes HEAD, so uncommitted work is silently absent from the
+            # pin. Not an error -- an unpinned side is by definition "whatever is
+            # current" -- but worth saying out loud, since the whole point of a
+            # pin is that you know what you got.
+            if git.Repo(repo).is_dirty():
+                log.warning(f"PINNING {name} at HEAD from a dirty repo {repo}: uncommitted changes will not be in the pin")
+        path = os.path.join(pin_root, f"{os.path.basename(repo)}-{rev or 'HEAD'}")
+        if not os.path.isdir(path):
+            # Clone to a scratch name and rename, so an interrupted clone cannot
+            # leave a half-populated directory that the next call would reuse.
+            staging = f"{path}.staging-{os.getpid()}"
+            gitclone(repo, staging)
+            if rev is not None:
+                gitcheckout(staging, rev)
+            os.rename(staging, path)
+        log.verbose(f"PINNED {name} from {repo} at revision {rev or 'HEAD'} -> {path}")
+        return path
+
+    return pin(dbx_repo, dbx_rev, "dbx"), pin(project_repo, project_rev, "project")
 
 
 gitwrkreposetup(reason="datablocks import")
@@ -4557,12 +4837,18 @@ class Remote:
         def __init__(self, revision=None):
             """
             Initialize the remote dbx instance.
+
+            *revision* can only rewind the PROJECT repo. By the time this runs,
+            resolving this very class has already imported dbx, and no checkout
+            can dislodge an imported module -- so a dbx revision passed here is
+            silently ignored. :func:`remote` pins dbx via ``PYTHONPATH`` instead
+            and passes ``revision=None`` here once it has.
             """
-            
+
             # Import dbx after setting environment variables.
             # We import the package to get the full namespace.
             import dbx
-            
+
             # Call this here, because os.environ got updated and/or a new revision may need to be checked out
             dbx.gitwrkreposetup(revision=revision, reason="because of RemoteDBX initialization")
                 
@@ -4653,37 +4939,213 @@ class Remote:
         return [self._unwrap_or_proxy(res) for res in results]
 
 
-def remote(*, revision=None, slurm=None, conda=None, log: Logger = Logger()):
+def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=None,
+           pin_root=None, pin_mode='auto', pin_source=None, gitrepo=None,
+           working_dir='auto', log: Logger = Logger()):
     """
     Instantiate a remote dbx interpreter and return a Remote handle to it.
+
+    When *revision* is given, BOTH repos are pinned in the worker before it
+    imports anything, which is what makes a remote handle able to reproduce a
+    hash that a local :meth:`DatajournalEntry.inst` cannot -- see the
+    ``PYTHONPATH`` note below.
+
+    Parameters
+    ----------
+    address:
+        Ray cluster to connect to, for a cluster that was not started by
+        *slurm*. ``None`` runs against a local Ray.
+    shared_repo:
+        Whether the workers can see :data:`_DBX_GIT_REPO_`, the original repo
+        path. ``None`` (default) guesses: true whenever the workers might be on
+        another host, i.e. when *slurm* or *address* is given. See the note on
+        filesystem visibility below.
+    pin_root:
+        Forwarded to :func:`gitpinrepos` in ``pin_mode='pin_root'``. Same
+        visibility requirement as *shared_repo*: the default temporary directory
+        works only for workers on this host, so an off-host cluster needs a path
+        on shared storage -- or ``pin_mode='shim'``, which removes the
+        requirement instead of relocating it.
+    pin_mode:
+        How the worker comes up pinned. ``'pin_root'`` clones here and hands the
+        worker paths; ``'shim'`` ships :mod:`dbx._pinshim` and lets each worker
+        clone for itself. ``'auto'`` (default) picks ``'shim'`` when *pin_source*
+        is given, or when the workers may be off-host and Ray supports the setup
+        hook; otherwise ``'pin_root'``, which is cheaper on one host.
+    pin_source:
+        SPACE-separated clone sources for ``'shim'``, dbx first, matching the
+        colon-separated parts of *revision*. Defaults to the repo paths in
+        ``DBX_GIT_REPO``. Give git URLs here and no shared filesystem is needed
+        at all. Implies ``pin_mode='shim'``.
+    gitrepo:
+        Override the repo paths the workers are told about, and that pinning
+        clones from. Mirrors the *gitrepo* argument of the local instantiation
+        path.
+    working_dir:
+        Ray ``runtime_env`` working directory. ``'auto'`` (the default) means:
+        when pinning, hand Ray an EMPTY directory, because Ray otherwise puts
+        this process's cwd at the head of the worker's ``sys.path`` -- and a
+        driver run from inside the dbx or project checkout would then shadow the
+        pins with the live tree. Pass a path to supply your own, or ``None`` to
+        leave Ray's default alone and accept that cwd.
+
+    Notes
+    -----
+    What decides both *shared_repo* and *pin_root* is whether the workers share
+    a filesystem with this process -- NOT whether Ray itself is local. A Ray
+    cluster reached over the network may well be running on this same host, and
+    a local-looking one may not be.
     """
     import ray
     dbx_env = {k: v for k, v in os.environ.items() if k.startswith('DBX')}
-    
+
     if DBX_USE_WORK_REPO is not None:
         dbx_env['DBX_GIT_REPO'] = DBX_USE_WORK_REPO
 
-    # If we are using a remote cluster, any path in /tmp on the login node will be inaccessible to workers.
-    # We revert to the original repository path (usually in /home) which is shared.
-    if slurm:
+    # The work repo is a temporary directory, hence node-local by construction: a
+    # worker on another host cannot see it. The original repo path (usually under
+    # /home) is the only one with any chance of being shared, so that is what an
+    # off-host cluster gets. This used to key off `slurm` alone, which left a
+    # cluster reached via a plain `address` handing workers an unreadable /tmp path.
+    offhost = bool(slurm) or address is not None
+    if shared_repo is None:
+        shared_repo = offhost
+    if shared_repo:
+        if _DBX_GIT_REPO_ is None:
+            raise ValueError(
+                "shared_repo requires an original repo path, but DBX_GIT_REPO was "
+                "neither set nor detectable when dbx was imported"
+            )
         dbx_env['DBX_GIT_REPO'] = _DBX_GIT_REPO_
+    elif offhost and DBX_USE_WORK_REPO is not None:
+        log.warning(
+            f"shared_repo=False for an off-host cluster: workers are being given "
+            f"{DBX_USE_WORK_REPO}, which is node-local and may not exist for them"
+        )
+
+    if gitrepo is not None:
+        dbx_env['DBX_GIT_REPO'] = gitrepo
 
     runtime_env = {'env_vars': dbx_env}
     if conda:
         runtime_env['conda'] = conda
+
+    # Pinning dbx CANNOT be delegated to dbx code running in the worker. Ray
+    # resolves the Remote.RemoteDBX actor class by reference, so the worker
+    # imports dbx.datablocks just to find the class -- dbx is in its sys.modules
+    # before RemoteDBX.__init__ runs a line, and gitwrkreposetup never refreshes
+    # an already-imported module (it says so itself). The pin has to be in place
+    # before the worker's first `import dbx`, which leaves exactly two footholds:
+    #
+    #   'pin_root'  clone here, hand the worker paths on PYTHONPATH. Cheap and
+    #               shared, but the clones must be READABLE by every worker.
+    #   'shim'      ship a dbx-free bootstrap and run it from Ray's
+    #               worker_process_setup_hook, which fires before any actor class
+    #               is resolved; the worker clones for itself. Costs a clone per
+    #               node, but the source can be a git URL, so no shared
+    #               filesystem is needed anywhere.
+    #
+    # PYTHONPATH beats an editable install because setuptools *appends* its
+    # _EditableFinder to sys.meta_path, leaving PathFinder -- and hence sys.path
+    # -- ahead of it. The shim wins by inserting at sys.path[0] directly.
+    worker_revision = revision
+    use_shim = False
+    if revision is not None:
+        if pin_mode == 'auto':
+            use_shim = pin_source is not None or (offhost and pinhook_available(ray))
+        elif pin_mode == 'shim':
+            if not pinhook_available(ray):
+                raise ValueError(
+                    "pin_mode='shim' needs a Ray with runtime_env['worker_process_setup_hook']; "
+                    f"this one ({getattr(ray, '__version__', '?')}) has no such field"
+                )
+            use_shim = True
+        elif pin_mode in ('pin_root', 'clone'):
+            use_shim = False
+        else:
+            raise ValueError(f"pin_mode must be 'auto', 'shim' or 'pin_root', got {pin_mode!r}")
+
+        # Tells the worker's gitwrkreposetup that it is already where it needs to
+        # be, and lets it refuse a conflicting revision instead of half-applying one.
+        dbx_env['DBX_PINNED_REVISION'] = revision
+
+        if use_shim:
+            if pin_source is None:
+                dbx_repo, project_repo = dbx_repos(dbx_env.get('DBX_GIT_REPO'))
+                dbx_rev, project_rev = dbx_revisions(revision)
+                pairs = [(r, v) for r, v in ((dbx_repo, dbx_rev), (project_repo, project_rev)) if r and v]
+                if not pairs:
+                    raise ValueError(f"pin_mode='shim': no repo/revision pairs to pin from {revision!r}")
+                pin_source = ' '.join(r for r, _ in pairs)
+                pin_revision = ':'.join(v for _, v in pairs)
+            else:
+                pin_revision = revision
+                if len(pin_source.split()) != len(pin_revision.split(':')):
+                    raise ValueError(
+                        f"pin_source has {len(pin_source.split())} entries but revision has "
+                        f"{len(pin_revision.split(':'))}; they are zipped together, dbx first"
+                    )
+            dbx_env['DBX_PIN_SOURCE'] = pin_source
+            dbx_env['DBX_PIN_REVISION'] = pin_revision
+            runtime_env['worker_process_setup_hook'] = 'dbxpinshim.setup'
+            log.verbose(f"PINNING by worker self-clone: {pin_source!r} at {pin_revision}")
+        else:
+            if offhost and pin_root is None:
+                log.warning(
+                    "PINNING into a temporary pin_root for an off-host cluster: workers "
+                    "on other hosts will not see it -- pass pin_root on shared storage, "
+                    "or pin_mode='shim' to have each worker clone for itself"
+                )
+            dbx_pin, project_pin = gitpinrepos(revision, gitrepo=dbx_env.get('DBX_GIT_REPO'),
+                                               pin_root=pin_root, log=log)
+            pins = [p for p in (dbx_pin, project_pin) if p]
+            dbx_env['PYTHONPATH'] = os.pathsep.join(pins + [p for p in (os.environ.get('PYTHONPATH'),) if p])
+            dbx_env['DBX_GIT_REPO'] = ':'.join(pins)
+            log.verbose(f"PINNED worker to {revision} via PYTHONPATH={dbx_env['PYTHONPATH']}")
+
+        # Both repos are already at the requested revision by the time the worker
+        # runs, so it has nothing left to check out. Passing the revision on would
+        # clone again to no effect -- and for dbx, to no *possible* effect.
+        worker_revision = None
+
+    # Ray prepends the driver's cwd to the worker's sys.path, AHEAD of anything
+    # PYTHONPATH contributes. Run the driver from inside the dbx or project
+    # checkout -- the most natural place to run it from -- and the live tree
+    # silently wins over the pins. Handing Ray a working_dir displaces that entry.
+    # The shim needs one anyway, to ship itself.
+    if working_dir == 'auto':
+        if use_shim:
+            runtime_env['working_dir'] = pinshimdir(log=log)
+        elif revision is not None:
+            empty = tempfile.TemporaryDirectory(prefix='dbx-pin-workdir-')
+            _DBX_PIN_ROOTS.append(empty)
+            runtime_env['working_dir'] = empty.name
+    elif use_shim:
+        raise ValueError(
+            "the self-clone shim needs working_dir to ship dbxpinshim.py, so it cannot "
+            "be combined with an explicit working_dir; use pin_mode='pin_root', or "
+            "leave working_dir='auto'"
+        )
+    elif working_dir is not None:
+        runtime_env['working_dir'] = working_dir
 
     if slurm and slurm.ray_address:
         if ray.is_initialized():
             log.info("Re-initializing Ray to connect to Slurm Ray cluster...")
             ray.shutdown()
         # Use ray:// protocol for remote clusters to avoid shared /tmp/ray filesystem requirements
-        address = getattr(slurm, 'ray_client_address', slurm.ray_address)
+        cluster_address = getattr(slurm, 'ray_client_address', slurm.ray_address)
+        ray.init(address=cluster_address, runtime_env=runtime_env, ignore_reinit_error=True)
+    elif address is not None:
+        if ray.is_initialized():
+            log.info(f"Re-initializing Ray to connect to cluster at {address}...")
+            ray.shutdown()
         ray.init(address=address, runtime_env=runtime_env, ignore_reinit_error=True)
     elif not ray.is_initialized():
         ray.init(runtime_env=runtime_env, ignore_reinit_error=True)
     
     log.verbose(f"INSTANTIATING Remote with env: {dbx_env}, revision: {revision}, slurm: {bool(slurm)}, conda: {conda}")
-    return Remote(revision=revision, slurm=slurm)
+    return Remote(revision=worker_revision, slurm=slurm)
 
 
 def slurm_remote(*, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger()):

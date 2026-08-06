@@ -515,10 +515,15 @@ def exec(s=None, **kwargs):
     read from the command line (``sys.argv[1:]``).
     """
     if s is None:
-        if len(sys.argv) < 2:
+        # Command line only: may re-exec this process pinned to a revision and
+        # never return. Imported late -- datablocks imports THIS module.
+        from .datablocks import pintrampoline, PIN_FLAGS
+        pintrampoline()
+        argv = [a for a in sys.argv[1:] if not a.startswith(PIN_FLAGS)]
+        if not argv:
             raise ValueError(f"Too few args: {sys.argv}")
-        s = sys.argv[1]
-        for arg in sys.argv[2:]:
+        s = argv[0]
+        for arg in argv[1:]:
             if "=" in arg:
                 k, v = arg.split("=", 1)
                 try:

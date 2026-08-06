@@ -550,6 +550,12 @@ def pprint(argstr=None, **kwargs):
     with each run of indent spaces shown as its own quoted chunk. Those
     methods return text meant to be read and copied, so print it as text.
     """
+    if argstr is None:
+        # Command line only. Tells the trampoline that phase 2 should render its
+        # result the way THIS function would, rather than however the pinned
+        # revision's pprint happens to. May re-exec and never return.
+        from .datablocks import pintrampoline
+        pintrampoline(printer='pprint')
     r = exec(argstr, **kwargs)
     if isinstance(r, str):
         print(r)

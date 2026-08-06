@@ -8,6 +8,13 @@ os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
 import pytest
 
+# torch and mosaicml-streaming are optional extras, and dbx.datastreams needs
+# both at import time. importorskip skips this module when either is absent,
+# rather than failing collection -- which takes the entire suite down before
+# any test runs. Install them and these run as normal.
+pytest.importorskip("torch", reason="torch is an optional dependency")
+pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
+
 from dbx.datastreams import ZipStreamingDataset
 
 

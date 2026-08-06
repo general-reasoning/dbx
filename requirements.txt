@@ -5,4 +5,7 @@ pandas>=2.0
 pyarrow>=14.0
 pyyaml>=6.0
 tqdm>=4.60
-# Optional: torch>=2.0  (pip install datablocks[torch])
+# Optional: torch>=2.0              (pip install datablocks[torch])
+# Optional: ray>=2.0                (pip install datablocks[ray])
+# Optional: mosaicml-streaming>=0.7 (pip install datablocks[streaming])
+#           -- dbx.datastreams only; also needs torch

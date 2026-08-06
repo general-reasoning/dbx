@@ -1,9 +1,11 @@
 """datastreams — Utilities for composing streaming datasets.
 
-This module requires ``torch`` at *import time* (specifically
-``torch.utils.data.Dataset``).  It is intentionally **not** re-exported
-from ``dbx.__init__``, so the rest of ``dbx`` never forces a dependency
-on PyTorch or any streaming library.
+This module requires ``torch`` AND ``mosaicml-streaming`` at *import time*
+(``torch.utils.data.Dataset`` and the ``streaming.base`` readers).  Both are
+optional extras; importing without them raises an ImportError naming what to
+install.  The module is intentionally **not** re-exported from
+``dbx.__init__``, so the rest of ``dbx`` never forces a dependency on PyTorch
+or any streaming library.
 
 Usage::
 
@@ -26,8 +28,14 @@ except ImportError as exc:  # pragma: no cover
         "Install it with:  pip install datablocks[torch]"
     ) from exc
 
-from streaming.base.compression import decompress as mds_decompress
-from streaming.base.format import reader_from_json
+try:
+    from streaming.base.compression import decompress as mds_decompress
+    from streaming.base.format import reader_from_json
+except ImportError as exc:  # pragma: no cover
+    raise ImportError(
+        "dbx.datastreams requires mosaicml-streaming.  "
+        "Install it with:  pip install datablocks[streaming]"
+    ) from exc
 
 
 class ZipStreamingDataset(Dataset):

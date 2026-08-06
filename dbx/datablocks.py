@@ -82,7 +82,7 @@ from .dataparts import (
 )
 __version__ = "0.0.2"
 
-class _Absent:
+class AbsentKey:
     """Singleton marking a key present on only ONE side of a :meth:`Datablock.diffnorm`.
 
     Needed because diffnorm reports typed values: a key whose value *is* ``None``
@@ -104,7 +104,7 @@ class _Absent:
         return False
 
 
-ABSENT = _Absent()
+ABSENT = AbsentKey()
 
 
 #: The filename of a directory topic in a dict-valued ``TOPICS``, i.e. no file

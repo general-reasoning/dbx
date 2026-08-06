@@ -50,13 +50,18 @@ ray = [
 torch = [
     "torch>=2.0",
 ]
+streaming = [
+    # dbx.datastreams only; needs torch too, hence the self-reference.
+    "datablocks[torch]",
+    "mosaicml-streaming>=0.7",
+]
 dev = [
     "build",
     "pytest>=8.0",
     "twine",
 ]
 all = [
-    "datablocks[ray,torch,dev]",
+    "datablocks[ray,torch,streaming,dev]",
 ]
 
 [project.urls]

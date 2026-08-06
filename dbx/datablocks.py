@@ -370,44 +370,85 @@ class DatajournalEntry(pd.Series):
         fs, _ = fsspec.url_to_fs(url, **self.storage_options)
         return fs
 
-    def _topic_path(self, topic):
+    @staticmethod
+    def _walk(mapping, topicpath):
+        """Descend a recorded mapping one segment per level; None if absent."""
+        node = mapping
+        for name in topicpath:
+            if not isinstance(node, dict) or name not in node:
+                return None
+            node = node[name]
+        return node
+
+    @staticmethod
+    def _normtopic(topicpath):
+        if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
+            return tuple(topicpath[0])
+        return tuple(topicpath)
+
+    def _leaf_paths(self, node):
+        """Every recorded path at or below *node*, flattened."""
+        if isinstance(node, dict):
+            return [p for child in node.values() for p in self._leaf_paths(child)]
+        return [node]
+
+    def _topic_path(self, *topicpath):
+        topicpath = self._normtopic(topicpath)
         paths = self.paths
-        if topic not in paths:
+        node = self._walk(paths, topicpath)
+        if node is None and self._walk(self.topics, topicpath) is None:
             raise KeyError(
-                f"topic {topic!r} not recorded in this journal entry's paths; "
-                f"available topics: {sorted(paths)}"
+                f"topic {'/'.join(topicpath)!r} not recorded in this journal entry's "
+                f"paths; available topics: {sorted(paths)}"
             )
-        return paths[topic]
+        return node
 
-    def _is_dir_topic(self, topic):
+    def _is_dir_topic(self, *topicpath):
         """A directory topic when the recorded TOPICS filename is :data:`DIRTOPIC`."""
-        return self.topics.get(topic) is DIRTOPIC
+        node = self._walk(self.topics, self._normtopic(topicpath))
+        return node is DIRTOPIC
 
-    def _is_syntopic(self, topic):
+    def _is_syntopic(self, *topicpath):
         """A :data:`SYNTOPIC` topic -- recorded as synthetic, with no location."""
-        return self.topics.get(topic, DIRTOPIC) is SYNTOPIC
+        node = self._walk(self.topics, self._normtopic(topicpath))
+        return isinstance(node, tuple) and len(node) == 0
 
-    def ls(self, topic, *, detail=False):
-        """List the contents at this entry's recorded path for *topic*.
+    def is_topicgroup(self, *topicpath):
+        """True when the recorded entry for *topicpath* is a group of topics."""
+        return isinstance(self._walk(self.topics, self._normtopic(topicpath)), dict)
+
+    def ls(self, *topicpath, detail=False):
+        """List the contents at this entry's recorded path for a topic.
 
         Mirrors :meth:`Datablock.ls`, but resolves the path from the
         journal entry's recorded :attr:`paths` rather than a live block.
+        A group concatenates its members' listings.
         """
-        return ls_path(self._fs(), self._topic_path(topic), self._is_dir_topic(topic), detail=detail)
+        topicpath = self._normtopic(topicpath)
+        p = self._topic_path(*topicpath)
+        if isinstance(p, dict):
+            return [e for leaf in self._leaf_paths(p)
+                    for e in ls_path(self._fs(), leaf, False, detail=detail)]
+        return ls_path(self._fs(), p, self._is_dir_topic(*topicpath), detail=detail)
 
-    def list(self, topic):
-        """Detailed, recursive listing of every file under this entry's path for *topic*.
+    def list(self, *topicpath):
+        """Detailed, recursive listing of every file under this entry's topic path.
 
         Mirrors :meth:`Datablock.list`, resolving the path from :attr:`paths`.
         """
-        return list_path(self._fs(), self._topic_path(topic), self._is_dir_topic(topic))
+        topicpath = self._normtopic(topicpath)
+        p = self._topic_path(*topicpath)
+        if isinstance(p, dict):
+            return [e for leaf in self._leaf_paths(p)
+                    for e in list_path(self._fs(), leaf, False)]
+        return list_path(self._fs(), p, self._is_dir_topic(*topicpath))
 
-    def size(self, topic):
-        """Total size in bytes of all files under this entry's path for *topic*.
+    def size(self, *topicpath):
+        """Total size in bytes of all files under this entry's topic path.
 
         Mirrors :meth:`Datablock.size`, resolving the path from :attr:`paths`.
         """
-        return size(self.list(topic))
+        return size(self.list(*self._normtopic(topicpath)))
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
@@ -718,6 +759,23 @@ class Datablock:
     the same thing every entry of the list form is; :data:`SYNTOPIC` marks a
     synthetic topic -- one that is never stored, so ``path()`` and ``dirpath()``
     are ``None``, nothing is created or copied, and validity is vacuous.
+
+    A dict value may itself be a dict, which nests topics::
+
+        TOPICS = {
+            'data': {'frames': DIRTOPIC, 'annotations': SYNTOPIC,
+                     'index': 'index.csv'},
+            'model': 'model.pt',
+        }
+
+    Every topic-addressing method then takes one name per level -- ``path('data',
+    'frames')``, ``read('data', 'annotations')``, ``ls``, ``size``,
+    ``validtopic`` -- and the nesting is mirrored on disk under the block's key.
+    A GROUP is addressable in its own right: ``dirpath('data')`` is the parent
+    directory of its members, ``path('data')`` is the dict of their paths, and
+    ``validtopic('data')`` is true when every leaf beneath it is.
+    :meth:`leaftopics` enumerates the leaves as name tuples.  A topic name may
+    not contain ``'/'``, which is the separator the signature nests with.
 
     Storage layout::
 
@@ -1125,10 +1183,18 @@ class Datablock:
         protocol = self.fs.protocol if isinstance(self.fs.protocol, str) else self.fs.protocol[0]
         return protocol in ('file', 'local', '')
 
-    def validtopic(self, topic):
-        path = self.path(topic)
+    def validtopic(self, *topicpath):
+        """Validity of one topic, or of a whole group.
+
+        ``validtopic('data', 'annotations')`` checks that leaf;
+        ``validtopic('data')`` checks every leaf under the group, because
+        :meth:`path` describes a group as a dict and :meth:`validpath`
+        recurses into it.
+        """
+        topicpath = self._normtopic(topicpath)
+        path = self.path(*topicpath)
         valid = self.validpath(path)
-        self.log.detailed(f"{self.anchor}: topic {topic} valid: {valid}")
+        self.log.detailed(f"{self.anchor}: topic {'/'.join(topicpath)} valid: {valid}")
         return valid
     
     def validtopics(self, topics=None, *, reduce: bool = False):
@@ -1182,10 +1248,12 @@ class Datablock:
         return self.validtopics(reduce=True)
     
     def topics(self):
-        """Return the list of topic names.
+        """Return the list of TOP-LEVEL topic names.
 
         For dict-TOPICS, returns the keys.  For list-TOPICS, returns the list.
-        Returns an empty list when TOPICS is not defined.
+        Returns an empty list when TOPICS is not defined.  A key naming a
+        nested group is returned as itself; :meth:`leaftopics` enumerates
+        what is underneath it.
         """
         if not hasattr(self, 'TOPICS'):
             return []
@@ -1194,6 +1262,27 @@ class Datablock:
         if isinstance(self.TOPICS, list):
             return list(self.TOPICS)
         return []
+
+    def leaftopics(self):
+        """Every leaf topic, as a tuple of names, depth-first in declaration order.
+
+        A flat TOPICS yields one-element tuples, in the same order as
+        :meth:`topics`, so anything built from this reads identically to the
+        pre-hierarchy form -- which is what keeps :attr:`signature` stable.
+        """
+        def walk(node, prefix):
+            if not isinstance(node, dict):
+                yield prefix
+                return
+            for name, child in node.items():
+                yield from walk(child, prefix + (self._check_topicname(name),))
+
+        if not self.has_topics():
+            return []
+        if self._topics_is_list:
+            return [(self._check_topicname(name),) for name in self.TOPICS]
+        return [tp for name, child in self.TOPICS.items()
+                for tp in walk(child, (self._check_topicname(name),))]
 
     def has_topics(self):
         """True when this block declares named topics (list or dict TOPICS)."""
@@ -1208,33 +1297,134 @@ class Datablock:
     def _topicfiles(self):
         """The effective topic → filename mapping.
 
-        Returns TOPICS when it is a dict, otherwise None.
+        Returns TOPICS when it is a dict, otherwise None.  For a hierarchical
+        TOPICS the values of group keys are themselves such mappings.
         """
         if hasattr(self, 'TOPICS') and isinstance(self.TOPICS, dict):
             return self.TOPICS
         return None
 
-    def _is_dir_topic(self, topic):
-        """True when *topic* resolves to a directory rather than a file.
+    @staticmethod
+    def _normtopic(topicpath):
+        """Accept ``('data', 'frames')``, ``(('data', 'frames'),)`` and ``('data',)``.
 
-        True for list-TOPICS entries and for dict-TOPICS entries whose
-        filename is :data:`DIRTOPIC`.  A :data:`SYNTOPIC` topic is neither.
+        The tuple form lets a caller feed a :meth:`leaftopics` entry straight
+        back in without unpacking it.
         """
-        return topic is not None and not self._is_syntopic(topic) and (
-            self._topics_is_list or
-            (self._topicfiles is not None and self._topicfiles.get(topic) is DIRTOPIC)
-        )
+        if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
+            return tuple(topicpath[0])
+        return tuple(topicpath)
 
-    def _is_syntopic(self, topic):
-        """True when *topic* is declared :data:`SYNTOPIC` -- synthetic, so no location.
+    def _topicnode(self, *topicpath):
+        """Resolve a topic path to its TOPICS entry.
+
+        Returns a filename (``str``), :data:`DIRTOPIC`, :data:`SYNTOPIC`, or a
+        ``dict`` for a group.  Raises KeyError naming the offending segment
+        when the path does not exist, so a typo in a nested name says which
+        level it failed at rather than surfacing as a missing file later.
+        """
+        topicpath = self._normtopic(topicpath)
+        if not topicpath:
+            # TypeError, not ValueError: before these became varargs this was a
+            # missing-positional-argument error, and callers may catch that.
+            raise TypeError(
+                f"{self.__class__.__name__}: a topic path needs at least one name"
+            )
+        if not self.has_topics():
+            raise KeyError(f"{self.__class__.__name__} declares no TOPICS")
+        if self._topics_is_list:
+            if len(topicpath) > 1:
+                raise KeyError(
+                    f"list-TOPICS has no groups: {'/'.join(topicpath)} is nested"
+                )
+            if topicpath[0] not in self.TOPICS:
+                raise KeyError(f"topic {topicpath[0]!r} not in {list(self.TOPICS)}")
+            return DIRTOPIC
+
+        node = self.TOPICS
+        for i, name in enumerate(topicpath):
+            self._check_topicname(name)
+            if not isinstance(node, dict):
+                raise KeyError(
+                    f"topic {'/'.join(topicpath[:i])!r} is a leaf, "
+                    f"so it has no member {name!r}"
+                )
+
+            node = node[name]
+            if not isinstance(node, (dict, str)) and node is not DIRTOPIC \
+                    and not self._node_is_syntopic(node):
+                raise TypeError(
+                    f"TOPICS entry {'/'.join(topicpath[:i+1])!r} is {node!r}; "
+                    f"expected a filename, DIRTOPIC, SYNTOPIC, or a dict of these"
+                )
+        return node
+
+    @staticmethod
+    def _node_is_syntopic(node):
+        return isinstance(node, tuple) and len(node) == 0
+
+    @staticmethod
+    def _check_topicname(name):
+        """A topic name may not contain '/'.
+
+        Nesting is rendered into :attr:`signature` as ``topic:data/frames=...``,
+        and the signature's own segments are '/'-joined. Allowing a '/' inside
+        a name would let two different TOPICS trees render identically and so
+        collide onto one hash.
+        """
+        if not isinstance(name, str):
+            raise TypeError(f"topic name must be a string, got {name!r}")
+        if '/' in name:
+            raise ValueError(
+                f"topic name {name!r} may not contain '/': nesting is expressed "
+                f"by nesting dicts, and '/' would make the signature ambiguous"
+            )
+        return name
+
+    def is_topicgroup(self, *topicpath):
+        """True when *topicpath* names a group of topics rather than a leaf."""
+        return isinstance(self._topicnode(*topicpath), dict)
+
+    def _leaves_under(self, *topicpath):
+        """Leaf topic paths at or below *topicpath*, as full tuples from the root."""
+        topicpath = self._normtopic(topicpath)
+        node = self._topicnode(*topicpath)
+
+        def walk(node, prefix):
+            if not isinstance(node, dict):
+                yield prefix
+                return
+            for name, child in node.items():
+                yield from walk(child, prefix + (name,))
+
+        return list(walk(node, topicpath))
+
+    def _is_dir_topic(self, *topicpath):
+        """True when the topic resolves to a directory rather than a file.
+
+        True for list-TOPICS entries and for :data:`DIRTOPIC` leaves.  A
+        :data:`SYNTOPIC` is neither, and neither is a group -- a group has a
+        directory, but :meth:`path` describes it by its members.
+        """
+        topicpath = self._normtopic(topicpath)
+        if not topicpath or topicpath[0] is None:
+            return False
+        node = self._topicnode(*topicpath)
+        return node is DIRTOPIC
+
+    def _is_syntopic(self, *topicpath):
+        """True when the topic is declared :data:`SYNTOPIC` -- so it has no location.
 
         Only dict-TOPICS can declare one; every entry of a list-TOPICS is a
         directory.
         """
-        return (
-            self._topicfiles is not None
-            and self._topicfiles.get(topic, DIRTOPIC) is SYNTOPIC
-        )
+        topicpath = self._normtopic(topicpath)
+        if not topicpath or not self.has_topics() or self._topics_is_list:
+            return False
+        try:
+            return self._node_is_syntopic(self._topicnode(*topicpath))
+        except (KeyError, TypeError):
+            return False
 
     def build(self, *args, **kwargs):
         if self.capture_output:
@@ -1582,11 +1772,12 @@ class Datablock:
             raise NotImplementedError(
                 f"{self.__class__.__name__}.leave_breadcrumbs() requires TOPICS"
             )
-        for topic in topics:
-            if self._is_syntopic(topic):
+        for leaf in self.leaftopics():
+            if self._is_syntopic(*leaf):
                 continue
-            dirpath = self.dirpath(topic, ensure=True)
-            crumbs = None if self._is_dir_topic(topic) else self._topicfiles[topic]
+            dirpath = self.dirpath(*leaf, ensure=True)
+            node = self._topicnode(*leaf)
+            crumbs = None if node is DIRTOPIC else node
             self.leave_breadcrumbs_at_path(dirpath, crumbs=crumbs)
         return self
 
@@ -1638,13 +1829,21 @@ class Datablock:
             for s, c in self._iter_var_blocks('TREE_SKIP_VALIDATION')
         }
     
-    def read(self, topic):
-        topics = self.topics()
-        if topic not in topics:
-            raise ValueError(f"Topic {repr(topic)} not in {topics}")
-        return self.__read__(topic)
-    
-    def __read__(self, topic):
+    def read(self, *topicpath):
+        """Read a topic: ``read('out')``, or ``read('data', 'annotations')``.
+
+        The path is validated against TOPICS first, so a mistyped name fails
+        here naming the level it failed at, rather than inside ``__read__``.
+        A single name is forwarded to ``__read__`` bare, which keeps every
+        existing one-argument override working untouched.
+        """
+        topicpath = self._normtopic(topicpath)
+        self._topicnode(*topicpath)      # raises KeyError if it does not exist
+        if len(topicpath) == 1:
+            return self.__read__(topicpath[0])
+        return self.__read__(*topicpath)
+
+    def __read__(self, *topicpath):
         raise NotImplementedError()
     
     def UNSAFE_clear(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
@@ -1677,23 +1876,22 @@ class Datablock:
                 self.log.warning(f"EXCEPTION: {e}")
                 if throw:
                     raise (e)
+        def clear_topic(topicpath):
+            # A group names a directory but holds no data of its own; clearing
+            # it means clearing what is under it.
+            if clear_dirpath:
+                clear_path(self.dirpath(*topicpath), recursive=True)
+                return
+            for leaf in self._leaves_under(*topicpath):
+                clear_path(self.path(*leaf), recursive=self._is_dir_topic(*leaf))
+
         if len(topics) == 0:
-            all_topics = self.topics()
-            if all_topics:
-                for topic in all_topics:
-                    if clear_dirpath:
-                        clear_path(self.dirpath(topic), recursive=True)
-                    else:
-                        is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is DIRTOPIC)
-                        clear_path(self.path(topic), recursive=is_dir)
+            for topic in self.topics():
+                clear_topic((topic,))
             self.write_journal_entry(event="UNSAFE_clear")
         else:
             for topic in topics:
-                if clear_dirpath:
-                    clear_path(self.dirpath(topic), recursive=True)
-                else:
-                    is_dir = self._topics_is_list or (self._topicfiles is not None and self._topicfiles.get(topic) is DIRTOPIC)
-                    clear_path(self.path(topic), recursive=is_dir)
+                clear_topic(self._normtopic((topic,)))
             self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
         return self
     
@@ -1754,18 +1952,38 @@ class Datablock:
         else:
             self._UNSAFE_copy_fs(src_path=src_path, dst_path=dst_path, recursive=False)
 
+    @staticmethod
+    def _topicpaths_lookup(topicpaths, topicpath):
+        """Find *topicpath* in a caller-supplied override map.
+
+        Accepts the flat form keyed by name, the tuple-keyed form, and a
+        mapping nested to match TOPICS, so callers can express an override at
+        whatever depth is convenient.
+        """
+        if tuple(topicpath) in topicpaths:
+            return topicpaths[tuple(topicpath)]
+        node = topicpaths
+        for name in topicpath:
+            if not isinstance(node, dict) or name not in node:
+                raise KeyError(
+                    f"topicpaths has no entry for {'/'.join(topicpath)!r}"
+                )
+            node = node[name]
+        return node
+
     def _UNSAFE_copy_topic_file(self, topic, anchorkeypath, *, topicpaths=None):
         """Copy the individual .path(topic) file."""
-        dst_path = self.path(topic)
+        topic = self._normtopic((topic,))
+        dst_path = self.path(*topic)
         if topicpaths is not None:
-            _src_path = topicpaths[topic]
+            _src_path = self._topicpaths_lookup(topicpaths, topic)
         else:
             if self._topicfiles is None:
                 raise ValueError(
-                    f"Cannot copy topic file for {topic!r}: TOPICS is not a dict "
+                    f"Cannot copy topic file for {'/'.join(topic)!r}: TOPICS is not a dict "
                     f"(no filename mapping). Use always_copy_whole_dirpath=True for list-mode topics."
                 )
-            _src_path = os.path.join(topic, self._topicfiles[topic])
+            _src_path = os.path.join(*topic, self._topicnode(*topic))
         if dst_path is not None:
             src_path = os.path.join(anchorkeypath, _src_path)
             self.log.detailed(f"Copying file {src_path} to {dst_path}")
@@ -1773,19 +1991,20 @@ class Datablock:
 
     def _UNSAFE_copy_topic_dir(self, topic, anchorkeypath, *, topicpaths=None):
         """Copy the entire .dirpath(topic) directory."""
+        topic = self._normtopic((topic,))
         if topicpaths is not None:
-            _src_path = topicpaths[topic]
+            _src_path = self._topicpaths_lookup(topicpaths, topic)
         else:
-            _src_path = topic
+            _src_path = os.path.join(*topic)
         src_path = os.path.join(anchorkeypath, _src_path)
         src_fs, _ = self._url_to_fs(src_path)
-        dest_fs, _ = self._url_to_fs(self.dirpath(topic))
+        dest_fs, _ = self._url_to_fs(self.dirpath(*topic))
         use_server_side = (src_fs == dest_fs
                            and 'file' not in getattr(src_fs, 'protocol', ()))
         # Ensure dst dir pre-exists only for server-side copy (Azure) or list-mode topics.
         # For dict-mode fscopy, pre-creating dst causes fsspec to copy src INTO dst instead of AS dst.
         ensure = use_server_side or (self._topicfiles is None)
-        dst_path = self.dirpath(topic, ensure=ensure)
+        dst_path = self.dirpath(*topic, ensure=ensure)
         if not src_fs.exists(src_path):
             return
         self.log.detailed(f"Copying directory {src_path} to {dst_path}")
@@ -1848,9 +2067,16 @@ class Datablock:
         this base signature; :meth:`UNSAFE_copy_from` forwards its own
         ``**kwargs`` to every topic's call.
         """
-        if self._is_syntopic(topic):
+        topic = self._normtopic((topic,))
+        if self.is_topicgroup(*topic):
+            for leaf in self._leaves_under(*topic):
+                self._UNSAFE_copy_topic(leaf, anchorkeypath, topicpaths=topicpaths,
+                                        always_copy_whole_dirpath=always_copy_whole_dirpath,
+                                        **kwargs)
+            return
+        if self._is_syntopic(*topic):
             # No location on either side -- there is nothing to copy.
-            self.log.verbose(f"Skipping SYNTOPIC topic {topic}: it has no location")
+            self.log.verbose(f"Skipping SYNTOPIC topic {'/'.join(topic)}: it has no location")
             return
         # Use directory copy when:
         #  - always_copy_whole_dirpath is explicitly requested, OR
@@ -1859,7 +2085,7 @@ class Datablock:
         use_dir = (
             always_copy_whole_dirpath
             or self._topicfiles is None
-            or (isinstance(self._topicfiles, dict) and self._topicfiles.get(topic) is DIRTOPIC)
+            or (isinstance(self._topicfiles, dict) and self._is_dir_topic(*topic))
         )
         if use_dir:
             self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
@@ -2945,7 +3171,11 @@ class Datablock:
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if self._topicfiles is not None:
-            topics = [f"topic:{topic}={file}" for topic, file in self._topicfiles.items()]
+            # A leaf is named by its full path, so a nested topic reads
+            # "topic:data/frames=None". A flat TOPICS has one-segment paths and
+            # renders byte-identically to before -- the hash does not move.
+            topics = [f"topic:{'/'.join(tp)}={self._topicnode(*tp)}"
+                      for tp in self.leaftopics()]
         elif hasattr(self, "TOPICS") and isinstance(self.TOPICS, list):
             topics = [f"topic:{topic}" for topic in self.TOPICS]
         else:
@@ -2962,7 +3192,11 @@ class Datablock:
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if self._topicfiles is not None:
-            topics = [f"topic:{topic}={file}" for topic, file in self._topicfiles.items()]
+            # A leaf is named by its full path, so a nested topic reads
+            # "topic:data/frames=None". A flat TOPICS has one-segment paths and
+            # renders byte-identically to before -- the hash does not move.
+            topics = [f"topic:{'/'.join(tp)}={self._topicnode(*tp)}"
+                      for tp in self.leaftopics()]
         elif hasattr(self, "TOPICS") and isinstance(self.TOPICS, list):
             topics = [f"topic:{topic}" for topic in self.TOPICS]
         else:
@@ -3062,47 +3296,50 @@ class Datablock:
     #PATHS: BEGIN
     def path(
         self,
-        topic,
-        *,
+        *topicpath,
         ensure_dirpath: bool = False,
         bare: bool = False,
         local: bool = False,
     ):
-        """Return the path for *topic*.
+        """Return the path for a topic, addressed by one name per level.
 
-        For dict-TOPICS with a string value, returns ``dirpath/filename``.
-        For dict-TOPICS with a :data:`DIRTOPIC` value or list-TOPICS, returns the
-        directory path (same as ``dirpath(topic)``).
-        For a :data:`SYNTOPIC` topic, returns ``None``: it has no location, and
-        ``ensure_dirpath`` creates nothing.
+        ``path('data', 'frames')`` descends a hierarchical TOPICS; ``path('x')``
+        is the flat case and behaves exactly as before.
+
+        A string leaf gives ``dirpath/filename``; a :data:`DIRTOPIC` leaf and
+        every list-TOPICS entry give the directory itself; a :data:`SYNTOPIC`
+        gives ``None`` and ``ensure_dirpath`` creates nothing for it.
+
+        A GROUP gives a dict of its members' paths, nested to match TOPICS --
+        so ``path('data')`` describes the whole subtree, and :meth:`validpath`
+        (which already recurses into dicts) validates it as a unit.
         """
-        if self._is_syntopic(topic):
+        topicpath = self._normtopic(topicpath)
+        node = self._topicnode(*topicpath)
+
+        if isinstance(node, dict):
+            return {name: self.path(*topicpath, name, ensure_dirpath=ensure_dirpath,
+                                    bare=bare, local=local)
+                    for name in node}
+        if self._node_is_syntopic(node):
             return None
 
-        dirpath = self.dirpath(topic, local=local)
+        dirpath = self.dirpath(*topicpath, local=local)
         if ensure_dirpath and dirpath is not None:
             ensure_path(dirpath, storage_options=self.storage_options)
 
-        if self._topics_is_list:
-            # List-TOPICS: the topic IS a directory
+        if node is DIRTOPIC:
+            # list-TOPICS entry, or a DIRTOPIC leaf: the topic IS the directory
             return dirpath
-
-        topicfile = self._topicfiles[topic]
-        if topicfile is DIRTOPIC:
-            # Dict-TOPICS with a DIRTOPIC value: directory-only topic
-            return dirpath
-        elif isinstance(topicfile, str):
-            path = os.path.join(dirpath, topicfile)
-        else:
-            path = None
+        path = os.path.join(dirpath, node)
         self.log.detailed(f"{self.anchor}: path: {path}")
         if bare and path:
             fs = self.localfs if local else self.fs
             path = fs._strip_protocol(path)
         return path
 
-    def ls(self, topic, *, detail=False, local: bool = False):
-        """List the contents at ``.path(topic)`` using *fsspec*.
+    def ls(self, *topicpath, detail=False, local: bool = False):
+        """List the contents at ``.path(*topicpath)`` using *fsspec*.
 
         If the path points to a file (i.e. a dict-TOPICS entry with a
         non-None filename), the parent directory is listed.  If the path
@@ -3123,11 +3360,17 @@ class Datablock:
             Listing of the path contents.
         """
         fs = self.localfs if local else self.fs
-        p = self.path(topic, local=local)
-        return ls_path(fs, p, self._is_dir_topic(topic), detail=detail)
+        topicpath = self._normtopic(topicpath)
+        if self.is_topicgroup(*topicpath):
+            # A group has no listing of its own: concatenate its leaves'.
+            return [entry
+                    for tp in self._leaves_under(*topicpath)
+                    for entry in self.ls(*tp, detail=detail, local=local)]
+        p = self.path(*topicpath, local=local)
+        return ls_path(fs, p, self._is_dir_topic(*topicpath), detail=detail)
 
-    def list(self, topic, *, local: bool = False):
-        """Detailed, recursive listing of every file under ``.path(topic)``.
+    def list(self, *topicpath, local: bool = False):
+        """Detailed, recursive listing of every file under ``.path(*topicpath)``.
 
         Parallels :meth:`ls`, but recurses and returns full ``fsspec``
         detail dicts for all files (directory entries excluded) beneath the
@@ -3150,11 +3393,16 @@ class Datablock:
             to a fully-qualified path.
         """
         fs = self.localfs if local else self.fs
-        p = self.path(topic, local=local)
-        return list_path(fs, p, self._is_dir_topic(topic))
+        topicpath = self._normtopic(topicpath)
+        if self.is_topicgroup(*topicpath):
+            return [entry
+                    for tp in self._leaves_under(*topicpath)
+                    for entry in self.list(*tp, local=local)]
+        p = self.path(*topicpath, local=local)
+        return list_path(fs, p, self._is_dir_topic(*topicpath))
 
-    def size(self, topic, *, local: bool = False):
-        """Total size in bytes of all files under ``.path(topic)``.
+    def size(self, *topicpath, local: bool = False):
+        """Total size in bytes of all files under ``.path(*topicpath)``.
 
         Sums the ``size`` of every file reported by :meth:`list`.  Returns
         0 when the topic has no files.
@@ -3167,23 +3415,29 @@ class Datablock:
             When *True* size the local cache of the topic instead of the
             (possibly remote) canonical path.
         """
-        return size(self.list(topic, local=local))
+        return size(self.list(*self._normtopic(topicpath), local=local))
 
 
     def dirpath(
         self,
-        topic,
-        *,
+        *topicpath,
         ensure: bool = False,
         list: bool = False,
         local: bool = False,
     ):
-        if self._is_syntopic(topic):
+        """The directory for a topic, one path segment per level.
+
+        A group has a directory of its own -- ``dirpath('data')`` is the parent
+        of ``dirpath('data', 'frames')`` -- so this answers for groups and
+        leaves alike.  A :data:`SYNTOPIC` has no location and gives ``None``.
+        """
+        topicpath = self._normtopic(topicpath)
+        if self._is_syntopic(*topicpath):
             # No location: nothing to name, and nothing to create for `ensure`.
             return None
         anchorkeypath = self.localanchorkeypath if local else self.anchorkeypath
         fs = self.localfs if local else self.fs
-        dirpath = os.path.join(anchorkeypath, topic)
+        dirpath = os.path.join(anchorkeypath, *topicpath)
         if ensure:
             fs.makedirs(dirpath, exist_ok=True)
         if list:
@@ -3254,9 +3508,8 @@ class Datablock:
         return self
 
     def paths(self):
-        topics = self.topics()
-        paths = {topic: self.path(topic) for topic in topics}
-        return paths
+        """``{topic: path}``, nested wherever TOPICS is."""
+        return {topic: self.path(topic) for topic in self.topics()}
 
     def anchorpath(self):
         return self._anchorpath()
@@ -3410,8 +3663,11 @@ class Datablock:
             has_log = False
         #
         _TOPICS = getattr(self, 'TOPICS', None)
-        topics_dict = {topic: (_TOPICS.get(topic) if isinstance(_TOPICS, dict) else None)
-                        for topic in self.topics()}
+        # Records the full declared shape: a group's value is its own mapping,
+        # so the entry can be walked the same way the live block is.
+        topics_dict = ({name: copy.deepcopy(node) for name, node in _TOPICS.items()}
+                       if isinstance(_TOPICS, dict)
+                       else {topic: DIRTOPIC for topic in self.topics()})
         paths_dict = self.paths()
         #
         journal_path = self._dbxjournalinstancepath(ensure_dirpath=True, filename_prefix=journal_prefix)

@@ -71,6 +71,25 @@ All notable changes to this project will be documented in this file.
   New classes should leave it alone (default `False`).
 
 ### Added
+- **Hierarchical `TOPICS`** — a dict value may itself be a dict, nesting topics:
+  ```python
+  TOPICS = {'data': {'frames': DIRTOPIC, 'annotations': SYNTOPIC,
+                     'index': 'index.csv'},
+            'model': 'model.pt'}
+  ```
+  Every topic-addressing method takes one name per level: `path('data', 'frames')`,
+  `read('data', 'annotations')`, `ls`, `list`, `size`, `dirpath`, `validtopic`,
+  `UNSAFE_clear`. The nesting is mirrored on disk under the block's key. A *group*
+  is addressable in its own right — `dirpath('data')` is the parent directory,
+  `path('data')` is the dict of its members' paths, and `validtopic('data')` is the
+  conjunction over the leaves beneath it (`validpath` already recursed into dicts).
+  New `leaftopics()` enumerates leaves as name tuples, and `is_topicgroup()` tests a
+  path. Journal entries record the declared shape, and `DatajournalEntry.ls`/`list`/
+  `size`/`_is_dir_topic`/`_is_syntopic` take the same per-level arguments.
+  **Fully backward compatible**: flat dict-TOPICS, list-TOPICS and no-TOPICS blocks
+  produce byte-identical signatures — hence the same hash, key and storage paths —
+  verified against the previous commit. A nested leaf is rendered `topic:data/frames=...`,
+  so a topic name may no longer contain `/`, which would make that ambiguous.
 - **`DIRTOPIC`** — the filename of a directory topic in a dict-valued `TOPICS`:
   `TOPICS = {'images': 'images.csv', 'masks': DIRTOPIC}`. It *is* `None`, the value the
   topic machinery has always tested for, so `{'masks': None}` stays valid and produces

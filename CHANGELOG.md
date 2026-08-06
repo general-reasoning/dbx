@@ -36,6 +36,27 @@ All notable changes to this project will be documented in this file.
   `.supersignature` fall back to them, treating a NaN as absent so that a journal
   spanning the rename (both columns present, NaN-filled per row) reads correctly on
   either side.
+- **Removed the whole `*DatablocksBuilder` family, `select_builder()` and `_DATABLOCKS_BUILDERS`**
+  — `Inline`, `Multithreading`, `Multiprocessing`, `Ray`, `TorchMultithreading` and
+  `TorchMultiprocessing`, plus the private `_build_block`, `_build_block_with_to` and
+  `_TorchBlockCallable_` helpers. Nothing constructed them: `Datastack` resolves
+  `executor_cls` to the `*CallableExecutor` family directly, and `select_builder` was
+  reachable only from its own tests. Use the executors (`select_executor`,
+  `callable_executor`, `parallelization='...'` on a `Datastack`) instead. The one
+  behaviour with no executor equivalent was `RayDatablocksBuilder` copying a remote
+  block's `__getstate__()` back onto the local object after a build; that is a no-op
+  unless a subclass registers a build-time value as a serializable parameter.
+- **Renamed `FDCapture` → `OutputTee`, and removed `Tee`.** `Tee` wrote to several
+  Python file objects at once, for installing as `sys.stdout` — but that only sees writes
+  going through the Python stream object, so it missed C extensions writing to fd 1/2,
+  subprocesses (which inherit descriptors, not `sys.stdout`), and any code holding the
+  real stream from before the swap. `OutputTee` redirects the descriptors themselves
+  with `dup2`, so all three are caught. It was already unused; nothing referenced it.
+  `capture_output=True` still **mirrors rather than silences** — output continues to
+  reach the terminal, which is what `Tee` was meant to provide.
+- **Removed the `@tagged` decorator** (and its `_make_tag` / `_TAGGED_SKIP_DEFAULTS`
+  helpers), which auto-generated a call-string tag for pipeline functions. Unused.
+  Pass `tag=` explicitly.
 - **Renamed `JournalFrame` → `Datajournal` and `JournalEntry` → `DatajournalEntry`.**
   No aliases are kept; update any `from dbx.datablocks import JournalEntry`. The
   `journal()` function, `Datablock.journal()` / `Datablock.Journal()`, and every journal

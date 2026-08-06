@@ -69,7 +69,6 @@ import fsspec
 import pandas as pd
 
 
-
 __eval__ = __builtins__['eval']
 
 from .dataparts import *
@@ -1744,7 +1743,7 @@ class Datablock:
             _local_log = tempfile.NamedTemporaryFile(
                 mode='w', suffix='.log', prefix='dbx_capture_', delete=False, encoding='utf-8',
             )
-            _fd_capture = FDCapture(_local_log)
+            _output_tee = OutputTee(_local_log)
         _log_uploaded = False
         try:
             if not self.valid():
@@ -1755,7 +1754,7 @@ class Datablock:
                 # journal entry, so that the journal's fs.exists(logpath)
                 # check finds the file and records the path.
                 if self.capture_output:
-                    _fd_capture.close()
+                    _output_tee.close()
                     _local_log.close()
                     _log_uploaded = True
                     try:
@@ -1770,7 +1769,7 @@ class Datablock:
                 self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
         except KeyboardInterrupt as e:
             if self.capture_output and not _log_uploaded:
-                _fd_capture.close()
+                _output_tee.close()
                 _local_log.close()
                 _log_uploaded = True
                 try:
@@ -1784,7 +1783,7 @@ class Datablock:
             raise(e)
         except Exception as e:
             if self.capture_output and not _log_uploaded:
-                _fd_capture.close()
+                _output_tee.close()
                 _local_log.close()
                 _log_uploaded = True
                 try:
@@ -1798,7 +1797,7 @@ class Datablock:
             raise(e)
         finally:
             if self.capture_output and not _log_uploaded:
-                _fd_capture.close()
+                _output_tee.close()
                 _local_log.close()
                 try:
                     self.fs.put(_local_log.name, logpath)
@@ -4475,199 +4474,6 @@ def quote(obj, *args, tag="$", **kwargs):
         _quote = quotefn(fn, *args, tag=tag, **kwargs)
     return _quote
 
-
-def _build_block_with_to(block, *args, **kwargs):
-    """Build helper for TorchXXX builders: the callable IS the block itself.
-
-    The callable must have ``.to(device)`` — the TorchXXXCallableExecutor
-    validates this and calls ``block.to(device)`` before invoking, then
-    ``block.to('cpu')`` afterwards.  We implement ``__call__`` via this
-    partial, and ``.to()`` is already on the block.
-    """
-    return block.build(*args, **kwargs)
-
-
-class _TorchBlockCallable_:
-    """Thin wrapper that makes a Datablock usable as a TorchXXX callable.
-
-    The executor calls ``callable.to(device)(...).to('cpu')``, so we need
-    ``.to()`` and ``__call__()`` on the same object.  This wrapper delegates
-    both to the underlying block.
-    """
-    def __init__(self, block):
-        if not hasattr(block, 'to') or not callable(getattr(block, 'to')):
-            raise TypeError(
-                f"{type(block).__name__} does not implement .to(device). "
-                f"Datablocks used with TorchMultithreadingDatablocksBuilder / "
-                f"TorchMultiprocessingDatablocksBuilder must define a .to() method."
-            )
-        self.block = block
-
-    def to(self, device):
-        self.block.to(device)
-        return self
-
-    def __call__(self, *args, **kwargs):
-        self.block.build(*args, **kwargs)
-        return self.block
-
-
-class TorchMultithreadingDatablocksBuilder:
-    """Builds Datablocks concurrently using threads with per-device placement.
-
-    Delegates to :class:`TorchMultithreadingCallableExecutor`.
-    Each block must implement ``.to(device)``.
-    """
-
-    def __init__(self, *, devices: list[str] = 'cuda', log: Logger = Logger()):
-        if isinstance(devices, str):
-            devices = [devices]
-        self.devices = devices
-        self.log = log
-        self._executor = TorchMultithreadingCallableExecutor(
-            devices=devices, log=log,
-        )
-
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        callables = [_TorchBlockCallable_(block) for block in blocks]
-        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
-        return blocks
-
-
-class TorchMultiprocessingDatablocksBuilder:
-    """Builds Datablocks concurrently using processes with per-device placement.
-
-    Delegates to :class:`TorchMultiprocessingCallableExecutor`.
-    Each block must implement ``.to(device)``.
-    """
-
-    def __init__(self, *, devices: list[str] = None, log: Logger = Logger()):
-        if isinstance(devices, str):
-            devices = [devices]
-        self.devices = devices
-        self.log = log
-        self._executor = TorchMultiprocessingCallableExecutor(
-            devices=devices, log=log,
-        )
-
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        callables = [_TorchBlockCallable_(block) for block in blocks]
-        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
-        return blocks
-
-
-
-def _build_block(block, *args, **kwargs):
-    return block.build(*args, **kwargs)
-
-class MultithreadingDatablocksBuilder:
-    """Builds Datablocks concurrently using threads, via MultithreadingCallableExecutor."""
-
-    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
-        self.n_workers = n_workers
-        self.batch_size = batch_size
-        self.tag = tag
-        self.log = log
-        self._executor = MultithreadingCallableExecutor(n_workers=n_workers, batch_size=batch_size, tag=tag, log=log)
-
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        callables = [functools.partial(_build_block, block) for block in blocks]
-        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
-        return blocks
-
-
-class MultiprocessingDatablocksBuilder:
-    """Builds Datablocks concurrently using processes, via MultiprocessingCallableExecutor."""
-
-    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
-        self.n_workers = n_workers
-        self.batch_size = batch_size
-        self.tag = tag
-        self.log = log
-        self._executor = MultiprocessingCallableExecutor(n_workers=n_workers, batch_size=batch_size, tag=tag, log=log)
-
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        callables = [functools.partial(_build_block, block) for block in blocks]
-        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
-        return blocks
-
-
-class RayDatablocksBuilder:
-    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", revision=None, conda=None, log: Logger = Logger()):
-        self.n_workers = n_workers
-        self.batch_size = batch_size
-        self.tag = tag
-        self.log = log
-        workers = [remote(revision=revision, conda=conda) for _ in range(n_workers)]
-        self.executor = RayCallableExecutor(workers=workers, batch_size=batch_size, tag=tag, log=log)
-
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        if len(blocks) > 0:
-            callables = [functools.partial(_build_block, block) for block in blocks]
-            results = self.executor.execute(callables, *ctx_args, **ctx_kwargs)
-            
-            # Update local blocks with built state from remote workers
-            for block, res in zip(blocks, results):
-                if res:
-                    # RayCallableExecutor returns a flat list: [res1, res2, ...]
-                    # We expect one result per block.
-                    remote_block = res
-                    state = remote_block.__getstate__()
-                    # Update local block state from the remote result
-                    block.__setstate__(state)
-
-        return blocks
-
-
-class InlineDatablocksBuilder:
-    """Builds Datablocks sequentially in the local process, via InlineCallableExecutor."""
-    def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "", log: Logger = Logger()):
-        self.n_workers = n_workers
-        self.batch_size = batch_size
-        self.tag = tag
-        self.log = log
-        self._executor = InlineCallableExecutor(n_workers=n_workers, batch_size=batch_size, tag=tag, log=log)
-
-    def build_blocks(self, blocks: Sequence[Datablock], *ctx_args, **ctx_kwargs):
-        callables = [functools.partial(_build_block, block) for block in blocks]
-        self._executor.exec_callables(callables, *ctx_args, **ctx_kwargs)
-        return blocks
-
-
-_DATABLOCKS_BUILDERS = {
-    "inline":                InlineDatablocksBuilder,
-    "multithreading":        MultithreadingDatablocksBuilder,
-    "multiprocessing":       MultiprocessingDatablocksBuilder,
-    "ray":                   RayDatablocksBuilder,
-    "torch_multithreading":  TorchMultithreadingDatablocksBuilder,
-    "torch_multiprocessing": TorchMultiprocessingDatablocksBuilder,
-}
-
-
-def select_builder(parallelization: str | None = None):
-    """Return the datablocks-builder **class** for the given parallelization strategy.
-
-    Parameters
-    ----------
-    parallelization : str or None
-        One of ``'inline'`` (default), ``'multithreading'``,
-        ``'multiprocessing'``, ``'ray'``, ``'torch_multithreading'``,
-        ``'torch_multiprocessing'``.  Case-insensitive.
-        ``None`` maps to ``'inline'``.
-
-    Returns
-    -------
-    type
-        The builder class (not an instance).
-    """
-    key = (parallelization or "inline").lower()
-    cls = _DATABLOCKS_BUILDERS.get(key)
-    if cls is None:
-        raise ValueError(
-            f"Unknown parallelization {parallelization!r}. "
-            f"Choose from {list(_DATABLOCKS_BUILDERS)}"
-        )
-    return cls
 
 
 class SlurmRayCluster:

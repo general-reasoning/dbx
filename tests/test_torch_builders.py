@@ -1,6 +1,5 @@
 """
-Tests for TorchMultithreadingCallableExecutor, TorchMultiprocessingCallableExecutor,
-TorchMultithreadingDatablocksBuilder, and TorchMultiprocessingDatablocksBuilder.
+Tests for TorchMultithreadingCallableExecutor and TorchMultiprocessingCallableExecutor.
 
 Verifies:
 1. _maybe_to_device: callables with .to() are moved, without .to() pass through.
@@ -8,7 +7,6 @@ Verifies:
 3. Callables without .to() execute successfully (permissive mode).
 4. n_workers + round-robin device assignment.
 5. Work-stealing mode with device management.
-6. TorchMultithreadingDatablocksBuilder: builds Datablocks with device management.
 """
 import os
 import functools
@@ -21,11 +19,7 @@ from dbx.dataparts import (
     TorchMultithreadingCallableExecutor,
     TorchMultiprocessingCallableExecutor,
 )
-from dbx.datablocks import (
-    Datablock,
-    TorchMultithreadingDatablocksBuilder,
-    TorchMultiprocessingDatablocksBuilder,
-)
+from dbx.datablocks import Datablock
 
 
 @pytest.fixture(autouse=True)
@@ -323,57 +317,3 @@ class TestTorchMultiprocessingCallableExecutor:
             devices=['cpu'], n_workers=3
         )
         assert executor.n_workers == 3
-
-
-# ===========================================================================
-# 7. TorchMultithreadingDatablocksBuilder (delegates to executor)
-# ===========================================================================
-
-class TestTorchMultithreadingBuilder:
-
-    def test_build_blocks_with_to(self, tmp_path):
-        """Blocks with .to() should build successfully."""
-        blocks = [BlockWithTo(url=str(tmp_path), spec=dict(label=f"item{i}")) for i in range(3)]
-        builder = TorchMultithreadingDatablocksBuilder(devices=['cpu'])
-        result = builder.build_blocks(blocks)
-        assert result is blocks
-        for block in blocks:
-            assert block.valid(), f"Block {block.var.label} should be valid after build"
-
-    def test_build_blocks_without_to_raises(self, tmp_path):
-        """Blocks without .to() should fail — _TorchBlockCallable_ validates."""
-        blocks = [BlockWithoutTo(url=str(tmp_path)) for _ in range(2)]
-        builder = TorchMultithreadingDatablocksBuilder(devices=['cpu'])
-        with pytest.raises(TypeError, match="does not implement .to"):
-            builder.build_blocks(blocks)
-
-    def test_empty_blocks_is_noop(self):
-        builder = TorchMultithreadingDatablocksBuilder(devices=['cpu'])
-        result = builder.build_blocks([])
-        assert result == []
-
-    def test_to_is_called_with_device(self, tmp_path):
-        """After build, blocks should have been moved to cpu."""
-        blocks = [BlockWithTo(url=str(tmp_path), spec=dict(label='test'))]
-        builder = TorchMultithreadingDatablocksBuilder(devices=['cpu'])
-        builder.build_blocks(blocks)
-        assert blocks[0].device == 'cpu'
-
-
-# ===========================================================================
-# 8. TorchMultiprocessingDatablocksBuilder (delegates to executor)
-# ===========================================================================
-
-class TestTorchMultiprocessingBuilder:
-
-    def test_build_blocks_without_to_raises(self, tmp_path):
-        """Blocks without .to() should fail — _TorchBlockCallable_ validates."""
-        blocks = [BlockWithoutTo(url=str(tmp_path))]
-        builder = TorchMultiprocessingDatablocksBuilder(devices=['cpu'])
-        with pytest.raises(TypeError, match="does not implement .to"):
-            builder.build_blocks(blocks)
-
-    def test_empty_blocks_is_noop(self):
-        builder = TorchMultiprocessingDatablocksBuilder(devices=['cpu'])
-        result = builder.build_blocks([])
-        assert result == []

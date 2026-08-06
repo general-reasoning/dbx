@@ -9,7 +9,6 @@ in dbx. The tests verify:
 3. test_remote_callable_executor: Parallel task execution across multiple workers using `RayCallableExecutor`.
 4. test_nested_proxying: Handling of objects returned by remote actors (proxies within proxies).
 5. test_remote_exception_handling: Correct propagation and reraising of exceptions from remote tasks.
-6. test_remote_datablocks_builder: Distributed building of Datablocks using `RayDatablocksBuilder`.
 
 Note: These tests require a clean git repository if DBX_GIT_REPO is set.
 """
@@ -32,7 +31,7 @@ import queue
 import tqdm
 import functools
 from dbx import datablocks
-from dbx.datablocks import remote, RayCallableExecutor, Datablock, RayDatablocksBuilder
+from dbx.datablocks import remote, RayCallableExecutor, Datablock
 
 class TestRemote(unittest.TestCase):
     @classmethod
@@ -124,39 +123,6 @@ class TestRemote(unittest.TestCase):
         
         with self.assertRaisesRegex(ValueError, "Intentional failure"):
             executor.execute([fail])
-
-    def test_remote_datablocks_builder(self):
-        """Verify that RayDatablocksBuilder can build multiple Datablock remotely."""
-        class TestBlock(Datablock):
-            TOPICS = {'test': 'test.txt'}
-            def __init__(self, **kwargs):
-                # Pass built=False to super to ensure it's tracked in parameters
-                kwargs.setdefault('built', False)
-                super().__init__(**kwargs)
-
-            def valid(self):
-                # Always return False to force build() to call __build__()
-                return False
-
-            def __build__(self, *args, **kwargs):
-                self.built = True
-
-        # Use a small number of threads/workers
-        builder = RayDatablocksBuilder(n_workers=2)
-        
-        # Create a few TestBlocks
-        blocks = [TestBlock() for _ in range(3)]
-        
-        # Initially they should not be marked as built
-        for b in blocks:
-            self.assertFalse(b.built)
-            
-        # Build them remotely
-        builder.build_blocks(blocks)
-        
-        # After building, they should be marked as built (state synchronized from remote)
-        for b in blocks:
-            self.assertTrue(b.built)
 
     def test_remote_callable_executor_streaming_batch_size(self):
         """Verify streaming results in chunks from RayCallableExecutor."""

@@ -211,7 +211,7 @@ def __split__(self):
 **Multiprocessing mode** — `self._shared_evaluator` is dropped by pickling,
 so `BlockMaker.__call__` lazily creates the evaluator **once per worker** and
 caches it on the `stack` context object (which is shared across all
-BlockMaker calls within a worker — see "Approach 2" below):
+BlockMaker calls within a worker — see "BlockMaker device pinning" below):
 
 ```python
 class BlockMaker(Datastack.BlockMaker):
@@ -359,42 +359,10 @@ For threads, `stack` is shared memory.  For processes, it is pickled once per wo
 ## Multi-GPU
 
 Most Datastacks don't need multi-GPU — `parallelization='multiprocessing'`
-with CPU workers is often sufficient.  When you do need GPU parallelism,
-two approaches exist:
+with CPU workers is often sufficient.  When you do need GPU parallelism, pin
+devices on the `BlockMaker`.
 
-| Approach | Use when | Tradeoff |
-|----------|----------|----------|
-| TorchDatablocksBuilder | Simple per-block GPU work, no `__split__`/`__stack__` needed | Bypasses Datastack lifecycle |
-| BlockMaker device pinning | Full Datastack lifecycle + multi-GPU + resource caching | Overrides `__build__` entirely |
-
-### Approach 1: TorchDatablocksBuilder (executor-level)
-
-The executor handles `.to(device)` automatically.  Each block must implement
-a `.to(device)` method:
-
-```python
-class MyGpuBlock(Datablock):
-    TOPICS = {'features': 'features.pt'}
-
-    def to(self, device):
-        self._device = device
-        return self
-
-    def __build__(self):
-        model = load_model().to(self._device)
-        features = model(load_data(self.var.idx).to(self._device))
-        torch.save(features.cpu(), self.path())
-
-shards = [MyGpuBlock(url=..., spec=dict(idx=i)) for i in range(n)]
-builder = TorchMultithreadingDatablocksBuilder(devices=['cuda:0', 'cuda:1'])
-builder.build_blocks(shards)
-```
-
-The executor lifecycle: `.to(device)` → build → `.to('cpu')`.  One thread per
-device.  This is the simplest approach but bypasses Datastack's `__split__`/`__stack__`
-hooks.
-
-### Approach 2: BlockMaker device pinning (stack-level)
+### BlockMaker device pinning
 
 Override `BlockMaker` to carry a device assignment and lazily cache expensive
 resources per worker.  The executor splits makers into **contiguous chunks**

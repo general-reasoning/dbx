@@ -1,5 +1,5 @@
 """
-Tests for select_executor (dataparts) and select_builder (datablocks).
+Tests for select_executor (dataparts).
 
 Verifies:
 1. Each valid parallelization string returns the correct class.
@@ -18,15 +18,6 @@ from dbx.dataparts import (
     MultiprocessingCallableExecutor,
     TorchMultithreadingCallableExecutor,
     TorchMultiprocessingCallableExecutor,
-)
-from dbx.datablocks import (
-    select_builder,
-    InlineDatablocksBuilder,
-    MultithreadingDatablocksBuilder,
-    MultiprocessingDatablocksBuilder,
-    RayDatablocksBuilder,
-    TorchMultithreadingDatablocksBuilder,
-    TorchMultiprocessingDatablocksBuilder,
 )
 
 
@@ -73,39 +64,3 @@ class TestSelectExecutor:
         """callable_executor should return an instance, not a class."""
         executor = callable_executor("inline", n_workers=1)
         assert isinstance(executor, InlineCallableExecutor)
-
-
-# ===========================================================================
-# select_builder
-# ===========================================================================
-
-class TestSelectBuilder:
-
-    @pytest.mark.parametrize("key,expected", [
-        ("inline",                InlineDatablocksBuilder),
-        ("multithreading",        MultithreadingDatablocksBuilder),
-        ("multiprocessing",       MultiprocessingDatablocksBuilder),
-        ("ray",                   RayDatablocksBuilder),
-        ("torch_multithreading",  TorchMultithreadingDatablocksBuilder),
-        ("torch_multiprocessing", TorchMultiprocessingDatablocksBuilder),
-    ])
-    def test_valid_keys(self, key, expected):
-        assert select_builder(key) is expected
-
-    def test_none_returns_inline(self):
-        assert select_builder(None) is InlineDatablocksBuilder
-
-    def test_default_returns_inline(self):
-        assert select_builder() is InlineDatablocksBuilder
-
-    @pytest.mark.parametrize("key", [
-        "Inline", "MULTITHREADING", "Ray", "TORCH_MULTITHREADING",
-        "Torch_Multiprocessing", "MultiProcessing",
-    ])
-    def test_case_insensitive(self, key):
-        cls = select_builder(key)
-        assert cls is not None
-
-    def test_unknown_raises(self):
-        with pytest.raises(ValueError, match="Unknown parallelization"):
-            select_builder("nonexistent")

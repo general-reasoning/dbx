@@ -30,7 +30,6 @@
 | Torch Executors | Device-aware executors that automatically move callables between CPU/GPU |
 | Remote Execution | Ray-based remote `dbx` interpreter with transparent proxying |
 | Slurm Integration | Launch Ray clusters on Slurm and execute pipelines remotely |
-| `@tagged` | Decorator that auto-generates human-readable pipeline tags |
 
 ## Installation
 

@@ -2011,7 +2011,6 @@ class DatastreamTable(SlicedTopics, Datastack):
         allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)
         streaming_kwargs = dict(
             streams=streams,
-            local=local,
             shuffle=shuffle,
             allow_unsafe_types=allow_unsafe_types,
             cache_limit=cache_limit,

@@ -230,9 +230,9 @@ class TestBuild:
         assert all(built_table.tab(i).valid() for i in range(built_table.n_tabs))
 
     def test_rebuild_is_a_no_op(self, built_table):
-        before = json.loads(open(built_table.slice_index_path('numbers')).read())
+        before = json.loads(open(built_table.tab(0).slice_index_path('numbers')).read())
         built_table.build()
-        after = json.loads(open(built_table.slice_index_path('numbers')).read())
+        after = json.loads(open(built_table.tab(0).slice_index_path('numbers')).read())
         assert before == after
 
     def test_staged_build_lands_the_same_data(self, tmp_path):

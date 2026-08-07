@@ -268,6 +268,48 @@ The defaults — `on_conflict='last'`, `skip_none=True`, no projection — are t
 plain merge `ZipStreamingDataset` has always done, so nothing already using it
 changes behaviour.
 
+## Shuffling
+
+`DataLoader(shuffle=True)` is the wrong thing here.  Consecutive sample
+indices live in the same MDS shard, so a full random permutation scatters
+every access across the whole table and almost every batch needs a shard that
+is not in the local cache — the cache can only help if consecutive accesses
+land in the same few shards.
+
+`table.sampler()` returns a `BlockShuffleSampler`: it shuffles contiguous
+*blocks* of the index space, and within each block, so the working set stays a
+handful of shards while both orders are still randomised every epoch.
+
+```python
+from torch.utils.data import DataLoader
+
+loader = DataLoader(table.dataset(), sampler=table.sampler(), batch_size=32)
+
+val = DataLoader(table.dataset(),
+                 sampler=table.sampler(seed=1, fixed_epoch=True),
+                 batch_size=32)
+```
+
+The block size defaults to the table's **own shard capacity**
+(`table.samples_per_shard()`, read off the merged index without downloading
+anything).  That is the reason this lives on the table: a caller passing a
+constant is guessing at a number the storage already determines — guess high
+and reads scatter across shards, guess low and the shuffle shrinks for no
+gain.  Pass `block_size=` to override.
+
+`fixed_epoch=True` for validation: otherwise `set_epoch` reshuffles which
+samples a capped validation run scores against, and val loss at one step stops
+being comparable to val loss at another.
+
+For mid-epoch resume, `BlockShuffleSampler` has `state_dict()`/
+`load_state_dict()`, and `ResumableDataLoader` surfaces them on the loader —
+which is where trainers look. Resume is approximate: with `num_workers > 0`
+the sampler runs ahead of what was consumed by up to
+`num_workers * prefetch_factor` batches.
+
+Three sibling readers, from the same merged index and equally cheap:
+`shard_sizes(slice)`, `samples_per_shard(slice)` and `n_samples(slice)`.
+
 ## Plug-in points
 
 Everything a subclass is meant to touch, and nothing else.  The `__dunder__`
@@ -303,7 +345,8 @@ internal, and a plain name means it is for calling, not overriding.
 
 `data()`, `dataset()`, `datastream()`, `stats()`, `slices`, `valid()`,
 `valid_slice()`, `slice_index_path()`, `cacheroot`, `tab()`, `tabs()`,
-`build_index()`, `TabMaker`, `TabIndexFetcher`.
+`build_index()`, `TabMaker`, `TabIndexFetcher`, `sampler()`,
+`shard_sizes()`, `samples_per_shard()`, `n_samples()`.
 
 `slice_writers()` is the one method meant to be *called* from a subclass's
 `__build__` rather than by a consumer — public in the same sense

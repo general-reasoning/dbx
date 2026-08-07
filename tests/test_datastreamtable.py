@@ -603,3 +603,109 @@ class TestExtraTopics:
         tab = self._table(tmp_path).tab(0)
         with pytest.raises(NotImplementedError, match='note'):
             tab.read('note')
+
+
+# ---------------------------------------------------------------------------
+# Block-shuffled sampling
+# ---------------------------------------------------------------------------
+
+class TestBlockShuffleSampler:
+
+    def test_covers_every_index_exactly_once(self):
+        from dbx.datastreams import BlockShuffleSampler
+        s = BlockShuffleSampler(n=100, block_size=8, seed=1)
+        assert sorted(s) == list(range(100))
+        assert len(s) == 100
+
+    def test_working_set_stays_within_a_block(self):
+        """The whole point: consecutive draws stay near each other, so a
+        shard cache can help.  A global shuffle would not."""
+        from dbx.datastreams import BlockShuffleSampler
+        block = 16
+        order = list(BlockShuffleSampler(n=320, block_size=block, seed=7))
+        for start in range(0, len(order), block):
+            chunk = order[start:start + block]
+            assert max(chunk) - min(chunk) < block, chunk
+
+    def test_order_is_not_the_identity(self):
+        from dbx.datastreams import BlockShuffleSampler
+        order = list(BlockShuffleSampler(n=256, block_size=8, seed=3))
+        assert order != list(range(256))
+
+    def test_reproducible_for_a_seed(self):
+        from dbx.datastreams import BlockShuffleSampler
+        a = list(BlockShuffleSampler(n=64, block_size=8, seed=5))
+        b = list(BlockShuffleSampler(n=64, block_size=8, seed=5))
+        c = list(BlockShuffleSampler(n=64, block_size=8, seed=6))
+        assert a == b and a != c
+
+    def test_set_epoch_reshuffles(self):
+        from dbx.datastreams import BlockShuffleSampler
+        s = BlockShuffleSampler(n=64, block_size=8, seed=5)
+        first = list(s)
+        s.set_epoch(1)
+        assert list(s) != first
+
+    def test_fixed_epoch_ignores_set_epoch(self):
+        """A validation sampler must score the same subset every epoch."""
+        from dbx.datastreams import BlockShuffleSampler
+        s = BlockShuffleSampler(n=64, block_size=8, seed=5, fixed_epoch=True)
+        first = list(s)
+        s.set_epoch(3)
+        assert list(s) == first
+
+    def test_ragged_tail_block(self):
+        from dbx.datastreams import BlockShuffleSampler
+        assert sorted(BlockShuffleSampler(n=10, block_size=4, seed=0)) == list(range(10))
+
+    def test_resume_state_skips_what_was_consumed(self):
+        from dbx.datastreams import BlockShuffleSampler
+        s = BlockShuffleSampler(n=64, block_size=8, seed=2)
+        it = iter(s)
+        consumed = [next(it) for _ in range(20)]
+        state = s.state_dict()
+        assert state['consumed'] == 20
+
+        resumed = BlockShuffleSampler(n=64, block_size=8, seed=2)
+        resumed.load_state_dict(state)
+        rest = list(resumed)
+        assert len(rest) == 44
+        assert consumed + rest == list(BlockShuffleSampler(n=64, block_size=8, seed=2))
+
+    def test_rejects_bad_block_size(self):
+        from dbx.datastreams import BlockShuffleSampler
+        with pytest.raises(ValueError, match='block_size'):
+            BlockShuffleSampler(n=10, block_size=0)
+
+
+class TestTableSampler:
+
+    def test_shard_sizes_come_from_the_merged_index(self, built_table):
+        sizes = built_table.shard_sizes('numbers')
+        assert sizes and sum(sizes) == len(built_table.datastream('numbers'))
+
+    def test_n_samples_matches_the_datastream(self, built_table):
+        assert built_table.n_samples() == len(built_table.datastream('numbers'))
+
+    def test_every_slice_agrees_on_length(self, built_table):
+        """The lockstep contract, read off the indexes without opening them."""
+        assert len({built_table.n_samples(s) for s in built_table.slices}) == 1
+
+    def test_sampler_defaults_block_size_to_the_shard_capacity(self, built_table):
+        sampler = built_table.sampler()
+        assert sampler.block_size == built_table.samples_per_shard()
+        assert sampler.block_size == max(built_table.shard_sizes('numbers'))
+        assert len(sampler) == built_table.n_samples()
+
+    def test_sampler_covers_the_whole_table(self, built_table):
+        assert sorted(built_table.sampler()) == list(range(built_table.n_samples()))
+
+    def test_sampler_honours_an_explicit_block_size(self, built_table):
+        assert built_table.sampler(block_size=2).block_size == 2
+
+    def test_sampler_drives_a_dataloader_over_the_zip(self, built_table):
+        from torch.utils.data import DataLoader
+        ds = built_table.dataset()
+        loader = DataLoader(ds, sampler=built_table.sampler(seed=1), batch_size=2)
+        seen = [int(i) for batch in loader for i in batch['idx']]
+        assert sorted(seen) == list(range(len(ds)))

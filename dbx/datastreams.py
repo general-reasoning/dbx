@@ -9,7 +9,8 @@ or any streaming library.
 
 Usage::
 
-    from dbx.datastreams import ZipStreamingDataset
+    from dbx.datastreams import ZipStreamingDataset          # map-style
+    from dbx.datastreams import ZipIterableStreamingDatasets  # iterator-style
     from dbx.datastreams import DatastreamTab, DatastreamTable
 """
 
@@ -25,7 +26,8 @@ import urllib.parse
 from dataclasses import dataclass
 
 try:
-    from torch.utils.data import Dataset
+    import torch
+    from torch.utils.data import DataLoader, Dataset, IterableDataset, Sampler
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "dbx.datastreams requires PyTorch.  "
@@ -58,15 +60,14 @@ def _same_value(a, b):
         return False
 
 
-class ZipStreamingDataset(Dataset):
-    """Pairs multiple ``StreamingDataset`` objects by index.
+class _ZipBase:
+    """Merge configuration and merge logic, shared by the two zip datasets.
 
-    All datasets must have the same length.  ``__getitem__`` merges
-    the sample dicts from all datasets into a single dict.
-
-    This avoids opening per-bag tile datasets inside DataLoader
-    workers (which breaks DDP barriers) by creating multiple
-    rank-coordinated ``StreamingDataset`` objects at the top level.
+    ``ZipStreamingDataset`` (map-style, index-addressed) and
+    ``ZipIterableStreamingDatasets`` (iterator-style, lockstep) differ only
+    in how they *obtain* one sample per source; what they then do with those
+    samples is identical.  Keeping that half here means one merge policy,
+    one set of error messages, and one place to change either.
 
     Beyond the plain merge, two things a multi-slice
     ``DatastreamTable`` needs:
@@ -206,6 +207,128 @@ class ZipStreamingDataset(Dataset):
 # singular is the name that is already imported elsewhere, so it stays the
 # canonical one and this is an alias rather than a rename.
 ZippedStreamingDatasets = ZipStreamingDataset
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Shard-locality-aware sampling
+# ═══════════════════════════════════════════════════════════════════════
+
+def shuffled_block_order(num_blocks: int, seed: int) -> list:
+    """A random permutation of ``range(num_blocks)`` for the given seed."""
+    generator = torch.Generator().manual_seed(seed)
+    return torch.randperm(num_blocks, generator=generator).tolist()
+
+
+class BlockShuffleSampler(Sampler):
+    """Shuffles contiguous blocks of an index space, and within each block --
+    instead of shuffling the whole range at once.
+
+    For anything backed by shard-organised storage, which is what an MDS
+    table is: consecutive sample indices live in the same shard.  A full
+    global shuffle (``torch.randperm`` over the whole dataset, i.e. what
+    ``DataLoader(shuffle=True)`` does) scatters every access across the whole
+    table, so almost every batch needs a shard that is not in the local
+    cache -- a cache can only help if consecutive accesses tend to land in
+    the same few shards.  Shuffling in blocks keeps the *working set* down to
+    a handful of shards, small enough to stay cache-resident, while both
+    block order and within-block order are still randomised every epoch.
+
+    ``DatastreamTable.sampler()`` builds one of these sized to the table's
+    own shards, which is the block size worth using -- see there.
+
+    Re-shuffled per epoch via :meth:`set_epoch`, which trainers call by the
+    same convention as ``torch.utils.data.DistributedSampler``.  Pass
+    ``fixed_epoch=True`` for a validation sampler: otherwise the held-out
+    subset a capped validation run scores against changes every epoch, and
+    val loss at one step stops being comparable to val loss at another.
+
+    :meth:`state_dict`/:meth:`load_state_dict` track how far into the epoch
+    the sampler has got, so a checkpoint saved mid-epoch can resume near
+    where it left off rather than replaying the epoch.  Approximate, not
+    exact: with ``num_workers > 0`` the sampler runs ahead of what has
+    actually been consumed by up to ``num_workers * prefetch_factor``
+    batches, so a few samples at the boundary are skipped rather than
+    replayed.  See :class:`ResumableDataLoader` for the wiring.
+
+    Parameters
+    ----------
+    n : int
+        Length of the index space (e.g. ``len(dataset)``).
+    block_size : int
+        Consecutive indices per block.
+    seed : int
+        Base seed, combined with the epoch so each epoch shuffles
+        independently but reproducibly.
+    fixed_epoch : bool
+        Ignore :meth:`set_epoch` and stay on epoch 0, so the order never
+        changes for the life of the sampler.
+    """
+
+    def __init__(self, n: int, block_size: int, seed: int = 0,
+                 fixed_epoch: bool = False):
+        if n < 0:
+            raise ValueError(f"n must be non-negative, got {n}")
+        if block_size <= 0:
+            raise ValueError(f"block_size must be positive, got {block_size}")
+        self.n = n
+        self.block_size = block_size
+        self.seed = seed
+        self.epoch = 0
+        self._fixed_epoch = fixed_epoch
+        self._consumed = 0
+
+    def set_epoch(self, epoch: int):
+        if not self._fixed_epoch and epoch != self.epoch:
+            self.epoch = epoch
+            self._consumed = 0
+
+    def __len__(self):
+        return self.n
+
+    def _full_order(self):
+        generator = torch.Generator().manual_seed(self.seed + self.epoch)
+        num_blocks = (self.n + self.block_size - 1) // self.block_size
+        order = []
+        for block in torch.randperm(num_blocks, generator=generator).tolist():
+            start = block * self.block_size
+            end = min(start + self.block_size, self.n)
+            order.extend(
+                start + p
+                for p in torch.randperm(end - start, generator=generator).tolist()
+            )
+        return order
+
+    def __iter__(self):
+        order = self._full_order()
+        start = self._consumed if self._consumed < len(order) else 0
+        for i in range(start, len(order)):
+            self._consumed = i + 1
+            yield order[i]
+        self._consumed = 0
+
+    def state_dict(self):
+        return {'epoch': self.epoch, 'consumed': self._consumed}
+
+    def load_state_dict(self, state_dict):
+        self.epoch = state_dict['epoch']
+        self._consumed = state_dict['consumed']
+
+
+class ResumableDataLoader(DataLoader):
+    """A ``DataLoader`` that forwards ``state_dict``/``load_state_dict`` to its
+    sampler.
+
+    Trainers that support mid-epoch resume check the *loader* for those
+    methods, not the sampler, so a :class:`BlockShuffleSampler`'s resume
+    state is inert unless the loader surfaces it.  Only meaningful with a
+    sampler that implements them.
+    """
+
+    def state_dict(self):
+        return self.sampler.state_dict()
+
+    def load_state_dict(self, state_dict):
+        self.sampler.load_state_dict(state_dict)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -765,9 +888,12 @@ class SlicedTopics:
         many slices it asked for.
 
         The slices are opened unshuffled and zipped by *physical* index,
-        which is what keeps them aligned.  Shuffle at the ``DataLoader``,
-        over the zip -- shuffling the slices separately would pair sample
-        *i* of one with an unrelated sample *i* of another.
+        which is what keeps them aligned: shuffling the slices separately
+        would pair sample *i* of one with an unrelated sample *i* of
+        another.  Shuffle over the zip instead -- but with
+        ``sampler=table.sampler()`` rather than ``DataLoader(shuffle=True)``,
+        which is the full permutation that defeats the shard cache.  See
+        :meth:`sampler` and :class:`BlockShuffleSampler`.
 
         Parameters
         ----------
@@ -800,6 +926,68 @@ class SlicedTopics:
             *datasets, columns=columns, shared=shared,
             validate_shared=validate_shared, on_conflict=on_conflict,
             skip_none=skip_none, zip_validator=zip_validator,
+        )
+
+    def shard_sizes(self, slice_name=None) -> list:
+        """Samples per shard, in index order, for one slice.
+
+        Read off the merged ``index.json`` rather than by opening the slice:
+        the shard metadata carries the count, so this costs one small read
+        and no downloads.
+        """
+        slice_name = self._slicenames((slice_name,) if slice_name else ())[0]
+        with self.fs.open(self.slice_index_path(slice_name), 'r') as f:
+            index = json.load(f)
+        # dirname is irrelevant -- the reader is built for its metadata only.
+        return [reader_from_json('.', None, meta).size
+                for meta in index.get('shards', [])]
+
+    def samples_per_shard(self, slice_name=None) -> int:
+        """The largest shard's sample count -- this table's shard capacity.
+
+        The natural block size for :meth:`sampler`: a block that size spans
+        one shard, or straddles two where blocks and shard boundaries do not
+        line up, which is what keeps the working set O(1) shards instead of
+        O(table).  The largest rather than the mean because every tab's last
+        shard is short, so the mean would understate the capacity that
+        actually governs locality.
+        """
+        sizes = self.shard_sizes(slice_name)
+        if not sizes:
+            raise ValueError(
+                f"{self.__class__.__name__}: no shards in "
+                f"{slice_name or self.slices[0]!r}; is it built?"
+            )
+        return max(sizes)
+
+    def n_samples(self, slice_name=None) -> int:
+        """Total samples in a slice -- and so in any of them, since the
+        slices are written in lockstep and are equal by contract."""
+        return sum(self.shard_sizes(slice_name))
+
+    def sampler(self, *, block_size=None, seed: int = 0,
+                fixed_epoch: bool = False, slice_name=None) -> BlockShuffleSampler:
+        """A :class:`BlockShuffleSampler` sized to this table's own shards.
+
+        The point of putting it here rather than leaving it to the caller:
+        *block_size* wants to be the shard capacity, and this is the only
+        place that knows it.  A caller passing a constant is guessing at a
+        number the storage already determines -- and guessing high scatters
+        reads across shards, guessing low shrinks the shuffle for no gain.
+
+        ::
+
+            loader = DataLoader(table.dataset(), sampler=table.sampler(),
+                                batch_size=32)
+
+        Use ``fixed_epoch=True`` and a distinct *seed* for a validation
+        loader; pass an explicit *block_size* to override the default.
+        """
+        if block_size is None:
+            block_size = self.samples_per_shard(slice_name)
+        return BlockShuffleSampler(
+            self.n_samples(slice_name), block_size,
+            seed=seed, fixed_epoch=fixed_epoch,
         )
 
     def stats(self, *slices, **kwargs):

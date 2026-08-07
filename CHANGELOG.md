@@ -88,6 +88,18 @@ All notable changes to this project will be documented in this file.
   (a `__stats__` hook). Local scratch — shard cache, write staging, decompression —
   goes under `cacheroot`, which defaults to `<localroot>/streaming` rather than `/tmp`
   and is overridden with the `cache=` kwarg.
+- **`BlockShuffleSampler` / `ResumableDataLoader` / `shuffled_block_order()`** in
+  `dbx.datastreams` — shuffle contiguous blocks of the index space, and within each
+  block, instead of permuting the whole range. Consecutive sample indices share an
+  MDS shard, so `DataLoader(shuffle=True)` scatters every access and defeats the
+  shard cache; block shuffling keeps the working set down to a few shards while still
+  randomising both orders each epoch. `fixed_epoch=True` pins a validation sampler's
+  order so capped val runs stay comparable; `state_dict()`/`load_state_dict()` (plus
+  `ResumableDataLoader`, which surfaces them where trainers look) allow approximate
+  mid-epoch resume. `DatastreamTable.sampler()` builds one whose `block_size` defaults
+  to the table's **own** shard capacity — read off the merged index by the new
+  `shard_sizes()` / `samples_per_shard()` / `n_samples()`, without downloading a shard
+  — rather than leaving every caller to guess a constant.
 - **`open_datastream()`** in `dbx.datastreams` — opens a `StreamingDataset` over an
   MDS index directory, local or remote, translating `abfs(s)://` to `azure-dl://` and
   retrying once past a stale `Reused local directory` shared-memory registration.

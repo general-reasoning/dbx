@@ -71,6 +71,35 @@ All notable changes to this project will be documented in this file.
   New classes should leave it alone (default `False`).
 
 ### Added
+- **`DatastreamTab` / `DatastreamTable`** in `dbx.datastreams` — an abstract `Datablock` /
+  `Datastack` pair over parallel MDS *slices*, documented in
+  [DATASTREAMTABLE.md](DATASTREAMTABLE.md). A tab declares `SLICES = ('frames', 'annotations')`
+  and writes them in lockstep inside `__build__`; the `data` group of its `TOPICS`
+  is synthesized from them, so the slices are covered by the block's hash. A table
+  inherits `SLICES` from its `TAB` and needs only `n_tabs`, with `__tab__(idx)`
+  — `Datastack.__block__` for tables, whose `super()` fills in placement — implemented
+  only when a tab needs a spec of its own. Block placement, `__split__`, and a `__stack__` that merges
+  every tab's per-slice `index.json` into one index per slice are preimplemented.
+  A tab's shards land in the table's per-slice root (`<table>/data/<slice>/<tabdir>/`)
+  rather than under the tab's own key, because `StreamingDataset` resolves a shard
+  relative to the directory holding the index that names it. Both classes read back
+  as `data(slice)` (lumped samples), `datastream(slice)` (one live
+  `StreamingDataset`), `dataset(*slices)` (the zip of those) and `stats(slice)`
+  (a `__stats__` hook). Local scratch — shard cache, write staging, decompression —
+  goes under `cacheroot`, which defaults to `<localroot>/streaming` rather than `/tmp`
+  and is overridden with the `cache=` kwarg.
+- **`open_datastream()`** in `dbx.datastreams` — opens a `StreamingDataset` over an
+  MDS index directory, local or remote, translating `abfs(s)://` to `azure-dl://` and
+  retrying once past a stale `Reused local directory` shared-memory registration.
+- **`ZipStreamingDataset` gained a merge policy** — `columns` (per-source column
+  projection), `shared` + `validate_shared` (keys expected in several sources, and
+  an equality check that makes a mis-zipped set of streams loud rather than silently
+  misaligned), `on_conflict` (`'last'`/`'first'`/`'error'`) and `skip_none`. Defaults
+  reproduce the previous plain last-wins merge exactly, so existing callers are
+  unaffected. This is what a multi-slice `DatastreamTable` needs to be readable
+  column-by-column, and it generalises `soundworld.databits.ZipDataset`.
+- **`ZippedStreamingDatasets`** — alias of `ZipStreamingDataset`. The singular stays
+  the canonical name; nothing is renamed.
 - **Hierarchical `TOPICS`** — a dict value may itself be a dict, nesting topics:
   ```python
   TOPICS = {'data': {'frames': DIRTOPIC, 'annotations': SYNTOPIC,

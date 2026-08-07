@@ -155,6 +155,37 @@ stack = MyStack(url='/data', spec=dict(n_items=1000),
 stack.build()
 ```
 
+See [DATASTACK.md](DATASTACK.md) for `__split__` / `__stack__`, shared state and multi-GPU.
+
+### DatastreamTab & DatastreamTable
+
+`dbx.datastreams` (needs the `torch` and `streaming` extras) adds a `Datablock` /
+`Datastack` pair for datasets stored as parallel MDS streams — *slices* — that
+can be zipped into one `torch.utils.data.Dataset` on demand:
+
+```python
+from dbx.datastreams import DatastreamTab, DatastreamTable
+
+class FrameTab(DatastreamTab):
+    SLICES = ('frames', 'annotations')
+    def __build__(self):
+        with self.slice_writers(COLUMNS) as writers: ...   # written in lockstep
+
+class FrameTable(DatastreamTable):
+    TAB = FrameTab
+    @property
+    def n_tabs(self): return len(self.var.episodes)
+    def __tab__(self, idx): return super().__tab__(idx, episode=self.var.episodes[idx])
+
+table.build()
+table.dataset('frames', 'annotations')   # zipped by index
+table.dataset('annotations')             # annotations only — no image bytes fetched
+table.datastream('frames')               # one slice, unzipped
+table.data('annotations')                # every tab's samples, concatenated
+```
+
+See [DATASTREAMTABLE.md](DATASTREAMTABLE.md).
+
 ### Configuration & `env()`
 
 Use `env()` to reference environment variables symbolically — the handle stays portable across machines:

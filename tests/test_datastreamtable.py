@@ -1,0 +1,605 @@
+"""Tests for the :class:`~dbx.datastreams.DatastreamTab` / :class:`~dbx.datastreams.DatastreamTable`
+scaffolding.
+
+Covers TOPICS synthesis from SLICES, where a tab's shards land relative to
+its table, the all-or-nothing validity rule, the merged per-slice index and its
+ordering, and the two ways a built table reads back (``data`` and ``dataset``).
+"""
+import json
+import os
+
+os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
+
+from dataclasses import dataclass
+
+import pytest
+
+# torch and mosaicml-streaming are optional extras, and dbx.datastreams needs
+# both at import time. importorskip skips this module when either is absent,
+# rather than failing collection -- which takes the entire suite down before
+# any test runs. Install them and these run as normal.
+pytest.importorskip("torch", reason="torch is an optional dependency")
+pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
+
+from dbx.datastreams import DIRTOPIC, DatastreamTab, DatastreamTable
+
+
+@pytest.fixture(autouse=True)
+def setup_env(monkeypatch):
+    monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+
+
+# ---------------------------------------------------------------------------
+# A minimal tab/table pair
+# ---------------------------------------------------------------------------
+
+class LetterTab(DatastreamTab):
+    """Writes ``n`` items into two lockstep slices, plus a non-slice topic."""
+
+    VERSION = 1
+    SLICES = ('numbers', 'letters')
+    TOPICS = {'note': 'note.txt'}
+
+    @dataclass
+    class VAR(DatastreamTab.VAR):
+        n: int = 3
+        base: int = 0
+        fail: bool = False
+
+    COLUMNS = {
+        'numbers': {'idx': 'int', 'square': 'int'},
+        'letters': {'idx': 'int', 'label': 'str'},
+    }
+
+    def __build__(self, stage=None):
+        with self.slice_writers(self.COLUMNS, stage=stage) as writers:
+            for i in range(self.var.n):
+                k = self.var.base + i
+                writers['numbers'].write({'idx': k, 'square': k * k})
+                writers['letters'].write({'idx': k, 'label': f"lbl{k}"})
+                if self.var.fail and i == self.var.n - 1:
+                    raise RuntimeError("boom")
+        with self.fs.open(self.path('note', ensure_dirpath=True), 'w') as f:
+            f.write(f"tab {self.var.tab_idx}")
+
+    def __stats__(self, slice_name):
+        return {'n_samples': len(self.data(slice_name))}
+
+
+class LetterTable(DatastreamTable):
+    VERSION = 1
+    TAB = LetterTab
+
+    @dataclass
+    class VAR(DatastreamTable.VAR):
+        n_tabs_: int = 3
+        per_tab: int = 3
+        fail: bool = False
+
+    @property
+    def n_tabs(self):
+        return self.var.n_tabs_
+
+    def __tab__(self, idx):
+        return super().__tab__(idx, n=self.var.per_tab,
+                               base=idx * self.var.per_tab, fail=self.var.fail)
+
+    def __stats__(self, slice_name):
+        per_tab = [self.tab(i).stats(slice_name) for i in range(self.n_tabs)]
+        return {'n_samples': sum(s['n_samples'] for s in per_tab)}
+
+
+@pytest.fixture
+def table(tmp_path):
+    return LetterTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+
+
+@pytest.fixture
+def built_table(table):
+    table.build()
+    return table
+
+
+# ---------------------------------------------------------------------------
+# TOPICS synthesis
+# ---------------------------------------------------------------------------
+
+class TestTopicsFromSlices:
+
+    def test_tab_data_group_is_synthesized(self):
+        assert LetterTab.TOPICS['data'] == {'numbers': DIRTOPIC, 'letters': DIRTOPIC}
+
+    def test_declared_topics_are_kept(self):
+        assert LetterTab.TOPICS['note'] == 'note.txt'
+
+    def test_table_inherits_slices_from_its_tab(self):
+        assert LetterTable.SLICES == LetterTab.SLICES
+        assert LetterTable.TOPICS['data'] == LetterTab.TOPICS['data']
+
+    def test_table_keeps_its_inherited_topics(self):
+        assert LetterTable.TOPICS['tabs'] is DIRTOPIC
+        assert LetterTable.TOPICS['done'] == 'done'
+
+    def test_docstring_example_subclass_extends_topics_and_slices(self):
+        """The DatastreamTab docstring's DebuggableFrameTab example."""
+        class Debuggable(LetterTab):
+            TOPICS = {'debug': {'plots': DIRTOPIC}}
+            SLICES = ('numbers', 'letters', 'depth')
+
+        assert Debuggable.TOPICS == {
+            'data': {'numbers': DIRTOPIC, 'letters': DIRTOPIC, 'depth': DIRTOPIC},
+            'note': 'note.txt',                    # inherited, not replaced
+            'debug': {'plots': DIRTOPIC},          # added
+        }
+
+    def test_topics_accumulate_down_the_hierarchy(self):
+        """A subclass declaring TOPICS adds to what it inherits rather than
+        replacing it -- which is how a table keeps 'tabs' and 'done'."""
+        class Annotated(LetterTable):
+            TOPICS = {'report': 'report.json'}
+
+        assert Annotated.TOPICS['report'] == 'report.json'
+        assert Annotated.TOPICS['tabs'] is DIRTOPIC
+        assert Annotated.TOPICS['done'] == 'done'
+        assert Annotated.TOPICS['data'] == LetterTab.TOPICS['data']
+
+    def test_own_topics_win_over_inherited(self):
+        class Renamed(LetterTable):
+            TOPICS = {'done': 'DONE'}
+
+        assert Renamed.TOPICS['done'] == 'DONE'
+        assert Renamed.TOPICS['tabs'] is DIRTOPIC
+
+    def test_slices_are_in_the_signature(self, table):
+        assert 'topic:data/numbers=None' in table.signature
+        assert 'topic:data/letters=None' in table.signature
+
+    def test_renaming_a_slice_rekeys_the_table(self, tmp_path):
+        class GlyphTab(LetterTab):
+            SLICES = ('numbers', 'glyphs')
+
+        class GlyphTable(LetterTable):
+            TAB = GlyphTab
+
+        assert GlyphTable.SLICES == ('numbers', 'glyphs')
+        assert GlyphTable.TOPICS['data'] == {'numbers': DIRTOPIC, 'glyphs': DIRTOPIC}
+        a = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        b = GlyphTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        assert a.hash != b.hash
+
+    def test_table_slices_may_not_disagree_with_its_tabs(self):
+        with pytest.raises(ValueError, match='disagrees'):
+            class Mismatched(DatastreamTable):
+                TAB = LetterTab
+                SLICES = ('numbers',)
+
+    def test_explicit_data_group_defines_slices(self):
+        class ExplicitTab(DatastreamTab):
+            TOPICS = {'data': {'x': DIRTOPIC, 'y': DIRTOPIC}}
+
+        assert ExplicitTab.SLICES == ('x', 'y')
+
+    def test_slices_and_data_group_may_not_disagree(self):
+        with pytest.raises(ValueError, match='disagree'):
+            class Both(DatastreamTab):
+                SLICES = ('x', 'y')
+                TOPICS = {'data': {'x': DIRTOPIC, 'z': DIRTOPIC}}
+
+    def test_unknown_slice_is_rejected(self, table):
+        with pytest.raises(KeyError, match='unknown slice'):
+            table.dataset('nope')
+
+
+# ---------------------------------------------------------------------------
+# Placement
+# ---------------------------------------------------------------------------
+
+class TestPlacement:
+
+    def test_tab_slices_live_under_the_tables_slice_root(self, table):
+        tab = table.tab(0)
+        slice_root = table.path('data', 'numbers')
+        assert tab.path('data', 'numbers') == os.path.join(slice_root, tab.tabdir)
+
+    def test_tabdir_is_unique_per_tab(self, table):
+        dirs = {table.tab(i).tabdir for i in range(table.n_tabs)}
+        assert len(dirs) == table.n_tabs
+
+    def test_non_slice_topics_stay_under_the_tabs_own_key(self, table):
+        tab = table.tab(0)
+        assert tab.path('note').startswith(tab.anchorkeypath)
+        assert tab.anchorkeypath.startswith(table.path('tabs'))
+
+    def test_a_tab_needs_a_table_to_address_a_slice(self, tmp_path):
+        lone = LetterTab(url=str(tmp_path), spec=dict(table=None, tab_idx=0, n=2))
+        with pytest.raises(ValueError, match='has no table'):
+            lone.path('data', 'numbers')
+
+    def test_a_tab_without_a_table_can_still_address_its_other_topics(self, tmp_path):
+        """Only the slices need the table, so a tab missing one fails on those
+        and nothing else -- the error names the actual problem."""
+        lone = LetterTab(url=str(tmp_path), spec=dict(table=None, tab_idx=0, n=2))
+        assert lone.path('note') == os.path.join(
+            lone.anchorkeypath, 'note', 'note.txt',
+        )
+
+    def test_table_and_tab_idx_are_required(self):
+        with pytest.raises(TypeError, match='table'):
+            LetterTab.VAR(n=2)
+
+
+# ---------------------------------------------------------------------------
+# Building and validity
+# ---------------------------------------------------------------------------
+
+class TestBuild:
+
+    def test_table_is_invalid_before_build(self, table):
+        assert table.valid() is False
+
+    def test_table_is_valid_after_build(self, built_table):
+        assert built_table.valid() is True
+
+    def test_every_tab_is_valid(self, built_table):
+        assert all(built_table.tab(i).valid() for i in range(built_table.n_tabs))
+
+    def test_rebuild_is_a_no_op(self, built_table):
+        before = json.loads(open(built_table.slice_index_path('numbers')).read())
+        built_table.build()
+        after = json.loads(open(built_table.slice_index_path('numbers')).read())
+        assert before == after
+
+    def test_staged_build_lands_the_same_data(self, tmp_path):
+        """``stage=True`` is the remote-storage path; on local storage it must
+        produce the same results as writing in place."""
+        direct = LetterTable(url=str(tmp_path / 'direct'), spec=dict(n_tabs_=1))
+        staged = LetterTable(url=str(tmp_path / 'staged'), spec=dict(n_tabs_=1))
+        direct.tab(0).build(stage=False)
+        staged.tab(0).build(stage=True)
+        assert staged.tab(0).valid()
+        assert staged.tab(0).data('letters') == direct.tab(0).data('letters')
+
+    def test_staged_upload_sends_the_index_last(self, tmp_path, monkeypatch):
+        """valid_slice() reads a non-empty index.json as "built", so an upload
+        interrupted partway must not have landed the index before the shards
+        it names."""
+        table = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1))
+        tab = table.tab(0)
+
+        uploaded = []
+        original = type(tab.fs).put_file
+
+        def recording_put_file(self, src, dest, **kwargs):
+            uploaded.append(os.path.basename(dest))
+            return original(self, src, dest, **kwargs)
+
+        monkeypatch.setattr(type(tab.fs), 'put_file', recording_put_file)
+        tab.build(stage=True)
+
+        assert uploaded.count('index.json') == len(tab.slices)
+        runs, current = [], []
+        for name in uploaded:
+            current.append(name)
+            if name == 'index.json':
+                runs.append(current)
+                current = []
+        assert not current, f"files uploaded after the last index: {current}"
+        for run in runs:                       # one run per slice
+            assert run[-1] == 'index.json'
+            assert len(run) > 1, "a slice uploaded its index and no shards"
+
+    def test_a_failed_build_leaves_the_tab_invalid(self, tmp_path):
+        broken = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1, fail=True))
+        tab = broken.tab(0)
+        with pytest.raises(RuntimeError, match='boom'):
+            tab.build()
+        assert tab.valid() is False
+        assert tab.validtopic('data', 'numbers') is False
+
+    def test_an_empty_slice_is_not_valid(self, tmp_path):
+        """``MDSWriter.finish()`` writes an index.json even when nothing was
+        written through it, so existence alone must not count as built."""
+        empty = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1, per_tab=0))
+        tab = empty.tab(0)
+        tab.build()
+        assert os.path.exists(tab.slice_index_path('numbers'))
+        assert tab.valid_slice('numbers') is False
+        assert tab.valid() is False
+
+
+# ---------------------------------------------------------------------------
+# The merged per-slice index
+# ---------------------------------------------------------------------------
+
+class TestMergedIndex:
+
+    def test_one_index_per_slice(self, built_table):
+        for name in built_table.slices:
+            assert os.path.exists(built_table.slice_index_path(name))
+
+    def test_shards_are_rebased_onto_the_slice_root(self, built_table):
+        index = json.loads(open(built_table.slice_index_path('numbers')).read())
+        basenames = [s['raw_data']['basename'] for s in index['shards']]
+        assert len(basenames) == built_table.n_tabs
+        for idx, basename in enumerate(basenames):
+            assert basename.startswith(built_table.tab(idx).tabdir + os.sep)
+
+    def test_slices_agree_on_tab_order(self, built_table):
+        """Every slice must list its tabs in the same order, or sample *i*
+        of one slice and sample *i* of another stop describing the same item."""
+        orders = []
+        for name in built_table.slices:
+            index = json.loads(open(built_table.slice_index_path(name)).read())
+            orders.append([os.path.dirname(s['raw_data']['basename'])
+                           for s in index['shards']])
+        assert orders[0] == orders[1]
+
+
+# ---------------------------------------------------------------------------
+# Reading: data / dataset / stats
+# ---------------------------------------------------------------------------
+
+class TestRead:
+
+    def test_tab_data_returns_its_own_samples(self, built_table):
+        assert [s['label'] for s in built_table.tab(1).data('letters')] == \
+            ['lbl3', 'lbl4', 'lbl5']
+
+    def test_table_data_concatenates_the_tabs(self, built_table):
+        assert [s['idx'] for s in built_table.data('numbers')] == list(range(9))
+
+    def test_data_with_no_slice_returns_every_slice(self, built_table):
+        data = built_table.data()
+        assert set(data) == set(built_table.slices)
+        assert len(data['numbers']) == 9
+
+    def test_read_addresses_a_slice(self, built_table):
+        assert built_table.read('data', 'letters') == built_table.data('letters')
+
+    def test_dataset_zips_every_slice(self, built_table):
+        ds = built_table.dataset()
+        assert len(ds) == 9
+        assert set(ds[0]) == {'idx', 'square', 'label'}
+
+    def test_dataset_is_index_aligned(self, built_table):
+        ds = built_table.dataset()
+        for i in range(len(ds)):
+            sample = ds[i]
+            assert sample['square'] == sample['idx'] ** 2
+            assert sample['label'] == f"lbl{sample['idx']}"
+
+    def test_dataset_opens_only_the_named_slices(self, built_table):
+        ds = built_table.dataset('letters')
+        assert set(ds[0]) == {'idx', 'label'}
+
+    def test_tab_dataset_covers_only_that_tab(self, built_table):
+        ds = built_table.tab(2).dataset()
+        assert len(ds) == 3
+        assert [ds[i]['idx'] for i in range(3)] == [6, 7, 8]
+
+    def test_stats_per_slice(self, built_table):
+        assert built_table.stats('numbers') == {'n_samples': 9}
+        assert built_table.tab(0).stats('letters') == {'n_samples': 3}
+
+    def test_stats_with_no_slice_returns_every_slice(self, built_table):
+        assert built_table.stats() == {'numbers': {'n_samples': 9},
+                                      'letters': {'n_samples': 9}}
+
+
+# ---------------------------------------------------------------------------
+# Unimplemented hooks name themselves
+# ---------------------------------------------------------------------------
+
+class TestScaffoldingErrors:
+
+    # table/tab_idx are required VAR fields, so even a tab built only to
+    # trigger an error has to name them.
+    LONE = dict(table=None, tab_idx=0)
+
+    def test_build_names_the_slices_to_write(self, tmp_path):
+        class Bare(DatastreamTab):
+            SLICES = ('a', 'b')
+
+        # __build__ directly, not build(): build() journals first, and
+        # journaling resolves every topic path -- which a table-less tab cannot
+        # do.  The hook's own message is what is under test.
+        with pytest.raises(NotImplementedError, match="'a', 'b'"):
+            Bare(url=str(tmp_path), spec=dict(self.LONE)).__build__()
+
+    def test_missing_tab_class(self, tmp_path):
+        class NoTab(DatastreamTable):
+            SLICES = ('a',)
+
+            @property
+            def n_tabs(self):
+                return 1
+
+        with pytest.raises(NotImplementedError, match='TAB'):
+            NoTab(url=str(tmp_path)).build()
+
+    def test_missing_n_tabs(self, tmp_path):
+        class NoCount(DatastreamTable):
+            TAB = LetterTab
+
+        with pytest.raises(NotImplementedError, match='n_tabs'):
+            NoCount(url=str(tmp_path)).build()
+
+    def test_missing_stats(self, tmp_path):
+        class NoStats(DatastreamTab):
+            SLICES = ('a',)
+
+        with pytest.raises(NotImplementedError, match='__stats__'):
+            NoStats(url=str(tmp_path), spec=dict(self.LONE)).stats('a')
+
+    def test_slice_writers_requires_every_slice(self, tmp_path):
+        class Partial(DatastreamTab):
+            SLICES = ('a', 'b')
+
+            def __build__(self):
+                with self.slice_writers({'a': {'x': 'int'}}):
+                    pass
+
+        with pytest.raises(ValueError, match=r"slice\(s\) \['b'\]"):
+            Partial(url=str(tmp_path), spec=dict(self.LONE)).__build__()
+
+    def test_no_slices_declared(self, tmp_path):
+        class Sliceless(DatastreamTab):
+            pass
+
+        with pytest.raises(NotImplementedError, match='SLICES'):
+            Sliceless(url=str(tmp_path), spec=dict(self.LONE)).slices
+
+
+# ---------------------------------------------------------------------------
+# Cache root
+# ---------------------------------------------------------------------------
+
+class TestCache:
+
+    def test_cacheroot_defaults_under_local(self, table):
+        assert table.cacheroot == os.path.join(table.localroot, 'streaming')
+
+    def test_cacheroot_honours_an_explicit_cache(self, tmp_path):
+        explicit = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1),
+                               cache=str(tmp_path / 'scratch'))
+        assert explicit.cacheroot == str(tmp_path / 'scratch')
+
+    def test_tabs_inherit_the_tables_cache(self, tmp_path):
+        explicit = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1),
+                               cache=str(tmp_path / 'scratch'))
+        assert explicit.tab(0).cacheroot == str(tmp_path / 'scratch')
+
+    def test_an_unset_cache_stays_unset_in_the_handle(self, table):
+        """cacheroot resolves lazily, so no machine's absolute path is baked
+        into the block's handle or journal."""
+        assert getattr(table, 'cache', None) is None
+        assert 'streaming' not in table.quote()
+
+
+# ---------------------------------------------------------------------------
+# Placement is the tab's own key
+# ---------------------------------------------------------------------------
+
+class TestTabdir:
+
+    def test_tabdir_is_the_tabs_key(self, table):
+        tab = table.tab(0)
+        assert tab.tabdir == tab.key
+
+    def test_slice_dir_and_own_topics_share_the_key(self, table):
+        tab = table.tab(0)
+        assert tab.path('data', 'numbers').endswith(tab.key)
+        assert tab.anchorkeypath.endswith(tab.key)
+
+
+# ---------------------------------------------------------------------------
+# datastream(): one slice, unzipped
+# ---------------------------------------------------------------------------
+
+class TestDatastream:
+
+    def test_datastream_returns_one_unzipped_slice(self, built_table):
+        ds = built_table.datastream('letters')
+        assert len(ds) == 9
+        assert set(ds[0]) >= {'idx', 'label'}
+        assert 'square' not in ds[0]
+
+    def test_dataset_is_the_zip_of_datastreams(self, built_table):
+        zipped = built_table.dataset()
+        assert len(zipped.datasets) == len(built_table.slices)
+        assert len(zipped) == len(built_table.datastream('numbers'))
+
+    def test_datastream_rejects_an_unknown_slice(self, built_table):
+        with pytest.raises(KeyError, match='unknown slice'):
+            built_table.datastream('nope')
+
+
+# ---------------------------------------------------------------------------
+# Zip policy: projection, shared keys, conflicts
+# ---------------------------------------------------------------------------
+
+class TestZipPolicy:
+
+    def test_columns_project_a_slice(self, built_table):
+        ds = built_table.dataset(columns={'numbers': ['square']})
+        assert set(ds[0]) == {'square', 'idx', 'label'}
+
+    def test_columns_reject_an_unopened_slice(self, built_table):
+        with pytest.raises(KeyError, match='not among the slices'):
+            built_table.dataset('letters', columns={'numbers': ['square']})
+
+    def test_shared_keys_are_validated(self, built_table):
+        """'idx' is written to both slices in lockstep, so it must agree."""
+        ds = built_table.dataset(shared={'idx'}, validate_shared=True,
+                                 on_conflict='error')
+        assert [ds[i]['idx'] for i in range(len(ds))] == list(range(9))
+
+    def test_an_unshared_collision_can_be_an_error(self, built_table):
+        with pytest.raises(KeyError, match="supplied by both source"):
+            built_table.dataset(on_conflict='error')[0]
+
+    def test_default_merge_is_unchanged(self, built_table):
+        """No policy arguments: a plain last-wins merge, as before."""
+        ds = built_table.dataset()
+        assert ds[0]['idx'] == 0 and ds[0]['square'] == 0
+
+
+# ---------------------------------------------------------------------------
+# Topics besides the slices
+# ---------------------------------------------------------------------------
+
+class NestedTab(LetterTab):
+    """A tab with a file topic and a nested topic group besides its slices."""
+
+    TOPICS = {'note': 'note.txt', 'debug': {'plots': DIRTOPIC, 'log': 'run.log'}}
+
+
+class NestedTable(LetterTable):
+    TAB = NestedTab
+
+
+class TestExtraTopics:
+    """Anything in TOPICS that is not a slice is an ordinary Datablock topic."""
+
+    def _table(self, tmp_path):
+        return NestedTable(url=str(tmp_path), spec=dict(n_tabs_=1))
+
+    def test_extra_topics_merge_with_the_synthesized_data_group(self):
+        assert NestedTab.TOPICS == {
+            'data': {'numbers': DIRTOPIC, 'letters': DIRTOPIC},
+            'note': 'note.txt',
+            'debug': {'plots': DIRTOPIC, 'log': 'run.log'},
+        }
+
+    def test_nested_extra_groups_are_addressable(self, tmp_path):
+        tab = self._table(tmp_path).tab(0)
+        assert tab.path('debug', 'log') == os.path.join(
+            tab.anchorkeypath, 'debug', 'log', 'run.log',
+        )
+        assert set(tab.path('debug')) == {'plots', 'log'}
+
+    def test_extra_topics_stay_under_the_tabs_own_key(self, tmp_path):
+        table = self._table(tmp_path)
+        tab = table.tab(0)
+        assert tab.path('debug', 'log').startswith(tab.anchorkeypath)
+        # ...unlike a slice, which is redirected into the table's slice root.
+        assert tab.path('data', 'numbers').startswith(table.path('data', 'numbers'))
+
+    def test_extra_topics_are_in_the_signature(self, tmp_path):
+        tab = self._table(tmp_path).tab(0)
+        assert 'topic:debug/log=run.log' in tab.signature
+        assert ('debug', 'log') in tab.leaftopics()
+
+    def test_extra_topics_count_towards_validity(self, tmp_path):
+        """A tab whose slices landed but whose extra topic did not is unbuilt."""
+        table = self._table(tmp_path)
+        tab = table.tab(0)
+        tab.build()                              # LetterTab.__build__ writes 'note'
+        assert tab.validtopic('data') is True
+        assert tab.validtopic('debug') is False  # nothing writes it
+        assert tab.valid() is False
+
+    def test_read_defers_extra_topics_to_the_subclass(self, tmp_path):
+        tab = self._table(tmp_path).tab(0)
+        with pytest.raises(NotImplementedError, match='note'):
+            tab.read('note')

@@ -61,7 +61,7 @@ class LetterTab(DatastreamTab):
                 if self.var.fail and i == self.var.n - 1:
                     raise RuntimeError("boom")
         with self.fs.open(self.path('note', ensure_dirpath=True), 'w') as f:
-            f.write(f"tab {self.var.tab_idx}")
+            f.write(f"tab note")
 
     def __stats__(self, slice_name):
         return {'n_samples': len(self.data(slice_name))}
@@ -197,36 +197,21 @@ class TestTopicsFromSlices:
 
 class TestPlacement:
 
-    def test_tab_slices_live_under_the_tables_slice_root(self, table):
+    def test_tab_slices_live_under_tab_anchorkeypath(self, table):
         tab = table.tab(0)
-        slice_root = table.path('data', 'numbers')
-        assert tab.path('data', 'numbers') == os.path.join(slice_root, tab.tabdir)
-
-    def test_tabdir_is_unique_per_tab(self, table):
-        dirs = {table.tab(i).tabdir for i in range(table.n_tabs)}
-        assert len(dirs) == table.n_tabs
+        assert tab.path('data', 'numbers').startswith(tab.anchorkeypath)
 
     def test_non_slice_topics_stay_under_the_tabs_own_key(self, table):
         tab = table.tab(0)
         assert tab.path('note').startswith(tab.anchorkeypath)
         assert tab.anchorkeypath.startswith(table.path('tabs'))
 
-    def test_a_tab_needs_a_table_to_address_a_slice(self, tmp_path):
-        lone = LetterTab(url=str(tmp_path), spec=dict(table=None, tab_idx=0, n=2))
-        with pytest.raises(ValueError, match='has no table'):
-            lone.path('data', 'numbers')
-
-    def test_a_tab_without_a_table_can_still_address_its_other_topics(self, tmp_path):
-        """Only the slices need the table, so a tab missing one fails on those
-        and nothing else -- the error names the actual problem."""
-        lone = LetterTab(url=str(tmp_path), spec=dict(table=None, tab_idx=0, n=2))
+    def test_a_tab_without_a_table_can_address_its_slices_and_topics(self, tmp_path):
+        lone = LetterTab(url=str(tmp_path), spec=dict(n=2))
         assert lone.path('note') == os.path.join(
             lone.anchorkeypath, 'note', 'note.txt',
         )
-
-    def test_table_and_tab_idx_are_required(self):
-        with pytest.raises(TypeError, match='table'):
-            LetterTab.VAR(n=2)
+        assert lone.path('data', 'numbers').startswith(lone.anchorkeypath)
 
 
 # ---------------------------------------------------------------------------
@@ -312,28 +297,13 @@ class TestBuild:
 # The merged per-slice index
 # ---------------------------------------------------------------------------
 
-class TestMergedIndex:
+class TestTabIndexes:
 
-    def test_one_index_per_slice(self, built_table):
-        for name in built_table.slices:
-            assert os.path.exists(built_table.slice_index_path(name))
-
-    def test_shards_are_rebased_onto_the_slice_root(self, built_table):
-        index = json.loads(open(built_table.slice_index_path('numbers')).read())
-        basenames = [s['raw_data']['basename'] for s in index['shards']]
-        assert len(basenames) == built_table.n_tabs
-        for idx, basename in enumerate(basenames):
-            assert basename.startswith(built_table.tab(idx).tabdir + os.sep)
-
-    def test_slices_agree_on_tab_order(self, built_table):
-        """Every slice must list its tabs in the same order, or sample *i*
-        of one slice and sample *i* of another stop describing the same item."""
-        orders = []
-        for name in built_table.slices:
-            index = json.loads(open(built_table.slice_index_path(name)).read())
-            orders.append([os.path.dirname(s['raw_data']['basename'])
-                           for s in index['shards']])
-        assert orders[0] == orders[1]
+    def test_one_index_per_tab_and_slice(self, built_table):
+        for idx in range(built_table.n_tabs):
+            tab = built_table.tab(idx)
+            for name in built_table.slices:
+                assert os.path.exists(tab.slice_index_path(name))
 
 
 # ---------------------------------------------------------------------------
@@ -565,17 +535,15 @@ class TestFlushEvery:
 
 class TestScaffoldingErrors:
 
-    # table/tab_idx are required VAR fields, so even a tab built only to
-    # trigger an error has to name them.
-    LONE = dict(table=None, tab_idx=0)
+    LONE = dict()
 
     def test_build_names_the_slices_to_write(self, tmp_path):
         class Bare(DatastreamTab):
             SLICES = ('a', 'b')
 
         # __build__ directly, not build(): build() journals first, and
-        # journaling resolves every topic path -- which a table-less tab cannot
-        # do.  The hook's own message is what is under test.
+        # journaling resolves every topic path.
+        # The hook's own message is what is under test.
         with pytest.raises(NotImplementedError, match="'a', 'b'"):
             Bare(url=str(tmp_path), spec=dict(self.LONE)).__build__()
 
@@ -653,15 +621,11 @@ class TestCache:
 # Placement is the tab's own key
 # ---------------------------------------------------------------------------
 
-class TestTabdir:
-
-    def test_tabdir_is_the_tabs_key(self, table):
-        tab = table.tab(0)
-        assert tab.tabdir == tab.key
+class TestTabKey:
 
     def test_slice_dir_and_own_topics_share_the_key(self, table):
         tab = table.tab(0)
-        assert tab.path('data', 'numbers').endswith(tab.key)
+        assert tab.path('data', 'numbers').startswith(tab.anchorkeypath)
         assert tab.anchorkeypath.endswith(tab.key)
 
 
@@ -755,8 +719,7 @@ class TestExtraTopics:
         table = self._table(tmp_path)
         tab = table.tab(0)
         assert tab.path('debug', 'log').startswith(tab.anchorkeypath)
-        # ...unlike a slice, which is redirected into the table's slice root.
-        assert tab.path('data', 'numbers').startswith(table.path('data', 'numbers'))
+        assert tab.path('data', 'numbers').startswith(tab.anchorkeypath)
 
     def test_extra_topics_are_in_the_signature(self, tmp_path):
         tab = self._table(tmp_path).tab(0)

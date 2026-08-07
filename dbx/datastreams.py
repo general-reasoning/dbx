@@ -35,7 +35,7 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 try:
-    from streaming import MDSWriter, StreamingDataset
+    from streaming import MDSWriter, Stream, StreamingDataset
     from streaming.base.compression import decompress as mds_decompress
     from streaming.base.format import reader_from_json
 except ImportError as exc:  # pragma: no cover
@@ -1063,7 +1063,7 @@ class SlicedTopics:
         return tuple(slices)
 
     def slice_index_path(self, slice_name) -> str:
-        """Path of the ``index.json`` addressing *slice_name*'s shards."""
+        """Path of the ``index.json`` for *slice_name*'s shards."""
         return os.path.join(self.path(self.DATA, slice_name), 'index.json')
 
     # ------------------------------------------------------------------ #
@@ -1172,6 +1172,20 @@ class SlicedTopics:
         kwargs.setdefault('cache_limit', getattr(self, 'cache_limit', None))
         return open_datastream(self.path(self.DATA, slice_name), **kwargs)
 
+    def _tab_stream(self, tab, slice_name) -> Stream:
+        """One ``Stream`` for *tab*'s *slice_name* directory.
+
+        Used by ``DatastreamTable.datastream()`` to compose a
+        multi-stream ``StreamingDataset`` without a consolidated
+        ``index.json``.
+        """
+        index_dir = tab.path(self.DATA, slice_name)
+        scheme = urllib.parse.urlparse(index_dir).scheme
+        if scheme in ('', 'file'):
+            return Stream(local=index_dir.removeprefix('file://'))
+        remote = abfs_to_mds_azure(index_dir) if scheme in ('abfs', 'abfss') else index_dir
+        return Stream(remote=remote)
+
     def dataset(self, *slices, mode='map', columns=None, shared=None,
                 validate_shared=False, on_conflict='last', skip_none=True,
                 zip_validator=None, **kwargs):
@@ -1272,18 +1286,21 @@ class SlicedTopics:
         )
 
     def shard_sizes(self, slice_name=None) -> list:
-        """Samples per shard, in index order, for one slice.
-
-        Read off the merged ``index.json`` rather than by opening the slice:
-        the shard metadata carries the count, so this costs one small read
-        and no downloads.
-        """
+        """Samples per shard, in tab then shard order, for one slice."""
         slice_name = self._slicenames((slice_name,) if slice_name else ())[0]
-        with self.fs.open(self.slice_index_path(slice_name), 'r') as f:
-            index = json.load(f)
-        # dirname is irrelevant -- the reader is built for its metadata only.
-        return [reader_from_json('.', None, meta).size
-                for meta in index.get('shards', [])]
+        sizes = []
+        for idx in range(self.n_tabs):
+            tab = self.tab(idx)
+            try:
+                with tab.fs.open(tab.slice_index_path(slice_name), 'r') as f:
+                    index = json.load(f)
+                sizes.extend(
+                    reader_from_json('.', None, meta).size
+                    for meta in index.get('shards', [])
+                )
+            except Exception:
+                pass
+        return sizes
 
     def samples_per_shard(self, slice_name=None) -> int:
         """The largest shard's sample count -- this table's shard capacity.
@@ -1468,22 +1485,9 @@ class DatastreamTab(SlicedTopics, Datablock):
                 return {'n_samples': len(self.data(slice_name))}
     """
 
-    # The table is the tab's parent, so descending into it while validating
-    # the tab's upstream would walk straight back into the tab.
-    TREE_SKIP_VALIDATION = {'table'}
-
     @dataclass
     class VAR(Datablock.VAR):
-        # Both required.  A tab's slices live in its table's per-slice roots,
-        # so a tab without a table is one whose shards no merged index will
-        # ever name; tab_idx is what orders them within it.
-        #
-        # Requiring them also leaves a subclass free to default its own
-        # fields: a dataclass forbids a non-default field *after* a defaulted
-        # one, so it is defaulting these that would force every subclass
-        # field to carry a default, not leaving them required.
-        table: DatastreamTable
-        tab_idx: int
+        pass
 
     # ------------------------------------------------------------------ #
     # Datablock protocol
@@ -1532,100 +1536,9 @@ class DatastreamTab(SlicedTopics, Datablock):
             f"override it to read {'/'.join(topicpath)!r}"
         )
 
-    def path(self, *topicpath, ensure_dirpath: bool = False, bare: bool = False,
-             local: bool = False):
-        """As ``Datablock.path()``, with a slice leaf redirected.
-
-        A slice is a ``DIRTOPIC``, so the base would already answer it
-        with ``dirpath()`` -- but only after resolving the node through
-        TOPICS.  Short-circuiting keeps the redirect in one place, and the
-        two agree on the details: the base likewise returns a DIRTOPIC leaf's
-        directory without applying *bare*, and its ``ensure_dirpath`` is
-        ``ensure_path()``, which is the ``fs.makedirs(..., exist_ok=True)``
-        that ``dirpath(ensure=True)`` does here.
-
-        Everything else -- a file topic, a nested group, a SYNTOPIC, the
-        ``tabs``/``done`` topics of a table -- falls through to
-        ``Datablock.path()`` unchanged, and is stored under this tab's own
-        ``anchorkeypath`` like any Datablock's.  ``Datablock.path`` needed no
-        modification for any of this.
-
-        Groups need no case of their own.  ``Datablock.path`` describes a
-        group by recursing through ``self.path`` for each member, and
-        ``self`` is this class -- so ``path('data')`` comes back as
-        ``{slice: redirected path}`` without the override ever seeing the
-        group, and a non-slice group like ``path('debug')`` comes back
-        wholly unredirected.  The same virtual dispatch is what makes
-        ``validtopic()``, ``ls()``, ``list()`` and ``size()`` follow
-        the redirect for free.
-        """
-        topicpath = self._normtopic(topicpath)
-        if self._is_slicepath(topicpath):
-            return self.dirpath(*topicpath, ensure=ensure_dirpath, local=local)
-        return super().path(*topicpath, ensure_dirpath=ensure_dirpath, bare=bare,
-                            local=local)
-
-    def dirpath(self, *topicpath, ensure: bool = False, list: bool = False,
-                local: bool = False):
-        """As ``Datablock.dirpath()``, except that a *slice* leaf redirects
-        into the table's per-slice root (see the class docstring)."""
-        topicpath = self._normtopic(topicpath)
-        if not self._is_slicepath(topicpath):
-            return super().dirpath(*topicpath, ensure=ensure, list=list, local=local)
-
-        # self.table only after the path is known to be a slice: a tab with no
-        # table can still address its other topics, and only fails on the ones
-        # that genuinely need one.
-        dirpath = os.path.join(
-            self.table.dirpath(self.DATA, topicpath[1], local=local), self.tabdir,
-        )
-        fs = self.localfs if local else self.fs
-        if ensure:
-            fs.makedirs(dirpath, exist_ok=True)
-        if list:
-            _lspath = dirpath if dirpath.endswith('/') else dirpath + '/'
-            return fs.ls(_lspath)
-        return dirpath
-
     # ------------------------------------------------------------------ #
     # Properties
     # ------------------------------------------------------------------ #
-
-    @property
-    def table(self):
-        """The ``DatastreamTable`` this tab belongs to."""
-        table = self.var.table
-        if table is None:
-            raise ValueError(
-                f"{self.__class__.__name__} has no table, so its slices have "
-                f"nowhere to live: a tab addresses its shards through its "
-                f"table's per-slice roots.  Form tabs with "
-                f"DatastreamTable.tab(idx), or pass "
-                f"spec=dict(table=..., tab_idx=...)"
-            )
-        return table
-
-    @property
-    def tabdir(self) -> str:
-        """This tab's directory under a slice root: its own ``key``.
-
-        Not a naming scheme of its own.  The key is what dbx already derives
-        from the tab's identity -- and the table already controls it, through
-        the ``tag=`` its ``__tab__()`` supplies and the
-        ``keyby`` it propagates.  So ``<table>/data/<slice>/<key>/`` and
-        ``<table>/tabs/<fqcn>/<key>/`` carry the same key, and a tab whose
-        spec changed writes beside the old shards rather than into them,
-        for the same reason its own topics do.
-
-        Which is also why placement cannot go through ``anchor=`` instead.
-        A tab has one ``anchorkeypath``, so its slices are always siblings
-        under it -- and then no directory is an ancestor of one slice
-        without being an ancestor of the others too, which is precisely
-        what a per-slice merged index needs.  A single-slice table (compare
-        soundworld's ``PoseGridReel``) can and does hoist its one index up
-        to the table instead; several slices (``PoseAggReel``) cannot.
-        """
-        return self.key
 
     # ------------------------------------------------------------------ #
     # Writing a tab's slices
@@ -1935,11 +1848,9 @@ class DatastreamTable(SlicedTopics, Datastack):
 
         Nothing about a tab is special: this is the same hook, at the same
         point, and it runs inside the worker for the same reason.  What the
-        base implementation adds is only the placement a tab cannot be
-        correct without -- the url under ``tabs``, ``table``/``tab_idx`` in
-        the spec, the storage and cache settings inherited from the table --
-        so a subclass supplies the tab's *own* VAR fields and leaves the rest
-        to ``super()``::
+        base implementation adds is the placement and cache settings
+        inherited from the table -- so a subclass supplies the tab's *own*
+        VAR fields and leaves the rest to ``super()``::
 
             def __tab__(self, idx):
                 return super().__tab__(idx, episode=self.var.episodes[idx])
@@ -1954,9 +1865,8 @@ class DatastreamTable(SlicedTopics, Datastack):
         ----------
         idx : int
         tag : str, optional
-            Tab *idx*'s tag -- its readable name in paths and logs, and by
-            way of ``key`` its directory under each slice root.  Defaults to
-            ``tab_<idx>``.
+            Tab *idx*'s tag -- its readable name in paths and logs.
+            Defaults to ``tab_<idx>``.
         **spec
             The tab's own VAR fields.
         """
@@ -1972,7 +1882,7 @@ class DatastreamTable(SlicedTopics, Datastack):
             cache=getattr(self, 'cache', None),
             cache_limit=getattr(self, 'cache_limit', None),
             verbose=False,
-            spec=dict(table=self, tab_idx=idx, **spec),
+            spec=spec,
             tag=tag if tag is not None else f"tab_{idx:06d}",
         )
 
@@ -1987,15 +1897,8 @@ class DatastreamTable(SlicedTopics, Datastack):
         return self.blocks()
 
     def __split__(self, *args, **kwargs):
-        """Create the tab root and the slice roots, then one maker per tab.
-
-        The slice roots must exist before any tab writes: a tab addresses
-        its shards *through* them, and on a local filesystem a missing parent
-        is a hard error rather than the no-op it is on an object store.
-        """
+        """Create the tab root, then one maker per tab."""
         self.path('tabs', ensure_dirpath=True)
-        for name in self.slices:
-            self.path(self.DATA, name, ensure_dirpath=True)
         n = self.n_tabs
         self.log.info(
             "%s: %d tabs x %d slices %s",
@@ -2004,7 +1907,12 @@ class DatastreamTable(SlicedTopics, Datastack):
         return [self.TabMaker(idx) for idx in range(n)], dict(build=True)
 
     def __stack__(self, results=None):
-        """Merge each slice's per-tab indexes, then write the done marker."""
+        """Write the done marker once all tabs are built.
+
+        No index merging needed: ``dataset()`` / ``datastream()`` build a
+        per-tab ``Stream`` list at read time rather than reading a
+        consolidated ``index.json``.
+        """
         n_tabs = n_skipped = 0
         for result in (results or []):
             if result is None:
@@ -2015,14 +1923,6 @@ class DatastreamTable(SlicedTopics, Datastack):
             "%s.__stack__: %d tabs (%d already built)",
             self.__class__.__name__, n_tabs, n_skipped,
         )
-
-        # Every index before the marker: the marker is what valid() reads.
-        for name in self.slices:
-            if self.fs.exists(self.slice_index_path(name)):
-                self.log.info("%s.__stack__: %s index present, skipping",
-                              self.__class__.__name__, name)
-            else:
-                self.build_index(name)
 
         if self.validtopic('done'):
             self.log.info("%s.__stack__: done marker already present",
@@ -2037,11 +1937,16 @@ class DatastreamTable(SlicedTopics, Datastack):
         return self
 
     def valid(self):
-        # The done marker, not the topics: it is written last, after every
-        # slice index is merged, so it is the only thing that means "this
-        # table is readable" rather than "some tab got that far".  One
-        # exists() rather than one per slice, which matters on object stores.
+        # The done marker, written after all tabs are built, is the signal
+        # that the table is fully readable.  One exists() rather than one
+        # per slice, which matters on object stores.
         return self.validtopic('done')
+
+    def valid_slice(self, slice_name) -> bool:
+        """True when every tab has a non-empty ``index.json`` for *slice_name*."""
+        return all(
+            self.tab(idx).valid_slice(slice_name) for idx in range(self.n_tabs)
+        )
 
     def __stats__(self, slice_name, **kwargs) -> dict:
         """Summarise one of this table's slices, across every tab.  Optional.
@@ -2078,20 +1983,51 @@ class DatastreamTable(SlicedTopics, Datastack):
     # ------------------------------------------------------------------ #
 
     def _read_slice(self, slice_name, *, tabs=None, **kwargs):
-        """Concatenate the tabs' samples for one slice.
-
-        Read tab by tab rather than through the merged index: the merged
-        index names shards in per-tab subdirectories, and ``read_mds_shard()``
-        stages a remote shard directory flat, which would collide those names.
-        """
+        """Concatenate the tabs' samples for one slice."""
         indices = range(self.n_tabs) if tabs is None else tabs
         samples = []
         for idx in indices:
             samples.extend(self.tab(idx).data(slice_name, **kwargs))
         return samples
 
+    def datastream(self, slice_name, **kwargs) -> StreamingDataset:
+        """One slice as a ``StreamingDataset`` composed of per-tab ``Stream``\\s.
+
+        Each tab contributes its own ``index.json``; no consolidated table-level
+        index is needed.  Tabs can therefore live anywhere -- each one is
+        addressed through its own ``path('data', slice_name)``, independent of
+        every other tab and of the table's own root.
+        """
+        self._slicenames((slice_name,))
+        streams = [self._tab_stream(self.tab(idx), slice_name)
+                   for idx in range(self.n_tabs)]
+        cacheroot = self._ensure_cacheroot(kwargs.pop('cache', None))
+        cache_dir = kwargs.pop('cache_dir',
+                               f"{self.fqcn}-{self.hash[:12]}-{slice_name}")
+        local = os.path.join(cacheroot, cache_dir)
+        os.makedirs(local, exist_ok=True)
+        cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
+        shuffle = kwargs.pop('shuffle', False)
+        allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)
+        streaming_kwargs = dict(
+            streams=streams,
+            local=local,
+            shuffle=shuffle,
+            allow_unsafe_types=allow_unsafe_types,
+            cache_limit=cache_limit,
+            **kwargs,
+        )
+        try:
+            return StreamingDataset(**streaming_kwargs)
+        except ValueError as exc:
+            if 'Reused local directory' not in str(exc):
+                raise
+            from streaming.base.util import clean_stale_shared_memory
+            clean_stale_shared_memory()
+            return StreamingDataset(**streaming_kwargs)
+
     # ------------------------------------------------------------------ #
-    # Index merging and worker callables
+    # Worker callable
     # ------------------------------------------------------------------ #
 
     class TabMaker:
@@ -2115,74 +2051,4 @@ class DatastreamTable(SlicedTopics, Datastack):
             del tab
             gc.collect()
             return result
-
-    class TabIndexFetcher:
-        """Reads one tab's ``index.json`` for one slice, rebasing its shards.
-
-        Each shard's ``basename`` is rewritten from tab-relative to
-        slice-root-relative, because the slice root is the single directory
-        the consuming ``StreamingDataset`` is constructed with.  Nested in the
-        table for namespace locality; pickles via ``__qualname__``.
-        """
-
-        def __init__(self, tab_idx: int, slice_name: str):
-            self.tab_idx = tab_idx
-            self.slice_name = slice_name
-
-        def __call__(self, table):
-            tab = table.__tab__(self.tab_idx)
-            tab_dir = tab.path(table.DATA, self.slice_name)
-            slice_root = table.path(table.DATA, self.slice_name)
-            fs = table.fs
-            index_path = os.path.join(tab_dir, 'index.json')
-            if not fs.exists(index_path):
-                return []
-            with fs.open(index_path, 'r') as f:
-                index = json.load(f)
-            prefix = os.path.relpath(
-                fs._strip_protocol(tab_dir), fs._strip_protocol(slice_root),
-            )
-            shards = []
-            for shard in index.get('shards', []):
-                shard = dict(shard)
-                for key in ('raw_data', 'zip_data'):
-                    if shard.get(key):
-                        entry = dict(shard[key])
-                        entry['basename'] = os.path.join(prefix, entry['basename'])
-                        shard[key] = entry
-                shards.append(shard)
-            return shards
-
-    def build_index(self, slice_name):
-        """Merge every tab's ``index.json`` for one slice into one index.
-
-        Shards are concatenated in tab-index order, and the same order is
-        used for every slice -- which is what carries the tabs' per-sample
-        lockstep up to the table, so that sample *i* of one merged slice and
-        sample *i* of another still describe the same thing.
-        """
-        slice_root = self.path(self.DATA, slice_name, ensure_dirpath=True)
-        fetchers = [self.TabIndexFetcher(idx, slice_name)
-                    for idx in range(self.n_tabs)]
-        self.log.info("%s.build_index[%s]: merging %d tabs",
-                      self.__class__.__name__, slice_name, len(fetchers))
-
-        executor_kwargs = dict(
-            n_workers=self.n_workers,
-            tag=f"{self.__class__.__name__}.build_index[{slice_name}] x{len(fetchers)}",
-        )
-        if getattr(self, 'work_stealing', False):
-            executor_kwargs['work_stealing'] = True
-        # exec_callables places results by item index, so this stays in tab
-        # order however the workers happened to interleave.
-        results = self.executor_cls(**executor_kwargs).exec_callables(fetchers, self)
-
-        shards = [shard for result in (results or []) for shard in (result or [])]
-        index_path = os.path.join(slice_root, 'index.json')
-        with self.fs.open(index_path, 'w') as f:
-            json.dump({'version': 2, 'shards': shards}, f)
-        self.log.info("%s.build_index[%s]: %d shards merged -> %s",
-                      self.__class__.__name__, slice_name, len(shards), index_path)
-
-
 

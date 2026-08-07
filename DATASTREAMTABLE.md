@@ -236,10 +236,10 @@ tab.dataset()                      # just this tab, zipped
 index names shards in per-tab subdirectories, and `read_mds_shard` stages a
 remote shard directory flat, which would collide those names.
 
-`dataset()` always returns a `ZipStreamingDataset`, even for a single slice,
-so the sample shape does not depend on how many slices were asked for.  The
-slices are opened unshuffled and zipped by *physical* index, which is what
-keeps them aligned — shuffle at the `DataLoader`, over the zip.
+`dataset()` always returns a zip, even for a single slice, so the sample shape
+does not depend on how many slices were asked for.  By default that is a
+`ZipStreamingDataset`, zipped by *physical* index; see
+[Map or iterator](#map-or-iterator) for the other mode.
 
 ### Merge policy
 
@@ -309,6 +309,79 @@ the sampler runs ahead of what was consumed by up to
 
 Three sibling readers, from the same merged index and equally cheap:
 `shard_sizes(slice)`, `samples_per_shard(slice)` and `n_samples(slice)`.
+
+## Map or iterator
+
+`table.dataset()` addresses the slices by index.  That is what makes
+`sampler()` above possible, and it is what you want for inspection — but
+indexing a `StreamingDataset` goes through `get_item()`, which downloads a
+missing shard **inline, on the calling thread**.  The download-ahead thread,
+the rank/worker partitioning, `num_canonical_nodes`, the shard-locality
+shuffle and mid-epoch resumption all live in `StreamingDataset.__iter__`, and
+so never run at all.
+
+`mode='iter'` gives that back, by iterating the slices in lockstep instead:
+
+```python
+loader = DataLoader(table.dataset(mode='iter', batch_size=32,
+                                  shuffle=True, shuffle_seed=17,
+                                  shared={'idx'}, validate_shared=True),
+                    batch_size=32, num_workers=8)
+```
+
+On remote storage this is usually the largest single factor in throughput —
+a background download instead of a blocking one.  On local storage there is
+nothing to download and the gain shrinks to access locality.
+
+What it costs:
+
+- **No random access.**  No `__getitem__`, no `sampler=`, no `Subset`.
+  Shuffling moves from the sampler into the slice configuration.  `len()`
+  still works.
+- **`batch_size=` is required**, and must match the `DataLoader`'s.
+  `StreamingDataset` partitions in whole batches.
+- **Alignment stops being structural.**  Map-style zipping pairs index *i*
+  with index *i* and cannot drift.  Iterator-style zipping pairs whatever the
+  slices yield, so they have to yield the same sequence.
+
+That last point is the one to understand before turning shuffling on.  The
+partition is computed from sample *counts* and the world, so **unshuffled
+slices of equal length are aligned for free**.  The shuffle is not: the
+permutation comes from the *per-shard sample counts*, and slices shard by
+bytes — so a frames slice and an annotations slice holding the same samples
+split differently, shuffle differently, and pair unrelated samples.
+
+Hence `flush_every`, which makes the boundaries coincide:
+
+```python
+def __build__(self):
+    with self.slice_writers(self.COLUMNS, flush_every=2048,
+                            size_limit=None) as writers:
+        ...
+```
+
+Every slice then breaks onto a new shard at the same sample counts, and a
+shuffled iterator zip stays paired.  Size it by the largest slice — that many
+of its samples is what one of its shards will weigh.  `flush_every` does not
+override `size_limit`; whichever comes first ends the shard, so a `size_limit`
+that fires first is detected and raised rather than left to misalign the
+shuffle quietly.  Counting the writes also makes the lockstep contract
+checked: a tab that does not write every slice the same number of times now
+raises instead of producing a table that cannot be zipped.
+
+`ZipIterableStreamingDatasets` verifies the shard boundaries of any shuffling
+slice at construction and refuses a zip that cannot be aligned.  That check is
+static, so keep `shared={'idx'}, validate_shared=True` on as well — it is the
+only thing that catches drift while running, and the drift is real: the
+shuffle seed is `shuffle_seed + epoch`, `next_epoch` is per slice, so
+iterating one slice out of band (a `stats()` pass, a debugging loop) advances
+that slice alone into a different permutation.
+
+Two more sharp edges.  Each slice's `__iter__` waits on a barrier across the
+node's workers, so every worker must iterate every slice, in the same order —
+`zip()` guarantees that, iterating a subset by hand does not, and the penalty
+is a deadlock.  And per-slice sampling (`proportion`/`repeat`/`choose`)
+resamples per shard and must stay unset.
 
 ## Plug-in points
 

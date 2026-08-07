@@ -60,7 +60,7 @@ def _same_value(a, b):
         return False
 
 
-class _ZipBase:
+class ZipBase:
     """Merge configuration and merge logic, shared by the two zip datasets.
 
     ``ZipStreamingDataset`` (map-style, index-addressed) and
@@ -68,6 +68,11 @@ class _ZipBase:
     in how they *obtain* one sample per source; what they then do with those
     samples is identical.  Keeping that half here means one merge policy,
     one set of error messages, and one place to change either.
+
+    Not a dataset itself -- it defines no ``__getitem__`` and no
+    ``__iter__``, and is mixed in front of whichever ``torch`` base supplies
+    one.  A third way of reading the sources subclasses this and adds only
+    that, calling ``_merge(idx, samples)`` with one sample per source.
 
     Beyond the plain merge, two things a multi-slice
     ``DatastreamTable`` needs:
@@ -130,13 +135,13 @@ class _ZipBase:
                 f"on_conflict must be 'last', 'first' or 'error', "
                 f"got {on_conflict!r}"
             )
+        what = self.__class__.__name__
         if not datasets:
-            raise ValueError("ZipStreamingDataset needs at least one dataset")
+            raise ValueError(f"{what} needs at least one dataset")
         lengths = [len(d) for d in datasets]
         if len(set(lengths)) != 1:
             raise ValueError(
-                f"ZipStreamingDataset requires datasets of equal length, "
-                f"got {lengths}"
+                f"{what} requires datasets of equal length, got {lengths}"
             )
         if columns is None:
             columns = [None] * len(datasets)
@@ -156,8 +161,16 @@ class _ZipBase:
     def __len__(self):
         return len(self.datasets[0])
 
-    def __getitem__(self, idx):
-        samples = [ds[idx] for ds in self.datasets]
+    def _merge(self, idx, samples) -> dict:
+        """Project and merge one sample per source into one dict.
+
+        *idx* only labels the item in error messages and is what the
+        *zip_validator* is handed.  It is a physical sample index in
+        ``ZipStreamingDataset`` and a position within the stream in
+        ``ZipIterableStreamingDatasets`` -- the merge itself never uses it
+        to address anything, so the difference does not matter here.
+        """
+        what = self.__class__.__name__
         if self.zip_validator is not None:
             self.zip_validator(idx, *samples)
 
@@ -170,7 +183,7 @@ class _ZipBase:
                 missing = [c for c in cols if c not in sample]
                 if missing:
                     raise KeyError(
-                        f"ZipStreamingDataset source {pos} has no column(s) "
+                        f"{what} source {pos} has no column(s) "
                         f"{missing} at index {idx}; it provides {sorted(sample)}"
                     )
                 items = ((c, sample[c]) for c in cols)
@@ -185,14 +198,14 @@ class _ZipBase:
                 if key in self.shared:
                     if self.validate_shared and not _same_value(merged[key], value):
                         raise ValueError(
-                            f"ZipStreamingDataset: shared key {key!r} disagrees "
+                            f"{what}: shared key {key!r} disagrees "
                             f"between source {origin[key]} and source {pos} at "
                             f"index {idx} -- the streams are not aligned"
                         )
                     continue
                 if self.on_conflict == 'error':
                     raise KeyError(
-                        f"ZipStreamingDataset: key {key!r} supplied by both "
+                        f"{what}: key {key!r} supplied by both "
                         f"source {origin[key]} and source {pos}. Project it "
                         f"away, or pass shared={{{key!r}, ...}} if both are "
                         f"expected to carry it, or set on_conflict='first'/'last'."
@@ -201,6 +214,180 @@ class _ZipBase:
                     merged[key] = value
                     origin[key] = pos
         return merged
+
+
+class ZipStreamingDataset(ZipBase, Dataset):
+    """Pairs multiple ``StreamingDataset`` objects by index.
+
+    All datasets must have the same length.  ``__getitem__`` merges
+    the sample dicts from all datasets into a single dict.  Merge parameters
+    are documented on ``ZipBase``.
+
+    This avoids opening per-bag tile datasets inside DataLoader
+    workers (which breaks DDP barriers) by creating multiple
+    rank-coordinated ``StreamingDataset`` objects at the top level.
+
+    Map-style, so index-addressed: every source is read through
+    ``StreamingDataset.get_item()``, which is a *blocking* read that
+    downloads the sample's shard inline on the calling thread if it is not
+    already cached.  ``StreamingDataset``'s download-ahead thread is started
+    by its ``__iter__`` and so never runs here.  Two consequences worth
+    knowing before choosing this over ``ZipIterableStreamingDatasets``:
+
+    * Shard misses stall the worker for a full download round-trip rather
+      than being prefetched.  For local storage there is nothing to
+      download and this costs nothing; for remote storage it is the
+      dominant cost.
+    * Access order is the caller's, so cache locality is the caller's
+      problem.  ``DataLoader(shuffle=True)`` is a full permutation and will
+      thrash a bounded ``cache_limit``; use ``DatastreamTable.sampler()``,
+      which shuffles in shard-sized blocks instead.
+
+    What it buys in exchange is genuine random access: an index means the
+    same sample every time, so inspection, subsetting, a ``Subset``, or any
+    sampler at all work normally.
+    """
+
+    def __getitem__(self, idx):
+        return self._merge(idx, [ds[idx] for ds in self.datasets])
+
+
+class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
+    """Pairs multiple ``StreamingDataset`` objects by *iteration order*.
+
+    The same merge as ``ZipStreamingDataset`` -- merge parameters are
+    documented on ``ZipBase`` -- reached by iterating every source in
+    lockstep rather than indexing them.  That is what puts each source back
+    on its own ``__iter__``, and so back in possession of the machinery
+    map-style access leaves switched off: the download-ahead thread, the
+    rank/worker partitioning, ``num_canonical_nodes``, the shard-locality
+    shuffle, and mid-epoch resumption via ``state_dict()``.
+
+    On remote storage this is the difference between a blocking download per
+    shard miss and a background one, which is normally the largest single
+    factor in throughput.  On local storage there is no download to hide and
+    the gain shrinks to access locality.
+
+    Alignment
+    ---------
+    Zipping iterators is only correct if every source yields the **same
+    sequence of samples**.  Sources of equal length are aligned by
+    construction under ``shuffle=False``: the partition comes from
+    ``get_partitions(algo, num_samples, num_canonical_nodes,
+    num_physical_nodes, ranks_per_node, workers_per_rank, batch_size)``,
+    which reads sample *counts* and the world, never shard structure.
+
+    Shuffling is the part that can silently break it.  ``get_shuffle(algo,
+    shard_sizes, ...)`` derives the permutation from the *per-shard sample
+    counts*, and slices shard by bytes -- so a frames slice and an
+    annotations slice holding the same samples split into different shards,
+    shuffle differently, and pair unrelated samples.  Hence:
+
+    * ``shuffle=False`` on every source: aligned, no shuffle.  Shuffle
+      cannot then be recovered with a sampler, because an ``IterableDataset``
+      takes none; it has to come from the source config.
+    * ``shuffle=True`` on every source with identical ``shuffle_seed``,
+      ``shuffle_algo``, ``num_canonical_nodes`` and ``batch_size``, **and**
+      shard boundaries that coincide: aligned, full locality-aware shuffle.
+      ``DatastreamTab.slice_writers(..., flush_every=N)`` is what makes the
+      boundaries coincide.
+    * ``shuffle_algo='naive'`` is the exception that needs no aligned
+      boundaries -- it permutes ``sum(shard_sizes)`` and so depends only on
+      the total -- but it is a full global permutation with no locality at
+      all, which is the thing iterating was meant to avoid.
+    * Per-source sampling (``proportion``/``repeat``/``choose``) resamples
+      *per shard* and must stay unset.
+
+    ``__init__`` checks the shard boundaries of any shuffling source and
+    refuses to build a zip that cannot be aligned; pass
+    ``check_alignment=False`` to skip it.  That check is static, so the
+    running safety net is still ``shared={'sample_id', ...}`` with
+    ``validate_shared=True`` -- cheap for scalar keys, and the only thing
+    that catches the drift described below.
+
+    Sharp edges
+    -----------
+    * **Barriers must be entered in the same order by every worker.**  Each
+      source's ``__iter__`` waits on a shared barrier across the node's
+      workers.  ``zip()`` advances the sources in a fixed order, which is
+      what makes that safe -- iterating a subset of the sources, or in a
+      different order, in some worker deadlocks the rest.
+    * **Epoch counters are per source.**  The shuffle seed is
+      ``shuffle_seed + epoch``, and ``next_epoch`` is incremented by each
+      source's own ``__iter__``.  Iterate one slice out of band -- a
+      ``stats()`` pass, a debugging loop -- and that slice alone advances an
+      epoch, changing its permutation and silently misaligning the zip.
+      Nothing but *validate_shared* will notice.
+    * **No random access.**  No ``__getitem__``, no sampler, no ``Subset``.
+      ``__len__`` is each source's per-rank length, so ``len(loader)``
+      works.
+    * **Every source needs ``batch_size=``.**  ``StreamingDataset``
+      partitions in whole batches and refuses to iterate without it.  It
+      must be the per-device batch size the ``DataLoader`` uses, and the
+      same on every source.
+    * **Threads.**  Two per source per worker, plus an executor.
+
+    Parameters
+    ----------
+    check_alignment : bool
+        Verify at construction that all shuffling sources shard identically.
+        On by default.  Sources that are not ``StreamingDataset``\\ s, or are
+        not shuffling, carry no shard metadata to check and are skipped.
+    *datasets, columns, shared, validate_shared, on_conflict, skip_none, zip_validator
+        As ``ZipBase``.
+    """
+
+    def __init__(self, *datasets, check_alignment=True, **kwargs):
+        super().__init__(*datasets, **kwargs)
+        if check_alignment:
+            self._check_shard_alignment()
+
+    def _check_shard_alignment(self):
+        """Refuse a zip whose shuffling sources shard differently.
+
+        Static and cheap: ``samples_per_shard`` is read off the index each
+        source already loaded, so this costs no downloads.  It cannot catch
+        epoch drift or a mid-run reconfiguration, which is what
+        *validate_shared* is for.
+        """
+        sharded = [
+            (pos, [int(n) for n in ds.samples_per_shard])
+            for pos, ds in enumerate(self.datasets)
+            if getattr(ds, 'samples_per_shard', None) is not None
+            and getattr(ds, 'shuffle', False)
+            # 'naive' permutes the total, not the boundaries, so differing
+            # boundaries are harmless there -- and it is the one algo for
+            # which this check would be a false alarm.
+            and getattr(ds, 'shuffle_algo', None) != 'naive'
+        ]
+        if len(sharded) < 2:
+            return
+        (first_pos, first), *rest = sharded
+        for pos, sizes in rest:
+            if sizes == first:
+                continue
+            raise ValueError(
+                f"{self.__class__.__name__}: source {pos} splits its samples "
+                f"into {len(sizes)} shards and source {first_pos} into "
+                f"{len(first)}, and both are shuffling.  The shuffle "
+                f"permutation is derived from the per-shard sample counts, so "
+                f"differently-sharded sources yield different orders and "
+                f"zipping them pairs unrelated samples.  Write the slices with "
+                f"slice_writers(..., flush_every=N) so their shard boundaries "
+                f"coincide, or open them with shuffle=False, or pass "
+                f"check_alignment=False if you have another reason to believe "
+                f"the orders agree."
+            )
+
+    def __iter__(self):
+        # strict=True: sources of equal length can still yield partitions of
+        # unequal length if their world or batch_size configuration differs,
+        # and a plain zip() would truncate to the shortest and call that
+        # success.  The order sources are advanced in is fixed by zip(),
+        # which is what keeps their startup barriers deadlock-free.
+        iterators = [iter(ds) for ds in self.datasets]
+        for idx, samples in enumerate(zip(*iterators, strict=True)):
+            yield self._merge(idx, samples)
 
 
 # The class zips *several* datasets, so the plural reads truer -- but the
@@ -329,6 +516,117 @@ class ResumableDataLoader(DataLoader):
 
     def load_state_dict(self, state_dict):
         self.sampler.load_state_dict(state_dict)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Lockstep shard boundaries
+# ═══════════════════════════════════════════════════════════════════════
+
+class _CountingWriter:
+    """An ``MDSWriter`` that counts its writes and tells a ``_ShardSync``.
+
+    A proxy rather than a subclass so that ``slice_writers(flush_every=N)``
+    is the only change a ``__build__()`` needs -- every other attribute and
+    method, ``finish()`` included, passes straight through, so the writers
+    a tab is handed behave exactly as before.
+    """
+
+    def __init__(self, name, writer, sync):
+        self.name = name
+        self.n_written = 0
+        self._writer = writer
+        self._sync = sync
+
+    def write(self, sample):
+        # MDSWriter.write() starts a new shard by itself when the byte budget
+        # (size_limit) would be exceeded.  That boundary is at a sample count
+        # nothing else shares, so it defeats the whole point of flush_every --
+        # and it is invisible afterwards, since a ragged index looks exactly
+        # like a correctly built one.  Catch it here, where the cause is still
+        # nameable, rather than letting the shuffle silently misalign.
+        n_shards = len(self._writer.shards)
+        self._writer.write(sample)
+        if len(self._writer.shards) > n_shards and self.n_written % self._sync.every:
+            raise ValueError(
+                f"slice {self.name!r} hit its size_limit after "
+                f"{self.n_written} samples and started a new shard there, "
+                f"which is not a multiple of flush_every="
+                f"{self._sync.every}: the slices no longer share shard "
+                f"boundaries.  Raise size_limit (or pass size_limit=None) so "
+                f"that flush_every is what ends a shard, or lower "
+                f"flush_every below what fits in one."
+            )
+        self.n_written += 1
+        self._sync.wrote(self)
+
+    def flush_shard(self):
+        """End the current shard here, if it has anything in it.
+
+        Both calls, in this order, are what ``MDSWriter.write()`` itself does
+        when the byte budget is hit and what ``finish()`` does for the
+        remainder: ``flush_shard()`` emits the pending samples as a shard and
+        ``_reset_cache()`` starts the next one.  Flushing without resetting
+        would write those samples again.
+
+        The emptiness guard matters at the boundary: ``finish()`` flushes
+        only ``if self.new_samples``, so a sample count that is an exact
+        multiple of *flush_every* must not leave a zero-sample shard behind
+        for the merged index to name.
+        """
+        if self._writer.new_samples:
+            self._writer.flush_shard()
+            self._writer._reset_cache()
+
+    def __getattr__(self, name):
+        # Reached only for attributes not found normally.  Going through
+        # __dict__ rather than self._writer keeps a lookup that happens
+        # before __init__ has run from recursing forever.
+        try:
+            writer = self.__dict__['_writer']
+        except KeyError:  # pragma: no cover
+            raise AttributeError(name) from None
+        return getattr(writer, name)
+
+
+class _ShardSync:
+    """Breaks a group of writers onto a new shard at the same sample counts.
+
+    The condition is deliberately "every writer has written the same number
+    of samples, and that number is a multiple of *every*" rather than
+    "*every* writes have happened on this one": slices are written one
+    sample each per item but in whatever order the tab's loop body
+    happens to use, so the sync has to fire on the last of them, not the
+    first.  A tab that does not write its slices in lockstep never satisfies
+    the condition, which is what ``check_lockstep()`` reports at the end.
+    """
+
+    def __init__(self, every: int):
+        self.every = every
+        self.writers = []
+
+    def track(self, name, writer) -> _CountingWriter:
+        counting = _CountingWriter(name, writer, self)
+        self.writers.append(counting)
+        return counting
+
+    def wrote(self, writer: _CountingWriter):
+        if writer.n_written % self.every:
+            return
+        if any(w.n_written != writer.n_written for w in self.writers):
+            return  # the other slices have not caught up to this item yet
+        for w in self.writers:
+            w.flush_shard()
+
+    def check_lockstep(self, what: str):
+        counts = {w.name: w.n_written for w in self.writers}
+        if len(set(counts.values())) <= 1:
+            return
+        raise ValueError(
+            f"{what}.slice_writers: slices were not written in lockstep -- "
+            f"{counts}.  Every slice must receive exactly one sample per "
+            f"item, or sample i of one slice does not describe the same thing "
+            f"as sample i of another and the slices cannot be zipped."
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -874,43 +1172,86 @@ class SlicedTopics:
         kwargs.setdefault('cache_limit', getattr(self, 'cache_limit', None))
         return open_datastream(self.path(self.DATA, slice_name), **kwargs)
 
-    def dataset(self, *slices, columns=None, shared=None, validate_shared=False,
-                on_conflict='last', skip_none=True, zip_validator=None, **kwargs):
-        """The named slices, zipped by index into one ``Dataset``.
+    def dataset(self, *slices, mode='map', columns=None, shared=None,
+                validate_shared=False, on_conflict='last', skip_none=True,
+                zip_validator=None, **kwargs):
+        """The named slices, zipped into one ``Dataset``.
 
         ``dataset()`` opens every slice; ``dataset('frames')`` opens one;
         ``dataset('frames', 'annotations')`` opens those two.  A consumer
         pays only for what it opens -- skipping the largest slice genuinely
         does not fetch its shards.
 
-        Always a ``ZipStreamingDataset``, even for a single slice, so
-        the sample a caller gets back has the same merged-dict shape however
-        many slices it asked for.
+        Always a zip, even for a single slice, so the sample a caller gets
+        back has the same merged-dict shape however many slices it asked
+        for.
 
-        The slices are opened unshuffled and zipped by *physical* index,
-        which is what keeps them aligned: shuffling the slices separately
-        would pair sample *i* of one with an unrelated sample *i* of
-        another.  Shuffle over the zip instead -- but with
-        ``sampler=table.sampler()`` rather than ``DataLoader(shuffle=True)``,
-        which is the full permutation that defeats the shard cache.  See
-        :meth:`sampler` and :class:`BlockShuffleSampler`.
+        The slices are opened with whatever *kwargs* say, identically -- and
+        identically is the operative word, because it is what keeps them
+        aligned.  Zipping pairs sample *i* of one slice with sample *i* of
+        another, so any per-slice difference in ordering pairs unrelated
+        samples.
 
         Parameters
         ----------
+        mode : {'map', 'iter'}
+            How the slices are read, which is the throughput decision:
+
+            ``'map'`` (default) zips by *physical index*
+            (``ZipStreamingDataset``).  Random access, so any sampler works
+            -- shuffle with ``sampler=table.sampler()`` rather than
+            ``DataLoader(shuffle=True)``, which is the full permutation that
+            defeats the shard cache.  But indexing reads through
+            ``StreamingDataset.get_item()``, which downloads a missing shard
+            inline on the calling thread; there is no download-ahead.
+
+            ``'iter'`` zips by *iteration order*
+            (``ZipIterableStreamingDatasets``).  Each slice keeps its own
+            prefetch thread, partitioning and resumption, which on remote
+            storage is normally the larger win by far.  It gives up random
+            access, it requires ``batch_size=``, and it constrains
+            shuffling: read that class's *Alignment* section before passing
+            ``shuffle=True``.
         columns : dict | None
             ``{slice: [column, ...]}`` -- project a slice down to some of its
             columns.  Keyed by slice name rather than position, since that is
             how the caller named the slices in the first place; slices absent
             from the dict are taken whole.
+
+            Projection happens after the row is decoded, so it saves
+            collation and the worker-to-parent handoff, not I/O.  Not
+            opening a slice at all is what saves I/O.
         shared, validate_shared, on_conflict, skip_none, zip_validator
-            Merge policy, passed to ``ZipStreamingDataset``.  Slices
-            written in lockstep normally share bookkeeping keys, so
-            ``shared={'sample_id', ...}`` with ``validate_shared=True`` is
-            the setting that turns a mis-zipped table into an error instead
-            of a silent misalignment.
+            Merge policy, passed to the zip.  Slices written in lockstep
+            normally share bookkeeping keys, so ``shared={'sample_id', ...}``
+            with ``validate_shared=True`` is the setting that turns a
+            mis-zipped table into an error instead of a silent misalignment.
+            Optional under ``'map'``, which is aligned by construction;
+            effectively required under ``'iter'``, which is not.
         **kwargs
-            Passed to ``datastream()`` for every slice opened.
+            Passed to ``datastream()`` for every slice opened -- and to every
+            slice the same, which is what ``'iter'`` mode needs of the
+            shuffle configuration.
         """
+        if mode not in ('map', 'iter'):
+            raise ValueError(
+                f"{self.__class__.__name__}.dataset: mode must be 'map' or "
+                f"'iter', got {mode!r}"
+            )
+        if mode == 'iter' and not isinstance(kwargs.get('batch_size'), int):
+            # StreamingDataset insists on this the first time it is iterated,
+            # because its partitioning is batch-aware.  Left to it, the
+            # complaint arrives on the first batch, inside a DataLoader
+            # worker, naming a class the caller never mentioned -- so ask
+            # here, where the mode that requires it was chosen.
+            raise ValueError(
+                f"{self.__class__.__name__}.dataset(mode='iter') needs "
+                f"batch_size=: iterating partitions each slice over ranks and "
+                f"workers in whole batches, so it has to know the size of "
+                f"one.  Pass the same per-device batch size you give the "
+                f"DataLoader.  (mode='map' does not partition and does not "
+                f"need it.)"
+            )
         names = self._slicenames(slices)
         if columns is not None:
             unknown = [s for s in columns if s not in names]
@@ -922,7 +1263,9 @@ class SlicedTopics:
                 )
             columns = [columns.get(name) for name in names]
         datasets = [self.datastream(name, **kwargs) for name in names]
-        return ZipStreamingDataset(
+        zip_cls = (ZipStreamingDataset if mode == 'map'
+                   else ZipIterableStreamingDatasets)
+        return zip_cls(
             *datasets, columns=columns, shared=shared,
             validate_shared=validate_shared, on_conflict=on_conflict,
             skip_none=skip_none, zip_validator=zip_validator,
@@ -1289,7 +1632,8 @@ class DatastreamTab(SlicedTopics, Datablock):
     # ------------------------------------------------------------------ #
 
     @contextlib.contextmanager
-    def slice_writers(self, columns, *, stage: bool = None, cache=None, **writer_kwargs):
+    def slice_writers(self, columns, *, stage: bool = None, cache=None,
+                      flush_every: int = None, **writer_kwargs):
         """One ``MDSWriter`` per slice, as ``{slice: writer}``.
 
         Yields the writers, finishes them on a clean exit, and -- when
@@ -1316,6 +1660,36 @@ class DatastreamTab(SlicedTopics, Datablock):
             orphaned shards do not end up in this attempt's index.
         cache : str, optional
             Parent of the staging directory.  Defaults to ``cacheroot``.
+        flush_every : int, optional
+            Break every slice onto a new shard every *flush_every* samples,
+            so that all slices carry **identical shard boundaries**.
+
+            ``MDSWriter`` otherwise starts a new shard on a byte budget
+            (``size_limit``, 64 MiB by default), so a frames slice and an
+            annotations slice holding the same samples split at completely
+            different places.  That is invisible to
+            ``ZipStreamingDataset``, which addresses by index -- but
+            ``ZipIterableStreamingDatasets`` cannot shuffle across it, since
+            the shuffle permutation is derived from the per-shard sample
+            counts.  This is the knob that makes shuffled iterator-mode
+            zipping possible; see that class.
+
+            Shards come out uniform in samples and ragged in bytes, so size
+            it by the *largest* slice: ``flush_every`` samples of that slice
+            is what one of its shards will weigh, and tens of megabytes is
+            the range to aim at.
+
+            It does not override ``size_limit`` -- whichever comes first
+            ends the shard -- so a ``size_limit`` that fires first would put
+            a boundary in one slice and not the others.  That is detected
+            and raised rather than left to surface as a misaligned shuffle;
+            raise ``size_limit``, or pass ``size_limit=None`` to let
+            *flush_every* be the only thing that ends a shard.
+
+            Also turns the lockstep contract into a checked one: writes are
+            counted per slice, and a tab that has not written every slice
+            the same number of times by the end raises rather than
+            producing a table that cannot be zipped.
         **writer_kwargs
             Passed to every ``MDSWriter`` (``compression``, ``size_limit``, …).
         """
@@ -1351,13 +1725,23 @@ class DatastreamTab(SlicedTopics, Datablock):
                     self.fs.rm(outdir, recursive=True)
                 self.fs.makedirs(outdir, exist_ok=True)
 
+        if flush_every is not None and flush_every <= 0:
+            raise ValueError(
+                f"{self.__class__.__name__}.slice_writers: flush_every must be "
+                f"positive, got {flush_every}"
+            )
+
         writers = {}
+        sync = _ShardSync(flush_every) if flush_every else None
         try:
             for name in names:
-                writers[name] = MDSWriter(
+                writer = MDSWriter(
                     out=outdirs[name], columns=columns[name], **writer_kwargs,
                 )
+                writers[name] = sync.track(name, writer) if sync else writer
             yield writers
+            if sync is not None:
+                sync.check_lockstep(self.__class__.__name__)
             for writer in writers.values():
                 writer.finish()
             if staging is not None:

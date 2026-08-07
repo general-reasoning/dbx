@@ -21,7 +21,8 @@ import pytest
 pytest.importorskip("torch", reason="torch is an optional dependency")
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datastreams import DIRTOPIC, DatastreamTab, DatastreamTable
+from dbx.datastreams import (DIRTOPIC, DatastreamTab, DatastreamTable,
+                             ZipIterableStreamingDatasets, ZipStreamingDataset)
 
 
 @pytest.fixture(autouse=True)
@@ -384,6 +385,178 @@ class TestRead:
     def test_stats_with_no_slice_returns_every_slice(self, built_table):
         assert built_table.stats() == {'numbers': {'n_samples': 9},
                                       'letters': {'n_samples': 9}}
+
+
+# ---------------------------------------------------------------------------
+# dataset(mode=...)
+# ---------------------------------------------------------------------------
+
+class TestDatasetMode:
+
+    def test_map_mode_is_the_default(self, built_table):
+        assert isinstance(built_table.dataset(), ZipStreamingDataset)
+
+    def test_iter_mode_gives_the_iterable_zip(self, built_table):
+        ds = built_table.dataset(mode='iter', batch_size=3)
+        assert isinstance(ds, ZipIterableStreamingDatasets)
+
+    def test_iter_mode_yields_what_map_mode_indexes(self, built_table):
+        mapped = built_table.dataset()
+        expected = [mapped[i] for i in range(len(mapped))]
+        assert list(built_table.dataset(mode='iter', batch_size=3)) == expected
+
+    def test_iter_mode_respects_projection(self, built_table):
+        ds = built_table.dataset(mode='iter', batch_size=3,
+                                 columns={'numbers': ['idx']})
+        assert set(next(iter(ds))) == {'idx', 'label'}
+
+    def test_iter_mode_demands_a_batch_size(self, built_table):
+        """StreamingDataset only complains on the first batch, from inside a
+        worker; dataset() asks where the mode was chosen."""
+        with pytest.raises(ValueError, match='batch_size'):
+            built_table.dataset(mode='iter')
+
+    def test_map_mode_needs_no_batch_size(self, built_table):
+        assert len(built_table.dataset()) == 9
+
+    def test_unknown_mode_is_rejected(self, built_table):
+        with pytest.raises(ValueError, match="'map' or 'iter'"):
+            built_table.dataset(mode='streaming')
+
+
+# ---------------------------------------------------------------------------
+# flush_every: shard boundaries that coincide across slices
+# ---------------------------------------------------------------------------
+
+class SizedTab(DatastreamTab):
+    """Two slices whose samples differ wildly in size, so that a byte-driven
+    shard boundary in one lands nowhere near the other's."""
+
+    VERSION = 1
+    SLICES = ('small', 'big')
+
+    @dataclass
+    class VAR(DatastreamTab.VAR):
+        n: int = 24
+        width: int = 400
+        flush_every: int = None
+        size_limit: int = None
+        skew: bool = False
+
+    COLUMNS = {'small': {'idx': 'int'},
+               'big': {'idx': 'int', 'payload': 'str'}}
+
+    def __build__(self):
+        with self.slice_writers(self.COLUMNS,
+                                flush_every=self.var.flush_every,
+                                size_limit=self.var.size_limit) as writers:
+            for i in range(self.var.n):
+                writers['small'].write({'idx': i})
+                writers['big'].write({'idx': i, 'payload': 'x' * self.var.width})
+            if self.var.skew:
+                writers['big'].write({'idx': -1, 'payload': 'extra'})
+
+
+class SizedTable(DatastreamTable):
+    VERSION = 1
+    TAB = SizedTab
+
+    @dataclass
+    class VAR(DatastreamTable.VAR):
+        n: int = 24
+        width: int = 400
+        flush_every: int = None
+        size_limit: int = None
+        skew: bool = False
+
+    @property
+    def n_tabs(self):
+        return 1
+
+    def __tab__(self, idx):
+        return super().__tab__(
+            idx, n=self.var.n, width=self.var.width,
+            flush_every=self.var.flush_every, size_limit=self.var.size_limit,
+            skew=self.var.skew,
+        )
+
+
+def sized(tmp_path, **spec):
+    table = SizedTable(url=str(tmp_path), spec=spec)
+    table.build()
+    return table
+
+
+class TestFlushEvery:
+
+    def test_byte_budget_alone_shards_the_slices_differently(self, tmp_path):
+        """The problem flush_every exists to solve: sized by bytes, a slice
+        of 4-byte ints and a slice of 400-byte strings break apart at
+        completely different sample counts."""
+        table = sized(tmp_path, size_limit=4096)
+        assert table.shard_sizes('small') != table.shard_sizes('big')
+
+    def test_flush_every_makes_the_boundaries_coincide(self, tmp_path):
+        table = sized(tmp_path, flush_every=8)
+        assert table.shard_sizes('small') == table.shard_sizes('big') == [8, 8, 8]
+
+    def test_trailing_partial_shard_is_kept(self, tmp_path):
+        """A count that is not a multiple of flush_every leaves a short last
+        shard -- in both slices, at the same place."""
+        table = sized(tmp_path, n=20, flush_every=8)
+        assert table.shard_sizes('small') == table.shard_sizes('big') == [8, 8, 4]
+
+    def test_exact_multiple_leaves_no_empty_shard(self, tmp_path):
+        """finish() flushes only what is pending, so a sample count that is
+        an exact multiple must not append a zero-sample shard."""
+        table = sized(tmp_path, n=16, flush_every=8)
+        assert table.shard_sizes('big') == [8, 8]
+
+    def test_the_data_still_reads_back_whole(self, tmp_path):
+        table = sized(tmp_path, flush_every=8)
+        assert [s['idx'] for s in table.data('small')] == list(range(24))
+        assert len(table.dataset()) == 24
+
+    def test_size_limit_firing_first_is_an_error(self, tmp_path):
+        """flush_every does not override size_limit -- whichever comes first
+        ends the shard -- so a size_limit that fires first would silently
+        undo the alignment."""
+        with pytest.raises(ValueError, match='size_limit'):
+            sized(tmp_path, flush_every=64, size_limit=4096)
+
+    def test_slices_written_out_of_lockstep_are_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match='lockstep'):
+            sized(tmp_path, flush_every=8, skew=True)
+
+    def test_non_positive_flush_every_is_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match='flush_every must be positive'):
+            sized(tmp_path, flush_every=0)
+
+    def test_aligned_slices_may_be_zipped_with_shuffle(self, tmp_path):
+        """The point of the whole exercise: identically-sharded slices pass
+        the iterator-mode alignment check with shuffling on."""
+        table = sized(tmp_path, flush_every=8)
+        ds = table.dataset(mode='iter', batch_size=4, shuffle=True,
+                           shuffle_seed=17)
+        assert isinstance(ds, ZipIterableStreamingDatasets)
+
+    def test_a_shuffled_zip_stays_aligned(self, tmp_path):
+        """Shuffled and still paired: 'big' carries idx too, so a mispairing
+        shows up as the two slices' idx disagreeing."""
+        table = sized(tmp_path, flush_every=8)
+        ds = table.dataset(mode='iter', batch_size=4, shuffle=True,
+                           shuffle_seed=17, columns={'small': ['idx'],
+                                                     'big': ['idx']},
+                           shared={'idx'}, validate_shared=True)
+        seen = [s['idx'] for s in ds]
+        assert sorted(seen) == list(range(24))
+        assert seen != list(range(24)), "shuffle=True did not shuffle"
+
+    def test_differently_sharded_slices_are_refused_a_shuffled_zip(self, tmp_path):
+        table = sized(tmp_path, size_limit=4096)
+        with pytest.raises(ValueError, match='shard boundaries'):
+            table.dataset(mode='iter', batch_size=4, shuffle=True,
+                          shuffle_seed=17)
 
 
 # ---------------------------------------------------------------------------

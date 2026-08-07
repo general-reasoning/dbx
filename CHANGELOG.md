@@ -100,6 +100,33 @@ All notable changes to this project will be documented in this file.
   to the table's **own** shard capacity — read off the merged index by the new
   `shard_sizes()` / `samples_per_shard()` / `n_samples()`, without downloading a shard
   — rather than leaving every caller to guess a constant.
+- **`ZipIterableStreamingDatasets` and `dataset(mode='iter')`** in `dbx.datastreams` —
+  zip the slices by *iteration order* instead of by physical index. Map-style indexing
+  reads through `StreamingDataset.get_item()`, which downloads a missing shard inline
+  on the calling thread; the download-ahead thread, the rank/worker partitioning,
+  `num_canonical_nodes`, the shard-locality shuffle and mid-epoch resumption all live
+  in `__iter__` and so never run. Iterating each slice puts every slice back in
+  possession of them, which on remote storage is normally the largest single factor in
+  throughput. The merge is unchanged — both classes now share it through `ZipBase` —
+  and so are the defaults: `mode='map'` remains what `dataset()` does.
+  Iterator-mode zipping is only correct while every slice yields the same sequence,
+  which `shuffle=False` gives for free (the partition reads sample *counts*, never
+  shard structure) but `shuffle=True` does not: the permutation is derived from the
+  per-shard sample counts, so differently-sharded slices shuffle differently and pair
+  unrelated samples. `__init__` checks that and refuses; `shared=` +
+  `validate_shared=True` remains the running check, and is effectively required here.
+  `mode='iter'` also demands `batch_size=`, which `StreamingDataset` would otherwise
+  only complain about on the first batch from inside a `DataLoader` worker.
+- **`slice_writers(..., flush_every=N)`** in `DatastreamTab` — break every slice onto a
+  new shard every *N* samples, so all slices carry identical shard boundaries.
+  `MDSWriter` otherwise starts a shard on a byte budget, so slices of different
+  per-sample size split at unrelated places; that is invisible to index-addressed
+  zipping but is exactly what stops `mode='iter'` from shuffling. Whichever of
+  `flush_every` and `size_limit` comes first still ends the shard, so a `size_limit`
+  that fires first is detected and raised rather than left to surface as a misaligned
+  shuffle. Writes are counted per slice, which also turns the lockstep contract into a
+  checked one: a tab that has not written every slice the same number of times raises
+  instead of producing a table that cannot be zipped.
 - **`open_datastream()`** in `dbx.datastreams` — opens a `StreamingDataset` over an
   MDS index directory, local or remote, translating `abfs(s)://` to `azure-dl://` and
   retrying once past a stale `Reused local directory` shared-memory registration.

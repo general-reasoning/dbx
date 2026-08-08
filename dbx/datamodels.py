@@ -202,7 +202,22 @@ class DatamodelEvaluatorFactory(Datablock):
 
     @property
     def layer_names(self) -> list[str]:
-        """Return the list of feature layer names configured on this factory."""
+        """Return the ordered list of feature layer names configured on this factory.
+
+        How `layer_names` corresponds to configuration fields:
+
+        1. `capture_layers`: Each layer name string `l` in `capture_layers` is included
+           directly in `layer_names` (for example `'model'` or `'layer1'`).
+        2. `capture_final`: If `capture_final=True`, the key `'final'` is appended to `layer_names`.
+
+        Ordering of `layer_names`:
+            `[capture_layers, ...] + (['final'] if capture_final else [])`
+
+        Returns
+        -------
+        list[str]
+            Ordered list of feature output keys.
+        """
         names = list(self.var.capture_layers)
         if self.var.capture_final:
             names.append('final')
@@ -395,4 +410,41 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
                 log=log,
             )
         return self._evaluators[device]
+
+    @property
+    def layer_names(self) -> list[str]:
+        """Return the ordered list of feature layer names configured on this factory.
+
+        How `layer_names` corresponds to configuration fields:
+
+        1. `capture_blocks`: Transformer block indices to capture. Each block index `b`
+           is mapped to key `f"block.{b}"` (for example `0` -> `'block.0'`, `7` -> `'block.7'`).
+           - If `capture_blocks` is an explicit list of non-negative integers (e.g. `[0, 7, 14]`),
+             they are formatted directly as `['block.0', 'block.7', 'block.14']`.
+           - If `capture_blocks='all'` or contains negative indices (e.g. `-1`), block indices
+             are resolved against the underlying model structure, yielding
+             `['block.0', 'block.1', ..., 'block.N-1']`.
+        2. `capture_layers`: Each layer name string `l` in `capture_layers` is included
+           directly (for example `'model'` or `'head'`).
+        3. `capture_final`: If `capture_final=True`, the key `'final'` is appended.
+
+        Ordering of `layer_names`:
+            `[f"block.{b}", ...] + [capture_layers, ...] + (['final'] if capture_final else [])`
+
+        Returns
+        -------
+        list[str]
+            Ordered list of feature output keys.
+        """
+        blocks_spec = self.var.capture_blocks
+        if isinstance(blocks_spec, (list, tuple)) and not any(isinstance(b, int) and b < 0 for b in blocks_spec):
+            block_names = [f"block.{b}" if isinstance(b, int) else str(b) for b in blocks_spec]
+            names = block_names + [str(l) for l in self.var.capture_layers]
+            if self.var.capture_final:
+                names.append('final')
+            return names
+
+        if hasattr(self, '_evaluators') and self._evaluators:
+            return next(iter(self._evaluators.values())).layer_names
+        return self.evaluator(device="cpu").layer_names
 

@@ -124,11 +124,20 @@ def test_dataformer_evaluator_factory():
         cls_token_only=True,
         capture_final=True,
     )
+    assert factory.layer_names == ["block.0", "block.1", "final"]
     ev1 = factory.evaluator(device="cpu")
     ev2 = factory.evaluator(device="cpu")
     assert ev1 is ev2
     assert isinstance(ev1, DataformerEvaluator)
     assert ev1.layer_names == ["block.0", "block.1", "final"]
+    assert factory.layer_names == ["block.0", "block.1", "final"]
+
+    factory_all = DataformerEvaluatorFactory(
+        model=DummyTransformer(),
+        capture_blocks="all",
+        capture_final=True,
+    )
+    assert factory_all.layer_names == ["block.0", "block.1", "block.2", "final"]
 
 
 if __name__ == "__main__":

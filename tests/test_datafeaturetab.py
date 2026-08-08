@@ -4,6 +4,7 @@ import pytest
 import numpy as np
 import torch
 import torch.nn as nn
+from dataclasses import dataclass
 
 from dbx import (
     DatastreamTab,
@@ -25,30 +26,30 @@ class DummySampleTab(DatastreamTab):
 
     def __build__(self):
         specs = {
-            "samples": ("samples.mds", "ndarray:float32"),
-            "labels": ("labels.mds", "int64"),
+            "samples": {"samples": "ndarray:float32"},
+            "labels": {"labels": "int64"},
         }
-        writers = self.slice_writers(specs)
-        try:
+        with self.slice_writers(specs) as writers:
             for i in range(self.var.n_samples):
                 vec = np.arange(4, dtype=np.float32) + i
                 label = np.int64(i % 2)
                 writers["samples"].write({"samples": vec})
                 writers["labels"].write({"labels": label})
-        finally:
-            for w in writers.values():
-                w.finish()
         return self
 
 
 class DummySampleTable(DatastreamTable):
     TAB = DummySampleTab
 
+    @dataclass
     class VAR(DatastreamTable.VAR):
-        n_tabs: int = 2
         samples_per_tab: int = 10
 
-    def __block__(self, idx: int) -> DummySampleTab:
+    @property
+    def n_tabs(self):
+        return 2
+
+    def __tab__(self, idx: int) -> DummySampleTab:
         return self.TAB(
             url=self.url,
             spec=dict(n_samples=self.var.samples_per_tab),
@@ -76,7 +77,7 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     # 2. Build feature tab
     eval_factory = DatamodelEvaluatorFactory(capture_final=True)
     eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), capture_final=True, device="cpu", **kwargs
+        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
     )
 
     featuretab = DatafeatureTab(
@@ -117,7 +118,7 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     sampletab = DummySampleTab(url=url, tag="samples_1").build()
     eval_factory = DatamodelEvaluatorFactory(capture_final=True)
     eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), capture_final=True, device="cpu", **kwargs
+        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
     )
 
     featuretab = DatafeatureTab(
@@ -164,13 +165,13 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
     # 1. Build sample table with 2 tabs
     sampletable = DummySampleTable(
         url=url,
-        spec=dict(n_tabs=2, samples_per_tab=5),
+        spec=dict(samples_per_tab=5),
         tag="sample_table",
     ).build()
 
     eval_factory = DatamodelEvaluatorFactory(capture_final=True)
     eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), capture_final=True, device="cpu", **kwargs
+        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
     )
 
     # 2. Build feature table

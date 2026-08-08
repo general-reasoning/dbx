@@ -34,12 +34,14 @@ class DatamodelEvaluator:
     """
 
     DEFAULT_MODEL: Any = None
+    DEFAULT_BACKBONE: Any = None
     DEFAULT_TRANSFORM: Any = None
 
     def __init__(
         self,
         model=None,
         *,
+        backbone=None,
         capture_layers: list[str] | None = None,
         capture_final: bool = True,
         transform=None,
@@ -48,7 +50,10 @@ class DatamodelEvaluator:
     ):
         self.device = device
         self.log = log or Logger(stack_depth=3)
-        self._model = model if model is not None else self.DEFAULT_MODEL
+        model_val = model if model is not None else backbone
+        if model_val is None:
+            model_val = self.DEFAULT_MODEL if self.DEFAULT_MODEL is not None else self.DEFAULT_BACKBONE
+        self._model = model_val
         self.transform = transform if transform is not None else self.DEFAULT_TRANSFORM
         if self.transform is None:
             self.transform = lambda x: x
@@ -68,6 +73,11 @@ class DatamodelEvaluator:
                 model_obj = model_obj.to(self.device)
             self._model = model_obj
         return self._model
+
+    @property
+    def backbone(self):
+        """Alias for model."""
+        return self.model
 
     def _make_capture_hook(self, name: str):
         def hook(module, input, output):

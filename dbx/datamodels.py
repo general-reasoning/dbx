@@ -139,13 +139,14 @@ class DataformerEvaluator(DatamodelEvaluator):
         Logger instance.
     """
 
+    DEFAULT_MODEL: Any = None
     DEFAULT_BACKBONE: Any = None
-    DEFAULT_TRANSFORM: Any = None
 
     def __init__(
         self,
-        backbone=None,
+        model=None,
         *,
+        backbone=None,
         capture_blocks: list[int] | str | None = None,
         capture_layers: list[str] | None = None,
         capture_final: bool = True,
@@ -155,7 +156,10 @@ class DataformerEvaluator(DatamodelEvaluator):
         log: Logger | None = None,
     ):
         super().__init__(device=device, log=log)
-        self._backbone = backbone if backbone is not None else self.DEFAULT_BACKBONE
+        model_val = model if model is not None else backbone
+        if model_val is None:
+            model_val = self.DEFAULT_MODEL if self.DEFAULT_MODEL is not None else self.DEFAULT_BACKBONE
+        self._model = model_val
         self.transform = transform if transform is not None else self.DEFAULT_TRANSFORM
         if self.transform is None:
             self.transform = lambda x: x
@@ -169,12 +173,17 @@ class DataformerEvaluator(DatamodelEvaluator):
         self._hooks_registered = False
 
     @property
+    def model(self):
+        """Lazy-load the model on first access."""
+        if isinstance(self._model, str):
+            self.log.verbose(f"Evaluating {self._model} on {self.device}")
+            self._model = dbx.eval(self._model).to(self.device)
+        return self._model
+
+    @property
     def backbone(self):
-        """Lazy-load the backbone model on first access."""
-        if isinstance(self._backbone, str):
-            self.log.verbose(f"Evaluating {self._backbone} on {self.device}")
-            self._backbone = dbx.eval(self._backbone).to(self.device)
-        return self._backbone
+        """Alias for model."""
+        return self.model
 
     def _get_blocks(self, model):
         """Extract transformer block container from model."""
@@ -209,11 +218,11 @@ class DataformerEvaluator(DatamodelEvaluator):
             return
 
         if self.capture_blocks_raw == 'all':
-            blocks = self._get_blocks(self.backbone)
+            blocks = self._get_blocks(self.model)
             self.capture_blocks = list(range(len(blocks)))
 
         if self.capture_blocks:
-            blocks = self._get_blocks(self.backbone)
+            blocks = self._get_blocks(self.model)
             for idx in self.capture_blocks:
                 if idx < 0:
                     idx = len(blocks) + idx
@@ -226,10 +235,10 @@ class DataformerEvaluator(DatamodelEvaluator):
 
         for layer in self.capture_layers:
             key = self._capture_key(layer)
-            if layer == "backbone":
-                self.backbone.register_forward_hook(self._make_capture_hook(key))
+            if layer in ("backbone", "model"):
+                self.model.register_forward_hook(self._make_capture_hook(key))
             else:
-                getattr(self.backbone, layer).register_forward_hook(self._make_capture_hook(key))
+                getattr(self.model, layer).register_forward_hook(self._make_capture_hook(key))
             self.log.debug(f"Registered capture hook: {key}")
 
         self._hooks_registered = True
@@ -251,13 +260,13 @@ class DataformerEvaluator(DatamodelEvaluator):
         if torch is not None and hasattr(x, 'to'):
             with torch.no_grad():
                 y = self.transform(x.to(self.device))
-                z = self.backbone(y)
+                z = self.model(y)
                 if hasattr(z, 'cpu'):
                     z = z.cpu().detach()
                 del y
         else:
             y = self.transform(x)
-            z = self.backbone(y)
+            z = self.model(y)
 
         result = dict(self._captured)
         if self.capture_final:

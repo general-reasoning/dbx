@@ -14,53 +14,119 @@ except ImportError:
 import dbx
 from dbx.datablocks import Datablock
 from dbx.dataparts import Logger
-
-
 class DatamodelEvaluator:
-    """Generic base for hook-based layer activation capture evaluators.
+    """Generic hook-based layer activation capture evaluator for any model.
 
-    Subclasses must implement:
-
-    * :meth:`layer_names` — ordered list of capture keys produced by ``__call__``.
-    * :meth:`__call__` — run a forward pass and return a ``dict[str, Tensor]``
-      mapping capture keys to activation tensors, plus ``"final"`` (if requested)
-      for the model's own output.
-    * :meth:`clear` — release captured tensors and free accelerator memory.
-
-    Optionally override :meth:`__pre_call__` to lazily register hooks.
+    Parameters
+    ----------
+    model
+        A pre-loaded model, a lazy-eval string (e.g. ``"$module.func()"``), or ``None``.
+    capture_layers : list[str]
+        Named model layers to capture.
+    capture_final : bool
+        Whether to capture the model's final output tensor.
+    transform : callable, optional
+        Preprocessing transform applied to inputs before forward pass.
+    device : str
+        Target device string (default ``"cuda"``).
+    log : Logger
+        Logger instance.
     """
 
-    def __init__(self, *, device: str = "cuda", log: Logger | None = None):
+    DEFAULT_MODEL: Any = None
+    DEFAULT_TRANSFORM: Any = None
+
+    def __init__(
+        self,
+        model=None,
+        *,
+        capture_layers: list[str] | None = None,
+        capture_final: bool = True,
+        transform=None,
+        device: str = "cuda",
+        log: Logger | None = None,
+    ):
         self.device = device
         self.log = log or Logger(stack_depth=3)
+        self._model = model if model is not None else self.DEFAULT_MODEL
+        self.transform = transform if transform is not None else self.DEFAULT_TRANSFORM
+        if self.transform is None:
+            self.transform = lambda x: x
+
+        self.capture_layers = list(capture_layers or [])
+        self.capture_final = capture_final
+        self._captured: dict[str, Any] = {}
+        self._hooks_registered = False
+
+    @property
+    def model(self):
+        """Lazy-load the model on first access."""
+        if isinstance(self._model, str):
+            self.log.verbose(f"Evaluating {self._model} on {self.device}")
+            model_obj = dbx.eval(self._model)
+            if hasattr(model_obj, 'to'):
+                model_obj = model_obj.to(self.device)
+            self._model = model_obj
+        return self._model
+
+    def _make_capture_hook(self, name: str):
+        def hook(module, input, output):
+            t = output
+            if isinstance(t, (tuple, list)):
+                t = t[0]
+            if hasattr(t, 'cpu'):
+                t = t.cpu().detach()
+            self._captured[name] = t
+        return hook
+
+    def _register_capture_hooks(self):
+        if self._hooks_registered:
+            return
+
+        for layer in self.capture_layers:
+            if layer in ("backbone", "model"):
+                self.model.register_forward_hook(self._make_capture_hook(layer))
+            else:
+                getattr(self.model, layer).register_forward_hook(self._make_capture_hook(layer))
+            self.log.debug(f"Registered capture hook: {layer}")
+
+        self._hooks_registered = True
 
     @property
     def layer_names(self) -> list[str]:
-        """Return the ordered list of capture keys that ``__call__`` produces.
-
-        Must be overridden by subclasses.
-        """
-        raise NotImplementedError
+        """Return the ordered list of capture keys that ``__call__`` produces."""
+        names = list(self.capture_layers)
+        if self.capture_final:
+            names.append('final')
+        return names
 
     def __pre_call__(self):
         """Hook called before each forward pass (e.g. to lazily register hooks)."""
-        pass
+        self._register_capture_hooks()
 
     def __call__(self, x: Any) -> dict[str, Any]:
-        """Run forward pass on batch *x* and return captured activations.
+        """Run forward pass on batch *x* and return captured activations."""
+        self._captured.clear()
+        self.__pre_call__()
+        if torch is not None and hasattr(x, 'to'):
+            with torch.no_grad():
+                y = self.transform(x.to(self.device))
+                z = self.model(y)
+                if hasattr(z, 'cpu'):
+                    z = z.cpu().detach()
+                del y
+        else:
+            y = self.transform(x)
+            z = self.model(y)
 
-        Returns
-        -------
-        dict[str, Tensor]
-            Mapping from capture-key to activation tensor, plus
-            ``"final"`` for the backbone's own output.
-
-        Must be overridden by subclasses.
-        """
-        raise NotImplementedError
+        result = dict(self._captured)
+        if self.capture_final:
+            result['final'] = z
+        return result
 
     def clear(self):
         """Release captured tensors and free accelerator memory."""
+        self._captured.clear()
         gc.collect()
         if torch is not None and torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -68,11 +134,8 @@ class DatamodelEvaluator:
 
     @property
     def layer_features(self) -> dict[str, Any]:
-        """Most recently captured activations (read-only snapshot).
-
-        Must be overridden by subclasses.
-        """
-        raise NotImplementedError
+        """Most recently captured activations (read-only snapshot)."""
+        return dict(self._captured)
 
 
 class DatamodelEvaluatorFactory(Datablock):
@@ -106,7 +169,7 @@ class DatamodelEvaluatorFactory(Datablock):
         if device not in self._evaluators:
             log = log or self.log
             self._evaluators[device] = self.Evaluator(
-                backbone=None,
+                model=None,
                 capture_layers=self.var.capture_layers,
                 capture_final=self.var.capture_final,
                 device=device,
@@ -120,7 +183,7 @@ class DataformerEvaluator(DatamodelEvaluator):
 
     Parameters
     ----------
-    backbone
+    model
         A pre-loaded model, a lazy-eval string (e.g. ``"$module.func()"``), or ``None``.
     capture_blocks : list[int] | str
         Transformer block indices to capture, or ``'all'``.
@@ -139,10 +202,6 @@ class DataformerEvaluator(DatamodelEvaluator):
         Logger instance.
     """
 
-    DEFAULT_MODEL: Any = None
-    DEFAULT_BACKBONE: Any = None
-    DEFAULT_TRANSFORM: Any = None
-
     def __init__(
         self,
         model=None,
@@ -156,33 +215,18 @@ class DataformerEvaluator(DatamodelEvaluator):
         device: str = "cuda",
         log: Logger | None = None,
     ):
-        super().__init__(device=device, log=log)
         model_val = model if model is not None else backbone
-        if model_val is None:
-            model_val = self.DEFAULT_MODEL if self.DEFAULT_MODEL is not None else self.DEFAULT_BACKBONE
-        self._model = model_val
-        self.transform = transform if transform is not None else self.DEFAULT_TRANSFORM
-        if self.transform is None:
-            self.transform = lambda x: x
-
+        super().__init__(
+            model=model_val,
+            capture_layers=capture_layers,
+            capture_final=capture_final,
+            transform=transform,
+            device=device,
+            log=log,
+        )
         self.capture_blocks_raw = capture_blocks
         self.capture_blocks = list(capture_blocks) if isinstance(capture_blocks, (list, tuple)) else []
-        self.capture_layers = list(capture_layers or [])
-        self.capture_final = capture_final
         self.cls_token_only = cls_token_only
-        self._captured: dict[str, Any] = {}
-        self._hooks_registered = False
-
-    @property
-    def model(self):
-        """Lazy-load the model on first access."""
-        if isinstance(self._model, str):
-            self.log.verbose(f"Evaluating {self._model} on {self.device}")
-            model_obj = dbx.eval(self._model)
-            if hasattr(model_obj, 'to'):
-                model_obj = model_obj.to(self.device)
-            self._model = model_obj
-        return self._model
 
     @property
     def backbone(self):
@@ -237,15 +281,7 @@ class DataformerEvaluator(DatamodelEvaluator):
                 blocks[idx].register_forward_hook(self._make_capture_hook(key))
                 self.log.debug(f"Registered capture hook: {key}")
 
-        for layer in self.capture_layers:
-            key = self._capture_key(layer)
-            if layer in ("backbone", "model"):
-                self.model.register_forward_hook(self._make_capture_hook(key))
-            else:
-                getattr(self.model, layer).register_forward_hook(self._make_capture_hook(key))
-            self.log.debug(f"Registered capture hook: {key}")
-
-        self._hooks_registered = True
+        super()._register_capture_hooks()
 
     @property
     def layer_names(self) -> list[str]:
@@ -255,38 +291,13 @@ class DataformerEvaluator(DatamodelEvaluator):
             names.append('final')
         return names
 
-    def __pre_call__(self):
-        self._register_capture_hooks()
-
     def __call__(self, x) -> dict[str, Any]:
-        self._captured.clear()
-        self.__pre_call__()
-        if torch is not None and hasattr(x, 'to'):
-            with torch.no_grad():
-                y = self.transform(x.to(self.device))
-                z = self.model(y)
-                if hasattr(z, 'cpu'):
-                    z = z.cpu().detach()
-                del y
-        else:
-            y = self.transform(x)
-            z = self.model(y)
-
-        result = dict(self._captured)
-        if self.capture_final:
-            out = z
-            if self.cls_token_only and hasattr(out, 'dim') and out.dim() == 3:
-                out = out[:, 0]
-            result['final'] = out
+        result = super().__call__(x)
+        if self.capture_final and self.cls_token_only:
+            out = result['final']
+            if hasattr(out, 'dim') and out.dim() == 3:
+                result['final'] = out[:, 0]
         return result
-
-    @property
-    def layer_features(self) -> dict[str, Any]:
-        return dict(self._captured)
-
-    def clear(self):
-        self._captured.clear()
-        return super().clear()
 
 
 class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
@@ -311,7 +322,7 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
         if device not in self._evaluators:
             log = log or self.log
             self._evaluators[device] = self.Evaluator(
-                backbone=None,
+                model=None,
                 capture_blocks=self.var.capture_blocks,
                 capture_layers=self.var.capture_layers,
                 capture_final=self.var.capture_final,

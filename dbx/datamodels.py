@@ -18,8 +18,6 @@ import dbx
 from dbx.datablocks import Datablock, Datastack
 from dbx.dataparts import Logger
 from dbx.datastreams import (
-    DatastreamTab,
-    DatastreamTable,
     ZipStreamingDataset,
     ZipIterableStreamingDatasets,
 )

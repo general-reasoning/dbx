@@ -198,7 +198,7 @@ class DatafeatureTab(DatasampleTab):
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
-    def sampletab(self) -> DatastreamTab:
+    def sampletab(self) -> DatasampleTab:
         return self.var.sampletab
 
     @property

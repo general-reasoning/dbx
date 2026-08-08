@@ -164,7 +164,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
     @dataclass
     class VAR(Datablock.VAR):
         featuretable: DatafeatureTable | DatafeatureTab
-        regressor: tuple[str, str]
+        feature: tuple[str, str]
         label: tuple[str, str]
         fit_intercept: bool = True
         evaluation_fraction: float = 0.8
@@ -179,15 +179,15 @@ class DatafeatureAffineLogisticProbe(Datablock):
 
     def __build__(self):
         table = self.var.featuretable
-        reg_spec = self.var.regressor
+        feat_spec = self.var.feature
         label_spec = self.var.label
 
-        if isinstance(reg_spec, (list, tuple)):
-            reg_slice = reg_spec[0]
-            reg_col = reg_spec[1] if len(reg_spec) > 1 else reg_spec[0]
+        if isinstance(feat_spec, (list, tuple)):
+            feat_slice = feat_spec[0]
+            feat_col = feat_spec[1] if len(feat_spec) > 1 else feat_spec[0]
         else:
-            reg_slice = str(reg_spec)
-            reg_col = str(reg_spec)
+            feat_slice = str(feat_spec)
+            feat_col = str(feat_spec)
 
         if isinstance(label_spec, (list, tuple)):
             label_slice = label_spec[0]
@@ -196,15 +196,15 @@ class DatafeatureAffineLogisticProbe(Datablock):
             label_slice = str(label_spec)
             label_col = str(label_spec)
 
-        self.log.verbose(f"Reading regressor '{reg_slice}:{reg_col}' and labels for '{label_slice}:{label_col}'")
+        self.log.verbose(f"Reading feature '{feat_slice}:{feat_col}' and label '{label_slice}:{label_col}'")
 
-        data_dict = table.data(reg_slice, label_slice, concat=True)
-        feat_data = data_dict[reg_slice]
+        data_dict = table.data(feat_slice, label_slice, concat=True)
+        feat_data = data_dict[feat_slice]
         lbl_data = data_dict[label_slice]
 
         if isinstance(feat_data, dict):
-            if reg_col in feat_data:
-                raw_features = feat_data[reg_col]
+            if feat_col in feat_data:
+                raw_features = feat_data[feat_col]
             else:
                 raw_features = next(iter(feat_data.values()))
         else:
@@ -255,7 +255,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
         self.log.verbose(
             f"FITTING LogisticRegression "
             f"(fit_intercept={self.var.fit_intercept}, "
-            f"regressor={reg_spec!r}, "
+            f"feature={feat_spec!r}, "
             f"label={label_spec!r}, "
             f"normalization={self.var.normalization!r})"
         )
@@ -302,31 +302,46 @@ class DatafeatureAffineLogisticProbe(Datablock):
 class DatafeatureStatsProbe(Datablock):
     """Per-layer statistics for a DatafeatureTable.
 
-    Computes item-level and sample-level statistics — mean, std, median,
-    min, max, L2 norms, and distinct counts — for a single layer.
+    Computes overall feature/signal statistics and tab-granularity statistics
+    for a DatafeatureTable or DatafeatureTab.
     """
 
     VERSION = 1
 
     TOPICS = {
-        'tile_count': 'tile_count.npz',
-        'tile_feature_mean': 'tile_feature_mean.npz',
-        'tile_feature_std': 'tile_feature_std.npz',
-        'tile_feature_median': 'tile_feature_median.npz',
-        'tile_feature_min': 'tile_feature_min.npz',
-        'tile_feature_max': 'tile_feature_max.npz',
-        'tile_feature_norms': 'tile_feature_norms.npz',
-        'sample_feature_mean': 'sample_feature_mean.npz',
-        'sample_feature_std': 'sample_feature_std.npz',
-        'distinct_tile_count': 'distinct_tile_count.npz',
-        'bag_feature_mean': 'sample_feature_mean.npz',
-        'bag_feature_std': 'sample_feature_std.npz',
+        'feature_mean': 'feature_mean.npz',
+        'feature_std': 'feature_std.npz',
+        'feature_median': 'feature_median.npz',
+        'feature_min': 'feature_min.npz',
+        'feature_max': 'feature_max.npz',
+        'feature_norms': 'feature_norms.npz',
+        'tab_feature_mean': 'tab_feature_mean.npz',
+        'tab_feature_std': 'tab_feature_std.npz',
+        'tab_feature_median': 'tab_feature_median.npz',
+        'tab_feature_min': 'tab_feature_min.npz',
+        'tab_feature_max': 'tab_feature_max.npz',
+        'tab_feature_norms': 'tab_feature_norms.npz',
+        'signal_count': 'unique_signal_count.npz',
+        'signal_mean': 'signal_mean.npz',
+        'signal_std': 'signal_std.npz',
+        'signal_median': 'signal_median.npz',
+        'signal_min': 'signal_min.npz',
+        'signal_max': 'signal_max.npz',
+        'signal_norms': 'signal_norms.npz',
+        'tab_signal_mean': 'tab_signal_mean.npz',
+        'tab_signal_std': 'tab_signal_std.npz',
+        'tab_signal_median': 'tab_signal_median.npz',
+        'tab_signal_min': 'tab_signal_min.npz',
+        'tab_signal_max': 'tab_signal_max.npz',
+        'tab_signal_norms': 'tab_signal_norms.npz',
     }
 
     @dataclass
     class VAR(Datablock.VAR):
         featuretable: DatafeatureTable | DatafeatureTab
-        feature: str = "features_final"
+        feature: tuple[str, str]
+        signal: tuple[str, str] | None = None
+        label: tuple[str, str] | None = None
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
 
     def __post_init__(self):
@@ -335,96 +350,216 @@ class DatafeatureStatsProbe(Datablock):
 
     def __build__(self):
         table = self.var.featuretable
-        feature = self.var.feature
+        feat_spec = self.var.feature
+        sig_spec = self.var.signal
 
-        if hasattr(table, 'slices') and feature in table.slices:
-            feat_slice = feature
-        elif hasattr(table, 'slices') and f"features_{feature.replace('.', '_')}" in table.slices:
-            feat_slice = f"features_{feature.replace('.', '_')}"
-        elif hasattr(table, 'available_slices') and feature in table.available_slices:
-            feat_slice = feature
+        if isinstance(feat_spec, (list, tuple)):
+            feat_slice = feat_spec[0]
+            feat_col = feat_spec[1] if len(feat_spec) > 1 else feat_spec[0]
         else:
-            feat_slice = feature
+            feat_slice = str(feat_spec)
+            feat_col = str(feat_spec)
 
-        self.log.verbose(f"COMPUTING stats for feature '{feature}' (normalization={self.var.normalization!r}): BEGIN")
+        self.log.verbose(f"COMPUTING stats for feature '{feat_slice}:{feat_col}' (normalization={self.var.normalization!r})")
 
-        raw_features = table.data(feat_slice, concat=True)[feat_slice]
-        if torch is not None and isinstance(raw_features, torch.Tensor):
-            feat_tensor = raw_features.float()
+        # Extract per-tab feature data
+        if hasattr(table, 'n_tabs') and table.n_tabs > 0:
+            tab_feat_list = []
+            for i in range(table.n_tabs):
+                tab_data = table.tab(i).data(feat_slice, concat=True)[feat_slice]
+                if isinstance(tab_data, dict):
+                    tab_data = tab_data.get(feat_col, next(iter(tab_data.values())))
+                tab_feat_list.append(tab_data)
         else:
-            feat_tensor = torch.from_numpy(np.array(raw_features)).float()
+            tab_data = table.data(feat_slice, concat=True)[feat_slice]
+            if isinstance(tab_data, dict):
+                tab_data = tab_data.get(feat_col, next(iter(tab_data.values())))
+            tab_feat_list = [tab_data]
 
-        feat_tensor = normalize_features(feat_tensor, self.var.normalization)
+        all_feats = []
+        tab_f_means, tab_f_stds, tab_f_medians, tab_f_mins, tab_f_maxs, tab_f_norms = [], [], [], [], [], []
 
-        if feat_tensor.dim() == 3:  # (N_tabs, N_tiles, D)
-            all_tiles = feat_tensor.reshape(-1, feat_tensor.shape[-1]).numpy()
-            sample_features = feat_tensor.mean(dim=1).numpy()
-        elif feat_tensor.dim() == 2:  # (N_samples, D)
-            all_tiles = feat_tensor.numpy()
-            sample_features = feat_tensor.numpy()
+        for tab_f in tab_feat_list:
+            if torch is not None and isinstance(tab_f, torch.Tensor):
+                arr = tab_f.float()
+            else:
+                arr = torch.from_numpy(np.array(tab_f)).float()
+            arr = normalize_features(arr, self.var.normalization).numpy()
+            if arr.ndim == 1:
+                arr = arr.reshape(1, -1)
+
+            all_feats.append(arr)
+            tab_f_means.append(np.mean(arr, axis=0))
+            tab_f_stds.append(np.std(arr, axis=0))
+            tab_f_medians.append(np.median(arr, axis=0))
+            tab_f_mins.append(np.min(arr, axis=0))
+            tab_f_maxs.append(np.max(arr, axis=0))
+            tab_f_norms.append(np.mean(np.linalg.norm(arr, axis=-1)))
+
+        concat_feats = np.concatenate(all_feats, axis=0)
+
+        # Overall feature stats
+        write_npz(self.path('feature_mean', ensure_dirpath=True), feature_mean=np.mean(concat_feats, axis=0))
+        write_npz(self.path('feature_std', ensure_dirpath=True), feature_std=np.std(concat_feats, axis=0))
+        write_npz(self.path('feature_median', ensure_dirpath=True), feature_median=np.median(concat_feats, axis=0))
+        write_npz(self.path('feature_min', ensure_dirpath=True), feature_min=np.min(concat_feats, axis=0))
+        write_npz(self.path('feature_max', ensure_dirpath=True), feature_max=np.max(concat_feats, axis=0))
+        write_npz(self.path('feature_norms', ensure_dirpath=True), feature_norms=np.linalg.norm(concat_feats, axis=-1))
+
+        # Tab feature stats
+        write_npz(self.path('tab_feature_mean', ensure_dirpath=True), tab_feature_mean=np.stack(tab_f_means))
+        write_npz(self.path('tab_feature_std', ensure_dirpath=True), tab_feature_std=np.stack(tab_f_stds))
+        write_npz(self.path('tab_feature_median', ensure_dirpath=True), tab_feature_median=np.stack(tab_f_medians))
+        write_npz(self.path('tab_feature_min', ensure_dirpath=True), tab_feature_min=np.stack(tab_f_mins))
+        write_npz(self.path('tab_feature_max', ensure_dirpath=True), tab_feature_max=np.stack(tab_f_maxs))
+        write_npz(self.path('tab_feature_norms', ensure_dirpath=True), tab_feature_norms=np.array(tab_f_norms))
+
+        # Extract per-tab signal data if signal is configured
+        if sig_spec is not None:
+            if isinstance(sig_spec, (list, tuple)):
+                sig_slice = sig_spec[0]
+                sig_col = sig_spec[1] if len(sig_spec) > 1 else sig_spec[0]
+            else:
+                sig_slice = str(sig_spec)
+                sig_col = str(sig_spec)
+
+            if hasattr(table, 'n_tabs') and table.n_tabs > 0:
+                tab_sig_list = []
+                for i in range(table.n_tabs):
+                    s_data = table.tab(i).data(sig_slice, concat=True)[sig_slice]
+                    if isinstance(s_data, dict):
+                        s_data = s_data.get(sig_col, next(iter(s_data.values())))
+                    tab_sig_list.append(s_data)
+            else:
+                s_data = table.data(sig_slice, concat=True)[sig_slice]
+                if isinstance(s_data, dict):
+                    s_data = s_data.get(sig_col, next(iter(s_data.values())))
+                tab_sig_list = [s_data]
+
+            all_sigs = []
+            tab_s_means, tab_s_stds, tab_s_medians, tab_s_mins, tab_s_maxs, tab_s_norms = [], [], [], [], [], []
+
+            for tab_s in tab_sig_list:
+                s_arr = np.array(tab_s)
+                if s_arr.ndim == 1:
+                    s_arr_2d = s_arr.reshape(-1, 1)
+                else:
+                    s_arr_2d = s_arr
+                all_sigs.append(s_arr)
+
+                if np.issubdtype(s_arr_2d.dtype, np.number):
+                    tab_s_means.append(np.mean(s_arr_2d, axis=0))
+                    tab_s_stds.append(np.std(s_arr_2d, axis=0))
+                    tab_s_medians.append(np.median(s_arr_2d, axis=0))
+                    tab_s_mins.append(np.min(s_arr_2d, axis=0))
+                    tab_s_maxs.append(np.max(s_arr_2d, axis=0))
+                    tab_s_norms.append(np.mean(np.linalg.norm(s_arr_2d, axis=-1)))
+                else:
+                    tab_s_means.append(np.array([0.0]))
+                    tab_s_stds.append(np.array([0.0]))
+                    tab_s_medians.append(np.array([0.0]))
+                    tab_s_mins.append(np.array([0.0]))
+                    tab_s_maxs.append(np.array([0.0]))
+                    tab_s_norms.append(0.0)
+
+            try:
+                concat_sigs = np.concatenate(all_sigs, axis=0)
+            except Exception:
+                concat_sigs = np.array(all_sigs, dtype=object)
+
+            signal_count = np.array(len(np.unique(concat_sigs, axis=0)) if concat_sigs.ndim > 0 else len(concat_sigs))
+            write_npz(self.path('signal_count', ensure_dirpath=True), signal_count=signal_count)
+
+            if np.issubdtype(concat_sigs.dtype, np.number):
+                write_npz(self.path('signal_mean', ensure_dirpath=True), signal_mean=np.mean(concat_sigs, axis=0))
+                write_npz(self.path('signal_std', ensure_dirpath=True), signal_std=np.std(concat_sigs, axis=0))
+                write_npz(self.path('signal_median', ensure_dirpath=True), signal_median=np.median(concat_sigs, axis=0))
+                write_npz(self.path('signal_min', ensure_dirpath=True), signal_min=np.min(concat_sigs, axis=0))
+                write_npz(self.path('signal_max', ensure_dirpath=True), signal_max=np.max(concat_sigs, axis=0))
+                write_npz(self.path('signal_norms', ensure_dirpath=True), signal_norms=np.linalg.norm(concat_sigs, axis=-1))
+
+            write_npz(self.path('tab_signal_mean', ensure_dirpath=True), tab_signal_mean=np.array(tab_s_means, dtype=object))
+            write_npz(self.path('tab_signal_std', ensure_dirpath=True), tab_signal_std=np.array(tab_s_stds, dtype=object))
+            write_npz(self.path('tab_signal_median', ensure_dirpath=True), tab_signal_median=np.array(tab_s_medians, dtype=object))
+            write_npz(self.path('tab_signal_min', ensure_dirpath=True), tab_signal_min=np.array(tab_s_mins, dtype=object))
+            write_npz(self.path('tab_signal_max', ensure_dirpath=True), tab_signal_max=np.array(tab_s_maxs, dtype=object))
+            write_npz(self.path('tab_signal_norms', ensure_dirpath=True), tab_signal_norms=np.array(tab_s_norms))
         else:
-            all_tiles = feat_tensor.reshape(-1, feat_tensor.shape[-1]).numpy()
-            sample_features = all_tiles
-
-        tile_count = np.array(len(all_tiles))
-        tile_feature_mean = np.mean(all_tiles, axis=0)
-        tile_feature_std = np.std(all_tiles, axis=0)
-        tile_feature_median = np.median(all_tiles, axis=0)
-        tile_feature_min = np.min(all_tiles, axis=0)
-        tile_feature_max = np.max(all_tiles, axis=0)
-        tile_feature_norms = np.linalg.norm(all_tiles, axis=1)
-
-        write_npz(self.path('tile_count', ensure_dirpath=True), tile_count=tile_count)
-        write_npz(self.path('tile_feature_mean', ensure_dirpath=True), tile_feature_mean=tile_feature_mean)
-        write_npz(self.path('tile_feature_std', ensure_dirpath=True), tile_feature_std=tile_feature_std)
-        write_npz(self.path('tile_feature_median', ensure_dirpath=True), tile_feature_median=tile_feature_median)
-        write_npz(self.path('tile_feature_min', ensure_dirpath=True), tile_feature_min=tile_feature_min)
-        write_npz(self.path('tile_feature_max', ensure_dirpath=True), tile_feature_max=tile_feature_max)
-        write_npz(self.path('tile_feature_norms', ensure_dirpath=True), tile_feature_norms=tile_feature_norms)
-
-        distinct_tile_count = np.array(np.unique(all_tiles, axis=0).shape[0])
-        write_npz(self.path('distinct_tile_count', ensure_dirpath=True), distinct_tile_count=distinct_tile_count)
-
-        sample_feature_mean = np.mean(sample_features, axis=0)
-        sample_feature_std = np.std(sample_features, axis=0)
-        write_npz(self.path('sample_feature_mean', ensure_dirpath=True), sample_feature_mean=sample_feature_mean)
-        write_npz(self.path('sample_feature_std', ensure_dirpath=True), sample_feature_std=sample_feature_std)
-        write_npz(self.path('bag_feature_mean', ensure_dirpath=True), bag_feature_mean=sample_feature_mean)
-        write_npz(self.path('bag_feature_std', ensure_dirpath=True), bag_feature_std=sample_feature_std)
+            signal_count = np.array(len(concat_feats))
+            write_npz(self.path('signal_count', ensure_dirpath=True), signal_count=signal_count)
 
         return self
 
     def __read__(self, topic: str):
-        if topic in ('bag_feature_mean', 'sample_feature_mean'):
-            return read_npz(self.path('sample_feature_mean'), 'sample_feature_mean')['sample_feature_mean']
+        if topic in ('tile_count', 'distinct_tile_count'):
+            return read_npz(self.path('signal_count'), 'signal_count')['signal_count']
+        elif topic == 'tile_feature_mean':
+            return read_npz(self.path('feature_mean'), 'feature_mean')['feature_mean']
+        elif topic == 'tile_feature_std':
+            return read_npz(self.path('feature_std'), 'feature_std')['feature_std']
+        elif topic == 'tile_feature_median':
+            return read_npz(self.path('feature_median'), 'feature_median')['feature_median']
+        elif topic == 'tile_feature_min':
+            return read_npz(self.path('feature_min'), 'feature_min')['feature_min']
+        elif topic == 'tile_feature_max':
+            return read_npz(self.path('feature_max'), 'feature_max')['feature_max']
+        elif topic == 'tile_feature_norms':
+            return read_npz(self.path('feature_norms'), 'feature_norms')['feature_norms']
+        elif topic in ('bag_feature_mean', 'sample_feature_mean'):
+            return read_npz(self.path('tab_feature_mean'), 'tab_feature_mean')['tab_feature_mean']
         elif topic in ('bag_feature_std', 'sample_feature_std'):
-            return read_npz(self.path('sample_feature_std'), 'sample_feature_std')['sample_feature_std']
+            return read_npz(self.path('tab_feature_std'), 'tab_feature_std')['tab_feature_std']
+
         return read_npz(self.path(topic), topic)[topic]
 
     @functools.cached_property
-    def tile_count(self):
-        return self.read('tile_count')
+    def feature_mean(self):
+        return self.read('feature_mean')
 
     @functools.cached_property
-    def tile_feature_mean(self):
-        return self.read('tile_feature_mean')
+    def feature_std(self):
+        return self.read('feature_std')
 
     @functools.cached_property
-    def tile_feature_std(self):
-        return self.read('tile_feature_std')
+    def feature_median(self):
+        return self.read('feature_median')
 
     @functools.cached_property
-    def tile_feature_median(self):
-        return self.read('tile_feature_median')
+    def feature_min(self):
+        return self.read('feature_min')
 
     @functools.cached_property
-    def tile_feature_min(self):
-        return self.read('tile_feature_min')
+    def feature_max(self):
+        return self.read('feature_max')
 
     @functools.cached_property
-    def tile_feature_max(self):
-        return self.read('tile_feature_max')
+    def feature_norms(self):
+        return self.read('feature_norms')
 
     @functools.cached_property
-    def tile_feature_norms(self):
-        return self.read('tile_feature_norms')
+    def tab_feature_mean(self):
+        return self.read('tab_feature_mean')
+
+    @functools.cached_property
+    def tab_feature_std(self):
+        return self.read('tab_feature_std')
+
+    @functools.cached_property
+    def tab_feature_median(self):
+        return self.read('tab_feature_median')
+
+    @functools.cached_property
+    def tab_feature_min(self):
+        return self.read('tab_feature_min')
+
+    @functools.cached_property
+    def tab_feature_max(self):
+        return self.read('tab_feature_max')
+
+    @functools.cached_property
+    def tab_feature_norms(self):
+        return self.read('tab_feature_norms')
+
+    @functools.cached_property
+    def signal_count(self):
+        return self.read('signal_count')

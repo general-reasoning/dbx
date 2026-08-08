@@ -119,7 +119,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
         url=url,
         spec=dict(
             featuretable=featuretable,
-            regressor=("features_final", "features_final"),
+            feature=("features_final", "features_final"),
             label=("labels", "labels"),
             evaluation_fraction=0.8,
         ),
@@ -165,20 +165,21 @@ def test_datafeature_stats_probe(tmp_path):
         url=url,
         spec=dict(
             featuretable=featuretable,
-            feature="features_final",
+            feature=("features_final", "features_final"),
+            signal=("samples", "samples"),
         ),
         tag="stats_probe",
     ).build()
 
     assert stats_probe.valid()
-    assert stats_probe.tile_count == 10
-    assert stats_probe.tile_feature_mean.shape == (8,)
-    assert stats_probe.tile_feature_std.shape == (8,)
-    assert stats_probe.tile_feature_median.shape == (8,)
-    assert stats_probe.tile_feature_min.shape == (8,)
-    assert stats_probe.tile_feature_max.shape == (8,)
-    assert stats_probe.tile_feature_norms.shape == (10,)
-    assert stats_probe.read('distinct_tile_count') > 0
+    assert stats_probe.feature_mean.shape == (8,)
+    assert stats_probe.feature_std.shape == (8,)
+    assert stats_probe.feature_median.shape == (8,)
+    assert stats_probe.feature_min.shape == (8,)
+    assert stats_probe.feature_max.shape == (8,)
+    assert stats_probe.feature_norms.shape == (10,)
+    assert stats_probe.tab_feature_mean.shape == (2, 8)
+    assert stats_probe.signal_count == 10
 
 
 if __name__ == "__main__":

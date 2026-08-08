@@ -49,8 +49,9 @@ class DatafeatureTab(DatasampleTab):
     class VAR(DatasampleTab.VAR):
         sampletab: DatasampleTab
         evaluator_factory: DatamodelEvaluatorFactory
-        shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
+        signal: tuple[str, str] | None = None
         features: dict | None = None
+        shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
 
@@ -86,12 +87,27 @@ class DatafeatureTab(DatasampleTab):
         }
 
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
-            sample_data = sampletab.data(concat=True)
-            input_key = next(iter(sample_data.keys()))
-            inputs = sample_data[input_key]
-            if isinstance(inputs, dict):
-                input_key_inner = next(iter(inputs.keys()))
-                inputs = inputs[input_key_inner]
+            if self.var.signal is not None:
+                if isinstance(self.var.signal, (list, tuple)):
+                    slice_name = self.var.signal[0]
+                    col_name = self.var.signal[1] if len(self.var.signal) > 1 else self.var.signal[0]
+                else:
+                    slice_name = str(self.var.signal)
+                    col_name = str(self.var.signal)
+
+                sample_data = sampletab.data(slice_name, concat=True)
+                slice_data = sample_data.get(slice_name, next(iter(sample_data.values())))
+                if isinstance(slice_data, dict):
+                    inputs = slice_data.get(col_name, next(iter(slice_data.values())))
+                else:
+                    inputs = slice_data
+            else:
+                sample_data = sampletab.data(concat=True)
+                input_key = next(iter(sample_data.keys()))
+                inputs = sample_data[input_key]
+                if isinstance(inputs, dict):
+                    input_key_inner = next(iter(inputs.keys()))
+                    inputs = inputs[input_key_inner]
 
             if not hasattr(inputs, 'shape') or not hasattr(inputs, 'to'):
                 inputs = torch.tensor(np.array(inputs))
@@ -209,8 +225,9 @@ class DatafeatureTable(DatasampleTable):
     class VAR(DatasampleTable.VAR):
         sampletable: DatasampleTable
         evaluator_factory: DatamodelEvaluatorFactory
-        shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
+        signal: tuple[str, str] | None = None
         features: dict | None = None
+        shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
     # 1. Datablock / Datastack Protocol Methods ─────────────────────
 
@@ -258,10 +275,12 @@ class DatafeatureTable(DatasampleTable):
         spec = dict(
             sampletab=dbx.quote(sampletab),
             evaluator_factory=self.spec['evaluator_factory'],
-            shard_size_limit_bytes=self.var.shard_size_limit_bytes,
         )
+        if self.var.signal is not None:
+            spec['signal'] = self.var.signal
         if self.var.features is not None:
             spec['features'] = self.var.features
+        spec['shard_size_limit_bytes'] = self.var.shard_size_limit_bytes
         return self.TAB(
             url=self.path('tabs'),
             storage_options=self.storage_options,

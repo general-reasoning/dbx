@@ -28,3 +28,4 @@ from .datablocks import *
 from .datasamples import *
 from .datamodels import *
 from .datafeatures import *
+from .dataprobes import *

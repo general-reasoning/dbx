@@ -243,6 +243,30 @@ def test_custom_features_mapping(tmp_path):
     assert res["custom_output"].shape == (10, 8)
 
 
+def test_signal_selection(tmp_path):
+    url = str(tmp_path)
+    sampletab = DummySampleTab(url=url, tag="samples_sig").build()
+    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
+    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
+        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
+    )
+
+    featuretab = DatafeatureTab(
+        url=url,
+        spec=dict(
+            sampletab=sampletab,
+            evaluator_factory=eval_factory,
+            signal=("samples", "samples"),
+        ),
+        device="cpu",
+        tag="features_sig",
+    ).build()
+
+    assert featuretab.valid()
+    res = featuretab.data("features_final")
+    assert res["features_final"].shape == (10, 8)
+
+
 if __name__ == "__main__":
     import sys
     dbx.dataparts.gitwrkreposetup = lambda *a, **k: None

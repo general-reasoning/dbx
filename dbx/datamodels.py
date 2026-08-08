@@ -34,14 +34,14 @@ class DatamodelEvaluator:
     """
 
     DEFAULT_MODEL: Any = None
-    DEFAULT_BACKBONE: Any = None
     DEFAULT_TRANSFORM: Any = None
+
+    # 1. Datablock / Evaluator Protocol Methods ─────────────────────
 
     def __init__(
         self,
         model=None,
         *,
-        backbone=None,
         capture_layers: list[str] | None = None,
         capture_final: bool = True,
         transform=None,
@@ -50,10 +50,7 @@ class DatamodelEvaluator:
     ):
         self.device = device
         self.log = log or Logger(stack_depth=3)
-        model_val = model if model is not None else backbone
-        if model_val is None:
-            model_val = self.DEFAULT_MODEL if self.DEFAULT_MODEL is not None else self.DEFAULT_BACKBONE
-        self._model = model_val
+        self._model = model if model is not None else self.DEFAULT_MODEL
         self.transform = transform if transform is not None else self.DEFAULT_TRANSFORM
         if self.transform is None:
             self.transform = lambda x: x
@@ -62,53 +59,6 @@ class DatamodelEvaluator:
         self.capture_final = capture_final
         self._captured: dict[str, Any] = {}
         self._hooks_registered = False
-
-    @property
-    def model(self):
-        """Lazy-load the model on first access."""
-        if isinstance(self._model, str):
-            self.log.verbose(f"Evaluating {self._model} on {self.device}")
-            model_obj = dbx.eval(self._model)
-            if hasattr(model_obj, 'to'):
-                model_obj = model_obj.to(self.device)
-            self._model = model_obj
-        return self._model
-
-    @property
-    def backbone(self):
-        """Alias for model."""
-        return self.model
-
-    def _make_capture_hook(self, name: str):
-        def hook(module, input, output):
-            t = output
-            if isinstance(t, (tuple, list)):
-                t = t[0]
-            if hasattr(t, 'cpu'):
-                t = t.cpu().detach()
-            self._captured[name] = t
-        return hook
-
-    def _register_capture_hooks(self):
-        if self._hooks_registered:
-            return
-
-        for layer in self.capture_layers:
-            if layer in ("backbone", "model"):
-                self.model.register_forward_hook(self._make_capture_hook(layer))
-            else:
-                getattr(self.model, layer).register_forward_hook(self._make_capture_hook(layer))
-            self.log.debug(f"Registered capture hook: {layer}")
-
-        self._hooks_registered = True
-
-    @property
-    def layer_names(self) -> list[str]:
-        """Return the ordered list of capture keys that ``__call__`` produces."""
-        names = list(self.capture_layers)
-        if self.capture_final:
-            names.append('final')
-        return names
 
     def __pre_call__(self):
         """Hook called before each forward pass (e.g. to lazily register hooks)."""
@@ -142,10 +92,56 @@ class DatamodelEvaluator:
             torch.cuda.empty_cache()
         return self
 
+    # 2. Properties and Accessors ───────────────────────────────────
+
+    @property
+    def model(self):
+        """Lazy-load the model on first access."""
+        if isinstance(self._model, str):
+            self.log.verbose(f"Evaluating {self._model} on {self.device}")
+            model_obj = dbx.eval(self._model)
+            if hasattr(model_obj, 'to'):
+                model_obj = model_obj.to(self.device)
+            self._model = model_obj
+        return self._model
+
+    @property
+    def layer_names(self) -> list[str]:
+        """Return the ordered list of capture keys that ``__call__`` produces."""
+        names = list(self.capture_layers)
+        if self.capture_final:
+            names.append('final')
+        return names
+
     @property
     def layer_features(self) -> dict[str, Any]:
         """Most recently captured activations (read-only snapshot)."""
         return dict(self._captured)
+
+    # 3. Private and Utility Methods ────────────────────────────────
+
+    def _make_capture_hook(self, name: str):
+        def hook(module, input, output):
+            t = output
+            if isinstance(t, (tuple, list)):
+                t = t[0]
+            if hasattr(t, 'cpu'):
+                t = t.cpu().detach()
+            self._captured[name] = t
+        return hook
+
+    def _register_capture_hooks(self):
+        if self._hooks_registered:
+            return
+
+        for layer in self.capture_layers:
+            if layer in ("backbone", "model"):
+                self.model.register_forward_hook(self._make_capture_hook(layer))
+            else:
+                getattr(self.model, layer).register_forward_hook(self._make_capture_hook(layer))
+            self.log.debug(f"Registered capture hook: {layer}")
+
+        self._hooks_registered = True
 
 
 class DatamodelEvaluatorFactory(Datablock):
@@ -167,6 +163,8 @@ class DatamodelEvaluatorFactory(Datablock):
     class VAR(Datablock.VAR):
         capture_layers: list = field(default_factory=list)  # list[str] — named layers
         capture_final: bool = True  # capture model output as 'features_final'
+
+    # 1. Datablock Protocol Methods ─────────────────────────────────
 
     def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DatamodelEvaluator:
         """Create a live :class:`DatamodelEvaluator`.
@@ -212,11 +210,12 @@ class DataformerEvaluator(DatamodelEvaluator):
         Logger instance.
     """
 
+    # 1. Datablock / Evaluator Protocol Methods ─────────────────────
+
     def __init__(
         self,
         model=None,
         *,
-        backbone=None,
         capture_blocks: list[int] | str | None = None,
         capture_layers: list[str] | None = None,
         capture_final: bool = True,
@@ -225,9 +224,8 @@ class DataformerEvaluator(DatamodelEvaluator):
         device: str = "cuda",
         log: Logger | None = None,
     ):
-        model_val = model if model is not None else backbone
         super().__init__(
-            model=model_val,
+            model=model,
             capture_layers=capture_layers,
             capture_final=capture_final,
             transform=transform,
@@ -238,10 +236,25 @@ class DataformerEvaluator(DatamodelEvaluator):
         self.capture_blocks = list(capture_blocks) if isinstance(capture_blocks, (list, tuple)) else []
         self.cls_token_only = cls_token_only
 
+    def __call__(self, x) -> dict[str, Any]:
+        result = super().__call__(x)
+        if self.capture_final and self.cls_token_only:
+            out = result['final']
+            if hasattr(out, 'dim') and out.dim() == 3:
+                result['final'] = out[:, 0]
+        return result
+
+    # 2. Properties and Accessors ───────────────────────────────────
+
     @property
-    def backbone(self):
-        """Alias for model."""
-        return self.model
+    def layer_names(self) -> list[str]:
+        names = [self._capture_key(b) for b in self.capture_blocks]
+        names += [self._capture_key(l) for l in self.capture_layers]
+        if self.capture_final:
+            names.append('final')
+        return names
+
+    # 3. Private and Utility Methods ────────────────────────────────
 
     def _get_blocks(self, model):
         """Extract transformer block container from model."""
@@ -252,6 +265,10 @@ class DataformerEvaluator(DatamodelEvaluator):
         if hasattr(model, 'transformer') and hasattr(model.transformer, 'blocks'):
             return model.transformer.blocks
         raise AttributeError(f"Could not find blocks/layers on model {type(model).__name__}")
+
+    @staticmethod
+    def _capture_key(layer) -> str:
+        return f"block.{layer}" if isinstance(layer, int) else str(layer)
 
     def _make_capture_hook(self, name: str):
         cls_only = self.cls_token_only
@@ -266,10 +283,6 @@ class DataformerEvaluator(DatamodelEvaluator):
                 t = t[:, 0]
             self._captured[name] = t
         return hook
-
-    @staticmethod
-    def _capture_key(layer) -> str:
-        return f"block.{layer}" if isinstance(layer, int) else str(layer)
 
     def _register_capture_hooks(self):
         if self._hooks_registered:
@@ -293,22 +306,6 @@ class DataformerEvaluator(DatamodelEvaluator):
 
         super()._register_capture_hooks()
 
-    @property
-    def layer_names(self) -> list[str]:
-        names = [self._capture_key(b) for b in self.capture_blocks]
-        names += [self._capture_key(l) for l in self.capture_layers]
-        if self.capture_final:
-            names.append('final')
-        return names
-
-    def __call__(self, x) -> dict[str, Any]:
-        result = super().__call__(x)
-        if self.capture_final and self.cls_token_only:
-            out = result['final']
-            if hasattr(out, 'dim') and out.dim() == 3:
-                result['final'] = out[:, 0]
-        return result
-
 
 class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
     """Datablock factory for Transformer-specific evaluators (Dataformer)."""
@@ -320,6 +317,8 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
     class VAR(DatamodelEvaluatorFactory.VAR):
         capture_blocks: list = field(default_factory=list)  # list[int] — transformer block indices
         cls_token_only: bool = False  # capture only CLS token activations
+
+    # 1. Datablock Protocol Methods ─────────────────────────────────
 
     def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DataformerEvaluator:
         """Create a live :class:`DataformerEvaluator`.

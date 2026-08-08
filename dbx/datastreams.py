@@ -924,7 +924,32 @@ def read_mds_shard(shard_dir, fs, cache_limit='2gb', tmpdir=None):
             shutil.rmtree(cleanup, ignore_errors=True)
 
 
-def concat_data(result):
+def _parse_slice_entries(raw_slices):
+    names = []
+    dtypes = {}
+    if isinstance(raw_slices, (tuple, list)):
+        for item in raw_slices:
+            if isinstance(item, str):
+                name, dtype = item, 'object'
+            elif isinstance(item, (tuple, list)):
+                if len(item) == 1:
+                    name, dtype = item[0], 'object'
+                elif len(item) >= 2:
+                    name, dtype = item[0], item[1]
+                else:
+                    raise ValueError(f"Invalid SLICES entry: {item!r}")
+            else:
+                raise TypeError(f"SLICES entry must be str or tuple, got {item!r}")
+            names.append(name)
+            dtypes[name] = dtype
+    elif isinstance(raw_slices, dict):
+        for name, dtype in raw_slices.items():
+            names.append(name)
+            dtypes[name] = dtype or 'object'
+    return tuple(dict.fromkeys(names)), dtypes
+
+
+def concat_data(result, dtype=None):
     """Concatenate a list of tensors/ndarrays or a list of dicts.
 
     If *result* is a list of tensors or list of numpy arrays, stack them along axis 0.
@@ -941,8 +966,29 @@ def concat_data(result):
         out = {}
         for k in keys:
             val_list = [d[k] for d in result]
-            out[k] = concat_data(val_list)
+            out[k] = concat_data(val_list, dtype=dtype)
         return out
+
+    if dtype is not None:
+        dtype_str = str(dtype).lower()
+        if dtype_str in ('object', "<class 'object'>"):
+            if isinstance(first, torch.Tensor) and all(isinstance(x, torch.Tensor) for x in result):
+                return torch.stack(result, dim=0)
+            if isinstance(first, np.ndarray) and all(isinstance(x, np.ndarray) for x in result):
+                return np.stack(result, axis=0)
+            return result
+        if dtype_str in ('tensor', 'torch') or dtype_str.startswith('tensor:'):
+            if all(isinstance(x, torch.Tensor) for x in result):
+                return torch.stack(result, dim=0)
+            return torch.stack([torch.as_tensor(x) for x in result], dim=0)
+        if dtype_str in ('ndarray', 'numpy') or dtype_str.startswith('ndarray:'):
+            if all(isinstance(x, np.ndarray) for x in result):
+                return np.stack(result, axis=0)
+            return np.array(result)
+        try:
+            return np.array(result, dtype=dtype)
+        except Exception:
+            pass
 
     if isinstance(first, torch.Tensor) and all(isinstance(x, torch.Tensor) for x in result):
         return torch.stack(result, dim=0)
@@ -1006,6 +1052,7 @@ class SlicedTopics:
 
     # Slice names, in the order they are zipped.  Declared by the subclass.
     SLICES = ()
+    SLICE_DTYPES = {}
 
     TOPICS = {}
 
@@ -1042,8 +1089,8 @@ class SlicedTopics:
 
         declared = own.get(cls.DATA)
         if isinstance(declared, dict) and declared:
-            slices = tuple(declared)
-            data_group = dict(declared)
+            slices, slice_dtypes = _parse_slice_entries(declared)
+            data_group = {name: DIRTOPIC for name in slices}
             own_slices = tuple(cls.__dict__.get('SLICES') or ())
             if own_slices and own_slices != slices:
                 raise ValueError(
@@ -1052,20 +1099,26 @@ class SlicedTopics:
                     f"declare one or the other"
                 )
         else:
-            slices = tuple(dict.fromkeys(cls.SLICES))
+            raw_slices = cls.__dict__.get('SLICES')
+            if raw_slices is None:
+                raw_slices = cls.SLICES
+            slices, slice_dtypes = _parse_slice_entries(raw_slices)
             data_group = {name: DIRTOPIC for name in slices}
 
         topics = {cls.DATA: data_group} if data_group else {}
         # Base-first, so a subclass's own entry overwrites what it inherits.
+        inherited_dtypes = {}
         for klass in reversed(cls.__mro__[1:]):
             inherited = klass.__dict__.get('TOPICS')
             if isinstance(inherited, dict):
                 topics.update({name: node for name, node in inherited.items()
                                if name != cls.DATA})
-        topics.update({name: node for name, node in own.items()
-                       if name != cls.DATA})
+            if hasattr(klass, 'SLICE_DTYPES'):
+                inherited_dtypes.update(klass.SLICE_DTYPES)
+        inherited_dtypes.update(slice_dtypes)
 
         cls.SLICES = slices
+        cls.SLICE_DTYPES = inherited_dtypes
         cls.TOPICS = topics
 
     # ------------------------------------------------------------------ #
@@ -1092,7 +1145,7 @@ class SlicedTopics:
         if unknown:
             raise KeyError(
                 f"{self.__class__.__name__}: unknown slice(s) {unknown}; "
-                f"declared slices are {list(self.slices)}"
+                f"available are {list(self.slices)}"
             )
         return tuple(slices)
 
@@ -1105,15 +1158,7 @@ class SlicedTopics:
     # ------------------------------------------------------------------ #
 
     def valid_slice(self, slice_name) -> bool:
-        """True when *slice_name* has a **non-empty** ``index.json``.
-
-        Existence of the directory is not enough, and neither is existence of
-        the index: ``MDSWriter.finish()`` writes an ``index.json`` even when
-        nothing was ever written through it, so a tab whose every input was
-        unreadable would otherwise report built and contribute an empty
-        stream to the table's merged index -- which surfaces much later, and
-        much less clearly, as ``Stream contains no samples``.
-        """
+        """True when *slice_name* has a **non-empty** ``index.json``."""
         try:
             index_path = self.slice_index_path(slice_name)
             if not self.fs.exists(index_path):
@@ -1191,12 +1236,13 @@ class SlicedTopics:
             Passed to ``_read_slice()``.
         """
         names = self._slicenames(slices)
+        slice_dtypes = getattr(self, 'SLICE_DTYPES', {})
         if len(names) == 1 and slices:
             res = self._read_slice(names[0], **kwargs)
-            return concat_data(res) if concat else res
+            return concat_data(res, dtype=slice_dtypes.get(names[0])) if concat else res
         res = {name: self._read_slice(name, **kwargs) for name in names}
         if concat:
-            return {name: concat_data(val) for name, val in res.items()}
+            return {name: concat_data(val, dtype=slice_dtypes.get(name)) for name, val in res.items()}
         return res
 
     def _read_slice(self, slice_name, **kwargs):

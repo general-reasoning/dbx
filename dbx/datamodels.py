@@ -166,6 +166,14 @@ class DatamodelEvaluatorFactory(Datablock):
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
+    def __init__(self, *, capture_layers=None, capture_final=True, spec=None, **kwargs):
+        spec = dict(spec) if spec is not None else {}
+        if capture_layers is not None:
+            spec['capture_layers'] = capture_layers
+        if capture_final is not True:
+            spec['capture_final'] = capture_final
+        super().__init__(spec=spec, **kwargs)
+
     def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DatamodelEvaluator:
         """Create a live `DatamodelEvaluator`.
 
@@ -233,7 +241,7 @@ class DataformerEvaluator(DatamodelEvaluator):
             log=log,
         )
         self.capture_blocks_raw = capture_blocks
-        self.capture_blocks = list(capture_blocks) if isinstance(capture_blocks, (list, tuple)) else []
+        self.capture_blocks = list(capture_blocks) if isinstance(capture_blocks, (list, tuple)) else ([] if capture_blocks != 'all' else 'all')
         self.cls_token_only = cls_token_only
 
     def __call__(self, x) -> dict[str, Any]:
@@ -248,7 +256,20 @@ class DataformerEvaluator(DatamodelEvaluator):
 
     @property
     def layer_names(self) -> list[str]:
-        names = [self._capture_key(b) for b in self.capture_blocks]
+        blocks_spec = self.capture_blocks
+        if blocks_spec == 'all' or self.capture_blocks_raw == 'all':
+            blocks = self._get_blocks(self.model)
+            blocks_list = list(range(len(blocks)))
+        elif isinstance(blocks_spec, (list, tuple)):
+            if any(isinstance(b, int) and b < 0 for b in blocks_spec):
+                blocks = self._get_blocks(self.model)
+                blocks_list = [len(blocks) + b if isinstance(b, int) and b < 0 else b for b in blocks_spec]
+            else:
+                blocks_list = list(blocks_spec)
+        else:
+            blocks_list = []
+
+        names = [self._capture_key(b) for b in blocks_list]
         names += [self._capture_key(l) for l in self.capture_layers]
         if self.capture_final:
             names.append('final')
@@ -288,18 +309,23 @@ class DataformerEvaluator(DatamodelEvaluator):
         if self._hooks_registered:
             return
 
-        if self.capture_blocks_raw == 'all':
-            blocks = self._get_blocks(self.model)
-            self.capture_blocks = list(range(len(blocks)))
+        blocks = self._get_blocks(self.model)
 
-        if self.capture_blocks:
-            blocks = self._get_blocks(self.model)
+        if self.capture_blocks_raw == 'all' or self.capture_blocks == 'all':
+            self.capture_blocks = list(range(len(blocks)))
+        elif self.capture_blocks:
+            resolved = []
             for idx in self.capture_blocks:
                 if idx < 0:
                     idx = len(blocks) + idx
                 assert 0 <= idx < len(blocks), (
                     f"Block index {idx} out of range [0, {len(blocks)})"
                 )
+                resolved.append(idx)
+            self.capture_blocks = resolved
+
+        if isinstance(self.capture_blocks, list):
+            for idx in self.capture_blocks:
                 key = self._capture_key(idx)
                 blocks[idx].register_forward_hook(self._make_capture_hook(key))
                 self.log.debug(f"Registered capture hook: {key}")
@@ -319,6 +345,18 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
         cls_token_only: bool = False  # capture only CLS token activations
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
+
+    def __init__(self, *, capture_blocks=None, capture_layers=None, capture_final=True, cls_token_only=False, spec=None, **kwargs):
+        spec = dict(spec) if spec is not None else {}
+        if capture_blocks is not None:
+            spec['capture_blocks'] = capture_blocks
+        if capture_layers is not None:
+            spec['capture_layers'] = capture_layers
+        if capture_final is not True:
+            spec['capture_final'] = capture_final
+        if cls_token_only:
+            spec['cls_token_only'] = cls_token_only
+        super().__init__(spec=spec, **kwargs)
 
     def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DataformerEvaluator:
         """Create a live `DataformerEvaluator`.

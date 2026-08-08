@@ -267,6 +267,36 @@ def test_signal_selection(tmp_path):
     assert res["features_final"].shape == (10, 8)
 
 
+def test_datacollator():
+    from dbx.datafeatures import Datacollator
+
+    collator = Datacollator(
+        spec=dict(
+            signals=[("samples", "samples"), ("extra", "extra")],
+            labels=[("labels", "labels")],
+        )
+    )
+
+    batch_datapoints = [
+        {
+            "samples": {"samples": np.ones((5, 4), dtype=np.float32)},
+            "extra": {"extra": np.zeros((5, 4), dtype=np.float32)},
+            "labels": {"labels": np.int64(1)},
+        },
+        {
+            "samples": {"samples": np.ones((5, 4), dtype=np.float32) * 2},
+            "extra": {"extra": np.zeros((5, 4), dtype=np.float32) * 2},
+            "labels": {"labels": np.int64(0)},
+        },
+    ]
+
+    out = collator(batch_datapoints)
+    assert "signal" in out
+    assert "label" in out
+    assert out["signal"].shape == (2, 5, 2, 4)  # batch=2, tokens=5, signals=2, d=4
+    assert out["label"].shape == (2, 1, 1, 1)
+
+
 if __name__ == "__main__":
     import sys
     dbx.dataparts.gitwrkreposetup = lambda *a, **k: None

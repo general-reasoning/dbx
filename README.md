@@ -157,21 +157,21 @@ stack.build()
 
 See [DATASTACK.md](DATASTACK.md) for `__split__` / `__stack__`, shared state and multi-GPU.
 
-### DatastreamTab & DatastreamTable
+### DatapointTab & DatapointTable
 
-`dbx.datastreams` (needs the `torch` and `streaming` extras) adds a `Datablock` /
+`dbx.datapoints` (needs the `torch` and `streaming` extras) adds a `Datablock` /
 `Datastack` pair for datasets stored as parallel MDS streams — *slices* — that
 can be zipped into one `torch.utils.data.Dataset` on demand:
 
 ```python
-from dbx.datastreams import DatastreamTab, DatastreamTable
+from dbx.datapoints import DatapointTab, DatapointTable
 
-class FrameTab(DatastreamTab):
+class FrameTab(DatapointTab):
     SLICES = ('frames', 'annotations')
     def __build__(self):
         with self.slice_writers(COLUMNS) as writers: ...   # written in lockstep
 
-class FrameTable(DatastreamTable):
+class FrameTable(DatapointTable):
     TAB = FrameTab
     @property
     def n_tabs(self): return len(self.var.episodes)
@@ -185,6 +185,14 @@ table.data('annotations')                # every tab's samples, concatenated
 ```
 
 See [DATASTREAMTABLE.md](DATASTREAMTABLE.md).
+
+### Data Terminology
+
+Data in `DatapointTab` / `DatapointTable` (and derived feature tables) follows a consistent structure:
+
+- **Datapoints / Observations (`obs`)**: The individual atomic data items (e.g. single vectors, tiles, or frames).
+- **Datapacks / Windows / Contexts / Sequences**: Datapoints are assembled into datapacks (also referred to as packs, windows, contexts, or sequences). A datapack can contain one or several datapoints. The length of the pack is fixed throughout the `Tab` / `Table` by its `VAR` specification at build time. By default, single-datapoint packs are assumed (`pack_length = 1`).
+- **Slices & Columns**: A datapoint is composed of columns organized into `SLICES`. Individual columns are addressed by `(slice, column)` pairs (for example `("features_final", "features_final")` or `("labels", "class_id")`).
 
 ### Configuration & `env()`
 

@@ -152,8 +152,8 @@ class DatamodelEvaluatorFactory(Datablock):
     as a spec dependency, enabling deterministic hashing and lineage tracking.
 
     Concrete subclasses may extend ``VAR`` with model-specific fields
-    and override :meth:`evaluator` to return a ready-to-use
-    :class:`DatamodelEvaluator`.
+    and override `evaluator()` to return a ready-to-use
+    `DatamodelEvaluator`.
     """
 
     VERSION = 1
@@ -167,7 +167,7 @@ class DatamodelEvaluatorFactory(Datablock):
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
     def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DatamodelEvaluator:
-        """Create a live :class:`DatamodelEvaluator`.
+        """Create a live `DatamodelEvaluator`.
 
         The result is cached per device so that repeated calls with
         the same device return the same instance.
@@ -321,7 +321,7 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
     def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DataformerEvaluator:
-        """Create a live :class:`DataformerEvaluator`.
+        """Create a live `DataformerEvaluator`.
 
         The result is cached per device so that repeated calls with
         the same device return the same instance.

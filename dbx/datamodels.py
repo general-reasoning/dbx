@@ -187,7 +187,7 @@ class DatamodelEvaluatorFactory(Datablock):
 
 
 class DataformerEvaluator(DatamodelEvaluator):
-    """Transformer-specific activation-capturing backbone evaluator.
+    """Transformer-specific activation-capturing model evaluator.
 
     Parameters
     ----------

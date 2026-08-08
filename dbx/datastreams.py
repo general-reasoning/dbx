@@ -1115,6 +1115,8 @@ class SlicedTopics:
                                if name != cls.DATA})
             if hasattr(klass, 'SLICE_DTYPES'):
                 inherited_dtypes.update(klass.SLICE_DTYPES)
+        topics.update({name: node for name, node in own.items()
+                       if name != cls.DATA})
         inherited_dtypes.update(slice_dtypes)
 
         cls.SLICES = slices

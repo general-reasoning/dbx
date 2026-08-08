@@ -922,6 +922,38 @@ def read_mds_shard(shard_dir, fs, cache_limit='2gb', tmpdir=None):
             shutil.rmtree(cleanup, ignore_errors=True)
 
 
+def concat_data(result):
+    """Concatenate a list of tensors/ndarrays or a list of dicts.
+
+    If *result* is a list of tensors or list of numpy arrays, stack them along axis 0.
+    If *result* is a list of dicts, process each key: if its values across dicts are
+    tensors/ndarrays, stack them along axis 0; otherwise keep them as a list inside the dict.
+    """
+    if not isinstance(result, list) or not result:
+        return result
+
+    first = result[0]
+
+    if isinstance(first, dict):
+        keys = first.keys()
+        out = {}
+        for k in keys:
+            val_list = [d[k] for d in result]
+            out[k] = concat_data(val_list)
+        return out
+
+    if isinstance(first, torch.Tensor) and all(isinstance(x, torch.Tensor) for x in result):
+        return torch.stack(result, dim=0)
+
+    if isinstance(first, np.ndarray) and all(isinstance(x, np.ndarray) for x in result):
+        return np.stack(result, axis=0)
+
+    if isinstance(first, np.generic) and all(isinstance(x, np.generic) for x in result):
+        return np.array(result)
+
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  DatastreamTab / DatastreamTable — a Datablock / Datastack pair over MDS slices
 # ═══════════════════════════════════════════════════════════════════════
@@ -1136,17 +1168,34 @@ class SlicedTopics:
         os.makedirs(cacheroot, exist_ok=True)
         return cacheroot
 
-    def data(self, *slices, **kwargs):
-        """Every sample of the named slices, decoded into a list.
+    def data(self, *slices, concat: bool = False, **kwargs):
+        """Every sample of the named slices, decoded into a list (or concatenated).
 
-        One slice gives ``list[dict]``; several (or none, meaning all) give
-        ``{slice: list[dict]}``.  Materialises the whole slice in memory --
-        for anything training-shaped use ``dataset()`` instead.
+        One slice gives ``list[dict]`` (or concatenated dict if *concat=True*);
+        several (or none, meaning all) give ``{slice: list[dict]}`` (or
+        ``{slice: concat_dict}`` if *concat=True*).  Materialises the whole slice
+        in memory -- for anything training-shaped use ``dataset()`` instead.
+
+        Parameters
+        ----------
+        *slices : str
+            Slice names to read.
+        concat : bool, optional
+            If True and the result is a list of tensors/ndarrays, stack them along
+            a new first dimension. If the result is a list of dicts, concat each
+            dict value separately (tensors/ndarrays are stacked, non-tensors remain
+            a list inside the dict). Defaults to False.
+        **kwargs
+            Passed to ``_read_slice()``.
         """
         names = self._slicenames(slices)
         if len(names) == 1 and slices:
-            return self._read_slice(names[0], **kwargs)
-        return {name: self._read_slice(name, **kwargs) for name in names}
+            res = self._read_slice(names[0], **kwargs)
+            return concat_data(res) if concat else res
+        res = {name: self._read_slice(name, **kwargs) for name in names}
+        if concat:
+            return {name: concat_data(val) for name, val in res.items()}
+        return res
 
     def _read_slice(self, slice_name, **kwargs):
         """Decode one slice.  Internal: ``data()`` is the override point."""

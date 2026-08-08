@@ -42,14 +42,11 @@ class DatamodelEvaluator:
         Logger instance.
     """
 
-    DEFAULT_MODEL: Any = None
-    DEFAULT_TRANSFORM: Any = None
-
     # 1. Datablock / Evaluator Protocol Methods ─────────────────────
 
     def __init__(
         self,
-        model=None,
+        model: Any,
         *,
         capture_layers: list[str] | None = None,
         capture_final: bool = True,
@@ -59,10 +56,8 @@ class DatamodelEvaluator:
     ):
         self.device = device
         self.log = log or Logger(stack_depth=3)
-        self._model = model if model is not None else self.DEFAULT_MODEL
-        self.transform = transform if transform is not None else self.DEFAULT_TRANSFORM
-        if self.transform is None:
-            self.transform = lambda x: x
+        self._model = model
+        self.transform = transform if transform is not None else (lambda x: x)
 
         self.capture_layers = list(capture_layers or [])
         self.capture_final = capture_final
@@ -170,13 +165,16 @@ class DatamodelEvaluatorFactory(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
+        model: Any
         capture_layers: list = field(default_factory=list)  # list[str] — named layers
         capture_final: bool = True  # capture model output as 'features_final'
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
-    def __init__(self, *, capture_layers=None, capture_final=True, spec=None, **kwargs):
+    def __init__(self, model=None, *, capture_layers=None, capture_final=True, spec=None, **kwargs):
         spec = dict(spec) if spec is not None else {}
+        if model is not None:
+            spec['model'] = model
         if capture_layers is not None:
             spec['capture_layers'] = capture_layers
         if capture_final is not True:
@@ -194,13 +192,21 @@ class DatamodelEvaluatorFactory(Datablock):
         if device not in self._evaluators:
             log = log or self.log
             self._evaluators[device] = self.Evaluator(
-                model=None,
+                model=self.var.model,
                 capture_layers=self.var.capture_layers,
                 capture_final=self.var.capture_final,
                 device=device,
                 log=log,
             )
         return self._evaluators[device]
+
+    @property
+    def layer_names(self) -> list[str]:
+        """Return the list of feature layer names configured on this factory."""
+        names = list(self.var.capture_layers)
+        if self.var.capture_final:
+            names.append('final')
+        return names
 
 
 class DataformerEvaluator(DatamodelEvaluator):
@@ -231,7 +237,7 @@ class DataformerEvaluator(DatamodelEvaluator):
 
     def __init__(
         self,
-        model=None,
+        model: Any,
         *,
         capture_blocks: list[int] | str | None = None,
         capture_layers: list[str] | None = None,
@@ -242,7 +248,7 @@ class DataformerEvaluator(DatamodelEvaluator):
         log: Logger | None = None,
     ):
         super().__init__(
-            model=model,
+            model,
             capture_layers=capture_layers,
             capture_final=capture_final,
             transform=transform,
@@ -355,8 +361,10 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
-    def __init__(self, *, capture_blocks=None, capture_layers=None, capture_final=True, cls_token_only=False, spec=None, **kwargs):
+    def __init__(self, model=None, *, capture_blocks=None, capture_layers=None, capture_final=True, cls_token_only=False, spec=None, **kwargs):
         spec = dict(spec) if spec is not None else {}
+        if model is not None:
+            spec['model'] = model
         if capture_blocks is not None:
             spec['capture_blocks'] = capture_blocks
         if capture_layers is not None:
@@ -378,7 +386,7 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
         if device not in self._evaluators:
             log = log or self.log
             self._evaluators[device] = self.Evaluator(
-                model=None,
+                model=self.var.model,
                 capture_blocks=self.var.capture_blocks,
                 capture_layers=self.var.capture_layers,
                 capture_final=self.var.capture_final,

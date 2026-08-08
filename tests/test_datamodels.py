@@ -64,6 +64,7 @@ def test_datamodel_evaluator_basic():
 
 def test_datamodel_evaluator_factory():
     factory = DatamodelEvaluatorFactory(
+        model="$tests.test_datamodels.DummyModel()",
         capture_layers=["layer1"],
         capture_final=True,
     )
@@ -118,6 +119,7 @@ def test_dataformer_evaluator_all_blocks():
 
 def test_dataformer_evaluator_factory():
     factory = DataformerEvaluatorFactory(
+        model="$tests.test_datamodels.DummyTransformer()",
         capture_blocks=[0, 1],
         cls_token_only=True,
         capture_final=True,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import gc
 import math
 from typing import Any
 
@@ -14,17 +15,27 @@ except ImportError:
     torch = None
 
 import dbx
+from dbx.datablocks import Datastack
 from dbx.datamodels import DatamodelEvaluatorFactory
+from dbx.datasamples import (
+    DatasampleTab,
+    DatasampleTable,
+    DIRTOPIC,
+)
 from dbx.datastreams import (
-    DatastreamTab,
-    DatastreamTable,
     ZipStreamingDataset,
     ZipIterableStreamingDatasets,
-    DIRTOPIC,
+    concat_data,
 )
 
 
-class DatafeatureTab(DatastreamTab):
+def _extract_slice_data(res, slice_name):
+    if isinstance(res, dict) and slice_name in res:
+        return res[slice_name]
+    return res
+
+
+class DatafeatureTab(DatasampleTab):
     """A tab storing multi-layer feature activations captured by an evaluator.
 
     Inherits access to the slices of the upstream `sampletab`. Calling `dataset()`
@@ -33,13 +44,13 @@ class DatafeatureTab(DatastreamTab):
     """
 
     VERSION = 1
-    LEGACY_NORM = False
 
     @dataclass
-    class VAR(DatastreamTab.VAR):
-        sampletab: DatastreamTab
+    class VAR(DatasampleTab.VAR):
+        sampletab: DatasampleTab
         evaluator_factory: DatamodelEvaluatorFactory
-        size_limit: int = 1 << 26  # 64 MiB default, in bytes
+        shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
+        features: dict | None = None
 
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
 
@@ -50,47 +61,31 @@ class DatafeatureTab(DatastreamTab):
 
     def __post_init__(self):
         super().__post_init__()
-        factory = getattr(self.var, 'evaluator_factory', None)
-        if hasattr(factory, 'layer_names'):
-            self._feature_names = list(factory.layer_names)
-        elif factory is not None and hasattr(factory, 'var'):
-            names = []
-            for block in getattr(factory.var, 'capture_blocks', []):
-                names.append(f"block.{block}")
-            for layer in getattr(factory.var, 'capture_layers', []):
-                names.append(layer)
-            if getattr(factory.var, 'capture_final', True):
-                names.append('final')
-            self._feature_names = names
+        factory = self.var.evaluator_factory
+        layer_names = factory.layer_names
+        if self.var.features is not None:
+            self._feature_map = dict(self.var.features)
         else:
-            self._feature_names = []
-
-        if not getattr(self, 'SLICES', None):
-            self.SLICES = tuple(f"features_{name.replace('.', '_')}" for name in self._feature_names)
-
-        topics = dict(getattr(self, 'TOPICS', {}))
+            self._feature_map = {
+                f"features_{name.replace('.', '_')}" if not name.startswith("features_") else name: name
+                for name in layer_names
+            }
+        self.SLICES = tuple(self._feature_map.keys())
+        self.SLICE_DTYPES = {name: "ndarray:float32" for name in self.SLICES}
+        topics = dict(self.TOPICS)
         topics[self.DATA] = {name: DIRTOPIC for name in self.SLICES}
         self.TOPICS = topics
 
-    def __build__(self, evaluator=None, sampletab=None):
-        if evaluator is None:
-            evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
-        if sampletab is None:
-            sampletab = self.var.sampletab
-
-        feature_names = evaluator.layer_names
-        self._feature_names = feature_names
-        self.SLICES = tuple(f"features_{name.replace('.', '_')}" for name in feature_names)
-        topics = dict(getattr(self, 'TOPICS', {}))
-        topics[self.DATA] = {name: DIRTOPIC for name in self.SLICES}
-        self.TOPICS = topics
+    def __build__(self):
+        evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
+        sampletab = self.var.sampletab
 
         slice_specs = {
-            f"features_{name.replace('.', '_')}": {f"features_{name.replace('.', '_')}": "ndarray:float32"}
-            for name in feature_names
+            col_name: {col_name: "ndarray:float32"}
+            for col_name in self.SLICES
         }
 
-        with self.slice_writers(slice_specs, size_limit=self.var.size_limit) as writers:
+        with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             sample_data = sampletab.data(concat=True)
             input_key = next(iter(sample_data.keys()))
             inputs = sample_data[input_key]
@@ -110,10 +105,9 @@ class DatafeatureTab(DatastreamTab):
                 batch = inputs[m:n].to(self.device)
                 result = evaluator(batch)
 
-                for name in feature_names:
-                    col_name = f"features_{name.replace('.', '_')}"
-                    if name in result:
-                        arr = result[name].cpu().numpy().astype(np.float32)
+                for col_name, layer_name in self._feature_map.items():
+                    if layer_name in result:
+                        arr = result[layer_name].cpu().numpy().astype(np.float32)
                         for i in range(len(arr)):
                             writers[col_name].write({col_name: arr[i]})
                 evaluator.clear()
@@ -175,9 +169,9 @@ class DatafeatureTab(DatastreamTab):
         result = {}
         for s in requested:
             if s in self.slices:
-                result[s] = super().data(s, concat=concat)[s]
+                result[s] = _extract_slice_data(super().data(s, concat=concat), s)
             elif self.sampletab is not None and s in self.sampletab.slices:
-                result[s] = self.sampletab.data(s, concat=concat)[s]
+                result[s] = _extract_slice_data(self.sampletab.data(s, concat=concat), s)
             else:
                 avail = list(self.slices) + (list(self.sampletab.slices) if self.sampletab else [])
                 raise KeyError(
@@ -205,18 +199,18 @@ class DatafeatureTab(DatastreamTab):
         return len(self.sampletab)
 
 
-class DatafeatureTable(DatastreamTable):
-    """A table of `DatafeatureTab` blocks built across a `DatastreamTable`."""
+class DatafeatureTable(DatasampleTable):
+    """A table of `DatafeatureTab` blocks built across a `DatasampleTable`."""
 
     TAB = DatafeatureTab
     VERSION = 1
-    LEGACY_NORM = False
 
     @dataclass
-    class VAR(DatastreamTable.VAR):
-        sampletable: DatastreamTable
+    class VAR(DatasampleTable.VAR):
+        sampletable: DatasampleTable
         evaluator_factory: DatamodelEvaluatorFactory
-        size_limit: int = 1 << 26  # 64 MiB default, in bytes
+        shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
+        features: dict | None = None
 
     # 1. Datablock / Datastack Protocol Methods ─────────────────────
 
@@ -227,56 +221,68 @@ class DatafeatureTable(DatastreamTable):
 
     def __post_init__(self):
         super().__post_init__()
-        factory = getattr(self.var, 'evaluator_factory', None)
-        if hasattr(factory, 'layer_names'):
-            feature_names = list(factory.layer_names)
-        elif factory is not None and hasattr(factory, 'var'):
-            names = []
-            for block in getattr(factory.var, 'capture_blocks', []):
-                names.append(f"block.{block}")
-            for layer in getattr(factory.var, 'capture_layers', []):
-                names.append(layer)
-            if getattr(factory.var, 'capture_final', True):
-                names.append('final')
-            feature_names = names
+        factory = self.var.evaluator_factory
+        layer_names = factory.layer_names
+        if self.var.features is not None:
+            self._feature_map = dict(self.var.features)
         else:
-            feature_names = []
-
-        if not getattr(self, 'SLICES', None):
-            self.SLICES = tuple(f"features_{name.replace('.', '_')}" for name in feature_names)
-
-        topics = dict(getattr(self, 'TOPICS', {}))
+            self._feature_map = {
+                f"features_{name.replace('.', '_')}" if not name.startswith("features_") else name: name
+                for name in layer_names
+            }
+        self.SLICES = tuple(self._feature_map.keys())
+        self.SLICE_DTYPES = {name: "ndarray:float32" for name in self.SLICES}
+        topics = dict(self.TOPICS)
         topics[self.DATA] = {name: DIRTOPIC for name in self.SLICES}
         self.TOPICS = topics
 
-    def __block__(self, idx: int, sampletable=None, device: str = "cuda", sampletab=None) -> DatafeatureTab:
-        if sampletab is None:
-            if sampletable is None:
-                sampletable = self.var.sampletable
-            sampletab = sampletable.tab(idx)
+    class BlockMaker(Datastack.BlockMaker):
+        """Lightweight callable that forms and optionally builds a block."""
+        def __init__(self, idx: int, *, device: str = "cuda"):
+            super().__init__(idx)
+            self.device = device
+
+        def __call__(self, table, *, build=True):
+            tab = table.__block__(self.idx, device=self.device)
+            tab.keyby = table.keyby
+            skipped = tab.valid()
+            if build:
+                tab.build()
+            result = {'tab_idx': self.idx, 'tag': tab.tag, 'skipped': skipped}
+            del tab
+            gc.collect()
+            return result
+
+    def __tab__(self, idx: int, device: str = "cuda", tag=None) -> DatafeatureTab:
+        sampletab = self.var.sampletable.tab(idx)
+        spec = dict(
+            sampletab=dbx.quote(sampletab),
+            evaluator_factory=self.spec['evaluator_factory'],
+            shard_size_limit_bytes=self.var.shard_size_limit_bytes,
+        )
+        if self.var.features is not None:
+            spec['features'] = self.var.features
         return self.TAB(
-            url=self.url,
-            spec=dict(
-                sampletab=dbx.quote(sampletab),
-                evaluator_factory=self.spec['evaluator_factory'],
-                size_limit=self.var.size_limit,
-            ),
+            url=self.path('tabs'),
+            storage_options=self.storage_options,
+            capture_output=self.capture_output,
+            cache=getattr(self, 'cache', None),
+            cache_limit=getattr(self, 'cache_limit', None),
+            verbose=False,
+            spec=spec,
             device_batch_size=self.device_batch_size,
             device=device,
             revision=self.revision,
-            tag=sampletab.tag,
+            tag=tag if tag is not None else sampletab.tag,
         )
+
+    def __block__(self, idx: int, **kwargs) -> DatafeatureTab:
+        return self.__tab__(idx, **kwargs)
 
     def __split__(self, *args, **kwargs):
         devices = self._devices
-        sampletable = self.var.sampletable
-        sampletabs = [sampletable.tab(idx) for idx in range(self.n_tabs)]
 
-        callable_kwargs = dict(
-            build=True,
-            sampletabs=sampletabs,
-            evaluator_factory=self.var.evaluator_factory,
-        )
+        callable_kwargs = dict(build=True)
         n_workers = len(devices)
         chunk_boundaries = np.array_split(range(self.n_tabs), n_workers)
         block_device = {}
@@ -346,9 +352,16 @@ class DatafeatureTable(DatastreamTable):
         result = {}
         for s in requested:
             if s in self.slices:
-                result[s] = super().data(s, concat=concat)[s]
+                tab_data = [self.tab(i).data(s, concat=concat)[s] for i in range(self.n_tabs)]
+                if concat:
+                    if isinstance(tab_data[0], np.ndarray):
+                        result[s] = np.concatenate(tab_data, axis=0)
+                    else:
+                        result[s] = concat_data(tab_data, dtype=self.SLICE_DTYPES.get(s))
+                else:
+                    result[s] = tab_data
             elif self.sampletable is not None and s in self.sampletable.slices:
-                result[s] = self.sampletable.data(s, concat=concat)[s]
+                result[s] = _extract_slice_data(self.sampletable.data(s, concat=concat), s)
             else:
                 avail = list(self.slices) + (list(self.sampletable.slices) if self.sampletable else [])
                 raise KeyError(
@@ -359,7 +372,7 @@ class DatafeatureTable(DatastreamTable):
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
-    def sampletable(self) -> DatastreamTable:
+    def sampletable(self) -> DatasampleTable:
         return self.var.sampletable
 
     @property
@@ -373,7 +386,7 @@ class DatafeatureTable(DatastreamTable):
         return own + upstream
 
 
-class BipolarDatafeatureTab(DatastreamTab):
+class BipolarDatafeatureTab(DatasampleTab):
     """Bipolar (median-thresholded) encoding of a `DatafeatureTab`.
 
     Maps continuous features to ``{-1, +1}^d`` via ``sign(features - median)``,
@@ -381,11 +394,10 @@ class BipolarDatafeatureTab(DatastreamTab):
     """
 
     VERSION = 1
-    LEGACY_NORM = False
     SLICES = ('bipolar_features', 'tab_bipolar_features')
 
     @dataclass
-    class VAR(DatastreamTab.VAR):
+    class VAR(DatasampleTab.VAR):
         featuretab: DatafeatureTab
         layer: str = 'final'
         threshold: float = 0.5
@@ -393,7 +405,7 @@ class BipolarDatafeatureTab(DatastreamTab):
 
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
 
-    def __build__(self, median=None):
+    def __build__(self):
         layer = self.var.layer
         col_feature = f"features_{layer.replace('.', '_')}"
         if col_feature in self.featuretab.slices:
@@ -407,8 +419,7 @@ class BipolarDatafeatureTab(DatastreamTab):
         else:
             features = np.array(raw_data)
 
-        if median is None:
-            median = np.median(features, axis=0)
+        median = np.median(features, axis=0)
 
         tile_bipolar = np.sign(features - median).astype(np.int8)
         tile_bipolar[tile_bipolar == 0] = 1
@@ -488,9 +499,9 @@ class BipolarDatafeatureTab(DatastreamTab):
         result = {}
         for s in requested:
             if s in self.slices:
-                result[s] = super().data(s, concat=concat)[s]
+                result[s] = _extract_slice_data(super().data(s, concat=concat), s)
             elif self.featuretab is not None and s in self.featuretab.available_slices:
-                result[s] = self.featuretab.data(s, concat=concat)[s]
+                result[s] = _extract_slice_data(self.featuretab.data(s, concat=concat), s)
             else:
                 avail = list(self.slices) + (list(self.featuretab.available_slices) if self.featuretab else [])
                 raise KeyError(
@@ -505,8 +516,8 @@ class BipolarDatafeatureTab(DatastreamTab):
         return self.var.featuretab
 
     @property
-    def sampletab(self) -> DatastreamTab | None:
-        return getattr(self.featuretab, 'sampletab', None)
+    def sampletab(self) -> DatasampleTab | None:
+        return self.featuretab.sampletab
 
     @property
     def available_slices(self) -> tuple[str, ...]:
@@ -518,15 +529,14 @@ class BipolarDatafeatureTab(DatastreamTab):
         return len(self.featuretab)
 
 
-class BipolarDatafeatureTable(DatastreamTable):
+class BipolarDatafeatureTable(DatasampleTable):
     """A table of `BipolarDatafeatureTab` blocks built over a `DatafeatureTable`."""
 
     TAB = BipolarDatafeatureTab
     VERSION = 1
-    LEGACY_NORM = False
 
     @dataclass
-    class VAR(DatastreamTable.VAR):
+    class VAR(DatasampleTable.VAR):
         featuretable: DatafeatureTable
         layer: str = 'final'
         threshold: float = 0.5
@@ -534,13 +544,15 @@ class BipolarDatafeatureTable(DatastreamTable):
 
     # 1. Datablock / Datastack Protocol Methods ─────────────────────
 
-    def __block__(self, idx: int, featuretable=None, featuretab=None) -> BipolarDatafeatureTab:
-        if featuretab is None:
-            if featuretable is None:
-                featuretable = self.var.featuretable
-            featuretab = featuretable.tab(idx)
+    def __tab__(self, idx: int, tag=None) -> BipolarDatafeatureTab:
+        featuretab = self.var.featuretable.tab(idx)
         return self.TAB(
-            url=self.url,
+            url=self.path('tabs'),
+            storage_options=self.storage_options,
+            capture_output=self.capture_output,
+            cache=getattr(self, 'cache', None),
+            cache_limit=getattr(self, 'cache_limit', None),
+            verbose=False,
             spec=dict(
                 featuretab=dbx.quote(featuretab),
                 layer=self.var.layer,
@@ -548,8 +560,11 @@ class BipolarDatafeatureTable(DatastreamTable):
                 ternarize=self.var.ternarize,
             ),
             revision=self.revision,
-            tag=featuretab.tag,
+            tag=tag if tag is not None else featuretab.tag,
         )
+
+    def __block__(self, idx: int, **kwargs) -> BipolarDatafeatureTab:
+        return self.__tab__(idx, **kwargs)
 
     def dataset(
         self,
@@ -607,9 +622,16 @@ class BipolarDatafeatureTable(DatastreamTable):
         result = {}
         for s in requested:
             if s in self.slices:
-                result[s] = super().data(s, concat=concat)[s]
+                tab_data = [self.tab(i).data(s, concat=concat)[s] for i in range(self.n_tabs)]
+                if concat:
+                    if isinstance(tab_data[0], np.ndarray):
+                        result[s] = np.concatenate(tab_data, axis=0)
+                    else:
+                        result[s] = concat_data(tab_data, dtype=self.SLICE_DTYPES.get(s))
+                else:
+                    result[s] = tab_data
             elif self.featuretable is not None and s in self.featuretable.available_slices:
-                result[s] = self.featuretable.data(s, concat=concat)[s]
+                result[s] = _extract_slice_data(self.featuretable.data(s, concat=concat), s)
             else:
                 avail = list(self.slices) + (list(self.featuretable.available_slices) if self.featuretable else [])
                 raise KeyError(
@@ -624,8 +646,8 @@ class BipolarDatafeatureTable(DatastreamTable):
         return self.var.featuretable
 
     @property
-    def sampletable(self) -> DatastreamTable | None:
-        return getattr(self.featuretable, 'sampletable', None)
+    def sampletable(self) -> DatasampleTable | None:
+        return self.featuretable.sampletable
 
     @property
     def n_tabs(self) -> int:

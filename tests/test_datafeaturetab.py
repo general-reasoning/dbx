@@ -7,8 +7,8 @@ import torch.nn as nn
 from dataclasses import dataclass
 
 from dbx import (
-    DatastreamTab,
-    DatastreamTable,
+    DatasampleTab,
+    DatasampleTable,
     DatamodelEvaluator,
     DatamodelEvaluatorFactory,
     DatafeatureTab,
@@ -18,11 +18,11 @@ from dbx import (
 )
 
 
-class DummySampleTab(DatastreamTab):
+class DummySampleTab(DatasampleTab):
     SLICES = ("samples", "labels")
 
     @dataclass
-    class VAR(DatastreamTab.VAR):
+    class VAR(DatasampleTab.VAR):
         n_samples: int = 10
 
     def __build__(self):
@@ -39,11 +39,11 @@ class DummySampleTab(DatastreamTab):
         return self
 
 
-class DummySampleTable(DatastreamTable):
+class DummySampleTable(DatasampleTable):
     TAB = DummySampleTab
 
     @dataclass
-    class VAR(DatastreamTable.VAR):
+    class VAR(DatasampleTable.VAR):
         samples_per_tab: int = 10
 
     @property
@@ -76,7 +76,7 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     assert sampletab.valid()
 
     # 2. Build feature tab
-    eval_factory = DatamodelEvaluatorFactory(capture_final=True)
+    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
     eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
         model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
     )
@@ -117,7 +117,7 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
     sampletab = DummySampleTab(url=url, tag="samples_1").build()
-    eval_factory = DatamodelEvaluatorFactory(capture_final=True)
+    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
     eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
         model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
     )
@@ -170,7 +170,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
         tag="sample_table",
     ).build()
 
-    eval_factory = DatamodelEvaluatorFactory(capture_final=True)
+    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
     eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
         model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
     )
@@ -190,9 +190,10 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
     assert set(featuretable.available_slices) == {"features_final", "samples", "labels"}
 
     # Test reading combined data across table
-    tbl_data = featuretable.data("features_final", "labels")
-    assert tbl_data["features_final"].shape == (10, 8)
-    assert len(tbl_data["labels"]) == 10
+    feat_data = featuretable.data("features_final", concat=True)
+    assert feat_data["features_final"].shape == (10, 8)
+    label_data = featuretable.data("labels", concat=True)
+    assert len(label_data["labels"]) == 10
 
     # 3. Build bipolar feature table
     bipolar_table = BipolarDatafeatureTable(
@@ -216,6 +217,30 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
     b_tbl_data = bipolar_table.data("bipolar_features", "labels")
     assert b_tbl_data["bipolar_features"].shape == (10, 8)
     assert len(b_tbl_data["labels"]) == 10
+
+
+def test_custom_features_mapping(tmp_path):
+    url = str(tmp_path)
+    sampletab = DummySampleTab(url=url, tag="samples_cust").build()
+    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
+    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
+        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
+    )
+
+    featuretab = DatafeatureTab(
+        url=url,
+        spec=dict(
+            sampletab=sampletab,
+            evaluator_factory=eval_factory,
+            features={"custom_output": "final"},
+        ),
+        device="cpu",
+        tag="features_cust",
+    ).build()
+
+    assert featuretab.slices == ("custom_output",)
+    res = featuretab.data("custom_output")
+    assert res["custom_output"].shape == (10, 8)
 
 
 if __name__ == "__main__":

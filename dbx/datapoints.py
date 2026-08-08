@@ -1,4 +1,4 @@
-"""datasamples — DatasampleTab / DatasampleTable blocks over MDS slices."""
+"""datapoints — DatapointTab / DatapointTable blocks over MDS slices."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ try:
     from torch.utils.data import Dataset, IterableDataset
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "dbx.datasamples requires PyTorch.  "
+        "dbx.datapoints requires PyTorch.  "
         "Install it with:  pip install datablocks[torch]"
     ) from exc
 
@@ -26,7 +26,7 @@ try:
     from streaming import MDSWriter, Stream, StreamingDataset
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "dbx.datasamples requires mosaicml-streaming.  "
+        "dbx.datapoints requires mosaicml-streaming.  "
         "Install it with:  pip install datablocks[streaming]"
     ) from exc
 
@@ -41,6 +41,7 @@ from .datastreams import (
     concat_data,
     open_datastream,
     read_mds_shard,
+    reader_from_json,
 )
 
 
@@ -48,7 +49,7 @@ class SlicedTopics:
     """Mixin giving a block a `data` topic group of parallel MDS slices.
 
     A **slice** is one independently-readable MDS stream.  Every slice of a
-    `DatasampleTab` is written in lockstep from one pass over that tab's
+    `DatapointTab` is written in lockstep from one pass over that tab's
     input, so sample i of every slice describes the same thing: that
     alignment is the whole contract, and it is what makes zipping the slices
     back together by index meaningful.
@@ -56,7 +57,7 @@ class SlicedTopics:
     Slices are declared once, as `SLICES`; the `data` group of
     `TOPICS` is synthesized from them::
 
-        class MyTab(DatasampleTab):
+        class MyTab(DatapointTab):
             SLICES = ('frames', 'annotations')
             TOPICS = {'stats': 'stats.json'}       # optional extra topics
 
@@ -106,7 +107,7 @@ class SlicedTopics:
         as a plain class attribute would: a subclass declaring
         `TOPICS = {'note': 'note.txt'}` adds to what it inherits instead of
         replacing it, and its own entries win on a collision.  That is the
-        whole mechanism -- it is what lets `DatasampleTable` declare
+        whole mechanism -- it is what lets `DatapointTable` declare
         `tabs` and `done` once, in the ordinary way, and still have them
         after a subclass declares topics of its own.
 
@@ -312,7 +313,7 @@ class SlicedTopics:
     def _tab_stream(self, tab, slice_name) -> Stream:
         """One `Stream` for *tab*'s *slice_name* directory.
 
-        Used by `DatasampleTable.datastream()` to compose a
+        Used by `DatapointTable.datastream()` to compose a
         multi-stream `StreamingDataset` without a consolidated
         `index.json`.
         """
@@ -490,7 +491,7 @@ class SlicedTopics:
     def stats(self, *slices, **kwargs):
         """User-defined summary of the named slices.
 
-        Shared by `DatasampleTab` and `DatasampleTable`: both have it,
+        Shared by `DatapointTab` and `DatapointTable`: both have it,
         each dispatching to its own `__stats__()`.
 
         The calling sequence is one `__stats__(slice)` per named slice,
@@ -527,8 +528,8 @@ class SlicedTopics:
         )
 
 
-class DatasampleTab(SlicedTopics, Datablock):
-    """One tab of a `DatasampleTable`: a Datablock writing MDS slices.
+class DatapointTab(SlicedTopics, Datablock):
+    """One tab of a `DatapointTable`: a Datablock writing MDS slices.
 
     Fill out three things:
 
@@ -547,7 +548,7 @@ class DatasampleTab(SlicedTopics, Datablock):
     `TOPICS` is built from it, and anything else declared in `TOPICS` is
     kept alongside::
 
-        class FrameTab(DatasampleTab):
+        class FrameTab(DatapointTab):
             SLICES = ('frames', 'annotations')
             TOPICS = {'note': 'note.txt'}
 
@@ -561,7 +562,7 @@ class DatasampleTab(SlicedTopics, Datablock):
     the group directly instead works and then it defines `SLICES`; doing
     both and disagreeing is an error::
 
-        class FrameTab(DatasampleTab):
+        class FrameTab(DatapointTab):
             TOPICS = {'data': {'frames': DIRTOPIC, 'annotations': DIRTOPIC}}
 
         FrameTab.SLICES        # ('frames', 'annotations')
@@ -601,11 +602,11 @@ class DatasampleTab(SlicedTopics, Datablock):
     -------
     ::
 
-        class AnnotatedFrameTab(DatasampleTab):
+        class AnnotatedFrameTab(DatapointTab):
             SLICES = ('frames', 'annotations')
 
             @dataclass
-            class VAR(DatasampleTab.VAR):
+            class VAR(DatapointTab.VAR):
                 episode: str = None
 
             def __build__(self):
@@ -812,12 +813,12 @@ class DatasampleTab(SlicedTopics, Datablock):
                              os.path.join(target_dir, name))
 
 
-class DatasampleTable(SlicedTopics, Datastack):
-    """A table of `DatasampleTab`s, sliced the same way as its tabs.
+class DatapointTable(SlicedTopics, Datastack):
+    """A table of `DatapointTab`s, sliced the same way as its tabs.
 
     Fill out three things:
 
-    * `TAB` -- the `DatasampleTab` subclass.  `SLICES` is
+    * `TAB` -- the `DatapointTab` subclass.  `SLICES` is
       taken from it unless declared here.
     * `n_tabs` -- how many.
     * `__tab__()` -- tab idx's own VAR fields, on top of the
@@ -829,7 +830,7 @@ class DatasampleTable(SlicedTopics, Datastack):
     into one index per slice and then writes the `done` marker.  Override
     either and call `super()` if a table needs more.
 
-    Reading mirrors `DatasampleTab`, over the whole table: `data()`
+    Reading mirrors `DatapointTab`, over the whole table: `data()`
     concatenates the tabs' samples for a slice, `dataset()` opens the
     merged per-slice indexes and zips them, `stats()` reaches
     `__stats__()`, which is yours.
@@ -842,7 +843,7 @@ class DatasampleTable(SlicedTopics, Datastack):
     tabs write into them, so a slice only one of the two knows about is one
     the tab writes and the table never merges::
 
-        class FrameTable(DatasampleTable):
+        class FrameTable(DatapointTable):
             TAB = FrameTab                 # SLICES = ('frames', 'annotations')
 
         FrameTable.SLICES                  # ('frames', 'annotations')
@@ -868,11 +869,11 @@ class DatasampleTable(SlicedTopics, Datastack):
     -------
     ::
 
-        class AnnotatedFrameTable(DatasampleTable):
+        class AnnotatedFrameTable(DatapointTable):
             TAB = AnnotatedFrameTab
 
             @dataclass
-            class VAR(DatasampleTable.VAR):
+            class VAR(DatapointTable.VAR):
                 episodes: list = None
 
             @property
@@ -891,7 +892,7 @@ class DatasampleTable(SlicedTopics, Datastack):
         table.dataset('annotations')               # annotations only: no image bytes
     """
 
-    # The DatasampleTab subclass this table is made of.
+    # The DatapointTab subclass this table is made of.
     TAB = None
 
     TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
@@ -930,11 +931,11 @@ class DatasampleTable(SlicedTopics, Datastack):
     def n_blocks(self) -> int:
         return self.n_tabs
 
-    def __tab__(self, idx: int, *, tag=None, **spec) -> DatasampleTab:
+    def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
         """Form tab idx.  `Datastack.__block__()` for tables."""
         if self.TAB is None:
             raise NotImplementedError(
-                f"{self.__class__.__name__} must set TAB = <DatasampleTab subclass> "
+                f"{self.__class__.__name__} must set TAB = <DatapointTab subclass> "
                 f"(or override __tab__(idx) outright)"
             )
         return self.TAB(
@@ -948,10 +949,10 @@ class DatasampleTable(SlicedTopics, Datastack):
             tag=tag if tag is not None else f"tab_{idx:06d}",
         )
 
-    def __block__(self, idx: int) -> DatasampleTab:
+    def __block__(self, idx: int) -> DatapointTab:
         return self.__tab__(idx)
 
-    def tab(self, idx: int) -> DatasampleTab:
+    def tab(self, idx: int) -> DatapointTab:
         """Tab idx, cached on this table instance."""
         return self.block(idx)
 
@@ -1076,3 +1077,8 @@ class DatasampleTable(SlicedTopics, Datastack):
             del tab
             gc.collect()
             return result
+
+
+# Backward compatibility aliases
+DatasampleTab = DatapointTab
+DatasampleTable = DatapointTable

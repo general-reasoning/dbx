@@ -7,8 +7,8 @@ import torch.nn as nn
 from dataclasses import dataclass
 
 from dbx import (
-    DatasampleTab,
-    DatasampleTable,
+    DatapointTab,
+    DatapointTable,
     DatamodelEvaluator,
     DatamodelEvaluatorFactory,
     DatafeatureTab,
@@ -18,11 +18,11 @@ from dbx import (
 )
 
 
-class DummySampleTab(DatasampleTab):
+class DummySampleTab(DatapointTab):
     SLICES = ("samples", "labels")
 
     @dataclass
-    class VAR(DatasampleTab.VAR):
+    class VAR(DatapointTab.VAR):
         n_samples: int = 10
 
     def __build__(self):
@@ -39,11 +39,11 @@ class DummySampleTab(DatasampleTab):
         return self
 
 
-class DummySampleTable(DatasampleTable):
+class DummySampleTable(DatapointTable):
     TAB = DummySampleTab
 
     @dataclass
-    class VAR(DatasampleTable.VAR):
+    class VAR(DatapointTable.VAR):
         samples_per_tab: int = 10
 
     @property

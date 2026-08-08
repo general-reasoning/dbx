@@ -1003,18 +1003,18 @@ def concat_data(result, dtype=None):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Backward-compatibility aliases for DatasampleTab / DatasampleTable
+# Backward-compatibility aliases for DatapointTab / DatapointTable
 # ═══════════════════════════════════════════════════════════════════════
 
 def __getattr__(name: str):
-    if name in ("DatasampleTab", "DatasampleTable", "DatastreamTab", "DatastreamTable", "SlicedTopics"):
-        from . import datasamples
-        if name in ("DatastreamTab", "DatasampleTab"):
-            return datasamples.DatasampleTab
-        if name in ("DatastreamTable", "DatasampleTable"):
-            return datasamples.DatasampleTable
+    if name in ("DatapointTab", "DatapointTable", "DatasampleTab", "DatasampleTable", "DatastreamTab", "DatastreamTable", "SlicedTopics"):
+        from . import datapoints
+        if name in ("DatapointTab", "DatastreamTab", "DatasampleTab"):
+            return datapoints.DatapointTab
+        if name in ("DatapointTable", "DatastreamTable", "DatasampleTable"):
+            return datapoints.DatapointTable
         if name == "SlicedTopics":
-            return datasamples.SlicedTopics
+            return datapoints.SlicedTopics
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

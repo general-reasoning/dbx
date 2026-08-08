@@ -17,9 +17,9 @@ except ImportError:
 import dbx
 from dbx.datablocks import Datastack
 from dbx.datamodels import DatamodelEvaluatorFactory
-from dbx.datasamples import (
-    DatasampleTab,
-    DatasampleTable,
+from dbx.datapoints import (
+    DatapointTab,
+    DatapointTable,
     DIRTOPIC,
 )
 from dbx.datastreams import (
@@ -35,7 +35,7 @@ def _extract_slice_data(res, slice_name):
     return res
 
 
-class DatafeatureTab(DatasampleTab):
+class DatafeatureTab(DatapointTab):
     """A tab storing multi-layer feature activations captured by an evaluator.
 
     Inherits access to the slices of the upstream `sampletab`. Calling `dataset()`
@@ -46,8 +46,8 @@ class DatafeatureTab(DatasampleTab):
     VERSION = 1
 
     @dataclass
-    class VAR(DatasampleTab.VAR):
-        sampletab: DatasampleTab
+    class VAR(DatapointTab.VAR):
+        sampletab: DatapointTab
         evaluator_factory: DatamodelEvaluatorFactory
         signal: tuple[str, str] | None = None
         features: dict | None = None
@@ -198,7 +198,7 @@ class DatafeatureTab(DatasampleTab):
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
-    def sampletab(self) -> DatasampleTab:
+    def sampletab(self) -> DatapointTab:
         return self.var.sampletab
 
     @property
@@ -215,15 +215,15 @@ class DatafeatureTab(DatasampleTab):
         return len(self.sampletab)
 
 
-class DatafeatureTable(DatasampleTable):
-    """A table of `DatafeatureTab` blocks built across a `DatasampleTable`."""
+class DatafeatureTable(DatapointTable):
+    """A table of `DatafeatureTab` blocks built across a `DatapointTable`."""
 
     TAB = DatafeatureTab
     VERSION = 1
 
     @dataclass
-    class VAR(DatasampleTable.VAR):
-        sampletable: DatasampleTable
+    class VAR(DatapointTable.VAR):
+        sampletable: DatapointTable
         evaluator_factory: DatamodelEvaluatorFactory
         signal: tuple[str, str] | None = None
         features: dict | None = None
@@ -391,7 +391,7 @@ class DatafeatureTable(DatasampleTable):
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
-    def sampletable(self) -> DatasampleTable:
+    def sampletable(self) -> DatapointTable:
         return self.var.sampletable
 
     @property
@@ -405,7 +405,7 @@ class DatafeatureTable(DatasampleTable):
         return own + upstream
 
 
-class BipolarDatafeatureTab(DatasampleTab):
+class BipolarDatafeatureTab(DatapointTab):
     """Bipolar (median-thresholded) encoding of a `DatafeatureTab`.
 
     Maps continuous features to ``{-1, +1}^d`` via ``sign(features - median)``,
@@ -416,7 +416,7 @@ class BipolarDatafeatureTab(DatasampleTab):
     SLICES = ('bipolar_features', 'tab_bipolar_features')
 
     @dataclass
-    class VAR(DatasampleTab.VAR):
+    class VAR(DatapointTab.VAR):
         featuretab: DatafeatureTab
         layer: str = 'final'
         threshold: float = 0.5
@@ -535,7 +535,7 @@ class BipolarDatafeatureTab(DatasampleTab):
         return self.var.featuretab
 
     @property
-    def sampletab(self) -> DatasampleTab | None:
+    def sampletab(self) -> DatapointTab | None:
         return self.featuretab.sampletab
 
     @property
@@ -548,14 +548,14 @@ class BipolarDatafeatureTab(DatasampleTab):
         return len(self.featuretab)
 
 
-class BipolarDatafeatureTable(DatasampleTable):
+class BipolarDatafeatureTable(DatapointTable):
     """A table of `BipolarDatafeatureTab` blocks built over a `DatafeatureTable`."""
 
     TAB = BipolarDatafeatureTab
     VERSION = 1
 
     @dataclass
-    class VAR(DatasampleTable.VAR):
+    class VAR(DatapointTable.VAR):
         featuretable: DatafeatureTable
         layer: str = 'final'
         threshold: float = 0.5
@@ -665,7 +665,7 @@ class BipolarDatafeatureTable(DatasampleTable):
         return self.var.featuretable
 
     @property
-    def sampletable(self) -> DatasampleTable | None:
+    def sampletable(self) -> DatapointTable | None:
         return self.featuretable.sampletable
 
     @property

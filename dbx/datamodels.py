@@ -178,7 +178,10 @@ class DataformerEvaluator(DatamodelEvaluator):
         """Lazy-load the model on first access."""
         if isinstance(self._model, str):
             self.log.verbose(f"Evaluating {self._model} on {self.device}")
-            self._model = dbx.eval(self._model).to(self.device)
+            model_obj = dbx.eval(self._model)
+            if hasattr(model_obj, 'to'):
+                model_obj = model_obj.to(self.device)
+            self._model = model_obj
         return self._model
 
     @property

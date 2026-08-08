@@ -428,8 +428,3 @@ class DatafeatureStatsProbe(Datablock):
     @functools.cached_property
     def tile_feature_norms(self):
         return self.read('tile_feature_norms')
-
-
-# Typo aliases
-DatafeatureAfflineLogisticProbe = DatafeatureAffineLogisticProbe
-DatafeatureAfflineLogisticProber = DatafeatureAffineLogisticProber

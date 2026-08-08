@@ -39,7 +39,7 @@ class DatafeatureTab(DatastreamTab):
     class VAR(DatastreamTab.VAR):
         sampletab: DatastreamTab
         evaluator_factory: DatamodelEvaluatorFactory
-        shard_size: int = 1024
+        size_limit: int = 1 << 26  # 64 MiB default, in bytes
 
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
 
@@ -90,7 +90,7 @@ class DatafeatureTab(DatastreamTab):
             for name in feature_names
         }
 
-        with self.slice_writers(slice_specs, shard_size=self.var.shard_size) as writers:
+        with self.slice_writers(slice_specs, size_limit=self.var.size_limit) as writers:
             sample_data = sampletab.data(concat=True)
             input_key = next(iter(sample_data.keys()))
             inputs = sample_data[input_key]
@@ -216,7 +216,7 @@ class DatafeatureTable(DatastreamTable):
     class VAR(DatastreamTable.VAR):
         sampletable: DatastreamTable
         evaluator_factory: DatamodelEvaluatorFactory
-        shard_size: int = 1024
+        size_limit: int = 1 << 26  # 64 MiB default, in bytes
 
     # 1. Datablock / Datastack Protocol Methods ─────────────────────
 
@@ -259,7 +259,7 @@ class DatafeatureTable(DatastreamTable):
             spec=dict(
                 sampletab=dbx.quote(sampletab),
                 evaluator_factory=self.spec['evaluator_factory'],
-                shard_size=self.var.shard_size,
+                size_limit=self.var.size_limit,
             ),
             device_batch_size=self.device_batch_size,
             device=device,

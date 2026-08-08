@@ -21,6 +21,7 @@ from dbx import (
 class DummySampleTab(DatastreamTab):
     SLICES = ("samples", "labels")
 
+    @dataclass
     class VAR(DatastreamTab.VAR):
         n_samples: int = 10
 

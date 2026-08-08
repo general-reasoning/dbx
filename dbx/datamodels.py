@@ -141,6 +141,7 @@ class DataformerEvaluator(DatamodelEvaluator):
 
     DEFAULT_MODEL: Any = None
     DEFAULT_BACKBONE: Any = None
+    DEFAULT_TRANSFORM: Any = None
 
     def __init__(
         self,

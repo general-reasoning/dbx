@@ -119,7 +119,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
         url=url,
         spec=dict(
             featuretable=featuretable,
-            feature="features_final",
+            regressor=("features_final", "features_final"),
             label=("labels", "labels"),
             evaluation_fraction=0.8,
         ),

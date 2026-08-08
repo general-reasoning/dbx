@@ -164,8 +164,8 @@ class DatafeatureAffineLogisticProbe(Datablock):
     @dataclass
     class VAR(Datablock.VAR):
         featuretable: DatafeatureTable | DatafeatureTab
-        feature: str = "features_final"
-        label: tuple[str, str] | str = ("labels", "labels")
+        regressor: tuple[str, str]
+        label: tuple[str, str]
         fit_intercept: bool = True
         evaluation_fraction: float = 0.8
         aggregation: str = "mean"
@@ -179,38 +179,44 @@ class DatafeatureAffineLogisticProbe(Datablock):
 
     def __build__(self):
         table = self.var.featuretable
-        feature = self.var.feature
+        reg_spec = self.var.regressor
         label_spec = self.var.label
 
+        if isinstance(reg_spec, (list, tuple)):
+            reg_slice = reg_spec[0]
+            reg_col = reg_spec[1] if len(reg_spec) > 1 else reg_spec[0]
+        else:
+            reg_slice = str(reg_spec)
+            reg_col = str(reg_spec)
+
         if isinstance(label_spec, (list, tuple)):
-            slice_name = label_spec[0]
-            col_name = label_spec[1] if len(label_spec) > 1 else label_spec[0]
+            label_slice = label_spec[0]
+            label_col = label_spec[1] if len(label_spec) > 1 else label_spec[0]
         else:
-            slice_name = str(label_spec)
-            col_name = str(label_spec)
+            label_slice = str(label_spec)
+            label_col = str(label_spec)
 
-        if hasattr(table, 'slices') and feature in table.slices:
-            feat_slice = feature
-        elif hasattr(table, 'slices') and f"features_{feature.replace('.', '_')}" in table.slices:
-            feat_slice = f"features_{feature.replace('.', '_')}"
-        elif hasattr(table, 'available_slices') and feature in table.available_slices:
-            feat_slice = feature
-        else:
-            feat_slice = feature
+        self.log.verbose(f"Reading regressor '{reg_slice}:{reg_col}' and labels for '{label_slice}:{label_col}'")
 
-        self.log.verbose(f"Reading features for slice '{feat_slice}' and labels for '{slice_name}:{col_name}'")
+        data_dict = table.data(reg_slice, label_slice, concat=True)
+        feat_data = data_dict[reg_slice]
+        lbl_data = data_dict[label_slice]
 
-        data_dict = table.data(feat_slice, slice_name, concat=True)
-        raw_features = data_dict[feat_slice]
-        label_data = data_dict[slice_name]
-
-        if isinstance(label_data, dict):
-            if col_name in label_data:
-                raw_labels = label_data[col_name]
+        if isinstance(feat_data, dict):
+            if reg_col in feat_data:
+                raw_features = feat_data[reg_col]
             else:
-                raw_labels = next(iter(label_data.values()))
+                raw_features = next(iter(feat_data.values()))
         else:
-            raw_labels = label_data
+            raw_features = feat_data
+
+        if isinstance(lbl_data, dict):
+            if label_col in lbl_data:
+                raw_labels = lbl_data[label_col]
+            else:
+                raw_labels = next(iter(lbl_data.values()))
+        else:
+            raw_labels = lbl_data
 
         if torch is not None and isinstance(raw_features, torch.Tensor):
             feat_tensor = raw_features.float()
@@ -249,7 +255,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
         self.log.verbose(
             f"FITTING LogisticRegression "
             f"(fit_intercept={self.var.fit_intercept}, "
-            f"feature='{feature}', "
+            f"regressor={reg_spec!r}, "
             f"label={label_spec!r}, "
             f"normalization={self.var.normalization!r})"
         )

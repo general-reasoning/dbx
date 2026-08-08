@@ -25,6 +25,8 @@ import tempfile
 import urllib.parse
 from dataclasses import dataclass
 
+import numpy as np
+
 try:
     import torch
     from torch.utils.data import DataLoader, Dataset, IterableDataset, Sampler

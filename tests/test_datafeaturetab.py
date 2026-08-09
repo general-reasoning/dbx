@@ -319,12 +319,12 @@ def test_datacollator():
     assert isinstance(out_strip, tuple)
     assert len(out_strip) == 2
 
-    # Test single_val
+    # Test signal_only
     c_single = Datacollator(
         spec=dict(
             signals=[("samples", "samples")],
             labels=[("labels", "labels")],
-            single_val=True,
+            signal_only=True,
         )
     )
     out_single = c_single(batch_datapoints)

@@ -53,7 +53,7 @@ class Datacollator(Datablock):
         labels: list[tuple[str, str]]
         length: int | None = None
         strip_keys: bool = False
-        single_val: bool = False
+        signal_only: bool = False
 
     def __call__(self, datapoints: list[dict]) -> dict[str, np.ndarray] | tuple[np.ndarray, ...] | np.ndarray:
         """Collate a batch of datapoint dicts into collated arrays.
@@ -66,7 +66,7 @@ class Datacollator(Datablock):
         Returns
         -------
         dict[str, np.ndarray] | tuple[np.ndarray, ...] | np.ndarray
-            Collated signals and labels, formatted according to VAR options (length, strip_keys, single_val).
+            Collated signals and labels, formatted according to VAR options (length, strip_keys, signal_only).
         """
         sig_arr = self._collate_pairs(datapoints, self.var.signals)
         lbl_arr = self._collate_pairs(datapoints, self.var.labels)
@@ -78,7 +78,7 @@ class Datacollator(Datablock):
             if hasattr(lbl_arr, 'ndim') and lbl_arr.ndim >= 1 and lbl_arr.shape[-1] > length:
                 lbl_arr = lbl_arr[..., :length]
 
-        if self.var.single_val:
+        if self.var.signal_only:
             return sig_arr
         if self.var.strip_keys:
             if len(self.var.labels) > 0:

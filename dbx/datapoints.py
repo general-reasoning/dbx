@@ -755,9 +755,9 @@ class DatapointPartition(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
-        datapoint_table: DatapointTable = None
-        fractions: list[float] = field(default_factory=list)
-        partition_slice: int | str = 0
+        datapoint_table: DatapointTable
+        fractions: list[float]
+        partition_slice: int | str
 
     def __build__(self):
         table = self.var.datapoint_table
@@ -833,23 +833,23 @@ class DatapointFold(DatapointTable):
 
     @dataclass
     class VAR(DatapointTable.VAR):
-        datapoint_table: DatapointTable = None
-        tab_indices: list[int] = field(default_factory=list)
+        partition: DatapointPartition
+        tab_indices: list[int]
 
     @property
     def TAB(self):
-        return getattr(self.var.datapoint_table, 'TAB', None)
+        return getattr(self.var.partition.var.datapoint_table, 'TAB', None)
 
     @property
     def slices(self):
-        if self.var.datapoint_table is not None:
-            return self.var.datapoint_table.slices
+        if self.var.partition.var.datapoint_table is not None:
+            return self.var.partition.var.datapoint_table.slices
         return ()
 
     @property
     def TOPICS(self):
-        if self.var.datapoint_table is not None:
-            return self.var.datapoint_table.TOPICS
+        if self.var.partition.var.datapoint_table is not None:
+            return self.var.partition.var.datapoint_table.TOPICS
         return {}
 
     @property
@@ -858,7 +858,7 @@ class DatapointFold(DatapointTable):
 
     def tab(self, idx: int) -> DatapointTab:
         real_idx = self.var.tab_indices[idx]
-        return self.var.datapoint_table.tab(real_idx)
+        return self.var.partition.var.datapoint_table.tab(real_idx)
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
         return self.tab(idx)

@@ -15,12 +15,13 @@ except ImportError:
     torch = None
 
 import dbx
-from dbx.datablocks import Datablock, Datastack, DIRTOPIC, SLICETOPIC
+from dbx.datablocks import Datablock, Datastack, DIRTOPIC
 from dbx.datamodels import DatamodelEvaluatorFactory
 from dbx.datapoints import (
     DatapointTab,
     DatapointTable,
     DIRTOPIC,
+    SLICETOPIC,
 )
 from dbx.datastreams import (
     ZipStreamingDataset,

@@ -54,37 +54,14 @@ class SlicesProperty:
     def __get__(self, obj, cls=None):
         target = obj if obj is not None else cls
         topics = getattr(target, 'TOPICS', {})
-        return tuple(SlicedTopics._find_slice_topics(topics))
+        return tuple(DatapointBase._find_slice_topics(topics))
 
 
-class SlicedTopics:
-    """Mixin giving a block a topic group of parallel MDS slice topics marked with `SLICETOPIC`.
+class DatapointBase(Datablock):
+    """Base class for sliced datapoint blocks (DatapointTab and DatapointTable).
 
-    A **slice** is one independently-readable MDS stream. Every slice of a
-    `DatapointTab` is written in lockstep from one pass over that tab's
-    input, so row i of every slice describes the same item.
-
-    Slices are declared via topics marked with `SLICETOPIC`::
-
-        class MyTab(DatapointTab):
-            TOPICS = {
-                'frames': SLICETOPIC,
-                'annotations': SLICETOPIC,
-                'stats': 'stats.json',
-            }
-
-    Two things are readable off a built slice:
-
-    * `data()` -- the rows themselves, decoded eagerly into a list.
-    * `dataset()` -- a live `StreamingDataset` per slice, zipped into
-      one `torch.utils.data.Dataset`.
-
-    Note
-    ----
-    Methods operating on tab shards (e.g. `shard_sizes`, `max_rows_per_shard`,
-    `n_rows`) presume this mixin is combined with a block implementing
-    `.tab(idx)` (such as `DatapointTable` or `DatapointFold`), and cannot be
-    used on their own without `.tab(idx)`.
+    A **slice** is one independently-readable MDS stream directory inside a block.
+    Slices are declared via topics marked with `SLICETOPIC`.
     """
 
     TOPICS = {}
@@ -105,15 +82,15 @@ class SlicedTopics:
             if val == SLICETOPIC or val is SLICETOPIC:
                 slice_topics.append('/'.join(current) if len(current) > 1 else key)
             elif isinstance(val, dict):
-                slice_topics.extend(SlicedTopics._find_slice_topics(val, current))
+                slice_topics.extend(DatapointBase._find_slice_topics(val, current))
         return slice_topics
 
     @classmethod
     def __resolve_topics__(cls):
-        """Rebuild `TOPICS` as inherited + own.
+        """Resolve `TOPICS` for this class without accumulating parent TOPICS down the hierarchy.
 
-        TOPICS **accumulates** down the hierarchy: a subclass declaring topics
-        adds to what it inherits instead of replacing it.
+        Slices are defined as the subset of topics in `TOPICS` with value `SLICETOPIC`.
+        If `SLICES` is declared on the class, its items are added to `TOPICS` with `SLICETOPIC` value.
         """
         own = cls.__dict__.get('TOPICS')
         if isinstance(own, property) or own is None:
@@ -125,20 +102,38 @@ class SlicedTopics:
             )
         else:
             own = dict(own)
-        own_slices = getattr(cls, 'SLICES', None) or cls.__dict__.get('SLICES')
-        if own_slices:
-            for s in own_slices:
-                if isinstance(s, (tuple, list)):
-                    s = s[0]
-                own[str(s)] = SLICETOPIC
 
-        topics = {}
-        for klass in reversed(cls.__mro__[1:]):
-            inherited = klass.__dict__.get('TOPICS')
-            if isinstance(inherited, dict):
-                topics.update(inherited)
-        topics.update(own)
-        cls.TOPICS = topics
+        # Collect slice topics (marked with SLICETOPIC or in SLICES) across the MRO
+        slice_topics = {}
+        for klass in reversed(cls.__mro__):
+            k_slices = getattr(klass, 'SLICES', None) or klass.__dict__.get('SLICES')
+            if k_slices:
+                for s in k_slices:
+                    if isinstance(s, (tuple, list)):
+                        s = s[0]
+                    slice_topics[str(s)] = SLICETOPIC
+
+            k_topics = klass.__dict__.get('TOPICS')
+            if isinstance(k_topics, dict):
+                for st in DatapointBase._find_slice_topics(k_topics):
+                    slice_topics[st] = SLICETOPIC
+
+        merged = dict(slice_topics)
+        merged.update(own)
+        cls.TOPICS = merged
+
+    @staticmethod
+    def _node_is_dirtopic(node):
+        """True when node is DIRTOPIC or SLICETOPIC."""
+        return node is DIRTOPIC or node == SLICETOPIC or node is SLICETOPIC
+
+    def _is_dir_topic(self, *topicpath):
+        """True when the topic resolves to a directory rather than a file."""
+        topicpath = self._normtopic(topicpath)
+        if not topicpath or topicpath[0] is None:
+            return False
+        node = self._topicnode(*topicpath)
+        return self._node_is_dirtopic(node)
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
@@ -160,7 +155,6 @@ class SlicedTopics:
             if topic_str in self.slices:
                 return self.valid_slice(topic_str)
         return super().valid_topic(*topicpath)
-
 
     # 2. Properties and Accessors ───────────────────────────────────
 
@@ -446,7 +440,10 @@ class SlicedTopics:
         return self.verify_slice_row_counts_match()
 
 
-class DatapointTab(SlicedTopics, Datablock):
+SlicedTopics = DatapointBase
+
+
+class DatapointTab(DatapointBase):
     """One tab of a `DatapointTable`: a Datablock writing MDS slices."""
 
     @dataclass
@@ -562,7 +559,7 @@ class DatapointTab(SlicedTopics, Datablock):
             self.fs.put_file(local_path, target_path)
 
 
-class DatapointTable(SlicedTopics, Datastack):
+class DatapointTable(DatapointBase, Datastack):
     """A table of DatapointTabs, sliced the same way as its tabs."""
 
     TAB = None
@@ -582,9 +579,11 @@ class DatapointTable(SlicedTopics, Datastack):
     def __resolve_topics__(cls):
         raw_own = cls.__dict__.get('TOPICS')
         own = dict(raw_own) if isinstance(raw_own, dict) else {}
+        own.setdefault('tabs', DIRTOPIC)
+        own.setdefault('done', 'done')
         if cls.TAB is not None and not isinstance(cls.TAB, property):
             tab_topics = getattr(cls.TAB, 'TOPICS', {})
-            tab_slices = SlicedTopics._find_slice_topics(tab_topics)
+            tab_slices = DatapointBase._find_slice_topics(tab_topics)
             if not tab_slices:
                 tab_slices = getattr(cls.TAB, 'SLICES', ())
             for s in tab_slices:
@@ -752,9 +751,9 @@ class DatapointPartition(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
-        datapoint_table: DatapointTable = None
-        fractions: list[float] = field(default_factory=list)
-        partition_slice: int | str = 0
+        datapoint_table: DatapointTable
+        fractions: list[float]
+        partition_slice: int | str
 
     def __build__(self):
         table = self.var.datapoint_table
@@ -830,28 +829,23 @@ class DatapointFold(DatapointTable):
     """A subset of a `DatapointTable` defined by tab_indices for a fold."""
 
     @dataclass
-    class VAR(DatapointTable.VAR):
-        partition: DatapointPartition = None
-        datapoint_table: DatapointTable = None
-        tab_indices: list[int] = field(default_factory=list)
+    class VAR(Datablock.VAR):
+        partition: DatapointPartition
+        datapoint_table: DatapointTable
+        tab_indices: list[int]
+        datapoints_per_row: int = 1
 
     @property
     def TAB(self):
-        table = self.var.datapoint_table if self.var.datapoint_table is not None else (self.var.partition.var.datapoint_table if self.var.partition is not None else None)
-        return getattr(table, 'TAB', None)
+        return getattr(self.var.datapoint_table, 'TAB', None)
 
     @property
     def slices(self):
-        table = self.var.datapoint_table if self.var.datapoint_table is not None else (self.var.partition.var.datapoint_table if self.var.partition is not None else None)
-        if table is not None:
-            return table.slices
-        return ()
+        return self.var.datapoint_table.slices
 
     @property
     def TOPICS(self):
-        if self.var.partition.var.datapoint_table is not None:
-            return self.var.partition.var.datapoint_table.TOPICS
-        return {}
+        return self.var.datapoint_table.TOPICS
 
     @property
     def n_tabs(self) -> int:

@@ -134,11 +134,6 @@ DIRTOPIC = None
 #: in CPython it is interned, so ``is SYNTOPIC`` is an exact test.
 SYNTOPIC = ()
 
-#: A SLICE topic: an MDS stream directory inside a sliced block::
-#:
-#:     TOPICS = {'samples': SLICETOPIC, 'labels': SLICETOPIC}
-SLICETOPIC = 'SLICETOPIC'
-
 
 def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
@@ -409,9 +404,9 @@ class DatajournalEntry(pd.Series):
         return node
 
     def _is_dir_topic(self, *topicpath):
-        """A directory topic when the recorded TOPICS filename is :data:`DIRTOPIC` or :data:`SLICETOPIC`."""
+        """A directory topic when the recorded TOPICS filename is :data:`DIRTOPIC`."""
         node = self._walk(self.topics, self._normtopic(topicpath))
-        return node is DIRTOPIC or node == SLICETOPIC or node is SLICETOPIC
+        return node is DIRTOPIC
 
     def _is_syntopic(self, *topicpath):
         """A :data:`SYNTOPIC` topic -- recorded as synthetic, with no location."""
@@ -1409,8 +1404,8 @@ class Datablock:
 
     @staticmethod
     def _node_is_dirtopic(node):
-        """True when node is DIRTOPIC or SLICETOPIC."""
-        return node is DIRTOPIC or node == SLICETOPIC or node is SLICETOPIC
+        """True when node is DIRTOPIC."""
+        return node is DIRTOPIC
 
     def _is_dir_topic(self, *topicpath):
         """True when the topic resolves to a directory rather than a file.

@@ -139,22 +139,17 @@ class TestTopicsFromSlices:
         assert Debuggable.TOPICS['debug'] == {'plots': DIRTOPIC}
         assert 'depth' in Debuggable.slices
 
-    def test_topics_accumulate_down_the_hierarchy(self):
-        """A subclass declaring TOPICS adds to what it inherits rather than
-        replacing it -- which is how a table keeps 'tabs' and 'done'."""
-        class Annotated(LetterTable):
+    def test_topics_do_not_accumulate_down_the_hierarchy(self):
+        """A subclass declaring TOPICS does not accumulate parent non-slice TOPICS."""
+        class BaseTab(DatapointTab):
+            TOPICS = {'samples': SLICETOPIC, 'meta': 'meta.json'}
+
+        class SubTab(BaseTab):
             TOPICS = {'report': 'report.json'}
 
-        assert Annotated.TOPICS['report'] == 'report.json'
-        assert Annotated.TOPICS['tabs'] is DIRTOPIC
-        assert Annotated.TOPICS['done'] == 'done'
-
-    def test_own_topics_win_over_inherited(self):
-        class Renamed(LetterTable):
-            TOPICS = {'done': 'DONE'}
-
-        assert Renamed.TOPICS['done'] == 'DONE'
-        assert Renamed.TOPICS['tabs'] is DIRTOPIC
+        assert SubTab.TOPICS['report'] == 'report.json'
+        assert SubTab.TOPICS['samples'] == SLICETOPIC
+        assert 'meta' not in SubTab.TOPICS
 
     def test_slices_are_in_the_signature(self, table):
         assert 'topic:numbers=SLICETOPIC' in table.signature

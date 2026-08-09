@@ -64,7 +64,7 @@ def table(tmp_path):
 def test_datapoint_partition_and_fold(table, tmp_path):
     partition = DatapointPartition(
         url=str(tmp_path / 'partition'),
-        spec=dict(datapoint_table=table, fractions=[0.5, 0.5]),
+        spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0),
     ).build()
 
     assert partition.valid()

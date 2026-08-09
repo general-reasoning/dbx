@@ -35,6 +35,119 @@ def _extract_slice_data(res, slice_name):
     return res
 
 
+class Datacollator(Datablock):
+    """Callable Datablock for collating batches of datapoint dicts into signal and label arrays.
+
+    `Datacollator` has no `TOPICS` (it does not build or persist files).
+    When invoked as `collator(datapoints)`, it extracts the specified `signals` and `labels`
+    `(slice, column)` pairs from each datapoint dict in `datapoints`, concatenating/stacking
+    signal tensors along a new dimension 1 for each datapoint, and concatenating datapoints
+    along dimension 0 (batch dimension).
+    """
+
+    TOPICS = {}
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        signals: list[tuple[str, str]]
+        labels: list[tuple[str, str]]
+        length: int | None = None
+        strip_keys: bool = False
+        single_val: bool = False
+
+    def __call__(self, datapoints: list[dict]) -> dict[str, np.ndarray] | tuple[np.ndarray, ...] | np.ndarray:
+        """Collate a batch of datapoint dicts into collated arrays.
+
+        Parameters
+        ----------
+        datapoints : list[dict]
+            List of datapoint sample dicts containing slice/column features and labels.
+
+        Returns
+        -------
+        dict[str, np.ndarray] | tuple[np.ndarray, ...] | np.ndarray
+            Collated signals and labels, formatted according to VAR options (length, strip_keys, single_val).
+        """
+        sig_arr = self._collate_pairs(datapoints, self.var.signals)
+        lbl_arr = self._collate_pairs(datapoints, self.var.labels)
+
+        length = self.var.length
+        if length is not None:
+            if hasattr(sig_arr, 'ndim') and sig_arr.ndim >= 1 and sig_arr.shape[-1] > length:
+                sig_arr = sig_arr[..., :length]
+            if hasattr(lbl_arr, 'ndim') and lbl_arr.ndim >= 1 and lbl_arr.shape[-1] > length:
+                lbl_arr = lbl_arr[..., :length]
+
+        if self.var.single_val:
+            return sig_arr
+        if self.var.strip_keys:
+            if len(self.var.labels) > 0:
+                return (sig_arr, lbl_arr)
+            return (sig_arr,)
+
+        res = {'signal': sig_arr}
+        if len(self.var.labels) > 0:
+            res['label'] = lbl_arr
+        return res
+
+    @staticmethod
+    def _norm_pair(pair: Any) -> tuple[str, str]:
+        if isinstance(pair, (list, tuple)):
+            if len(pair) >= 2:
+                return str(pair[0]), str(pair[1])
+            elif len(pair) == 1:
+                return str(pair[0]), str(pair[0])
+        return str(pair), str(pair)
+
+    def _collate_pairs(self, datapoints: list[dict], pairs: list[tuple[str, str]]) -> np.ndarray:
+        if not pairs:
+            return np.array([])
+
+        norm_pairs = [self._norm_pair(p) for p in pairs]
+        batch_items = []
+
+        for dp in datapoints:
+            dp_signals = []
+            for s_name, c_name in norm_pairs:
+                if isinstance(dp, dict) and s_name in dp:
+                    val = dp[s_name]
+                    if isinstance(val, dict):
+                        val = val.get(c_name, next(iter(val.values())))
+                else:
+                    val = dp
+
+                if torch is not None and isinstance(val, torch.Tensor):
+                    val = val.detach().cpu().numpy()
+                else:
+                    val = np.array(val)
+
+                dp_signals.append(val)
+
+            norm_signals = []
+            for sig in dp_signals:
+                if sig.ndim == 0:
+                    norm_signals.append(sig.reshape(1, 1))
+                elif sig.ndim == 1:
+                    norm_signals.append(sig.reshape(1, -1))
+                else:
+                    norm_signals.append(sig)
+
+            if norm_signals[0].ndim == 2 and all(x.ndim == 2 for x in norm_signals):
+                try:
+                    dp_tensor = np.stack(norm_signals, axis=1)
+                except ValueError:
+                    dp_tensor = np.concatenate(norm_signals, axis=1)
+            else:
+                dp_tensor = np.stack(norm_signals, axis=1)
+
+            batch_items.append(dp_tensor)
+
+        try:
+            return np.stack(batch_items, axis=0)
+        except ValueError:
+            return np.concatenate(batch_items, axis=0)
+
+
 class DatafeatureTab(DatapointTab):
     """A tab storing multi-layer feature activations captured by an evaluator.
 
@@ -677,96 +790,3 @@ class BipolarDatafeatureTable(DatapointTable):
         own = tuple(self.slices)
         upstream = tuple(self.featuretable.available_slices) if self.featuretable is not None else ()
         return own + upstream
-
-
-class Datacollator(Datablock):
-    """Callable Datablock for collating batches of datapoint dicts into signal and label arrays.
-
-    `Datacollator` has no `TOPICS` (it does not build or persist files).
-    When invoked as `collator(datapoints)`, it extracts the specified `signals` and `labels`
-    `(slice, column)` pairs from each datapoint dict in `datapoints`, concatenating/stacking
-    signal tensors along a new dimension 1 for each datapoint, and concatenating datapoints
-    along dimension 0 (batch dimension).
-    """
-
-    TOPICS = {}
-
-    @dataclass
-    class VAR(Datablock.VAR):
-        signals: list[tuple[str, str]]
-        labels: list[tuple[str, str]]
-
-    def __call__(self, datapoints: list[dict]) -> dict[str, np.ndarray]:
-        """Collate a batch of datapoint dicts into a dict with 'signal' and 'label' keys.
-
-        Parameters
-        ----------
-        datapoints : list[dict]
-            List of datapoint sample dicts containing slice/column features and labels.
-
-        Returns
-        -------
-        dict[str, np.ndarray]
-            Dict with keys `'signal'` and `'label'` mapping to collated arrays.
-        """
-        return {
-            'signal': self._collate_pairs(datapoints, self.var.signals),
-            'label': self._collate_pairs(datapoints, self.var.labels),
-        }
-
-    @staticmethod
-    def _norm_pair(pair: Any) -> tuple[str, str]:
-        if isinstance(pair, (list, tuple)):
-            if len(pair) >= 2:
-                return str(pair[0]), str(pair[1])
-            elif len(pair) == 1:
-                return str(pair[0]), str(pair[0])
-        return str(pair), str(pair)
-
-    def _collate_pairs(self, datapoints: list[dict], pairs: list[tuple[str, str]]) -> np.ndarray:
-        if not pairs:
-            return np.array([])
-
-        norm_pairs = [self._norm_pair(p) for p in pairs]
-        batch_items = []
-
-        for dp in datapoints:
-            dp_signals = []
-            for s_name, c_name in norm_pairs:
-                if isinstance(dp, dict) and s_name in dp:
-                    val = dp[s_name]
-                    if isinstance(val, dict):
-                        val = val.get(c_name, next(iter(val.values())))
-                else:
-                    val = dp
-
-                if torch is not None and isinstance(val, torch.Tensor):
-                    val = val.detach().cpu().numpy()
-                else:
-                    val = np.array(val)
-
-                dp_signals.append(val)
-
-            norm_signals = []
-            for sig in dp_signals:
-                if sig.ndim == 0:
-                    norm_signals.append(sig.reshape(1, 1))
-                elif sig.ndim == 1:
-                    norm_signals.append(sig.reshape(1, -1))
-                else:
-                    norm_signals.append(sig)
-
-            if norm_signals[0].ndim == 2 and all(x.ndim == 2 for x in norm_signals):
-                try:
-                    dp_tensor = np.stack(norm_signals, axis=1)
-                except ValueError:
-                    dp_tensor = np.concatenate(norm_signals, axis=1)
-            else:
-                dp_tensor = np.stack(norm_signals, axis=1)
-
-            batch_items.append(dp_tensor)
-
-        try:
-            return np.stack(batch_items, axis=0)
-        except ValueError:
-            return np.concatenate(batch_items, axis=0)

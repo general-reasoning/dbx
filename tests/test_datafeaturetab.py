@@ -296,6 +296,41 @@ def test_datacollator():
     assert out["signal"].shape == (2, 5, 2, 4)  # batch=2, tokens=5, signals=2, d=4
     assert out["label"].shape == (2, 1, 1, 1)
 
+    # Test length trimming
+    c_len = Datacollator(
+        spec=dict(
+            signals=[("samples", "samples")],
+            labels=[("labels", "labels")],
+            length=2,
+        )
+    )
+    out_len = c_len(batch_datapoints)
+    assert out_len["signal"].shape == (2, 5, 1, 2)  # last dim trimmed to 2
+
+    # Test strip_keys
+    c_strip = Datacollator(
+        spec=dict(
+            signals=[("samples", "samples")],
+            labels=[("labels", "labels")],
+            strip_keys=True,
+        )
+    )
+    out_strip = c_strip(batch_datapoints)
+    assert isinstance(out_strip, tuple)
+    assert len(out_strip) == 2
+
+    # Test single_val
+    c_single = Datacollator(
+        spec=dict(
+            signals=[("samples", "samples")],
+            labels=[("labels", "labels")],
+            single_val=True,
+        )
+    )
+    out_single = c_single(batch_datapoints)
+    assert isinstance(out_single, np.ndarray)
+    assert out_single.shape == (2, 5, 1, 4)
+
 
 if __name__ == "__main__":
     import sys

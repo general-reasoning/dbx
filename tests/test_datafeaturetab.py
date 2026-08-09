@@ -84,7 +84,7 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     featuretab = DatafeatureTab(
         url=url,
         spec=dict(
-            sampletab=sampletab,
+            datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
         ),
         device="cpu",
@@ -125,7 +125,7 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     featuretab = DatafeatureTab(
         url=url,
         spec=dict(
-            sampletab=sampletab,
+            datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
         ),
         device="cpu",
@@ -179,7 +179,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
     featuretable = DatafeatureTable(
         url=url,
         spec=dict(
-            sampletable=sampletable,
+            datapoint_table=sampletable,
             evaluator_factory=eval_factory,
         ),
         devices=["cpu"],
@@ -230,7 +230,7 @@ def test_custom_features_mapping(tmp_path):
     featuretab = DatafeatureTab(
         url=url,
         spec=dict(
-            sampletab=sampletab,
+            datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
             features={"custom_output": "final"},
         ),
@@ -254,7 +254,7 @@ def test_signal_selection(tmp_path):
     featuretab = DatafeatureTab(
         url=url,
         spec=dict(
-            sampletab=sampletab,
+            datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
             signal=("samples", "samples"),
         ),

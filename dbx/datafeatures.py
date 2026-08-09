@@ -163,7 +163,7 @@ class DatafeatureTab(DatapointTab):
 
     @dataclass
     class VAR(DatapointTab.VAR):
-        sampletab: DatapointTab
+        datapoint_tab: DatapointTab
         evaluator_factory: DatamodelEvaluatorFactory
         signal: tuple[str, str] | None = None
         features: dict | None = None
@@ -172,9 +172,7 @@ class DatafeatureTab(DatapointTab):
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
 
     def __init__(self, *args, device_batch_size: int = 64, device: str = "cuda", **kwargs):
-        self.device = device
-        self.device_batch_size = device_batch_size
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, device=device, device_batch_size=device_batch_size, **kwargs)
 
     def __post_init__(self):
         super().__post_init__()
@@ -195,7 +193,7 @@ class DatafeatureTab(DatapointTab):
 
     def __build__(self):
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
-        sampletab = self.var.sampletab
+        datapoint_tab = self.var.datapoint_tab
 
         slice_specs = {
             col_name: {col_name: "ndarray:float32"}
@@ -211,14 +209,14 @@ class DatafeatureTab(DatapointTab):
                     slice_name = str(self.var.signal)
                     col_name = str(self.var.signal)
 
-                sample_data = sampletab.data(slice_name, concat=True)
+                sample_data = datapoint_tab.data(slice_name, concat=True)
                 slice_data = sample_data.get(slice_name, next(iter(sample_data.values())))
                 if isinstance(slice_data, dict):
                     inputs = slice_data.get(col_name, next(iter(slice_data.values())))
                 else:
                     inputs = slice_data
             else:
-                sample_data = sampletab.data(concat=True)
+                sample_data = datapoint_tab.data(concat=True)
                 input_key = next(iter(sample_data.keys()))
                 inputs = sample_data[input_key]
                 if isinstance(inputs, dict):
@@ -271,10 +269,10 @@ class DatafeatureTab(DatapointTab):
         for s in requested:
             if s in self.slices:
                 datasets.append(self.datastream(s, **kwargs))
-            elif self.sampletab is not None and s in self.sampletab.slices:
-                datasets.append(self.sampletab.datastream(s, **kwargs))
+            elif self.datapoint_tab is not None and s in self.datapoint_tab.slices:
+                datasets.append(self.datapoint_tab.datastream(s, **kwargs))
             else:
-                avail = list(self.slices) + (list(self.sampletab.slices) if self.sampletab else [])
+                avail = list(self.slices) + (list(self.datapoint_tab.slices) if self.datapoint_tab else [])
                 raise KeyError(
                     f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
                 )
@@ -302,10 +300,10 @@ class DatafeatureTab(DatapointTab):
         for s in requested:
             if s in self.slices:
                 result[s] = _extract_slice_data(super().data(s, concat=concat), s)
-            elif self.sampletab is not None and s in self.sampletab.slices:
-                result[s] = _extract_slice_data(self.sampletab.data(s, concat=concat), s)
+            elif self.datapoint_tab is not None and s in self.datapoint_tab.slices:
+                result[s] = _extract_slice_data(self.datapoint_tab.data(s, concat=concat), s)
             else:
-                avail = list(self.slices) + (list(self.sampletab.slices) if self.sampletab else [])
+                avail = list(self.slices) + (list(self.datapoint_tab.slices) if self.datapoint_tab else [])
                 raise KeyError(
                     f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
                 )
@@ -314,8 +312,12 @@ class DatafeatureTab(DatapointTab):
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
+    def datapoint_tab(self) -> DatapointTab:
+        return self.var.datapoint_tab
+
+    @property
     def sampletab(self) -> DatapointTab:
-        return self.var.sampletab
+        return self.datapoint_tab
 
     @property
     def feature_names(self) -> list[str]:
@@ -324,11 +326,11 @@ class DatafeatureTab(DatapointTab):
     @property
     def available_slices(self) -> tuple[str, ...]:
         own = tuple(self.slices)
-        upstream = tuple(self.sampletab.slices) if self.sampletab is not None else ()
+        upstream = tuple(self.datapoint_tab.slices) if self.datapoint_tab is not None else ()
         return own + upstream
 
     def __len__(self) -> int:
-        return len(self.sampletab)
+        return len(self.datapoint_tab)
 
 
 class DatafeatureTable(DatapointTable):
@@ -339,7 +341,7 @@ class DatafeatureTable(DatapointTable):
 
     @dataclass
     class VAR(DatapointTable.VAR):
-        sampletable: DatapointTable
+        datapoint_table: DatapointTable
         evaluator_factory: DatamodelEvaluatorFactory
         signal: tuple[str, str] | None = None
         features: dict | None = None
@@ -387,9 +389,9 @@ class DatafeatureTable(DatapointTable):
             return result
 
     def __tab__(self, idx: int, device: str = "cuda", tag=None) -> DatafeatureTab:
-        sampletab = self.var.sampletable.tab(idx)
+        datapoint_tab = self.var.datapoint_table.tab(idx)
         spec = dict(
-            sampletab=dbx.quote(sampletab),
+            datapoint_tab=dbx.quote(datapoint_tab),
             evaluator_factory=self.spec['evaluator_factory'],
         )
         if self.var.signal is not None:
@@ -408,7 +410,7 @@ class DatafeatureTable(DatapointTable):
             device_batch_size=self.device_batch_size,
             device=device,
             revision=self.revision,
-            tag=tag if tag is not None else sampletab.tag,
+            tag=tag if tag is not None else datapoint_tab.tag,
         )
 
     def __block__(self, idx: int, **kwargs) -> DatafeatureTab:
@@ -457,10 +459,10 @@ class DatafeatureTable(DatapointTable):
         for s in requested:
             if s in self.slices:
                 datasets.append(self.datastream(s, **kwargs))
-            elif self.sampletable is not None and s in self.sampletable.slices:
-                datasets.append(self.sampletable.datastream(s, **kwargs))
+            elif self.datapoint_table is not None and s in self.datapoint_table.slices:
+                datasets.append(self.datapoint_table.datastream(s, **kwargs))
             else:
-                avail = list(self.slices) + (list(self.sampletable.slices) if self.sampletable else [])
+                avail = list(self.slices) + (list(self.datapoint_table.slices) if self.datapoint_table else [])
                 raise KeyError(
                     f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
                 )
@@ -495,10 +497,10 @@ class DatafeatureTable(DatapointTable):
                         result[s] = concat_data(tab_data, dtype=self.SLICE_DTYPES.get(s))
                 else:
                     result[s] = tab_data
-            elif self.sampletable is not None and s in self.sampletable.slices:
-                result[s] = _extract_slice_data(self.sampletable.data(s, concat=concat), s)
+            elif self.datapoint_table is not None and s in self.datapoint_table.slices:
+                result[s] = _extract_slice_data(self.datapoint_table.data(s, concat=concat), s)
             else:
-                avail = list(self.slices) + (list(self.sampletable.slices) if self.sampletable else [])
+                avail = list(self.slices) + (list(self.datapoint_table.slices) if self.datapoint_table else [])
                 raise KeyError(
                     f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
                 )
@@ -507,17 +509,21 @@ class DatafeatureTable(DatapointTable):
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
+    def datapoint_table(self) -> DatapointTable:
+        return self.var.datapoint_table
+
+    @property
     def sampletable(self) -> DatapointTable:
-        return self.var.sampletable
+        return self.datapoint_table
 
     @property
     def n_tabs(self) -> int:
-        return self.sampletable.n_tabs
+        return self.datapoint_table.n_tabs
 
     @property
     def available_slices(self) -> tuple[str, ...]:
         own = tuple(self.slices)
-        upstream = tuple(self.sampletable.slices) if self.sampletable is not None else ()
+        upstream = tuple(self.datapoint_table.slices) if self.datapoint_table is not None else ()
         return own + upstream
 
 
@@ -651,8 +657,12 @@ class BipolarDatafeatureTab(DatapointTab):
         return self.var.featuretab
 
     @property
+    def datapoint_tab(self) -> DatapointTab | None:
+        return self.featuretab.datapoint_tab if self.featuretab is not None else None
+
+    @property
     def sampletab(self) -> DatapointTab | None:
-        return self.featuretab.sampletab
+        return self.datapoint_tab
 
     @property
     def available_slices(self) -> tuple[str, ...]:
@@ -781,8 +791,12 @@ class BipolarDatafeatureTable(DatapointTable):
         return self.var.featuretable
 
     @property
+    def datapoint_table(self) -> DatapointTable | None:
+        return self.featuretable.datapoint_table if self.featuretable is not None else None
+
+    @property
     def sampletable(self) -> DatapointTable | None:
-        return self.featuretable.sampletable
+        return self.datapoint_table
 
     @property
     def n_tabs(self) -> int:

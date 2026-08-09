@@ -108,7 +108,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
     featuretable = DatafeatureTable(
         url=url,
         spec=dict(
-            sampletable=sampletable,
+            datapoint_table=sampletable,
             evaluator_factory=eval_factory,
         ),
         devices=["cpu"],
@@ -154,7 +154,7 @@ def test_datafeature_stats_probe(tmp_path):
     featuretable = DatafeatureTable(
         url=url,
         spec=dict(
-            sampletable=sampletable,
+            datapoint_table=sampletable,
             evaluator_factory=eval_factory,
         ),
         devices=["cpu"],

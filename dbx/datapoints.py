@@ -832,7 +832,7 @@ class DatapointFold(DatapointTable):
     """A subset of a `DatapointTable` defined by tab_indices for a fold."""
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datablock.VAR):
         partition: DatapointPartition
         tab_indices: list[int]
 

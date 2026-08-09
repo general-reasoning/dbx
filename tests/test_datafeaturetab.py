@@ -92,25 +92,25 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     ).build()
 
     assert featuretab.valid()
-    assert "features_final" in featuretab.slices
-    assert set(featuretab.available_slices) == {"features_final", "samples", "labels"}
+    assert "features" in featuretab.slices
+    assert set(featuretab.available_slices) == {"features", "samples", "labels"}
 
     # 3. Read data combining feature slice and inherited sample slices
-    res = featuretab.data("features_final", "samples", "labels")
-    assert "features_final" in res
+    res = featuretab.data(("features", "final"), "samples", "labels")
+    assert "features" in res
     assert "samples" in res
     assert "labels" in res
 
-    assert res["features_final"].shape == (10, 8)
+    assert res["features"]["final"].shape == (10, 8)
     assert res["samples"].shape == (10, 4)
     assert len(res["labels"]) == 10
 
     # 4. Map-style dataset zipping feature slice and sample slice
-    ds = featuretab.dataset("features_final", "labels", mode="map")
+    ds = featuretab.dataset("features", "labels", mode="map")
     sample_0 = ds[0]
-    assert "features_final" in sample_0
+    assert "final" in sample_0
     assert "labels" in sample_0
-    assert sample_0["features_final"].shape == (8,)
+    assert sample_0["final"].shape == (8,)
 
 
 def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
@@ -147,16 +147,16 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     assert set(bipolar_tab.available_slices) == {
         "bipolar_features",
         "tab_bipolar_features",
-        "features_final",
+        "features",
         "samples",
         "labels",
     }
 
     # Test reading data across bipolar, raw features, and original sample labels
-    b_data = bipolar_tab.data("bipolar_features", "features_final", "labels")
+    b_data = bipolar_tab.data("bipolar_features", ("features", "final"), "labels")
     assert b_data["bipolar_features"].shape == (10, 8)
     assert set(np.unique(b_data["bipolar_features"])).issubset({-1, 1})
-    assert b_data["features_final"].shape == (10, 8)
+    assert b_data["features"]["final"].shape == (10, 8)
     assert len(b_data["labels"]) == 10
 
 
@@ -187,11 +187,11 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
     ).build()
 
     assert featuretable.n_tabs == 2
-    assert set(featuretable.available_slices) == {"features_final", "samples", "labels"}
+    assert set(featuretable.available_slices) == {"features", "samples", "labels"}
 
     # Test reading combined data across table
-    feat_data = featuretable.data("features_final", concat=True)
-    assert feat_data["features_final"].shape == (10, 8)
+    feat_data = featuretable.data(("features", "final"), concat=True)
+    assert feat_data["features"]["final"].shape == (10, 8)
     label_data = featuretable.data("labels", concat=True)
     assert len(label_data["labels"]) == 10
 
@@ -209,7 +209,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
     assert set(bipolar_table.available_slices) == {
         "bipolar_features",
         "tab_bipolar_features",
-        "features_final",
+        "features",
         "samples",
         "labels",
     }
@@ -238,9 +238,9 @@ def test_custom_features_mapping(tmp_path):
         tag="features_cust",
     ).build()
 
-    assert featuretab.slices == ("custom_output",)
-    res = featuretab.data("custom_output")
-    assert res["custom_output"].shape == (10, 8)
+    assert featuretab.slices == ("features",)
+    res = featuretab.data(("features", "custom_output"))
+    assert res["features"]["custom_output"].shape == (10, 8)
 
 
 def test_signal_selection(tmp_path):

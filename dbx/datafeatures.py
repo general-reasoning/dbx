@@ -35,6 +35,21 @@ def _extract_slice_data(res, slice_name):
     return res
 
 
+def _extract_pair_data(data_dict, pair: tuple[str, str]):
+    s_name, c_name = pair[0], pair[1]
+    if isinstance(data_dict, dict) and s_name in data_dict:
+        val = data_dict[s_name]
+        if isinstance(val, dict):
+            if c_name in val:
+                return val[c_name]
+            col_key = c_name.replace('features_', '')
+            if col_key in val:
+                return val[col_key]
+            return next(iter(val.values()))
+        return val
+    return data_dict
+
+
 class Datacollator(Datablock):
     """Callable Datablock for collating batches of datapoint dicts into signal and label arrays.
 
@@ -179,26 +194,30 @@ class DatafeatureTab(DatapointTab):
         factory = self.var.evaluator_factory
         layer_names = factory.layer_names
         if self.var.features is not None:
-            self._feature_map = dict(self.var.features)
+            if isinstance(self.var.features, dict):
+                self._feature_map = dict(self.var.features)
+            elif isinstance(self.var.features, (list, tuple)):
+                self._feature_map = {str(k): str(k) for k in self.var.features}
+            else:
+                self._feature_map = {str(self.var.features): str(self.var.features)}
         else:
-            self._feature_map = {
-                f"features_{name.replace('.', '_')}" if not name.startswith("features_") else name: name
-                for name in layer_names
-            }
-        self.SLICES = tuple(self._feature_map.keys())
-        self.SLICE_DTYPES = {name: "ndarray:float32" for name in self.SLICES}
+            self._feature_map = {name: name for name in layer_names}
+
+        self.SLICES = ("features",)
+        self.SLICE_DTYPES = {"features": "ndarray:float32"}
         topics = dict(self.TOPICS)
-        topics[self.DATA] = {name: DIRTOPIC for name in self.SLICES}
+        topics[self.DATA] = {"features": DIRTOPIC}
         self.TOPICS = topics
 
     def __build__(self):
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         datapoint_tab = self.var.datapoint_tab
 
-        slice_specs = {
-            col_name: {col_name: "ndarray:float32"}
-            for col_name in self.SLICES
+        columns_spec = {
+            col_name: "ndarray:float32"
+            for col_name in self._feature_map.keys()
         }
+        slice_specs = {"features": columns_spec}
 
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             if self.var.signal is not None:
@@ -235,11 +254,14 @@ class DatafeatureTab(DatapointTab):
                 batch = inputs[m:n].to(self.device)
                 result = evaluator(batch)
 
-                for col_name, layer_name in self._feature_map.items():
-                    if layer_name in result:
-                        arr = result[layer_name].cpu().numpy().astype(np.float32)
-                        for i in range(len(arr)):
-                            writers[col_name].write({col_name: arr[i]})
+                batch_len = n - m
+                for i in range(batch_len):
+                    sample_dict = {}
+                    for col_name, layer_name in self._feature_map.items():
+                        if layer_name in result:
+                            arr = result[layer_name].cpu().numpy().astype(np.float32)
+                            sample_dict[col_name] = arr[i]
+                    writers['features'].write(sample_dict)
                 evaluator.clear()
         return self
 
@@ -267,14 +289,15 @@ class DatafeatureTab(DatapointTab):
 
         datasets = []
         for s in requested:
-            if s in self.slices:
-                datasets.append(self.datastream(s, **kwargs))
-            elif self.datapoint_tab is not None and s in self.datapoint_tab.slices:
-                datasets.append(self.datapoint_tab.datastream(s, **kwargs))
+            s_name = s[0] if isinstance(s, (tuple, list)) else str(s)
+            if s_name in self.slices:
+                datasets.append(self.datastream(s_name, **kwargs))
+            elif self.datapoint_tab is not None and s_name in self.datapoint_tab.slices:
+                datasets.append(self.datapoint_tab.datastream(s_name, **kwargs))
             else:
                 avail = list(self.slices) + (list(self.datapoint_tab.slices) if self.datapoint_tab else [])
                 raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
+                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
                 )
 
         zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
@@ -291,22 +314,51 @@ class DatafeatureTab(DatapointTab):
     def data(self, *slices, concat=True):
         requested = list(slices)
         if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            requested = list(requested[0])
+            if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
+                requested = list(requested[0])
+            elif len(requested[0]) == 2 and isinstance(requested[0][0], str) and (requested[0][0] in ('features', 'samples', 'labels') or requested[0][0] in self.available_slices):
+                requested = [requested[0]]
+            else:
+                requested = list(requested[0])
 
         if not requested:
             requested = list(self.slices)
 
         result = {}
-        for s in requested:
-            if s in self.slices:
-                result[s] = _extract_slice_data(super().data(s, concat=concat), s)
-            elif self.datapoint_tab is not None and s in self.datapoint_tab.slices:
-                result[s] = _extract_slice_data(self.datapoint_tab.data(s, concat=concat), s)
+        for item in requested:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                s_name, c_name = str(item[0]), str(item[1])
             else:
-                avail = list(self.slices) + (list(self.datapoint_tab.slices) if self.datapoint_tab else [])
-                raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
-                )
+                s_name, c_name = str(item), None
+
+            if s_name == 'features' or s_name in self.slices:
+                raw_data = _extract_slice_data(super().data('features', concat=concat), 'features')
+                if c_name is not None and isinstance(raw_data, dict):
+                    target_col = c_name if c_name in raw_data else raw_data.get(c_name.replace('features_', ''), next(iter(raw_data.values())))
+                    if target_col in raw_data:
+                        result['features'] = {c_name: raw_data[target_col]}
+                    else:
+                        result['features'] = {c_name: next(iter(raw_data.values()))}
+                else:
+                    result['features'] = raw_data
+            elif self.datapoint_tab is not None and s_name in self.datapoint_tab.slices:
+                dp_data = _extract_slice_data(self.datapoint_tab.data(s_name, concat=concat), s_name)
+                if c_name is not None and isinstance(dp_data, dict):
+                    result[s_name] = {c_name: dp_data.get(c_name, next(iter(dp_data.values())))}
+                else:
+                    result[s_name] = dp_data
+            else:
+                col_key = s_name.replace('features_', '')
+                raw_data = _extract_slice_data(super().data('features', concat=concat), 'features')
+                if isinstance(raw_data, dict) and col_key in raw_data:
+                    result[s_name] = raw_data[col_key]
+                elif isinstance(raw_data, dict) and s_name in raw_data:
+                    result[s_name] = raw_data[s_name]
+                else:
+                    avail = list(self.slices) + (list(self.datapoint_tab.slices) if self.datapoint_tab else [])
+                    raise KeyError(
+                        f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
+                    )
         return result
 
     # 2. Properties and Accessors ───────────────────────────────────
@@ -359,16 +411,19 @@ class DatafeatureTable(DatapointTable):
         factory = self.var.evaluator_factory
         layer_names = factory.layer_names
         if self.var.features is not None:
-            self._feature_map = dict(self.var.features)
+            if isinstance(self.var.features, dict):
+                self._feature_map = dict(self.var.features)
+            elif isinstance(self.var.features, (list, tuple)):
+                self._feature_map = {str(k): str(k) for k in self.var.features}
+            else:
+                self._feature_map = {str(self.var.features): str(self.var.features)}
         else:
-            self._feature_map = {
-                f"features_{name.replace('.', '_')}" if not name.startswith("features_") else name: name
-                for name in layer_names
-            }
-        self.SLICES = tuple(self._feature_map.keys())
-        self.SLICE_DTYPES = {name: "ndarray:float32" for name in self.SLICES}
+            self._feature_map = {name: name for name in layer_names}
+
+        self.SLICES = ("features",)
+        self.SLICE_DTYPES = {"features": "ndarray:float32"}
         topics = dict(self.TOPICS)
-        topics[self.DATA] = {name: DIRTOPIC for name in self.SLICES}
+        topics[self.DATA] = {"features": DIRTOPIC}
         self.TOPICS = topics
 
     class BlockMaker(Datastack.BlockMaker):
@@ -457,14 +512,15 @@ class DatafeatureTable(DatapointTable):
 
         datasets = []
         for s in requested:
-            if s in self.slices:
-                datasets.append(self.datastream(s, **kwargs))
-            elif self.datapoint_table is not None and s in self.datapoint_table.slices:
-                datasets.append(self.datapoint_table.datastream(s, **kwargs))
+            s_name = s[0] if isinstance(s, (tuple, list)) else str(s)
+            if s_name in self.slices:
+                datasets.append(self.datastream(s_name, **kwargs))
+            elif self.datapoint_table is not None and s_name in self.datapoint_table.slices:
+                datasets.append(self.datapoint_table.datastream(s_name, **kwargs))
             else:
                 avail = list(self.slices) + (list(self.datapoint_table.slices) if self.datapoint_table else [])
                 raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
+                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
                 )
 
         zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
@@ -481,29 +537,53 @@ class DatafeatureTable(DatapointTable):
     def data(self, *slices, concat=True):
         requested = list(slices)
         if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            requested = list(requested[0])
+            if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
+                requested = list(requested[0])
+            elif len(requested[0]) == 2 and isinstance(requested[0][0], str) and (requested[0][0] in ('features', 'samples', 'labels') or requested[0][0] in self.available_slices):
+                requested = [requested[0]]
+            else:
+                requested = list(requested[0])
 
         if not requested:
             requested = list(self.slices)
 
         result = {}
-        for s in requested:
-            if s in self.slices:
-                tab_data = [self.tab(i).data(s, concat=concat)[s] for i in range(self.n_tabs)]
-                if concat:
-                    if isinstance(tab_data[0], np.ndarray):
-                        result[s] = np.concatenate(tab_data, axis=0)
-                    else:
-                        result[s] = concat_data(tab_data, dtype=self.SLICE_DTYPES.get(s))
-                else:
-                    result[s] = tab_data
-            elif self.datapoint_table is not None and s in self.datapoint_table.slices:
-                result[s] = _extract_slice_data(self.datapoint_table.data(s, concat=concat), s)
+        for item in requested:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                s_name, c_name = str(item[0]), str(item[1])
             else:
-                avail = list(self.slices) + (list(self.datapoint_table.slices) if self.datapoint_table else [])
-                raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
-                )
+                s_name, c_name = str(item), None
+
+            if s_name == 'features' or s_name in self.slices:
+                tab_results = [self.tab(i).data((s_name, c_name) if c_name else s_name, concat=concat) for i in range(self.n_tabs)]
+                feat_datas = [tr.get('features', tr) for tr in tab_results]
+                if concat:
+                    if isinstance(feat_datas[0], dict):
+                        col_keys = feat_datas[0].keys()
+                        result['features'] = {
+                            k: np.concatenate([fd[k] for fd in feat_datas], axis=0) if isinstance(feat_datas[0][k], np.ndarray) else concat_data([fd[k] for fd in feat_datas])
+                            for k in col_keys
+                        }
+                    elif isinstance(feat_datas[0], np.ndarray):
+                        result['features'] = np.concatenate(feat_datas, axis=0)
+                    else:
+                        result['features'] = concat_data(feat_datas)
+                else:
+                    result['features'] = feat_datas
+            elif self.datapoint_table is not None and s_name in self.datapoint_table.slices:
+                dp_data = _extract_slice_data(self.datapoint_table.data(s_name, concat=concat), s_name)
+                result[s_name] = dp_data
+            else:
+                col_key = s_name.replace('features_', '')
+                tab_results = [self.tab(i).data(('features', col_key), concat=concat) for i in range(self.n_tabs)]
+                feat_datas = [tr.get('features', tr)[col_key] for tr in tab_results if isinstance(tr.get('features', tr), dict) and col_key in tr.get('features', tr)]
+                if concat and feat_datas:
+                    if isinstance(feat_datas[0], np.ndarray):
+                        result[s_name] = np.concatenate(feat_datas, axis=0)
+                    else:
+                        result[s_name] = concat_data(feat_datas)
+                else:
+                    result[s_name] = feat_datas
         return result
 
     # 2. Properties and Accessors ───────────────────────────────────
@@ -548,12 +628,8 @@ class BipolarDatafeatureTab(DatapointTab):
 
     def __build__(self):
         layer = self.var.layer
-        col_feature = f"features_{layer.replace('.', '_')}"
-        if col_feature in self.featuretab.slices:
-            raw_data = self.featuretab.data(col_feature, concat=True)[col_feature]
-        else:
-            raw_data = self.featuretab.data(concat=True)
-            raw_data = raw_data[next(iter(raw_data.keys()))]
+        res = self.featuretab.data(('features', layer), concat=True)
+        raw_data = _extract_pair_data(res, ('features', layer))
 
         if hasattr(raw_data, 'numpy'):
             features = raw_data.numpy()
@@ -632,21 +708,31 @@ class BipolarDatafeatureTab(DatapointTab):
     def data(self, *slices, concat=True):
         requested = list(slices)
         if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            requested = list(requested[0])
+            if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
+                requested = list(requested[0])
+            elif len(requested[0]) == 2 and isinstance(requested[0][0], str) and (requested[0][0] in ('features', 'samples', 'labels') or requested[0][0] in self.available_slices):
+                requested = [requested[0]]
+            else:
+                requested = list(requested[0])
 
         if not requested:
             requested = list(self.slices)
 
         result = {}
-        for s in requested:
-            if s in self.slices:
-                result[s] = _extract_slice_data(super().data(s, concat=concat), s)
-            elif self.featuretab is not None and s in self.featuretab.available_slices:
-                result[s] = _extract_slice_data(self.featuretab.data(s, concat=concat), s)
+        for item in requested:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                s_name, c_name = str(item[0]), str(item[1])
+            else:
+                s_name, c_name = str(item), None
+
+            if s_name in self.slices:
+                result[s_name] = _extract_slice_data(super().data(s_name, concat=concat), s_name)
+            elif self.featuretab is not None and s_name in self.featuretab.available_slices:
+                result[s_name] = _extract_slice_data(self.featuretab.data(item, concat=concat), s_name)
             else:
                 avail = list(self.slices) + (list(self.featuretab.available_slices) if self.featuretab else [])
                 raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
+                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
                 )
         return result
 
@@ -735,14 +821,15 @@ class BipolarDatafeatureTable(DatapointTable):
 
         datasets = []
         for s in requested:
-            if s in self.slices:
-                datasets.append(self.datastream(s, **kwargs))
-            elif self.featuretable is not None and s in self.featuretable.available_slices:
-                datasets.append(self.featuretable.dataset(s, mode=mode, **kwargs))
+            s_name = s[0] if isinstance(s, (tuple, list)) else str(s)
+            if s_name in self.slices:
+                datasets.append(self.datastream(s_name, **kwargs))
+            elif self.featuretable is not None and s_name in self.featuretable.available_slices:
+                datasets.append(self.featuretable.dataset(s_name, mode=mode, **kwargs))
             else:
                 avail = list(self.slices) + (list(self.featuretable.available_slices) if self.featuretable else [])
                 raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
+                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
                 )
 
         zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
@@ -759,28 +846,38 @@ class BipolarDatafeatureTable(DatapointTable):
     def data(self, *slices, concat=True):
         requested = list(slices)
         if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            requested = list(requested[0])
+            if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
+                requested = list(requested[0])
+            elif len(requested[0]) == 2 and isinstance(requested[0][0], str) and (requested[0][0] in ('features', 'samples', 'labels') or requested[0][0] in self.available_slices):
+                requested = [requested[0]]
+            else:
+                requested = list(requested[0])
 
         if not requested:
             requested = list(self.slices)
 
         result = {}
-        for s in requested:
-            if s in self.slices:
-                tab_data = [self.tab(i).data(s, concat=concat)[s] for i in range(self.n_tabs)]
+        for item in requested:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                s_name, c_name = str(item[0]), str(item[1])
+            else:
+                s_name, c_name = str(item), None
+
+            if s_name in self.slices:
+                tab_data = [self.tab(i).data(s_name, concat=concat)[s_name] for i in range(self.n_tabs)]
                 if concat:
                     if isinstance(tab_data[0], np.ndarray):
-                        result[s] = np.concatenate(tab_data, axis=0)
+                        result[s_name] = np.concatenate(tab_data, axis=0)
                     else:
-                        result[s] = concat_data(tab_data, dtype=self.SLICE_DTYPES.get(s))
+                        result[s_name] = concat_data(tab_data, dtype=self.SLICE_DTYPES.get(s_name))
                 else:
-                    result[s] = tab_data
-            elif self.featuretable is not None and s in self.featuretable.available_slices:
-                result[s] = _extract_slice_data(self.featuretable.data(s, concat=concat), s)
+                    result[s_name] = tab_data
+            elif self.featuretable is not None and s_name in self.featuretable.available_slices:
+                result[s_name] = _extract_slice_data(self.featuretable.data(item, concat=concat), s_name)
             else:
                 avail = list(self.slices) + (list(self.featuretable.available_slices) if self.featuretable else [])
                 raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
+                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
                 )
         return result
 

@@ -292,10 +292,10 @@ class DatafeatureTab(DatapointTab):
             s_name = s[0] if isinstance(s, (tuple, list)) else str(s)
             if s_name in self.slices:
                 datasets.append(self.datastream(s_name, **kwargs))
-            elif self.datapoint_tab is not None and s_name in self.datapoint_tab.slices:
-                datasets.append(self.datapoint_tab.datastream(s_name, **kwargs))
+            elif self.var.datapoint_tab is not None and s_name in self.var.datapoint_tab.slices:
+                datasets.append(self.var.datapoint_tab.datastream(s_name, **kwargs))
             else:
-                avail = list(self.slices) + (list(self.datapoint_tab.slices) if self.datapoint_tab else [])
+                avail = list(self.slices) + (list(self.var.datapoint_tab.slices) if self.var.datapoint_tab else [])
                 raise KeyError(
                     f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
                 )
@@ -341,8 +341,8 @@ class DatafeatureTab(DatapointTab):
                         result['features'] = {c_name: next(iter(raw_data.values()))}
                 else:
                     result['features'] = raw_data
-            elif self.datapoint_tab is not None and s_name in self.datapoint_tab.slices:
-                dp_data = _extract_slice_data(self.datapoint_tab.data(s_name, concat=concat), s_name)
+            elif self.var.datapoint_tab is not None and s_name in self.var.datapoint_tab.slices:
+                dp_data = _extract_slice_data(self.var.datapoint_tab.data(s_name, concat=concat), s_name)
                 if c_name is not None and isinstance(dp_data, dict):
                     result[s_name] = {c_name: dp_data.get(c_name, next(iter(dp_data.values())))}
                 else:
@@ -355,7 +355,7 @@ class DatafeatureTab(DatapointTab):
                 elif isinstance(raw_data, dict) and s_name in raw_data:
                     result[s_name] = raw_data[s_name]
                 else:
-                    avail = list(self.slices) + (list(self.datapoint_tab.slices) if self.datapoint_tab else [])
+                    avail = list(self.slices) + (list(self.var.datapoint_tab.slices) if self.var.datapoint_tab else [])
                     raise KeyError(
                         f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
                     )
@@ -364,25 +364,13 @@ class DatafeatureTab(DatapointTab):
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
-    def datapoint_tab(self) -> DatapointTab:
-        return self.var.datapoint_tab
-
-    @property
-    def sampletab(self) -> DatapointTab:
-        return self.datapoint_tab
-
-    @property
-    def feature_names(self) -> list[str]:
-        return list(self._feature_names)
-
-    @property
     def available_slices(self) -> tuple[str, ...]:
         own = tuple(self.slices)
-        upstream = tuple(self.datapoint_tab.slices) if self.datapoint_tab is not None else ()
+        upstream = tuple(self.var.datapoint_tab.slices) if self.var.datapoint_tab is not None else ()
         return own + upstream
 
     def __len__(self) -> int:
-        return len(self.datapoint_tab)
+        return len(self.var.datapoint_tab)
 
 
 class DatafeatureTable(DatapointTable):
@@ -515,10 +503,10 @@ class DatafeatureTable(DatapointTable):
             s_name = s[0] if isinstance(s, (tuple, list)) else str(s)
             if s_name in self.slices:
                 datasets.append(self.datastream(s_name, **kwargs))
-            elif self.datapoint_table is not None and s_name in self.datapoint_table.slices:
-                datasets.append(self.datapoint_table.datastream(s_name, **kwargs))
+            elif self.var.datapoint_table is not None and s_name in self.var.datapoint_table.slices:
+                datasets.append(self.var.datapoint_table.datastream(s_name, **kwargs))
             else:
-                avail = list(self.slices) + (list(self.datapoint_table.slices) if self.datapoint_table else [])
+                avail = list(self.slices) + (list(self.var.datapoint_table.slices) if self.var.datapoint_table else [])
                 raise KeyError(
                     f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
                 )
@@ -570,8 +558,8 @@ class DatafeatureTable(DatapointTable):
                         result['features'] = concat_data(feat_datas)
                 else:
                     result['features'] = feat_datas
-            elif self.datapoint_table is not None and s_name in self.datapoint_table.slices:
-                dp_data = _extract_slice_data(self.datapoint_table.data(s_name, concat=concat), s_name)
+            elif self.var.datapoint_table is not None and s_name in self.var.datapoint_table.slices:
+                dp_data = _extract_slice_data(self.var.datapoint_table.data(s_name, concat=concat), s_name)
                 result[s_name] = dp_data
             else:
                 col_key = s_name.replace('features_', '')
@@ -589,21 +577,13 @@ class DatafeatureTable(DatapointTable):
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
-    def datapoint_table(self) -> DatapointTable:
-        return self.var.datapoint_table
-
-    @property
-    def sampletable(self) -> DatapointTable:
-        return self.datapoint_table
-
-    @property
     def n_tabs(self) -> int:
-        return self.datapoint_table.n_tabs
+        return self.var.datapoint_table.n_tabs
 
     @property
     def available_slices(self) -> tuple[str, ...]:
         own = tuple(self.slices)
-        upstream = tuple(self.datapoint_table.slices) if self.datapoint_table is not None else ()
+        upstream = tuple(self.var.datapoint_table.slices) if self.var.datapoint_table is not None else ()
         return own + upstream
 
 
@@ -743,14 +723,6 @@ class BipolarDatafeatureTab(DatapointTab):
         return self.var.featuretab
 
     @property
-    def datapoint_tab(self) -> DatapointTab | None:
-        return self.featuretab.datapoint_tab if self.featuretab is not None else None
-
-    @property
-    def sampletab(self) -> DatapointTab | None:
-        return self.datapoint_tab
-
-    @property
     def available_slices(self) -> tuple[str, ...]:
         own = tuple(self.slices)
         upstream = tuple(self.featuretab.available_slices) if self.featuretab is not None else ()
@@ -886,14 +858,6 @@ class BipolarDatafeatureTable(DatapointTable):
     @property
     def featuretable(self) -> DatafeatureTable:
         return self.var.featuretable
-
-    @property
-    def datapoint_table(self) -> DatapointTable | None:
-        return self.featuretable.datapoint_table if self.featuretable is not None else None
-
-    @property
-    def sampletable(self) -> DatapointTable | None:
-        return self.datapoint_table
 
     @property
     def n_tabs(self) -> int:

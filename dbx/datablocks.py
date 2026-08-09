@@ -409,9 +409,9 @@ class DatajournalEntry(pd.Series):
         return node
 
     def _is_dir_topic(self, *topicpath):
-        """A directory topic when the recorded TOPICS filename is :data:`DIRTOPIC`."""
+        """A directory topic when the recorded TOPICS filename is :data:`DIRTOPIC` or :data:`SLICETOPIC`."""
         node = self._walk(self.topics, self._normtopic(topicpath))
-        return node is DIRTOPIC
+        return node is DIRTOPIC or node == SLICETOPIC or node is SLICETOPIC
 
     def _is_syntopic(self, *topicpath):
         """A :data:`SYNTOPIC` topic -- recorded as synthetic, with no location."""
@@ -1407,10 +1407,15 @@ class Datablock:
 
         return list(walk(node, topicpath))
 
+    @staticmethod
+    def _node_is_dirtopic(node):
+        """True when node is DIRTOPIC or SLICETOPIC."""
+        return node is DIRTOPIC or node == SLICETOPIC or node is SLICETOPIC
+
     def _is_dir_topic(self, *topicpath):
         """True when the topic resolves to a directory rather than a file.
 
-        True for list-TOPICS entries and for :data:`DIRTOPIC` leaves.  A
+        True for list-TOPICS entries and for :data:`DIRTOPIC` or :data:`SLICETOPIC` leaves.  A
         :data:`SYNTOPIC` is neither, and neither is a group -- a group has a
         directory, but :meth:`path` describes it by its members.
         """
@@ -1418,7 +1423,7 @@ class Datablock:
         if not topicpath or topicpath[0] is None:
             return False
         node = self._topicnode(*topicpath)
-        return node is DIRTOPIC
+        return self._node_is_dirtopic(node)
 
     def _is_syntopic(self, *topicpath):
         """True when the topic is declared :data:`SYNTOPIC` -- so it has no location.
@@ -1785,7 +1790,7 @@ class Datablock:
                 continue
             dirpath = self.dirpath(*leaf, ensure=True)
             node = self._topicnode(*leaf)
-            crumbs = None if node is DIRTOPIC else node
+            crumbs = None if self._node_is_dirtopic(node) else node
             self.leave_breadcrumbs_at_path(dirpath, crumbs=crumbs)
         return self
 
@@ -3336,8 +3341,8 @@ class Datablock:
         if ensure_dirpath and dirpath is not None:
             ensure_path(dirpath, storage_options=self.storage_options)
 
-        if node is DIRTOPIC:
-            # list-TOPICS entry, or a DIRTOPIC leaf: the topic IS the directory
+        if self._node_is_dirtopic(node):
+            # list-TOPICS entry, or a DIRTOPIC/SLICETOPIC leaf: the topic IS the directory
             return dirpath
         path = os.path.join(dirpath, node)
         self.log.detailed(f"{self.anchor}: path: {path}")

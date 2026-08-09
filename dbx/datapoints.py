@@ -161,9 +161,6 @@ class SlicedTopics:
                 return self.valid_slice(topic_str)
         return super().valid_topic(*topicpath)
 
-    def validtopic(self, *topicpath):
-        """Deprecated alias for valid_topic."""
-        return self.valid_topic(*topicpath)
 
     # 2. Properties and Accessors ───────────────────────────────────
 
@@ -755,9 +752,9 @@ class DatapointPartition(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
-        datapoint_table: DatapointTable
-        fractions: list[float]
-        partition_slice: int | str
+        datapoint_table: DatapointTable = None
+        fractions: list[float] = field(default_factory=list)
+        partition_slice: int | str = 0
 
     def __build__(self):
         table = self.var.datapoint_table
@@ -816,6 +813,7 @@ class DatapointPartition(Datablock):
     def fold(self, fold: int) -> DatapointFold:
         return DatapointFold(
             spec=dict(
+                partition=self,
                 datapoint_table=self.var.datapoint_table,
                 tab_indices=self.tabs_indices(fold),
             )
@@ -832,18 +830,21 @@ class DatapointFold(DatapointTable):
     """A subset of a `DatapointTable` defined by tab_indices for a fold."""
 
     @dataclass
-    class VAR(Datablock.VAR):
-        partition: DatapointPartition
-        tab_indices: list[int]
+    class VAR(DatapointTable.VAR):
+        partition: DatapointPartition = None
+        datapoint_table: DatapointTable = None
+        tab_indices: list[int] = field(default_factory=list)
 
     @property
     def TAB(self):
-        return getattr(self.var.partition.var.datapoint_table, 'TAB', None)
+        table = self.var.datapoint_table if self.var.datapoint_table is not None else (self.var.partition.var.datapoint_table if self.var.partition is not None else None)
+        return getattr(table, 'TAB', None)
 
     @property
     def slices(self):
-        if self.var.partition.var.datapoint_table is not None:
-            return self.var.partition.var.datapoint_table.slices
+        table = self.var.datapoint_table if self.var.datapoint_table is not None else (self.var.partition.var.datapoint_table if self.var.partition is not None else None)
+        if table is not None:
+            return table.slices
         return ()
 
     @property

@@ -402,49 +402,35 @@ ZippedStreamingDatasets = ZipStreamingDataset
 #  Shard-locality-aware sampling
 # ═══════════════════════════════════════════════════════════════════════
 
-def shuffled_block_order(num_blocks: int, seed: int) -> list:
-    """A random permutation of ``range(num_blocks)`` for the given seed."""
+def shuffled_chunk_order(num_chunks: int, seed: int) -> list:
+    """A random permutation of ``range(num_chunks)`` for the given seed."""
     generator = torch.Generator().manual_seed(seed)
-    return torch.randperm(num_blocks, generator=generator).tolist()
+    return torch.randperm(num_chunks, generator=generator).tolist()
 
 
-class BlockShuffleSampler(Sampler):
-    """Shuffles contiguous blocks of an index space, and within each block --
+def shuffled_block_order(num_blocks: int, seed: int) -> list:
+    """Deprecated alias for shuffled_chunk_order."""
+    return shuffled_chunk_order(num_blocks, seed)
+
+
+class ChunkShuffleSampler(Sampler):
+    """Shuffles contiguous chunks of an index space, and within each chunk --
     instead of shuffling the whole range at once.
 
     For anything backed by shard-organised storage, which is what an MDS
-    table is: consecutive sample indices live in the same shard.  A full
-    global shuffle (``torch.randperm`` over the whole dataset, i.e. what
-    ``DataLoader(shuffle=True)`` does) scatters every access across the whole
-    table, so almost every batch needs a shard that is not in the local
-    cache -- a cache can only help if consecutive accesses tend to land in
-    the same few shards.  Shuffling in blocks keeps the *working set* down to
-    a handful of shards, small enough to stay cache-resident, while both
-    block order and within-block order are still randomised every epoch.
-
-    ``DatastreamTable.sampler()`` builds one of these sized to the table's
-    own shards, which is the block size worth using -- see there.
-
-    Re-shuffled per epoch via :meth:`set_epoch`, which trainers call by the
-    same convention as ``torch.utils.data.DistributedSampler``.  Pass
-    ``fixed_epoch=True`` for a validation sampler: otherwise the held-out
-    subset a capped validation run scores against changes every epoch, and
-    val loss at one step stops being comparable to val loss at another.
-
-    :meth:`state_dict`/:meth:`load_state_dict` track how far into the epoch
-    the sampler has got, so a checkpoint saved mid-epoch can resume near
-    where it left off rather than replaying the epoch.  Approximate, not
-    exact: with ``num_workers > 0`` the sampler runs ahead of what has
-    actually been consumed by up to ``num_workers * prefetch_factor``
-    batches, so a few samples at the boundary are skipped rather than
-    replayed.  See :class:`ResumableDataLoader` for the wiring.
+    table is: consecutive sample indices live in the same shard. A full
+    global shuffle (``torch.randperm`` over the whole dataset) scatters
+    every access across the whole table. Shuffling in chunks keeps the
+    working set down to a handful of shards, small enough to stay
+    cache-resident, while both chunk order and within-chunk order are
+    still randomised every epoch.
 
     Parameters
     ----------
     n : int
         Length of the index space (e.g. ``len(dataset)``).
-    block_size : int
-        Consecutive indices per block.
+    chunk_size : int
+        Consecutive indices per chunk.
     seed : int
         Base seed, combined with the epoch so each epoch shuffles
         independently but reproducibly.
@@ -453,18 +439,24 @@ class BlockShuffleSampler(Sampler):
         changes for the life of the sampler.
     """
 
-    def __init__(self, n: int, block_size: int, seed: int = 0,
-                 fixed_epoch: bool = False):
+    def __init__(self, n: int, chunk_size: int = None, seed: int = 0,
+                 fixed_epoch: bool = False, *, block_size: int = None):
+        size = chunk_size if chunk_size is not None else block_size
         if n < 0:
             raise ValueError(f"n must be non-negative, got {n}")
-        if block_size <= 0:
-            raise ValueError(f"block_size must be positive, got {block_size}")
+        if size is None or size <= 0:
+            raise ValueError(f"chunk_size / block_size must be positive, got {size}")
         self.n = n
-        self.block_size = block_size
+        self.chunk_size = size
         self.seed = seed
         self.epoch = 0
         self._fixed_epoch = fixed_epoch
         self._consumed = 0
+
+    @property
+    def block_size(self) -> int:
+        """Alias for chunk_size."""
+        return self.chunk_size
 
     def set_epoch(self, epoch: int):
         if not self._fixed_epoch and epoch != self.epoch:
@@ -476,11 +468,11 @@ class BlockShuffleSampler(Sampler):
 
     def _full_order(self):
         generator = torch.Generator().manual_seed(self.seed + self.epoch)
-        num_blocks = (self.n + self.block_size - 1) // self.block_size
+        num_chunks = (self.n + self.chunk_size - 1) // self.chunk_size
         order = []
-        for block in torch.randperm(num_blocks, generator=generator).tolist():
-            start = block * self.block_size
-            end = min(start + self.block_size, self.n)
+        for chunk in torch.randperm(num_chunks, generator=generator).tolist():
+            start = chunk * self.chunk_size
+            end = min(start + self.chunk_size, self.n)
             order.extend(
                 start + p
                 for p in torch.randperm(end - start, generator=generator).tolist()
@@ -501,6 +493,9 @@ class BlockShuffleSampler(Sampler):
     def load_state_dict(self, state_dict):
         self.epoch = state_dict['epoch']
         self._consumed = state_dict['consumed']
+
+
+BlockShuffleSampler = ChunkShuffleSampler
 
 
 class ResumableDataLoader(DataLoader):
@@ -1000,21 +995,4 @@ def concat_data(result, dtype=None):
         return np.array(result)
 
     return result
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Backward-compatibility aliases for DatapointTab / DatapointTable
-# ═══════════════════════════════════════════════════════════════════════
-
-def __getattr__(name: str):
-    if name in ("DatapointTab", "DatapointTable", "DatasampleTab", "DatasampleTable", "DatastreamTab", "DatastreamTable", "SlicedTopics"):
-        from . import datapoints
-        if name in ("DatapointTab", "DatastreamTab", "DatasampleTab"):
-            return datapoints.DatapointTab
-        if name in ("DatapointTable", "DatastreamTable", "DatasampleTable"):
-            return datapoints.DatapointTable
-        if name == "SlicedTopics":
-            return datapoints.SlicedTopics
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 

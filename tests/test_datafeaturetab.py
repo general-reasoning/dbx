@@ -92,8 +92,7 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     ).build()
 
     assert featuretab.valid()
-    assert "features" in featuretab.slices
-    assert set(featuretab.available_slices) == {"features", "samples", "labels"}
+    assert set(featuretab.slices) == {"features"}
 
     # 3. Read data combining feature slice and inherited sample slices
     res = featuretab.data(("features", "final"), "samples", "labels")
@@ -148,16 +147,13 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
         "bipolar_features",
         "tab_bipolar_features",
         "features",
-        "samples",
-        "labels",
     }
 
     # Test reading data across bipolar, raw features, and original sample labels
-    b_data = bipolar_tab.data("bipolar_features", ("features", "final"), "labels")
+    b_data = bipolar_tab.data("bipolar_features", ("features", "final"))
     assert b_data["bipolar_features"].shape == (10, 8)
     assert set(np.unique(b_data["bipolar_features"])).issubset({-1, 1})
     assert b_data["features"]["final"].shape == (10, 8)
-    assert len(b_data["labels"]) == 10
 
 
 def test_datafeature_table_and_bipolar_table(tmp_path):
@@ -187,7 +183,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
     ).build()
 
     assert featuretable.n_tabs == 2
-    assert set(featuretable.available_slices) == {"features", "samples", "labels"}
+    assert set(featuretable.slices) == {"features"}
 
     # Test reading combined data across table
     feat_data = featuretable.data(("features", "final"), concat=True)
@@ -210,13 +206,11 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
         "bipolar_features",
         "tab_bipolar_features",
         "features",
-        "samples",
-        "labels",
     }
 
-    b_tbl_data = bipolar_table.data("bipolar_features", "labels")
+    b_tbl_data = bipolar_table.data("bipolar_features", ("features", "final"))
     assert b_tbl_data["bipolar_features"].shape == (10, 8)
-    assert len(b_tbl_data["labels"]) == 10
+    assert b_tbl_data["features"]["final"].shape == (10, 8)
 
 
 def test_custom_features_mapping(tmp_path):
@@ -232,7 +226,7 @@ def test_custom_features_mapping(tmp_path):
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
-            features={"custom_output": "final"},
+            feature_namemap={"custom_output": "final"},
         ),
         device="cpu",
         tag="features_cust",
@@ -256,7 +250,7 @@ def test_signal_selection(tmp_path):
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
-            signal=("samples", "samples"),
+            collator=("samples", "samples"),
         ),
         device="cpu",
         tag="features_sig",

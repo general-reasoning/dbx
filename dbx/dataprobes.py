@@ -33,6 +33,12 @@ from dbx.dataparts import (
 NORMALIZATION_MODES = {None, "l2", "corner-l1", "corner-l2", "corner-linfty"}
 
 
+def _norm_pair(pair: Any, name: str) -> tuple[str, str]:
+    if isinstance(pair, (list, tuple)) and len(pair) == 2:
+        return str(pair[0]), str(pair[1])
+    raise ValueError(f"{name} must be specified as a (slice, column) pair of strings, e.g. ('features', 'final'), got {pair!r}")
+
+
 def normalize_features(features: Any, mode: str | None) -> Any:
     """Apply optional normalization to a feature tensor or array."""
     if mode is None:
@@ -163,9 +169,9 @@ class DatafeatureAffineLogisticProbe(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
-        featuretable: DatafeatureTable | DatafeatureTab
-        feature: tuple[str, str]
-        label: tuple[str, str]
+        feature_table: DatafeatureTable | DatafeatureTab
+        feature_column: tuple[str, str]
+        label_column: tuple[str, str]
         fit_intercept: bool = True
         evaluation_fraction: float = 0.8
         aggregation: str = "mean"
@@ -173,28 +179,16 @@ class DatafeatureAffineLogisticProbe(Datablock):
 
     def __post_init__(self):
         super().__post_init__()
+        self._feat_slice, self._feat_col = _norm_pair(self.var.feature_column, "feature_column")
+        self._label_slice, self._label_col = _norm_pair(self.var.label_column, "label_column")
         assert self.var.aggregation in ["mean"], f"Unknown aggregation: {self.var.aggregation}"
         assert self.var.normalization in NORMALIZATION_MODES, f"Unknown normalization mode: {self.var.normalization!r}"
         self._prober = DatafeatureAffineLogisticProber(log=self.log)
 
     def __build__(self):
-        table = self.var.featuretable
-        feat_spec = self.var.feature
-        label_spec = self.var.label
-
-        if isinstance(feat_spec, (list, tuple)):
-            feat_slice = feat_spec[0]
-            feat_col = feat_spec[1] if len(feat_spec) > 1 else feat_spec[0]
-        else:
-            feat_slice = str(feat_spec)
-            feat_col = str(feat_spec)
-
-        if isinstance(label_spec, (list, tuple)):
-            label_slice = label_spec[0]
-            label_col = label_spec[1] if len(label_spec) > 1 else label_spec[0]
-        else:
-            label_slice = str(label_spec)
-            label_col = str(label_spec)
+        table = self.var.feature_table
+        feat_slice, feat_col = self._feat_slice, self._feat_col
+        label_slice, label_col = self._label_slice, self._label_col
 
         self.log.verbose(f"Reading feature '{feat_slice}:{feat_col}' and label '{label_slice}:{label_col}'")
 
@@ -255,8 +249,8 @@ class DatafeatureAffineLogisticProbe(Datablock):
         self.log.verbose(
             f"FITTING LogisticRegression "
             f"(fit_intercept={self.var.fit_intercept}, "
-            f"feature={feat_spec!r}, "
-            f"label={label_spec!r}, "
+            f"feature={(feat_slice, feat_col)!r}, "
+            f"label={(label_slice, label_col)!r}, "
             f"normalization={self.var.normalization!r})"
         )
         clf = LogisticRegression(fit_intercept=self.var.fit_intercept)
@@ -272,7 +266,11 @@ class DatafeatureAffineLogisticProbe(Datablock):
 
         return self
 
-    def __read__(self, topic: str):
+    def __read__(self, *topicpath):
+        if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
+            topicpath = tuple(topicpath[0])
+
+        topic = str(topicpath[0])
         if topic in ('labels', 'sample_labels', 'bag_labels'):
             result = read_npz(self.path('labels'), 'labels')['labels']
         elif topic in ('features', 'sample_features', 'bag_features'):
@@ -286,7 +284,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
         elif topic == 'classes':
             result = read_npz(self.path('classes'), 'classes')['classes']
         else:
-            raise ValueError(f"Unknown topic: {topic}")
+            raise ValueError(f"Unknown topic: {topic!r}")
         return result
 
     def asphericity(self) -> dict[str, float]:
@@ -309,56 +307,61 @@ class DatafeatureStatsProbe(Datablock):
     VERSION = 1
 
     TOPICS = {
-        'feature_mean': 'feature_mean.npz',
-        'feature_std': 'feature_std.npz',
-        'feature_median': 'feature_median.npz',
-        'feature_min': 'feature_min.npz',
-        'feature_max': 'feature_max.npz',
-        'feature_norms': 'feature_norms.npz',
-        'tab_feature_mean': 'tab_feature_mean.npz',
-        'tab_feature_std': 'tab_feature_std.npz',
-        'tab_feature_median': 'tab_feature_median.npz',
-        'tab_feature_min': 'tab_feature_min.npz',
-        'tab_feature_max': 'tab_feature_max.npz',
-        'tab_feature_norms': 'tab_feature_norms.npz',
-        'signal_count': 'unique_signal_count.npz',
-        'signal_mean': 'signal_mean.npz',
-        'signal_std': 'signal_std.npz',
-        'signal_median': 'signal_median.npz',
-        'signal_min': 'signal_min.npz',
-        'signal_max': 'signal_max.npz',
-        'signal_norms': 'signal_norms.npz',
-        'tab_signal_mean': 'tab_signal_mean.npz',
-        'tab_signal_std': 'tab_signal_std.npz',
-        'tab_signal_median': 'tab_signal_median.npz',
-        'tab_signal_min': 'tab_signal_min.npz',
-        'tab_signal_max': 'tab_signal_max.npz',
-        'tab_signal_norms': 'tab_signal_norms.npz',
+        'feature': {
+            'mean': 'feature_mean.npz',
+            'std': 'feature_std.npz',
+            'median': 'feature_median.npz',
+            'min': 'feature_min.npz',
+            'max': 'feature_max.npz',
+            'norms': 'feature_norms.npz',
+        },
+        'tab_feature': {
+            'mean': 'tab_feature_mean.npz',
+            'std': 'tab_feature_std.npz',
+            'median': 'tab_feature_median.npz',
+            'min': 'tab_feature_min.npz',
+            'max': 'tab_feature_max.npz',
+            'norms': 'tab_feature_norms.npz',
+        },
+        'signal': {
+            'count': 'unique_signal_count.npz',
+            'mean': 'signal_mean.npz',
+            'std': 'signal_std.npz',
+            'median': 'signal_median.npz',
+            'min': 'signal_min.npz',
+            'max': 'signal_max.npz',
+            'norms': 'signal_norms.npz',
+        },
+        'tab_signal': {
+            'mean': 'tab_signal_mean.npz',
+            'std': 'tab_signal_std.npz',
+            'median': 'tab_signal_median.npz',
+            'min': 'tab_signal_min.npz',
+            'max': 'tab_signal_max.npz',
+            'norms': 'tab_signal_norms.npz',
+        },
     }
 
     @dataclass
     class VAR(Datablock.VAR):
-        featuretable: DatafeatureTable | DatafeatureTab
-        feature: tuple[str, str]
-        signal: tuple[str, str] | None = None
-        label: tuple[str, str] | None = None
+        feature_table: DatafeatureTable | DatafeatureTab
+        feature_column: tuple[str, str]
+        signal_column: tuple[str, str] | None = None
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
 
     def __post_init__(self):
         super().__post_init__()
+        self._feat_slice, self._feat_col = _norm_pair(self.var.feature_column, "feature_column")
+        if self.var.signal_column is not None:
+            self._sig_slice, self._sig_col = _norm_pair(self.var.signal_column, "signal_column")
+        else:
+            self._sig_slice, self._sig_col = None, None
         assert self.var.normalization in NORMALIZATION_MODES, f"Unknown normalization mode: {self.var.normalization!r}"
 
     def __build__(self):
-        table = self.var.featuretable
-        feat_spec = self.var.feature
-        sig_spec = self.var.signal
-
-        if isinstance(feat_spec, (list, tuple)):
-            feat_slice = feat_spec[0]
-            feat_col = feat_spec[1] if len(feat_spec) > 1 else feat_spec[0]
-        else:
-            feat_slice = str(feat_spec)
-            feat_col = str(feat_spec)
+        table = self.var.feature_table
+        feat_slice, feat_col = self._feat_slice, self._feat_col
+        sig_slice, sig_col = self._sig_slice, self._sig_col
 
         self.log.verbose(f"COMPUTING stats for feature '{feat_slice}:{feat_col}' (normalization={self.var.normalization!r})")
 
@@ -399,30 +402,23 @@ class DatafeatureStatsProbe(Datablock):
         concat_feats = np.concatenate(all_feats, axis=0)
 
         # Overall feature stats
-        write_npz(self.path('feature_mean', ensure_dirpath=True), feature_mean=np.mean(concat_feats, axis=0))
-        write_npz(self.path('feature_std', ensure_dirpath=True), feature_std=np.std(concat_feats, axis=0))
-        write_npz(self.path('feature_median', ensure_dirpath=True), feature_median=np.median(concat_feats, axis=0))
-        write_npz(self.path('feature_min', ensure_dirpath=True), feature_min=np.min(concat_feats, axis=0))
-        write_npz(self.path('feature_max', ensure_dirpath=True), feature_max=np.max(concat_feats, axis=0))
-        write_npz(self.path('feature_norms', ensure_dirpath=True), feature_norms=np.linalg.norm(concat_feats, axis=-1))
+        write_npz(self.path('feature', 'mean', ensure_dirpath=True), feature_mean=np.mean(concat_feats, axis=0))
+        write_npz(self.path('feature', 'std', ensure_dirpath=True), feature_std=np.std(concat_feats, axis=0))
+        write_npz(self.path('feature', 'median', ensure_dirpath=True), feature_median=np.median(concat_feats, axis=0))
+        write_npz(self.path('feature', 'min', ensure_dirpath=True), feature_min=np.min(concat_feats, axis=0))
+        write_npz(self.path('feature', 'max', ensure_dirpath=True), feature_max=np.max(concat_feats, axis=0))
+        write_npz(self.path('feature', 'norms', ensure_dirpath=True), feature_norms=np.linalg.norm(concat_feats, axis=-1))
 
         # Tab feature stats
-        write_npz(self.path('tab_feature_mean', ensure_dirpath=True), tab_feature_mean=np.stack(tab_f_means))
-        write_npz(self.path('tab_feature_std', ensure_dirpath=True), tab_feature_std=np.stack(tab_f_stds))
-        write_npz(self.path('tab_feature_median', ensure_dirpath=True), tab_feature_median=np.stack(tab_f_medians))
-        write_npz(self.path('tab_feature_min', ensure_dirpath=True), tab_feature_min=np.stack(tab_f_mins))
-        write_npz(self.path('tab_feature_max', ensure_dirpath=True), tab_feature_max=np.stack(tab_f_maxs))
-        write_npz(self.path('tab_feature_norms', ensure_dirpath=True), tab_feature_norms=np.array(tab_f_norms))
+        write_npz(self.path('tab_feature', 'mean', ensure_dirpath=True), tab_feature_mean=np.stack(tab_f_means))
+        write_npz(self.path('tab_feature', 'std', ensure_dirpath=True), tab_feature_std=np.stack(tab_f_stds))
+        write_npz(self.path('tab_feature', 'median', ensure_dirpath=True), tab_feature_median=np.stack(tab_f_medians))
+        write_npz(self.path('tab_feature', 'min', ensure_dirpath=True), tab_feature_min=np.stack(tab_f_mins))
+        write_npz(self.path('tab_feature', 'max', ensure_dirpath=True), tab_feature_max=np.stack(tab_f_maxs))
+        write_npz(self.path('tab_feature', 'norms', ensure_dirpath=True), tab_feature_norms=np.array(tab_f_norms))
 
         # Extract per-tab signal data if signal is configured
-        if sig_spec is not None:
-            if isinstance(sig_spec, (list, tuple)):
-                sig_slice = sig_spec[0]
-                sig_col = sig_spec[1] if len(sig_spec) > 1 else sig_spec[0]
-            else:
-                sig_slice = str(sig_spec)
-                sig_col = str(sig_spec)
-
+        if sig_slice is not None:
             if hasattr(table, 'n_tabs') and table.n_tabs > 0:
                 tab_sig_list = []
                 for i in range(table.n_tabs):
@@ -468,98 +464,144 @@ class DatafeatureStatsProbe(Datablock):
                 concat_sigs = np.array(all_sigs, dtype=object)
 
             signal_count = np.array(len(np.unique(concat_sigs, axis=0)) if concat_sigs.ndim > 0 else len(concat_sigs))
-            write_npz(self.path('signal_count', ensure_dirpath=True), signal_count=signal_count)
+            write_npz(self.path('signal', 'count', ensure_dirpath=True), signal_count=signal_count)
 
             if np.issubdtype(concat_sigs.dtype, np.number):
-                write_npz(self.path('signal_mean', ensure_dirpath=True), signal_mean=np.mean(concat_sigs, axis=0))
-                write_npz(self.path('signal_std', ensure_dirpath=True), signal_std=np.std(concat_sigs, axis=0))
-                write_npz(self.path('signal_median', ensure_dirpath=True), signal_median=np.median(concat_sigs, axis=0))
-                write_npz(self.path('signal_min', ensure_dirpath=True), signal_min=np.min(concat_sigs, axis=0))
-                write_npz(self.path('signal_max', ensure_dirpath=True), signal_max=np.max(concat_sigs, axis=0))
-                write_npz(self.path('signal_norms', ensure_dirpath=True), signal_norms=np.linalg.norm(concat_sigs, axis=-1))
+                write_npz(self.path('signal', 'mean', ensure_dirpath=True), signal_mean=np.mean(concat_sigs, axis=0))
+                write_npz(self.path('signal', 'std', ensure_dirpath=True), signal_std=np.std(concat_sigs, axis=0))
+                write_npz(self.path('signal', 'median', ensure_dirpath=True), signal_median=np.median(concat_sigs, axis=0))
+                write_npz(self.path('signal', 'min', ensure_dirpath=True), signal_min=np.min(concat_sigs, axis=0))
+                write_npz(self.path('signal', 'max', ensure_dirpath=True), signal_max=np.max(concat_sigs, axis=0))
+                write_npz(self.path('signal', 'norms', ensure_dirpath=True), signal_norms=np.linalg.norm(concat_sigs, axis=-1))
 
-            write_npz(self.path('tab_signal_mean', ensure_dirpath=True), tab_signal_mean=np.array(tab_s_means, dtype=object))
-            write_npz(self.path('tab_signal_std', ensure_dirpath=True), tab_signal_std=np.array(tab_s_stds, dtype=object))
-            write_npz(self.path('tab_signal_median', ensure_dirpath=True), tab_signal_median=np.array(tab_s_medians, dtype=object))
-            write_npz(self.path('tab_signal_min', ensure_dirpath=True), tab_signal_min=np.array(tab_s_mins, dtype=object))
-            write_npz(self.path('tab_signal_max', ensure_dirpath=True), tab_signal_max=np.array(tab_s_maxs, dtype=object))
-            write_npz(self.path('tab_signal_norms', ensure_dirpath=True), tab_signal_norms=np.array(tab_s_norms))
+            write_npz(self.path('tab_signal', 'mean', ensure_dirpath=True), tab_signal_mean=np.array(tab_s_means, dtype=object))
+            write_npz(self.path('tab_signal', 'std', ensure_dirpath=True), tab_signal_std=np.array(tab_s_stds, dtype=object))
+            write_npz(self.path('tab_signal', 'median', ensure_dirpath=True), tab_signal_median=np.array(tab_s_medians, dtype=object))
+            write_npz(self.path('tab_signal', 'min', ensure_dirpath=True), tab_signal_min=np.array(tab_s_mins, dtype=object))
+            write_npz(self.path('tab_signal', 'max', ensure_dirpath=True), tab_signal_max=np.array(tab_s_maxs, dtype=object))
+            write_npz(self.path('tab_signal', 'norms', ensure_dirpath=True), tab_signal_norms=np.array(tab_s_norms))
         else:
             signal_count = np.array(len(concat_feats))
-            write_npz(self.path('signal_count', ensure_dirpath=True), signal_count=signal_count)
+            write_npz(self.path('signal', 'count', ensure_dirpath=True), signal_count=signal_count)
 
         return self
 
-    def __read__(self, topic: str):
-        if topic in ('tile_count', 'distinct_tile_count'):
-            return read_npz(self.path('signal_count'), 'signal_count')['signal_count']
-        elif topic == 'tile_feature_mean':
-            return read_npz(self.path('feature_mean'), 'feature_mean')['feature_mean']
-        elif topic == 'tile_feature_std':
-            return read_npz(self.path('feature_std'), 'feature_std')['feature_std']
-        elif topic == 'tile_feature_median':
-            return read_npz(self.path('feature_median'), 'feature_median')['feature_median']
-        elif topic == 'tile_feature_min':
-            return read_npz(self.path('feature_min'), 'feature_min')['feature_min']
-        elif topic == 'tile_feature_max':
-            return read_npz(self.path('feature_max'), 'feature_max')['feature_max']
-        elif topic == 'tile_feature_norms':
-            return read_npz(self.path('feature_norms'), 'feature_norms')['feature_norms']
-        elif topic in ('bag_feature_mean', 'sample_feature_mean'):
-            return read_npz(self.path('tab_feature_mean'), 'tab_feature_mean')['tab_feature_mean']
-        elif topic in ('bag_feature_std', 'sample_feature_std'):
-            return read_npz(self.path('tab_feature_std'), 'tab_feature_std')['tab_feature_std']
+    def __read__(self, *topicpath):
+        if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
+            topicpath = tuple(topicpath[0])
 
-        return read_npz(self.path(topic), topic)[topic]
+        if len(topicpath) == 2:
+            group, key = str(topicpath[0]), str(topicpath[1])
+            npz_key = f"{group}_{key}" if group != 'signal' or key != 'count' else 'signal_count'
+            return read_npz(self.path(group, key), npz_key)[npz_key]
+
+        if len(topicpath) == 1:
+            topic = str(topicpath[0])
+            # Support single string group read (e.g. read('feature') -> dict of stats)
+            if topic in self.TOPICS and isinstance(self.TOPICS[topic], dict):
+                return {sub_k: self.read(topic, sub_k) for sub_k in self.TOPICS[topic]}
+            # Direct backward compatibility mapping for single string key reads
+            if topic in ('tile_count', 'distinct_tile_count', 'signal_count'):
+                return read_npz(self.path('signal', 'count'), 'signal_count')['signal_count']
+            elif topic in ('tile_feature_mean', 'feature_mean'):
+                return read_npz(self.path('feature', 'mean'), 'feature_mean')['feature_mean']
+            elif topic in ('tile_feature_std', 'feature_std'):
+                return read_npz(self.path('feature', 'std'), 'feature_std')['feature_std']
+            elif topic in ('tile_feature_median', 'feature_median'):
+                return read_npz(self.path('feature', 'median'), 'feature_median')['feature_median']
+            elif topic in ('tile_feature_min', 'feature_min'):
+                return read_npz(self.path('feature', 'min'), 'feature_min')['feature_min']
+            elif topic in ('tile_feature_max', 'feature_max'):
+                return read_npz(self.path('feature', 'max'), 'feature_max')['feature_max']
+            elif topic in ('tile_feature_norms', 'feature_norms'):
+                return read_npz(self.path('feature', 'norms'), 'feature_norms')['feature_norms']
+            elif topic in ('bag_feature_mean', 'sample_feature_mean', 'tab_feature_mean'):
+                return read_npz(self.path('tab_feature', 'mean'), 'tab_feature_mean')['tab_feature_mean']
+            elif topic in ('bag_feature_std', 'sample_feature_std', 'tab_feature_std'):
+                return read_npz(self.path('tab_feature', 'std'), 'tab_feature_std')['tab_feature_std']
+            elif topic == 'tab_feature_median':
+                return read_npz(self.path('tab_feature', 'median'), 'tab_feature_median')['tab_feature_median']
+            elif topic == 'tab_feature_min':
+                return read_npz(self.path('tab_feature', 'min'), 'tab_feature_min')['tab_feature_min']
+            elif topic == 'tab_feature_max':
+                return read_npz(self.path('tab_feature', 'max'), 'tab_feature_max')['tab_feature_max']
+            elif topic == 'tab_feature_norms':
+                return read_npz(self.path('tab_feature', 'norms'), 'tab_feature_norms')['tab_feature_norms']
+            elif topic == 'signal_mean':
+                return read_npz(self.path('signal', 'mean'), 'signal_mean')['signal_mean']
+            elif topic == 'signal_std':
+                return read_npz(self.path('signal', 'std'), 'signal_std')['signal_std']
+            elif topic == 'signal_median':
+                return read_npz(self.path('signal', 'median'), 'signal_median')['signal_median']
+            elif topic == 'signal_min':
+                return read_npz(self.path('signal', 'min'), 'signal_min')['signal_min']
+            elif topic == 'signal_max':
+                return read_npz(self.path('signal', 'max'), 'signal_max')['signal_max']
+            elif topic == 'signal_norms':
+                return read_npz(self.path('signal', 'norms'), 'signal_norms')['signal_norms']
+            elif topic == 'tab_signal_mean':
+                return read_npz(self.path('tab_signal', 'mean'), 'tab_signal_mean')['tab_signal_mean']
+            elif topic == 'tab_signal_std':
+                return read_npz(self.path('tab_signal', 'std'), 'tab_signal_std')['tab_signal_std']
+            elif topic == 'tab_signal_median':
+                return read_npz(self.path('tab_signal', 'median'), 'tab_signal_median')['tab_signal_median']
+            elif topic == 'tab_signal_min':
+                return read_npz(self.path('tab_signal', 'min'), 'tab_signal_min')['tab_signal_min']
+            elif topic == 'tab_signal_max':
+                return read_npz(self.path('tab_signal', 'max'), 'tab_signal_max')['tab_signal_max']
+            elif topic == 'tab_signal_norms':
+                return read_npz(self.path('tab_signal', 'norms'), 'tab_signal_norms')['tab_signal_norms']
+
+        return read_npz(self.path(*topicpath), str(topicpath[-1]))[str(topicpath[-1])]
 
     @functools.cached_property
     def feature_mean(self):
-        return self.read('feature_mean')
+        return self.read('feature', 'mean')
 
     @functools.cached_property
     def feature_std(self):
-        return self.read('feature_std')
+        return self.read('feature', 'std')
 
     @functools.cached_property
     def feature_median(self):
-        return self.read('feature_median')
+        return self.read('feature', 'median')
 
     @functools.cached_property
     def feature_min(self):
-        return self.read('feature_min')
+        return self.read('feature', 'min')
 
     @functools.cached_property
     def feature_max(self):
-        return self.read('feature_max')
+        return self.read('feature', 'max')
 
     @functools.cached_property
     def feature_norms(self):
-        return self.read('feature_norms')
+        return self.read('feature', 'norms')
 
     @functools.cached_property
     def tab_feature_mean(self):
-        return self.read('tab_feature_mean')
+        return self.read('tab_feature', 'mean')
 
     @functools.cached_property
     def tab_feature_std(self):
-        return self.read('tab_feature_std')
+        return self.read('tab_feature', 'std')
 
     @functools.cached_property
     def tab_feature_median(self):
-        return self.read('tab_feature_median')
+        return self.read('tab_feature', 'median')
 
     @functools.cached_property
     def tab_feature_min(self):
-        return self.read('tab_feature_min')
+        return self.read('tab_feature', 'min')
 
     @functools.cached_property
     def tab_feature_max(self):
-        return self.read('tab_feature_max')
+        return self.read('tab_feature', 'max')
 
     @functools.cached_property
     def tab_feature_norms(self):
-        return self.read('tab_feature_norms')
+        return self.read('tab_feature', 'norms')
 
     @functools.cached_property
     def signal_count(self):
-        return self.read('signal_count')
+        return self.read('signal', 'count')

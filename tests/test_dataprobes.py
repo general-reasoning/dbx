@@ -118,9 +118,9 @@ def test_datafeature_affine_logistic_probe(tmp_path):
     probe = DatafeatureAffineLogisticProbe(
         url=url,
         spec=dict(
-            featuretable=featuretable,
-            feature=("features_final", "features_final"),
-            label=("labels", "labels"),
+            feature_table=featuretable,
+            feature_column=("features", "final"),
+            label_column=("labels", "labels"),
             evaluation_fraction=0.8,
         ),
         tag="log_probe",
@@ -128,6 +128,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
 
     assert probe.valid()
     assert probe.read('features').shape == (10, 8)
+    assert probe.read(['features']).shape == (10, 8)
     assert len(probe.read('labels')) == 10
     assert probe.read('coef').shape[1] == 8
     assert isinstance(probe.read('evaluation_report'), str)
@@ -164,22 +165,31 @@ def test_datafeature_stats_probe(tmp_path):
     stats_probe = DatafeatureStatsProbe(
         url=url,
         spec=dict(
-            featuretable=featuretable,
-            feature=("features_final", "features_final"),
-            signal=("samples", "samples"),
+            feature_table=featuretable,
+            feature_column=("features", "final"),
+            signal_column=("samples", "samples"),
         ),
         tag="stats_probe",
     ).build()
 
     assert stats_probe.valid()
     assert stats_probe.feature_mean.shape == (8,)
+    assert stats_probe.read('feature', 'mean').shape == (8,)
+    assert stats_probe.read(['feature', 'mean']).shape == (8,)
+    assert stats_probe.read(('feature', 'mean')).shape == (8,)
+    feat_group = stats_probe.read('feature')
+    assert isinstance(feat_group, dict)
+    assert 'mean' in feat_group
+    assert feat_group['mean'].shape == (8,)
     assert stats_probe.feature_std.shape == (8,)
     assert stats_probe.feature_median.shape == (8,)
     assert stats_probe.feature_min.shape == (8,)
     assert stats_probe.feature_max.shape == (8,)
     assert stats_probe.feature_norms.shape == (10,)
     assert stats_probe.tab_feature_mean.shape == (2, 8)
+    assert stats_probe.read('tab_feature', 'mean').shape == (2, 8)
     assert stats_probe.signal_count == 10
+    assert stats_probe.read('signal', 'count') == 10
 
 
 if __name__ == "__main__":

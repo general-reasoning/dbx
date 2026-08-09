@@ -134,6 +134,11 @@ DIRTOPIC = None
 #: in CPython it is interned, so ``is SYNTOPIC`` is an exact test.
 SYNTOPIC = ()
 
+#: A SLICE topic: an MDS stream directory inside a sliced block::
+#:
+#:     TOPICS = {'samples': SLICETOPIC, 'labels': SLICETOPIC}
+SLICETOPIC = 'SLICETOPIC'
+
 
 def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
@@ -1183,20 +1188,23 @@ class Datablock:
         protocol = self.fs.protocol if isinstance(self.fs.protocol, str) else self.fs.protocol[0]
         return protocol in ('file', 'local', '')
 
-    def validtopic(self, *topicpath):
-        """Validity of one topic, or of a whole group.
+    @property
+    def _is_local_fs(self):
+        """Deprecated alias for `is_local_fs`."""
+        return self.is_local_fs
 
-        ``validtopic('data', 'annotations')`` checks that leaf;
-        ``validtopic('data')`` checks every leaf under the group, because
-        :meth:`path` describes a group as a dict and :meth:`validpath`
-        recurses into it.
-        """
+    def valid_topic(self, *topicpath):
+        """Validity of one topic, or of a whole group."""
         topicpath = self._normtopic(topicpath)
         path = self.path(*topicpath)
         valid = self.validpath(path)
         self.log.detailed(f"{self.anchor}: topic {'/'.join(topicpath)} valid: {valid}")
         return valid
-    
+
+    def validtopic(self, *topicpath):
+        """Deprecated alias for valid_topic."""
+        return self.valid_topic(*topicpath)
+
     def validtopics(self, topics=None, *, reduce: bool = False):
         result = None
         if topics is None:
@@ -1204,7 +1212,7 @@ class Datablock:
         if topics:
             results = {
                 topic:
-                self.validtopic(topic) for topic in topics
+                self.valid_topic(topic) for topic in topics
             }
             if reduce:
                 result = all(list(results.values()))

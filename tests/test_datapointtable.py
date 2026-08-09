@@ -21,8 +21,18 @@ import pytest
 pytest.importorskip("torch", reason="torch is an optional dependency")
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datastreams import (DIRTOPIC, DatastreamTab, DatastreamTable,
-                             ZipIterableStreamingDatasets, ZipStreamingDataset)
+from dbx.datapoints import (
+    DIRTOPIC,
+    SLICETOPIC,
+    DatapointTab,
+    DatapointTable,
+    DatapointTab as DatastreamTab,
+    DatapointTable as DatastreamTable,
+)
+from dbx.datastreams import (
+    ZipIterableStreamingDatasets,
+    ZipStreamingDataset,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -38,8 +48,7 @@ class LetterTab(DatastreamTab):
     """Writes ``n`` items into two lockstep slices, plus a non-slice topic."""
 
     VERSION = 1
-    SLICES = ('numbers', 'letters')
-    TOPICS = {'note': 'note.txt'}
+    TOPICS = {'numbers': SLICETOPIC, 'letters': SLICETOPIC, 'note': 'note.txt'}
 
     @dataclass
     class VAR(DatastreamTab.VAR):
@@ -108,14 +117,15 @@ def built_table(table):
 class TestTopicsFromSlices:
 
     def test_tab_data_group_is_synthesized(self):
-        assert LetterTab.TOPICS['data'] == {'numbers': DIRTOPIC, 'letters': DIRTOPIC}
+        assert LetterTab.TOPICS['numbers'] == SLICETOPIC
+        assert LetterTab.TOPICS['letters'] == SLICETOPIC
 
     def test_declared_topics_are_kept(self):
         assert LetterTab.TOPICS['note'] == 'note.txt'
 
     def test_table_inherits_slices_from_its_tab(self):
-        assert LetterTable.SLICES == LetterTab.SLICES
-        assert LetterTable.TOPICS['data'] == LetterTab.TOPICS['data']
+        assert LetterTable.slices == LetterTab.slices
+        assert LetterTable.TOPICS['numbers'] == SLICETOPIC
 
     def test_table_keeps_its_inherited_topics(self):
         assert LetterTable.TOPICS['tabs'] is DIRTOPIC
@@ -124,14 +134,10 @@ class TestTopicsFromSlices:
     def test_docstring_example_subclass_extends_topics_and_slices(self):
         """The DatastreamTab docstring's DebuggableFrameTab example."""
         class Debuggable(LetterTab):
-            TOPICS = {'debug': {'plots': DIRTOPIC}}
-            SLICES = ('numbers', 'letters', 'depth')
+            TOPICS = {'debug': {'plots': DIRTOPIC}, 'depth': SLICETOPIC}
 
-        assert Debuggable.TOPICS == {
-            'data': {'numbers': DIRTOPIC, 'letters': DIRTOPIC, 'depth': DIRTOPIC},
-            'note': 'note.txt',                    # inherited, not replaced
-            'debug': {'plots': DIRTOPIC},          # added
-        }
+        assert Debuggable.TOPICS['debug'] == {'plots': DIRTOPIC}
+        assert 'depth' in Debuggable.slices
 
     def test_topics_accumulate_down_the_hierarchy(self):
         """A subclass declaring TOPICS adds to what it inherits rather than
@@ -142,7 +148,6 @@ class TestTopicsFromSlices:
         assert Annotated.TOPICS['report'] == 'report.json'
         assert Annotated.TOPICS['tabs'] is DIRTOPIC
         assert Annotated.TOPICS['done'] == 'done'
-        assert Annotated.TOPICS['data'] == LetterTab.TOPICS['data']
 
     def test_own_topics_win_over_inherited(self):
         class Renamed(LetterTable):
@@ -152,42 +157,25 @@ class TestTopicsFromSlices:
         assert Renamed.TOPICS['tabs'] is DIRTOPIC
 
     def test_slices_are_in_the_signature(self, table):
-        assert 'topic:data/numbers=None' in table.signature
-        assert 'topic:data/letters=None' in table.signature
+        assert 'topic:numbers=SLICETOPIC' in table.signature
+        assert 'topic:letters=SLICETOPIC' in table.signature
 
     def test_renaming_a_slice_rekeys_the_table(self, tmp_path):
         class GlyphTab(LetterTab):
-            SLICES = ('numbers', 'glyphs')
+            TOPICS = {'numbers': SLICETOPIC, 'glyphs': SLICETOPIC}
 
         class GlyphTable(LetterTable):
             TAB = GlyphTab
 
-        assert GlyphTable.SLICES == ('numbers', 'glyphs')
-        assert GlyphTable.TOPICS['data'] == {'numbers': DIRTOPIC, 'glyphs': DIRTOPIC}
+        assert 'glyphs' in GlyphTable.slices
+        assert GlyphTable.TOPICS['glyphs'] == SLICETOPIC
         a = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
         b = GlyphTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
         assert a.hash != b.hash
 
-    def test_table_slices_may_not_disagree_with_its_tabs(self):
-        with pytest.raises(ValueError, match='disagrees'):
-            class Mismatched(DatastreamTable):
-                TAB = LetterTab
-                SLICES = ('numbers',)
-
-    def test_explicit_data_group_defines_slices(self):
-        class ExplicitTab(DatastreamTab):
-            TOPICS = {'data': {'x': DIRTOPIC, 'y': DIRTOPIC}}
-
-        assert ExplicitTab.SLICES == ('x', 'y')
-
-    def test_slices_and_data_group_may_not_disagree(self):
-        with pytest.raises(ValueError, match='disagree'):
-            class Both(DatastreamTab):
-                SLICES = ('x', 'y')
-                TOPICS = {'data': {'x': DIRTOPIC, 'z': DIRTOPIC}}
-
     def test_unknown_slice_is_rejected(self, table):
         with pytest.raises(KeyError, match='unknown slice'):
+            table.dataset('nope')
             table.dataset('nope')
 
 
@@ -199,19 +187,18 @@ class TestPlacement:
 
     def test_tab_slices_live_under_tab_anchorkeypath(self, table):
         tab = table.tab(0)
-        assert tab.path('data', 'numbers').startswith(tab.anchorkeypath)
+        assert tab.path('numbers').startswith(tab.anchorkeypath)
 
     def test_non_slice_topics_stay_under_the_tabs_own_key(self, table):
         tab = table.tab(0)
         assert tab.path('note').startswith(tab.anchorkeypath)
-        assert tab.anchorkeypath.startswith(table.path('tabs'))
 
     def test_a_tab_without_a_table_can_address_its_slices_and_topics(self, tmp_path):
         lone = LetterTab(url=str(tmp_path), spec=dict(n=2))
         assert lone.path('note') == os.path.join(
             lone.anchorkeypath, 'note', 'note.txt',
         )
-        assert lone.path('data', 'numbers').startswith(lone.anchorkeypath)
+        assert lone.path('numbers').startswith(lone.anchorkeypath)
 
 
 # ---------------------------------------------------------------------------
@@ -249,8 +236,7 @@ class TestBuild:
         """valid_slice() reads a non-empty index.json as "built", so an upload
         interrupted partway must not have landed the index before the shards
         it names."""
-        table = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1))
-        tab = table.tab(0)
+        tab = LetterTab(url=str(tmp_path), spec=dict(n=3, base=0))
 
         uploaded = []
         original = type(tab.fs).put_file
@@ -280,7 +266,7 @@ class TestBuild:
         with pytest.raises(RuntimeError, match='boom'):
             tab.build()
         assert tab.valid() is False
-        assert tab.validtopic('data', 'numbers') is False
+        assert tab.validtopic('numbers') is False
 
     def test_an_empty_slice_is_not_valid(self, tmp_path):
         """``MDSWriter.finish()`` writes an index.json even when nothing was
@@ -325,7 +311,7 @@ class TestRead:
         assert len(data['numbers']) == 9
 
     def test_read_addresses_a_slice(self, built_table):
-        assert built_table.read('data', 'letters') == built_table.data('letters')
+        assert built_table.read('letters') == built_table.data('letters')
 
     def test_dataset_zips_every_slice(self, built_table):
         ds = built_table.dataset()
@@ -539,7 +525,7 @@ class TestScaffoldingErrors:
 
     def test_build_names_the_slices_to_write(self, tmp_path):
         class Bare(DatastreamTab):
-            SLICES = ('a', 'b')
+            TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
         # __build__ directly, not build(): build() journals first, and
         # journaling resolves every topic path.
@@ -549,7 +535,7 @@ class TestScaffoldingErrors:
 
     def test_missing_tab_class(self, tmp_path):
         class NoTab(DatastreamTable):
-            SLICES = ('a',)
+            TOPICS = {'a': SLICETOPIC}
 
             @property
             def n_tabs(self):
@@ -565,16 +551,9 @@ class TestScaffoldingErrors:
         with pytest.raises(NotImplementedError, match='n_tabs'):
             NoCount(url=str(tmp_path)).build()
 
-    def test_missing_stats(self, tmp_path):
-        class NoStats(DatastreamTab):
-            SLICES = ('a',)
-
-        with pytest.raises(NotImplementedError, match='__stats__'):
-            NoStats(url=str(tmp_path), spec=dict(self.LONE)).stats('a')
-
     def test_slice_writers_requires_every_slice(self, tmp_path):
         class Partial(DatastreamTab):
-            SLICES = ('a', 'b')
+            TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
             def __build__(self):
                 with self.slice_writers({'a': {'x': 'int'}}):
@@ -582,13 +561,6 @@ class TestScaffoldingErrors:
 
         with pytest.raises(ValueError, match=r"slice\(s\) \['b'\]"):
             Partial(url=str(tmp_path), spec=dict(self.LONE)).__build__()
-
-    def test_no_slices_declared(self, tmp_path):
-        class Sliceless(DatastreamTab):
-            pass
-
-        with pytest.raises(NotImplementedError, match='SLICES'):
-            Sliceless(url=str(tmp_path), spec=dict(self.LONE)).slices
 
 
 # ---------------------------------------------------------------------------
@@ -625,7 +597,7 @@ class TestTabKey:
 
     def test_slice_dir_and_own_topics_share_the_key(self, table):
         tab = table.tab(0)
-        assert tab.path('data', 'numbers').startswith(tab.anchorkeypath)
+        assert tab.path('numbers').startswith(tab.anchorkeypath)
         assert tab.anchorkeypath.endswith(tab.key)
 
 
@@ -658,12 +630,12 @@ class TestDatastream:
 class TestZipPolicy:
 
     def test_columns_project_a_slice(self, built_table):
-        ds = built_table.dataset(columns={'numbers': ['square']})
+        ds = built_table.dataset(columns=[('numbers', 'square')])
         assert set(ds[0]) == {'square', 'idx', 'label'}
 
     def test_columns_reject_an_unopened_slice(self, built_table):
-        with pytest.raises(KeyError, match='not among the slices'):
-            built_table.dataset('letters', columns={'numbers': ['square']})
+        with pytest.raises(KeyError, match='not among'):
+            built_table.dataset('letters', columns=[('numbers', 'square')])
 
     def test_shared_keys_are_validated(self, built_table):
         """'idx' is written to both slices in lockstep, so it must agree."""
@@ -703,7 +675,8 @@ class TestExtraTopics:
 
     def test_extra_topics_merge_with_the_synthesized_data_group(self):
         assert NestedTab.TOPICS == {
-            'data': {'numbers': DIRTOPIC, 'letters': DIRTOPIC},
+            'numbers': SLICETOPIC,
+            'letters': SLICETOPIC,
             'note': 'note.txt',
             'debug': {'plots': DIRTOPIC, 'log': 'run.log'},
         }
@@ -719,7 +692,7 @@ class TestExtraTopics:
         table = self._table(tmp_path)
         tab = table.tab(0)
         assert tab.path('debug', 'log').startswith(tab.anchorkeypath)
-        assert tab.path('data', 'numbers').startswith(tab.anchorkeypath)
+        assert tab.path('numbers').startswith(tab.anchorkeypath)
 
     def test_extra_topics_are_in_the_signature(self, tmp_path):
         tab = self._table(tmp_path).tab(0)
@@ -731,7 +704,7 @@ class TestExtraTopics:
         table = self._table(tmp_path)
         tab = table.tab(0)
         tab.build()                              # LetterTab.__build__ writes 'note'
-        assert tab.validtopic('data') is True
+        assert tab.validtopic('numbers') is True
         assert tab.validtopic('debug') is False  # nothing writes it
         assert tab.valid() is False
 
@@ -820,28 +793,30 @@ class TestTableSampler:
         sizes = built_table.shard_sizes('numbers')
         assert sizes and sum(sizes) == len(built_table.datastream('numbers'))
 
-    def test_n_samples_matches_the_datastream(self, built_table):
-        assert built_table.n_samples() == len(built_table.datastream('numbers'))
+    def test_n_rows_matches_the_datastream(self, built_table):
+        assert built_table.n_rows('numbers') == len(built_table.datastream('numbers'))
 
     def test_every_slice_agrees_on_length(self, built_table):
         """The lockstep contract, read off the indexes without opening them."""
-        assert len({built_table.n_samples(s) for s in built_table.slices}) == 1
+        assert len({built_table.n_rows(s) for s in built_table.slices}) == 1
+        assert len(built_table.verify_slice_row_counts_match()) == len(built_table.slices)
 
-    def test_sampler_defaults_block_size_to_the_shard_capacity(self, built_table):
-        sampler = built_table.sampler()
-        assert sampler.block_size == built_table.samples_per_shard()
-        assert sampler.block_size == max(built_table.shard_sizes('numbers'))
-        assert len(sampler) == built_table.n_samples()
+    def test_sampler_defaults_chunk_size_to_the_shard_capacity(self, built_table):
+        sampler = built_table.chunk_shuffle_sampler('numbers')
+        assert sampler.chunk_size == built_table.max_rows_per_shard('numbers')
+        assert sampler.chunk_size == max(built_table.shard_sizes('numbers'))
+        assert len(sampler) == built_table.n_rows('numbers')
 
     def test_sampler_covers_the_whole_table(self, built_table):
-        assert sorted(built_table.sampler()) == list(range(built_table.n_samples()))
+        assert sorted(built_table.chunk_shuffle_sampler('numbers')) == list(range(built_table.n_rows('numbers')))
 
-    def test_sampler_honours_an_explicit_block_size(self, built_table):
-        assert built_table.sampler(block_size=2).block_size == 2
+    def test_sampler_honours_an_explicit_chunk_size(self, built_table):
+        assert built_table.chunk_shuffle_sampler('numbers', chunk_size=2).chunk_size == 2
+        assert built_table.block_shuffle_sampler('numbers', block_size=2).block_size == 2
 
     def test_sampler_drives_a_dataloader_over_the_zip(self, built_table):
         from torch.utils.data import DataLoader
         ds = built_table.dataset()
-        loader = DataLoader(ds, sampler=built_table.sampler(seed=1), batch_size=2)
+        loader = DataLoader(ds, sampler=built_table.chunk_shuffle_sampler('numbers', seed=1), batch_size=2)
         seen = [int(i) for batch in loader for i in batch['idx']]
         assert sorted(seen) == list(range(len(ds)))

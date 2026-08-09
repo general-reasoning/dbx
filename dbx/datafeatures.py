@@ -79,7 +79,10 @@ class Datacollator(Datablock):
                 lbl_arr = lbl_arr[..., :length]
 
         if self.var.signal_only:
-            return sig_arr
+            if self.var.strip_keys:
+                return sig_arr
+            return {'signal': sig_arr}
+
         if self.var.strip_keys:
             if len(self.var.labels) > 0:
                 return (sig_arr, lbl_arr)

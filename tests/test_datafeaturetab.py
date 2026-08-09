@@ -319,17 +319,32 @@ def test_datacollator():
     assert isinstance(out_strip, tuple)
     assert len(out_strip) == 2
 
-    # Test signal_only
-    c_single = Datacollator(
+    # Test signal_only (strip_keys=False) -> dict with 'signal' key only
+    c_sig_dict = Datacollator(
         spec=dict(
             signals=[("samples", "samples")],
             labels=[("labels", "labels")],
             signal_only=True,
+            strip_keys=False,
         )
     )
-    out_single = c_single(batch_datapoints)
-    assert isinstance(out_single, np.ndarray)
-    assert out_single.shape == (2, 5, 1, 4)
+    out_sig_dict = c_sig_dict(batch_datapoints)
+    assert isinstance(out_sig_dict, dict)
+    assert list(out_sig_dict.keys()) == ["signal"]
+    assert out_sig_dict["signal"].shape == (2, 5, 1, 4)
+
+    # Test signal_only (strip_keys=True) -> signal value directly
+    c_sig_val = Datacollator(
+        spec=dict(
+            signals=[("samples", "samples")],
+            labels=[("labels", "labels")],
+            signal_only=True,
+            strip_keys=True,
+        )
+    )
+    out_sig_val = c_sig_val(batch_datapoints)
+    assert isinstance(out_sig_val, np.ndarray)
+    assert out_sig_val.shape == (2, 5, 1, 4)
 
 
 if __name__ == "__main__":

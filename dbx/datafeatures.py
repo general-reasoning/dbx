@@ -187,7 +187,9 @@ class DatafeatureTab(DatapointTab):
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
 
     def __init__(self, *args, device_batch_size: int = 64, device: str = "cuda", **kwargs):
-        super().__init__(*args, device=device, device_batch_size=device_batch_size, **kwargs)
+        self.device_batch_size = device_batch_size
+        self.device = device
+        super().__init__(*args, **kwargs)
 
     def __post_init__(self):
         super().__post_init__()

@@ -175,6 +175,7 @@ class DatafeatureTab(DatapointTab):
     """
 
     VERSION = 1
+    SLICES = (("features", "ndarray:float32"),)
 
     @dataclass
     class VAR(DatapointTab.VAR):
@@ -204,12 +205,6 @@ class DatafeatureTab(DatapointTab):
                 self._feature_map = {str(self.var.features): str(self.var.features)}
         else:
             self._feature_map = {name: name for name in layer_names}
-
-        self.SLICES = ("features",)
-        self.SLICE_DTYPES = {"features": "ndarray:float32"}
-        topics = dict(self.TOPICS)
-        topics[self.DATA] = {"features": DIRTOPIC}
-        self.TOPICS = topics
 
     def __build__(self):
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
@@ -409,12 +404,6 @@ class DatafeatureTable(DatapointTable):
                 self._feature_map = {str(self.var.features): str(self.var.features)}
         else:
             self._feature_map = {name: name for name in layer_names}
-
-        self.SLICES = ("features",)
-        self.SLICE_DTYPES = {"features": "ndarray:float32"}
-        topics = dict(self.TOPICS)
-        topics[self.DATA] = {"features": DIRTOPIC}
-        self.TOPICS = topics
 
     class BlockMaker(Datastack.BlockMaker):
         """Lightweight callable that forms and optionally builds a block."""

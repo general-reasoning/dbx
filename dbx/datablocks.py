@@ -46,6 +46,7 @@ import numpy as np
 
 import fsspec
 
+import pyarrow as pa
 import pandas as pd
 
 
@@ -3744,6 +3745,7 @@ class Datablock:
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:
+            """
             dfs = []
             for file in parquet_files:
                 try:
@@ -3770,6 +3772,9 @@ class Datablock:
                 df = df.rename(columns={'build_log': 'log'})
             else:
                 df = None
+            """
+            pqdataset = pa.dataset.dataset(parquet_files, filesystem=fs, format='parquet')
+            df = pqdataset.to_table().to_pandas()
         else:
             df = None
         journal = Datajournal(df, storage_options=storage_options, **filter_kwargs)

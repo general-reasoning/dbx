@@ -3721,7 +3721,9 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, **filter_kwargs):
+    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, **filter_kwargs):
+        if log is None:
+            log = Logger()
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         if url is None:
@@ -3740,11 +3742,11 @@ class Datablock:
                 f"Check that the class name / anchor and url are correct."
             )
 
-        self.log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: BEGIN")
+        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: BEGIN")
         files = fs.glob(os.path.join(journaldirpath, '**/journal/**/*.parquet'))
         parquet_files = files
-        self.log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
-        self.log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: END")
+        log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
+        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: END")
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:
@@ -3776,10 +3778,10 @@ class Datablock:
             else:
                 df = None
             """
-            self.log.verbose(f"Reading {len(parquet_files)} journal files from {journaldirpath=} using pyarrow: BEGIN")
+            log.verbose(f"Reading {len(parquet_files)} journal files from {journaldirpath=} using pyarrow: BEGIN")
             pqdataset = pa.dataset.dataset(parquet_files, filesystem=fs, format='parquet')
             df = pqdataset.to_table().to_pandas()
-            self.log.verbose(f"Reading {len(parquet_files)} journal files from {journaldirpath=} using pyarrow: END")
+            log.verbose(f"Reading {len(parquet_files)} journal files from {journaldirpath=} using pyarrow: END")
         else:
             df = None
         journal = Datajournal(df, storage_options=storage_options, **filter_kwargs)

@@ -1410,7 +1410,7 @@ class Datablock:
     def _is_dir_topic(self, *topicpath):
         """True when the topic resolves to a directory rather than a file.
 
-        True for list-TOPICS entries and for :data:`DIRTOPIC` or :data:`SLICETOPIC` leaves.  A
+        True for list-TOPICS entries and for :data:`DIRTOPIC` leaves.  A
         :data:`SYNTOPIC` is neither, and neither is a group -- a group has a
         directory, but :meth:`path` describes it by its members.
         """
@@ -2104,7 +2104,7 @@ class Datablock:
             self._UNSAFE_copy_topic_file(topic, anchorkeypath, topicpaths=topicpaths)
             self.log.verbose(f"Using copy_topic_file for topic {topic}: END")
 
-    def UNSAFE_copy_from(self, anchorkeypath, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
+   def UNSAFE_copy_from(self, anchorkeypath, *, OVERRIDE: bool = False, overwr ite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
         """Copy topic data from an external directory into this Datablock.
 
         Parameters
@@ -3337,7 +3337,7 @@ class Datablock:
             ensure_path(dirpath, storage_options=self.storage_options)
 
         if self._node_is_dirtopic(node):
-            # list-TOPICS entry, or a DIRTOPIC/SLICETOPIC leaf: the topic IS the directory
+            # list-TOPICS entry, or a DIRTOPIC leaf: the topic IS the directory
             return dirpath
         path = os.path.join(dirpath, node)
         self.log.detailed(f"{self.anchor}: path: {path}")

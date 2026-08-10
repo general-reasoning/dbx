@@ -170,8 +170,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
     @dataclass
     class VAR(Datablock.VAR):
         feature_table: DatafeatureTable | DatafeatureTab
-        feature_column: tuple[str, str]
-        label_column: tuple[str, str]
+        collator: Datacollator
         fit_intercept: bool = True
         evaluation_fraction: float = 0.8
         aggregation: str = "mean"
@@ -179,38 +178,16 @@ class DatafeatureAffineLogisticProbe(Datablock):
 
     def __post_init__(self):
         super().__post_init__()
-        self._feat_slice, self._feat_col = _norm_pair(self.var.feature_column, "feature_column")
-        self._label_slice, self._label_col = _norm_pair(self.var.label_column, "label_column")
         assert self.var.aggregation in ["mean"], f"Unknown aggregation: {self.var.aggregation}"
         assert self.var.normalization in NORMALIZATION_MODES, f"Unknown normalization mode: {self.var.normalization!r}"
         self._prober = DatafeatureAffineLogisticProber(log=self.log)
 
     def __build__(self):
         table = self.var.feature_table
-        feat_slice, feat_col = self._feat_slice, self._feat_col
-        label_slice, label_col = self._label_slice, self._label_col
+        collator = self.var.collator
 
-        self.log.verbose(f"Reading feature '{feat_slice}:{feat_col}' and label '{label_slice}:{label_col}'")
-
-        data_dict = table.data(feat_slice, label_slice, concat=True)
-        feat_data = data_dict[feat_slice]
-        lbl_data = data_dict[label_slice]
-
-        if isinstance(feat_data, dict):
-            if feat_col in feat_data:
-                raw_features = feat_data[feat_col]
-            else:
-                raw_features = next(iter(feat_data.values()))
-        else:
-            raw_features = feat_data
-
-        if isinstance(lbl_data, dict):
-            if label_col in lbl_data:
-                raw_labels = lbl_data[label_col]
-            else:
-                raw_labels = next(iter(lbl_data.values()))
-        else:
-            raw_labels = lbl_data
+        data_dict = table.data(*collator.slices, concat=True)
+        raw_features, raw_labels = collator(data_dict, strip_keys=True)
 
         if torch is not None and isinstance(raw_features, torch.Tensor):
             feat_tensor = raw_features.float()
@@ -345,25 +322,30 @@ class DatafeatureStatsProbe(Datablock):
     @dataclass
     class VAR(Datablock.VAR):
         feature_table: DatafeatureTable | DatafeatureTab
-        feature_column: tuple[str, str]
-        signal_column: tuple[str, str] | None = None
+        collator: Datacollator
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
 
     def __post_init__(self):
         super().__post_init__()
-        self._feat_slice, self._feat_col = _norm_pair(self.var.feature_column, "feature_column")
-        if self.var.signal_column is not None:
-            self._sig_slice, self._sig_col = _norm_pair(self.var.signal_column, "signal_column")
-        else:
-            self._sig_slice, self._sig_col = None, None
         assert self.var.normalization in NORMALIZATION_MODES, f"Unknown normalization mode: {self.var.normalization!r}"
 
     def __build__(self):
         table = self.var.feature_table
-        feat_slice, feat_col = self._feat_slice, self._feat_col
-        sig_slice, sig_col = self._sig_slice, self._sig_col
+        collator = self.var.collator
 
-        self.log.verbose(f"COMPUTING stats for feature '{feat_slice}:{feat_col}' (normalization={self.var.normalization!r})")
+        data_dict = table.data(*collator.slices, concat=True)
+        feat_tensor, sig_tensor = collator(data_dict, strip_keys=True)
+
+        if torch is not None and isinstance(feat_tensor, torch.Tensor):
+            feat_tensor = feat_tensor.float()
+        else:
+            feat_tensor = torch.from_numpy(np.array(feat_tensor)).float()
+
+        if torch is not None and isinstance(sig_tensor, torch.Tensor):
+            sig_tensor = sig_tensor.float()
+        else:
+            sig_tensor = torch.from_numpy(np.array(sig_tensor)).float()
+        
 
         # Extract per-tab feature data
         if hasattr(table, 'n_tabs') and table.n_tabs > 0:

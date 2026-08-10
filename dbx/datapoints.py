@@ -48,15 +48,6 @@ from .datastreams import (
 SLICETOPIC = 'SLICETOPIC'
 
 
-class SlicesProperty:
-    """Descriptor enabling `.slices` to work on both class and instance."""
-
-    def __get__(self, obj, cls=None):
-        target = obj if obj is not None else cls
-        topics = getattr(target, 'TOPICS', {})
-        return tuple(DatapointBase._find_slice_topics(topics))
-
-
 class DatapointBase(Datablock):
     """Base class for sliced datapoint blocks (DatapointTab and DatapointTable).
 
@@ -65,77 +56,11 @@ class DatapointBase(Datablock):
     """
 
     TOPICS = {}
-    slices = SlicesProperty()
-
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        cls.__resolve_topics__()
-
-    @staticmethod
-    def _find_slice_topics(topics_dict, prefix=()):
-        """Find all topic paths in `topics_dict` marked with `SLICETOPIC`."""
-        slice_topics = []
-        if not isinstance(topics_dict, dict):
-            return slice_topics
-        for key, val in topics_dict.items():
-            current = prefix + (key,)
-            if val == SLICETOPIC or val is SLICETOPIC:
-                slice_topics.append('/'.join(current) if len(current) > 1 else key)
-            elif isinstance(val, dict):
-                slice_topics.extend(DatapointBase._find_slice_topics(val, current))
-        return slice_topics
-
-    @classmethod
-    def __resolve_topics__(cls):
-        """Resolve `TOPICS` for this class without accumulating parent TOPICS down the hierarchy.
-
-        Slices are defined as the subset of topics in `TOPICS` with value `SLICETOPIC`.
-        If `SLICES` is declared on the class, its items are added to `TOPICS` with `SLICETOPIC` value.
-        """
-        own = cls.__dict__.get('TOPICS')
-        if isinstance(own, property) or own is None:
-            own = {}
-        elif not isinstance(own, dict):
-            raise TypeError(
-                f"{cls.__name__}: TOPICS must be a dict for a sliced block, "
-                f"got {own!r}"
-            )
-        else:
-            own = dict(own)
-
-        # Collect slice topics (marked with SLICETOPIC or in SLICES) across the MRO
-        slice_topics = {}
-        for klass in reversed(cls.__mro__):
-            k_slices = getattr(klass, 'SLICES', None) or klass.__dict__.get('SLICES')
-            if k_slices:
-                for s in k_slices:
-                    if isinstance(s, (tuple, list)):
-                        s = s[0]
-                    slice_topics[str(s)] = SLICETOPIC
-
-            k_topics = klass.__dict__.get('TOPICS')
-            if isinstance(k_topics, dict):
-                for st in DatapointBase._find_slice_topics(k_topics):
-                    slice_topics[st] = SLICETOPIC
-
-        merged = dict(slice_topics)
-        merged.update(own)
-        cls.TOPICS = merged
-
-    @staticmethod
-    def _node_is_dirtopic(node):
-        """True when node is DIRTOPIC or SLICETOPIC."""
-        return node is DIRTOPIC or node == SLICETOPIC or node is SLICETOPIC
-
-    def _is_dir_topic(self, *topicpath):
-        """True when the topic resolves to a directory rather than a file."""
-        topicpath = self._normtopic(topicpath)
-        if not topicpath or topicpath[0] is None:
-            return False
-        node = self._topicnode(*topicpath)
-        return self._node_is_dirtopic(node)
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
+
+    def __init__(self, *args, cache_limit=None, **kwargs):
+        super().__init__(*args, cache_limit=cache_limit, **kwargs)
 
     def valid_slice(self, slice) -> bool:
         """True when *slice* has a **non-empty** `index.json`."""
@@ -156,15 +81,18 @@ class DatapointBase(Datablock):
                 return self.valid_slice(topic_str)
         return super().valid_topic(*topicpath)
 
+    def UNSAFE_copy_from(self, anchorkeypath, *, OVERRIDE: bool = False, overwr ite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
+        result = super().UNSAFE_copy_from(anchorkeypath, OVERRIDE=OVERRIDE, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=show_progress, **kwargs)
+        if validate:
+            self.verify_slice_row_counts_match()
+        return result
+
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
-    def cacheroot(self) -> str:
-        """Local scratch root for everything streaming: read caches, staged writes."""
-        return getattr(self, 'cache', None) or os.path.join(
-            self.localroot, 'streaming',
-        )
-
+    def slices(self):
+        return self._find_slice_topics(self.TOPICS)
+    
     def data(self, *slices, concat: bool = False, **kwargs):
         """Every row of the named slices, decoded into a list (or concatenated).
 
@@ -189,10 +117,10 @@ class DatapointBase(Datablock):
     def datastream(self, slice, **kwargs) -> StreamingDataset:
         """One slice as a live `StreamingDataset`."""
         self._slicenames((slice,))
-        cache_limit_gb = kwargs.pop('cache_limit_gb', kwargs.pop('cache_limit', getattr(self, 'cache_limit', None)))
+        cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
         kwargs.setdefault('cache_dir', f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
         kwargs.setdefault('cache', self.cacheroot)
-        kwargs.setdefault('cache_limit', cache_limit_gb)
+        kwargs.setdefault('cache_limit', cache_limit)
         return open_datastream(self.path(*slice.split('/')), **kwargs)
 
     def dataset(
@@ -205,7 +133,7 @@ class DatapointBase(Datablock):
         on_conflict='last',
         skip_none=True,
         zip_validator=None,
-        cache_limit_gb=None,
+        cache_limit=None,
         **kwargs,
     ):
         """The named slices, zipped into one `Dataset`.
@@ -216,7 +144,7 @@ class DatapointBase(Datablock):
             How the slices are read.
         columns : list[tuple[str, str]] | dict | None
             Specified as a list of `(slice, column)` tuples.
-        cache_limit_gb : float or str, optional
+        cache_limit : float or str, optional
             Limit on cache size for streaming downloads.
         """
         if mode not in ('map', 'iter'):
@@ -263,8 +191,8 @@ class DatapointBase(Datablock):
         else:
             per_slice_columns = None
 
-        if cache_limit_gb is not None:
-            kwargs['cache_limit_gb'] = cache_limit_gb
+        if cache_limit is not None:
+            kwargs['cache_limit'] = cache_limit
 
         datasets = [self.datastream(name, **kwargs) for name in names]
         zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
@@ -285,43 +213,11 @@ class DatapointBase(Datablock):
             return self.__stats__(names[0], **kwargs)
         return {name: self.__stats__(name, **kwargs) for name in names}
 
-    # 3. Private and Utility Methods ────────────────────────────────
-
-    def _slicenames(self, slices) -> tuple:
-        """Normalize a `*slices` varargs tuple; empty means *all* slices."""
-        if len(slices) == 1 and isinstance(slices[0], (tuple, list)):
-            slices = tuple(slices[0])
-        if not slices:
-            return self.slices
-        unknown = [s for s in slices if s not in self.slices]
-        if unknown:
-            raise KeyError(
-                f"{self.__class__.__name__}: unknown slice(s) {unknown}; "
-                f"available are {list(self.slices)}"
-            )
-        return tuple(slices)
-
-    def slice_index_path(self, slice) -> str:
-        """Path of the `index.json` for *slice*'s shards."""
-        return os.path.join(self.path(*slice.split('/')), 'index.json')
-
-    def _ensure_cacheroot(self, cache=None) -> str:
-        cacheroot = cache or self.cacheroot
-        os.makedirs(cacheroot, exist_ok=True)
-        return cacheroot
-
-    def _read_slice(self, slice, **kwargs):
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement _read_slice(slice)"
-        )
-
-    def _tab_stream(self, tab, slice) -> Stream:
-        index_dir = tab.path(*slice.split('/'))
-        scheme = urllib.parse.urlparse(index_dir).scheme
-        if scheme in ('', 'file'):
-            return Stream(local=index_dir.removeprefix('file://'))
-        remote = abfs_to_mds_azure(index_dir) if scheme in ('abfs', 'abfss') else index_dir
-        return Stream(remote=remote)
+    def n_rows(self, slice: str) -> int:
+        """Total dataset rows in the specified slice."""
+        if slice is None:
+            raise TypeError(f"{self.__class__.__name__}.n_rows requires an explicit slice argument")
+        return sum(self.shard_sizes(slice))
 
     def shard_sizes(self, slice: str) -> list[int]:
         """Row counts per shard for the specified slice."""
@@ -364,11 +260,14 @@ class DatapointBase(Datablock):
             )
         return max(sizes)
 
-    def n_rows(self, slice: str) -> int:
-        """Total dataset rows in the specified slice."""
-        if slice is None:
-            raise TypeError(f"{self.__class__.__name__}.n_rows requires an explicit slice argument")
-        return sum(self.shard_sizes(slice))
+    @property
+    def cacheroot(self) -> str:
+        """Local scratch root for everything streaming: read caches, staged writes."""
+        return getattr(self, 'cache', None) or os.path.join(
+            self.localroot, 'streaming',
+        )
+
+    # 3. Utility and Private Methods ────────────────────────────────
 
     def chunk_shuffle_sampler(
         self,
@@ -405,18 +304,6 @@ class DatapointBase(Datablock):
             fixed_epoch=fixed_epoch,
         )
 
-    def block_shuffle_sampler(self, slice: str = None, *, block_size=None, seed: int = 0, fixed_epoch: bool = False, **kwargs) -> ChunkShuffleSampler:
-        """Deprecated alias for chunk_shuffle_sampler."""
-        s = slice or kwargs.pop('principal_slice', None)
-        if s is None:
-            raise TypeError(f"{self.__class__.__name__}.block_shuffle_sampler requires an explicit slice argument")
-        return self.chunk_shuffle_sampler(
-            s,
-            chunk_size=block_size,
-            seed=seed,
-            fixed_epoch=fixed_epoch,
-        )
-
     def verify_slice_row_counts_match(self) -> dict[str, int]:
         """Check that the total number of dataset rows is identical across all declared slices.
 
@@ -435,12 +322,68 @@ class DatapointBase(Datablock):
             )
         return counts
 
-    def check_lockstep_rows(self) -> dict[str, int]:
-        """Deprecated alias for verify_slice_row_counts_match."""
-        return self.verify_slice_row_counts_match()
+    def slice_index_path(self, slice) -> str:
+        """Path of the `index.json` for *slice*'s shards."""
+        return os.path.join(self.path(*slice.split('/')), 'index.json')
 
+    @staticmethod
+    def _node_is_dirtopic(node):
+        """True when node is DIRTOPIC or SLICETOPIC."""
+        return node is DIRTOPIC or node == SLICETOPIC or node is SLICETOPIC
 
-SlicedTopics = DatapointBase
+    def _is_dir_topic(self, *topicpath):
+        """True when the topic resolves to a directory rather than a file."""
+        topicpath = self._normtopic(topicpath)
+        if not topicpath or topicpath[0] is None:
+            return False
+        node = self._topicnode(*topicpath)
+        return self._node_is_dirtopic(node)
+
+    def _slicenames(self, slices) -> tuple:
+        """Normalize a `*slices` varargs tuple; empty means *all* slices."""
+        if len(slices) == 1 and isinstance(slices[0], (tuple, list)):
+            slices = tuple(slices[0])
+        if not slices:
+            return self.slices
+        unknown = [s for s in slices if s not in self.slices]
+        if unknown:
+            raise KeyError(
+                f"{self.__class__.__name__}: unknown slice(s) {unknown}; "
+                f"available are {list(self.slices)}"
+            )
+        return tuple(slices)
+
+    def _ensure_cacheroot(self, cache=None) -> str:
+        cacheroot = cache or self.cacheroot
+        os.makedirs(cacheroot, exist_ok=True)
+        return cacheroot
+
+    def _read_slice(self, slice, **kwargs):
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement _read_slice(slice)"
+        )
+
+    def _tab_stream(self, tab, slice) -> Stream:
+        index_dir = tab.path(*slice.split('/'))
+        scheme = urllib.parse.urlparse(index_dir).scheme
+        if scheme in ('', 'file'):
+            return Stream(local=index_dir.removeprefix('file://'))
+        remote = abfs_to_mds_azure(index_dir) if scheme in ('abfs', 'abfss') else index_dir
+        return Stream(remote=remote)
+
+    @staticmethod
+    def _find_slice_topics(topics_dict, prefix=()):
+        """Find all topic paths in `topics_dict` marked with `SLICETOPIC`."""
+        slice_topics = []
+        if not isinstance(topics_dict, dict):
+            return slice_topics
+        for key, val in topics_dict.items():
+            current = prefix + (key,)
+            if val == SLICETOPIC or val is SLICETOPIC:
+                slice_topics.append('/'.join(current) if len(current) > 1 else key)
+            elif isinstance(val, dict):
+                slice_topics.extend(DatapointBase._find_slice_topics(val, current))
+        return slice_topics
 
 
 class DatapointTab(DatapointBase):
@@ -452,9 +395,8 @@ class DatapointTab(DatapointBase):
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
-    def __init__(self, *args, cache=None, cache_limit_gb=None, cache_limit=None, **kwargs):
-        limit = cache_limit_gb if cache_limit_gb is not None else cache_limit
-        super().__init__(*args, cache=cache, cache_limit=limit, **kwargs)
+    def __init__(self, *args, cache=None, cache_limit=None, **kwargs):
+        super().__init__(*args, cache=cache, cache_limit=cache_limit, **kwargs)
 
     def __build__(self, *args, **kwargs):
         raise NotImplementedError(
@@ -477,11 +419,11 @@ class DatapointTab(DatapointBase):
 
     # 2. Properties and Accessors ───────────────────────────────────
 
-    # 3. Private and Utility Methods ────────────────────────────────
+    # 3. Utility and Private Methods ────────────────────────────────
 
     @contextlib.contextmanager
     def slice_writers(self, slices, *, stage: bool = None, cache=None,
-                      cache_limit_gb=None, flush_every: int = None, **writer_kwargs):
+                      flush_every: int = None, **writer_kwargs):
         """One `MDSWriter` per slice, as `{slice: writer}`.
 
         Parameters
@@ -571,27 +513,8 @@ class DatapointTable(DatapointBase, Datastack):
 
     # 1. Datastack / Table Protocol Methods ─────────────────────────
 
-    def __init__(self, *args, cache=None, cache_limit_gb=None, cache_limit=None, **kwargs):
-        limit = cache_limit_gb if cache_limit_gb is not None else cache_limit
-        super().__init__(*args, cache=cache, cache_limit=limit, **kwargs)
-
-    @classmethod
-    def __resolve_topics__(cls):
-        raw_own = cls.__dict__.get('TOPICS')
-        own = dict(raw_own) if isinstance(raw_own, dict) else {}
-        own.setdefault('tabs', DIRTOPIC)
-        own.setdefault('done', 'done')
-        if cls.TAB is not None and not isinstance(cls.TAB, property):
-            tab_topics = getattr(cls.TAB, 'TOPICS', {})
-            tab_slices = DatapointBase._find_slice_topics(tab_topics)
-            if not tab_slices:
-                tab_slices = getattr(cls.TAB, 'SLICES', ())
-            for s in tab_slices:
-                if isinstance(s, (tuple, list)):
-                    s = s[0]
-                own[str(s)] = SLICETOPIC
-        cls.TOPICS = own
-        super().__resolve_topics__()
+    def __init__(self, *args, cache=None, cache_limit=None, **kwargs):
+        super().__init__(*args, cache=cache, cache_limit=cache_limit, **kwargs)
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
         if self.TAB is None:
@@ -694,14 +617,14 @@ class DatapointTable(DatapointBase, Datastack):
                                f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
         local = os.path.join(cacheroot, cache_dir)
         os.makedirs(local, exist_ok=True)
-        cache_limit_gb = kwargs.pop('cache_limit_gb', kwargs.pop('cache_limit', getattr(self, 'cache_limit', None)))
+        cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
         shuffle = kwargs.pop('shuffle', False)
         allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)
         streaming_kwargs = dict(
             streams=streams,
             shuffle=shuffle,
             allow_unsafe_types=allow_unsafe_types,
-            cache_limit=cache_limit_gb,
+            cache_limit=cache_limit,
             **kwargs,
         )
         try:
@@ -880,14 +803,14 @@ class DatapointFold(DatapointTable):
                                f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
         local = os.path.join(cacheroot, cache_dir)
         os.makedirs(local, exist_ok=True)
-        cache_limit_gb = kwargs.pop('cache_limit_gb', kwargs.pop('cache_limit', getattr(self, 'cache_limit', None)))
+        cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
         shuffle = kwargs.pop('shuffle', False)
         allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)
         streaming_kwargs = dict(
             streams=streams,
             shuffle=shuffle,
             allow_unsafe_types=allow_unsafe_types,
-            cache_limit=cache_limit_gb,
+            cache_limit=cache_limit,
             **kwargs,
         )
         try:

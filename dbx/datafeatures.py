@@ -65,13 +65,11 @@ class Datacollator(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
-        signals: list[tuple[str, str]] = field(default_factory=list)
-        labels: list[tuple[str, str]] = field(default_factory=list)
+        signals: list[tuple[str, str]]
+        labels: list[tuple[str, str]]
         length: int | None = None
-        strip_keys: bool = False
-        signal_only: bool = False
 
-    def __call__(self, datapoints: list[dict]) -> dict[str, np.ndarray] | tuple[np.ndarray, ...] | np.ndarray:
+    def __call__(self, datapoints: list[dict], *, strip_keys: bool = False, signal_only: bool = False) -> dict[str, np.ndarray] | tuple[np.ndarray, ...] | np.ndarray:
         """Collate a batch of datapoint dicts into collated arrays.
 
         Parameters
@@ -94,12 +92,12 @@ class Datacollator(Datablock):
             if hasattr(lbl_arr, 'ndim') and lbl_arr.ndim >= 1 and lbl_arr.shape[-1] > length:
                 lbl_arr = lbl_arr[..., :length]
 
-        if self.var.signal_only:
-            if self.var.strip_keys:
+        if signal_only:
+            if strip_keys:
                 return sig_arr
             return {'signal': sig_arr}
 
-        if self.var.strip_keys:
+        if strip_keys:
             if len(self.var.labels) > 0:
                 return (sig_arr, lbl_arr)
             return (sig_arr,)
@@ -108,6 +106,10 @@ class Datacollator(Datablock):
         if len(self.var.labels) > 0:
             res['label'] = lbl_arr
         return res
+
+    @property
+    def slices(self):
+        return list(set([p[0] for p in self.var.signals] + [p[0] for p in self.var.labels]))
 
     @staticmethod
     def _norm_pair(pair: Any) -> tuple[str, str]:
@@ -180,10 +182,10 @@ class DatafeatureTab(DatapointTab):
 
     @dataclass
     class VAR(DatapointTab.VAR):
-        datapoint_tab: DatapointTab = None
-        evaluator_factory: DatamodelEvaluatorFactory = None
-        collator: Datacollator | tuple[str, str] | str | None = None
-        feature_namemap: dict | None = None
+        datapoint_tab: DatapointTab
+        evaluator_factory: DatamodelEvaluatorFactory
+        collator: Datacollator
+        feature_namemap: dict[str, str] | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
@@ -195,7 +197,6 @@ class DatafeatureTab(DatapointTab):
 
     def __post_init__(self):
         super().__post_init__()
-        factory = self.var.evaluator_factory
         layer_names = factory.layer_names if factory is not None else []
         namemap = self.var.feature_namemap
         if namemap is not None:
@@ -219,29 +220,8 @@ class DatafeatureTab(DatapointTab):
         slice_specs = {"features": columns_spec}
 
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
-            collator = self.var.collator
-            if collator is not None:
-                if isinstance(collator, (list, tuple)):
-                    slice_name = str(collator[0])
-                    col_name = str(collator[1]) if len(collator) > 1 else str(collator[0])
-                else:
-                    slice_name = str(collator)
-                    col_name = str(collator)
-
-                sample_data = datapoint_tab.data(slice_name, concat=True)
-                slice_data = sample_data.get(slice_name, next(iter(sample_data.values())))
-                if isinstance(slice_data, dict):
-                    inputs = slice_data.get(col_name, next(iter(slice_data.values())))
-                else:
-                    inputs = slice_data
-            else:
-                sample_data = datapoint_tab.data(concat=True)
-                input_key = next(iter(sample_data.keys()))
-                inputs = sample_data[input_key]
-                if isinstance(inputs, dict):
-                    input_key_inner = next(iter(inputs.keys()))
-                    inputs = inputs[input_key_inner]
-
+            sample_data = datapoint_tab.data(*self.var.collator.slices, concat=True)
+            inputs = self.var.collator(sample_data, signal_only=True, strip_keys=True)
             if not hasattr(inputs, 'shape') or not hasattr(inputs, 'to'):
                 inputs = torch.tensor(np.array(inputs))
 

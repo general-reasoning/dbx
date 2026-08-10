@@ -3762,7 +3762,7 @@ class Datablock:
                     try:
                         _df = future.result()
                     except Exception as e:
-                        log.warning(f"Skipping unreadable journal file {file}: {e}")
+                        log.warning(f"Skipping unreadable journal file: {e}")
                         continue
                     dfs.append(_df)
             if dfs:

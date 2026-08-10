@@ -3756,9 +3756,8 @@ class Datablock:
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:
-            """
             dfs = []
-            for file in parquet_files:
+            for file in tqdm.tqdm(parquet_files, desc='Reading journal files', total=len(parquet_files)):
                 try:
                     with fs.open(file, 'rb') as f:
                         _df = pd.read_parquet(f)
@@ -3788,6 +3787,7 @@ class Datablock:
             pqdataset = pa.dataset.dataset(parquet_files, filesystem=fs, format='parquet')
             df = pqdataset.to_table().to_pandas()
             log.verbose(f"Reading {len(parquet_files)} journal files from {journaldirpath=} using pyarrow: END")
+            """
         else:
             df = None
         journal = Datajournal(df, storage_options=storage_options, **filter_kwargs)

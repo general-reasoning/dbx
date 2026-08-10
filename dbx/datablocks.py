@@ -2104,7 +2104,7 @@ class Datablock:
             self._UNSAFE_copy_topic_file(topic, anchorkeypath, topicpaths=topicpaths)
             self.log.verbose(f"Using copy_topic_file for topic {topic}: END")
 
-    def UNSAFE_copy_from(self, anchorkeypath, *, OVERRIDE: bool = False, overwr ite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
+    def UNSAFE_copy_from(self, anchorkeypath, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
         """Copy topic data from an external directory into this Datablock.
 
         Parameters

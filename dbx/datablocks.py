@@ -3758,11 +3758,13 @@ class Datablock:
             dfs = []
             with ThreadPoolExecutor(max_workers=n_workers) as ex:
                 futures = [ex.submit(pd.read_parquet, file, engine='pyarrow') for file in parquet_files]
+                future_to_file = {f: file for f, file in zip(futures, parquet_files)}
                 for future in tqdm.tqdm(as_completed(futures), desc='Reading journal files', total=len(parquet_files)):
                     try:
                         _df = future.result()
+                        _df['entry_path'] = fs_full_path(fs, future_to_file[future])
                     except Exception as e:
-                        log.warning(f"Skipping unreadable journal file: {e}")
+                        log.warning(f"Skipping unreadable journal file {future_to_file[future]}: {e}")
                         continue
                     dfs.append(_df)
             if dfs:
@@ -3775,7 +3777,7 @@ class Datablock:
                 # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
                 if 'build_datetime' in df.columns and 'build:end:datetime' not in df.columns:
                     df = df.rename(columns={'build_datetime': 'build:end:datetime'})
-                df['entry_path'] = fs_full_path(fs, file)
+                
                 leading = ['hash'] + (['uuid'] if 'uuid' in df.columns else []) + ['datetime']
                 columns = leading + [c for c in df.columns if c not in set(leading + ['event'])] + ['event']
                 df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)

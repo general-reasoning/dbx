@@ -371,9 +371,9 @@ class DatafeatureTable(DatapointTable):
 
     @dataclass
     class VAR(Datablock.VAR):
-        datapoint_table: DatapointTable = None
-        evaluator_factory: DatamodelEvaluatorFactory = None
-        collator: Datacollator | tuple[str, str] | str | None = None
+        datapoint_table: DatapointTable
+        evaluator_factory: DatamodelEvaluatorFactory
+        collator: Datacollator
         feature_namemap: dict | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 

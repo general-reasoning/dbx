@@ -3721,7 +3721,7 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=None, **filter_kwargs):
+    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, **filter_kwargs):
         if log is None:
             log = Logger()
         if loc is not None and iloc is not None:

@@ -47,7 +47,6 @@ import numpy as np
 
 import fsspec
 
-import pyarrow as pa
 import pandas as pd
 
 
@@ -3757,11 +3756,12 @@ class Datablock:
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:
             dfs = []
-            for file in tqdm.tqdm(parquet_files, desc='Reading journal files', total=len(parquet_files)):
-                try:
-                    with fs.open(file, 'rb') as f:
-                        _df = pd.read_parquet(f)
-                except Exception as e:
+            with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                futures = [ex.submit(pd.read_parquet, file, engine='pyarrow') for file in parquet_files]
+                for future in tqdm.tqdm(as_completed(futures), desc='Reading journal files', total=len(parquet_files)):
+                    try:
+                        _df = future.result()
+                    except Exception as e:
                     log.warning(f"Skipping unreadable journal file {file}: {e}")
                     continue
                 if 'revision' not in _df.columns:
@@ -3782,12 +3782,6 @@ class Datablock:
                 df = df.rename(columns={'build_log': 'log'})
             else:
                 df = None
-            """
-            log.verbose(f"Reading {len(parquet_files)} journal files from {journaldirpath=} using pyarrow: BEGIN")
-            pqdataset = pa.dataset.dataset(parquet_files, filesystem=fs, format='parquet')
-            df = pqdataset.to_table().to_pandas()
-            log.verbose(f"Reading {len(parquet_files)} journal files from {journaldirpath=} using pyarrow: END")
-            """
         else:
             df = None
         journal = Datajournal(df, storage_options=storage_options, **filter_kwargs)

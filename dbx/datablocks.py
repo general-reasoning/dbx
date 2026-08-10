@@ -3762,20 +3762,20 @@ class Datablock:
                     try:
                         _df = future.result()
                     except Exception as e:
-                    log.warning(f"Skipping unreadable journal file {file}: {e}")
-                    continue
-                if 'revision' not in _df.columns:
-                    _df = _df.rename(columns={'version': 'revision',})
+                        log.warning(f"Skipping unreadable journal file {file}: {e}")
+                        continue
+                    dfs.append(_df)
+            if dfs:
+                df = pd.concat(dfs, ignore_index=True)
+                if 'revision' not in df.columns:
+                    df = df.rename(columns={'version': 'revision',})
                 # Backward compat: rename legacy 'context' column to 'message'
-                if 'context' in _df.columns and 'message' not in _df.columns:
-                    _df = _df.rename(columns={'context': 'message'})
+                if 'context' in df.columns and 'message' not in df.columns:
+                    df = df.rename(columns={'context': 'message'})
                 # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
-                if 'build_datetime' in _df.columns and 'build:end:datetime' not in _df.columns:
-                    _df = _df.rename(columns={'build_datetime': 'build:end:datetime'})
-                _df['entry_path'] = fs_full_path(fs, file)
-                dfs.append(_df)
-            if len(dfs) > 0:
-                df = pd.concat(dfs)
+                if 'build_datetime' in df.columns and 'build:end:datetime' not in df.columns:
+                    df = df.rename(columns={'build_datetime': 'build:end:datetime'})
+                df['entry_path'] = fs_full_path(fs, file)
                 leading = ['hash'] + (['uuid'] if 'uuid' in df.columns else []) + ['datetime']
                 columns = leading + [c for c in df.columns if c not in set(leading + ['event'])] + ['event']
                 df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)

@@ -3740,8 +3740,11 @@ class Datablock:
                 f"Check that the class name / anchor and url are correct."
             )
 
+        self.log.verbose(f"Retreiving journal files from {journaldirpath=} using glob: BEGIN")
         files = fs.glob(os.path.join(journaldirpath, '**/journal/**/*.parquet'))
         parquet_files = files
+        self.log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
+        self.log.verbose(f"Retreiving journal files from {journaldirpath=} using glob: END")
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:

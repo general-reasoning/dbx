@@ -3721,7 +3721,7 @@ class Datablock:
                          f"to journal_path {journal_path}")
 
     @staticmethod
-    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, **filter_kwargs):
+    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=None, **filter_kwargs):
         if log is None:
             log = Logger()
         if loc is not None and iloc is not None:
@@ -3742,11 +3742,16 @@ class Datablock:
                 f"Check that the class name / anchor and url are correct."
             )
 
-        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: BEGIN")
-        files = fs.glob(os.path.join(journaldirpath, '**/journal/**/*.parquet'))
-        parquet_files = files
+        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: with n_workers={n_workers} BEGIN")
+        #files = fs.glob(os.path.join(journaldirpath, '**/journal/**/*.parquet'))
+        dirs = fs.glob(os.path.join(journaldirpath, '**/'), maxdepth=2)
+        with ThreadPoolExecutor(max_workers=n_workers) as ex:
+            futures = [ex.submit(fs.glob, os.path.join(d, 'journal/**/*.parquet')) for d in dirs]
+            parquet_files = []
+            for future in tqdm.tqdm(as_completed(futures), desc='Reading journal files', total=len(dirs)):
+                parquet_files.extend(future.result())
         log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
-        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: END")
+        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: with n_workers={n_workers} END")
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         if len(parquet_files) > 0:

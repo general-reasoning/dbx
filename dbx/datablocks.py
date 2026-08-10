@@ -3749,7 +3749,7 @@ class Datablock:
         with ThreadPoolExecutor(max_workers=n_workers) as ex:
             futures = [ex.submit(fs.glob, os.path.join(d, 'journal/**/*.parquet')) for d in dirs]
             parquet_files = []
-            for future in tqdm.tqdm(as_completed(futures), desc='Reading journal files', total=len(dirs)):
+            for future in tqdm.tqdm(as_completed(futures), desc=f'Reading journal files from {len(dirs)} directories', total=len(dirs)):
                 parquet_files.extend(future.result())
         log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
         log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: with n_workers={n_workers} END")

@@ -181,7 +181,7 @@ class DatafeatureTab(DatapointTab):
     TOPICS = {'features': SLICETOPIC}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datablock.VAR):
         datapoint_tab: DatapointTab
         evaluator_factory: DatamodelEvaluatorFactory
         collator: Datacollator
@@ -370,7 +370,7 @@ class DatafeatureTable(DatapointTable):
     VERSION = 1
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datablock.VAR):
         datapoint_table: DatapointTable = None
         evaluator_factory: DatamodelEvaluatorFactory = None
         collator: Datacollator | tuple[str, str] | str | None = None

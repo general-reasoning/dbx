@@ -3773,8 +3773,10 @@ class Datablock:
             else:
                 df = None
             """
+            self.log.verbose(f"Reading {len(parquet_files)} journal files from {journaldirpath=} using pyarrow: BEGIN")
             pqdataset = pa.dataset.dataset(parquet_files, filesystem=fs, format='parquet')
             df = pqdataset.to_table().to_pandas()
+            self.log.verbose(f"Reading {len(parquet_files)} journal files from {journaldirpath=} using pyarrow: END")
         else:
             df = None
         journal = Datajournal(df, storage_options=storage_options, **filter_kwargs)

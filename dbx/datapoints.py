@@ -81,7 +81,7 @@ class DatapointBase(Datablock):
                 return self.valid_slice(topic_str)
         return super().valid_topic(*topicpath)
 
-    def UNSAFE_copy_from(self, anchorkeypath, *, OVERRIDE: bool = False, overwr ite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
+    def UNSAFE_copy_from(self, anchorkeypath, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
         result = super().UNSAFE_copy_from(anchorkeypath, OVERRIDE=OVERRIDE, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=show_progress, **kwargs)
         if validate:
             self.verify_slice_row_counts_match()

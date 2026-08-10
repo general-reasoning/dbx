@@ -16,6 +16,7 @@ This module defines the central abstractions of dbx:
 - :class:`SlurmRayCluster` — Slurm integration for launching Ray clusters.
 """
 import ast
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 from dataclasses import dataclass, fields, asdict, replace
 import datetime

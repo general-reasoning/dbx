@@ -7,6 +7,7 @@ import torch.nn as nn
 from dataclasses import dataclass
 
 from dbx import (
+    SLICETOPIC,
     DatapointTab,
     DatapointTable,
     DatamodelEvaluator,
@@ -16,10 +17,25 @@ from dbx import (
     BipolarDatafeatureTab,
     BipolarDatafeatureTable,
 )
+from dbx.datafeatures import Datacollator
+
+
+def sample_collator(**spec):
+    """What feeds DummyModel: the 'samples' slice's own column, labelled by 'labels'.
+
+    A feature block takes its collator as a required VAR -- which pairs of
+    (slice, column) are the signal is a decision about the block's identity,
+    not something to be defaulted behind the author's back.
+    """
+    return Datacollator(spec=dict(
+        signals=[("samples", "samples")],
+        labels=[("labels", "labels")],
+        **spec,
+    ))
 
 
 class DummySampleTab(DatapointTab):
-    SLICES = ("samples", "labels")
+    TOPICS = {"samples": SLICETOPIC, "labels": SLICETOPIC}
 
     @dataclass
     class VAR(DatapointTab.VAR):
@@ -86,6 +102,7 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
+            collator=sample_collator(),
         ),
         device="cpu",
         tag="features_0",
@@ -126,6 +143,7 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
+            collator=sample_collator(),
         ),
         device="cpu",
         tag="features_1",
@@ -177,6 +195,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=eval_factory,
+            collator=sample_collator(),
         ),
         devices=["cpu"],
         tag="feature_table",
@@ -227,6 +246,7 @@ def test_custom_features_mapping(tmp_path):
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
             feature_namemap={"custom_output": "final"},
+            collator=sample_collator(),
         ),
         device="cpu",
         tag="features_cust",
@@ -250,7 +270,7 @@ def test_signal_selection(tmp_path):
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
-            collator=("samples", "samples"),
+            collator=sample_collator(),
         ),
         device="cpu",
         tag="features_sig",
@@ -301,42 +321,28 @@ def test_datacollator():
     out_len = c_len(batch_datapoints)
     assert out_len["signal"].shape == (2, 5, 1, 2)  # last dim trimmed to 2
 
-    # Test strip_keys
-    c_strip = Datacollator(
+    # strip_keys and signal_only are how a CALLER wants the output shaped, not
+    # part of what the collator is, so they are call arguments rather than spec.
+    c_one = Datacollator(
         spec=dict(
             signals=[("samples", "samples")],
             labels=[("labels", "labels")],
-            strip_keys=True,
         )
     )
-    out_strip = c_strip(batch_datapoints)
+
+    # Test strip_keys
+    out_strip = c_one(batch_datapoints, strip_keys=True)
     assert isinstance(out_strip, tuple)
     assert len(out_strip) == 2
 
     # Test signal_only (strip_keys=False) -> dict with 'signal' key only
-    c_sig_dict = Datacollator(
-        spec=dict(
-            signals=[("samples", "samples")],
-            labels=[("labels", "labels")],
-            signal_only=True,
-            strip_keys=False,
-        )
-    )
-    out_sig_dict = c_sig_dict(batch_datapoints)
+    out_sig_dict = c_one(batch_datapoints, signal_only=True)
     assert isinstance(out_sig_dict, dict)
     assert list(out_sig_dict.keys()) == ["signal"]
     assert out_sig_dict["signal"].shape == (2, 5, 1, 4)
 
     # Test signal_only (strip_keys=True) -> signal value directly
-    c_sig_val = Datacollator(
-        spec=dict(
-            signals=[("samples", "samples")],
-            labels=[("labels", "labels")],
-            signal_only=True,
-            strip_keys=True,
-        )
-    )
-    out_sig_val = c_sig_val(batch_datapoints)
+    out_sig_val = c_one(batch_datapoints, signal_only=True, strip_keys=True)
     assert isinstance(out_sig_val, np.ndarray)
     assert out_sig_val.shape == (2, 5, 1, 4)
 

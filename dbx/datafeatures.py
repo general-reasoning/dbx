@@ -111,6 +111,22 @@ class Datacollator(Datablock):
     def slices(self):
         return list(set([p[0] for p in self.var.signals] + [p[0] for p in self.var.labels]))
 
+    @property
+    def signal_pairs(self) -> tuple[tuple[str, str], ...]:
+        """The signal ``(slice, column)`` pairs, each in full two-part form.
+
+        A pair may be declared as a bare name or a one-element sequence, both
+        of which mean the column of the same name; this is what a caller that
+        has to address the data itself -- a per-tab breakdown, a log line --
+        reads, rather than normalizing ``var.signals`` again at each site.
+        """
+        return tuple(self._norm_pair(p) for p in self.var.signals)
+
+    @property
+    def label_pairs(self) -> tuple[tuple[str, str], ...]:
+        """The label ``(slice, column)`` pairs, as :attr:`signal_pairs`."""
+        return tuple(self._norm_pair(p) for p in self.var.labels)
+
     @staticmethod
     def _norm_pair(pair: Any) -> tuple[str, str]:
         if isinstance(pair, (list, tuple)):
@@ -120,11 +136,46 @@ class Datacollator(Datablock):
                 return str(pair[0]), str(pair[0])
         return str(pair), str(pair)
 
+    @staticmethod
+    def _as_array(val):
+        if torch is not None and isinstance(val, torch.Tensor):
+            return val.detach().cpu().numpy()
+        return np.array(val)
+
+    def _collate_batch(self, batch: dict, norm_pairs) -> np.ndarray:
+        """Collate a ``{slice: data}`` mapping, in which the batch is ALREADY stacked.
+
+        This is what ``data(*collator.slices, concat=True)`` hands back -- one
+        entry per slice, each holding every sample of it -- as opposed to the
+        list of per-sample dicts a DataLoader yields. Both reach __call__, and
+        they are told apart by shape rather than by a flag, because the callers
+        that pass a whole slice at a time (a feature build, a probe fit) are the
+        same ones that pass batches elsewhere.
+
+        One pair passes its array through untouched, so a single-signal collation
+        keeps the shape the slice was written with -- which is what a model is
+        then fed. Several are stacked along a new axis 1, mirroring the signals
+        axis of the per-sample form.
+        """
+        arrays = []
+        for s_name, c_name in norm_pairs:
+            val = batch[s_name] if s_name in batch else batch
+            if isinstance(val, dict):
+                val = val.get(c_name, next(iter(val.values())))
+            arrays.append(self._as_array(val))
+        if len(arrays) == 1:
+            return arrays[0]
+        return np.stack(arrays, axis=1)
+
     def _collate_pairs(self, datapoints: list[dict], pairs: list[tuple[str, str]]) -> np.ndarray:
         if not pairs:
             return np.array([])
 
         norm_pairs = [self._norm_pair(p) for p in pairs]
+
+        if isinstance(datapoints, dict):
+            return self._collate_batch(datapoints, norm_pairs)
+
         batch_items = []
 
         for dp in datapoints:
@@ -137,12 +188,7 @@ class Datacollator(Datablock):
                 else:
                     val = dp
 
-                if torch is not None and isinstance(val, torch.Tensor):
-                    val = val.detach().cpu().numpy()
-                else:
-                    val = np.array(val)
-
-                dp_signals.append(val)
+                dp_signals.append(self._as_array(val))
 
             norm_signals = []
             for sig in dp_signals:
@@ -197,6 +243,7 @@ class DatafeatureTab(DatapointTab):
 
     def __post_init__(self):
         super().__post_init__()
+        factory = self.var.evaluator_factory
         layer_names = factory.layer_names if factory is not None else []
         namemap = self.var.feature_namemap
         if namemap is not None:

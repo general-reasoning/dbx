@@ -226,8 +226,8 @@ class DatafeatureAffineLogisticProbe(Datablock):
         self.log.verbose(
             f"FITTING LogisticRegression "
             f"(fit_intercept={self.var.fit_intercept}, "
-            f"feature={(feat_slice, feat_col)!r}, "
-            f"label={(label_slice, label_col)!r}, "
+            f"feature={self.var.collator.signal_pairs!r}, "
+            f"label={self.var.collator.label_pairs!r}, "
             f"normalization={self.var.normalization!r})"
         )
         clf = LogisticRegression(fit_intercept=self.var.fit_intercept)
@@ -335,6 +335,26 @@ class DatafeatureStatsProbe(Datablock):
 
         data_dict = table.data(*collator.slices, concat=True)
         feat_tensor, sig_tensor = collator(data_dict, strip_keys=True)
+
+        # The aggregate stats come off the collated whole above; the per-tab
+        # breakdowns below have to address one column of one slice at a time,
+        # so they follow the FIRST pair of each side. A collator naming several
+        # is collated whole all the same -- only the breakdown narrows.
+        feat_slice, feat_col = collator.signal_pairs[0]
+        if len(collator.signal_pairs) > 1:
+            self.log.warning(
+                f"{self.__class__.__name__}: per-tab feature stats describe "
+                f"{(feat_slice, feat_col)!r} only, of {collator.signal_pairs!r}"
+            )
+        if collator.label_pairs:
+            sig_slice, sig_col = collator.label_pairs[0]
+            if len(collator.label_pairs) > 1:
+                self.log.warning(
+                    f"{self.__class__.__name__}: per-tab signal stats describe "
+                    f"{(sig_slice, sig_col)!r} only, of {collator.label_pairs!r}"
+                )
+        else:
+            sig_slice, sig_col = None, None
 
         if torch is not None and isinstance(feat_tensor, torch.Tensor):
             feat_tensor = feat_tensor.float()

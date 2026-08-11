@@ -7,7 +7,9 @@ import torch
 import torch.nn as nn
 
 import dbx
+from dbx.datafeatures import Datacollator
 from dbx import (
+    SLICETOPIC,
     DatafeatureTab,
     DatafeatureTable,
     DatapointTab,
@@ -22,7 +24,7 @@ from dbx import (
 
 
 class DummySampleTab(DatapointTab):
-    SLICES = ("samples", "labels")
+    TOPICS = {"samples": SLICETOPIC, "labels": SLICETOPIC}
 
     @dataclass
     class VAR(DatapointTab.VAR):
@@ -110,6 +112,10 @@ def test_datafeature_affine_logistic_probe(tmp_path):
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=eval_factory,
+            collator=Datacollator(spec=dict(
+                signals=[("samples", "samples")],
+                labels=[("labels", "labels")],
+            )),
         ),
         devices=["cpu"],
         tag="feature_table",
@@ -119,8 +125,10 @@ def test_datafeature_affine_logistic_probe(tmp_path):
         url=url,
         spec=dict(
             feature_table=featuretable,
-            feature_column=("features", "final"),
-            label_column=("labels", "labels"),
+            collator=Datacollator(spec=dict(
+                signals=[("features", "final")],
+                labels=[("labels", "labels")],
+            )),
             evaluation_fraction=0.8,
         ),
         tag="log_probe",
@@ -157,6 +165,10 @@ def test_datafeature_stats_probe(tmp_path):
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=eval_factory,
+            collator=Datacollator(spec=dict(
+                signals=[("samples", "samples")],
+                labels=[("labels", "labels")],
+            )),
         ),
         devices=["cpu"],
         tag="feature_table_stats",
@@ -166,8 +178,10 @@ def test_datafeature_stats_probe(tmp_path):
         url=url,
         spec=dict(
             feature_table=featuretable,
-            feature_column=("features", "final"),
-            signal_column=("samples", "samples"),
+            collator=Datacollator(spec=dict(
+                signals=[("features", "final")],
+                labels=[("samples", "samples")],
+            )),
         ),
         tag="stats_probe",
     ).build()

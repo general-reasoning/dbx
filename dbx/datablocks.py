@@ -1154,9 +1154,11 @@ class Datablock:
                 self.VAR = klass.__dict__['CONFIG']
                 break
 
-    #: Attributes that no longer do anything, and the name that replaced each.
-    #: Ignoring one silently would re-enable the validation it was suppressing,
-    #: so a subclass still carrying it is an error rather than a warning.
+    #: Attributes that no longer do anything, and what replaced each. Ignoring
+    #: one silently would leave a class quietly not doing what it declares --
+    #: the validation it meant to suppress back on, the streams it meant to
+    #: declare absent -- so a subclass still carrying one is an error rather
+    #: than a warning. Subclasses extend this dict; see DatapointBase.
     RETIRED_ATTRS = {'VALIDATE_CFG_EXEMPTIONS': 'TREE_SKIP_VALIDATION'}
 
     def _reject_retired_attrs(self):
@@ -1167,7 +1169,7 @@ class Datablock:
                 if retired in klass.__dict__:
                     raise AttributeError(
                         f"{klass.__name__}.{retired} is retired and no longer "
-                        f"consulted -- rename it to {replacement}"
+                        f"consulted -- use {replacement} instead"
                     )
 
     def __getstate__(self):
@@ -4053,10 +4055,19 @@ class Datablock:
         log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: with n_workers={n_workers} END")
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
+        def read_entry_file(file):
+            # Through `fs`, not by path: the glob above returns paths as that
+            # filesystem names them -- protocol-stripped -- so handing one to
+            # pandas reads it off the LOCAL disk, where a memory:// or remote
+            # journal file is not. Every entry then "skipped as unreadable" and
+            # the journal came back empty rather than failing.
+            with fs.open(file, 'rb') as f:
+                return pd.read_parquet(f, engine='pyarrow')
+
         if len(parquet_files) > 0:
             dfs = []
             with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                futures = [ex.submit(pd.read_parquet, file, engine='pyarrow') for file in parquet_files]
+                futures = [ex.submit(read_entry_file, file) for file in parquet_files]
                 future_to_file = {f: file for f, file in zip(futures, parquet_files)}
                 for future in tqdm.tqdm(as_completed(futures), desc='Reading journal files', total=len(parquet_files)):
                     try:

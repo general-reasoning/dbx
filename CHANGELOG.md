@@ -201,6 +201,26 @@ All notable changes to this project will be documented in this file.
   read then answers with data this block did not produce and whose hash does not describe
   it, which nothing downstream can detect — so every followed redirection is announced at
   INFO.
+- **`read()` follows a redirection, and `build()` declines to run under one.** A failed
+  `__read__` is retried against the path the redirected-to entry recorded for that topic,
+  announced at INFO both times; the original exception is re-raised unchanged whenever no
+  usable redirection turns up, so a block with none behaves exactly as before. `__read__`
+  takes the path as an optional argument — an override that does not accept it fails at
+  the redirection rather than silently reading its own path. `Datablock.redirection` is
+  the resolved entry, cached (a resolution reads the whole journal, so a block reading ten
+  topics pays once) and detached from the frame it came out of; the `None` is cached too,
+  so a redirection recorded after a block has looked is seen by the next instance rather
+  than that one. `build()` refuses a redirected block: nothing would read what it wrote,
+  and a `build_tree()` sweeping past would otherwise quietly rebuild the very block
+  someone redirected away from. `redirect=False` at construction opts out of all of it.
+- **A table's slices are synthesized from its `TAB`**, and a subclass declaring `TOPICS`
+  keeps its bases' *slice* topics while dropping their ordinary ones — slices are what
+  makes such a block the kind of block it is, whereas an ordinary topic belongs to the
+  class that declared it. A table keeps `tabs`/`done` whatever it declares, and `slices`
+  now reads off the class (`LetterTable.slices`) as readily as off an instance, as a
+  tuple: what a block is sliced by is settled once its class is, and it feeds the hash.
+- **`block_shuffle_sampler()`** on a datapoint block, the deprecated alias of
+  `chunk_shuffle_sampler()` that `BlockShuffleSampler` and `block_size` already had.
 - **`diffnorm()` descends recursively** into nested blocks and spec dicts, returning a
   *sparse* nested dict so a changed leaf appears at the end of a short path instead of
   as two multi-kilobyte strings. New options: `recursive=False` (previous flat
@@ -225,6 +245,31 @@ All notable changes to this project will be documented in this file.
 - **`Datablock.format_diffnorm(diff)`** — renders a `diffnorm` dict as text.
 
 ### Fixed
+- **A journal on any non-local filesystem read back empty.** `Journal()` globbed its
+  parquet files through the block's filesystem — which names them protocol-stripped — and
+  then handed those paths to pandas, which looked for them on the LOCAL disk. Every entry
+  was logged as "unreadable" and skipped, so a `memory://` or remote journal came back
+  empty rather than failing. Entry files are now opened through that filesystem.
+- **A table's tabs escaped to `DBX_ROOT`.** `DatapointTable.__tab__()` constructed its
+  `TAB` without a url, so a table built anywhere other than the ambient root wrote its
+  tabs to an unrelated one, where they were then looked for in vain under the table. A
+  tab now inherits the table's url — raw, so a relocatable table stays relocatable tab by
+  tab — and a `DatapointFold` likewise takes the partition's.
+- **`Datacollator` could not consume what `data()` returns.** Every caller — a feature
+  build, both probes — passes `data(*collator.slices, concat=True)`, a `{slice: data}`
+  mapping in which the batch is already stacked; iterating that yields its KEYS, so the
+  collation was over strings. Such a mapping is now collated as the batch it is: one pair
+  passes its array through untouched, several are stacked along a new axis 1. New
+  `signal_pairs`/`label_pairs` accessors give the normalized `(slice, column)` pairs.
+- **`DatafeatureTab.__post_init__` and `DatafeatureStatsProbe.__build__` raised
+  `NameError`** on names left behind by the move to `Datacollator` (`factory`,
+  `feat_slice`/`sig_slice`): neither block could be constructed or built. The probe's
+  per-tab breakdowns now follow the collator's first signal/label pair, and say so when
+  it names more than one.
+- **`SLICES` is rejected rather than ignored.** It is retired — a slice is a `TOPICS`
+  entry valued `SLICETOPIC` — and a class still carrying one came out with no slices at
+  all: valid, buildable, and empty. It now raises at construction, naming the
+  replacement, like every other retired attribute.
 - **`leave_breadcrumbs()` raised `IsADirectoryError` on any directory topic.** It passed
   `path(topic)` to `leave_breadcrumbs_at_path()`, which opened it for writing — but for a
   directory topic (list-TOPICS, or dict-TOPICS with `DIRTOPIC`) `path()` *is* the directory, so

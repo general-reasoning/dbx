@@ -48,14 +48,95 @@ from .datastreams import (
 SLICETOPIC = 'SLICETOPIC'
 
 
+class _slices_descriptor:
+    """``slices`` read off the class as readily as off an instance.
+
+    A subclass's slices are a property of how it was DECLARED, so they are
+    asked for at class level -- ``LetterTable.slices``, ``'depth' in
+    Debuggable.slices`` -- as often as they are asked of a block. A plain
+    ``@property`` answers only the second, handing back the descriptor itself
+    for the first.
+
+    Derived on each access rather than frozen at class creation, so a TOPICS
+    assigned or amended after the class body still reports its slices, and an
+    instance overriding TOPICS (as :class:`DatapointFold` does) is read through.
+    """
+
+    def __get__(self, obj, owner=None):
+        target = owner if obj is None else obj
+        return DatapointBase._find_slice_topics(getattr(target, 'TOPICS', None))
+
+
 class DatapointBase(Datablock):
     """Base class for sliced datapoint blocks (DatapointTab and DatapointTable).
 
     A **slice** is one independently-readable MDS stream directory inside a block.
     Slices are declared via topics marked with `SLICETOPIC`.
+
+    A subclass declaring TOPICS keeps its bases' SLICE topics and drops their
+    other ones::
+
+        class BaseTab(DatapointTab):
+            TOPICS = {'samples': SLICETOPIC, 'meta': 'meta.json'}
+
+        class SubTab(BaseTab):
+            TOPICS = {'report': 'report.json'}
+            # TOPICS == {'samples': SLICETOPIC, 'report': 'report.json'}
+
+    Slices are what makes such a block the kind of block it is -- a subclass
+    that redeclares TOPICS is describing what it adds, not renouncing the
+    streams its base reads and writes -- whereas ordinary topics belong to the
+    class that declared them and do not accumulate down the hierarchy.
     """
 
     TOPICS = {}
+
+    #: SLICES is retired: a slice is a TOPICS entry valued SLICETOPIC, and
+    #: nothing reads a SLICES attribute any more. A class still carrying one
+    #: would come out with no slices at all -- valid, buildable, and empty --
+    #: which is worth an error at construction rather than a puzzle later.
+    RETIRED_ATTRS = {**Datablock.RETIRED_ATTRS,
+                     'SLICES': 'TOPICS entries valued SLICETOPIC'}
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._synthesize_topics()
+
+    @classmethod
+    def _synthesize_topics(cls):
+        """Merge this class's declared TOPICS with its bases' slice topics."""
+        declared = cls.__dict__.get('TOPICS')
+        if not isinstance(declared, dict):
+            # Declares none (inherits its base's TOPICS whole), or overrides the
+            # name with something computed -- DatapointFold makes it a property.
+            return
+        cls.TOPICS = {**cls._inherited_slice_topics(), **declared}
+
+    @classmethod
+    def _inherited_slice_topics(cls):
+        """The slice topics of the nearest base that declares TOPICS."""
+        for base in cls.__mro__[1:]:
+            topics = base.__dict__.get('TOPICS')
+            if isinstance(topics, dict):
+                return cls._slice_topics_only(topics)
+        return {}
+
+    @classmethod
+    def _slice_topics_only(cls, topics):
+        """*topics* with everything that is not a slice pruned out.
+
+        Recurses into groups, and drops a group that holds no slice at all, so
+        a group of ordinary topics does not come down as an empty husk.
+        """
+        kept = {}
+        for name, node in topics.items():
+            if node == SLICETOPIC or node is SLICETOPIC:
+                kept[name] = node
+            elif isinstance(node, dict):
+                nested = cls._slice_topics_only(node)
+                if nested:
+                    kept[name] = nested
+        return kept
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
@@ -89,10 +170,8 @@ class DatapointBase(Datablock):
 
     # 2. Properties and Accessors ───────────────────────────────────
 
-    @property
-    def slices(self):
-        return self._find_slice_topics(self.TOPICS)
-    
+    slices = _slices_descriptor()
+
     def data(self, *slices, concat: bool = False, **kwargs):
         """Every row of the named slices, decoded into a list (or concatenated).
 
@@ -304,6 +383,25 @@ class DatapointBase(Datablock):
             fixed_epoch=fixed_epoch,
         )
 
+    def block_shuffle_sampler(
+        self,
+        slice: str,
+        *,
+        block_size: int | None = None,
+        seed: int = 0,
+        fixed_epoch: bool = False,
+    ) -> ChunkShuffleSampler:
+        """Deprecated alias of :meth:`chunk_shuffle_sampler`; *block_size* is *chunk_size*.
+
+        A chunk was called a block before the name moved to what it describes
+        -- consecutive indices, which are a shard's worth of rows, not a block.
+        The sampler itself still answers to :class:`BlockShuffleSampler` and to
+        ``block_size``, and so does this.
+        """
+        return self.chunk_shuffle_sampler(
+            slice, chunk_size=block_size, seed=seed, fixed_epoch=fixed_epoch,
+        )
+
     def verify_slice_row_counts_match(self) -> dict[str, int]:
         """Check that the total number of dataset rows is identical across all declared slices.
 
@@ -373,17 +471,22 @@ class DatapointBase(Datablock):
 
     @staticmethod
     def _find_slice_topics(topics_dict, prefix=()):
-        """Find all topic paths in `topics_dict` marked with `SLICETOPIC`."""
+        """Every topic path in `topics_dict` marked with `SLICETOPIC`, as a tuple.
+
+        A tuple because a block's slices are settled once its class is: nothing
+        may append to them behind the block's back, and the hash they feed
+        would be a lie if anything did.
+        """
         slice_topics = []
         if not isinstance(topics_dict, dict):
-            return slice_topics
+            return ()
         for key, val in topics_dict.items():
             current = prefix + (key,)
             if val == SLICETOPIC or val is SLICETOPIC:
                 slice_topics.append('/'.join(current) if len(current) > 1 else key)
             elif isinstance(val, dict):
                 slice_topics.extend(DatapointBase._find_slice_topics(val, current))
-        return slice_topics
+        return tuple(slice_topics)
 
 
 class DatapointTab(DatapointBase):
@@ -502,10 +605,58 @@ class DatapointTab(DatapointBase):
 
 
 class DatapointTable(DatapointBase, Datastack):
-    """A table of DatapointTabs, sliced the same way as its tabs."""
+    """A table of DatapointTabs, sliced the same way as its tabs.
+
+    A table does not declare its slices: they are its TAB's, taken from
+    ``TAB.TOPICS`` when the class is defined and merged into the table's own
+    TOPICS beside ``tabs`` and ``done``. So a table is sliced the same way as
+    its tabs by construction rather than by the author remembering to keep two
+    declarations in step, and pointing a table at a differently-sliced TAB
+    rekeys it -- the slices are in :attr:`signature`, and so in the hash.
+
+    The tab's ORDINARY topics are not taken: they are written into each tab,
+    under the tab's own key, and the table has nothing at those paths.
+    """
 
     TAB = None
-    TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
+
+    #: The topics the table machinery itself writes and reads: the directory
+    #: the tabs live in, and the marker that says the stack completed. Kept
+    #: whatever a subclass declares -- a table missing them cannot be built or
+    #: asked whether it is valid, and a subclass redeclaring TOPICS is naming
+    #: what it adds, not opting out of being a table.
+    STRUCTURAL_TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
+    TOPICS = dict(STRUCTURAL_TOPICS)
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._synthesize_table_topics()
+
+    @classmethod
+    def _synthesize_topics(cls):
+        super()._synthesize_topics()
+        if not isinstance(cls.__dict__.get('TOPICS'), dict):
+            return
+        missing = {name: node for name, node in cls.STRUCTURAL_TOPICS.items()
+                   if name not in cls.TOPICS}
+        if missing:
+            cls.TOPICS = {**missing, **cls.TOPICS}
+
+    @classmethod
+    def _synthesize_table_topics(cls):
+        tab = cls.__dict__.get('TAB', cls.TAB)
+        if not (isinstance(tab, type) and issubclass(tab, DatapointBase)):
+            # No TAB yet (an intermediate base), or one computed per instance --
+            # DatapointFold reads its TAB off the table it wraps.
+            return
+        topics = cls.TOPICS if isinstance(cls.TOPICS, dict) else {}
+        # The inherited slices came from the base's TAB; this class's TAB is the
+        # authority on what this class is sliced by, so they are replaced rather
+        # than added to -- otherwise a renamed slice would leave its old name
+        # behind, in the TOPICS and in the hash.
+        own = {name: node for name, node in topics.items()
+               if not cls._slice_topics_only({name: node})}
+        cls.TOPICS = {**own, **cls._slice_topics_only(tab.TOPICS)}
 
     @dataclass
     class VAR(Datastack.VAR):
@@ -522,6 +673,12 @@ class DatapointTable(DatapointBase, Datastack):
                 f"{self.__class__.__name__} must set TAB = <DatapointTab subclass>"
             )
         return self.TAB(
+            # The table's own url, RAW -- the specline it was given, not what
+            # that resolved to -- so a relocatable table stays relocatable tab
+            # by tab. Without it a tab fell back to DBX_ROOT, and a table built
+            # anywhere else (a test's tmp_path, a second lake) wrote its tabs to
+            # an unrelated root, where they were then looked for in vain.
+            url=self.url,
             storage_options=self.storage_options,
             capture_output=self.capture_output,
             cache=getattr(self, 'cache', None),
@@ -734,6 +891,11 @@ class DatapointPartition(Datablock):
 
     def fold(self, fold: int) -> DatapointFold:
         return DatapointFold(
+            # As a table gives its tabs its url: a fold of a partition belongs
+            # where the partition does, not wherever DBX_ROOT happens to point
+            # in the process that asks for it.
+            url=self.url,
+            storage_options=self.storage_options,
             spec=dict(
                 partition=self,
                 datapoint_table=self.var.datapoint_table,

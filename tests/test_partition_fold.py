@@ -48,9 +48,14 @@ class DummyTable(DatapointTable):
 
     def __tab__(self, idx):
         offset = sum(self.var.tab_sizes[:idx])
-        return self.TAB(
-            spec=dict(n=self.var.tab_sizes[idx], base=offset),
+        # Through super(), so the tab inherits the table's url. Constructing
+        # self.TAB directly leaves url unset, and the tab lands under DBX_ROOT
+        # instead of under the table it belongs to.
+        return super().__tab__(
+            idx,
             tag=f"tab_{idx}",
+            n=self.var.tab_sizes[idx],
+            base=offset,
         )
 
 

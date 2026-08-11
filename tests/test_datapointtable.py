@@ -1,7 +1,7 @@
 """Tests for the :class:`~dbx.datastreams.DatastreamTab` / :class:`~dbx.datastreams.DatastreamTable`
 scaffolding.
 
-Covers TOPICS synthesis from SLICES, where a tab's shards land relative to
+Covers TOPICS synthesis from SLICETOPIC entries, where a tab's shards land relative to
 its table, the all-or-nothing validity rule, the merged per-slice index and its
 ordering, and the two ways a built table reads back (``data`` and ``dataset``).
 """
@@ -384,7 +384,7 @@ class SizedTab(DatastreamTab):
     shard boundary in one lands nowhere near the other's."""
 
     VERSION = 1
-    SLICES = ('small', 'big')
+    TOPICS = {'small': SLICETOPIC, 'big': SLICETOPIC}
 
     @dataclass
     class VAR(DatastreamTab.VAR):

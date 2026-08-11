@@ -5,10 +5,12 @@ dependencies:
   - python=3.12
   - pip
   - pip:
-    - -e .
-    - pytest
+    # Everything dbx declares, from one source of truth: core deps plus the
+    # ray / torch / streaming / azure / dev extras. Listing packages here as
+    # well let this file drift from pyproject.toml -- it named fsspec, pandas,
+    # ray and mosaicml-streaming, but never torch, scikit-learn or adlfs, so a
+    # freshly created env could not run what the accumulated one could.
+    - -e .[all]
+    # [ray] asks only for ray itself; the dashboard and its dependencies come
+    # with the [default] extra, which is what makes a local cluster observable.
     - ray[default]
-    - fsspec
-    - adlfs          # abfs://, abfss:// -- see datablocks[azure]
-    - pandas
-    - mosaicml-streaming

@@ -40,6 +40,10 @@ dependencies = [
     "pandas>=2.0",
     "pyarrow>=14.0",
     "pyyaml>=6.0",
+    # Core, not an extra: dbx.dataprobes imports sklearn at module scope --
+    # unguarded, unlike torch beside it -- and dbx/__init__ imports dataprobes,
+    # so without this `import dbx` itself fails.
+    "scikit-learn>=1.9.0",
     "tqdm>=4.60",
 ]
 

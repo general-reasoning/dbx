@@ -81,7 +81,7 @@ from .dataparts import (
     write_str,
     write_yaml,
 )
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 class AbsentKey:
     """Singleton marking a key present on only ONE side of a :meth:`Datablock.diffnorm`.

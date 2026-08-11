@@ -186,33 +186,51 @@ All notable changes to this project will be documented in this file.
   by `self.dt`, so a second call from one instance overwrites the first — which is why
   `build()` leaves a `build:end` and no `build:start`. Pass a distinct `journal_prefix` to
   keep both.
-- **`UNSAFE_redirect()` — send a failed read to another entry's data**, which is what
-  `entry_code` exists to make addressable. Takes exactly one of `entry_code=` (one entry,
-  the value `write_journal_entry()` returned for it) or `filter=` (whichever entries match
-  its `{column: value}` pairs, latest match winning), and records it verbatim in a fresh
-  entry's new `redirection` column. So `{'hash': other.hash, 'event': 'build:end'}`
-  follows that block as it is rebuilt, where an `entry_code` is pinned to the one build it
-  was returned for. Nothing is copied, moved or validated: a redirection is a note in the
-  journal, consulted by `read()` only *after* a read has already failed. The redirection
-  travels in the entry rather than in a file of its own — unlike `message` and
-  `quote`/`norm`/`spec` — because a fallback for missing data must not itself depend on a
-  second file still being there; and it is written under a `redirect-` prefix so an
-  instance that has already journalled does not overwrite that entry. UNSAFE because the
-  read then answers with data this block did not produce and whose hash does not describe
-  it, which nothing downstream can detect — so every followed redirection is announced at
-  INFO.
-- **`read()` follows a redirection, and `build()` declines to run under one.** A failed
-  `__read__` is retried against the path the redirected-to entry recorded for that topic,
-  announced at INFO both times; the original exception is re-raised unchanged whenever no
-  usable redirection turns up, so a block with none behaves exactly as before. `__read__`
-  takes the path as an optional argument — an override that does not accept it fails at
-  the redirection rather than silently reading its own path. `Datablock.redirection` is
-  the resolved entry, cached (a resolution reads the whole journal, so a block reading ten
-  topics pays once) and detached from the frame it came out of; the `None` is cached too,
-  so a redirection recorded after a block has looked is seen by the next instance rather
-  than that one. `build()` refuses a redirected block: nothing would read what it wrote,
-  and a `build_tree()` sweeping past would otherwise quietly rebuild the very block
-  someone redirected away from. `redirect=False` at construction opts out of all of it.
+- **`UNSAFE_redirect()` — read this block's topics from somewhere else.** Takes exactly
+  one of `filter=` ({column: value} pairs selecting a journal entry, as `journal()`
+  filters, the first — newest — match winning, so `{'hash': other.hash, 'event':
+  'build:end'}` follows that block as it is rebuilt where `{'entry_code': code}` is pinned
+  to the one build that code was returned for) and `paths=` ({topic: path}, naming the
+  locations outright, consulting no journal at all). `topic_map=` re-keys a filtered
+  entry's topics, reading mine → theirs: `{'out': 'output'}` says this block's `out` is
+  that entry's `output`. Topics line up by name to begin with and the map only adds to
+  that; a mapping whose target the other side lacks leaves its topic *unredirected* and
+  says so, since asking for theirs and silently getting mine is the one answer that is
+  certainly wrong. The non-None parts are packaged into a `redirection` dict and written
+  to a fresh journal entry. Nothing is copied, moved or validated — a redirection is a
+  note in the journal. It travels in the entry rather than in a file of its own, unlike
+  `message` and `quote`/`norm`/`spec`, because a stand-in for missing data must not itself
+  depend on a second file still being there; and it is written under a `redirect-` prefix
+  so an instance that has already journalled does not overwrite that entry. A filter
+  selects from this block's journal, which is per anchor, so it reaches another build of
+  this class but not another class's unless the two share an `anchor=`.
+- **`path()` and `dirpath()` are where a redirection takes effect**, so everything that
+  resolves through them — `read()`, `valid()`, `ls()`, `list()`, `size()` — describes the
+  data actually being read, and no reader needs to know: an override reads
+  `self.path(topic)` exactly as it always did. A topic the redirection does not name keeps
+  its own path, so a partial redirection redirects only what it names. `local=True` is
+  never redirected (the local cache is this block's own) and a redirected path is never
+  `ensure`d (creating directories inside another block's data is not this block's
+  business). UNSAFE because every path the block reports then names data it did not
+  produce and whose hash does not describe it, which nothing downstream can detect — so
+  the redirection is announced at INFO when it resolves. `build()` refuses a redirected
+  block: nothing would read what it wrote, and a `build_tree()` sweeping past would
+  otherwise quietly rebuild the very block someone redirected away from.
+  `Datablock.redirection` is the resolved `Redirection(paths, entry, filter, topic_map)`,
+  cached — including the `None`, so a redirection recorded after a block has looked is
+  seen by the next instance rather than that one — and detached from the frame its entry
+  came out of. Whether a block HAS one is answered from its own journal directory rather
+  than by globbing the anchor's, because `path()` asks on first use and a table of a
+  thousand tabs asks a thousand times. `redirect=False` at construction opts out of all
+  of it.
+- **`valid()` goes through a `__valid__(path=None)` hook.** The default validates this
+  block's topics, which for a redirected block are the redirected-to paths already, so it
+  needs no knowledge of redirection either; *path* is the redirected-to block directory,
+  for an override that wants to validate the location by more than the presence of its
+  topics, and is `None` when the block is not redirected or was given paths outright.
+- **`valid_topics()`, `valid_paths()`, `valid_path()`** are the canonical spellings,
+  joining `valid_topic()`; `validtopics()`, `validpaths()` and `validpath()` remain as
+  deprecated aliases.
 - **A table's slices are synthesized from its `TAB`**, and a subclass declaring `TOPICS`
   keeps its bases' *slice* topics while dropping their ordinary ones — slices are what
   makes such a block the kind of block it is, whereas an ordinary topic belongs to the

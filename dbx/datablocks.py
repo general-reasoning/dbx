@@ -1275,7 +1275,7 @@ class Datablock:
         """Validity of one topic, or of a whole group."""
         topicpath = self._normtopic(topicpath)
         path = self.path(*topicpath)
-        valid = self.validpath(path)
+        valid = self.valid_path(path)
         self.log.detailed(f"{self.anchor}: topic {'/'.join(topicpath)} valid: {valid}")
         return valid
 
@@ -1284,6 +1284,10 @@ class Datablock:
         return self.valid_topic(*topicpath)
 
     def validtopics(self, topics=None, *, reduce: bool = False):
+        """Deprecated alias for valid_topics."""
+        return self.valid_topics(topics, reduce=reduce)
+
+    def valid_topics(self, topics=None, *, reduce: bool = False):
         result = None
         if topics is None:
             topics = self.topics()
@@ -1301,27 +1305,35 @@ class Datablock:
         return result
 
     def validpath(self, path):
+        """Deprecated alias for valid_path."""
+        return self.valid_path(path)
+
+    def valid_path(self, path):
         if path is None:
             return True
         elif isinstance(path, dict):
-            return all([self.validpath(p) for p in path.values()])
+            return all([self.valid_path(p) for p in path.values()])
         elif isinstance(path, list):
-            return all([self.validpath(p) for p in path])
+            return all([self.valid_path(p) for p in path])
         if path is None or path.endswith("None"): #If topic filename ends with 'None', it is considered to be valid by default
             result = True
         elif isinstance(path, dict):
-            result = all([self.validpath(p) for p in path.values()])
+            result = all([self.valid_path(p) for p in path.values()])
         else:
             result = self.fs.exists(path)
         self.log.detailed(f"{self.anchor}: path {path} valid: {result}") 
         return result
     
     def validpaths(self, topics=None, *, reduce: bool = False):
+        """Deprecated alias for valid_paths."""
+        return self.valid_paths(topics, reduce=reduce)
+
+    def valid_paths(self, topics=None, *, reduce: bool = False):
         result = None
         if topics is None:
             topics = self.topics()
         results = {
-            topic: self.validpath(self.path(topic))
+            topic: self.valid_path(self.path(topic))
             for topic in topics
         }
         if reduce:
@@ -1329,9 +1341,32 @@ class Datablock:
         else:
             result = results
         return result
-    
+
     def valid(self):
-        return self.validtopics(reduce=True)
+        """Is this block's data there? Answered by :meth:`__valid__`.
+
+        A redirected block is asked about the data it reads, not the data it
+        never wrote: every path it reports is the redirected-to one (see
+        :meth:`path`), so the default :meth:`__valid__` validates those without
+        knowing anything about redirection. The redirected-to block directory is
+        passed to the hook for an override that wants to check more.
+        """
+        redirection = self.redirection
+        entry = redirection.entry if redirection is not None else None
+        return self.__valid__(path=entry.anchorkeypath if entry is not None else None)
+
+    def __valid__(self, path: str|None = None):
+        """Whether this block's data is there; override to decide differently.
+
+        *path* is the directory this block has been redirected to -- the
+        anchorkeypath of the entry a ``filter`` matched -- and None when it has
+        not been redirected, or when the redirection gave paths outright and so
+        names no single block directory. It is for an override that validates a
+        redirected-to location by more than the presence of its topics; the
+        default needs no such thing, since a redirected block's own
+        :meth:`path` already answers with the redirected-to paths.
+        """
+        return self.valid_topics(reduce=True)
     
     def topics(self):
         """Return the list of TOP-LEVEL topic names.
@@ -1525,10 +1560,12 @@ class Datablock:
         # block someone redirected away from. Costs one journal read per
         # instance, which :attr:`redirection` caches.
         if self.redirection is not None:
+            entry = self.redirection.entry
+            whither = (f"journal entry {entry.entry_code} (hash {entry.hash})"
+                       if entry is not None else f"the paths {self.redirection.paths}")
             self.log.info(
-                f"BUILD DECLINED: {self.anchorkeypath} is REDIRECTED to journal entry "
-                f"{self.redirection.entry_code} (hash {self.redirection.hash}), and reads from "
-                f"there instead: nothing would read what a build of it wrote. Undo the "
+                f"BUILD DECLINED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
+                f"from there instead: nothing would read what a build of it wrote. Undo the "
                 f"redirection, or construct with redirect=False, to build it anyway."
             )
             return self
@@ -1942,186 +1979,277 @@ class Datablock:
         A single name is forwarded to ``__read__`` bare, which keeps every
         existing one-argument override working untouched.
 
-        When ``__read__`` raises and this block was constructed with
-        ``redirect=True`` (the default), :attr:`redirection` -- the journal
-        entry a :meth:`UNSAFE_redirect` sends this block's reads to -- is
-        consulted, and ``__read__`` is retried against the path that entry
-        recorded for this topic. The redirection is announced at INFO on every
-        read that follows it: a read answering from another block's data should
-        never do so quietly.
-
-        Nothing is redirected until ``__read__`` has already failed, and the
-        original exception is raised unchanged whenever no usable redirection
-        turns up, so a block with none behaves exactly as it did before.
+        Nothing here knows about redirection: an override reads
+        ``self.path(topic)``, and that is where a :meth:`UNSAFE_redirect` takes
+        effect, so a redirected block reads the redirected-to data through the
+        same override that reads its own.
         """
         topicpath = self._normtopic(topicpath)
         self._topicnode(*topicpath)      # raises KeyError if it does not exist
-        try:
-            if len(topicpath) == 1:
-                return self.__read__(topicpath[0])
-            return self.__read__(*topicpath)
-        except Exception as exc:
-            path = self._redirect_path(*topicpath, exc=exc)
-            if path is None:
-                raise
-        # Outside the handler, so a failure of the redirected read is reported
-        # on its own terms rather than chained to the one that caused it.
         if len(topicpath) == 1:
-            return self.__read__(topicpath[0], path=path)
-        return self.__read__(*topicpath, path=path)
+            return self.__read__(topicpath[0])
+        return self.__read__(*topicpath)
 
-    def __read__(self, *topicpath, path: str|None = None):
-        """Read *topicpath*; when *path* is given, read from THERE.
-
-        An override that never wants to be redirected to may ignore *path*, but
-        it has to accept it: :meth:`read` passes it when it follows a
-        redirection, and an override that does not take it fails with a
-        TypeError at that point instead of reading the redirected-to data.
-        """
+    def __read__(self, *topicpath):
         raise NotImplementedError()
 
     #REDIRECT: BEGIN
+    #: A resolved redirection: where this block's topics are read from instead,
+    #: and what it was resolved from. `paths` is the nested {topic: path}
+    #: mapping :meth:`path` answers out of; `entry` is the journal entry a
+    #: filter matched, and is None for a redirection given paths directly.
+    Redirection = collections.namedtuple('Redirection', 'paths entry filter topic_map')
+
     @functools.cached_property
     def redirection(self):
-        """The journal entry this block's failed reads answer from, or None.
+        """Where this block reads from instead, as a :attr:`Redirection`, or None.
 
-        Resolved once, on first access, by two journal passes: the latest
-        redirection recorded against this block's :attr:`hash` by
-        :meth:`UNSAFE_redirect`, and then the entry that redirection names.
-        None when ``redirect`` is off, when no redirection is recorded, or when
-        the recorded one names nothing the journal has.
+        A redirection is recorded by :meth:`UNSAFE_redirect` and resolved here,
+        once, on first access:
 
-        Reading a journal means globbing and parsing every parquet file under
-        the anchor, so this is cached -- a block reading ten topics, or one
-        topic ten times, pays for it once. Only the resolved entry is kept, and
-        it is detached from the frame it came out of, so caching it does not
-        pin the whole journal in memory.
+        - ``filter`` selects a journal entry -- the FIRST match, the journal
+          coming back newest-first -- and that entry's recorded paths become
+          this block's, re-keyed by ``topic_map`` where one is given.
+        - ``paths`` names the locations directly, and no journal is consulted
+          for them at all.
 
-        Cached including the None, so a redirection recorded after a block has
-        already consulted its journal is not seen by that instance. Construct
-        the block again to pick it up, or ``del block.redirection`` (which
-        raises AttributeError if nothing was cached yet).
+        None when ``redirect`` is off, when nothing is recorded against this
+        block's :attr:`hash`, or when what is recorded matches no entry.
+
+        Resolving reads the whole journal, so it is cached -- a block asked for
+        ten paths pays once. The entry is detached from the frame it came out
+        of, so caching it does not pin the journal in memory, and the None is
+        cached too: a redirection recorded after a block has looked is seen by
+        the next instance, not that one. ``del block.redirection`` drops the
+        cache (and raises AttributeError if nothing was cached yet).
         """
         if not getattr(self, 'redirect', False):
             return None
-        redirection = self._recorded_redirection()
-        if redirection is None:
+        recorded = self._recorded_redirection()
+        if recorded is None:
             self.log.detailed(f"redirection: none recorded for hash {self.hash}")
             return None
-        entry = self._redirect_entry(redirection)
-        if entry is None:
-            self.log.warning(f"redirection: {redirection!r} matches no journal entry")
-            return None
-        self.log.info(
-            f"redirection: {self.hash} -> {redirection!r} -> entry {entry.entry_code} "
-            f"(hash {entry.hash}, event {entry.get('event')!r}, written {entry.get('datetime')})"
-        )
-        return entry
+        if isinstance(recorded, str):
+            # Written before a redirection was a dict, when it was an
+            # entry_code and nothing else. That is one filter.
+            recorded = {'filter': {'entry_code': recorded}}
+        filter, topic_map = recorded.get('filter'), recorded.get('topic_map')
+        paths = recorded.get('paths')
 
-    def _redirect_path(self, *topicpath, exc: Exception = None):
-        """Path to read *topicpath* from instead, per :attr:`redirection`, or None.
-
-        None whenever the redirection cannot be followed to a path -- there is
-        none, or the entry it names recorded no path for this topic. Either
-        leaves :meth:`read` to re-raise *exc*, the failure that sent us here.
-        """
-        entry = self.redirection
-        if entry is None:
-            return None
-        topicstr = '/'.join(topicpath)
-        self.log.info(
-            f"read: {topicstr}: FAILED with {type(exc).__name__}: {exc}\n"
-            f"read: {topicstr}: REDIRECTING to journal entry {entry.entry_code}"
-        )
-        try:
-            path = entry._topic_path(*topicpath)
-        except KeyError as e:
-            self.log.warning(
-                f"read: {topicstr}: redirected-to entry {entry.entry_code} records no such "
-                f"topic ({e}); re-raising the original failure"
+        if paths is not None:
+            self.log.info(
+                f"REDIRECTION: {self.anchorkeypath} reads from the given paths instead: {paths}"
             )
+            return self.Redirection(paths=paths, entry=None, filter=None, topic_map=None)
+
+        entry = self._redirect_entry(filter)
+        if entry is None:
+            self.log.warning(f"redirection: filter {filter!r} matches no journal entry")
             return None
-        self.log.info(f"read: {topicstr}: REDIRECTED to entry {entry.entry_code}: reading from {path}")
-        return path
+        paths = self._mapped_paths(entry.paths, topic_map)
+        self.log.info(
+            f"REDIRECTION: {self.anchorkeypath} reads from journal entry {entry.entry_code} "
+            f"instead (hash {entry.hash}, event {entry.get('event')!r}, written "
+            f"{entry.get('datetime')}), matched by {filter!r}"
+            + (f", topics mapped {topic_map!r}" if topic_map else "")
+        )
+        return self.Redirection(paths=paths, entry=entry, filter=filter, topic_map=topic_map)
+
+    def _mapped_paths(self, paths, topic_map):
+        """*paths*, re-keyed by *topic_map* -- which reads mine -> theirs.
+
+        Topics line up by name to begin with, as they would with no map at all;
+        ``{'out': 'output'}`` then says this block's ``out`` is that entry's
+        ``output``, so the entry's ``output`` path also comes back under ``out``.
+        Every topic the map does not mention is untouched.
+
+        A mapping whose target the other side does not have leaves its topic
+        with NO redirected path, rather than falling back to the name it was
+        told not to use: asking for ``theirs`` and silently getting ``mine`` is
+        the one answer that is certainly wrong. That topic then reads as it
+        would unredirected, and the mapping is reported.
+        """
+        if not topic_map:
+            return paths
+        mapped = dict(paths)
+        for mine, theirs in topic_map.items():
+            if theirs in paths:
+                mapped[mine] = paths[theirs]
+            else:
+                self.log.warning(
+                    f"redirection: topic_map sends {mine!r} to {theirs!r}, which the "
+                    f"redirected-to entry does not record; {mine!r} is left unredirected"
+                )
+                mapped.pop(mine, None)
+        return mapped
+
+    def _redirect_path(self, *topicpath):
+        """The path this block's *topicpath* is redirected to, or None.
+
+        None whenever there is no redirection, or it records nothing for this
+        topic -- which leaves :meth:`path` to answer with this block's own, so a
+        partial redirection redirects only what it names.
+        """
+        redirection = self.redirection
+        if redirection is None:
+            return None
+        node = redirection.paths
+        for name in topicpath:
+            if not isinstance(node, dict) or name not in node:
+                return None
+            node = node[name]
+        return node
+
+    def _redirect_dirpath(self, *topicpath):
+        """The directory of the path *topicpath* is redirected to, or None.
+
+        A directory topic IS its path; a file topic's directory is the parent of
+        the file it was redirected to -- which is what makes ``ls``, ``list``
+        and ``size`` describe the redirected-to data rather than this block's
+        empty one, since all three resolve through here.
+        """
+        redirected = self._redirect_path(*topicpath)
+        if redirected is None:
+            return None
+        if isinstance(redirected, dict):
+            # A group: it has no path of its own, and its members carry theirs.
+            return None
+        node = self._topicnode(*topicpath)
+        if self._node_is_dirtopic(node):
+            return redirected
+        return os.path.dirname(redirected)
+
+    def _journal_hashdirpath(self):
+        """The directory holding THIS block's journal entries, and no others."""
+        return os.path.join(
+            Datablock._dbxanchorpathx(self._url_, self.anchor, 'journal',
+                                      fqcn=self.fqcn, storage_options=self.storage_options),
+            self.hash,
+        )
 
     def _recorded_redirection(self):
         """The latest redirection recorded for this block's hash, or None.
 
         Latest, because a redirection is a correction and the newest one is the
-        one still meant: the journal comes back newest-first, so this is the
-        first entry of ours that carries one.
+        one still meant.
+
+        Read from this block's own journal directory rather than through
+        :meth:`journal`, which globs and parses every entry under the anchor.
+        Every entry of this block's hash is in that one directory -- including
+        the one :meth:`UNSAFE_redirect` writes -- and :meth:`path` asks this on
+        first use, so a block that has never been redirected must not pay for
+        the whole anchor's journal to find that out. A table of a thousand tabs
+        asks a thousand times.
         """
         try:
-            journal = self.journal(hash=self.hash)
-        except (KeyError, FileNotFoundError):
-            # No journal directory at all, or one holding no entries -- which
-            # has no 'hash' column for the filter to select on.
+            dirpath = self._journal_hashdirpath()
+            if not self.fs.exists(dirpath):
+                return None
+            files = self.fs.glob(os.path.join(dirpath, '*.parquet'))
+        except Exception as e:
+            # Asked of every block on its first path(), including ones whose
+            # storage cannot answer -- so a failure to look means "no
+            # redirection", not an error thrown from underneath path().
+            self.log.detailed(f"redirection: no journal directory to read: {e}")
             return None
-        for loc in range(len(journal)):
-            redirection = journal.get(loc).redirection
-            if redirection is not None:
-                return redirection
-        return None
+        latest = None
+        for file in files:
+            try:
+                with self.fs.open(file, 'rb') as f:
+                    df = pd.read_parquet(f)
+            except Exception as e:
+                self.log.warning(f"redirection: skipping unreadable journal file {file}: {e}")
+                continue
+            if 'redirection' not in df.columns:
+                continue
+            for _, row in df.iterrows():
+                entry = DatajournalEntry(row, storage_options=self.storage_options)
+                if entry.redirection is None:
+                    continue
+                when = row.get('datetime')
+                if latest is None or str(when) > str(latest[0]):
+                    latest = (when, entry.redirection)
+        return latest[1] if latest is not None else None
 
-    def _redirect_entry(self, redirection):
-        """The entry a redirection names -- by ``entry_code`` or by filter -- or None.
+    def _redirect_entry(self, filter):
+        """The FIRST journal entry matching *filter*, or None.
 
-        A filter can match many entries (that is the point of one: ``{'tag':
-        'good'}``); the latest match is taken, for the same reason the latest
-        redirection is.
+        First as in newest: a filter names a set on purpose (``{'tag': 'good'}``
+        matches every build of it), and the newest member is the one meant, for
+        the same reason the newest redirection is.
 
         The entry comes back deep-copied, holding nothing of the journal it was
         selected from: a pandas row can share storage with its frame, and
         :attr:`redirection` caches this for the life of the block.
         """
-        filter = {'entry_code': redirection} if isinstance(redirection, str) else dict(redirection)
         try:
-            journal = self.journal(**filter)
-        except (KeyError, FileNotFoundError) as e:
-            self.log.warning(f"redirection {redirection!r} is not a usable journal filter: {e}")
+            journal = self.journal(**dict(filter))
+        except (KeyError, FileNotFoundError, TypeError) as e:
+            self.log.warning(f"redirection filter {filter!r} is not usable: {e}")
             return None
         if len(journal) == 0:
             return None
         row = journal.get(0, dropna=True)
         return DatajournalEntry(pd.Series(row).copy(deep=True), storage_options=self.storage_options)
 
-    def UNSAFE_redirect(self, entry_code: str|None = None, filter: dict|None = None, *, OVERRIDE: bool = False):
-        """Record that reads of this block should fall back to another entry's data.
+    def UNSAFE_redirect(self, filter: dict|None = None, topic_map: dict|None = None,
+                        paths: dict|None = None, *, OVERRIDE: bool = False):
+        """Record that this block's topics are read from somewhere else.
 
-        Exactly one of *entry_code* and *filter* is given, and it is written
-        verbatim into a fresh journal entry's ``redirection`` column. Nothing
-        is copied, moved or validated -- the redirection is a note in the
-        journal, and it is only ever consulted after a read has already failed
-        (see :meth:`read`).
+        Exactly one of *filter* and *paths* says where.
 
-        *entry_code* names one entry, the value :meth:`write_journal_entry`
-        returned for it. *filter* names whichever entries match its
-        ``{column: value}`` pairs, as :meth:`journal` filters, with the latest
-        match winning -- so ``{'hash': other.hash, 'event': 'build:end'}``
-        follows that block as it is rebuilt, where an ``entry_code`` is pinned
-        to the one build it was returned for.
+        *filter* is a set of ``{column: value}`` pairs selecting a journal
+        entry, as :meth:`journal` filters, the first (newest) match winning --
+        so ``{'hash': other.hash, 'event': 'build:end'}`` follows that block as
+        it is rebuilt, where ``{'entry_code': code}`` is pinned to the one build
+        that code was returned for. That entry's recorded paths become this
+        block's. It is selected from THIS block's journal, which is per anchor,
+        so a filter reaches another build of this class but not another class's
+        -- unless the two were given the same ``anchor=``, or *paths* is used
+        instead, which consults no journal at all.
 
-        UNSAFE because a redirected read answers with data this block did not
-        produce and whose hash does not describe it. Nothing downstream can
-        tell the difference, so the redirection is announced at INFO every time
-        it is followed.
+        *topic_map* re-keys them, reading mine -> theirs: ``{'out': 'output'}``
+        says this block's ``out`` is that entry's ``output``. It applies only to
+        *filter*, there being nothing to re-key when the paths are given
+        outright, and is ignored with a warning if passed alongside *paths*.
 
-        Returns the ``entry_code`` of the entry that records the redirection,
-        or None if the confirmation prompt was declined.
+        *paths* names the locations directly, as ``{topic: path}``, nested the
+        way TOPICS is. No journal is consulted for them.
+
+        The non-None parts are packaged into a ``redirection`` dict and written
+        to a fresh journal entry. Nothing is copied, moved or validated: a
+        redirection is a note in the journal, and :attr:`path` reads it.
+
+        UNSAFE because every path this block reports then names data it did not
+        produce and whose hash does not describe it, which nothing downstream
+        can detect -- so the redirection is announced at INFO when it resolves.
+
+        Returns the ``entry_code`` of the entry recording it, or None if the
+        confirmation prompt was declined.
         """
-        if (entry_code is None) == (filter is None):
+        if (filter is None) == (paths is None):
             raise ValueError(
-                f"UNSAFE_redirect takes exactly one of entry_code= and filter=, "
-                f"got {entry_code=}, {filter=}"
+                f"UNSAFE_redirect takes exactly one of filter= and paths=, "
+                f"got {filter=}, {paths=}"
             )
-        if entry_code is not None and not (isinstance(entry_code, str) and entry_code):
-            raise ValueError(f"UNSAFE_redirect: entry_code must be a non-empty str, got {entry_code!r}")
         if filter is not None and not (isinstance(filter, dict) and filter):
             # An empty filter matches every entry, which would redirect to
             # whatever was written last -- never what anyone means.
             raise ValueError(f"UNSAFE_redirect: filter must be a non-empty dict, got {filter!r}")
+        if paths is not None and not (isinstance(paths, dict) and paths):
+            raise ValueError(f"UNSAFE_redirect: paths must be a non-empty dict, got {paths!r}")
+        if topic_map is not None and not isinstance(topic_map, dict):
+            raise ValueError(f"UNSAFE_redirect: topic_map must be a dict, got {topic_map!r}")
+        if topic_map is not None and paths is not None:
+            self.log.warning(
+                f"UNSAFE_redirect: topic_map {topic_map!r} re-keys the topics of a "
+                f"journal entry and means nothing beside paths=; ignoring it"
+            )
+            topic_map = None
 
-        redirection = entry_code if entry_code is not None else filter
+        redirection = {k: v for k, v in
+                       (('filter', filter), ('topic_map', topic_map), ('paths', paths))
+                       if v is not None}
         if not UNSAFE_allowed(f"UNSAFE_redirect to {redirection!r}", OVERRIDE=OVERRIDE):
             return None
         # Its own journal file (see write_journal_entry): a redirect written by
@@ -2131,6 +2259,11 @@ class Datablock:
             redirection=redirection,
             journal_prefix='redirect-',
         )
+        # Writing the entry resolved this block's redirection -- write_journal_entry
+        # records paths(), which consults it -- and cached the None there was at the
+        # time. Drop that, or the one instance that could not possibly be wrong about
+        # having been redirected would be the only one not to honour it.
+        self.__dict__.pop('redirection', None)
         self.log.info(f"UNSAFE_redirect: {self.hash} -> {redirection!r} (entry {code})")
         return code
     #REDIRECT: END
@@ -3803,6 +3936,14 @@ class Datablock:
         if self._node_is_syntopic(node):
             return None
 
+        if not local:
+            redirected = self._redirect_path(*topicpath)
+            if redirected is not None:
+                # Not `ensure`d: the redirected-to data belongs to another block,
+                # and this one has no business creating directories in it.
+                self.log.detailed(f"{self.anchor}: path: REDIRECTED: {'/'.join(topicpath)} -> {redirected}")
+                return redirected
+
         dirpath = self.dirpath(*topicpath, local=local)
         if ensure_dirpath and dirpath is not None:
             ensure_path(dirpath, storage_options=self.storage_options)
@@ -3909,6 +4050,12 @@ class Datablock:
         A group has a directory of its own -- ``dirpath('data')`` is the parent
         of ``dirpath('data', 'frames')`` -- so this answers for groups and
         leaves alike.  A :data:`SYNTOPIC` has no location and gives ``None``.
+
+        A redirected topic answers with the directory of the path it is
+        redirected to -- the path itself for a directory topic, its parent for a
+        file one -- so a listing of a redirected block lists the data it
+        actually reads. As in :meth:`path`, ``local=True`` is never redirected:
+        the local cache is this block's own.
         """
         topicpath = self._normtopic(topicpath)
         if self._is_syntopic(*topicpath):
@@ -3916,6 +4063,13 @@ class Datablock:
             return None
         anchorkeypath = self.localanchorkeypath if local else self.anchorkeypath
         fs = self.localfs if local else self.fs
+        if not local:
+            redirected = self._redirect_dirpath(*topicpath)
+            if redirected is not None:
+                if list:
+                    _lspath = redirected if redirected.endswith('/') else redirected + '/'
+                    return fs.ls(_lspath)
+                return redirected
         dirpath = os.path.join(anchorkeypath, *topicpath)
         if ensure:
             fs.makedirs(dirpath, exist_ok=True)

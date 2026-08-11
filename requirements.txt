@@ -10,3 +10,5 @@ tqdm>=4.60
 # Optional: ray>=2.0                (pip install datablocks[ray])
 # Optional: mosaicml-streaming>=0.7 (pip install datablocks[streaming])
 #           -- dbx.datastreams only; also needs torch
+# Optional: adlfs>=2023.1           (pip install datablocks[azure])
+#           -- fsspec driver for abfs:// and abfss:// urls

@@ -55,13 +55,19 @@ streaming = [
     "datablocks[torch]",
     "mosaicml-streaming>=0.7",
 ]
+azure = [
+    # The fsspec driver for abfs:// and abfss:// urls. Nothing imports it --
+    # fsspec resolves it from the url -- so its absence surfaces only when a
+    # block is given one, as "Protocol not known: abfss".
+    "adlfs>=2023.1",
+]
 dev = [
     "build",
     "pytest>=8.0",
     "twine",
 ]
 all = [
-    "datablocks[ray,torch,streaming,dev]",
+    "datablocks[ray,torch,streaming,azure,dev]",
 ]
 
 [project.urls]

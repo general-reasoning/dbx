@@ -9,5 +9,6 @@ dependencies:
     - pytest
     - ray[default]
     - fsspec
+    - adlfs          # abfs://, abfss:// -- see datablocks[azure]
     - pandas
     - mosaicml-streaming

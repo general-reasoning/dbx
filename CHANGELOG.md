@@ -221,6 +221,10 @@ All notable changes to this project will be documented in this file.
   tuple: what a block is sliced by is settled once its class is, and it feeds the hash.
 - **`block_shuffle_sampler()`** on a datapoint block, the deprecated alias of
   `chunk_shuffle_sampler()` that `BlockShuffleSampler` and `block_size` already had.
+- **`datablocks[azure]`** — `adlfs`, the fsspec driver for `abfs://` and `abfss://`, as a
+  named extra rather than an assumption. Nothing imports it (fsspec resolves it from the
+  url), so its absence surfaced only as `ValueError: Protocol not known: abfss` from a
+  block that happened to be given one.
 - **`diffnorm()` descends recursively** into nested blocks and spec dicts, returning a
   *sparse* nested dict so a changed leaf appears at the end of a short path instead of
   as two multi-kilobyte strings. New options: `recursive=False` (previous flat

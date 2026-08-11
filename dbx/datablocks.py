@@ -263,6 +263,48 @@ class DatajournalEntry(pd.Series):
         return self._renamed_column('supersignature', 'superhashstr')
 
     @property
+    def uuid(self):
+        """The uuid of the live instance that wrote this entry, or None.
+
+        Shared by every entry one instance wrote; :attr:`entry_code` is what
+        distinguishes them.
+        """
+        return self.get('uuid')
+
+    @property
+    def entry_code(self):
+        """This entry's own uuid -- unique to the row, or None.
+
+        ``.get`` rather than pandas' attribute fallback because journals
+        written before the field existed have no such column, where the
+        fallback would raise AttributeError.
+        """
+        return self.get('entry_code')
+
+    @property
+    def redirection(self):
+        """Where this entry sends a failed read: an ``entry_code``, a filter, or None.
+
+        Unlike ``quote``/``norm``/``message``, whose columns hold the PATH of a
+        file that carries the value, this column holds the redirection itself --
+        a dict recorded as ``str(dict)``, the way ``paths`` and ``topics`` are.
+        There is no file to go missing, so a redirection resolves as long as the
+        journal does.
+
+        None for an entry that records no redirection, and for every entry in a
+        journal written before the column existed.
+        """
+        raw = self.get('redirection')
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            return None
+        if isinstance(raw, dict):
+            return raw
+        raw = str(raw)
+        if not raw:
+            return None
+        return ast.literal_eval(raw) if raw.startswith('{') else raw
+
+    @property
     def keyby(self):
         return self.get('keyby', 'tag_version_shorthash')
 
@@ -904,6 +946,9 @@ class Datablock:
         revision: str = None,
         keyby: str = 'tag_version_shorthash',
         uuid16: bool = False,
+        # When a read fails, follow a redirection recorded by UNSAFE_redirect()
+        # and read from the entry it names instead. See :meth:`read`.
+        redirect: bool = True,
         validate_vars: bool = True,
         # DEPRECATED alias of validate_vars. Kept as an explicit parameter so a
         # dfn recorded before the rename still reconstructs faithfully. Left to
@@ -945,6 +990,7 @@ class Datablock:
             'revision': revision,
             'keyby': keyby,
             'uuid16': uuid16,
+            'redirect': redirect,
             'validate_vars': validate_vars if validate_cfg is None else validate_cfg,
             'storage_options': storage_options,
             'local': local,
@@ -1050,6 +1096,11 @@ class Datablock:
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
             )
         self._uuid16_ = state.get('uuid16', False)
+        # Defaults to True, including for state pickled before the parameter
+        # existed: a block that has no redirection recorded reads exactly as it
+        # did before either way, since a redirect is only ever consulted after
+        # __read__ has already failed.
+        self.redirect = bool(state.get('redirect', True))
         self.validate_vars = state.get('validate_vars', True)
         
         explicit_keys = set(self.__explicit_params__())
@@ -1436,6 +1487,20 @@ class Datablock:
             return False
 
     def build(self, *args, **kwargs):
+        # A redirected block answers its reads out of another entry's data (see
+        # :attr:`redirection`), so building it would produce data that nothing
+        # would go on to read. Declining is also what makes a redirect stick:
+        # a build_tree() sweeping past would otherwise quietly rebuild the very
+        # block someone redirected away from. Costs one journal read per
+        # instance, which :attr:`redirection` caches.
+        if self.redirection is not None:
+            self.log.info(
+                f"BUILD DECLINED: {self.anchorkeypath} is REDIRECTED to journal entry "
+                f"{self.redirection.entry_code} (hash {self.redirection.hash}), and reads from "
+                f"there instead: nothing would read what a build of it wrote. Undo the "
+                f"redirection, or construct with redirect=False, to build it anyway."
+            )
+            return self
         if self.capture_output:
             logpath = self._dbxanchorhashpathx('log', ext='log', ensure_dirpath=True)
             self.log.verbose(f"-------------------- Capturing stdout/stderr to {logpath} ------------------")
@@ -1845,16 +1910,200 @@ class Datablock:
         here naming the level it failed at, rather than inside ``__read__``.
         A single name is forwarded to ``__read__`` bare, which keeps every
         existing one-argument override working untouched.
+
+        When ``__read__`` raises and this block was constructed with
+        ``redirect=True`` (the default), :attr:`redirection` -- the journal
+        entry a :meth:`UNSAFE_redirect` sends this block's reads to -- is
+        consulted, and ``__read__`` is retried against the path that entry
+        recorded for this topic. The redirection is announced at INFO on every
+        read that follows it: a read answering from another block's data should
+        never do so quietly.
+
+        Nothing is redirected until ``__read__`` has already failed, and the
+        original exception is raised unchanged whenever no usable redirection
+        turns up, so a block with none behaves exactly as it did before.
         """
         topicpath = self._normtopic(topicpath)
         self._topicnode(*topicpath)      # raises KeyError if it does not exist
+        try:
+            if len(topicpath) == 1:
+                return self.__read__(topicpath[0])
+            return self.__read__(*topicpath)
+        except Exception as exc:
+            path = self._redirect_path(*topicpath, exc=exc)
+            if path is None:
+                raise
+        # Outside the handler, so a failure of the redirected read is reported
+        # on its own terms rather than chained to the one that caused it.
         if len(topicpath) == 1:
-            return self.__read__(topicpath[0])
-        return self.__read__(*topicpath)
+            return self.__read__(topicpath[0], path=path)
+        return self.__read__(*topicpath, path=path)
 
-    def __read__(self, *topicpath):
+    def __read__(self, *topicpath, path: str|None = None):
+        """Read *topicpath*; when *path* is given, read from THERE.
+
+        An override that never wants to be redirected to may ignore *path*, but
+        it has to accept it: :meth:`read` passes it when it follows a
+        redirection, and an override that does not take it fails with a
+        TypeError at that point instead of reading the redirected-to data.
+        """
         raise NotImplementedError()
-    
+
+    #REDIRECT: BEGIN
+    @functools.cached_property
+    def redirection(self):
+        """The journal entry this block's failed reads answer from, or None.
+
+        Resolved once, on first access, by two journal passes: the latest
+        redirection recorded against this block's :attr:`hash` by
+        :meth:`UNSAFE_redirect`, and then the entry that redirection names.
+        None when ``redirect`` is off, when no redirection is recorded, or when
+        the recorded one names nothing the journal has.
+
+        Reading a journal means globbing and parsing every parquet file under
+        the anchor, so this is cached -- a block reading ten topics, or one
+        topic ten times, pays for it once. Only the resolved entry is kept, and
+        it is detached from the frame it came out of, so caching it does not
+        pin the whole journal in memory.
+
+        Cached including the None, so a redirection recorded after a block has
+        already consulted its journal is not seen by that instance. Construct
+        the block again to pick it up, or ``del block.redirection`` (which
+        raises AttributeError if nothing was cached yet).
+        """
+        if not getattr(self, 'redirect', False):
+            return None
+        redirection = self._recorded_redirection()
+        if redirection is None:
+            self.log.detailed(f"redirection: none recorded for hash {self.hash}")
+            return None
+        entry = self._redirect_entry(redirection)
+        if entry is None:
+            self.log.warning(f"redirection: {redirection!r} matches no journal entry")
+            return None
+        self.log.info(
+            f"redirection: {self.hash} -> {redirection!r} -> entry {entry.entry_code} "
+            f"(hash {entry.hash}, event {entry.get('event')!r}, written {entry.get('datetime')})"
+        )
+        return entry
+
+    def _redirect_path(self, *topicpath, exc: Exception = None):
+        """Path to read *topicpath* from instead, per :attr:`redirection`, or None.
+
+        None whenever the redirection cannot be followed to a path -- there is
+        none, or the entry it names recorded no path for this topic. Either
+        leaves :meth:`read` to re-raise *exc*, the failure that sent us here.
+        """
+        entry = self.redirection
+        if entry is None:
+            return None
+        topicstr = '/'.join(topicpath)
+        self.log.info(
+            f"read: {topicstr}: FAILED with {type(exc).__name__}: {exc}\n"
+            f"read: {topicstr}: REDIRECTING to journal entry {entry.entry_code}"
+        )
+        try:
+            path = entry._topic_path(*topicpath)
+        except KeyError as e:
+            self.log.warning(
+                f"read: {topicstr}: redirected-to entry {entry.entry_code} records no such "
+                f"topic ({e}); re-raising the original failure"
+            )
+            return None
+        self.log.info(f"read: {topicstr}: REDIRECTED to entry {entry.entry_code}: reading from {path}")
+        return path
+
+    def _recorded_redirection(self):
+        """The latest redirection recorded for this block's hash, or None.
+
+        Latest, because a redirection is a correction and the newest one is the
+        one still meant: the journal comes back newest-first, so this is the
+        first entry of ours that carries one.
+        """
+        try:
+            journal = self.journal(hash=self.hash)
+        except (KeyError, FileNotFoundError):
+            # No journal directory at all, or one holding no entries -- which
+            # has no 'hash' column for the filter to select on.
+            return None
+        for loc in range(len(journal)):
+            redirection = journal.get(loc).redirection
+            if redirection is not None:
+                return redirection
+        return None
+
+    def _redirect_entry(self, redirection):
+        """The entry a redirection names -- by ``entry_code`` or by filter -- or None.
+
+        A filter can match many entries (that is the point of one: ``{'tag':
+        'good'}``); the latest match is taken, for the same reason the latest
+        redirection is.
+
+        The entry comes back deep-copied, holding nothing of the journal it was
+        selected from: a pandas row can share storage with its frame, and
+        :attr:`redirection` caches this for the life of the block.
+        """
+        filter = {'entry_code': redirection} if isinstance(redirection, str) else dict(redirection)
+        try:
+            journal = self.journal(**filter)
+        except (KeyError, FileNotFoundError) as e:
+            self.log.warning(f"redirection {redirection!r} is not a usable journal filter: {e}")
+            return None
+        if len(journal) == 0:
+            return None
+        row = journal.get(0, dropna=True)
+        return DatajournalEntry(pd.Series(row).copy(deep=True), storage_options=self.storage_options)
+
+    def UNSAFE_redirect(self, entry_code: str|None = None, filter: dict|None = None, *, OVERRIDE: bool = False):
+        """Record that reads of this block should fall back to another entry's data.
+
+        Exactly one of *entry_code* and *filter* is given, and it is written
+        verbatim into a fresh journal entry's ``redirection`` column. Nothing
+        is copied, moved or validated -- the redirection is a note in the
+        journal, and it is only ever consulted after a read has already failed
+        (see :meth:`read`).
+
+        *entry_code* names one entry, the value :meth:`write_journal_entry`
+        returned for it. *filter* names whichever entries match its
+        ``{column: value}`` pairs, as :meth:`journal` filters, with the latest
+        match winning -- so ``{'hash': other.hash, 'event': 'build:end'}``
+        follows that block as it is rebuilt, where an ``entry_code`` is pinned
+        to the one build it was returned for.
+
+        UNSAFE because a redirected read answers with data this block did not
+        produce and whose hash does not describe it. Nothing downstream can
+        tell the difference, so the redirection is announced at INFO every time
+        it is followed.
+
+        Returns the ``entry_code`` of the entry that records the redirection,
+        or None if the confirmation prompt was declined.
+        """
+        if (entry_code is None) == (filter is None):
+            raise ValueError(
+                f"UNSAFE_redirect takes exactly one of entry_code= and filter=, "
+                f"got {entry_code=}, {filter=}"
+            )
+        if entry_code is not None and not (isinstance(entry_code, str) and entry_code):
+            raise ValueError(f"UNSAFE_redirect: entry_code must be a non-empty str, got {entry_code!r}")
+        if filter is not None and not (isinstance(filter, dict) and filter):
+            # An empty filter matches every entry, which would redirect to
+            # whatever was written last -- never what anyone means.
+            raise ValueError(f"UNSAFE_redirect: filter must be a non-empty dict, got {filter!r}")
+
+        redirection = entry_code if entry_code is not None else filter
+        if not UNSAFE_allowed(f"UNSAFE_redirect to {redirection!r}", OVERRIDE=OVERRIDE):
+            return None
+        # Its own journal file (see write_journal_entry): a redirect written by
+        # an instance that has already journalled must not overwrite that entry.
+        code = self.write_journal_entry(
+            event='UNSAFE_redirect',
+            redirection=redirection,
+            journal_prefix='redirect-',
+        )
+        self.log.info(f"UNSAFE_redirect: {self.hash} -> {redirection!r} (entry {code})")
+        return code
+    #REDIRECT: END
+
     def UNSAFE_clear(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
         if not UNSAFE_allowed("UNSAFE_clear", OVERRIDE=OVERRIDE):
             return self
@@ -3633,7 +3882,54 @@ class Datablock:
         assert self.fs.exists(path), f"scopepath {path} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
-    def write_journal_entry(self, event:str, *, message: str = None, inline_message: bool = False, journal_prefix: str = ''):
+    def write_journal_entry(self, event:str, *, message: str = None, inline_message: bool = False, journal_prefix: str = '',
+                            redirection: 'str | dict | None' = None):
+        """Write one journal entry for *event*, and return its ``entry_code``.
+
+        ``entry_code`` is a fresh uuid per call, and it is the only field that
+        identifies a *row*.  Everything else on an entry describes the block
+        or the moment: ``hash`` and ``key`` are shared by every entry of that
+        block, ``uuid`` by every entry of one live instance, and ``datetime``
+        is only as unique as its resolution -- two entries written inside the
+        same microsecond, or by two processes at once, collide.  So a caller
+        holding an ``entry_code`` can address exactly the row it wrote:
+
+            code = block.write_journal_entry(event='note')
+            entry = block.journal(entry_code=code, loc=0)
+
+        With one caveat that is a property of where entries live rather than
+        of the code.  A journal *file* is per live instance -- its path is
+        built from ``self.dt``, which does not move -- so a second call from
+        the same instance **overwrites** the first.  The new code is written;
+        the old one is gone from storage, though the call that made it still
+        returned it.  A code therefore resolves only until that instance
+        writes again, which is why ``build()`` leaves a ``build:end`` and no
+        ``build:start``: same instance, same file.  To keep both entries,
+        write them from separate instances, or pass distinct
+        *journal_prefix* values.
+
+        Journals written before this field have no such column; the
+        ``entry_code`` accessor on ``DatajournalEntry`` returns None for them.
+
+        *redirection* -- an ``entry_code`` or a journal filter, normally passed
+        by :meth:`UNSAFE_redirect` rather than directly -- is recorded IN the
+        entry, in the ``redirection`` column, not written out to a file the way
+        *message* and ``quote``/``norm``/``spec`` are. A redirection is what
+        :meth:`read` falls back to when the data it wanted is gone, so it must
+        not itself depend on a second file still being there.
+        """
+        if redirection is not None and not isinstance(redirection, (str, dict)):
+            raise TypeError(
+                f"redirection must be an entry_code str or a journal filter dict, "
+                f"got {type(redirection).__name__}: {redirection!r}"
+            )
+        # A dict goes in as str(dict), the way 'paths' and 'topics' do -- one
+        # parquet column cannot hold both a string and a mapping.
+        redirection_value = redirection if (redirection is None or isinstance(redirection, str)) else str(redirection)
+        # Follows uuid16, so the two identifiers sitting side by side in the
+        # journal are the same shape. It is not a path component, so the
+        # length is cosmetic either way.
+        entry_code = uuid.uuid4().hex[:16] if getattr(self, '_uuid16_', False) else str(uuid.uuid4())
         self._write_journal_dict('spec', self.spec)
         self._write_journal_dict('dfn', self.dfn)
         self._write_journal_dict('kwargs', self.kwargs)
@@ -3694,11 +3990,13 @@ class Datablock:
                                          'key': self.key,
                                          'anchorkeypath': self.anchorkeypath,
                                          'uuid': self.uuid,
+                                         'entry_code': entry_code,
                                          'tag': self.tag,
                                          'topics': str(topics_dict),
                                          'paths': str(paths_dict),
                                          'log': logpath if has_log else None,
                                          'event': event,
+                                         'redirection': redirection_value,
                                          'spec': spec_path,
                                          'dfn': dfn_path,
                                          'kwargs': kwargs_path,
@@ -3717,8 +4015,9 @@ class Datablock:
             df.to_parquet(f)
         
         tagstr = f"with tag {repr(self.tag)} " if self.tag is not None else ""
-        self.log.debug(f"WROTE JOURNAL entry for event {repr(event)} {tagstr}"
+        self.log.debug(f"WROTE JOURNAL entry {entry_code} for event {repr(event)} {tagstr}"
                          f"to journal_path {journal_path}")
+        return entry_code
 
     @staticmethod
     def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, **filter_kwargs):

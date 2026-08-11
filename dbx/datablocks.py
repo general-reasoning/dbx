@@ -16,6 +16,7 @@ This module defines the central abstractions of dbx:
 - :class:`SlurmRayCluster` — Slurm integration for launching Ray clusters.
 """
 import ast
+import collections
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
 from dataclasses import dataclass, fields, asdict, replace
@@ -106,6 +107,34 @@ class AbsentKey:
 
 
 ABSENT = AbsentKey()
+
+
+class SignatureTopicsKey:
+    """Singleton key under which :meth:`Datablock.difftopics` reports a whole-rendering
+    difference -- one that belongs to no single topic.
+
+    Two of those exist. The topics are joined into the :attr:`Datablock.signature`
+    in declaration order, so the same topics declared in a different order are a
+    different signature and a different hash, though no one topic changed. And a
+    block declaring ``TOPICS = {}`` contributes no segment at all where a block
+    declaring none contributes ``topics:None``, which again differs without any
+    topic differing.
+
+    Reported under a sentinel rather than a string key so it cannot collide with
+    a topic that happens to be named for it.
+    """
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self):
+        return '<signature topics>'
+
+
+SIGNATURE_TOPICS = SignatureTopicsKey()
 
 
 #: The filename of a directory topic in a dict-valued ``TOPICS``, i.e. no file
@@ -3312,6 +3341,195 @@ class Datablock:
             return diff
         return self.format_diffnorm(diff, maxlen=maxlen)
 
+    #: What :meth:`diff` returns: a triple, and one whose parts have names.
+    #: ``any(d)`` is the question "did anything about this block's identity
+    #: change", since each part is empty exactly when its component did not.
+    Diff = collections.namedtuple('Diff', 'norm topics version')
+
+    def _topic_map(self, topics):
+        """A TOPICS declaration as an ordered ``{path: value}`` map, or None.
+
+        The structured counterpart of :meth:`signature_topics`: one entry per
+        leaf, keyed by its ``'/'``-joined path, valued by the text that follows
+        the ``=`` in that leaf's segment -- :data:`ABSENT` for a list-``TOPICS``
+        entry, whose segment has no ``=`` at all. None for a block that declares
+        no topics, which is the ``topics:None`` segment and NOT the same as the
+        empty map of ``TOPICS = {}``.
+        """
+        if isinstance(topics, dict):
+            out = {}
+
+            def walk(node, prefix):
+                if not isinstance(node, dict):
+                    out['/'.join(prefix)] = str(node)
+                    return
+                for name, child in node.items():
+                    walk(child, prefix + (str(name),))
+
+            for name, child in topics.items():
+                walk(child, (str(name),))
+            return out
+        if isinstance(topics, list):
+            return {str(name): ABSENT for name in topics}
+        return None
+
+    def _other_topics(self, other_topics, journal):
+        """The other side of a :meth:`difftopics`, as ``(segments, map)``.
+
+        Accepts a live block, a journal entry, a ``TOPICS`` declaration, or the
+        ``str(dict)`` a journal records one as.
+        """
+        if other_topics is ABSENT:
+            if journal is None:
+                raise ValueError("difftopics needs other_topics= or journal=")
+            other_topics = self._journal_entry(journal)
+        if isinstance(other_topics, Datablock):
+            return other_topics.signature_topics(), other_topics._topic_map(getattr(other_topics, 'TOPICS', None))
+        if isinstance(other_topics, DatajournalEntry):
+            # A journal records a list-TOPICS block as a mapping of DIRTOPIC,
+            # so the two render alike from an entry even though they do not from
+            # the blocks themselves. Compare two LIVE blocks to see that one.
+            other_topics = other_topics.topics
+        elif isinstance(other_topics, str):
+            other_topics = ast.literal_eval(other_topics)
+        topicmap = self._topic_map(other_topics)
+        return self._render_topic_map(topicmap), topicmap
+
+    @staticmethod
+    def _render_topic_map(topicmap):
+        if topicmap is None:
+            return ("topics:None",)
+        return tuple(f"topic:{path}" if value is ABSENT else f"topic:{path}={value}"
+                     for path, value in topicmap.items())
+
+    def difftopics(
+        self,
+        other_topics=ABSENT,
+        *,
+        journal: 'dict | None' = None,
+        report: bool = False,
+        maxlen: 'int | None' = 160,
+    ) -> 'dict | str':
+        """Diff this block's topics against another's, the way :attr:`signature` sees them.
+
+        Compares :meth:`signature_topics` -- the very segments the signature is
+        built from -- so the two agree by construction: the result is empty
+        exactly when the topics contribute nothing to a difference in signature,
+        and non-empty exactly when they do.
+
+        Returns a **sparse** dict keyed by topic path, valued by
+        ``(self_filename, other_filename)`` as those render into the signature,
+        with :data:`ABSENT` for a path one side does not declare. A difference
+        belonging to no single path -- a reordering, or ``TOPICS = {}`` against
+        no TOPICS at all -- is reported under the :data:`SIGNATURE_TOPICS`
+        sentinel key, carrying both segment tuples.
+
+        Parameters
+        ----------
+        other_topics:
+            A :class:`Datablock`, a :class:`DatajournalEntry`, a ``TOPICS``
+            declaration (dict or list, ``None`` for a block declaring none), or
+            the ``str(dict)`` form a journal records. Omit it to read the other
+            side from *journal*.
+        journal:
+            Selector dict for the journal entry to compare against, as
+            :meth:`diffnorm`. Note that a journal records a list-``TOPICS``
+            block as a mapping of :data:`DIRTOPIC`, so a list declaration and the
+            equivalent dict one are indistinguishable once written -- against an
+            entry they compare equal, against the live block they do not.
+        report:
+            Return readable text instead of the dict.
+        maxlen:
+            Truncate values longer than this in the *report* only.
+        """
+        mine = self.signature_topics()
+        theirs, theirmap = self._other_topics(other_topics, journal)
+        mymap = self._topic_map(getattr(self, 'TOPICS', None))
+
+        diff = {}
+        if tuple(mine) != tuple(theirs):
+            for path in list(mymap or {}) + [p for p in (theirmap or {}) if p not in (mymap or {})]:
+                one = (mymap or {}).get(path, ABSENT)
+                two = (theirmap or {}).get(path, ABSENT)
+                if one != two:
+                    diff[path] = (one, two)
+            if not diff:
+                # They differ, but no single path does: a reordering, or the
+                # empty-TOPICS/no-TOPICS distinction. Report the renderings.
+                diff[SIGNATURE_TOPICS] = (tuple(mine), tuple(theirs))
+        if not report:
+            return diff
+        return self.format_diffnorm(diff, maxlen=maxlen)
+
+    def diffversion(self, other_version=ABSENT, *, journal: 'dict | None' = None):
+        """Diff this block's :attr:`version` against another's.
+
+        Returns ``(self_version, other_version)`` when they differ, and ``None``
+        when they do not -- so it is empty in the same sense the other two diffs
+        are, and ``if block.diffversion(...)`` reads as "did the version move".
+
+        Compared as :attr:`signature` renders them (``f"version={v}"``), so
+        ``1`` and ``'1'`` are the same version -- they are the same signature,
+        and this method exists to answer for the signature. Both values are
+        reported as they are, so the type difference is still visible.
+
+        Parameters
+        ----------
+        other_version:
+            A :class:`Datablock`, a :class:`DatajournalEntry`, or a version
+            value (``None`` being the version of a block declaring no
+            ``VERSION``). Omit it to read the other side from *journal*.
+        journal:
+            Selector dict for the journal entry to compare against, as
+            :meth:`diffnorm`.
+        """
+        if other_version is ABSENT:
+            if journal is None:
+                raise ValueError("diffversion needs other_version= or journal=")
+            other_version = self._journal_entry(journal)
+        if isinstance(other_version, (Datablock, DatajournalEntry)):
+            other_version = other_version.version
+        mine = self.version
+        if str(mine) == str(other_version):
+            return None
+        return (mine, other_version)
+
+    def diff(self, other=ABSENT, *, journal: 'dict | None' = None, report: bool = False, **kwargs):
+        """Diff every component of this block's identity: ``(norm, topics, version)``.
+
+        A :attr:`signature` is a norm, a version and the topics, joined -- so
+        these three diffs between them account for every way two blocks can hash
+        differently, and ``any(block.diff(other))`` is "is this a different
+        block". Returns a :attr:`Diff` triple, whose parts are also reachable by
+        name (``.norm``, ``.topics``, ``.version``).
+
+        *other* is a :class:`Datablock` or a :class:`DatajournalEntry`; omit it
+        to read all three components from the entry *journal* selects. Extra
+        keyword arguments go to :meth:`diffnorm` (``recursive``, ``legacy``,
+        ``raw``, ``deslash``); *report* is passed to all three.
+        """
+        if other is ABSENT:
+            if journal is None:
+                raise ValueError("diff needs other= or journal=")
+            other = self._journal_entry(journal)
+        if isinstance(other, Datablock):
+            other_norm = other.norm(legacy=kwargs.get('legacy'))
+        elif isinstance(other, DatajournalEntry):
+            other_norm = other.read('norm') or ''
+        else:
+            raise TypeError(
+                f"diff compares against a Datablock or a DatajournalEntry, got "
+                f"{type(other).__name__}: {other!r}"
+            )
+        version = self.diffversion(other)
+        return self.Diff(
+            norm=self.diffnorm(other_norm, report=report, **kwargs),
+            topics=self.difftopics(other, report=report),
+            version=(("no differences" if version is None else
+                      f"self : {version[0]!r}\nother: {version[1]!r}"))
+                    if report else version,
+        )
+
     @classmethod
     def format_diffnorm(cls, diff: dict, *, maxlen: 'int | None' = 160) -> str:
         """Render a :meth:`diffnorm` result as one ``path`` + self/other per difference."""
@@ -3426,24 +3644,35 @@ class Datablock:
         explicit_keys = set(self.__explicit_params__())
         return {k: v for k, v in self.__getstate__().items() if k not in explicit_keys}
     
-    @property
-    def signature(self):
+    def signature_topics(self):
+        """The topic segments of :attr:`signature`, in the order it joins them.
+
+        The one rendering of a block's topics into its identity: :attr:`signature`
+        and :attr:`supersignature` join what this returns, and :meth:`difftopics`
+        compares it. Two blocks whose signatures differ only in their topics are
+        exactly the two whose ``signature_topics()`` differ -- which is what makes
+        the diff answer the question the hash asks.
+        """
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if self._topicfiles is not None:
             # A leaf is named by its full path, so a nested topic reads
             # "topic:data/frames=None". A flat TOPICS has one-segment paths and
             # renders byte-identically to before -- the hash does not move.
-            topics = [f"topic:{'/'.join(tp)}={self._topicnode(*tp)}"
-                      for tp in self.leaftopics()]
-        elif hasattr(self, "TOPICS") and isinstance(self.TOPICS, list):
-            topics = [f"topic:{topic}" for topic in self.TOPICS]
-        else:
-            topics = ["topics:None"]
+            return tuple(f"topic:{'/'.join(tp)}={self._topicnode(*tp)}"
+                         for tp in self.leaftopics())
+        if hasattr(self, "TOPICS") and isinstance(self.TOPICS, list):
+            return tuple(f"topic:{topic}" for topic in self.TOPICS)
+        return ("topics:None",)
+
+    @property
+    def signature(self):
+        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
+        # computed using the older version of these methods
         signature = os.path.join(
             self.norm(),
             f"version={self.version}",
-            *topics,
+            *self.signature_topics(),
         )
         return signature
 
@@ -3451,20 +3680,10 @@ class Datablock:
     def supersignature(self):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        if self._topicfiles is not None:
-            # A leaf is named by its full path, so a nested topic reads
-            # "topic:data/frames=None". A flat TOPICS has one-segment paths and
-            # renders byte-identically to before -- the hash does not move.
-            topics = [f"topic:{'/'.join(tp)}={self._topicnode(*tp)}"
-                      for tp in self.leaftopics()]
-        elif hasattr(self, "TOPICS") and isinstance(self.TOPICS, list):
-            topics = [f"topic:{topic}" for topic in self.TOPICS]
-        else:
-            topics = ["topics:None"]
         supersignature = os.path.join(
             self.supernorm(),
             f"version={self.version}",
-            *topics,
+            *self.signature_topics(),
         )
         return supersignature
 

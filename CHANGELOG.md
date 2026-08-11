@@ -225,6 +225,21 @@ All notable changes to this project will be documented in this file.
   named extra rather than an assumption. Nothing imports it (fsspec resolves it from the
   url), so its absence surfaced only as `ValueError: Protocol not known: abfss` from a
   block that happened to be given one.
+- **`diff()`, `difftopics()`, `diffversion()` — the rest of what a hash is made of.**
+  A `signature` is a norm, a version and the topics, joined, so those three diffs between
+  them account for every way two blocks can hash differently; `diff()` returns them as a
+  `Diff` triple (also reachable as `.norm`, `.topics`, `.version`), and `any(a.diff(b))`
+  is "is this a different block". `difftopics()` compares `signature_topics()` — the very
+  segments the signature is built from, now rendered in one place instead of twice — so
+  the diff and the hash cannot drift: it is non-empty exactly when the topics contribute
+  to a difference in signature. It reports a sparse `{topic path: (self, other)}` dict,
+  with `ABSENT` for a path one side does not declare, and a difference belonging to no
+  single path — a reordering, or `TOPICS = {}` against no TOPICS at all, both of which
+  move the hash — under the `SIGNATURE_TOPICS` sentinel key. `diffversion()` returns
+  `(self, other)` or `None`, comparing as the signature renders (`1` and `'1'` are the
+  same version because they are the same hash) while reporting both values as they are.
+  Each takes its other side as a block, a journal entry, a declaration, or a `journal=`
+  selector, as `diffnorm()` does.
 - **`diffnorm()` descends recursively** into nested blocks and spec dicts, returning a
   *sparse* nested dict so a changed leaf appears at the end of a short path instead of
   as two multi-kilobyte strings. New options: `recursive=False` (previous flat

@@ -4416,16 +4416,26 @@ class Datablock:
                 f"Check that the class name / anchor and url are correct."
             )
 
-        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: with n_workers={n_workers} BEGIN")
-        #files = fs.glob(os.path.join(journaldirpath, '**/journal/**/*.parquet'))
-        dirs = fs.glob(os.path.join(journaldirpath, '**/'), maxdepth=2)
-        with ThreadPoolExecutor(max_workers=n_workers) as ex:
-            futures = [ex.submit(fs.glob, os.path.join(d, 'journal/**/*.parquet')) for d in dirs]
-            parquet_files = []
-            for future in tqdm.tqdm(as_completed(futures), desc=f'Reading journal files from {len(dirs)} directories', total=len(dirs)):
-                parquet_files.extend(future.result())
+        # One '*' for the anchor level, then '**' only under 'journal/'.
+        #
+        # A journal entry lives at .dbx/<anchor>/journal/<hash>/<entry>.parquet,
+        # so the anchor level is a single '*' -- and confining '**' to what
+        # follows 'journal/' keeps the scan off the thirteen sibling kinds
+        # (dfn, spec, norm, signature, ...) that share the anchor directory and
+        # outnumber the journal entries an order of magnitude.
+        #
+        # The pattern this replaces fanned a thread pool out over
+        # glob('**/', maxdepth=2), which matches *nothing*: a trailing slash
+        # finds no directories (fsspec 2026.6, adlfs), so no directory was ever
+        # globbed for entries and every journal came back empty even though the
+        # entries were on storage. Nor was there anything to parallelise -- the
+        # anchor level holds exactly one directory. The parallelism that pays
+        # is over the entry files, which is below and unchanged.
+        glob_pattern = os.path.join(journaldirpath, '*/journal/**/*.parquet')
+        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: {glob_pattern} BEGIN")
+        parquet_files = fs.glob(glob_pattern)
         log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
-        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: with n_workers={n_workers} END")
+        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: {glob_pattern} END")
 
         log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
         def read_entry_file(file):

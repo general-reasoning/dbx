@@ -174,6 +174,33 @@ All notable changes to this project will be documented in this file.
 - **`Datablock.cite()` recorded alongside `quote()`**: new `Bid.cite` field, a `cite.txt`
   written by `write_journal_entry()`, and a `JournalEntry.cite` property (returns `None`
   on journals written before the column existed, rather than raising).
+- **`entry_code` on every journal entry** — a fresh uuid per `write_journal_entry()` call,
+  recorded as a column and returned by the call, plus `DatajournalEntry.entry_code` and a
+  matching `.uuid` accessor. It is the only field that identifies a *row*: `hash` and
+  `key` are shared by every entry of a block, `uuid` by every entry of one live instance,
+  and `datetime` only to its resolution — two entries written in the same microsecond, or
+  by two processes at once, collide. So `journal(entry_code=code, loc=0)` addresses
+  exactly the row a caller wrote. Follows `uuid16`, so the two identifiers in one entry
+  are the same shape. Journals written before the column read as `None` rather than
+  raising. A code resolves only until its *instance* writes again: a journal file is keyed
+  by `self.dt`, so a second call from one instance overwrites the first — which is why
+  `build()` leaves a `build:end` and no `build:start`. Pass a distinct `journal_prefix` to
+  keep both.
+- **`UNSAFE_redirect()` — send a failed read to another entry's data**, which is what
+  `entry_code` exists to make addressable. Takes exactly one of `entry_code=` (one entry,
+  the value `write_journal_entry()` returned for it) or `filter=` (whichever entries match
+  its `{column: value}` pairs, latest match winning), and records it verbatim in a fresh
+  entry's new `redirection` column. So `{'hash': other.hash, 'event': 'build:end'}`
+  follows that block as it is rebuilt, where an `entry_code` is pinned to the one build it
+  was returned for. Nothing is copied, moved or validated: a redirection is a note in the
+  journal, consulted by `read()` only *after* a read has already failed. The redirection
+  travels in the entry rather than in a file of its own — unlike `message` and
+  `quote`/`norm`/`spec` — because a fallback for missing data must not itself depend on a
+  second file still being there; and it is written under a `redirect-` prefix so an
+  instance that has already journalled does not overwrite that entry. UNSAFE because the
+  read then answers with data this block did not produce and whose hash does not describe
+  it, which nothing downstream can detect — so every followed redirection is announced at
+  INFO.
 - **`diffnorm()` descends recursively** into nested blocks and spec dicts, returning a
   *sparse* nested dict so a changed leaf appears at the end of a short path instead of
   as two multi-kilobyte strings. New options: `recursive=False` (previous flat

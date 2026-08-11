@@ -461,13 +461,43 @@ class DatapointBase(Datablock):
             f"{self.__class__.__name__} must implement _read_slice(slice)"
         )
 
-    def _tab_stream(self, tab, slice) -> Stream:
+    def _tab_stream(self, tab, slice, local: str | None = None) -> Stream:
+        """One tab's slice as a `Stream`, cached under *local* when it is remote.
+
+        A local tab is its own cache and *local* is ignored, as in
+        `open_datastream()`. A remote one MUST be given a cache directory of its
+        own: left without, `Stream` invents `{tmpdir}/{blake2s(remote)}` and
+        REFUSES to reuse it, so the second open of that tab -- a second process,
+        a second run, a retry after a crash -- dies with "Could not create a
+        temporary local directory ... already exists". Hence the error rather
+        than a default here: the caller knows which cache this belongs in, and
+        every path that omitted one was a collision waiting to happen.
+        """
         index_dir = tab.path(*slice.split('/'))
         scheme = urllib.parse.urlparse(index_dir).scheme
         if scheme in ('', 'file'):
             return Stream(local=index_dir.removeprefix('file://'))
         remote = abfs_to_mds_azure(index_dir) if scheme in ('abfs', 'abfss') else index_dir
-        return Stream(remote=remote)
+        if local is None:
+            raise ValueError(
+                f"{self.__class__.__name__}._tab_stream: {index_dir} is remote, so it "
+                f"needs a local cache directory of its own; pass local="
+            )
+        os.makedirs(local, exist_ok=True)
+        return Stream(remote=remote, local=local)
+
+    def _tab_streams(self, slice, local: str):
+        """One `Stream` per tab, each cached in its own subdirectory of *local*.
+
+        Subdivided by tab, because `StreamingDataset` takes either `streams=` or
+        `local=` and never both -- so the cache directory this class computes
+        cannot be handed to the dataset, only to the streams under it -- and
+        because two streams sharing one directory is itself the collision.
+        Named by the tab's hash: unique per tab, and the same across runs, so a
+        cache is reused rather than rebuilt.
+        """
+        return [self._tab_stream(tab, slice, local=os.path.join(local, tab.hash[:12]))
+                for tab in (self.tab(idx) for idx in range(self.n_tabs))]
 
     @staticmethod
     def _find_slice_topics(topics_dict, prefix=()):
@@ -767,13 +797,12 @@ class DatapointTable(DatapointBase, Datastack):
 
     def datastream(self, slice, **kwargs) -> StreamingDataset:
         self._slicenames((slice,))
-        streams = [self._tab_stream(self.tab(idx), slice)
-                   for idx in range(self.n_tabs)]
         cacheroot = self._ensure_cacheroot(kwargs.pop('cache', None))
         cache_dir = kwargs.pop('cache_dir',
                                f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
         local = os.path.join(cacheroot, cache_dir)
         os.makedirs(local, exist_ok=True)
+        streams = self._tab_streams(slice, local)
         cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
         shuffle = kwargs.pop('shuffle', False)
         allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)
@@ -958,13 +987,12 @@ class DatapointFold(DatapointTable):
 
     def datastream(self, slice, **kwargs) -> StreamingDataset:
         self._slicenames((slice,))
-        streams = [self._tab_stream(self.tab(idx), slice)
-                   for idx in range(self.n_tabs)]
         cacheroot = self._ensure_cacheroot(kwargs.pop('cache', None))
         cache_dir = kwargs.pop('cache_dir',
                                f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
         local = os.path.join(cacheroot, cache_dir)
         os.makedirs(local, exist_ok=True)
+        streams = self._tab_streams(slice, local)
         cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
         shuffle = kwargs.pop('shuffle', False)
         allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)

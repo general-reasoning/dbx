@@ -264,6 +264,18 @@ All notable changes to this project will be documented in this file.
 - **`Datablock.format_diffnorm(diff)`** — renders a `diffnorm` dict as text.
 
 ### Fixed
+- **A remote tab was cached where mosaic guessed, not where the table said.**
+  `DatapointTable.datastream()` (and `DatapointFold`'s) computed a cache directory,
+  created it, and then never passed it on, so every `Stream` over a remote tab was left
+  without a `local=`. Mosaic then derives one itself — `{tmpdir}/{blake2s(remote)}`, the
+  same path for every process on the box — and REFUSES to reuse it, so the second open of
+  that tab (a second process, a second run, a retry after a crash) died with `Could not
+  create a temporary local directory ... already exists`. It cannot simply be handed to
+  `StreamingDataset`, which takes `streams=` or `remote`/`local` and never both: it
+  belongs on each stream, one subdirectory per tab, named by the tab's hash so it is
+  unique per tab and the same across runs. `_tab_stream()` now raises rather than letting
+  a remote stream go without one. Local tabs are unaffected — a local slice is its own
+  cache, and nothing is copied for it.
 - **A journal on any non-local filesystem read back empty.** `Journal()` globbed its
   parquet files through the block's filesystem — which names them protocol-stripped — and
   then handed those paths to pandas, which looked for them on the LOCAL disk. Every entry

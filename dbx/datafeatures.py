@@ -266,9 +266,15 @@ class DatafeatureTab(DatapointTab):
         }
         slice_specs = {"features": columns_spec}
 
+        collator = self.var.collator
+        if collator is None:
+            slice_name = 'tiles' if 'tiles' in datapoint_tab.slices else (datapoint_tab.slices[0] if datapoint_tab.slices else 'tiles')
+            col_name = 'tile' if slice_name == 'tiles' else slice_name
+            collator = Datacollator(spec=dict(signals=[(slice_name, col_name)], labels=[]))
+
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
-            sample_data = datapoint_tab.data(*self.var.collator.slices, concat=True)
-            inputs = self.var.collator(sample_data, signal_only=True, strip_keys=True)
+            sample_data = datapoint_tab.data(*collator.slices, concat=True)
+            inputs = collator(sample_data, signal_only=True, strip_keys=True)
             if not hasattr(inputs, 'shape') or not hasattr(inputs, 'to'):
                 inputs = torch.tensor(np.array(inputs))
 

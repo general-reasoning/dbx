@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import gc
 import json
 import os
@@ -993,7 +994,7 @@ class DatapointPartition(Datablock):
             spec=dict(
                 partition=self,
                 datapoint_table=self.var.datapoint_table,
-                tab_indices=self.tabs_indices(fold),
+                fold=fold,
             )
         )
 
@@ -1011,8 +1012,12 @@ class DatapointFold(DatapointTable):
     class VAR(Datablock.VAR):
         partition: DatapointPartition
         datapoint_table: DatapointTable
-        tab_indices: list[int]
+        fold: int
         datapoints_per_row: int = 1
+
+    @functools.cached_property
+    def tab_indices(self) -> list[int]:
+        return self.var.partition.tabs_indices(self.var.fold)
 
     @property
     def TAB(self):
@@ -1028,10 +1033,10 @@ class DatapointFold(DatapointTable):
 
     @property
     def n_tabs(self) -> int:
-        return len(self.var.tab_indices)
+        return len(self.tab_indices)
 
     def tab(self, idx: int) -> DatapointTab:
-        real_idx = self.var.tab_indices[idx]
+        real_idx = self.tab_indices[idx]
         return self.var.partition.var.datapoint_table.tab(real_idx)
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:

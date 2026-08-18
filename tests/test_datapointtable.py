@@ -123,9 +123,10 @@ class TestTopicsFromSlices:
     def test_declared_topics_are_kept(self):
         assert LetterTab.TOPICS['note'] == 'note.txt'
 
-    def test_table_inherits_slices_from_its_tab(self):
+    def test_table_slices_equal_tab_slices(self):
+        """Table slices come from TAB, not from table's own TOPICS."""
         assert LetterTable.slices == LetterTab.slices
-        assert LetterTable.TOPICS['numbers'] == SLICETOPIC
+        assert 'numbers' not in LetterTable.TOPICS
 
     def test_table_keeps_its_inherited_topics(self):
         assert LetterTable.TOPICS['tabs'] is DIRTOPIC
@@ -151,6 +152,11 @@ class TestTopicsFromSlices:
         assert SubTab.TOPICS['samples'] == SLICETOPIC
         assert 'meta' not in SubTab.TOPICS
 
+    def test_slice_topics_are_not_in_table_topics(self):
+        """Slice topics belong to the tab; they must not appear in the table's TOPICS."""
+        assert 'numbers' not in LetterTable.TOPICS
+        assert 'letters' not in LetterTable.TOPICS
+
     def test_slices_are_in_the_signature(self, table):
         assert 'topic:numbers=SLICETOPIC' in table.signature
         assert 'topic:letters=SLICETOPIC' in table.signature
@@ -163,7 +169,7 @@ class TestTopicsFromSlices:
             TAB = GlyphTab
 
         assert 'glyphs' in GlyphTable.slices
-        assert GlyphTable.TOPICS['glyphs'] == SLICETOPIC
+        assert 'glyphs' not in GlyphTable.TOPICS
         a = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
         b = GlyphTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
         assert a.hash != b.hash

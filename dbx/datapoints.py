@@ -67,6 +67,28 @@ class _slices_descriptor:
         return DatapointBase._find_slice_topics(getattr(target, 'TOPICS', None))
 
 
+class _table_slices_descriptor:
+    """``slices`` for a `DatapointTable`, derived from TAB's slices.
+
+    A table does not declare slice topics in its own TOPICS (they belong to the
+    tab). Its slices are the TAB's slices -- the same set, but accessed via the
+    TAB class rather than by inspecting the table's TOPICS.
+
+    Falls back to reading the instance/class TOPICS if TAB is not set or is not
+    a proper DatapointBase subclass (e.g. DatapointFold, which overrides TOPICS
+    at instance level and computes its TAB dynamically).
+    """
+
+    def __get__(self, obj, owner=None):
+        target = owner if obj is None else obj
+        tab = getattr(target, 'TAB', None)
+        if isinstance(tab, type) and issubclass(tab, DatapointBase):
+            return tab.slices
+        # Fallback: read from own TOPICS (covers DatapointFold and intermediate
+        # bases that have no TAB yet).
+        return DatapointBase._find_slice_topics(getattr(target, 'TOPICS', None))
+
+
 class DatapointBase(Datablock):
     """Base class for sliced datapoint blocks (DatapointTab and DatapointTable).
 
@@ -637,15 +659,19 @@ class DatapointTab(DatapointBase):
 class DatapointTable(DatapointBase, Datastack):
     """A table of DatapointTabs, sliced the same way as its tabs.
 
-    A table does not declare its slices: they are its TAB's, taken from
-    ``TAB.TOPICS`` when the class is defined and merged into the table's own
-    TOPICS beside ``tabs`` and ``done``. So a table is sliced the same way as
-    its tabs by construction rather than by the author remembering to keep two
-    declarations in step, and pointing a table at a differently-sliced TAB
-    rekeys it -- the slices are in :attr:`signature`, and so in the hash.
+    A table's TOPICS only contains what the table itself owns: the structural
+    topics (``tabs``, ``done``) and any extra file topics the subclass declares
+    (such as ``bag_lens``). The tab's slice topics are NOT merged into the
+    table's TOPICS -- they belong to the tab, not the table.
 
-    The tab's ORDINARY topics are not taken: they are written into each tab,
-    under the tab's own key, and the table has nothing at those paths.
+    The table's `slices` attribute is derived from ``TAB.slices`` rather than
+    from ``TOPICS``, so slice routing (``data()``, ``dataset()``,
+    ``valid_slice()``) continues to work without polluting ``TOPICS``. Pointing
+    a table at a differently-sliced TAB still rekeys the table because the TAB
+    class is part of :attr:`signature`.
+
+    The tab's ordinary (non-slice) topics are written into each tab under the
+    tab's own key; the table has nothing at those paths.
     """
 
     TAB = None
@@ -657,6 +683,9 @@ class DatapointTable(DatapointBase, Datastack):
     #: what it adds, not opting out of being a table.
     STRUCTURAL_TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
     TOPICS = dict(STRUCTURAL_TOPICS)
+
+    #: Slices come from TAB, not from this table's own TOPICS.
+    slices = _table_slices_descriptor()
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -680,13 +709,12 @@ class DatapointTable(DatapointBase, Datastack):
             # DatapointFold reads its TAB off the table it wraps.
             return
         topics = cls.TOPICS if isinstance(cls.TOPICS, dict) else {}
-        # The inherited slices came from the base's TAB; this class's TAB is the
-        # authority on what this class is sliced by, so they are replaced rather
-        # than added to -- otherwise a renamed slice would leave its old name
-        # behind, in the TOPICS and in the hash.
+        # Strip any slice topics that may have crept in (e.g. via inheritance
+        # from an older base that still used the accumulating behaviour).  Only
+        # table-owned, non-slice topics belong in TOPICS.
         own = {name: node for name, node in topics.items()
                if not cls._slice_topics_only({name: node})}
-        cls.TOPICS = {**own, **cls._slice_topics_only(tab.TOPICS)}
+        cls.TOPICS = own
 
     @dataclass
     class VAR(Datastack.VAR):
@@ -751,6 +779,20 @@ class DatapointTable(DatapointBase, Datastack):
             self.log.info("%s.__stack__: done marker written", self.__class__.__name__)
         return self
 
+    def read(self, *topicpath):
+        """As `Datablock.read()`, but slice names bypass the TOPICS guard.
+
+        Slice topics are not in this table's TOPICS (they belong to the tab),
+        so the base `read()` would reject them with a KeyError.  Slice reads
+        are valid, they just skip the guard and fall through to `__read__`.
+        """
+        topicpath = self._normtopic(topicpath)
+        topic_str = '/'.join(topicpath)
+        if topic_str in self.slices:
+            # Bypass _topicnode: slices are not in TOPICS but are valid reads.
+            return self.__read__(*topicpath)
+        return super().read(*topicpath)
+
     def __read__(self, *topicpath):
         topicpath = self._normtopic(topicpath)
         if topicpath:
@@ -776,6 +818,29 @@ class DatapointTable(DatapointBase, Datastack):
 
     def __stats__(self, slice, **kwargs) -> dict:
         return super().__stats__(slice, **kwargs)
+
+    def signature_topics(self):
+        """Own TOPICS segments plus the TAB's slice-topic segments.
+
+        Slice topics no longer live in this table's TOPICS, but they must still
+        appear in the signature so that pointing a table at a differently-sliced
+        TAB changes its hash. The output is byte-identical to what the old
+        accumulating behaviour produced (slice topics rendered as
+        ``topic:<name>=SLICETOPIC``), so no existing hashes are invalidated.
+        """
+        # Own (non-slice) topics come first, in declaration order.
+        own = super().signature_topics()
+        # Then the TAB's slice topics, in the same format Datastack uses.
+        tab = self.TAB
+        if isinstance(tab, type) and issubclass(tab, DatapointBase):
+            slice_segments = tuple(
+                f"topic:{name}=SLICETOPIC"
+                for name in tab.slices
+            )
+        else:
+            slice_segments = ()
+        return own + slice_segments
+
 
     # 2. Properties and Accessors ───────────────────────────────────
 

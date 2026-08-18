@@ -975,16 +975,16 @@ class DatapointPartition(Datablock):
     def n_folds(self) -> int:
         return len(self.var.fractions)
 
-    def tabs_indices(self, fold: int) -> list[int]:
+    def tabs_indices(self, fold: int | str) -> list[int]:
         data = json.loads(self.fs.cat(self.path('tabs')))
-        return data[fold]
+        return data[int(fold)]
 
-    def tabs(self, fold: int) -> list[DatapointTab]:
+    def tabs(self, fold: int | str) -> list[DatapointTab]:
         indices = self.tabs_indices(fold)
         table = self.var.datapoint_table
         return [table.tab(i) for i in indices]
 
-    def fold(self, fold: int) -> DatapointFold:
+    def fold(self, fold: int | str) -> DatapointFold:
         return DatapointFold(
             # As a table gives its tabs its url: a fold of a partition belongs
             # where the partition does, not wherever DBX_ROOT happens to point

@@ -129,3 +129,17 @@ def test_multiprocessing_executor_shuffle():
     funcs = [functools.partial(dummy_func, i) for i in range(50)]
     res = ex.execute(funcs)
     assert res == [i * 2 for i in range(50)]
+
+# ---------------------------------------------------------
+# Devices Parameter Tests
+# ---------------------------------------------------------
+def test_executor_devices_parameter():
+    ex_inline = InlineCallableExecutor(devices=["cuda:0"])
+    assert ex_inline.devices == ["cuda:0"]
+
+    ex_thread = MultithreadingCallableExecutor(n_workers=2, devices=["cuda:0", "cuda:1"])
+    assert ex_thread.devices == ["cuda:0", "cuda:1"]
+
+    ex_mp = MultiprocessingCallableExecutor(n_workers=2, devices=["cuda:0", "cuda:1"])
+    assert ex_mp.devices == ["cuda:0", "cuda:1"]
+

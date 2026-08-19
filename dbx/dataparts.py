@@ -545,6 +545,7 @@ def exec(s=None, **kwargs):
     When *s* is ``None``, the expression and keyword arguments are
     read from the command line (``sys.argv[1:]``).
     """
+    from .datablocks import Datablock
     if s is None:
         # Command line only: may re-exec this process pinned to a revision and
         # never return.
@@ -566,7 +567,8 @@ def exec(s=None, **kwargs):
     _, cxt = get_named_const_and_cxt(s[:lb])
     cxt.update(kwargs)
     r = __eval__(s, globals(), cxt)
-    
+    if isinstance(r, Datablock):
+        r.write_journal_entry(event="dbx:exec", message=s, inline_message=True)
     return r
 
 
@@ -1383,6 +1385,7 @@ class RayCallableExecutor:
                  batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
+                 devices: list | None = None,
                  log: Logger = Logger()):
         if workers is not None:
             self.workers = workers
@@ -1400,6 +1403,7 @@ class RayCallableExecutor:
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
+        self.devices = devices
         self.log = log
 
     @staticmethod

@@ -4708,7 +4708,7 @@ class Datastack(Datablock):
                 and self.multiprocessing_start_method is not None
                 and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
-        # Torch executors require a 'devices' parameter.
+        # All executors accept 'devices'; torch executors use it, others ignore it.
         if getattr(self, 'devices', None) is not None:
             executor_kwargs['devices'] = self.devices
         if getattr(self, 'work_stealing', False):

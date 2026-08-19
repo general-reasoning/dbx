@@ -1251,6 +1251,7 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
                  worker_done_timeout_sec: int = 1000,
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
+                 devices: list | None = None,
                  log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
@@ -1258,6 +1259,7 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
+        self.devices = devices
         self.log = log
 
     @property
@@ -1309,6 +1311,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
                  start_method: str = 'spawn', worker_done_timeout_sec: int = 1000,
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
+                 devices: list | None = None,
                  log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
@@ -1316,6 +1319,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
+        self.devices = devices
         self.log = log
         # Use 'spawn' by default to avoid fork-safety issues with HTTP clients
         # (e.g. Azure SDK, fsspec AzureBlobFileSystem) and CUDA contexts.
@@ -1614,6 +1618,7 @@ class InlineCallableExecutor:
     def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
+                 devices: list | None = None,
                  log: Logger = Logger()):
         self.n_workers = n_workers
         self.batch_size = batch_size
@@ -1621,6 +1626,7 @@ class InlineCallableExecutor:
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
+        self.devices = devices
         self.log = log
 
     @staticmethod

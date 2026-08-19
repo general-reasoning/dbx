@@ -433,12 +433,15 @@ class DatafeatureTable(DatapointTable):
     # 1. Datablock / Datastack Protocol Methods ─────────────────────
 
     def __init__(self, *args, device_batch_size: int = 64, devices: list | None = None, **kwargs):
-        self._devices = devices or ["cuda"]
-        self.device_batch_size = device_batch_size
-        super().__init__(*args, **kwargs)
+        # Pass device_batch_size and devices through Datastack.__init__ so they
+        # survive multiprocessing pickling (Datablock folds **kwargs into the
+        # state dict, which __getstate__/__setstate__ round-trips faithfully).
+        super().__init__(*args, device_batch_size=device_batch_size, devices=devices or ["cuda"], **kwargs)
 
     def __post_init__(self):
         super().__post_init__()
+        # Read back from self — works whether we came through __init__ or __setstate__.
+        self._devices = getattr(self, 'devices', None) or ["cuda"]
         factory = self.var.evaluator_factory
         layer_names = factory.layer_names if factory is not None else []
         namemap = self.var.feature_namemap

@@ -87,6 +87,11 @@ def test_datapoint_partition_and_fold(table, tmp_path):
     fold1 = partition.fold(1)
 
     assert isinstance(fold0, DatapointFold)
+    assert not hasattr(fold0.var, 'datapoint_table')
+    assert not hasattr(fold0.var, 'datapoints_per_row')
+    assert fold0.var.partition.datapoint_table == table
+    assert fold0.datapoint_table == table
+    assert fold0.datapoints_per_row == 1
     assert fold0.n_tabs == len(indices0)
     assert fold1.n_tabs == len(indices1)
 

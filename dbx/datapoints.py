@@ -1072,6 +1072,10 @@ class DatapointPartition(Datablock):
         table = self.var.datapoint_table
         return [table.tab(i) for i in indices]
 
+    @property
+    def datapoint_table(self) -> DatapointTable:
+        return self.var.datapoint_table
+
     def fold(self, fold: int | str) -> DatapointFold:
         return DatapointFold(
             # As a table gives its tabs its url: a fold of a partition belongs
@@ -1081,7 +1085,6 @@ class DatapointPartition(Datablock):
             storage_options=self.storage_options,
             spec=dict(
                 partition=self,
-                datapoint_table=self.var.datapoint_table,
                 fold=fold,
             )
         )
@@ -1099,25 +1102,31 @@ class DatapointFold(DatapointTable):
     @dataclass
     class VAR(Datablock.VAR):
         partition: DatapointPartition
-        datapoint_table: DatapointTable
         fold: int
-        datapoints_per_row: int = 1
 
     @functools.cached_property
     def tab_indices(self) -> list[int]:
         return self.var.partition.tabs_indices(self.var.fold)
 
     @property
+    def datapoint_table(self) -> DatapointTable:
+        return self.var.partition.datapoint_table
+
+    @property
+    def datapoints_per_row(self) -> int:
+        return getattr(self.var.partition.datapoint_table.var, 'datapoints_per_row')
+
+    @property
     def TAB(self):
-        return getattr(self.var.datapoint_table, 'TAB', None)
+        return getattr(self.var.partition.datapoint_table, 'TAB', None)
 
     @property
     def slices(self):
-        return self.var.datapoint_table.slices
+        return self.var.partition.datapoint_table.slices
 
     @property
     def TOPICS(self):
-        return self.var.datapoint_table.TOPICS
+        return self.var.partition.datapoint_table.TOPICS
 
     @property
     def n_tabs(self) -> int:
@@ -1125,19 +1134,19 @@ class DatapointFold(DatapointTable):
 
     def tab(self, idx: int) -> DatapointTab:
         real_idx = self.tab_indices[idx]
-        return self.var.partition.var.datapoint_table.tab(real_idx)
+        return self.var.partition.datapoint_table.tab(real_idx)
 
     def valid_tab(self, idx: int) -> bool:
         real_idx = self.tab_indices[idx]
-        return self.var.partition.var.datapoint_table.valid_tab(real_idx)
+        return self.var.partition.datapoint_table.valid_tab(real_idx)
 
     def _write_tab_built(self, idx: int):
         real_idx = self.tab_indices[idx]
-        return self.var.partition.var.datapoint_table._write_tab_built(real_idx)
+        return self.var.partition.datapoint_table._write_tab_built(real_idx)
 
     def _check_tab_built(self, idx: int) -> bool:
         real_idx = self.tab_indices[idx]
-        return self.var.partition.var.datapoint_table._check_tab_built(real_idx)
+        return self.var.partition.datapoint_table._check_tab_built(real_idx)
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
         return self.tab(idx)

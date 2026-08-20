@@ -821,3 +821,61 @@ class TestTableSampler:
         loader = DataLoader(ds, sampler=built_table.chunk_shuffle_sampler('numbers', seed=1), batch_size=2)
         seen = [int(i) for batch in loader for i in batch['idx']]
         assert sorted(seen) == list(range(len(ds)))
+
+
+# ---------------------------------------------------------------------------
+# Valid Tab Fast Path and Sentinel Files
+# ---------------------------------------------------------------------------
+
+class TestValidTabAndSentinels:
+
+    def test_sentinels_written_on_build(self, tmp_path):
+        tbl = LetterTable(url=str(tmp_path / "sentinel_test"), spec=dict(n_tabs_=3))
+        for i in range(3):
+            assert not tbl.valid_tab(i)
+            assert not tbl._check_tab_built(i)
+        
+        tbl.build()
+        
+        for i in range(3):
+            assert tbl._check_tab_built(i)
+            assert tbl.valid_tab(i)
+            assert os.path.exists(os.path.join(tbl.path('built_tabs'), f"tab_{i}.built"))
+
+    def test_fallback_when_built_tabs_topic_missing(self, tmp_path):
+        class NoBuiltTabsTable(LetterTable):
+            STRUCTURAL_TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
+            TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
+
+        tbl = NoBuiltTabsTable(url=str(tmp_path / "nobuilt_test"), spec=dict(n_tabs_=2))
+        assert 'built_tabs' not in tbl.topics()
+        assert not tbl.valid_tab(0)
+        
+        tbl.build()
+        assert tbl.valid_tab(0)
+        assert tbl.valid_tab(1)
+
+    def test_parallel_filtering_skips_already_valid_tabs(self, tmp_path):
+        tbl = LetterTable(
+            url=str(tmp_path / "filter_test"),
+            spec=dict(n_tabs_=4),
+            parallelization="multithreading",
+            n_workers=2,
+        )
+        # Manually build tab 0 and tab 2
+        tbl.tab(0).build()
+        tbl._write_tab_built(0)
+        tbl.tab(2).build()
+        tbl._write_tab_built(2)
+
+        assert tbl.valid_tab(0)
+        assert not tbl.valid_tab(1)
+        assert tbl.valid_tab(2)
+        assert not tbl.valid_tab(3)
+
+        # Build whole table — should filter out 0 and 2, only building 1 and 3
+        tbl.build()
+        for i in range(4):
+            assert tbl.valid_tab(i)
+            assert tbl._check_tab_built(i)
+

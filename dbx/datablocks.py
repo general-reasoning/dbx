@@ -4938,6 +4938,25 @@ class Datastack(Datablock):
 
     # -- Default build logic ------------------------------------------------------
 
+    def _executor_kwargs(self, tag: str | None = None) -> dict:
+        executor_kwargs = dict(
+            n_workers=self.n_workers,
+            tag=tag or f"EXECUTING [{self.__class__.__name__}]",
+        )
+        if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
+            executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec
+        if hasattr(self, 'shuffle_callables') and self.shuffle_callables:
+            executor_kwargs['shuffle_callables'] = self.shuffle_callables
+        if (hasattr(self, 'multiprocessing_start_method')
+                and self.multiprocessing_start_method is not None
+                and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
+            executor_kwargs['start_method'] = self.multiprocessing_start_method
+        if getattr(self, 'devices', None) is not None:
+            executor_kwargs['devices'] = self.devices
+        if getattr(self, 'work_stealing', False):
+            executor_kwargs['work_stealing'] = True
+        return executor_kwargs
+
     def __build__(self, *args, **kwargs):
         """Build all blocks using BlockMaker + the configured executor.
 
@@ -4950,23 +4969,9 @@ class Datastack(Datablock):
             f"Building {self.__class__.__name__}: blocks using {len(callables)} callables, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
         )
-        executor_kwargs = dict(
-            n_workers=self.n_workers,
-            tag=f"EXECUTING {len(callables)} callables [{self.__class__.__name__}]",
+        executor_kwargs = self._executor_kwargs(
+            tag=f"EXECUTING {len(callables)} callables [{self.__class__.__name__}]"
         )
-        if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
-            executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec
-        if hasattr(self, 'shuffle_callables') and self.shuffle_callables:
-            executor_kwargs['shuffle_callables'] = self.shuffle_callables
-        if (hasattr(self, 'multiprocessing_start_method')
-                and self.multiprocessing_start_method is not None
-                and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
-            executor_kwargs['start_method'] = self.multiprocessing_start_method
-        # All executors accept 'devices'; torch executors use it, others ignore it.
-        if getattr(self, 'devices', None) is not None:
-            executor_kwargs['devices'] = self.devices
-        if getattr(self, 'work_stealing', False):
-            executor_kwargs['work_stealing'] = True
         executor = self.executor_cls(**executor_kwargs)
         callable_results = executor.exec_callables(callables, self, **callable_kwargs)
         self.log.info(f"Stacking the results of {len(callable_results)} callables of {self.__class__.__name__}")

@@ -682,7 +682,7 @@ class DatapointTable(DatapointBase, Datastack):
     #: whatever a subclass declares -- a table missing them cannot be built or
     #: asked whether it is valid, and a subclass redeclaring TOPICS is naming
     #: what it adds, not opting out of being a table.
-    STRUCTURAL_TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
+    STRUCTURAL_TOPICS = {'tabs': DIRTOPIC, 'built_tabs': DIRTOPIC, 'done': 'done'}
     TOPICS = dict(STRUCTURAL_TOPICS)
 
     #: Slices come from TAB, not from this table's own TOPICS.
@@ -752,12 +752,64 @@ class DatapointTable(DatapointBase, Datastack):
 
     def __split__(self, *args, **kwargs):
         self.path('tabs', ensure_dirpath=True)
+        if 'built_tabs' in self.topics():
+            self.path('built_tabs', ensure_dirpath=True)
         n = self.n_tabs
         self.log.info(
             "%s: %d tabs x %d slices %s",
             self.__class__.__name__, n, len(self.slices), list(self.slices),
         )
         return [self.TabMaker(idx) for idx in range(n)], dict(build=True)
+
+    def __build__(self, *args, **kwargs):
+        callables, callable_kwargs = self.__split__(*args, **kwargs)
+        if not callables:
+            return self.__stack__([])
+
+        work_stealing_state = getattr(self, 'work_stealing', False)
+        self.log.info(
+            f"Building {self.__class__.__name__}: filtering {len(callables)} tabs using "
+            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
+        )
+
+        filter_exec_kwargs = self._executor_kwargs(
+            tag=f"FILTERING {len(callables)} tabs [{self.__class__.__name__}]"
+        )
+        filter_executor = self.executor_cls(**filter_exec_kwargs)
+        checkers = [
+            self.TabValidChecker(getattr(c, 'tab_idx', getattr(c, 'idx', i)))
+            for i, c in enumerate(callables)
+        ]
+        validity = filter_executor.exec_callables(checkers, self)
+
+        to_build_callables = []
+        callable_results = []
+
+        for i, (c, is_valid) in enumerate(zip(callables, validity)):
+            idx = getattr(c, 'tab_idx', getattr(c, 'idx', i))
+            tag = getattr(c, 'tag', f"tab_{idx:06d}")
+            if is_valid:
+                callable_results.append({'tab_idx': idx, 'tag': tag, 'skipped': True})
+            else:
+                to_build_callables.append(c)
+
+        self.log.info(
+            f"{self.__class__.__name__}: {len(callables) - len(to_build_callables)}/{len(callables)} tabs already valid, "
+            f"building {len(to_build_callables)} tabs"
+        )
+
+        if to_build_callables:
+            build_exec_kwargs = self._executor_kwargs(
+                tag=f"EXECUTING {len(to_build_callables)} callables [{self.__class__.__name__}]"
+            )
+            build_executor = self.executor_cls(**build_exec_kwargs)
+            built_results = build_executor.exec_callables(to_build_callables, self, **callable_kwargs)
+            callable_results.extend(built_results)
+
+        callable_results.sort(key=lambda r: r.get('tab_idx', 0))
+        result = self.__stack__(callable_results)
+        self.log.info(f"Build complete: {self.__class__.__name__}")
+        return result
 
     def __stack__(self, results=None):
         n_tabs = n_skipped = 0
@@ -802,15 +854,42 @@ class DatapointTable(DatapointBase, Datastack):
                 return self.data(topic_str)
         if topicpath == ('tabs',):
             return self.path('tabs')
+        if topicpath == ('built_tabs',):
+            return self.path('built_tabs')
         if topicpath == ('done',):
             return self.valid()
         raise NotImplementedError(
-            f"{self.__class__.__name__}.__read__ answers only slices, 'tabs' and 'done'; "
+            f"{self.__class__.__name__}.__read__ answers only slices, 'tabs', 'built_tabs' and 'done'; "
             f"override it to read {'/'.join(topicpath)!r}"
         )
 
     def valid(self):
         return self.valid_topic('done')
+
+    def _write_tab_built(self, i: int):
+        if 'built_tabs' not in self.topics():
+            return
+        built_dir = self.path('built_tabs', ensure_dirpath=True)
+        sentinel_path = os.path.join(built_dir, f"tab_{i}.built")
+        with self.fs.open(sentinel_path, 'wb'):
+            pass
+
+    def _check_tab_built(self, i: int) -> bool:
+        if 'built_tabs' not in self.topics():
+            return False
+        try:
+            built_dir = self.path('built_tabs')
+            sentinel_path = os.path.join(built_dir, f"tab_{i}.built")
+            return self.fs.exists(sentinel_path)
+        except Exception:
+            return False
+
+    def valid_tab(self, i: int) -> bool:
+        if 'built_tabs' in self.topics():
+            if self._check_tab_built(i):
+                return True
+            return self.tab(i).valid()
+        return self.tab(i).valid()
 
     def valid_slice(self, slice) -> bool:
         return all(
@@ -897,6 +976,13 @@ class DatapointTable(DatapointBase, Datastack):
             datapoints.extend(self.tab(idx).data(slice, **kwargs))
         return datapoints
 
+    class TabValidChecker:
+        def __init__(self, tab_idx: int):
+            self.tab_idx = tab_idx
+
+        def __call__(self, table):
+            return table.valid_tab(self.tab_idx)
+
     class TabMaker:
         def __init__(self, tab_idx: int):
             self.tab_idx = tab_idx
@@ -907,6 +993,8 @@ class DatapointTable(DatapointBase, Datastack):
             skipped = tab.valid()
             if build:
                 tab.build()
+                if hasattr(table, '_write_tab_built'):
+                    table._write_tab_built(self.tab_idx)
             result = {'tab_idx': self.tab_idx, 'tag': tab.tag, 'skipped': skipped}
             del tab
             gc.collect()
@@ -1038,6 +1126,18 @@ class DatapointFold(DatapointTable):
     def tab(self, idx: int) -> DatapointTab:
         real_idx = self.tab_indices[idx]
         return self.var.partition.var.datapoint_table.tab(real_idx)
+
+    def valid_tab(self, idx: int) -> bool:
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.var.datapoint_table.valid_tab(real_idx)
+
+    def _write_tab_built(self, idx: int):
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.var.datapoint_table._write_tab_built(real_idx)
+
+    def _check_tab_built(self, idx: int) -> bool:
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.var.datapoint_table._check_tab_built(real_idx)
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
         return self.tab(idx)

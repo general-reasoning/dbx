@@ -467,6 +467,8 @@ class DatafeatureTable(DatapointTable):
             skipped = tab.valid()
             if build:
                 tab.build()
+                if hasattr(table, '_write_tab_built'):
+                    table._write_tab_built(self.idx)
             result = {'tab_idx': self.idx, 'tag': tab.tag, 'skipped': skipped}
             del tab
             gc.collect()

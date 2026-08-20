@@ -473,6 +473,16 @@ class DatajournalEntry(pd.Series):
         return ast.literal_eval(raw) if raw.startswith('{') else raw
 
     @property
+    def note(self):
+        """Path to or content of this entry's note, or None."""
+        return self._renamed_column('note', 'message')
+
+    @property
+    def message(self):
+        """Legacy alias for :attr:`note`."""
+        return self.note
+
+    @property
     def keyby(self):
         return self.get('keyby', 'tag_version_shorthash')
 
@@ -663,17 +673,19 @@ class DatajournalEntry(pd.Series):
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
-            if hasattr(self, thing) and getattr(self, thing) is not None:
-                path = getattr(self, thing)
+            target_attr = 'note' if thing in ('note', 'message') else thing
+            val = getattr(self, target_attr, None)
+            if val is not None:
+                path = val
                 _, _ext = os.path.splitext(path)
                 ext = _ext[1:]
                 try:
                     if raw or ext == 'txt' or ext == 'log':
-                        result = read_str(getattr(self, thing), storage_options=self.storage_options)
+                        result = read_str(path, storage_options=self.storage_options)
                     elif ext == 'yaml':
-                        result = read_yaml(getattr(self, thing), safe=safe, storage_options=self.storage_options)
+                        result = read_yaml(path, safe=safe, storage_options=self.storage_options)
                     else:
-                        raise ValueError(f"Uknown journal entry field extention for {thing}: {ext}")
+                        raise ValueError(f"Unknown journal entry field extension for {thing}: {ext}")
                 except FileNotFoundError:
                     self.logger.warning(f"read: {thing}: file not found, returning None: {path}")
                     result = None
@@ -1349,9 +1361,9 @@ class Datablock:
         self._paths_ = resolved_paths
 
         if code_of_target is not None and target_entry is not None:
-            code_of_source = self.write_journal_entry(event='redirect:target', message=code_of_target)
+            code_of_source = self.write_journal_entry(event='redirect:target', note=code_of_target)
             target_block = target_entry.inst()
-            target_block.write_journal_entry(event='redirection:target', message=code_of_source)
+            target_block.write_journal_entry(event='redirection:target', note=code_of_source)
 
     def _find_journal_entry_by_code(self, code: str):
         try:
@@ -2074,8 +2086,8 @@ class Datablock:
                 return local_path
         return None
 
-    def note(self, message: str | None = None, event: str = 'note', *, inline: bool = False):
-        """Write a journal entry with the given *event* and optional *message*.
+    def note(self, note: str | None = None, event: str = 'note', *, inline: bool = False, message: str | None = None):
+        """Write a journal entry with the given *event* and optional *note*.
 
         The journal parquet file is prepended with ``{event}-`` so it can
         be distinguished from regular journal entries, but it still
@@ -2084,34 +2096,40 @@ class Datablock:
 
         Parameters
         ----------
-        message : str, optional
-            If provided, recorded in the journal ``message`` field.
+        note : str, optional
+            If provided, recorded in the journal ``note`` field.
         event : str, default 'note'
             The event name recorded in the journal (e.g. ``'keep'``,
             ``'note'``).
         inline : bool, default False
-            When ``True`` the *message* string is stored directly in the
-            journal record.  When ``False`` the message is written to a
+            When ``True`` the *note* string is stored directly in the
+            journal record.  When ``False`` the note is written to a
             separate text file and the journal stores the file path.
+        message : str, optional
+            Legacy alias for *note*.
 
         Returns
         -------
         self
         """
+        if note is None and message is not None:
+            note = message
         self.write_journal_entry(
             event=event,
-            message=message,
-            inline_message=inline,
+            note=note,
+            inline_note=inline,
             journal_prefix=f'{event}-',
         )
         return self
 
-    def keep(self, message: str | None = None):
-        """Write a journal entry with event='keep' and optional *message*.
+    def keep(self, note: str | None = None, message: str | None = None):
+        """Write a journal entry with event='keep' and optional *note*.
 
-        Equivalent to ``self.note(message, event='keep', inline=True)``.
+        Equivalent to ``self.note(note, event='keep', inline=True)``.
         """
-        return self.note(message, event='keep', inline=True)
+        if note is None and message is not None:
+            note = message
+        return self.note(note, event='keep', inline=True)
 
     def leave_breadcrumbs(self):
         """Touch a breadcrumb for every topic that has a location.
@@ -2778,7 +2796,7 @@ class Datablock:
         fs, _ = self._url_to_fs(anchorkeypath)
         assert fs.isdir(anchorkeypath), f"Nonexistent hashpath {anchorkeypath}"
         self.log.verbose(f"Copying files from {anchorkeypath}: BEGIN")
-        self.write_journal_entry(event="UNSAFE_copy_from:BEGIN", message=anchorkeypath, inline_message=True)
+        self.write_journal_entry(event="UNSAFE_copy_from:BEGIN", note=anchorkeypath, inline_note=True)
         try:
             topics = self.topics()
             if not topics:
@@ -2793,13 +2811,13 @@ class Datablock:
                 )
 
             self.log.verbose(f"Copying files from {anchorkeypath}: END")
-            self.write_journal_entry(event="UNSAFE_copy_from:END", message=anchorkeypath, inline_message=True)
+            self.write_journal_entry(event="UNSAFE_copy_from:END", note=anchorkeypath, inline_note=True)
             if validate:
                 assert self.valid(), f"Invalid Datablock after copy: {self}"
         except Exception as e:
             self.log.error(f"UNSAFE_copy_from: Error when trying to copy files from {anchorkeypath}")
             self.log.error(f"EXCEPTION: {e}")
-            self.write_journal_entry(event="UNSAFE_copy_from:ERROR", message=anchorkeypath, inline_message=True)
+            self.write_journal_entry(event="UNSAFE_copy_from:ERROR", note=anchorkeypath, inline_note=True)
             raise e
         return self
 
@@ -4494,7 +4512,8 @@ class Datablock:
         assert self.fs.exists(path), f"scopepath {path} does not exist after writing"
         self.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
-    def write_journal_entry(self, event:str, *, message: str = None, inline_message: bool = False, journal_prefix: str = '',
+    def write_journal_entry(self, event: str, *, note: str = None, inline_note: bool = False,
+                            message: str = None, inline_message: bool = False, journal_prefix: str = '',
                             redirection: 'str | dict | None' = None):
         """Write one journal entry for *event*, and return its ``entry_code``.
 
@@ -4526,10 +4545,15 @@ class Datablock:
         *redirection* -- an ``entry_code`` or a journal filter, normally passed
         by :meth:`UNSAFE_redirect` rather than directly -- is recorded IN the
         entry, in the ``redirection`` column, not written out to a file the way
-        *message* and ``quote``/``norm``/``spec`` are. A redirection is what
+        *note* and ``quote``/``norm``/``spec`` are. A redirection is what
         :meth:`read` falls back to when the data it wanted is gone, so it must
         not itself depend on a second file still being there.
         """
+        if note is None and message is not None:
+            note = message
+        if not inline_note and inline_message:
+            inline_note = inline_message
+
         if redirection is not None and not isinstance(redirection, (str, dict)):
             raise TypeError(
                 f"redirection must be an entry_code str or a journal filter dict, "
@@ -4552,8 +4576,8 @@ class Datablock:
         self._write_str('supernorm', self.supernorm())
         self._write_str('signature', self.signature)
         self._write_str('supersignature', self.supersignature)
-        if message is not None and not inline_message:
-            self._write_str('message', message)
+        if note is not None and not inline_note:
+            self._write_str('note', note)
         #
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
 
@@ -4567,11 +4591,11 @@ class Datablock:
         signature_path = self._dbxanchorhashpathx('signature', 'txt')
         supernorm_path = self._dbxanchorhashpathx('supernorm', 'txt')
         supersignature_path = self._dbxanchorhashpathx('supersignature', 'txt')
-        if message is not None and not inline_message:
-            message_path = self._dbxanchorhashpathx('message', 'txt')
-            message = message_path
+        if note is not None and not inline_note:
+            note_path = self._dbxanchorhashpathx('note', 'txt')
+            note_val = note_path
         else:
-            message_path = None
+            note_val = note
         #
         logpath = self._dbxanchorhashpathx('log', ensure_dirpath=True)
         if logpath is not None:
@@ -4619,7 +4643,7 @@ class Datablock:
                                          'repr': repr_path,
                                          'signature': signature_path,
                                          'supersignature': supersignature_path,
-                                         'message': message,
+                                         'note': note_val,
                                          'gitrepo': dataparts.DBX_GIT_REPO,
                                          'wrkrepo': dataparts.DBX_USE_WORK_REPO,
         }])
@@ -4701,9 +4725,13 @@ class Datablock:
                 df = pd.concat(dfs, ignore_index=True)
                 if 'revision' not in df.columns:
                     df = df.rename(columns={'version': 'revision',})
-                # Backward compat: rename legacy 'context' column to 'message'
-                if 'context' in df.columns and 'message' not in df.columns:
-                    df = df.rename(columns={'context': 'message'})
+                # Backward compat: rename legacy 'context' column to 'note' and alias 'message'
+                if 'context' in df.columns and 'note' not in df.columns:
+                    df = df.rename(columns={'context': 'note'})
+                if 'note' in df.columns and 'message' not in df.columns:
+                    df['message'] = df['note']
+                elif 'message' in df.columns and 'note' not in df.columns:
+                    df['note'] = df['message']
                 # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
                 if 'build_datetime' in df.columns and 'build:end:datetime' not in df.columns:
                     df = df.rename(columns={'build_datetime': 'build:end:datetime'})

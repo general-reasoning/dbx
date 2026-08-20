@@ -568,7 +568,7 @@ def exec(s=None, **kwargs):
     cxt.update(kwargs)
     r = __eval__(s, globals(), cxt)
     if isinstance(r, Datablock):
-        r.write_journal_entry(event="dbx:exec", message=s, inline_message=True)
+        r.write_journal_entry(event="dbx:exec", note=s, inline_note=True)
     return r
 
 

@@ -486,7 +486,7 @@ class DatafeatureTable(DatapointTable):
             spec['feature_namemap'] = self.var.feature_namemap
         spec['shard_size_limit_bytes'] = self.var.shard_size_limit_bytes
         return self.TAB(
-            url=self.path('tabs'),
+            url=self.url,
             storage_options=self.storage_options,
             capture_output=self.capture_output,
             cache=getattr(self, 'cache', None),
@@ -803,7 +803,7 @@ class BipolarDatafeatureTable(DatapointTable):
     def __tab__(self, idx: int, tag=None) -> BipolarDatafeatureTab:
         featuretab = self.var.featuretable.tab(idx)
         return self.TAB(
-            url=self.path('tabs'),
+            url=self.url,
             storage_options=self.storage_options,
             capture_output=self.capture_output,
             cache=getattr(self, 'cache', None),

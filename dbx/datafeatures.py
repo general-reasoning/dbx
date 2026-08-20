@@ -455,24 +455,7 @@ class DatafeatureTable(DatapointTable):
         else:
             self._feature_map = {name: name for name in layer_names}
 
-    class BlockMaker(Datastack.BlockMaker):
-        """Lightweight callable that forms and optionally builds a block."""
-        def __init__(self, idx: int, *, device: str = "cuda"):
-            super().__init__(idx)
-            self.device = device
 
-        def __call__(self, table, *, build=True):
-            tab = table.__block__(self.idx, device=self.device)
-            tab.keyby = table.keyby
-            skipped = tab.valid()
-            if build:
-                tab.build()
-                if hasattr(table, '_write_tab_built'):
-                    table._write_tab_built(self.idx)
-            result = {'tab_idx': self.idx, 'tag': tab.tag, 'skipped': skipped}
-            del tab
-            gc.collect()
-            return result
 
     def __tab__(self, idx: int, device: str = "cuda", tag=None) -> DatafeatureTab:
         datapoint_tab = self.var.datapoint_table.tab(idx)
@@ -501,23 +484,6 @@ class DatafeatureTable(DatapointTable):
 
     def __block__(self, idx: int, **kwargs) -> DatafeatureTab:
         return self.__tab__(idx, **kwargs)
-
-    def __split__(self, *args, **kwargs):
-        devices = self._devices
-
-        callable_kwargs = dict(build=True)
-        n_workers = len(devices)
-        chunk_boundaries = np.array_split(range(self.n_tabs), n_workers)
-        block_device = {}
-        for worker_idx, chunk in enumerate(chunk_boundaries):
-            dev = devices[worker_idx % len(devices)]
-            for idx in chunk:
-                block_device[idx] = dev
-        makers = [
-            self.BlockMaker(idx, device=block_device[idx])
-            for idx in range(self.n_tabs)
-        ]
-        return makers, callable_kwargs
 
     def dataset(
         self,

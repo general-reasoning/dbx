@@ -184,7 +184,7 @@ table.datastream('frames')               # one slice, unzipped
 table.data('annotations')                # every tab's samples, concatenated
 ```
 
-See [DATASTREAMTABLE.md](DATASTREAMTABLE.md).
+See [DATAPOINTS.md](DATAPOINTS.md).
 
 ### Data Terminology
 

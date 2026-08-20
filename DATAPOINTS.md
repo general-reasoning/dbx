@@ -1,14 +1,14 @@
-# DatastreamTab / DatastreamTable
+# DatapointTab / DatapointTable
 
-`DatastreamTable` is a `Datastack` whose blocks — `DatastreamTab`s — each write several
+`DatapointTable` is a `Datastack` whose blocks — `DatapointTab`s — each write several
 **parallel MDS streams**, called *slices*, that can be zipped back into one
 `torch.utils.data.Dataset` on demand.
 
-Both live in `dbx.datastreams`, which needs `torch` and `mosaicml-streaming`
+Both live in `dbx.datapoints`, which needs `torch` and `mosaicml-streaming`
 at import time:
 
 ```python
-from dbx.datastreams import DatastreamTab, DatastreamTable
+from dbx.datapoints import DatapointTab, DatapointTable
 ```
 
 ## Why slices
@@ -34,13 +34,13 @@ Declare `SLICES`, add whatever VAR addresses the tab's input, and write the
 slices in lockstep inside `__build__`:
 
 ```python
-class FrameTab(DatastreamTab):
+class FrameTab(DatapointTab):
     VERSION = 1
     SLICES = ('frames', 'annotations')
     TOPICS = {'note': 'note.txt'}          # optional extra topics
 
     @dataclass
-    class VAR(DatastreamTab.VAR):
+    class VAR(DatapointTab.VAR):
         episode: str = None                # on top of table and tab_idx
 
     COLUMNS = {
@@ -83,7 +83,7 @@ The synthesized `data` group is merged with what the class declares, so a tab
 or table keeps its own files, dicts and `DIRTOPIC`s — nested ones included:
 
 ```python
-class FrameTab(DatastreamTab):
+class FrameTab(DatapointTab):
     SLICES = ('frames', 'annotations')
     TOPICS = {'note': 'note.txt', 'debug': {'plots': DIRTOPIC}}
 ```
@@ -100,12 +100,9 @@ They differ from slices in three ways:
   anything else raises `NotImplementedError` naming the topic, for the
   subclass to override — the same contract as a plain Datablock.
 
-`TOPICS` **accumulates** down the hierarchy here, rather than shadowing as a
-plain class attribute would: a subclass declaring `TOPICS = {'note': ...}`
-adds to what it inherits, and its own entries win on a collision.  That is the
-whole mechanism by which a table keeps the `tabs` and `done` topics
-`DatastreamTable` declares — no second class attribute, no registry.  The
-`data` group is the one exemption: it is always rebuilt from `SLICES`.
+`TOPICS` behaves as a standard Python class attribute: a subclass declaring `TOPICS = {'note': ...}`
+can explicitly include base class topics (e.g., `TOPICS = {'note': ..., **BaseTab.TOPICS}`) if it wants to
+extend what it inherits. `DatapointTable` explicitly declares its structural topics (`tabs`, `tab_paths`, `done`) on its `TOPICS` attribute.
 
 Redeclaring `done` (say, as a different filename) is harmless.  Redeclaring
 `tabs` as a file topic is not: it is the `url=` every tab is formed under.
@@ -113,12 +110,12 @@ Redeclaring `done` (say, as a different filename) is harmless.  Redeclaring
 ## Implementing a Table
 
 ```python
-class FrameTable(DatastreamTable):
+class FrameTable(DatapointTable):
     VERSION = 1
     TAB = FrameTab                     # SLICES are inherited from it
 
     @dataclass
-    class VAR(DatastreamTable.VAR):
+    class VAR(DatapointTable.VAR):
         episodes: list = None
 
     @property
@@ -134,7 +131,7 @@ class FrameTable(DatastreamTable):
 `__stack__`, which are preimplemented and should be extended via `super()`
 rather than replaced.
 
-`DatastreamTab.VAR` declares `table` and `tab_idx`, both **required**: a tab's
+`DatapointTab.VAR` declares `table` and `tab_idx`, both **required**: a tab's
 slices live in its table's per-slice roots, so a tab without a table is one
 whose shards no merged index will ever name.  Form tabs with `table.tab(idx)`
 rather than constructing them directly.  (Requiring them rather than defaulting
@@ -171,7 +168,7 @@ A tab's shards do **not** live under its own `anchorkeypath`:
 so a slice's merged index must sit at an **ancestor** of that slice's shards.
 Several slices therefore cannot share one directory, and `'../'` is not an
 option because Azure Data Lake's REST API does not resolve it.
-`DatastreamTab.dirpath` implements the redirect; non-slice topics are untouched
+`DatapointTab.dirpath` implements the redirect; non-slice topics are untouched
 and stay under the tab's own key.
 
 Both `<key>` above are the same string — `tabdir` is just the tab's `key`, so
@@ -390,7 +387,7 @@ methods are the override points, matching the `Datablock`/`Datastack`
 convention (`__build__`, `__read__`, `__block__`); a leading underscore means
 internal, and a plain name means it is for calling, not overriding.
 
-### `DatastreamTab`
+### `DatapointTab`
 
 | | | |
 |---|---|---|
@@ -402,11 +399,11 @@ internal, and a plain name means it is for calling, not overriding.
 | `__read__(*topicpath)` | | needed only for topics besides `data` |
 | `tabdir` | | directory under a slice root; defaults to the tab's `key` |
 
-### `DatastreamTable`
+### `DatapointTable`
 
 | | | |
 |---|---|---|
-| `TAB` | **required** | the `DatastreamTab` subclass; `SLICES` follows it |
+| `TAB` | **required** | the `DatapointTab` subclass; `SLICES` follows it |
 | `VAR`, `VERSION` | | as on any `Datastack` |
 | `n_tabs` | **required** | how many tabs |
 | `__tab__(idx)` | | tab *idx*'s own VAR fields; `super()` fills in placement |

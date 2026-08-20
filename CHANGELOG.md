@@ -73,7 +73,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 - **`DatastreamTab` / `DatastreamTable`** in `dbx.datastreams` — an abstract `Datablock` /
   `Datastack` pair over parallel MDS *slices*, documented in
-  [DATASTREAMTABLE.md](DATASTREAMTABLE.md). A tab declares `SLICES = ('frames', 'annotations')`
+  [DATAPOINTS.md](DATAPOINTS.md). A tab declares `SLICES = ('frames', 'annotations')`
   and writes them in lockstep inside `__build__`; the `data` group of its `TOPICS`
   is synthesized from them, so the slices are covered by the block's hash. A table
   inherits `SLICES` from its `TAB` and needs only `n_tabs`, with `__tab__(idx)`

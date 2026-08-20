@@ -1,4 +1,4 @@
-"""Tests for the :class:`~dbx.datastreams.DatastreamTab` / :class:`~dbx.datastreams.DatastreamTable`
+"""Tests for the :class:`~dbx.datapoints.DatapointTab` / :class:`~dbx.datapoints.DatapointTable`
 scaffolding.
 
 Covers TOPICS synthesis from SLICETOPIC entries, where a tab's shards land relative to
@@ -26,8 +26,6 @@ from dbx.datapoints import (
     SLICETOPIC,
     DatapointTab,
     DatapointTable,
-    DatapointTab as DatastreamTab,
-    DatapointTable as DatastreamTable,
 )
 from dbx.datastreams import (
     ZipIterableStreamingDatasets,
@@ -44,14 +42,14 @@ def setup_env(monkeypatch):
 # A minimal tab/table pair
 # ---------------------------------------------------------------------------
 
-class LetterTab(DatastreamTab):
+class LetterTab(DatapointTab):
     """Writes ``n`` items into two lockstep slices, plus a non-slice topic."""
 
     VERSION = 1
     TOPICS = {'numbers': SLICETOPIC, 'letters': SLICETOPIC, 'note': 'note.txt'}
 
     @dataclass
-    class VAR(DatastreamTab.VAR):
+    class VAR(DatapointTab.VAR):
         n: int = 3
         base: int = 0
         fail: bool = False
@@ -76,12 +74,12 @@ class LetterTab(DatastreamTab):
         return {'n_samples': len(self.data(slice_name))}
 
 
-class LetterTable(DatastreamTable):
+class LetterTable(DatapointTable):
     VERSION = 1
     TAB = LetterTab
 
     @dataclass
-    class VAR(DatastreamTable.VAR):
+    class VAR(DatapointTable.VAR):
         n_tabs_: int = 3
         per_tab: int = 3
         fail: bool = False
@@ -133,7 +131,7 @@ class TestTopicsFromSlices:
         assert LetterTable.TOPICS['done'] == 'done'
 
     def test_docstring_example_subclass_extends_topics_and_slices(self):
-        """The DatastreamTab docstring's DebuggableFrameTab example."""
+        """The DatapointTab docstring's DebuggableFrameTab example."""
         class Debuggable(LetterTab):
             TOPICS = {'debug': {'plots': DIRTOPIC}, 'depth': SLICETOPIC}
 
@@ -141,16 +139,18 @@ class TestTopicsFromSlices:
         assert 'depth' in Debuggable.slices
 
     def test_topics_do_not_accumulate_down_the_hierarchy(self):
-        """A subclass declaring TOPICS does not accumulate parent non-slice TOPICS."""
+        """A subclass declaring TOPICS does not accumulate parent TOPICS unless explicitly specified."""
         class BaseTab(DatapointTab):
             TOPICS = {'samples': SLICETOPIC, 'meta': 'meta.json'}
 
         class SubTab(BaseTab):
             TOPICS = {'report': 'report.json'}
 
-        assert SubTab.TOPICS['report'] == 'report.json'
-        assert SubTab.TOPICS['samples'] == SLICETOPIC
-        assert 'meta' not in SubTab.TOPICS
+        class ExplicitSubTab(BaseTab):
+            TOPICS = {'report': 'report.json', **BaseTab.TOPICS}
+
+        assert SubTab.TOPICS == {'report': 'report.json'}
+        assert ExplicitSubTab.TOPICS == {'report': 'report.json', 'samples': SLICETOPIC, 'meta': 'meta.json'}
 
     def test_slice_topics_are_not_in_table_topics(self):
         """Slice topics belong to the tab; they must not appear in the table's TOPICS."""
@@ -385,7 +385,7 @@ class TestDatasetMode:
 # flush_every: shard boundaries that coincide across slices
 # ---------------------------------------------------------------------------
 
-class SizedTab(DatastreamTab):
+class SizedTab(DatapointTab):
     """Two slices whose samples differ wildly in size, so that a byte-driven
     shard boundary in one lands nowhere near the other's."""
 
@@ -393,7 +393,7 @@ class SizedTab(DatastreamTab):
     TOPICS = {'small': SLICETOPIC, 'big': SLICETOPIC}
 
     @dataclass
-    class VAR(DatastreamTab.VAR):
+    class VAR(DatapointTab.VAR):
         n: int = 24
         width: int = 400
         flush_every: int = None
@@ -414,12 +414,12 @@ class SizedTab(DatastreamTab):
                 writers['big'].write({'idx': -1, 'payload': 'extra'})
 
 
-class SizedTable(DatastreamTable):
+class SizedTable(DatapointTable):
     VERSION = 1
     TAB = SizedTab
 
     @dataclass
-    class VAR(DatastreamTable.VAR):
+    class VAR(DatapointTable.VAR):
         n: int = 24
         width: int = 400
         flush_every: int = None
@@ -525,7 +525,7 @@ class TestScaffoldingErrors:
     LONE = dict()
 
     def test_build_names_the_slices_to_write(self, tmp_path):
-        class Bare(DatastreamTab):
+        class Bare(DatapointTab):
             TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
         # __build__ directly, not build(): build() journals first, and
@@ -535,8 +535,8 @@ class TestScaffoldingErrors:
             Bare(url=str(tmp_path), spec=dict(self.LONE)).__build__()
 
     def test_missing_tab_class(self, tmp_path):
-        class NoTab(DatastreamTable):
-            TOPICS = {'a': SLICETOPIC}
+        class NoTab(DatapointTable):
+            TOPICS = {'a': SLICETOPIC, **DatapointTable.TOPICS}
 
             @property
             def n_tabs(self):
@@ -546,14 +546,14 @@ class TestScaffoldingErrors:
             NoTab(url=str(tmp_path)).build()
 
     def test_missing_n_tabs(self, tmp_path):
-        class NoCount(DatastreamTable):
+        class NoCount(DatapointTable):
             TAB = LetterTab
 
         with pytest.raises(NotImplementedError, match='n_tabs'):
             NoCount(url=str(tmp_path)).build()
 
     def test_slice_writers_requires_every_slice(self, tmp_path):
-        class Partial(DatastreamTab):
+        class Partial(DatapointTab):
             TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
             def __build__(self):
@@ -661,7 +661,7 @@ class TestZipPolicy:
 class NestedTab(LetterTab):
     """A tab with a file topic and a nested topic group besides its slices."""
 
-    TOPICS = {'note': 'note.txt', 'debug': {'plots': DIRTOPIC, 'log': 'run.log'}}
+    TOPICS = {'note': 'note.txt', 'debug': {'plots': DIRTOPIC, 'log': 'run.log'}, **LetterTab.TOPICS}
 
 
 class NestedTable(LetterTable):
@@ -833,22 +833,24 @@ class TestValidTabAndSentinels:
         tbl = LetterTable(url=str(tmp_path / "sentinel_test"), spec=dict(n_tabs_=3))
         for i in range(3):
             assert not tbl.valid_tab(i)
-            assert not tbl._check_tab_built(i)
+            assert not tbl._check_tab_path(i)
         
         tbl.build()
         
         for i in range(3):
-            assert tbl._check_tab_built(i)
+            assert tbl._check_tab_path(i)
             assert tbl.valid_tab(i)
-            assert os.path.exists(os.path.join(tbl.path('built_tabs'), f"tab_{i}.built"))
+            sentinel_path = os.path.join(tbl.path('tab_paths'), f"tab_{i}.path")
+            assert os.path.exists(sentinel_path)
+            with open(sentinel_path) as f:
+                assert f.read().strip() == tbl.tab(i).anchorkeypath
 
-    def test_fallback_when_built_tabs_topic_missing(self, tmp_path):
-        class NoBuiltTabsTable(LetterTable):
-            STRUCTURAL_TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
+    def test_fallback_when_tab_paths_topic_missing(self, tmp_path):
+        class NoTabPathsTable(LetterTable):
             TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
 
-        tbl = NoBuiltTabsTable(url=str(tmp_path / "nobuilt_test"), spec=dict(n_tabs_=2))
-        assert 'built_tabs' not in tbl.topics()
+        tbl = NoTabPathsTable(url=str(tmp_path / "nobuilt_test"), spec=dict(n_tabs_=2))
+        assert 'tab_paths' not in tbl.topics()
         assert not tbl.valid_tab(0)
         
         tbl.build()
@@ -864,9 +866,9 @@ class TestValidTabAndSentinels:
         )
         # Manually build tab 0 and tab 2
         tbl.tab(0).build()
-        tbl._write_tab_built(0)
+        tbl._write_tab_path(0)
         tbl.tab(2).build()
-        tbl._write_tab_built(2)
+        tbl._write_tab_path(2)
 
         assert tbl.valid_tab(0)
         assert not tbl.valid_tab(1)
@@ -877,5 +879,5 @@ class TestValidTabAndSentinels:
         tbl.build()
         for i in range(4):
             assert tbl.valid_tab(i)
-            assert tbl._check_tab_built(i)
+            assert tbl._check_tab_path(i)
 

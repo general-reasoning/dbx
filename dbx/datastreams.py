@@ -11,7 +11,7 @@ Usage::
 
     from dbx.datastreams import ZipStreamingDataset          # map-style
     from dbx.datastreams import ZipIterableStreamingDatasets  # iterator-style
-    from dbx.datastreams import DatastreamTab, DatastreamTable
+    from dbx.datapoints import DatapointTab, DatapointTable
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ class ZipBase:
     that, calling ``_merge(idx, samples)`` with one sample per source.
 
     Beyond the plain merge, two things a multi-slice
-    ``DatastreamTable`` needs:
+    ``DatapointTable`` needs:
 
     * **Per-source column projection** (*columns*), so a caller can say
       "frames, and only these two annotation columns" without paying to
@@ -242,7 +242,7 @@ class ZipStreamingDataset(ZipBase, Dataset):
       dominant cost.
     * Access order is the caller's, so cache locality is the caller's
       problem.  ``DataLoader(shuffle=True)`` is a full permutation and will
-      thrash a bounded ``cache_limit``; use ``DatastreamTable.sampler()``,
+      thrash a bounded ``cache_limit``; use ``DatapointTable.sampler()``,
       which shuffles in shard-sized blocks instead.
 
     What it buys in exchange is genuine random access: an index means the
@@ -291,7 +291,7 @@ class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
     * ``shuffle=True`` on every source with identical ``shuffle_seed``,
       ``shuffle_algo``, ``num_canonical_nodes`` and ``batch_size``, **and**
       shard boundaries that coincide: aligned, full locality-aware shuffle.
-      ``DatastreamTab.slice_writers(..., flush_every=N)`` is what makes the
+      ``DatapointTab.slice_writers(..., flush_every=N)`` is what makes the
       boundaries coincide.
     * ``shuffle_algo='naive'`` is the exception that needs no aligned
       boundaries -- it permutes ``sum(shard_sizes)`` and so depends only on

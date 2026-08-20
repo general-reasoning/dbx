@@ -96,70 +96,17 @@ class DatapointBase(Datablock):
     A **slice** is one independently-readable MDS stream directory inside a block.
     Slices are declared via topics marked with `SLICETOPIC`.
 
-    A subclass declaring TOPICS keeps its bases' SLICE topics and drops their
-    other ones::
+    A subclass declaring TOPICS constructs its TOPICS dictionary explicitly if extending
+    its base class's topics::
 
         class BaseTab(DatapointTab):
             TOPICS = {'samples': SLICETOPIC, 'meta': 'meta.json'}
 
         class SubTab(BaseTab):
-            TOPICS = {'report': 'report.json'}
-            # TOPICS == {'samples': SLICETOPIC, 'report': 'report.json'}
-
-    Slices are what makes such a block the kind of block it is -- a subclass
-    that redeclares TOPICS is describing what it adds, not renouncing the
-    streams its base reads and writes -- whereas ordinary topics belong to the
-    class that declared them and do not accumulate down the hierarchy.
+            TOPICS = {'report': 'report.json', **BaseTab.TOPICS}
     """
 
     TOPICS = {}
-
-    #: SLICES is retired: a slice is a TOPICS entry valued SLICETOPIC, and
-    #: nothing reads a SLICES attribute any more. A class still carrying one
-    #: would come out with no slices at all -- valid, buildable, and empty --
-    #: which is worth an error at construction rather than a puzzle later.
-    RETIRED_ATTRS = {**Datablock.RETIRED_ATTRS,
-                     'SLICES': 'TOPICS entries valued SLICETOPIC'}
-
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        cls._synthesize_topics()
-
-    @classmethod
-    def _synthesize_topics(cls):
-        """Merge this class's declared TOPICS with its bases' slice topics."""
-        declared = cls.__dict__.get('TOPICS')
-        if not isinstance(declared, dict):
-            # Declares none (inherits its base's TOPICS whole), or overrides the
-            # name with something computed -- DatapointFold makes it a property.
-            return
-        cls.TOPICS = {**cls._inherited_slice_topics(), **declared}
-
-    @classmethod
-    def _inherited_slice_topics(cls):
-        """The slice topics of the nearest base that declares TOPICS."""
-        for base in cls.__mro__[1:]:
-            topics = base.__dict__.get('TOPICS')
-            if isinstance(topics, dict):
-                return cls._slice_topics_only(topics)
-        return {}
-
-    @classmethod
-    def _slice_topics_only(cls, topics):
-        """*topics* with everything that is not a slice pruned out.
-
-        Recurses into groups, and drops a group that holds no slice at all, so
-        a group of ordinary topics does not come down as an empty husk.
-        """
-        kept = {}
-        for name, node in topics.items():
-            if node == SLICETOPIC or node is SLICETOPIC:
-                kept[name] = node
-            elif isinstance(node, dict):
-                nested = cls._slice_topics_only(node)
-                if nested:
-                    kept[name] = nested
-        return kept
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
@@ -678,44 +625,12 @@ class DatapointTable(DatapointBase, Datastack):
     TAB = None
 
     #: The topics the table machinery itself writes and reads: the directory
-    #: the tabs live in, and the marker that says the stack completed. Kept
-    #: whatever a subclass declares -- a table missing them cannot be built or
-    #: asked whether it is valid, and a subclass redeclaring TOPICS is naming
-    #: what it adds, not opting out of being a table.
-    STRUCTURAL_TOPICS = {'tabs': DIRTOPIC, 'built_tabs': DIRTOPIC, 'done': 'done'}
-    TOPICS = dict(STRUCTURAL_TOPICS)
+    #: the tabs live in, and the marker that says the stack completed. Subclasses
+    #: extending TOPICS explicitly include DatapointTable.TOPICS if desired.
+    TOPICS = {'tabs': DIRTOPIC, 'tab_paths': DIRTOPIC, 'done': 'done'}
 
     #: Slices come from TAB, not from this table's own TOPICS.
     slices = _table_slices_descriptor()
-
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        cls._synthesize_table_topics()
-
-    @classmethod
-    def _synthesize_topics(cls):
-        super()._synthesize_topics()
-        if not isinstance(cls.__dict__.get('TOPICS'), dict):
-            return
-        missing = {name: node for name, node in cls.STRUCTURAL_TOPICS.items()
-                   if name not in cls.TOPICS}
-        if missing:
-            cls.TOPICS = {**missing, **cls.TOPICS}
-
-    @classmethod
-    def _synthesize_table_topics(cls):
-        tab = cls.__dict__.get('TAB', cls.TAB)
-        if not (isinstance(tab, type) and issubclass(tab, DatapointBase)):
-            # No TAB yet (an intermediate base), or one computed per instance --
-            # DatapointFold reads its TAB off the table it wraps.
-            return
-        topics = cls.TOPICS if isinstance(cls.TOPICS, dict) else {}
-        # Strip any slice topics that may have crept in (e.g. via inheritance
-        # from an older base that still used the accumulating behaviour).  Only
-        # table-owned, non-slice topics belong in TOPICS.
-        own = {name: node for name, node in topics.items()
-               if not cls._slice_topics_only({name: node})}
-        cls.TOPICS = own
 
     @dataclass
     class VAR(Datastack.VAR):
@@ -752,14 +667,29 @@ class DatapointTable(DatapointBase, Datastack):
 
     def __split__(self, *args, **kwargs):
         self.path('tabs', ensure_dirpath=True)
-        if 'built_tabs' in self.topics():
-            self.path('built_tabs', ensure_dirpath=True)
+        if 'tab_paths' in self.topics():
+            self.path('tab_paths', ensure_dirpath=True)
         n = self.n_tabs
         self.log.info(
             "%s: %d tabs x %d slices %s",
             self.__class__.__name__, n, len(self.slices), list(self.slices),
         )
-        return [self.TabMaker(idx) for idx in range(n)], dict(build=True)
+        devices = getattr(self, '_devices', None) or getattr(self, 'devices', None)
+        if devices:
+            n_workers = len(devices)
+            chunk_boundaries = np.array_split(range(n), n_workers)
+            block_device = {}
+            for worker_idx, chunk in enumerate(chunk_boundaries):
+                dev = devices[worker_idx % len(devices)]
+                for idx in chunk:
+                    block_device[idx] = dev
+            makers = [
+                self.TabMaker(idx, device=block_device[idx])
+                for idx in range(n)
+            ]
+        else:
+            makers = [self.TabMaker(idx) for idx in range(n)]
+        return makers, dict(build=True)
 
     def __build__(self, *args, **kwargs):
         callables, callable_kwargs = self.__split__(*args, **kwargs)
@@ -854,39 +784,43 @@ class DatapointTable(DatapointBase, Datastack):
                 return self.data(topic_str)
         if topicpath == ('tabs',):
             return self.path('tabs')
-        if topicpath == ('built_tabs',):
-            return self.path('built_tabs')
+        if topicpath == ('tab_paths',):
+            return self.path('tab_paths')
         if topicpath == ('done',):
             return self.valid()
         raise NotImplementedError(
-            f"{self.__class__.__name__}.__read__ answers only slices, 'tabs', 'built_tabs' and 'done'; "
+            f"{self.__class__.__name__}.__read__ answers only slices, 'tabs', 'tab_paths' and 'done'; "
             f"override it to read {'/'.join(topicpath)!r}"
         )
 
     def valid(self):
         return self.valid_topic('done')
 
-    def _write_tab_built(self, i: int):
-        if 'built_tabs' not in self.topics():
+    def _write_tab_path(self, i: int):
+        if 'tab_paths' not in self.topics():
             return
-        built_dir = self.path('built_tabs', ensure_dirpath=True)
-        sentinel_path = os.path.join(built_dir, f"tab_{i}.built")
-        with self.fs.open(sentinel_path, 'wb'):
-            pass
+        tab_dir = self.path('tab_paths', ensure_dirpath=True)
+        sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
+        anchorkeypath = self.tab(i).anchorkeypath
+        with self.fs.open(sentinel_path, 'w') as f:
+            f.write(anchorkeypath)
 
-    def _check_tab_built(self, i: int) -> bool:
-        if 'built_tabs' not in self.topics():
+    def _check_tab_path(self, i: int) -> bool:
+        if 'tab_paths' not in self.topics():
             return False
         try:
-            built_dir = self.path('built_tabs')
-            sentinel_path = os.path.join(built_dir, f"tab_{i}.built")
+            tab_dir = self.path('tab_paths')
+            sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
             return self.fs.exists(sentinel_path)
         except Exception:
             return False
 
+    _write_tab_built = _write_tab_path
+    _check_tab_built = _check_tab_path
+
     def valid_tab(self, i: int) -> bool:
-        if 'built_tabs' in self.topics():
-            if self._check_tab_built(i):
+        if 'tab_paths' in self.topics():
+            if self._check_tab_path(i):
                 return True
             return self.tab(i).valid()
         return self.tab(i).valid()
@@ -983,19 +917,24 @@ class DatapointTable(DatapointBase, Datastack):
         def __call__(self, table):
             return table.valid_tab(self.tab_idx)
 
-    class TabMaker:
-        def __init__(self, tab_idx: int):
+    class TabMaker(Datastack.BlockMaker):
+        """Lightweight callable that forms and optionally builds a tab."""
+        def __init__(self, tab_idx: int, **kwargs):
+            super().__init__(tab_idx)
             self.tab_idx = tab_idx
+            self.kwargs = kwargs
 
         def __call__(self, table, *, build=True):
-            tab = table.__tab__(self.tab_idx)
+            tab = table.__block__(self.idx, **self.kwargs)
             tab.keyby = table.keyby
             skipped = tab.valid()
             if build:
                 tab.build()
-                if hasattr(table, '_write_tab_built'):
-                    table._write_tab_built(self.tab_idx)
-            result = {'tab_idx': self.tab_idx, 'tag': tab.tag, 'skipped': skipped}
+                if hasattr(table, '_write_tab_path'):
+                    table._write_tab_path(self.idx)
+                elif hasattr(table, '_write_tab_built'):
+                    table._write_tab_built(self.idx)
+            result = {'tab_idx': self.idx, 'tag': tab.tag, 'skipped': skipped}
             del tab
             gc.collect()
             return result
@@ -1140,13 +1079,16 @@ class DatapointFold(DatapointTable):
         real_idx = self.tab_indices[idx]
         return self.var.partition.datapoint_table.valid_tab(real_idx)
 
-    def _write_tab_built(self, idx: int):
+    def _write_tab_path(self, idx: int):
         real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table._write_tab_built(real_idx)
+        return self.var.partition.datapoint_table._write_tab_path(real_idx)
 
-    def _check_tab_built(self, idx: int) -> bool:
+    def _check_tab_path(self, idx: int) -> bool:
         real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table._check_tab_built(real_idx)
+        return self.var.partition.datapoint_table._check_tab_path(real_idx)
+
+    _write_tab_built = _write_tab_path
+    _check_tab_built = _check_tab_path
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
         return self.tab(idx)

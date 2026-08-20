@@ -1183,7 +1183,6 @@ class Datablock:
             )
         self._working_params_ = []
         self._resolve_legacy_CONFIG()
-        self._reject_retired_attrs()
 
         # Backward compatibility for legacy pickles or explicit kwargs dict arguments
         old_kwargs = state.pop('kwargs', None)
@@ -1413,23 +1412,7 @@ class Datablock:
                 self.VAR = klass.__dict__['CONFIG']
                 break
 
-    #: Attributes that no longer do anything, and what replaced each. Ignoring
-    #: one silently would leave a class quietly not doing what it declares --
-    #: the validation it meant to suppress back on, the streams it meant to
-    #: declare absent -- so a subclass still carrying one is an error rather
-    #: than a warning. Subclasses extend this dict; see DatapointBase.
-    RETIRED_ATTRS = {'VALIDATE_CFG_EXEMPTIONS': 'TREE_SKIP_VALIDATION'}
 
-    def _reject_retired_attrs(self):
-        for retired, replacement in self.RETIRED_ATTRS.items():
-            for klass in type(self).__mro__:
-                if klass is Datablock:
-                    break
-                if retired in klass.__dict__:
-                    raise AttributeError(
-                        f"{klass.__name__}.{retired} is retired and no longer "
-                        f"consulted -- use {replacement} instead"
-                    )
 
     def __getstate__(self):
         # Serialization convention for explicit params (url, spec, anchor, …):

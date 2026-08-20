@@ -208,16 +208,7 @@ def test_validate_vars_is_not_part_of_identity(url):
     assert checked.key == unchecked.key
 
 
-# ---------------------------------------------------------------------------
-# VALIDATE_CFG_EXEMPTIONS is retired
-# ---------------------------------------------------------------------------
 
-def test_retired_exemptions_attr_raises(url):
-    class Stale(ParentBlock):
-        VALIDATE_CFG_EXEMPTIONS = ('child',)
-
-    with pytest.raises(AttributeError, match='TREE_SKIP_VALIDATION'):
-        Stale(url=url, spec=dict(child=ModernBlock(url=url)))
 
 
 def test_TREE_SKIP_VALIDATION_replaces_it(url):

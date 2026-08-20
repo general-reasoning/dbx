@@ -595,3 +595,72 @@ class TestDeprecatedValidAliases:
         b = block(tmp_path)
         b.build()
         assert b.valid_topic('output') is b.validtopic('output') is True
+
+
+class TestRestructuredRedirect:
+    def test_redirect_dict_validation(self, tmp_path):
+        # Multiple non-None
+        with pytest.raises(ValueError, match="exactly one"):
+            Built(url=str(tmp_path), redirect={'code': 'c1', 'paths': {'output': '/x'}})
+
+        # Zero non-None
+        with pytest.raises(ValueError, match="exactly one"):
+            Built(url=str(tmp_path), redirect={'code': None, 'filter': None, 'paths': None})
+
+    def test_redirect_to_paths(self, tmp_path):
+        p = {'output': '/custom/output.txt'}
+        b = Built(url=str(tmp_path), redirect={'paths': p})
+        assert b._paths_ == p
+        assert b.path('output') == '/custom/output.txt'
+        assert '_paths_' in b.norm()
+
+    def test_redirect_to_code(self, tmp_path, source):
+        src_block, code = source
+        b = Built(url=str(tmp_path), spec={'x': 2}, redirect={'code': code})
+        assert b._paths_ == src_block.paths()
+        assert b.path('output') == src_block.path('output')
+
+        # Check source journal entry
+        j_source = b.journal(event='redirect:target', loc=0)
+        assert j_source.read('message') == code
+
+        # Check target journal entry
+        j_target = src_block.journal(event='redirection:target', loc=0)
+        assert j_target.read('message') == j_source.entry_code
+
+        # Check norm does NOT include _paths_ when redirecting to code
+        assert '_paths_' not in b.norm()
+
+    def test_redirect_to_filter(self, tmp_path, source):
+        src_block, code = source
+        b = Built(url=str(tmp_path), spec={'x': 2}, redirect={'filter': {'event': 'build:end'}})
+        assert b._paths_ == src_block.paths()
+        assert b.path('output') == src_block.path('output')
+
+        j_source = b.journal(event='redirect:target', loc=0)
+        assert j_source.read('message') == code
+
+        j_target = src_block.journal(event='redirection:target', loc=0)
+        assert j_target.read('message') == j_source.entry_code
+
+    def test_redirect_code_not_found(self, tmp_path):
+        with pytest.raises(ValueError, match="no journal entry found"):
+            Built(url=str(tmp_path), redirect={'code': 'nonexistent_code'})
+
+    def test_redirect_filter_not_found(self, tmp_path):
+        with pytest.raises(ValueError, match="matches no journal entry"):
+            Built(url=str(tmp_path), redirect={'filter': {'event': 'nonexistent_event'}})
+
+    def test_custom_path_hook_specialization(self, tmp_path):
+        class SpecialBlock(Built):
+            def __path__(self, topic, **kwargs):
+                return f"/special/{topic}.dat"
+
+        # Without redirect, uses __path__ hook
+        b_normal = SpecialBlock(url=str(tmp_path))
+        assert b_normal.path('output') == "/special/output.dat"
+
+        # With redirect, uses self._paths_
+        b_redirected = SpecialBlock(url=str(tmp_path), redirect={'paths': {'output': '/override.dat'}})
+        assert b_redirected.path('output') == "/override.dat"
+

@@ -1264,13 +1264,11 @@ class Datablock:
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
             )
         self._uuid16_ = state.get('uuid16', False)
-        # Defaults to True, including for state pickled before the parameter
-        # existed: a block that has no redirection recorded reads exactly as it
-        # did before either way, since a redirect is only ever consulted after
-        # __read__ has already failed.
-        self.redirect = bool(state.get('redirect', True))
+        # Redirection config: dict(code=..., filter=..., paths=...) or legacy bool
+        self.redirect = state.get('redirect')
         self.validate_vars = state.get('validate_vars', True)
-        
+        self._paths_ = None
+
         explicit_keys = set(self.__explicit_params__())
         state_params = {k: v for k, v in state.items() if k not in explicit_keys}
 
@@ -1301,8 +1299,101 @@ class Datablock:
             info=state.get('info', True),
             # stack_depth=2 (default) is correct for both _print (stack[2]) and selected (_getframe(1))
         )
+        if isinstance(self.redirect, dict):
+            self._process_redirect()
         self.__post_init__()
         self.log.detailed(f"======--------------> bid: {self.bid}")
+
+    def _process_redirect(self):
+        if not isinstance(self.redirect, dict):
+            return
+
+        code = self.redirect.get('code')
+        filter_spec = self.redirect.get('filter')
+        paths = self.redirect.get('paths')
+
+        non_nones = [v for v in (code, filter_spec, paths) if v is not None]
+        if len(non_nones) != 1:
+            raise ValueError(
+                f"redirect dict must specify exactly one of 'code', 'filter', or 'paths' as non-None, got {self.redirect!r}"
+            )
+
+        code_of_target = None
+        resolved_paths = None
+        target_entry = None
+
+        if code is not None:
+            code_of_target = code
+            target_entry = self._find_journal_entry_by_code(code_of_target)
+            if target_entry is None:
+                raise ValueError(f"redirect failed: no journal entry found for code {code_of_target!r}")
+            resolved_paths = target_entry.paths
+
+        elif filter_spec is not None:
+            target_entry = self._find_journal_entry_by_filter(filter_spec)
+            if target_entry is None:
+                raise ValueError(f"redirect failed: filter {filter_spec!r} matches no journal entry")
+            code_of_target = target_entry.entry_code
+            resolved_paths = target_entry.paths
+
+        elif paths is not None:
+            code_of_target = None
+            resolved_paths = paths
+
+        if target_entry is not None and (resolved_paths is None or not isinstance(resolved_paths, dict)):
+            target_block = target_entry.inst()
+            resolved_paths = target_block.paths()
+
+        if resolved_paths is None:
+            raise ValueError(f"redirect failed: could not resolve paths for {self.redirect!r}")
+
+        self._paths_ = resolved_paths
+
+        if code_of_target is not None and target_entry is not None:
+            code_of_source = self.write_journal_entry(event='redirect:target', message=code_of_target)
+            target_block = target_entry.inst()
+            target_block.write_journal_entry(event='redirection:target', message=code_of_source)
+
+    def _find_journal_entry_by_code(self, code: str):
+        try:
+            j = self.journal(entry_code=code)
+            if len(j) > 0:
+                return DatajournalEntry(j.iloc[0].dropna(), storage_options=self.storage_options)
+        except Exception:
+            pass
+
+        try:
+            fs, root = fsspec.url_to_fs(self._url_, **(self.storage_options or {}))
+            pattern = os.path.join(fs_full_path(fs, root), "**/journal/**/*.parquet")
+            parquet_files = fs.glob(pattern)
+            for file in parquet_files:
+                try:
+                    with fs.open(file, 'rb') as f:
+                        df = pd.read_parquet(f, engine='pyarrow')
+                    if 'entry_code' in df.columns and code in df['entry_code'].values:
+                        row = df[df['entry_code'] == code].iloc[0]
+                        return DatajournalEntry(row.dropna(), storage_options=self.storage_options)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return None
+
+    def _find_journal_entry_by_filter(self, filter_spec: Union[dict, str]):
+        try:
+            if isinstance(filter_spec, dict):
+                j = self.journal(**filter_spec)
+            elif isinstance(filter_spec, str):
+                j = self.journal(event=filter_spec)
+                if len(j) == 0:
+                    j = self.journal(entry_code=filter_spec)
+            else:
+                return None
+            if len(j) > 0:
+                return DatajournalEntry(j.iloc[0].dropna(), storage_options=self.storage_options)
+        except Exception:
+            pass
+        return None
 
     def _resolve_legacy_CONFIG(self):
         """Honor a subclass that still declares ``class CONFIG`` instead of ``VAR``.
@@ -3241,10 +3332,13 @@ class Datablock:
         # computed using the older version of these methods
         norm_spec = self.__expand_spec__('norm', legacy=legacy)
         legacy_norm = self.LEGACY_NORM if legacy is None else legacy
-        norm = self.__repr_from_kwargs__({
+        kwargs_dict = {
             **self._rootkwargs_,
             **{'spec': norm_spec},
-        }, anchor=None, quote_strs=not legacy_norm)
+        }
+        if isinstance(getattr(self, 'redirect', None), dict) and self.redirect.get('paths') is not None:
+            kwargs_dict['_paths_'] = getattr(self, '_paths_', None)
+        norm = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy_norm)
         if deslash:
             norm = norm.replace('\\', '')
         self.log.detailed(f"norm: ------------> {norm_spec=}")
@@ -3257,10 +3351,13 @@ class Datablock:
         # computed using the older version of these methods
         supernorm_spec = self.__expand_spec__('norm', legacy=legacy)
         legacy_norm = self.LEGACY_NORM if legacy is None else legacy
-        supernorm = self.__repr_from_kwargs__({
+        kwargs_dict = {
             **self._rootkwargs_,
             **{'spec': supernorm_spec},
-        }, anchor='fqcn', quote_strs=not legacy_norm)
+        }
+        if isinstance(getattr(self, 'redirect', None), dict) and self.redirect.get('paths') is not None:
+            kwargs_dict['_paths_'] = getattr(self, '_paths_', None)
+        supernorm = self.__repr_from_kwargs__(kwargs_dict, anchor='fqcn', quote_strs=not legacy_norm)
         if deslash:
             supernorm = supernorm.replace('\\', '')
         self.log.detailed(f"supernorm: ------------> {supernorm_spec=}")
@@ -4045,26 +4142,14 @@ class Datablock:
     #IDS: END
 
     #PATHS: BEGIN
-    def path(
+    def __path__(
         self,
         *topicpath,
         ensure_dirpath: bool = False,
         bare: bool = False,
         local: bool = False,
     ):
-        """Return the path for a topic, addressed by one name per level.
-
-        ``path('data', 'frames')`` descends a hierarchical TOPICS; ``path('x')``
-        is the flat case and behaves exactly as before.
-
-        A string leaf gives ``dirpath/filename``; a :data:`DIRTOPIC` leaf and
-        every list-TOPICS entry give the directory itself; a :data:`SYNTOPIC`
-        gives ``None`` and ``ensure_dirpath`` creates nothing for it.
-
-        A GROUP gives a dict of its members' paths, nested to match TOPICS --
-        so ``path('data')`` describes the whole subtree, and :meth:`validpath`
-        (which already recurses into dicts) validates it as a unit.
-        """
+        """Default path resolution for topics. May be implemented/overridden by specializations."""
         topicpath = self._normtopic(topicpath)
         node = self._topicnode(*topicpath)
 
@@ -4078,8 +4163,6 @@ class Datablock:
         if not local:
             redirected = self._redirect_path(*topicpath)
             if redirected is not None:
-                # Not `ensure`d: the redirected-to data belongs to another block,
-                # and this one has no business creating directories in it.
                 self.log.detailed(f"{self.anchor}: path: REDIRECTED: {'/'.join(topicpath)} -> {redirected}")
                 return redirected
 
@@ -4088,7 +4171,6 @@ class Datablock:
             ensure_path(dirpath, storage_options=self.storage_options)
 
         if self._node_is_dirtopic(node):
-            # list-TOPICS entry, or a DIRTOPIC leaf: the topic IS the directory
             return dirpath
         path = os.path.join(dirpath, node)
         self.log.detailed(f"{self.anchor}: path: {path}")
@@ -4096,6 +4178,39 @@ class Datablock:
             fs = self.localfs if local else self.fs
             path = fs._strip_protocol(path)
         return path
+
+    def path(
+        self,
+        *topicpath,
+        ensure_dirpath: bool = False,
+        bare: bool = False,
+        local: bool = False,
+    ):
+        """Return the path for a topic, using self._paths_ if available or delegating to __path__."""
+        if not local and getattr(self, '_paths_', None) is not None:
+            topicpath = self._normtopic(topicpath)
+            if not topicpath:
+                res = self._paths_
+            else:
+                node = self._paths_
+                for name in topicpath:
+                    if isinstance(node, dict) and name in node:
+                        node = node[name]
+                    else:
+                        node = None
+                        break
+                res = node
+            if res is not None:
+                if bare and isinstance(res, str):
+                    fs = self.fs
+                    res = fs._strip_protocol(res)
+                return res
+        return self.__path__(
+            *topicpath,
+            ensure_dirpath=ensure_dirpath,
+            bare=bare,
+            local=local,
+        )
 
     def ls(self, *topicpath, detail=False, local: bool = False):
         """List the contents at ``.path(*topicpath)`` using *fsspec*.

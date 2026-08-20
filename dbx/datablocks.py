@@ -27,6 +27,7 @@ import hashlib
 import inspect
 import os
 import shutil
+import sys
 import tempfile
 from typing import Optional, Union
 import uuid
@@ -198,6 +199,144 @@ def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=
         else:
             anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
         return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, **filter_kwargs)
+
+
+def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs):
+    """Check validity of the top matching build/instance for specified events for given anchors.
+
+    Parameters
+    ----------
+    *args : str | type | list | tuple
+        Anchors (anchor strings or Datablock classes) to validate.
+    n_workers : int, optional
+        Number of workers for reading journal files.
+    summary : bool, default False
+        If True, return the boolean AND of all validation results.
+        If False, return a dict mapping anchor to its validation results.
+    url : str, optional
+        Storage URL for reading journals.
+    events : list[str] | str, optional
+        Event name(s) to check validity for. Defaults to ``['build:end']``.
+    **kwargs
+        Additional keyword arguments forwarded to journal query.
+
+    Returns
+    -------
+    dict or bool
+        A dict mapping each anchor to a boolean (or dict of event->bool if multiple events),
+        or a single boolean value if *summary* is True.
+    """
+    called_from_cli = False
+    if not args:
+        called_from_cli = True
+        dataparts.pintrampoline()
+        import argparse
+        parser = argparse.ArgumentParser(prog="dbx.valid", description="Validate latest builds for given anchors.")
+        parser.add_argument("anchors", nargs="*", help="Anchor keys or Datablock names")
+        parser.add_argument("--n-workers", type=int, default=None, help="Number of workers for journal scanning")
+        parser.add_argument("--summary", action="store_true", help="Return boolean AND of results")
+        parser.add_argument("--url", type=str, default=None, help="Storage URL")
+        parser.add_argument("--events", nargs="+", default=None, help="Event names to check validity for (default: build:end)")
+
+        cli_argv = [a for a in sys.argv[1:] if not a.startswith(dataparts.PIN_FLAGS)]
+        parsed, unknown = parser.parse_known_args(cli_argv)
+
+        anchors = parsed.anchors
+        if parsed.n_workers is not None and n_workers is None:
+            n_workers = parsed.n_workers
+        if parsed.summary:
+            summary = True
+        if parsed.url is not None and url is None:
+            url = parsed.url
+        if parsed.events is not None and events is None:
+            events = parsed.events
+
+        for arg in unknown:
+            if "=" in arg:
+                k, v = arg.split("=", 1)
+                try:
+                    kwargs[k] = eval(v)
+                except Exception:
+                    kwargs[k] = v
+    else:
+        if len(args) == 1 and isinstance(args[0], (list, tuple, set)):
+            anchors = list(args[0])
+        else:
+            anchors = list(args)
+
+    if events is None:
+        events = ['build:end']
+    elif isinstance(events, str):
+        events = [events]
+    else:
+        events = list(events)
+
+    results = {}
+    for anchor in anchors:
+        if isinstance(anchor, str):
+            anchor_key = anchor
+        elif isinstance(anchor, type):
+            anchor_key = f"{anchor.__module__}.{anchor.__name__}"
+        elif hasattr(anchor, "anchor"):
+            anchor_key = anchor.anchor
+        else:
+            anchor_key = str(anchor)
+
+        j_kwargs = dict(kwargs)
+        if n_workers is not None:
+            j_kwargs['n_workers'] = n_workers
+        if url is not None:
+            j_kwargs['url'] = url
+
+        try:
+            j = journal(anchor_key, **j_kwargs)
+        except Exception:
+            j = None
+
+        event_results = {}
+        for ev in events:
+            is_val = False
+            if j is not None and len(j) > 0 and 'event' in j.columns:
+                j_ev = j[j['event'] == ev]
+                if len(j_ev) > 0:
+                    try:
+                        row = j_ev.iloc[0]
+                        entry = DatajournalEntry(row.dropna(), storage_options=getattr(j, 'storage_options', None))
+                        block = entry.instantiate()
+                        val_res = block.valid()
+                        if isinstance(val_res, dict):
+                            is_val = bool(all(val_res.values()))
+                        else:
+                            is_val = bool(val_res)
+                    except Exception:
+                        is_val = False
+
+            event_results[ev] = is_val
+
+        if len(events) == 1:
+            results[anchor] = event_results[events[0]]
+        else:
+            results[anchor] = event_results
+
+    def _all_true(obj):
+        if isinstance(obj, dict):
+            return all(_all_true(v) for v in obj.values())
+        return bool(obj)
+
+    if summary:
+        final_res = _all_true(results) if results else True
+    else:
+        final_res = results
+
+    if called_from_cli:
+        import pprint
+        if isinstance(final_res, bool):
+            print(final_res)
+        else:
+            pprint.pprint(final_res)
+
+    return final_res
+
 
 
 class DatajournalEntry(pd.Series):

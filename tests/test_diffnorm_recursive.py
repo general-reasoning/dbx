@@ -97,18 +97,20 @@ class TestRecursiveDescent:
         assert set(flat) == {'spec'}
         self_side, other_side = flat['spec']
         assert not isinstance(self_side, tuple), "flat mode descended anyway"
-        assert len(repr(self_side)) > 200, "the whole subtree should be one value"
+        assert len(repr(self_side)) > 100, "the whole subtree should be one value"
         # raw=True is the un-deserialised form: one long string, as rendered.
         raw_self = b.diffnorm(a.norm(), recursive=False, raw=True)['spec'][0]
-        assert isinstance(raw_self, str) and len(raw_self) > 200
+        assert isinstance(raw_self, str) and len(raw_self) > 100
 
     def test_no_difference_is_empty(self, tmp_path):
         a = _tree(tmp_path)
         assert a.diffnorm(a.norm()) == {}
 
     def test_url_difference_stays_at_the_top(self, tmp_path):
-        a = _tree(tmp_path)
-        b = _tree(tmp_path / 'elsewhere')
+        class LegacyTop(Top):
+            LEGACY_NORM = True
+        a = LegacyTop(url=str(tmp_path))
+        b = LegacyTop(url=str(tmp_path / 'elsewhere'))
         diff = b.diffnorm(a.norm())
         assert 'url' in diff
 
@@ -362,17 +364,15 @@ class TestTypingNeverHidesADifference:
         assert diff == {'spec': {'n': ('1', '1.0')}}
 
     def test_quoted_versus_bare_is_still_visible(self):
-        """The two sides evaluate to the same str, so the bytes are reported.
-
-        This is the `url=` kwarg across the LEGACY_NORM boundary: quoted on one
-        side, bare on the other. Showing the evaluated values would print the
-        same thing twice.
-        """
-        M = self._cls()
-        class L(M):
+        """The two sides evaluate to the same str, so the bytes are reported."""
+        class L(Datablock):
             LEGACY_NORM = True
-        diff = M(url='/tmp/dbx-typed').diffnorm(L(url='/tmp/dbx-typed').norm())
-        assert diff['url'] == ("'/tmp/dbx-typed'", '/tmp/dbx-typed')
+            TOPICS = {'output': 'output.txt'}
+            def __build__(self): pass
+
+        norm_quoted = "(url='/tmp/dbx-typed', spec={})"
+        diff = L(url='/tmp/dbx-typed').diffnorm(norm_quoted, legacy=True)
+        assert diff['url'] == ('/tmp/dbx-typed', "'/tmp/dbx-typed'")
 
 
 class TestAbsentIsNotNone:

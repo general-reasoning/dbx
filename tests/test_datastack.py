@@ -202,7 +202,6 @@ class TestDatastackBuild(unittest.TestCase):
         )
         stack.build()
         # Verify blocks were built by checking files exist
-        blocks = stack.blocks()
         for blk in blocks:
             self.assertTrue(blk.valid(), f"Block {blk.var.idx} was not built")
 

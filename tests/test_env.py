@@ -30,6 +30,7 @@ def setup_env(monkeypatch):
 
 class EnvBlock(Datablock):
     """Minimal block for testing env in root."""
+    LEGACY_NORM = True
     TOPICS = {'output': 'output.txt'}
 
     @dataclass
@@ -44,6 +45,7 @@ class EnvBlock(Datablock):
 
 class EnvSpecBlock(Datablock):
     """Block with an env-valued spec field."""
+    LEGACY_NORM = True
     TOPICS = {'output': 'output.txt'}
 
     @dataclass

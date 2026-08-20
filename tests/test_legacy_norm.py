@@ -100,12 +100,12 @@ class TestLegacyNormIsByteStable:
 
 class TestModernNormQuotesStrings:
 
-    def test_url_is_quoted(self):
+    def test_url_is_omitted(self):
         norm = _pin(ModernBlock).norm()
-        assert f"url={PIN_URL!r}" in norm
+        assert "url=" not in norm
 
-    def test_supernorm_url_is_quoted(self):
-        assert f"url={PIN_URL!r}" in _pin(ModernBlock).supernorm()
+    def test_supernorm_url_is_omitted(self):
+        assert "url=" not in _pin(ModernBlock).supernorm()
 
     def test_non_string_spec_value_is_repr_d_once(self):
         assert "'size': 3" in _pin(ModernBlock).norm()
@@ -118,6 +118,34 @@ class TestModernNormQuotesStrings:
         """
         assert _pin(ModernBlock).hash != _pin(LegacyBlock).hash
         assert _pin(ModernBlock).superhash != _pin(LegacyBlock).superhash
+
+
+class TestOptionalRootkwargs:
+
+    def test_legacy_norm_includes_rootkwargs(self):
+        """When LEGACY_NORM is True, _rootkwargs_ (url, etc.) is included in norm and supernorm."""
+        blk = _pin(LegacyBlock)
+        assert "url=" in blk.norm()
+        assert "url=" in blk.supernorm()
+
+    def test_modern_norm_omits_rootkwargs(self):
+        """When LEGACY_NORM is False (default), _rootkwargs_ is omitted from norm and supernorm."""
+        blk = _pin(ModernBlock)
+        assert "url=" not in blk.norm()
+        assert "url=" not in blk.supernorm()
+
+    def test_legacy_override_controls_rootkwargs(self):
+        """Passing legacy=True / legacy=False dynamically includes or omits _rootkwargs_."""
+        modern = _pin(ModernBlock)
+        legacy = _pin(LegacyBlock)
+
+        # Forcing legacy=True on modern block includes url=
+        assert "url=" in modern.norm(legacy=True)
+        assert "url=" in modern.supernorm(legacy=True)
+
+        # Forcing legacy=False on legacy block omits url=
+        assert "url=" not in legacy.norm(legacy=False)
+        assert "url=" not in legacy.supernorm(legacy=False)
 
 
 class TestSpecValueCollision:

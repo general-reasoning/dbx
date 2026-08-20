@@ -3316,7 +3316,7 @@ class Datablock:
         norm_spec = self.__expand_spec__('norm', legacy=legacy)
         legacy_norm = self.LEGACY_NORM if legacy is None else legacy
         kwargs_dict = {
-            **self._rootkwargs_,
+            **(self._rootkwargs_ if legacy_norm else {}),
             **{'spec': norm_spec},
         }
         if isinstance(getattr(self, 'redirect', None), dict) and self.redirect.get('paths') is not None:
@@ -3335,7 +3335,7 @@ class Datablock:
         supernorm_spec = self.__expand_spec__('norm', legacy=legacy)
         legacy_norm = self.LEGACY_NORM if legacy is None else legacy
         kwargs_dict = {
-            **self._rootkwargs_,
+            **(self._rootkwargs_ if legacy_norm else {}),
             **{'spec': supernorm_spec},
         }
         if isinstance(getattr(self, 'redirect', None), dict) and self.redirect.get('paths') is not None:

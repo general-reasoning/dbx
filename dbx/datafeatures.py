@@ -94,6 +94,21 @@ def _to_tensor(inputs, device=None) -> torch.Tensor:
     return t.to(device) if device is not None else t
 
 
+def _squeeze_collated_batch(batch: torch.Tensor) -> torch.Tensor:
+    if not isinstance(batch, torch.Tensor):
+        return batch
+    if batch.ndim == 5:
+        if batch.shape[2] == 1:
+            batch = batch.squeeze(2)
+        elif batch.shape[1] == 1:
+            batch = batch.squeeze(1)
+    elif batch.ndim == 4 and batch.shape[1:3] == (1, 1):
+        batch = batch.squeeze(1).squeeze(1)
+    elif batch.ndim > 2 and batch.shape[1] == 1:
+        batch = batch.squeeze(1)
+    return batch
+
+
 def _extract_pair_data(data_dict, pair: tuple[str, str]):
     s_name, c_name = pair[0], pair[1]
     if isinstance(data_dict, dict) and s_name in data_dict:
@@ -359,7 +374,7 @@ class DatafeatureTab(DatapointTab):
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             sample_data = datapoint_tab.data(*collator.slices, concat=True)
             inputs = collator(sample_data, signal_only=True, strip_keys=True)
-            inputs = _to_tensor(inputs, "cpu")
+            inputs = _squeeze_collated_batch(_to_tensor(inputs, "cpu"))
 
             n_samples = len(inputs)
             n_batches = math.ceil(n_samples / self.device_batch_size)
@@ -412,9 +427,7 @@ class DatafeatureTab(DatapointTab):
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             for batch_data in dataloader:
                 inputs = collator(batch_data, signal_only=True, strip_keys=True)
-                batch = _to_tensor(inputs, self.device)
-                if batch.ndim > 2 and batch.shape[1:3] == (1, 1):
-                    batch = batch.squeeze(1).squeeze(1)
+                batch = _squeeze_collated_batch(_to_tensor(inputs, self.device))
                 result = evaluator(batch)
 
                 batch_len = len(batch)

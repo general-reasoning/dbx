@@ -881,3 +881,10 @@ class TestValidTabAndSentinels:
             assert tbl.valid_tab(i)
             assert tbl._check_tab_path(i)
 
+    def test_filter_built_tabs_option(self, tmp_path):
+        tbl_default = LetterTable(url=str(tmp_path / "filter_default"), spec=dict(n_tabs_=2))
+        assert tbl_default.filter_built_tabs is False
+
+        tbl_explicit = LetterTable(url=str(tmp_path / "filter_explicit"), spec=dict(n_tabs_=2), filter_built_tabs=True)
+        assert tbl_explicit.filter_built_tabs is True
+

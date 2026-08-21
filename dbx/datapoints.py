@@ -638,8 +638,12 @@ class DatapointTable(DatapointBase, Datastack):
 
     # 1. Datastack / Table Protocol Methods ─────────────────────────
 
-    def __init__(self, *args, cache=None, cache_limit=None, **kwargs):
-        super().__init__(*args, cache=cache, cache_limit=cache_limit, **kwargs)
+    def __init__(self, *args, cache=None, cache_limit=None, filter_built_tabs: bool = False, **kwargs):
+        super().__init__(*args, cache=cache, cache_limit=cache_limit, filter_built_tabs=filter_built_tabs, **kwargs)
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.filter_built_tabs = getattr(self, 'filter_built_tabs', False)
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
         if self.TAB is None:
@@ -696,37 +700,42 @@ class DatapointTable(DatapointBase, Datastack):
         if not callables:
             return self.__stack__([])
 
-        work_stealing_state = getattr(self, 'work_stealing', False)
-        self.log.info(
-            f"Building {self.__class__.__name__}: filtering {len(callables)} tabs using "
-            f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
-        )
+        filter_built = getattr(self, 'filter_built_tabs', False)
+        if filter_built:
+            work_stealing_state = getattr(self, 'work_stealing', False)
+            self.log.info(
+                f"Building {self.__class__.__name__}: filtering {len(callables)} tabs using "
+                f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
+            )
 
-        filter_exec_kwargs = self._executor_kwargs(
-            tag=f"FILTERING {len(callables)} tabs [{self.__class__.__name__}]"
-        )
-        filter_executor = self.executor_cls(**filter_exec_kwargs)
-        checkers = [
-            self.TabValidChecker(getattr(c, 'tab_idx', getattr(c, 'idx', i)))
-            for i, c in enumerate(callables)
-        ]
-        validity = filter_executor.exec_callables(checkers, self)
+            filter_exec_kwargs = self._executor_kwargs(
+                tag=f"FILTERING {len(callables)} tabs [{self.__class__.__name__}]"
+            )
+            filter_executor = self.executor_cls(**filter_exec_kwargs)
+            checkers = [
+                self.TabValidChecker(getattr(c, 'tab_idx', getattr(c, 'idx', i)))
+                for i, c in enumerate(callables)
+            ]
+            validity = filter_executor.exec_callables(checkers, self)
 
-        to_build_callables = []
-        callable_results = []
+            to_build_callables = []
+            callable_results = []
 
-        for i, (c, is_valid) in enumerate(zip(callables, validity)):
-            idx = getattr(c, 'tab_idx', getattr(c, 'idx', i))
-            tag = getattr(c, 'tag', f"tab_{idx:06d}")
-            if is_valid:
-                callable_results.append({'tab_idx': idx, 'tag': tag, 'skipped': True})
-            else:
-                to_build_callables.append(c)
+            for i, (c, is_valid) in enumerate(zip(callables, validity)):
+                idx = getattr(c, 'tab_idx', getattr(c, 'idx', i))
+                tag = getattr(c, 'tag', f"tab_{idx:06d}")
+                if is_valid:
+                    callable_results.append({'tab_idx': idx, 'tag': tag, 'skipped': True})
+                else:
+                    to_build_callables.append(c)
 
-        self.log.info(
-            f"{self.__class__.__name__}: {len(callables) - len(to_build_callables)}/{len(callables)} tabs already valid, "
-            f"building {len(to_build_callables)} tabs"
-        )
+            self.log.info(
+                f"{self.__class__.__name__}: {len(callables) - len(to_build_callables)}/{len(callables)} tabs already valid, "
+                f"building {len(to_build_callables)} tabs"
+            )
+        else:
+            to_build_callables = callables
+            callable_results = []
 
         if to_build_callables:
             build_exec_kwargs = self._executor_kwargs(

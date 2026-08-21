@@ -501,9 +501,10 @@ class DatafeatureTable(DatapointTable):
         devices: list | None = None,
         streaming: bool = False,
         dataloader_kwargs: dict | None = None,
+        filter_built_tabs: bool = False,
         **kwargs,
     ):
-        # Pass device_batch_size, devices, streaming, dataloader_kwargs through Datastack.__init__ so they
+        # Pass device_batch_size, devices, streaming, dataloader_kwargs, filter_built_tabs through Datastack.__init__ so they
         # survive multiprocessing pickling (Datablock folds **kwargs into the
         # state dict, which __getstate__/__setstate__ round-trips faithfully).
         super().__init__(
@@ -512,6 +513,7 @@ class DatafeatureTable(DatapointTable):
             devices=devices or ["cuda"],
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
+            filter_built_tabs=filter_built_tabs,
             **kwargs,
         )
 
@@ -520,6 +522,7 @@ class DatafeatureTable(DatapointTable):
         # Read back from self — works whether we came through __init__ or __setstate__.
         self.streaming = getattr(self, 'streaming', False)
         self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
+        self.filter_built_tabs = getattr(self, 'filter_built_tabs', False)
         self._devices = getattr(self, 'devices', None) or ["cuda"]
         factory = self.var.evaluator_factory
         layer_names = factory.layer_names if factory is not None else []

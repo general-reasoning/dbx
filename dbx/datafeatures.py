@@ -309,15 +309,15 @@ class DatafeatureTab(DatapointTab):
         self,
         *args,
         device_batch_size: int = 64,
-        device: str = "cuda",
+        device: str = "cpu",
         streaming: bool = False,
         dataloader_kwargs: dict | None = None,
         **kwargs,
     ):
-        self.device_batch_size = device_batch_size
-        self.device = device
         super().__init__(
             *args,
+            device_batch_size=device_batch_size,
+            feature_device=device,
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
             **kwargs,
@@ -325,6 +325,8 @@ class DatafeatureTab(DatapointTab):
 
     def __post_init__(self):
         super().__post_init__()
+        self.device = getattr(self, 'feature_device', None) or getattr(self, 'device', 'cpu')
+        self.device_batch_size = getattr(self, 'device_batch_size', 64)
         self.streaming = getattr(self, 'streaming', False)
         self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
         factory = self.var.evaluator_factory
@@ -588,7 +590,7 @@ class DatafeatureTable(DatapointTable):
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
-            devices=devices or ["cuda"],
+            feature_devices=devices or ["cpu"],
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
             filter_built_tabs=filter_built_tabs,
@@ -601,7 +603,7 @@ class DatafeatureTable(DatapointTable):
         self.streaming = getattr(self, 'streaming', False)
         self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
         self.filter_built_tabs = getattr(self, 'filter_built_tabs', False)
-        self._devices = getattr(self, 'devices', None)
+        self._devices = getattr(self, 'feature_devices', None) or getattr(self, 'devices', None) or ["cpu"]
         factory = self.var.evaluator_factory
         layer_names = factory.layer_names if factory is not None else []
         namemap = self.var.feature_namemap

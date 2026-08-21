@@ -542,7 +542,7 @@ def eval(name):
                     k, v = kwparts[0].strip(), kwparts[1].strip()
                     try:
                         val = __eval__(v, globals(), cxt)
-                    except Exception:
+                    except (NameError, SyntaxError):
                         val = v
                     if isinstance(val, str) and (val.startswith("$") or val.startswith("@") or val.startswith("#")):
                         val = eval(val)
@@ -550,12 +550,13 @@ def eval(name):
                 else:
                     try:
                         arg = __eval__(bit, globals(), cxt)
-                    except Exception:
+                    except (NameError, SyntaxError):
                         arg = bit
                     if isinstance(arg, str) and (arg.startswith("$") or arg.startswith("@") or arg.startswith("#")):
                         arg = eval(arg)
                     args.append(arg)
         return args, kwargs
+
 
 
     def get_funcstr_argkwargstr(name):

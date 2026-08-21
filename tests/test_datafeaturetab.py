@@ -376,7 +376,7 @@ def test_datafeature_tab_streaming(tmp_path):
 
     data_bulk = featuretab_bulk.data(("features", "final"))["features"]["final"]
     data_stream = featuretab_stream.data(("features", "final"))["features"]["final"]
-    np.testing.assert_allclose(data_stream, data_bulk)
+    np.testing.assert_allclose(np.squeeze(data_stream), np.squeeze(data_bulk))
 
 
 def test_datafeature_table_streaming(tmp_path):

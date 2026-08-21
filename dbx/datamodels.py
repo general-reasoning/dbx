@@ -194,8 +194,6 @@ class DatamodelEvaluatorFactory(Datablock):
     def model(self):
         raise NotImplementedError()
 
-
-
     @property
     def layer_names(self) -> list[str]:
         """Return the ordered list of feature layer names configured on this factory.

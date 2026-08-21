@@ -442,14 +442,14 @@ class DatajournalEntry(pd.Series):
         return self.get('uuid')
 
     @property
-    def entry_code(self):
-        """This entry's own uuid -- unique to the row, or None.
+    def code(self):
+        """This entry's unique 32-character sha256 code hash."""
+        return self.get('code') or self.get('entry_code')
 
-        ``.get`` rather than pandas' attribute fallback because journals
-        written before the field existed have no such column, where the
-        fallback would raise AttributeError.
-        """
-        return self.get('entry_code')
+    @property
+    def entry_code(self):
+        """This entry's own uuid or code -- unique to the row, or None."""
+        return self.get('entry_code') or self.get('code')
 
     @property
     def redirection(self):
@@ -4421,10 +4421,18 @@ class Datablock:
         xpath = os.path.join(_dbxanchorhashpathx, f'{filename_prefix}{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
         return xpath
 
-    def _dbxjournalinstancepath(self, *, ensure_dirpath: bool = False, filename_prefix: str = ''):
+    def _dbxjournalinstancepath(self, *, ensure_dirpath: bool = False, filename_prefix: str = '', event: str = None, code: str = None):
         """
-        Return /root/anchor/.dbx/journal/hash/{fqcn}-{dt}.journal."""
-        return self._dbxanchorhashpathx('journal', 'parquet', ensure_dirpath=ensure_dirpath, filename_prefix=filename_prefix)
+        Return /root/anchor/.dbx/journal/hash/{fqcn}-{dt}-{event}-{code[:8]}.parquet."""
+        ext = 'parquet'
+        _dbxanchorpathx = Datablock._dbxanchorpathx(self._url_, self.anchor, 'journal', fqcn=self.fqcn, storage_options=self.storage_options)
+        _dbxanchorhashpathx = os.path.join(_dbxanchorpathx, self.hash)
+        if ensure_dirpath:
+            self.fs.makedirs(_dbxanchorhashpathx, exist_ok=True)
+        event_str = f"-{event.replace(':', '_')}" if event else ""
+        code_str = f"-{code[:8]}" if code else ""
+        filename = f"{filename_prefix}{self.fqcn}-journal-{self.hash}-{self.dt}{event_str}{code_str}.{ext}"
+        return os.path.join(_dbxanchorhashpathx, filename)
 
     #PATHS: END
 
@@ -4531,10 +4539,11 @@ class Datablock:
         # A dict goes in as str(dict), the way 'paths' and 'topics' do -- one
         # parquet column cannot hold both a string and a mapping.
         redirection_value = redirection if (redirection is None or isinstance(redirection, str)) else str(redirection)
-        # Follows uuid16, so the two identifiers sitting side by side in the
-        # journal are the same shape. It is not a path component, so the
-        # length is cosmetic either way.
-        entry_code = uuid.uuid4().hex[:16] if getattr(self, '_uuid16_', False) else str(uuid.uuid4())
+        dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+        code_seed = f"{self.hash}:{self.uuid}:{dt}:{event}:{uuid.uuid4().hex}"
+        code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
+        entry_code = code
+
         self._write_journal_dict('spec', self.spec)
         self._write_journal_dict('dfn', self.dfn)
         self._write_journal_dict('kwargs', self.kwargs)
@@ -4545,8 +4554,6 @@ class Datablock:
         self._write_str('signature', self.signature())
         if note is not None and not inline_note:
             self._write_str('note', note)
-        #
-        dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
 
         spec_path = self._dbxanchorhashpathx('spec', 'yaml')
         dfn_path = self._dbxanchorhashpathx('dfn', 'yaml')
@@ -4576,7 +4583,12 @@ class Datablock:
                        else {topic: DIRTOPIC for topic in self.topics()})
         paths_dict = self.paths()
         #
-        journal_path = self._dbxjournalinstancepath(ensure_dirpath=True, filename_prefix=journal_prefix)
+        journal_path = self._dbxjournalinstancepath(
+            ensure_dirpath=True,
+            filename_prefix=journal_prefix,
+            event=event,
+            code=code,
+        )
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build:start:datetime': self._build_start_dt,
                                          'build:end:datetime': self._build_end_dt,
@@ -4591,6 +4603,7 @@ class Datablock:
                                          'key': self.key,
                                          'anchorkeypath': self.anchorkeypath,
                                          'uuid': self.uuid,
+                                         'code': code,
                                          'entry_code': entry_code,
                                          'tag': self.tag,
                                          'topics': str(topics_dict),
@@ -4695,6 +4708,10 @@ class Datablock:
                     df['message'] = df['note']
                 elif 'message' in df.columns and 'note' not in df.columns:
                     df['note'] = df['message']
+                if 'code' not in df.columns and 'entry_code' in df.columns:
+                    df['code'] = df['entry_code']
+                elif 'entry_code' not in df.columns and 'code' in df.columns:
+                    df['entry_code'] = df['code']
                 leading = ['hash'] + (['uuid'] if 'uuid' in df.columns else []) + ['datetime']
                 columns = leading + [c for c in df.columns if c not in set(leading + ['event'])] + ['event']
                 df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)

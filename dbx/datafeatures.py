@@ -140,7 +140,10 @@ class Datacollator(Datablock):
     def _as_array(val):
         if torch is not None and isinstance(val, torch.Tensor):
             return val.detach().cpu().numpy()
-        return np.array(val)
+        arr = np.array(val)
+        if hasattr(arr, 'flags') and not arr.flags.writeable:
+            arr = np.copy(arr)
+        return arr
 
     def _collate_batch(self, batch: dict, norm_pairs) -> np.ndarray:
         """Collate a ``{slice: data}`` mapping, in which the batch is ALREADY stacked.

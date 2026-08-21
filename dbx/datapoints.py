@@ -688,7 +688,14 @@ class DatapointTable(DatapointBase, Datastack):
             self.__class__.__name__, n, len(self.slices), list(self.slices),
         )
         devices = getattr(self, '_devices', None) or getattr(self, 'devices', None)
-        if devices:
+        device_mapping = kwargs.get('device_mapping', None)
+        if device_mapping is not None and isinstance(device_mapping, dict):
+            block_device = device_mapping.get('block_device', None)
+            makers = [
+                self.TabMaker(self, idx, device=block_device[idx])
+                for idx in range(n)
+            ]
+        elif devices:
             n_workers = len(devices)
             chunk_boundaries = np.array_split(range(n), n_workers)
             block_device = {}
@@ -697,11 +704,11 @@ class DatapointTable(DatapointBase, Datastack):
                 for idx in chunk:
                     block_device[idx] = dev
             makers = [
-                self.TabMaker(idx, device=block_device[idx])
+                self.TabMaker(self, idx, device=block_device[idx])
                 for idx in range(n)
             ]
         else:
-            makers = [self.TabMaker(idx) for idx in range(n)]
+            makers = [self.TabMaker(self, idx) for idx in range(n)]
         return makers, dict(build=True)
 
     def __build__(self, *args, **kwargs):
@@ -732,9 +739,8 @@ class DatapointTable(DatapointBase, Datastack):
 
             for i, (c, is_valid) in enumerate(zip(callables, validity)):
                 idx = getattr(c, 'tab_idx', getattr(c, 'idx', i))
-                tag = getattr(c, 'tag', f"tab_{idx:06d}")
                 if is_valid:
-                    callable_results.append({'tab_idx': idx, 'tag': tag, 'skipped': True})
+                    callable_results.append({'tab_idx': idx, 'skipped': True})
                 else:
                     to_build_callables.append(c)
 
@@ -940,22 +946,32 @@ class DatapointTable(DatapointBase, Datastack):
 
     class TabMaker(Datastack.BlockMaker):
         """Lightweight callable that forms and optionally builds a tab."""
-        def __init__(self, tab_idx: int, **kwargs):
+        def __init__(self, table=None, tab_idx: int | None = None, **kwargs):
+            if isinstance(table, int) and tab_idx is None:
+                tab_idx = table
+                table = None
             super().__init__(tab_idx)
+            self.table = table
             self.tab_idx = tab_idx
             self.kwargs = kwargs
 
-        def __call__(self, table, *, build=True):
-            tab = table.__block__(self.idx, **self.kwargs)
-            tab.keyby = table.keyby
+        def __call__(self, table=None, *, build=True):
+            tbl = table if table is not None else self.table
+            if tbl is not None and tbl.valid_tab(self.idx):
+                return {'tab_idx': self.idx, 'skipped': True}
+
+            tab = tbl.__block__(self.idx, **self.kwargs)
+            keyby_val = getattr(tbl, 'keyby', None)
+            if keyby_val is not None:
+                tab = tab.set(keyby=keyby_val)
             skipped = tab.valid()
-            if build:
+            if build and not skipped:
                 tab.build()
-                if hasattr(table, '_write_tab_path'):
-                    table._write_tab_path(self.idx)
-                elif hasattr(table, '_write_tab_built'):
-                    table._write_tab_built(self.idx)
-            result = {'tab_idx': self.idx, 'tag': tab.tag, 'skipped': skipped}
+                if hasattr(tbl, '_write_tab_path'):
+                    tbl._write_tab_path(self.idx)
+                elif hasattr(tbl, '_write_tab_built'):
+                    tbl._write_tab_built(self.idx)
+            result = {'tab_idx': self.idx, 'skipped': skipped}
             del tab
             gc.collect()
             return result

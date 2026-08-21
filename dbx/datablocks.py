@@ -4962,7 +4962,9 @@ class Datastack(Datablock):
             pass
         if idx not in self._blocks_:
             s = self.__block__(idx)
-            s.keyby = self.keyby
+            keyby_val = getattr(self, 'keyby', None)
+            if keyby_val is not None:
+                s = s.set(keyby=keyby_val)
             self._blocks_[idx] = s
         return self._blocks_[idx]
 

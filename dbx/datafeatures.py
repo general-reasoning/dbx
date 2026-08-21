@@ -94,19 +94,7 @@ def _to_tensor(inputs, device=None) -> torch.Tensor:
     return t.to(device) if device is not None else t
 
 
-def _squeeze_collated_batch(batch: torch.Tensor) -> torch.Tensor:
-    if not isinstance(batch, torch.Tensor):
-        return batch
-    if batch.ndim == 5:
-        if batch.shape[2] == 1:
-            batch = batch.squeeze(2)
-        elif batch.shape[1] == 1:
-            batch = batch.squeeze(1)
-    elif batch.ndim == 4 and batch.shape[1:3] == (1, 1):
-        batch = batch.squeeze(1).squeeze(1)
-    elif batch.ndim > 2 and batch.shape[1] == 1:
-        batch = batch.squeeze(1)
-    return batch
+
 
 
 def _extract_pair_data(data_dict, pair: tuple[str, str]):
@@ -268,22 +256,25 @@ class Datacollator(Datablock):
 
                 dp_signals.append(self._as_array(val))
 
-            norm_signals = []
-            for sig in dp_signals:
-                if sig.ndim == 0:
-                    norm_signals.append(sig.reshape(1, 1))
-                elif sig.ndim == 1:
-                    norm_signals.append(sig.reshape(1, -1))
-                else:
-                    norm_signals.append(sig)
-
-            if norm_signals[0].ndim == 2 and all(x.ndim == 2 for x in norm_signals):
-                try:
-                    dp_tensor = np.stack(norm_signals, axis=1)
-                except ValueError:
-                    dp_tensor = np.concatenate(norm_signals, axis=1)
+            if len(dp_signals) == 1:
+                dp_tensor = dp_signals[0]
             else:
-                dp_tensor = np.stack(norm_signals, axis=1)
+                norm_signals = []
+                for sig in dp_signals:
+                    if sig.ndim == 0:
+                        norm_signals.append(sig.reshape(1, 1))
+                    elif sig.ndim == 1:
+                        norm_signals.append(sig.reshape(1, -1))
+                    else:
+                        norm_signals.append(sig)
+
+                if norm_signals[0].ndim == 2 and all(x.ndim == 2 for x in norm_signals):
+                    try:
+                        dp_tensor = np.stack(norm_signals, axis=1)
+                    except ValueError:
+                        dp_tensor = np.concatenate(norm_signals, axis=1)
+                else:
+                    dp_tensor = np.stack(norm_signals, axis=1)
 
             batch_items.append(dp_tensor)
 
@@ -374,7 +365,7 @@ class DatafeatureTab(DatapointTab):
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             sample_data = datapoint_tab.data(*collator.slices, concat=True)
             inputs = collator(sample_data, signal_only=True, strip_keys=True)
-            inputs = _squeeze_collated_batch(_to_tensor(inputs, "cpu"))
+            inputs = _to_tensor(inputs, "cpu")
 
             n_samples = len(inputs)
             n_batches = math.ceil(n_samples / self.device_batch_size)
@@ -427,7 +418,7 @@ class DatafeatureTab(DatapointTab):
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             for batch_data in dataloader:
                 inputs = collator(batch_data, signal_only=True, strip_keys=True)
-                batch = _squeeze_collated_batch(_to_tensor(inputs, self.device))
+                batch = _to_tensor(inputs, self.device)
                 result = evaluator(batch)
 
                 batch_len = len(batch)

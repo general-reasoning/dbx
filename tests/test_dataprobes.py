@@ -76,6 +76,12 @@ class DummyModel(nn.Module):
         return self.fc(x)
 
 
+class DummyModelEvaluatorFactory(DatamodelEvaluatorFactory):
+    @property
+    def model(self):
+        return DummyModel()
+
+
 def test_normalize_features():
     x_numpy = np.array([[3.0, 4.0], [-1.0, 1.0]])
     x_torch = torch.tensor(x_numpy, dtype=torch.float32)
@@ -102,10 +108,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
         tag="sample_table",
     ).build()
 
-    eval_factory = DatamodelEvaluatorFactory(model="$test_dataprobes.DummyModel()", capture_final=True)
-    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
-    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretable = DatafeatureTable(
         url=url,
@@ -155,10 +158,7 @@ def test_datafeature_stats_probe(tmp_path):
         tag="sample_table_stats",
     ).build()
 
-    eval_factory = DatamodelEvaluatorFactory(model="$test_dataprobes.DummyModel()", capture_final=True)
-    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
-    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretable = DatafeatureTable(
         url=url,

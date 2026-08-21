@@ -83,6 +83,12 @@ class DummyModel(nn.Module):
         return self.fc(x)
 
 
+class DummyModelEvaluatorFactory(DatamodelEvaluatorFactory):
+    @property
+    def model(self):
+        return DummyModel()
+
+
 def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
@@ -92,10 +98,7 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     assert sampletab.valid()
 
     # 2. Build feature tab
-    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
-    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
-    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab = DatafeatureTab(
         url=url,
@@ -133,10 +136,7 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
     sampletab = DummySampleTab(url=url, tag="samples_1").build()
-    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
-    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
-    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab = DatafeatureTab(
         url=url,
@@ -184,10 +184,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
         tag="sample_table",
     ).build()
 
-    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
-    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
-    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     # 2. Build feature table
     featuretable = DatafeatureTable(
@@ -236,10 +233,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
 def test_custom_features_mapping(tmp_path):
     url = str(tmp_path)
     sampletab = DummySampleTab(url=url, tag="samples_cust").build()
-    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
-    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
-    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab = DatafeatureTab(
         url=url,
@@ -261,10 +255,7 @@ def test_custom_features_mapping(tmp_path):
 def test_signal_selection(tmp_path):
     url = str(tmp_path)
     sampletab = DummySampleTab(url=url, tag="samples_sig").build()
-    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
-    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
-    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab = DatafeatureTab(
         url=url,
@@ -352,10 +343,7 @@ def test_datafeature_tab_streaming(tmp_path):
     url = str(tmp_path)
     sampletab = DummySampleTab(url=url, tag="samples_str").build()
 
-    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
-    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
-    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab_bulk = DatafeatureTab(
         url=url,
@@ -399,10 +387,7 @@ def test_datafeature_table_streaming(tmp_path):
         tag="sample_table_str",
     ).build()
 
-    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
-    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
-        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
-    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretable_stream = DatafeatureTable(
         url=url,

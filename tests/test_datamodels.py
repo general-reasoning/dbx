@@ -39,6 +39,18 @@ class DummyTransformer(nn.Module):
         return out
 
 
+class DummyModelEvaluatorFactory(DatamodelEvaluatorFactory):
+    @property
+    def model(self):
+        return DummyModel()
+
+
+class DummyTransformerEvaluatorFactory(DataformerEvaluatorFactory):
+    @property
+    def model(self):
+        return DummyTransformer()
+
+
 def test_datamodel_evaluator_basic():
     model = DummyModel()
     evaluator = DatamodelEvaluator(
@@ -63,10 +75,8 @@ def test_datamodel_evaluator_basic():
 
 
 def test_datamodel_evaluator_factory():
-    factory = DatamodelEvaluatorFactory(
-        model="$tests.test_datamodels.DummyModel()",
-        capture_layers=["layer1"],
-        capture_final=True,
+    factory = DummyModelEvaluatorFactory(
+        spec=dict(capture_layers=["layer1"], capture_final=True)
     )
     ev1 = factory.evaluator(device="cpu")
     ev2 = factory.evaluator(device="cpu")
@@ -118,11 +128,8 @@ def test_dataformer_evaluator_all_blocks():
 
 
 def test_dataformer_evaluator_factory():
-    factory = DataformerEvaluatorFactory(
-        model="$tests.test_datamodels.DummyTransformer()",
-        capture_blocks=[0, 1],
-        cls_token_only=True,
-        capture_final=True,
+    factory = DummyTransformerEvaluatorFactory(
+        spec=dict(capture_blocks=[0, 1], cls_token_only=True, capture_final=True)
     )
     assert factory.layer_names == ["block.0", "block.1", "final"]
     ev1 = factory.evaluator(device="cpu")
@@ -132,10 +139,8 @@ def test_dataformer_evaluator_factory():
     assert ev1.layer_names == ["block.0", "block.1", "final"]
     assert factory.layer_names == ["block.0", "block.1", "final"]
 
-    factory_all = DataformerEvaluatorFactory(
-        model=DummyTransformer(),
-        capture_blocks="all",
-        capture_final=True,
+    factory_all = DummyTransformerEvaluatorFactory(
+        spec=dict(capture_blocks="all", capture_final=True)
     )
     assert factory_all.layer_names == ["block.0", "block.1", "block.2", "final"]
 

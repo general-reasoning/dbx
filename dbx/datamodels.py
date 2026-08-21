@@ -192,11 +192,8 @@ class DatamodelEvaluatorFactory(Datablock):
 
     @property
     def model(self):
-        return getattr(self, '_model', getattr(self.var, 'model', None))
+        raise NotImplementedError()
 
-    @model.setter
-    def model(self, value):
-        self._model = value
 
 
     @property

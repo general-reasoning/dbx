@@ -1580,6 +1580,13 @@ class Datablock:
         entry = redirection.entry if redirection is not None else None
         return self.__valid__(path=entry.anchorkeypath if entry is not None else None)
 
+    def validate(self):
+        """Validate this block's data. Default implementation calls self.valid().
+
+        Specializations may override it to perform custom validation logic.
+        """
+        return self.valid()
+
     def __valid__(self, path: str|None = None):
         """Whether this block's data is there; override to decide differently.
 
@@ -2813,7 +2820,7 @@ class Datablock:
             self.log.verbose(f"Copying files from {anchorkeypath}: END")
             self.write_journal_entry(event="UNSAFE_copy_from:END", note=anchorkeypath, inline_note=True)
             if validate:
-                assert self.valid(), f"Invalid Datablock after copy: {self}"
+                assert self.validate(), f"Invalid Datablock after copy: {self}"
         except Exception as e:
             self.log.error(f"UNSAFE_copy_from: Error when trying to copy files from {anchorkeypath}")
             self.log.error(f"EXCEPTION: {e}")
@@ -4778,8 +4785,26 @@ class Datablock:
         running_entries = j[(j['event'] == 'build:start') & (j['hash'].isin(running_hashes))]
         return DatajournalEntry(running_entries.iloc[0].dropna(), storage_options=self.storage_options)
 
-    #JOURNAL: END
-    
+def UNSAFE_clear_block_from_callable(block, topics, clear_dirpath):
+    """Module-level callable for UNSAFE_clear_blocks (must be picklable)."""
+    block.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
+    return block
+
+
+def UNSAFE_copy_block_from_callable(block, anchorkeypath, overwrite=False, topicpaths=None, validate=True, always_copy_whole_dirpath=False):
+    """Module-level callable for UNSAFE_copy_blocks_from (must be picklable).
+
+    show_progress=False: UNSAFE_copy_blocks_from's executor already
+    reports real aggregate per-block progress; each block's own
+    (typically 1-topic, so always instantly "100%") bar would just
+    flood the output otherwise.
+
+    OVERRIDE=True: UNSAFE_copy_blocks_from already confirmed once at the
+    top level; without this, each block's own UNSAFE_copy_from would
+    re-prompt (or hang waiting on stdin in a worker process) once per block.
+    """
+    block.UNSAFE_copy_from(anchorkeypath, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=False)
+    return block
 
 
 class Datastack(Datablock):
@@ -4998,7 +5023,7 @@ class Datastack(Datablock):
     def __stack__(self, results=None):
         return self
 
-    def UNSAFE_clear_blocks(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
+    def UNSAFE_clear_blocks(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False, callable=UNSAFE_clear_block_from_callable):
         """Clear all block data, parallelized using the stack's builder settings.
 
         The interactive UNSAFE confirmation prompt is shown **once** at the
@@ -5013,6 +5038,8 @@ class Datastack(Datablock):
             If ``True``, skip the interactive confirmation.
         clear_dirpath : bool
             Forwarded to each block's ``UNSAFE_clear()``.
+        callable : callable, default UNSAFE_clear_block_from_callable
+            Callable invoked per block to execute the clear operation.
         """
         if not UNSAFE_allowed("UNSAFE_clear_blocks", OVERRIDE=OVERRIDE):
             return self
@@ -5032,14 +5059,14 @@ class Datastack(Datablock):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
         executor = callable_executor(self.parallelization, **executor_kwargs)
 
-        callables = [functools.partial(_clear_block_callable, blk, topics, clear_dirpath) for blk in block_list]
+        callables = [functools.partial(callable, blk, topics, clear_dirpath) for blk in block_list]
         executor.exec_callables(callables)
 
         self.log.info(f"UNSAFE_clear_blocks complete: {self.__class__.__name__}")
         self.write_journal_entry(event="UNSAFE_clear_blocks:end")
         return self
 
-    def UNSAFE_copy_blocks_from(self, anchorkeypath_callable, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False):
+    def UNSAFE_copy_blocks_from(self, anchorkeypath_callable, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, callable=UNSAFE_copy_block_from_callable):
         """Copy each block's data from a per-block anchor path, parallelized using the stack's builder settings.
 
         Parameters
@@ -5051,6 +5078,8 @@ class Datastack(Datablock):
             If ``True``, skip the interactive confirmation.
         overwrite, topicpaths, validate, always_copy_whole_dirpath :
             Forwarded to each block's ``UNSAFE_copy_from()``.
+        callable : callable, default UNSAFE_copy_block_from_callable
+            Callable invoked per block to execute the copy operation.
         """
         if not UNSAFE_allowed("UNSAFE_copy_blocks_from", OVERRIDE=OVERRIDE):
             return self
@@ -5065,7 +5094,7 @@ class Datastack(Datablock):
 
         blocks_iter = tqdm.tqdm(block_list, desc="UNSAFE_copy_blocks_from", unit="block", disable=not self.log_volume.info)
         callables = [
-            functools.partial(_copy_block_from_callable, blk, anchorkeypath_callable(blk), overwrite, topicpaths, validate, always_copy_whole_dirpath)
+            functools.partial(callable, blk, anchorkeypath_callable(blk), overwrite, topicpaths, validate, always_copy_whole_dirpath)
             for blk in blocks_iter
         ]
 
@@ -5089,28 +5118,6 @@ class Datastack(Datablock):
         self.log.info(f"UNSAFE_copy_blocks_from complete: {self.__class__.__name__}")
         self.write_journal_entry(event="UNSAFE_copy_blocks_from:end")
         return self
-
-
-def _clear_block_callable(block, topics, clear_dirpath):
-    """Module-level callable for UNSAFE_clear_blocks (must be picklable)."""
-    block.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
-    return block
-
-
-def _copy_block_from_callable(block, anchorkeypath, overwrite=False, topicpaths=None, validate=True, always_copy_whole_dirpath=False):
-    """Module-level callable for UNSAFE_copy_blocks_from (must be picklable).
-
-    show_progress=False: UNSAFE_copy_blocks_from's executor already
-    reports real aggregate per-block progress; each block's own
-    (typically 1-topic, so always instantly "100%") bar would just
-    flood the output otherwise.
-
-    OVERRIDE=True: UNSAFE_copy_blocks_from already confirmed once at the
-    top level; without this, each block's own UNSAFE_copy_from would
-    re-prompt (or hang waiting on stdin in a worker process) once per block.
-    """
-    block.UNSAFE_copy_from(anchorkeypath, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=False)
-    return block
 
 
 def _fscopy_item_callable(src_item, dst_item, storage_options):

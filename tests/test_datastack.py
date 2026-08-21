@@ -201,7 +201,7 @@ class TestDatastackBuild(unittest.TestCase):
             n_workers=2,
         )
         stack.build()
-        # Verify blocks were built by checking files exist
+        blocks = stack.blocks()
         for blk in blocks:
             self.assertTrue(blk.valid(), f"Block {blk.var.idx} was not built")
 
@@ -455,6 +455,53 @@ class TestDatastackPreStack(unittest.TestCase):
         callables, kwargs = stack.__split__()
         self.assertIsInstance(callables, list)
         self.assertIsInstance(kwargs, dict)
+
+
+class TestValidateAndCustomCallable(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
+
+    def test_validate_default_calls_valid(self):
+        block = CounterBlock(url=self.tmpdir, spec=dict(idx=0))
+        block.build()
+        self.assertTrue(block.validate())
+
+    def test_validate_override_used_by_copy_from(self):
+        validated = []
+        class CustomBlock(CounterBlock):
+            def validate(self):
+                validated.append(True)
+                return self.valid()
+
+        b1 = CustomBlock(url=os.path.join(self.tmpdir, 'src'), spec=dict(idx=0)).build()
+        b2 = CustomBlock(url=os.path.join(self.tmpdir, 'dst'), spec=dict(idx=0))
+        b2.UNSAFE_copy_from(b1.anchorkeypath, OVERRIDE=True, validate=True)
+        self.assertTrue(validated)
+
+    def test_custom_callable_clear_and_copy_blocks(self):
+        cleared_custom = []
+        copied_custom = []
+
+        from dbx.datablocks import UNSAFE_clear_block_from_callable, UNSAFE_copy_block_from_callable
+
+        def custom_clear(block, topics, clear_dirpath):
+            cleared_custom.append(block.var.idx)
+            return UNSAFE_clear_block_from_callable(block, topics, clear_dirpath)
+
+        def custom_copy(block, anchorkeypath, overwrite=False, topicpaths=None, validate=True, always_copy_whole_dirpath=False):
+            copied_custom.append(block.var.idx)
+            return UNSAFE_copy_block_from_callable(block, anchorkeypath, overwrite, topicpaths, validate, always_copy_whole_dirpath)
+
+        src_stack = SimpleStack(url=os.path.join(self.tmpdir, 'src_stack'), spec=dict(total_items=4, block_size=2)).build()
+        dst_stack = SimpleStack(url=os.path.join(self.tmpdir, 'dst_stack'), spec=dict(total_items=4, block_size=2))
+
+        dst_stack.UNSAFE_copy_blocks_from(lambda blk: src_stack.blocks()[blk.var.idx].anchorkeypath, OVERRIDE=True, callable=custom_copy)
+        self.assertEqual(len(copied_custom), 2)
+
+        src_stack.UNSAFE_clear_blocks(OVERRIDE=True, callable=custom_clear)
+        self.assertEqual(len(cleared_custom), 2)
 
 
 if __name__ == "__main__":

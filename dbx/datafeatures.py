@@ -350,6 +350,7 @@ class DatafeatureTab(DatapointTab):
         dataset = datapoint_tab.dataset(*collator.slices)
         dl_kwargs = dict(self.dataloader_kwargs) if self.dataloader_kwargs else {}
         dl_kwargs.setdefault('batch_size', self.device_batch_size)
+        dl_kwargs.setdefault('collate_fn', lambda batch: batch)
 
         dataloader = torch.utils.data.DataLoader(dataset, **dl_kwargs)
 
@@ -358,6 +359,8 @@ class DatafeatureTab(DatapointTab):
                 inputs = collator(batch_data, signal_only=True, strip_keys=True)
                 if not hasattr(inputs, 'shape') or not hasattr(inputs, 'to'):
                     inputs = torch.tensor(np.array(inputs))
+                if inputs.ndim > 2 and inputs.shape[1:3] == (1, 1):
+                    inputs = inputs.squeeze(1).squeeze(1)
                 batch = inputs.to(self.device)
                 result = evaluator(batch)
 
@@ -537,7 +540,7 @@ class DatafeatureTable(DatapointTable):
         self.streaming = getattr(self, 'streaming', False)
         self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
         self.filter_built_tabs = getattr(self, 'filter_built_tabs', False)
-        self._devices = getattr(self, 'devices', None) or ["cuda"]
+        self._devices = getattr(self, 'devices', None)
         factory = self.var.evaluator_factory
         layer_names = factory.layer_names if factory is not None else []
         namemap = self.var.feature_namemap
@@ -551,7 +554,14 @@ class DatafeatureTable(DatapointTable):
         else:
             self._feature_map = {name: name for name in layer_names}
 
-    def __tab__(self, idx: int, device: str = "cuda", tag=None) -> DatafeatureTab:
+    def __tab__(self, idx: int, device: str | None = None, tag=None) -> DatafeatureTab:
+        if device is None:
+            devs = getattr(self, '_devices', None) or getattr(self, 'devices', None)
+            if not devs and hasattr(self, 'var') and getattr(self.var, 'datapoint_table', None) is not None:
+                dp_tbl = self.var.datapoint_table
+                devs = getattr(dp_tbl, '_devices', None) or getattr(dp_tbl, 'devices', None)
+            devs = devs or ["cuda"]
+            device = devs[idx % len(devs)]
         datapoint_tab = self.var.datapoint_table.tab(idx)
         spec = dict(
             datapoint_tab=dbx.quote(datapoint_tab),

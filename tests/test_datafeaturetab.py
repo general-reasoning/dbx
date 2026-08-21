@@ -217,6 +217,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
             featuretable=featuretable,
             layer="final",
         ),
+        devices=["cpu"],
         tag="bipolar_table",
     ).build()
 

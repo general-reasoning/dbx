@@ -403,6 +403,12 @@ class DatafeatureTab(DatapointTab):
 
     def __build_streaming__(self):
         warnings.filterwarnings("ignore", category=UserWarning, message=".*given NumPy array is not writable.*")
+        try:
+            from streaming.base.util import clean_stale_shared_memory
+            clean_stale_shared_memory()
+        except Exception:
+            pass
+        gc.collect()
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         datapoint_tab = self.var.datapoint_tab
 
@@ -443,8 +449,13 @@ class DatafeatureTab(DatapointTab):
                 evaluator.clear()
                 del batch_data, inputs, batch, result, batch_features
                 gc.collect()
-        del evaluator
+        del dataloader, dataset, evaluator
         gc.collect()
+        try:
+            from streaming.base.util import clean_stale_shared_memory
+            clean_stale_shared_memory()
+        except Exception:
+            pass
         return self
 
     def dataset(

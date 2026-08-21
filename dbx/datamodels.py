@@ -163,21 +163,13 @@ class DatamodelEvaluatorFactory(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
-        model: Any
         capture_layers: list = field(default_factory=list)  # list[str] — named layers
         capture_final: bool = True  # capture model output as 'features_final'
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
-    def __init__(self, model=None, *, capture_layers=None, capture_final=True, spec=None, **kwargs):
-        spec = dict(spec) if spec is not None else {}
-        if model is not None:
-            spec['model'] = model
-        if capture_layers is not None:
-            spec['capture_layers'] = capture_layers
-        if capture_final is not True:
-            spec['capture_final'] = capture_final
-        super().__init__(spec=spec, **kwargs)
+    def __init__(self, *args, capture_layers=None, capture_final=True, **kwargs):
+        super().__init__(*args, capture_layers=capture_layers, capture_final=capture_final, **kwargs)
 
     def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DatamodelEvaluator:
         """Create a live `DatamodelEvaluator`.
@@ -190,13 +182,17 @@ class DatamodelEvaluatorFactory(Datablock):
         if device not in self._evaluators:
             log = log or self.log
             self._evaluators[device] = self.Evaluator(
-                model=self.var.model,
+                model=self.model,
                 capture_layers=self.var.capture_layers,
                 capture_final=self.var.capture_final,
                 device=device,
                 log=log,
             )
         return self._evaluators[device]
+
+    @property
+    def model(self):
+        raise NotImplementedError()
 
     @property
     def layer_names(self) -> list[str]:
@@ -374,19 +370,8 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
-    def __init__(self, model=None, *, capture_blocks=None, capture_layers=None, capture_final=True, cls_token_only=False, spec=None, **kwargs):
-        spec = dict(spec) if spec is not None else {}
-        if model is not None:
-            spec['model'] = model
-        if capture_blocks is not None:
-            spec['capture_blocks'] = capture_blocks
-        if capture_layers is not None:
-            spec['capture_layers'] = capture_layers
-        if capture_final is not True:
-            spec['capture_final'] = capture_final
-        if cls_token_only:
-            spec['cls_token_only'] = cls_token_only
-        super().__init__(spec=spec, **kwargs)
+    def __init__(self, *args, capture_blocks=None, capture_layers=None, capture_final=True, cls_token_only=False, **kwargs):
+        super().__init__(*args, capture_layers=capture_layers, capture_final=capture_final, capture_blocks=capture_blocks, cls_token_only=cls_token_only, **kwargs)
 
     def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DataformerEvaluator:
         """Create a live `DataformerEvaluator`.
@@ -399,7 +384,7 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
         if device not in self._evaluators:
             log = log or self.log
             self._evaluators[device] = self.Evaluator(
-                model=self.var.model,
+                model=self.model,
                 capture_blocks=self.var.capture_blocks,
                 capture_layers=self.var.capture_layers,
                 capture_final=self.var.capture_final,

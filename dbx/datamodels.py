@@ -192,7 +192,12 @@ class DatamodelEvaluatorFactory(Datablock):
 
     @property
     def model(self):
-        raise NotImplementedError()
+        return getattr(self, '_model', getattr(self.var, 'model', None))
+
+    @model.setter
+    def model(self, value):
+        self._model = value
+
 
     @property
     def layer_names(self) -> list[str]:

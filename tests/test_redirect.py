@@ -612,7 +612,8 @@ class TestRestructuredRedirect:
         b = Built(url=str(tmp_path), redirect={'paths': p})
         assert b._paths_ == p
         assert b.path('output') == '/custom/output.txt'
-        assert '_paths_' in b.norm()
+        assert '_paths_' in b.signature()
+        assert '_paths_' not in b.subsignature()
 
     def test_redirect_to_code(self, tmp_path, source):
         src_block, code = source
@@ -628,8 +629,8 @@ class TestRestructuredRedirect:
         j_target = src_block.journal(event='redirection:target', loc=0)
         assert j_target.read('message') == j_source.entry_code
 
-        # Check norm does NOT include _paths_ when redirecting to code
-        assert '_paths_' not in b.norm()
+        # Check subsignature does NOT include _paths_ when redirecting to code
+        assert '_paths_' not in b.subsignature()
 
     def test_redirect_to_filter(self, tmp_path, source):
         src_block, code = source

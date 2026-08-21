@@ -35,7 +35,7 @@ class TestAnchorKeyPath(unittest.TestCase):
             'url': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
             'hash': '12345abcde',
-            'superhash': 'ab12cd34',
+            'subhash': 'ab12cd34',
         }
         series = pd.Series(data)
         entry = DatajournalEntry(series)
@@ -56,7 +56,7 @@ class TestAnchorKeyPath(unittest.TestCase):
             'root': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
             'hash': '12345abcde',
-            'superhash': 'ab12cd34',
+            'subhash': 'ab12cd34',
         }
         series = pd.Series(data)
         entry = DatajournalEntry(series)

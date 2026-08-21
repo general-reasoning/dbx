@@ -251,7 +251,7 @@ class TestDatajournalEntryPaths:
             'url': 'memory://bucket/root',
             'anchor': 'my.module.MyBlock',
             'hash': 'abc123def456',
-            'superhash': 'ab12cd34',
+            'subhash': 'ab12cd34',
         }
         entry = DatajournalEntry(pd.Series(data))
         akp = entry.anchorkeypath
@@ -264,7 +264,7 @@ class TestDatajournalEntryPaths:
             'url': 'memory://bucket/root',
             'anchor': 'my.module.MyBlock',
             'hash': 'abc123def456',
-            'superhash': 'ab12cd34',
+            'subhash': 'ab12cd34',
         }
         entry = DatajournalEntry(pd.Series(data))
         akp = entry.anchorkeypath
@@ -277,7 +277,7 @@ class TestDatajournalEntryPaths:
             'url': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
             'hash': 'abc123def456',
-            'superhash': 'ab12cd34',
+            'subhash': 'ab12cd34',
         }
         entry = DatajournalEntry(pd.Series(data))
         assert not entry.anchorkeypath.startswith('file://')

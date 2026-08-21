@@ -166,7 +166,7 @@ DIRTOPIC = None
 SYNTOPIC = ()
 
 
-def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, **filter_kwargs):
+def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, index=None, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
 
     Parameters
@@ -182,6 +182,8 @@ def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=
         Storage URL.  Defaults to ``DBX_ROOT`` or its alias ``DBX_URL``.
     storage_options : dict, optional
         Storage options for fsspec.  Defaults to ``default_storage_options()``.
+    index : str, optional
+        Column name to set as DataFrame index on the returned Datajournal.
     **filter_kwargs
         Forwarded to :class:`Datajournal` for filtering.
 
@@ -192,13 +194,13 @@ def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):
-        return Datajournal(cls_anchor_or_df, storage_options=storage_options, **filter_kwargs)
+        return Datajournal(cls_anchor_or_df, storage_options=storage_options, index=index, **filter_kwargs)
     else:
         if isinstance(cls_anchor_or_df, str):
             anchor = cls_anchor_or_df
         else:
             anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
-        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, **filter_kwargs)
+        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, index=index, **filter_kwargs)
 
 
 def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs):
@@ -367,8 +369,8 @@ class DatajournalEntry(pd.Series):
         return self.get('anchor')
 
     @property
-    def superhash(self):
-        return self.get('superhash')
+    def subhash(self):
+        return self.get('subhash')
     
     @property
     def hash(self):
@@ -426,9 +428,9 @@ class DatajournalEntry(pd.Series):
         return self._renamed_column('signature', 'hashstr')
 
     @property
-    def supersignature(self):
-        """As :attr:`signature`, for the fqcn-anchored form (was ``superhashstr``)."""
-        return self._renamed_column('supersignature', 'superhashstr')
+    def subsignature(self):
+        """Path to this entry's ``subsignature.txt``, or None (falls back to legacy ``norm`` column)."""
+        return self._renamed_column('subsignature', 'norm')
 
     @property
     def uuid(self):
@@ -826,6 +828,7 @@ class DatajournalEntry(pd.Series):
         """Reconstruct a Datablock.Bid from this journal entry."""
         return Datablock.Bid(
             hash=self.hash,
+            subhash=self.subhash,
             version=self.version,
             revision=self.revision,
             dfn=self.read('dfn', safe=True) or {},
@@ -834,11 +837,8 @@ class DatajournalEntry(pd.Series):
             quote=self.read('quote') or '',
             cite=self.read('cite') or '',
             repr=self.read('repr') or '',
-            norm=self.read('norm') or '',
+            subsignature=self.read('subsignature') or self.read('norm') or '',
             signature=self.read('signature') or '',
-            supernorm=self.read('supernorm') or '',
-            supersignature=self.read('supersignature') or '',
-            superhash=self.superhash,
             anchor=self.anchor,
             tag=self.tag,
             key=self.key,
@@ -851,7 +851,8 @@ class Datajournal(pd.DataFrame):
     _metadata = ['storage_options', 'logger']
 
     def __init__(self, df: pd.DataFrame|None, *, storage_options: dict = None,
-                 parse_datetimes: bool = True, logger: Logger = Logger(), **filter_kwargs):
+                 parse_datetimes: bool = True, logger: Logger = Logger(),
+                 index: str | None = None, **filter_kwargs):
         
         # Guard against an empty journal (no parquet files written yet).
         if df is None:
@@ -889,18 +890,13 @@ class Datajournal(pd.DataFrame):
                     df = df[df[k] == v]
 
         if filter_kwargs:
-            # Renumber 0..N-1, because filtering above kept the LABELS the rows
-            # had in the unfiltered journal. Those labels are what `loc=` and
-            # :meth:`get` index by, so without this a filtered journal raised
-            # KeyError for every position whose row the filter removed:
-            # journal(event='build:end', loc=0) and lastbuilt() both failed
-            # whenever the newest entry was some other event.
-            #
-            # Guarded on filter_kwargs so it only fires when this constructor
-            # did the filtering. A caller slicing a Datajournal with a boolean
-            # mask (see :meth:`running`) keeps pandas' label semantics, and
-            # subclass slicing does not reach __init__ at all.
             df = df.reset_index(drop=True)
+
+        if index is not None:
+            if index in df.columns:
+                df = df.set_index(index)
+            else:
+                raise KeyError(f"Column {index!r} not found in journal DataFrame")
 
         # Initialize the DataFrame first
         super().__init__(df)
@@ -1039,10 +1035,12 @@ class Datablock:
     # necessarily changes the hash. Existing subclasses set it to True so their
     # already-computed hashes, keys and storage paths stay valid.
     LEGACY_NORM = False
+    LEGACY_SIGNATURE = False
 
     @dataclass
     class Bid: #BlockId
         hash: str
+        subhash: str
         version: str
         revision: str
         dfn: dict
@@ -1051,11 +1049,8 @@ class Datablock:
         quote: str
         cite: str
         repr: str
-        norm: str
+        subsignature: str
         signature: str
-        supernorm: str
-        supersignature: str
-        superhash: str
         anchor: str
         tag: str
         key: str
@@ -1262,14 +1257,14 @@ class Datablock:
             self.spec = self._spec_
         self._anchor_ = state.get('anchor')
         self._hash_ = state.get('hash')
-        self._superhash_ = state.get('superhash')
+        self._subhash_ = state.get('subhash')
         self._tag_ = state.get('tag')
         
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'tag_version_shorthash')
-        if self.keyby not in (None, 'hash', 'superhash', 'norm', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'superhash', 'norm', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
+        if self.keyby not in (None, 'hash', 'subhash', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'subhash', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -2906,6 +2901,7 @@ class Datablock:
     def bid(self):
         return self.Bid(
             hash=self.hash,
+            subhash=self.subhash,
             version=self.version,
             revision=self.revision,
             kwargs=self.kwargs,
@@ -2914,11 +2910,8 @@ class Datablock:
             quote=self.quote(deslash=True),
             cite=self.cite(),
             repr=self.__repr__(deslash=True),
-            norm=self.norm(deslash=True),
+            subsignature=self.subsignature(deslash=True),
             signature=self.signature(deslash=True),
-            supernorm=self.supernorm(deslash=True),
-            supersignature=self.supersignature(deslash=True),
-            superhash=self.superhash,
             anchor=self.anchor,
             tag=self.tag,
             key=self.key,
@@ -3002,7 +2995,7 @@ class Datablock:
             for k, v in spec.items():
                 value = getattr(self.var, k)
                 _spec_[k] = repr(value)
-        elif expansion == 'norm':
+        elif expansion in ('norm', 'subsignature'):
             legacy_norm = self.LEGACY_NORM if legacy is None else legacy
             for k, v in spec.items():
                 value = getattr(self.var, k)
@@ -3010,7 +3003,7 @@ class Datablock:
                     # Pass the override down, not the resolved flag: with
                     # legacy=None each child keeps using its OWN flag, which is
                     # what makes the default byte-identical to before.
-                    _spec_[k] = value.norm(legacy=legacy)
+                    _spec_[k] = value.subsignature(legacy=legacy)
                 elif self.is_specline(v):
                     _spec_[k] = v
                 elif isinstance(value, str):
@@ -3322,55 +3315,33 @@ class Datablock:
         self.log.detailed(f"cite: ------------> {cite=}")
         return cite
 
-    def norm(self, *, deslash: bool = False, legacy: bool | None = None):
-        """The identity string that :attr:`signature` -- and hence :attr:`hash` -- is built from.
+    def subsignature(self, *, deslash: bool = False, legacy: bool | None = None):
+        """The base identity string that :attr:`signature` -- and hence :attr:`hash` and :attr:`subhash` -- is built from.
 
         ``legacy`` temporarily overrides :attr:`LEGACY_NORM`, for the whole
         subtree (nested blocks are rendered the same way). ``None`` (the
         default) means every block uses its own flag, which is the ONLY
-        rendering that corresponds to :attr:`hash`; :attr:`signature` never passes
+        rendering that corresponds to :attr:`subhash`; :attr:`signature` never passes
         an override.
-
-        ``legacy=False`` on a legacy block answers "what would this norm be if I
-        dropped the marker" -- which is how you read typed values out of a
-        :meth:`diffnorm` for a class that still carries one. ``legacy=True`` on a
-        new block answers the reverse. Neither affects :attr:`hash`.
         """
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        norm_spec = self.__expand_spec__('norm', legacy=legacy)
-        legacy_norm = self.LEGACY_NORM if legacy is None else legacy
+        subsig_spec = self.__expand_spec__('subsignature', legacy=legacy)
+        legacy_norm = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
         kwargs_dict = {
             **(self._rootkwargs_ if legacy_norm else {}),
-            **{'spec': norm_spec},
+            **{'spec': subsig_spec},
         }
-        if isinstance(getattr(self, 'redirect', None), dict) and self.redirect.get('paths') is not None:
-            kwargs_dict['_paths_'] = getattr(self, '_paths_', None)
-        norm = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy_norm)
+        subsig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy_norm)
         if deslash:
-            norm = norm.replace('\\', '')
-        self.log.detailed(f"norm: ------------> {norm_spec=}")
-        self.log.detailed(f"norm: ------------>{norm=}")
-        return norm
+            subsig = subsig.replace('\\', '')
+        self.log.detailed(f"subsignature: ------------> {subsig_spec=}")
+        self.log.detailed(f"subsignature: ------------>{subsig=}")
+        return subsig
 
-    def supernorm(self, *, deslash: bool = False, legacy: 'bool | None' = None):
-        """As :meth:`norm`, but anchored on the fqcn. ``legacy`` behaves the same way."""
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
-        # computed using the older version of these methods
-        supernorm_spec = self.__expand_spec__('norm', legacy=legacy)
-        legacy_norm = self.LEGACY_NORM if legacy is None else legacy
-        kwargs_dict = {
-            **(self._rootkwargs_ if legacy_norm else {}),
-            **{'spec': supernorm_spec},
-        }
-        if isinstance(getattr(self, 'redirect', None), dict) and self.redirect.get('paths') is not None:
-            kwargs_dict['_paths_'] = getattr(self, '_paths_', None)
-        supernorm = self.__repr_from_kwargs__(kwargs_dict, anchor='fqcn', quote_strs=not legacy_norm)
-        if deslash:
-            supernorm = supernorm.replace('\\', '')
-        self.log.detailed(f"supernorm: ------------> {supernorm_spec=}")
-        self.log.detailed(f"supernorm: ------------>{{supernorm=}}")
-        return supernorm
+    def norm(self, *, deslash: bool = False, legacy: bool | None = None):
+        """Alias for :meth:`subsignature` for backwards compatibility."""
+        return self.subsignature(deslash=deslash, legacy=legacy)
 
     @staticmethod
     def _parse_norm(norm: str) -> dict:
@@ -4045,23 +4016,12 @@ class Datablock:
     def signature(self, *, deslash: bool = False):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        sig = os.path.join(
-            self.norm(deslash=deslash),
-            f"version={self.version}",
-            *self.signature_topics(),
-        )
-        if deslash:
-            sig = sig.replace('\\', '')
-        return sig
-
-    def supersignature(self, *, deslash: bool = False):
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
-        # computed using the older version of these methods
-        sig = os.path.join(
-            self.supernorm(deslash=deslash),
-            f"version={self.version}",
-            *self.signature_topics(),
-        )
+        parts = [self.subsignature(deslash=deslash)]
+        if isinstance(getattr(self, 'redirect', None), dict) and self.redirect.get('paths') is not None:
+            parts.append(f"_paths_={getattr(self, '_paths_', None)}")
+        parts.append(f"version={self.version}")
+        parts.extend(self.signature_topics())
+        sig = os.path.join(*parts)
         if deslash:
             sig = sig.replace('\\', '')
         return sig
@@ -4082,19 +4042,17 @@ class Datablock:
         return self._hash
 
     @property
-    def superhash(self):
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hash
-        # computed with the older code.
-        if not hasattr(self, '_superhash'): 
-            if self._superhash_ is not None:
-                self._superhash = self._superhash_
+    def subhash(self):
+        if not hasattr(self, '_subhash'): 
+            if getattr(self, '_subhash_', None) is not None:
+                self._subhash = self._subhash_
             else:
                 sha = hashlib.sha256()
-                supsig = self.supersignature()
-                sha.update(supsig.encode())
-                self._superhash = sha.hexdigest()[:8]
-                self.log.detailed(f"superhash: ---------===---------> {supsig=} ---> superhash: {self._superhash}")
-        return self._superhash
+                subsig = self.subsignature()
+                sha.update(subsig.encode())
+                self._subhash = sha.hexdigest()
+                self.log.detailed(f"subhash: ---------===---------> {subsig=} ---> subhash: {self._subhash}")
+        return self._subhash
 
     ### anchorage: begin
     @property
@@ -4114,10 +4072,10 @@ class Datablock:
             key = None
         elif self.keyby == 'hash':
             key = self.hash
-        elif self.keyby == 'superhash':
-            key = self.superhash
-        elif self.keyby == 'norm':
-            key = self.norm()
+        elif self.keyby == 'subhash':
+            key = self.subhash
+        elif self.keyby == 'subsignature':
+            key = self.subsignature()
         elif self.keyby == 'tag':
             key = self.tag
         elif self.keyby in ('taghash', 'tag_hash'):
@@ -4583,10 +4541,8 @@ class Datablock:
         self._write_str('quote', self.quote())
         self._write_str('cite', self.cite())
         self._write_str('repr', self.__repr__())
-        self._write_str('norm', self.norm())
-        self._write_str('supernorm', self.supernorm())
+        self._write_str('subsignature', self.subsignature())
         self._write_str('signature', self.signature())
-        self._write_str('supersignature', self.supersignature())
         if note is not None and not inline_note:
             self._write_str('note', note)
         #
@@ -4597,11 +4553,9 @@ class Datablock:
         kwargs_path = self._dbxanchorhashpathx('kwargs', 'yaml')
         quote_path = self._dbxanchorhashpathx('quote', 'txt')
         cite_path = self._dbxanchorhashpathx('cite', 'txt')
-        norm_path = self._dbxanchorhashpathx('norm', 'txt')
+        subsignature_path = self._dbxanchorhashpathx('subsignature', 'txt')
         repr_path = self._dbxanchorhashpathx('repr', 'txt')
         signature_path = self._dbxanchorhashpathx('signature', 'txt')
-        supernorm_path = self._dbxanchorhashpathx('supernorm', 'txt')
-        supersignature_path = self._dbxanchorhashpathx('supersignature', 'txt')
         if note is not None and not inline_note:
             note_path = self._dbxanchorhashpathx('note', 'txt')
             note_val = note_path
@@ -4632,7 +4586,7 @@ class Datablock:
                                          'url': self._url_,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
-                                         'superhash': self.superhash,
+                                         'subhash': self.subhash,
                                          'keyby': self.keyby,
                                          'key': self.key,
                                          'anchorkeypath': self.anchorkeypath,
@@ -4649,11 +4603,9 @@ class Datablock:
                                          'kwargs': kwargs_path,
                                          'quote': quote_path,
                                          'cite': cite_path,
-                                         'norm': norm_path,
-                                         'supernorm': supernorm_path,
+                                         'subsignature': subsignature_path,
                                          'repr': repr_path,
                                          'signature': signature_path,
-                                         'supersignature': supersignature_path,
                                          'note': note_val,
                                          'gitrepo': dataparts.DBX_GIT_REPO,
                                          'wrkrepo': dataparts.DBX_USE_WORK_REPO,
@@ -4743,19 +4695,13 @@ class Datablock:
                     df['message'] = df['note']
                 elif 'message' in df.columns and 'note' not in df.columns:
                     df['note'] = df['message']
-                # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
-                if 'build_datetime' in df.columns and 'build:end:datetime' not in df.columns:
-                    df = df.rename(columns={'build_datetime': 'build:end:datetime'})
-                
                 leading = ['hash'] + (['uuid'] if 'uuid' in df.columns else []) + ['datetime']
                 columns = leading + [c for c in df.columns if c not in set(leading + ['event'])] + ['event']
                 df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)
                 df = df.rename(columns={'build_log': 'log'})
             else:
                 df = None
-        else:
-            df = None
-        journal = Datajournal(df, storage_options=storage_options, **filter_kwargs)
+        journal = Datajournal(df, storage_options=storage_options, index=index, **filter_kwargs)
         if loc is not None:
             result = DatajournalEntry(journal.loc[loc].dropna(), storage_options=storage_options)
         elif iloc is not None:
@@ -4764,21 +4710,21 @@ class Datablock:
             result = journal
         return result
 
-    def journal(self, loc: int = None, *, iloc: int = None, **filter_kwargs):
+    def journal(self, loc: int = None, *, iloc: int = None, index: str | None = None, **filter_kwargs):
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-        return self.Journal(self.anchor, loc=loc, iloc=iloc, url=self._url_, storage_options=self.storage_options, **filter_kwargs)
+        return self.Journal(self.anchor, loc=loc, iloc=iloc, url=self._url_, storage_options=self.storage_options, index=index, **filter_kwargs)
 
-    def lastbuilt(self):
+    def lastbuilt(self, index: str | None = None):
         """Return the most recent 'build:end' DatajournalEntry, or None."""
-        j = self.journal(event='build:end')
+        j = self.journal(event='build:end', index=index)
         if len(j) == 0:
             return None
         return j.get(0, dropna=True)
 
-    def running(self):
+    def running(self, index: str | None = None):
         """Return the latest 'build:start' DatajournalEntry with no matching 'build:end', or None."""
-        j = self.journal()
+        j = self.journal(index=index)
         if len(j) == 0:
             return None
         started = set(j[j['event'] == 'build:start']['hash'])

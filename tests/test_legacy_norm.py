@@ -90,9 +90,6 @@ class TestLegacyNormIsByteStable:
         assert f"url={PIN_URL}" in norm
         assert f"url={PIN_URL!r}" not in norm
 
-    def test_supernorm_url_is_not_quoted(self):
-        assert f"url={PIN_URL}" in _pin(LegacyBlock).supernorm()
-
     def test_non_string_spec_value_is_repr_d_twice(self):
         """int 3 renders "'3'" -- the collision the legacy form is stuck with."""
         assert "'size': '3'" in _pin(LegacyBlock).norm()
@@ -104,9 +101,6 @@ class TestModernNormQuotesStrings:
         norm = _pin(ModernBlock).norm()
         assert "url=" not in norm
 
-    def test_supernorm_url_is_omitted(self):
-        assert "url=" not in _pin(ModernBlock).supernorm()
-
     def test_non_string_spec_value_is_repr_d_once(self):
         assert "'size': 3" in _pin(ModernBlock).norm()
 
@@ -117,22 +111,20 @@ class TestModernNormQuotesStrings:
         unmarked silently re-keys it.
         """
         assert _pin(ModernBlock).hash != _pin(LegacyBlock).hash
-        assert _pin(ModernBlock).superhash != _pin(LegacyBlock).superhash
+        assert _pin(ModernBlock).subhash != _pin(LegacyBlock).subhash
 
 
 class TestOptionalRootkwargs:
 
     def test_legacy_norm_includes_rootkwargs(self):
-        """When LEGACY_NORM is True, _rootkwargs_ (url, etc.) is included in norm and supernorm."""
+        """When LEGACY_NORM is True, _rootkwargs_ (url, etc.) is included in norm/subsignature."""
         blk = _pin(LegacyBlock)
         assert "url=" in blk.norm()
-        assert "url=" in blk.supernorm()
 
     def test_modern_norm_omits_rootkwargs(self):
-        """When LEGACY_NORM is False (default), _rootkwargs_ is omitted from norm and supernorm."""
+        """When LEGACY_NORM is False (default), _rootkwargs_ is omitted from norm/subsignature."""
         blk = _pin(ModernBlock)
         assert "url=" not in blk.norm()
-        assert "url=" not in blk.supernorm()
 
     def test_legacy_override_controls_rootkwargs(self):
         """Passing legacy=True / legacy=False dynamically includes or omits _rootkwargs_."""
@@ -141,11 +133,9 @@ class TestOptionalRootkwargs:
 
         # Forcing legacy=True on modern block includes url=
         assert "url=" in modern.norm(legacy=True)
-        assert "url=" in modern.supernorm(legacy=True)
 
         # Forcing legacy=False on legacy block omits url=
         assert "url=" not in legacy.norm(legacy=False)
-        assert "url=" not in legacy.supernorm(legacy=False)
 
 
 class TestSpecValueCollision:
@@ -222,7 +212,6 @@ class TestLegacyOverride:
         for cls in (LegacyBlock, ModernBlock):
             block = _pin(cls)
             assert block.norm(legacy=None) == block.norm()
-            assert block.supernorm(legacy=None) == block.supernorm()
 
     def test_forcing_the_blocks_own_setting_is_a_no_op(self):
         assert _pin(LegacyBlock).norm(legacy=True) == _pin(LegacyBlock).norm()
@@ -234,18 +223,13 @@ class TestLegacyOverride:
     def test_legacy_true_on_a_modern_block_matches_a_legacy_block(self):
         assert _pin(ModernBlock).norm(legacy=True) == _pin(LegacyBlock).norm()
 
-    def test_override_reaches_supernorm(self):
-        assert (_pin(LegacyBlock).supernorm(legacy=False)
-                != _pin(LegacyBlock).supernorm())
-
     def test_override_does_not_change_hash(self):
         """The load-bearing guard: identity must ignore the override."""
         block = _pin(LegacyBlock)
-        before, superbefore = block.hash, block.superhash
+        before, subbefore = block.hash, block.subhash
         block.norm(legacy=False)
-        block.supernorm(legacy=False)
         assert block.hash == before
-        assert block.superhash == superbefore
+        assert block.subhash == subbefore
         # ... and a freshly built instance still pins the pre-quoting hash.
         assert _pin(LegacyBlock).hash == (
             '067daa07f7bc70c43d923133b42e018753a77a91d1de949abc199ad4b03f329f'

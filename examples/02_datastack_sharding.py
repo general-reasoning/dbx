@@ -85,7 +85,7 @@ def main():
     )
 
     print(f"Blocks: {stack.n_blocks}")
-    print(f"Hash:   {stack.superhash}")
+    print(f"Hash:   {stack.hash[:8]}")
 
     stack.build()
 

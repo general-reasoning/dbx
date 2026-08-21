@@ -55,28 +55,23 @@ class TestSignatureMethod:
     def test_signature_is_what_hash_hashes(self, block):
         assert block.hash == hashlib.sha256(block.signature().encode()).hexdigest()
 
-    def test_supersignature_is_what_superhash_hashes(self, block):
-        assert block.superhash == hashlib.sha256(
-            block.supersignature().encode()).hexdigest()[:8]
+    def test_subsignature_is_what_subhash_hashes(self, block):
+        assert block.subhash == hashlib.sha256(
+            block.subsignature().encode()).hexdigest()
 
-    def test_signature_is_built_from_norm(self, block):
-        assert block.norm() in block.signature()
+    def test_signature_is_built_from_subsignature(self, block):
+        assert block.subsignature() in block.signature()
         assert f"version={block.version}" in block.signature()
-
-    def test_supersignature_is_built_from_supernorm(self, block):
-        assert block.supernorm() in block.supersignature()
-
-    def test_the_two_differ(self, block):
-        """supersignature anchors on the fqcn; a silent alias would hide that."""
-        assert block.signature() != block.supersignature()
 
     def test_deslash_parameter(self, block):
         assert '\\' not in block.signature(deslash=True)
-        assert '\\' not in block.supersignature(deslash=True)
+        assert '\\' not in block.subsignature(deslash=True)
 
     def test_the_old_names_are_gone(self, block):
         assert not hasattr(block, 'hashstr')
         assert not hasattr(block, 'superhashstr')
+        assert not hasattr(block, 'superhash')
+        assert not hasattr(block, 'supersignature')
 
 
 # ---------------------------------------------------------------------------
@@ -87,17 +82,19 @@ class TestSignatureInBid:
 
     def test_bid_field_names(self, block):
         fields = block.bid.fields()
-        assert 'signature' in fields and 'supersignature' in fields
-        assert 'hashstr' not in fields and 'superhashstr' not in fields
+        assert 'signature' in fields and 'subsignature' in fields and 'subhash' in fields
+        assert 'hashstr' not in fields and 'superhashstr' not in fields and 'superhash' not in fields
 
     def test_bid_values_match_the_properties(self, block):
         assert block.bid.signature == block.signature(deslash=True)
-        assert block.bid.supersignature == block.supersignature(deslash=True)
+        assert block.bid.subsignature == block.subsignature(deslash=True)
+        assert block.bid.subhash == block.subhash
 
     def test_bid_to_dict_covers_them(self, block):
         d = block.bid.to_dict()
         assert d['signature'] == block.signature(deslash=True)
-        assert d['supersignature'] == block.supersignature(deslash=True)
+        assert d['subsignature'] == block.subsignature(deslash=True)
+        assert d['subhash'] == block.subhash
 
 
 # ---------------------------------------------------------------------------
@@ -113,15 +110,16 @@ class TestSignatureInJournal:
         assert entry.signature.endswith('.txt')
         assert entry.read('signature') == built.signature()
 
-    def test_build_writes_supersignature_txt(self, built):
+    def test_build_writes_subsignature_txt(self, built):
         entry = built.journal(iloc=-1)
-        assert entry.supersignature is not None
-        assert entry.read('supersignature') == built.supersignature()
+        assert entry.subsignature is not None
+        assert entry.read('subsignature') == built.subsignature()
 
     def test_journal_entry_bid_carries_them(self, built):
         bid = built.journal(iloc=-1).bid
         assert bid.signature == built.signature(deslash=True)
-        assert bid.supersignature == built.supersignature(deslash=True)
+        assert bid.subsignature == built.subsignature(deslash=True)
+        assert bid.subhash == built.subhash
 
 
 # ---------------------------------------------------------------------------
@@ -135,29 +133,22 @@ class TestPreRenameJournals:
 
     def test_legacy_hashstr_column_is_read_as_signature(self):
         entry = self._entry(hashstr='/j/x-hashstr-1.txt',
-                            superhashstr='/j/x-superhashstr-1.txt')
+                            norm='/j/x-norm-1.txt')
         assert entry.signature == '/j/x-hashstr-1.txt'
-        assert entry.supersignature == '/j/x-superhashstr-1.txt'
+        assert entry.subsignature == '/j/x-norm-1.txt'
 
     def test_new_column_wins_when_both_are_present(self):
         entry = self._entry(signature='/j/new.txt', hashstr='/j/old.txt')
         assert entry.signature == '/j/new.txt'
 
     def test_nan_in_the_new_column_still_falls_back(self):
-        """A journal spanning the rename has BOTH columns, NaN-filled per row.
-
-        Concatenating a pre- and a post-rename entry gives every row both
-        columns, so the old row's `signature` is NaN rather than missing --
-        a plain .get(name, default) would return the NaN and read() would
-        then try to open it as a path.
-        """
         entry = self._entry(signature=float('nan'), hashstr='/j/old.txt')
         assert entry.signature == '/j/old.txt'
 
     def test_absent_in_both_degrades_to_none(self):
         entry = self._entry()
         assert entry.signature is None
-        assert entry.supersignature is None
+        assert entry.subsignature is None
         assert entry.read('signature') is None
 
     def test_nan_in_both_degrades_to_none(self):
@@ -168,9 +159,9 @@ class TestPreRenameJournals:
         """End to end: an old row and a new row concatenated into one frame."""
         new_row = built.journal(iloc=-1)
         old_row = pd.Series({**dict(new_row), 'signature': None,
-                             'supersignature': None,
+                             'subsignature': None,
                              'hashstr': '/j/legacy-hashstr.txt',
-                             'superhashstr': '/j/legacy-superhashstr.txt'})
+                             'norm': '/j/legacy-norm.txt'})
         frame = pd.DataFrame([old_row, pd.Series(dict(new_row))])
 
         assert DatajournalEntry(frame.iloc[0]).signature == '/j/legacy-hashstr.txt'

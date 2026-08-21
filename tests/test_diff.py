@@ -121,10 +121,10 @@ class TestSignatureTopics:
     def test_empty_topics_renders_as_nothing(self, tmp_path):
         assert block(Empty, tmp_path).signature_topics() == ()
 
-    def test_the_supersignature_uses_the_same_segments(self, tmp_path):
+    def test_the_signature_uses_the_same_segments(self, tmp_path):
         b = block(Block, tmp_path)
         for segment in b.signature_topics():
-            assert segment in b.supersignature()
+            assert segment in b.signature()
 
 
 class TestDifftopicsAgreesWithSignature:

@@ -236,13 +236,28 @@ class DatafeatureTab(DatapointTab):
 
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
 
-    def __init__(self, *args, device_batch_size: int = 64, device: str = "cuda", **kwargs):
+    def __init__(
+        self,
+        *args,
+        device_batch_size: int = 64,
+        device: str = "cuda",
+        streaming: bool = False,
+        dataloader_kwargs: dict | None = None,
+        **kwargs,
+    ):
         self.device_batch_size = device_batch_size
         self.device = device
-        super().__init__(*args, **kwargs)
+        super().__init__(
+            *args,
+            streaming=streaming,
+            dataloader_kwargs=dataloader_kwargs,
+            **kwargs,
+        )
 
     def __post_init__(self):
         super().__post_init__()
+        self.streaming = getattr(self, 'streaming', False)
+        self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
         factory = self.var.evaluator_factory
         layer_names = factory.layer_names if factory is not None else []
         namemap = self.var.feature_namemap
@@ -257,6 +272,12 @@ class DatafeatureTab(DatapointTab):
             self._feature_map = {name: name for name in layer_names}
 
     def __build__(self):
+        if self.streaming:
+            return self.__build_streaming__()
+        else:
+            return self.__build_bulk__()
+
+    def __build_bulk__(self):
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         datapoint_tab = self.var.datapoint_tab
 
@@ -288,6 +309,47 @@ class DatafeatureTab(DatapointTab):
                 result = evaluator(batch)
 
                 batch_len = n - m
+                for i in range(batch_len):
+                    sample_dict = {}
+                    for col_name, layer_name in self._feature_map.items():
+                        if layer_name in result:
+                            arr = result[layer_name].cpu().numpy().astype(np.float32)
+                            sample_dict[col_name] = arr[i]
+                    writers['features'].write(sample_dict)
+                evaluator.clear()
+        return self
+
+    def __build_streaming__(self):
+        evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
+        datapoint_tab = self.var.datapoint_tab
+
+        columns_spec = {
+            col_name: "ndarray:float32"
+            for col_name in self._feature_map.keys()
+        }
+        slice_specs = {"features": columns_spec}
+
+        collator = self.var.collator
+        if collator is None:
+            slice_name = 'tiles' if 'tiles' in datapoint_tab.slices else (datapoint_tab.slices[0] if datapoint_tab.slices else 'tiles')
+            col_name = 'tile' if slice_name == 'tiles' else slice_name
+            collator = Datacollator(spec=dict(signals=[(slice_name, col_name)], labels=[]))
+
+        dataset = datapoint_tab.dataset(*collator.slices)
+        dl_kwargs = dict(self.dataloader_kwargs) if self.dataloader_kwargs else {}
+        dl_kwargs.setdefault('batch_size', self.device_batch_size)
+
+        dataloader = torch.utils.data.DataLoader(dataset, **dl_kwargs)
+
+        with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
+            for batch_data in dataloader:
+                inputs = collator(batch_data, signal_only=True, strip_keys=True)
+                if not hasattr(inputs, 'shape') or not hasattr(inputs, 'to'):
+                    inputs = torch.tensor(np.array(inputs))
+                batch = inputs.to(self.device)
+                result = evaluator(batch)
+
+                batch_len = len(batch)
                 for i in range(batch_len):
                     sample_dict = {}
                     for col_name, layer_name in self._feature_map.items():
@@ -432,15 +494,32 @@ class DatafeatureTable(DatapointTable):
 
     # 1. Datablock / Datastack Protocol Methods ─────────────────────
 
-    def __init__(self, *args, device_batch_size: int = 64, devices: list | None = None, **kwargs):
-        # Pass device_batch_size and devices through Datastack.__init__ so they
+    def __init__(
+        self,
+        *args,
+        device_batch_size: int = 64,
+        devices: list | None = None,
+        streaming: bool = False,
+        dataloader_kwargs: dict | None = None,
+        **kwargs,
+    ):
+        # Pass device_batch_size, devices, streaming, dataloader_kwargs through Datastack.__init__ so they
         # survive multiprocessing pickling (Datablock folds **kwargs into the
         # state dict, which __getstate__/__setstate__ round-trips faithfully).
-        super().__init__(*args, device_batch_size=device_batch_size, devices=devices or ["cuda"], **kwargs)
+        super().__init__(
+            *args,
+            device_batch_size=device_batch_size,
+            devices=devices or ["cuda"],
+            streaming=streaming,
+            dataloader_kwargs=dataloader_kwargs,
+            **kwargs,
+        )
 
     def __post_init__(self):
         super().__post_init__()
         # Read back from self — works whether we came through __init__ or __setstate__.
+        self.streaming = getattr(self, 'streaming', False)
+        self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
         self._devices = getattr(self, 'devices', None) or ["cuda"]
         factory = self.var.evaluator_factory
         layer_names = factory.layer_names if factory is not None else []
@@ -454,8 +533,6 @@ class DatafeatureTable(DatapointTable):
                 self._feature_map = {str(namemap): str(namemap)}
         else:
             self._feature_map = {name: name for name in layer_names}
-
-
 
     def __tab__(self, idx: int, device: str = "cuda", tag=None) -> DatafeatureTab:
         datapoint_tab = self.var.datapoint_table.tab(idx)
@@ -478,6 +555,8 @@ class DatafeatureTable(DatapointTable):
             spec=spec,
             device_batch_size=self.device_batch_size,
             device=device,
+            streaming=self.streaming,
+            dataloader_kwargs=self.dataloader_kwargs,
             revision=self.revision,
             tag=tag if tag is not None else datapoint_tab.tag,
         )

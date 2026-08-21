@@ -347,6 +347,85 @@ def test_datacollator():
     assert out_sig_val.shape == (2, 5, 1, 4)
 
 
+def test_datafeature_tab_streaming(tmp_path):
+    url = str(tmp_path)
+    sampletab = DummySampleTab(url=url, tag="samples_str").build()
+
+    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
+    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
+        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
+    )
+
+    featuretab_bulk = DatafeatureTab(
+        url=url,
+        spec=dict(
+            datapoint_tab=sampletab,
+            evaluator_factory=eval_factory,
+            collator=sample_collator(),
+        ),
+        device="cpu",
+        streaming=False,
+        tag="features_bulk",
+    ).build()
+
+    featuretab_stream = DatafeatureTab(
+        url=url,
+        spec=dict(
+            datapoint_tab=sampletab,
+            evaluator_factory=eval_factory,
+            collator=sample_collator(),
+        ),
+        device="cpu",
+        streaming=True,
+        dataloader_kwargs={"num_workers": 0},
+        tag="features_stream",
+    ).build()
+
+    assert featuretab_stream.streaming is True
+    assert featuretab_stream.dataloader_kwargs == {"num_workers": 0}
+    assert featuretab_stream.valid()
+
+    data_bulk = featuretab_bulk.data(("features", "final"))["features"]["final"]
+    data_stream = featuretab_stream.data(("features", "final"))["features"]["final"]
+    np.testing.assert_allclose(data_stream, data_bulk)
+
+
+def test_datafeature_table_streaming(tmp_path):
+    url = str(tmp_path)
+    sampletable = DummySampleTable(
+        url=url,
+        spec=dict(samples_per_tab=5),
+        tag="sample_table_str",
+    ).build()
+
+    eval_factory = DatamodelEvaluatorFactory(model="$test_datafeaturetab.DummyModel()", capture_final=True)
+    eval_factory.Evaluator = lambda model=None, **kwargs: DatamodelEvaluator(
+        model=DummyModel(), **{k: v for k, v in kwargs.items() if k != 'device'}, device="cpu"
+    )
+
+    featuretable_stream = DatafeatureTable(
+        url=url,
+        spec=dict(
+            datapoint_table=sampletable,
+            evaluator_factory=eval_factory,
+            collator=sample_collator(),
+        ),
+        devices=["cpu"],
+        streaming=True,
+        dataloader_kwargs={"num_workers": 0},
+        tag="feature_table_str",
+    ).build()
+
+    assert featuretable_stream.streaming is True
+    assert featuretable_stream.dataloader_kwargs == {"num_workers": 0}
+    tab0 = featuretable_stream.tab(0)
+    assert tab0.streaming is True
+    assert tab0.dataloader_kwargs == {"num_workers": 0}
+
+    feat_data = featuretable_stream.data(("features", "final"), concat=True)
+    assert feat_data["features"]["final"].shape == (10, 8)
+
+
 if __name__ == "__main__":
     import sys
     dbx.dataparts.gitwrkreposetup = lambda *a, **k: None

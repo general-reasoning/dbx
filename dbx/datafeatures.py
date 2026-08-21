@@ -388,6 +388,8 @@ class DatafeatureTab(DatapointTab):
                 gc.collect()
             del inputs
             gc.collect()
+        del evaluator
+        gc.collect()
         return self
 
     def __build_streaming__(self):
@@ -431,6 +433,8 @@ class DatafeatureTab(DatapointTab):
                 evaluator.clear()
                 del batch_data, inputs, batch, result, batch_features
                 gc.collect()
+        del evaluator
+        gc.collect()
         return self
 
     def dataset(

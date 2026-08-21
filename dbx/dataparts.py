@@ -527,9 +527,12 @@ def eval(name):
             out.append(''.join(buf))
         return out
 
-    def get_named_args_kwargs(argkwargstr):
+    def get_named_args_kwargs(argkwargstr, cxt=None):
         args = []
         kwargs = {}
+        if cxt is None:
+            cxt = {}
+        cxt['dbx'] = sys.modules.get('dbx', sys.modules[__name__.split('.')[0]])
         if len(argkwargstr) > 0:
             bits = split_top_level_items(argkwargstr)
             for bit in bits:
@@ -537,12 +540,12 @@ def eval(name):
                 kwparts = split_top_level_items(bit, sep='=')
                 if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
                     k, v = kwparts[0].strip(), kwparts[1].strip()
-                    val = __eval__(v)
+                    val = __eval__(v, globals(), cxt)
                     if isinstance(val, str) and (val.startswith("$") or val.startswith("@") or val.startswith("#")):
                         val = eval(val)
                     kwargs[k] = val
                 else:
-                    arg = __eval__(bit)
+                    arg = __eval__(bit, globals(), cxt)
                     if isinstance(arg, str) and (arg.startswith("$") or arg.startswith("@") or arg.startswith("#")):
                         arg = eval(arg)
                     args.append(arg)
@@ -575,10 +578,11 @@ def eval(name):
                 func, cxt = get_named_const_and_cxt(funcstr)
                 cxt['dbx'] = sys.modules['dbx']
                 if argkwargstr is not None:
-                    args, kwargs = get_named_args_kwargs(argkwargstr)
+                    args, kwargs = get_named_args_kwargs(argkwargstr, cxt=cxt)
                     term = func(*args, **kwargs)
                 else:
                     term = __eval__(_name_, cxt)
+
         else:
             term = name
     else:

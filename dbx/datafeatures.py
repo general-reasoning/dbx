@@ -5,9 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import gc
 import math
+import warnings
 from typing import Any
 
 import numpy as np
+
+# Suppress PyTorch non-writable NumPy array UserWarning for read-only streaming buffers
+warnings.filterwarnings("ignore", category=UserWarning, message=".*given NumPy array is not writable.*")
 
 try:
     import torch
@@ -323,6 +327,7 @@ class DatafeatureTab(DatapointTab):
         return self
 
     def __build_streaming__(self):
+        warnings.filterwarnings("ignore", category=UserWarning, message=".*given NumPy array is not writable.*")
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         datapoint_tab = self.var.datapoint_tab
 

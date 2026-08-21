@@ -619,7 +619,7 @@ class DatafeatureTable(DatapointTable):
         if device is None:
             devs = getattr(self, '_devices', None) or getattr(self, 'devices', None) or ["cuda"]
             device = devs[idx % len(devs)]
-        dp_table = self.spec['datapoint_table']
+        dp_table = getattr(self.var, 'datapoint_table', None) or getattr(self.var, 'tilebagclip', None) or self.spec.get('datapoint_table') or self.spec.get('tilebagclip')
         if hasattr(dp_table, 'tab'):
             dp_tab = dp_table.tab(idx)
             dp_tab_quote = dbx.quote(dp_tab)

@@ -3322,7 +3322,7 @@ class Datablock:
         self.log.detailed(f"cite: ------------> {cite=}")
         return cite
 
-    def norm(self, *, deslash: bool = False, legacy: 'bool | None' = None):
+    def norm(self, *, deslash: bool = False, legacy: bool | None = None):
         """The identity string that :attr:`signature` -- and hence :attr:`hash` -- is built from.
 
         ``legacy`` temporarily overrides :attr:`LEGACY_NORM`, for the whole

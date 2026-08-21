@@ -669,10 +669,19 @@ class DatapointTable(DatapointBase, Datastack):
     def __block__(self, idx: int) -> DatapointTab:
         return self.__tab__(idx)
 
+    def _tab_paths_topic(self) -> str | None:
+        topics = self.topics()
+        if 'tab_paths' in topics:
+            return 'tab_paths'
+        if 'built_tabs' in topics:
+            return 'built_tabs'
+        return None
+
     def __split__(self, *args, **kwargs):
         self.path('tabs', ensure_dirpath=True)
-        if 'tab_paths' in self.topics():
-            self.path('tab_paths', ensure_dirpath=True)
+        topic_name = self._tab_paths_topic()
+        if topic_name:
+            self.path(topic_name, ensure_dirpath=True)
         n = self.n_tabs
         self.log.info(
             "%s: %d tabs x %d slices %s",
@@ -791,14 +800,15 @@ class DatapointTable(DatapointBase, Datastack):
             topic_str = '/'.join(topicpath)
             if topic_str in self.slices:
                 return self.data(topic_str)
+        topic_name = self._tab_paths_topic()
+        if topic_name and topicpath == (topic_name,):
+            return self.path(topic_name)
         if topicpath == ('tabs',):
             return self.path('tabs')
-        if topicpath == ('tab_paths',):
-            return self.path('tab_paths')
         if topicpath == ('done',):
             return self.valid()
         raise NotImplementedError(
-            f"{self.__class__.__name__}.__read__ answers only slices, 'tabs', 'tab_paths' and 'done'; "
+            f"{self.__class__.__name__}.__read__ answers only slices, 'tabs', 'built_tabs', 'tab_paths' and 'done'; "
             f"override it to read {'/'.join(topicpath)!r}"
         )
 
@@ -806,19 +816,21 @@ class DatapointTable(DatapointBase, Datastack):
         return self.valid_topic('done')
 
     def _write_tab_path(self, i: int):
-        if 'tab_paths' not in self.topics():
+        topic_name = self._tab_paths_topic()
+        if not topic_name:
             return
-        tab_dir = self.path('tab_paths', ensure_dirpath=True)
+        tab_dir = self.path(topic_name, ensure_dirpath=True)
         sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
         anchorkeypath = self.tab(i).anchorkeypath
         with self.fs.open(sentinel_path, 'w') as f:
             f.write(anchorkeypath)
 
     def _check_tab_path(self, i: int) -> bool:
-        if 'tab_paths' not in self.topics():
+        topic_name = self._tab_paths_topic()
+        if not topic_name:
             return False
         try:
-            tab_dir = self.path('tab_paths')
+            tab_dir = self.path(topic_name)
             sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
             return self.fs.exists(sentinel_path)
         except Exception:
@@ -828,7 +840,7 @@ class DatapointTable(DatapointBase, Datastack):
     _check_tab_built = _check_tab_path
 
     def valid_tab(self, i: int) -> bool:
-        if 'tab_paths' in self.topics():
+        if self._tab_paths_topic():
             if self._check_tab_path(i):
                 return True
             return self.tab(i).valid()

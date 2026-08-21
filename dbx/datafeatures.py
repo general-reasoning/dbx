@@ -40,17 +40,36 @@ def _extract_slice_data(res, slice_name):
     return res
 
 
+def _flatten_item(x):
+    while isinstance(x, dict) and len(x) > 0:
+        x = next(iter(x.values()))
+    if torch is not None and isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy().astype(np.float32)
+    if isinstance(x, np.ndarray):
+        if x.dtype == np.object_:
+            return np.array([_flatten_item(item) for item in x], dtype=np.float32)
+        return x.astype(np.float32) if x.dtype != np.float32 else x
+    try:
+        return np.asarray(x, dtype=np.float32)
+    except Exception:
+        return np.array(x)
+
+
 def _to_tensor(inputs, device=None) -> torch.Tensor:
     if isinstance(inputs, torch.Tensor):
         return inputs.to(device) if device is not None else inputs
 
+    if isinstance(inputs, dict) and len(inputs) > 0:
+        inputs = next(iter(inputs.values()))
+        return _to_tensor(inputs, device)
+
     if isinstance(inputs, np.ndarray):
         if inputs.dtype == np.object_:
             try:
-                stacked = np.stack(inputs.tolist())
+                stacked = np.stack([_flatten_item(x) for x in inputs])
                 t = torch.from_numpy(np.ascontiguousarray(stacked))
             except Exception:
-                stacked = np.array([np.asarray(x, dtype=np.float32) for x in inputs])
+                stacked = np.array([_flatten_item(x) for x in inputs], dtype=np.float32)
                 t = torch.from_numpy(np.ascontiguousarray(stacked))
             return t.to(device) if device is not None else t
         t = torch.from_numpy(np.ascontiguousarray(inputs))
@@ -60,25 +79,18 @@ def _to_tensor(inputs, device=None) -> torch.Tensor:
         if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
             t = torch.stack(inputs)
             return t.to(device) if device is not None else t
-        if len(inputs) > 0 and isinstance(inputs[0], np.ndarray):
-            if inputs[0].dtype == np.object_:
-                flat = [np.asarray(x, dtype=np.float32) for x in inputs]
-                t = torch.from_numpy(np.ascontiguousarray(np.stack(flat)))
-            else:
-                t = torch.from_numpy(np.ascontiguousarray(np.stack(inputs)))
-            return t.to(device) if device is not None else t
         try:
-            arr = np.asarray(inputs, dtype=np.float32)
-            t = torch.from_numpy(np.ascontiguousarray(arr))
+            stacked = np.stack([_flatten_item(x) for x in inputs])
+            t = torch.from_numpy(np.ascontiguousarray(stacked))
         except Exception:
-            arr = np.array([np.asarray(x, dtype=np.float32) for x in inputs])
-            t = torch.from_numpy(np.ascontiguousarray(arr))
+            stacked = np.array([_flatten_item(x) for x in inputs], dtype=np.float32)
+            t = torch.from_numpy(np.ascontiguousarray(stacked))
         return t.to(device) if device is not None else t
 
     try:
         t = torch.as_tensor(inputs)
     except Exception:
-        t = torch.tensor(np.asarray(inputs, dtype=np.float32))
+        t = torch.tensor(_flatten_item(inputs))
     return t.to(device) if device is not None else t
 
 
@@ -230,12 +242,14 @@ class Datacollator(Datablock):
         for dp in datapoints:
             dp_signals = []
             for s_name, c_name in norm_pairs:
-                if isinstance(dp, dict) and s_name in dp:
-                    val = dp[s_name]
-                    if isinstance(val, dict):
-                        val = val.get(c_name, next(iter(val.values())))
-                else:
-                    val = dp
+                val = dp.get(s_name, dp) if isinstance(dp, dict) else dp
+                while isinstance(val, dict) and len(val) > 0:
+                    if c_name and c_name in val:
+                        val = val[c_name]
+                    elif c_name and c_name.replace('features_', '') in val:
+                        val = val[c_name.replace('features_', '')]
+                    else:
+                        val = next(iter(val.values()))
 
                 dp_signals.append(self._as_array(val))
 

@@ -256,25 +256,24 @@ class Datacollator(Datablock):
 
                 dp_signals.append(self._as_array(val))
 
-            if len(dp_signals) == 1:
-                dp_tensor = dp_signals[0]
-            else:
-                norm_signals = []
-                for sig in dp_signals:
-                    if sig.ndim == 0:
-                        norm_signals.append(sig.reshape(1, 1))
-                    elif sig.ndim == 1:
-                        norm_signals.append(sig.reshape(1, -1))
-                    else:
-                        norm_signals.append(sig)
-
-                if norm_signals[0].ndim == 2 and all(x.ndim == 2 for x in norm_signals):
-                    try:
-                        dp_tensor = np.stack(norm_signals, axis=1)
-                    except ValueError:
-                        dp_tensor = np.concatenate(norm_signals, axis=1)
+            norm_signals = []
+            for sig in dp_signals:
+                if sig.ndim == 0:
+                    norm_signals.append(sig.reshape(1, 1))
+                elif sig.ndim == 1:
+                    norm_signals.append(sig.reshape(1, -1))
                 else:
+                    norm_signals.append(sig)
+
+            if len(norm_signals) == 1 and norm_signals[0].ndim >= 3:
+                dp_tensor = norm_signals[0]
+            elif norm_signals[0].ndim == 2 and all(x.ndim == 2 for x in norm_signals):
+                try:
                     dp_tensor = np.stack(norm_signals, axis=1)
+                except ValueError:
+                    dp_tensor = np.concatenate(norm_signals, axis=1)
+            else:
+                dp_tensor = np.stack(norm_signals, axis=1)
 
             batch_items.append(dp_tensor)
 

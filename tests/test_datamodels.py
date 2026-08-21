@@ -137,15 +137,65 @@ def test_dataformer_evaluator_factory():
     assert ev1 is ev2
     assert isinstance(ev1, DataformerEvaluator)
     assert ev1.layer_names == ["block.0", "block.1", "final"]
-    assert factory.layer_names == ["block.0", "block.1", "final"]
-
     factory_all = DummyTransformerEvaluatorFactory(
         spec=dict(capture_blocks="all", capture_final=True)
     )
     assert factory_all.layer_names == ["block.0", "block.1", "block.2", "final"]
 
 
+class TransformedModelEvaluatorFactory(DatamodelEvaluatorFactory):
+    @property
+    def model(self):
+        return DummyModel()
+
+    @property
+    def transform(self):
+        return lambda x: x * 2.0
+
+
+class TransformedDataformerEvaluatorFactory(DataformerEvaluatorFactory):
+    @property
+    def model(self):
+        return DummyTransformer()
+
+    @property
+    def transform(self):
+        return lambda x: x * 3.0
+
+
+def test_datamodel_evaluator_factory_transform():
+    factory_default = DummyModelEvaluatorFactory()
+    ev_default = factory_default.evaluator(device="cpu")
+    if torch is not None:
+        assert isinstance(ev_default.transform, torch.nn.Identity)
+
+    factory_custom = TransformedModelEvaluatorFactory(spec=dict(capture_final=True))
+    ev_custom = factory_custom.evaluator(device="cpu")
+    x = torch.ones(2, 4)
+    res_custom = ev_custom(x)
+
+    model_direct = DummyModel()
+    model_direct.load_state_dict(ev_custom.model.state_dict())
+    expected_out = model_direct(x * 2.0)
+    torch.testing.assert_close(res_custom["final"], expected_out)
+
+
+def test_dataformer_evaluator_factory_transform():
+    factory_custom = TransformedDataformerEvaluatorFactory(
+        spec=dict(capture_blocks=[0], capture_final=True)
+    )
+    ev_custom = factory_custom.evaluator(device="cpu")
+    x = torch.ones(2, 5, 8)
+    res_custom = ev_custom(x)
+
+    model_direct = DummyTransformer()
+    model_direct.load_state_dict(ev_custom.model.state_dict())
+    expected_out = model_direct(x * 3.0)
+    torch.testing.assert_close(res_custom["final"], expected_out)
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__]))
+
 

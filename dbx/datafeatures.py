@@ -35,7 +35,12 @@ from dbx.datastreams import (
 )
 
 
+def _passthrough_collate(batch):
+    return batch
+
+
 def _extract_slice_data(res, slice_name):
+
     if isinstance(res, dict) and slice_name in res:
         return res[slice_name]
     return res
@@ -416,7 +421,8 @@ class DatafeatureTab(DatapointTab):
         dataset = datapoint_tab.dataset(*collator.slices)
         dl_kwargs = dict(self.dataloader_kwargs) if self.dataloader_kwargs else {}
         dl_kwargs.setdefault('batch_size', self.device_batch_size)
-        dl_kwargs.setdefault('collate_fn', lambda batch: batch)
+        dl_kwargs.setdefault('collate_fn', _passthrough_collate)
+
 
         dataloader = torch.utils.data.DataLoader(dataset, **dl_kwargs)
 

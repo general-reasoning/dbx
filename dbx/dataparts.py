@@ -540,16 +540,23 @@ def eval(name):
                 kwparts = split_top_level_items(bit, sep='=')
                 if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
                     k, v = kwparts[0].strip(), kwparts[1].strip()
-                    val = __eval__(v, globals(), cxt)
+                    try:
+                        val = __eval__(v, globals(), cxt)
+                    except Exception:
+                        val = v
                     if isinstance(val, str) and (val.startswith("$") or val.startswith("@") or val.startswith("#")):
                         val = eval(val)
                     kwargs[k] = val
                 else:
-                    arg = __eval__(bit, globals(), cxt)
+                    try:
+                        arg = __eval__(bit, globals(), cxt)
+                    except Exception:
+                        arg = bit
                     if isinstance(arg, str) and (arg.startswith("$") or arg.startswith("@") or arg.startswith("#")):
                         arg = eval(arg)
                     args.append(arg)
         return args, kwargs
+
 
     def get_funcstr_argkwargstr(name):
         # TODO: replace with a regex

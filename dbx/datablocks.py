@@ -4619,7 +4619,7 @@ class Datablock:
         return entry_code
 
     @staticmethod
-    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, **filter_kwargs):
+    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index=None, **filter_kwargs):
         if log is None:
             log = Logger()
         if loc is not None and iloc is not None:

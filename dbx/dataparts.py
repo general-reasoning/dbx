@@ -469,16 +469,27 @@ def get_named_const_and_cxt(name):
     if not modbits:
         return None, cxt
     prefix = None
+    last_mod = None
     for modbit in modbits:
         if prefix is not None:
             modname = prefix + "." + modbit
         else:
             modname = modbit
-        mod = importlib.import_module(modname)
-        prefix = modname
-        cxt[modname] = mod
+        try:
+            mod = sys.modules.get(modname) or importlib.import_module(modname)
+            prefix = modname
+            cxt[modname] = mod
+            last_mod = mod
+        except ModuleNotFoundError:
+            break
+    if last_mod is not None:
+        obj = last_mod
+        consumed_index = len(prefix.split("."))
+        for bit in bits[consumed_index:]:
+            obj = getattr(obj, bit)
+        return obj, cxt
     constname = bits[-1]
-    const = getattr(mod, constname)
+    const = getattr(last_mod, constname) if last_mod is not None else None
     return const, cxt
 
 
@@ -490,18 +501,50 @@ def eval(name):
     Iterables are evaluated element-wise.  Plain strings and other
     objects are returned as-is.
     """
+    def split_top_level_items(inner: str, sep: str = ','):
+        out, buf, depth, quote, esc = [], [], 0, None, False
+        for c in inner:
+            if esc:
+                buf.append(c); esc = False; continue
+            if c == '\\':
+                buf.append(c); esc = True; continue
+            if quote is not None:
+                buf.append(c)
+                if c == quote:
+                    quote = None
+                continue
+            if c in ('"', "'"):
+                quote = c; buf.append(c); continue
+            if c in ('(', '[', '{'):
+                depth += 1
+            elif c in (')', ']', '}'):
+                depth -= 1
+            elif c == sep and depth == 0:
+                out.append(''.join(buf)); buf = []
+                continue
+            buf.append(c)
+        if buf:
+            out.append(''.join(buf))
+        return out
+
     def get_named_args_kwargs(argkwargstr):
         args = []
         kwargs = {}
         if len(argkwargstr) > 0:
-            bits = argkwargstr.split(",")
+            bits = split_top_level_items(argkwargstr)
             for bit in bits:
-                if "=" in bit:
-                    k, v = bit.split("=")
+                bit = bit.strip()
+                kwparts = split_top_level_items(bit, sep='=')
+                if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
+                    k, v = kwparts[0].strip(), kwparts[1].strip()
                     val = __eval__(v)
+                    if isinstance(val, str) and (val.startswith("$") or val.startswith("@") or val.startswith("#")):
+                        val = eval(val)
                     kwargs[k] = val
                 else:
                     arg = __eval__(bit)
+                    if isinstance(arg, str) and (arg.startswith("$") or arg.startswith("@") or arg.startswith("#")):
+                        arg = eval(arg)
                     args.append(arg)
         return args, kwargs
 
@@ -525,13 +568,17 @@ def eval(name):
     elif isinstance(name, str):
         if name.startswith("@") or name.startswith("#") or name.startswith("$"):
             _name_ = name[1:]
-            funcstr, _ = get_funcstr_argkwargstr(_name_)
+            funcstr, argkwargstr = get_funcstr_argkwargstr(_name_)
             if funcstr is None:
                 term, _ = get_named_const_and_cxt(_name_)
             else:
-                _, cxt = get_named_const_and_cxt(funcstr)
+                func, cxt = get_named_const_and_cxt(funcstr)
                 cxt['dbx'] = sys.modules['dbx']
-                term = __eval__(_name_, cxt)
+                if argkwargstr is not None:
+                    args, kwargs = get_named_args_kwargs(argkwargstr)
+                    term = func(*args, **kwargs)
+                else:
+                    term = __eval__(_name_, cxt)
         else:
             term = name
     else:
@@ -2057,8 +2104,15 @@ def size(entries):
 
 def quotefn(fn, *args, tag="$", **kwargs):
     log = Logger()
-    argstrs = [quote(arg) for arg in args]
-    kwargstrs = [f"{k}={quote(v)}" for k, v in kwargs.items()]
+    if callable(fn):
+        fn = f"{fn.__module__}.{fn.__qualname__}"
+    def quote_arg(arg):
+        q = quote(arg)
+        if isinstance(q, str) and (q.startswith("$") or q.startswith("@") or q.startswith("#")):
+            return json.dumps(q)
+        return str(q)
+    argstrs = [quote_arg(arg) for arg in args]
+    kwargstrs = [f"{k}={quote_arg(v)}" for k, v in kwargs.items()]
     argkwargstr = ','.join(argstrs+kwargstrs)
     _quote = f"{tag}{fn}({argkwargstr})"
     log.detailed(f"Quoted {fn=}, {args=}, {kwargs=} to {repr(_quote)}")

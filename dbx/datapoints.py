@@ -604,6 +604,13 @@ class DatapointTab(DatapointBase):
             self.fs.put_file(local_path, target_path)
 
 
+def DatapointTableTab(table, idx, tag=None, **spec):
+    if isinstance(table, str) and (table.startswith('$') or table.startswith('@') or table.startswith('#')):
+        from .dataparts import eval as dbx_eval
+        table = dbx_eval(table)
+    return table(idx, tag=tag, **spec)
+
+
 class DatapointTable(DatapointBase, Datastack):
     """A table of DatapointTabs, sliced the same way as its tabs.
 
@@ -632,6 +639,8 @@ class DatapointTable(DatapointBase, Datastack):
     #: Slices come from TAB, not from this table's own TOPICS.
     slices = _table_slices_descriptor()
 
+    Tab = staticmethod(DatapointTableTab)
+
     @dataclass
     class VAR(Datastack.VAR):
         datapoints_per_row: int = 1
@@ -640,10 +649,6 @@ class DatapointTable(DatapointBase, Datastack):
 
     def __init__(self, *args, cache=None, cache_limit=None, filter_built_tabs: bool = False, **kwargs):
         super().__init__(*args, cache=cache, cache_limit=cache_limit, filter_built_tabs=filter_built_tabs, **kwargs)
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.filter_built_tabs = getattr(self, 'filter_built_tabs', False)
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
         if self.TAB is None:

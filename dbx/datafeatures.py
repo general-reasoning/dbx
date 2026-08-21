@@ -24,6 +24,7 @@ from dbx.datamodels import DatamodelEvaluatorFactory
 from dbx.datapoints import (
     DatapointTab,
     DatapointTable,
+    DatapointTableTab,
     DIRTOPIC,
     SLICETOPIC,
 )
@@ -616,22 +617,23 @@ class DatafeatureTable(DatapointTable):
 
     def __tab__(self, idx: int, device: str | None = None, tag=None) -> DatafeatureTab:
         if device is None:
-            devs = getattr(self, '_devices', None) or getattr(self, 'devices', None)
-            if not devs and hasattr(self, 'var') and getattr(self.var, 'datapoint_table', None) is not None:
-                dp_tbl = self.var.datapoint_table
-                devs = getattr(dp_tbl, '_devices', None) or getattr(dp_tbl, 'devices', None)
-            devs = devs or ["cuda"]
+            devs = getattr(self, '_devices', None) or getattr(self, 'devices', None) or ["cuda"]
             device = devs[idx % len(devs)]
-        datapoint_tab = self.var.datapoint_table.tab(idx)
+        dp_table = self.spec['datapoint_table']
+        if hasattr(dp_table, 'tab'):
+            dp_tab = dp_table.tab(idx)
+            dp_tab_quote = dbx.quote(dp_tab)
+            dp_tag = dp_tab.tag
+        else:
+            dp_tab_quote = dbx.quotefn(DatapointTableTab, dp_table, idx)
+            dp_tag = f"tab_{idx:06d}"
         spec = dict(
-            datapoint_tab=dbx.quote(datapoint_tab),
+            datapoint_tab=dp_tab_quote,
             evaluator_factory=self.spec['evaluator_factory'],
+            collator=self.spec.get('collator'),
+            feature_namemap=self.spec.get('feature_namemap'),
+            shard_size_limit_bytes=self.spec.get('shard_size_limit_bytes', 1 << 26),
         )
-        if self.var.collator is not None:
-            spec['collator'] = self.var.collator
-        if self.var.feature_namemap is not None:
-            spec['feature_namemap'] = self.var.feature_namemap
-        spec['shard_size_limit_bytes'] = self.var.shard_size_limit_bytes
         return self.TAB(
             url=self.url,
             storage_options=self.storage_options,
@@ -645,7 +647,7 @@ class DatafeatureTable(DatapointTable):
             streaming=self.streaming,
             dataloader_kwargs=self.dataloader_kwargs,
             revision=self.revision,
-            tag=tag if tag is not None else datapoint_tab.tag,
+            tag=tag if tag is not None else dp_tag,
         )
 
     def __block__(self, idx: int, **kwargs) -> DatafeatureTab:
@@ -783,11 +785,12 @@ class BipolarDatafeatureTab(DatapointTab):
     }
 
     @dataclass
-    class VAR(DatapointTab.VAR):
-        featuretab: DatafeatureTab = None
+    class VAR(Datablock.VAR):
+        featuretab: DatafeatureTab
         layer: str = 'final'
         threshold: float = 0.5
         ternarize: bool = False
+        datapoints_per_row: int = 1
 
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
 

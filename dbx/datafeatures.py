@@ -314,10 +314,11 @@ class DatafeatureTab(DatapointTab):
         dataloader_kwargs: dict | None = None,
         **kwargs,
     ):
+        feature_device = kwargs.pop('feature_device', device)
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
-            feature_device=device,
+            feature_device=feature_device,
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
             **kwargs,
@@ -584,13 +585,11 @@ class DatafeatureTable(DatapointTable):
         filter_built_tabs: bool = False,
         **kwargs,
     ):
-        # Pass device_batch_size, devices, streaming, dataloader_kwargs, filter_built_tabs through Datastack.__init__ so they
-        # survive multiprocessing pickling (Datablock folds **kwargs into the
-        # state dict, which __getstate__/__setstate__ round-trips faithfully).
+        feature_devices = kwargs.pop('feature_devices', devices or ["cpu"])
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
-            feature_devices=devices or ["cpu"],
+            feature_devices=feature_devices,
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
             filter_built_tabs=filter_built_tabs,

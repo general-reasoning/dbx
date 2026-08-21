@@ -183,6 +183,7 @@ class DatamodelEvaluatorFactory(Datablock):
             log = log or self.log
             self._evaluators[device] = self.Evaluator(
                 model=self.model,
+                transform=self.transform,
                 capture_layers=self.var.capture_layers,
                 capture_final=self.var.capture_final,
                 device=device,
@@ -193,6 +194,13 @@ class DatamodelEvaluatorFactory(Datablock):
     @property
     def model(self):
         raise NotImplementedError()
+
+    @property
+    def transform(self):
+        if torch is not None:
+            return torch.nn.Identity()
+        return lambda x: x
+
 
     @property
     def layer_names(self) -> list[str]:
@@ -389,7 +397,8 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
                 capture_layers=self.var.capture_layers,
                 capture_final=self.var.capture_final,
                 cls_token_only=self.var.cls_token_only,
-                transform=getattr(self, 'transform', None),
+                transform=self.transform,
+
                 device=device,
                 log=log,
             )

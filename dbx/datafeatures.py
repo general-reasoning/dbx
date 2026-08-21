@@ -936,7 +936,7 @@ class BipolarDatafeatureTable(DatapointTable):
 
     # 1. Datablock / Datastack Protocol Methods ─────────────────────
 
-    def __tab__(self, idx: int, tag=None) -> BipolarDatafeatureTab:
+    def __tab__(self, idx: int, tag=None, **kwargs) -> BipolarDatafeatureTab:
         featuretab = self.var.featuretable.tab(idx)
         return self.TAB(
             url=self.url,

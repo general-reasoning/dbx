@@ -557,8 +557,6 @@ def eval(name):
                     args.append(arg)
         return args, kwargs
 
-
-
     def get_funcstr_argkwargstr(name):
         # TODO: replace with a regex
         lb = name.find("(")

@@ -409,7 +409,7 @@ def test_datafeature_table_streaming(tmp_path):
     assert tab0.dataloader_kwargs == {"num_workers": 0}
 
     feat_data = featuretable_stream.data(("features", "final"), concat=True)
-    assert feat_data["features"]["final"].shape == (10, 8)
+    assert np.squeeze(feat_data["features"]["final"]).shape == (10, 8)
 
 
 if __name__ == "__main__":

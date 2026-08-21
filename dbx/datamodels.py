@@ -389,9 +389,11 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
                 capture_layers=self.var.capture_layers,
                 capture_final=self.var.capture_final,
                 cls_token_only=self.var.cls_token_only,
+                transform=getattr(self, 'transform', None),
                 device=device,
                 log=log,
             )
+
         return self._evaluators[device]
 
     @property

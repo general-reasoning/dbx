@@ -40,6 +40,48 @@ def _extract_slice_data(res, slice_name):
     return res
 
 
+def _to_tensor(inputs, device=None) -> torch.Tensor:
+    if isinstance(inputs, torch.Tensor):
+        return inputs.to(device) if device is not None else inputs
+
+    if isinstance(inputs, np.ndarray):
+        if inputs.dtype == np.object_:
+            try:
+                stacked = np.stack(inputs.tolist())
+                t = torch.from_numpy(np.ascontiguousarray(stacked))
+            except Exception:
+                stacked = np.array([np.asarray(x, dtype=np.float32) for x in inputs])
+                t = torch.from_numpy(np.ascontiguousarray(stacked))
+            return t.to(device) if device is not None else t
+        t = torch.from_numpy(np.ascontiguousarray(inputs))
+        return t.to(device) if device is not None else t
+
+    if isinstance(inputs, (list, tuple)):
+        if len(inputs) > 0 and isinstance(inputs[0], torch.Tensor):
+            t = torch.stack(inputs)
+            return t.to(device) if device is not None else t
+        if len(inputs) > 0 and isinstance(inputs[0], np.ndarray):
+            if inputs[0].dtype == np.object_:
+                flat = [np.asarray(x, dtype=np.float32) for x in inputs]
+                t = torch.from_numpy(np.ascontiguousarray(np.stack(flat)))
+            else:
+                t = torch.from_numpy(np.ascontiguousarray(np.stack(inputs)))
+            return t.to(device) if device is not None else t
+        try:
+            arr = np.asarray(inputs, dtype=np.float32)
+            t = torch.from_numpy(np.ascontiguousarray(arr))
+        except Exception:
+            arr = np.array([np.asarray(x, dtype=np.float32) for x in inputs])
+            t = torch.from_numpy(np.ascontiguousarray(arr))
+        return t.to(device) if device is not None else t
+
+    try:
+        t = torch.as_tensor(inputs)
+    except Exception:
+        t = torch.tensor(np.asarray(inputs, dtype=np.float32))
+    return t.to(device) if device is not None else t
+
+
 def _extract_pair_data(data_dict, pair: tuple[str, str]):
     s_name, c_name = pair[0], pair[1]
     if isinstance(data_dict, dict) and s_name in data_dict:
@@ -303,8 +345,7 @@ class DatafeatureTab(DatapointTab):
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             sample_data = datapoint_tab.data(*collator.slices, concat=True)
             inputs = collator(sample_data, signal_only=True, strip_keys=True)
-            if not hasattr(inputs, 'shape') or not hasattr(inputs, 'to'):
-                inputs = torch.tensor(np.array(inputs))
+            inputs = _to_tensor(inputs, "cpu")
 
             n_samples = len(inputs)
             n_batches = math.ceil(n_samples / self.device_batch_size)
@@ -357,11 +398,9 @@ class DatafeatureTab(DatapointTab):
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             for batch_data in dataloader:
                 inputs = collator(batch_data, signal_only=True, strip_keys=True)
-                if not hasattr(inputs, 'shape') or not hasattr(inputs, 'to'):
-                    inputs = torch.tensor(np.array(inputs))
-                if inputs.ndim > 2 and inputs.shape[1:3] == (1, 1):
-                    inputs = inputs.squeeze(1).squeeze(1)
-                batch = inputs.to(self.device)
+                batch = _to_tensor(inputs, self.device)
+                if batch.ndim > 2 and batch.shape[1:3] == (1, 1):
+                    batch = batch.squeeze(1).squeeze(1)
                 result = evaluator(batch)
 
                 batch_len = len(batch)

@@ -830,11 +830,41 @@ class DatapointTable(DatapointBase, Datastack):
         anchorkeypath = self.tab(i).anchorkeypath
         with self.fs.open(sentinel_path, 'w') as f:
             f.write(anchorkeypath)
+        if hasattr(self, '_built_tab_set_cache'):
+            self._built_tab_set_cache.add(i)
+
+    def _built_tab_set(self) -> set[int]:
+        if not hasattr(self, '_built_tab_set_cache'):
+            topic_name = self._tab_paths_topic()
+            if not topic_name:
+                self._built_tab_set_cache = set()
+            else:
+                try:
+                    tab_dir = self.path(topic_name)
+                    if not self.fs.exists(tab_dir):
+                        self._built_tab_set_cache = set()
+                    else:
+                        files = self.fs.ls(tab_dir, detail=False)
+                        indices = set()
+                        for f in files:
+                            fname = os.path.basename(f)
+                            if fname.startswith('tab_') and fname.endswith('.path'):
+                                try:
+                                    idx = int(fname.removeprefix('tab_').removesuffix('.path'))
+                                    indices.add(idx)
+                                except ValueError:
+                                    pass
+                        self._built_tab_set_cache = indices
+                except Exception:
+                    self._built_tab_set_cache = set()
+        return self._built_tab_set_cache
 
     def _check_tab_path(self, i: int) -> bool:
         topic_name = self._tab_paths_topic()
         if not topic_name:
             return False
+        if i in self._built_tab_set():
+            return True
         try:
             tab_dir = self.path(topic_name)
             sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")

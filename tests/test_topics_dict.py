@@ -224,15 +224,15 @@ class TestDictTopicsHash:
         """Dict-TOPICS signature should use topic:topic=file format."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsFileBlock(url=str(tmp_path))
-        assert 'topic:alpha=alpha.csv' in block.signature
-        assert 'topic:beta=beta.csv' in block.signature
+        assert 'topic:alpha=alpha.csv' in block.signature()
+        assert 'topic:beta=beta.csv' in block.signature()
 
     def test_list_topics_hash_unchanged(self, tmp_path, monkeypatch):
         """List-TOPICS signature should still use topic:topic format (no =)."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = ListTopicsBlock(url=str(tmp_path))
-        assert 'topic:part_a' in block.signature
-        assert '=' not in block.signature.split('topic:part_a')[1].split('/')[0]
+        assert 'topic:part_a' in block.signature()
+        assert '=' not in block.signature().split('topic:part_a')[1].split('/')[0]
 
 
 # ---------------------------------------------------------------------------

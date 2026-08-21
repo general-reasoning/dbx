@@ -191,12 +191,12 @@ class TestSYNTOPICInTheSignature:
 
         a = WithCache(url=str(tmp_path), anchor='shared')
         b = WithoutCache(url=str(tmp_path), anchor='shared')
-        assert a.signature != b.signature
+        assert a.signature() != b.signature()
         assert a.hash != b.hash
 
     def test_it_renders_as_the_empty_tuple(self, tmp_path):
         """Pinned so the recorded form is a decision, not an accident."""
-        assert 'topic:cache=()' in Mixed(url=str(tmp_path)).signature
+        assert 'topic:cache=()' in Mixed(url=str(tmp_path)).signature()
 
     def test_syntopic_and_dirtopic_give_different_signatures(self, tmp_path):
         class AsSyn(Datablock):
@@ -207,5 +207,5 @@ class TestSYNTOPICInTheSignature:
             TOPICS = {'x': DIRTOPIC}
             def __build__(self): pass
 
-        assert (AsSyn(url=str(tmp_path), anchor='s').signature
-                != AsDirTopic(url=str(tmp_path), anchor='s').signature)
+        assert (AsSyn(url=str(tmp_path), anchor='s').signature()
+                != AsDirTopic(url=str(tmp_path), anchor='s').signature())

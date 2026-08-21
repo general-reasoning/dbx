@@ -120,8 +120,8 @@ class TestEnvInRoot:
 
     def test_signature_contains_specline(self):
         block = EnvBlock(url=env('TEST_ROOT'))
-        assert "$dbx.getenv('TEST_ROOT')" in block.signature
-        assert '/tmp/test_root_value' not in block.signature
+        assert "$dbx.getenv('TEST_ROOT')" in block.signature()
+        assert '/tmp/test_root_value' not in block.signature()
 
     def test_anchorkeypath_uses_resolved_path(self):
         block = EnvBlock(url=env('TEST_ROOT'))

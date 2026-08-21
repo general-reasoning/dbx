@@ -47,28 +47,32 @@ def built(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The property itself
+# The method itself
 # ---------------------------------------------------------------------------
 
-class TestSignatureProperty:
+class TestSignatureMethod:
 
     def test_signature_is_what_hash_hashes(self, block):
-        assert block.hash == hashlib.sha256(block.signature.encode()).hexdigest()
+        assert block.hash == hashlib.sha256(block.signature().encode()).hexdigest()
 
     def test_supersignature_is_what_superhash_hashes(self, block):
         assert block.superhash == hashlib.sha256(
-            block.supersignature.encode()).hexdigest()[:8]
+            block.supersignature().encode()).hexdigest()[:8]
 
     def test_signature_is_built_from_norm(self, block):
-        assert block.norm() in block.signature
-        assert f"version={block.version}" in block.signature
+        assert block.norm() in block.signature()
+        assert f"version={block.version}" in block.signature()
 
     def test_supersignature_is_built_from_supernorm(self, block):
-        assert block.supernorm() in block.supersignature
+        assert block.supernorm() in block.supersignature()
 
     def test_the_two_differ(self, block):
         """supersignature anchors on the fqcn; a silent alias would hide that."""
-        assert block.signature != block.supersignature
+        assert block.signature() != block.supersignature()
+
+    def test_deslash_parameter(self, block):
+        assert '\\' not in block.signature(deslash=True)
+        assert '\\' not in block.supersignature(deslash=True)
 
     def test_the_old_names_are_gone(self, block):
         assert not hasattr(block, 'hashstr')
@@ -87,13 +91,13 @@ class TestSignatureInBid:
         assert 'hashstr' not in fields and 'superhashstr' not in fields
 
     def test_bid_values_match_the_properties(self, block):
-        assert block.bid.signature == block.signature
-        assert block.bid.supersignature == block.supersignature
+        assert block.bid.signature == block.signature(deslash=True)
+        assert block.bid.supersignature == block.supersignature(deslash=True)
 
     def test_bid_to_dict_covers_them(self, block):
         d = block.bid.to_dict()
-        assert d['signature'] == block.signature
-        assert d['supersignature'] == block.supersignature
+        assert d['signature'] == block.signature(deslash=True)
+        assert d['supersignature'] == block.supersignature(deslash=True)
 
 
 # ---------------------------------------------------------------------------
@@ -107,17 +111,17 @@ class TestSignatureInJournal:
         assert entry.signature is not None, "journal has no signature column"
         assert '-signature-' in entry.signature
         assert entry.signature.endswith('.txt')
-        assert entry.read('signature') == built.signature
+        assert entry.read('signature') == built.signature()
 
     def test_build_writes_supersignature_txt(self, built):
         entry = built.journal(iloc=-1)
         assert entry.supersignature is not None
-        assert entry.read('supersignature') == built.supersignature
+        assert entry.read('supersignature') == built.supersignature()
 
     def test_journal_entry_bid_carries_them(self, built):
         bid = built.journal(iloc=-1).bid
-        assert bid.signature == built.signature
-        assert bid.supersignature == built.supersignature
+        assert bid.signature == built.signature(deslash=True)
+        assert bid.supersignature == built.supersignature(deslash=True)
 
 
 # ---------------------------------------------------------------------------

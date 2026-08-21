@@ -77,13 +77,13 @@ class TestDIRTOPICDoesNotChangeIdentity:
     def test_signature_is_unaffected_by_the_spelling(self, tmp_path):
         a = WithDIR(url=str(tmp_path), anchor='shared')
         b = WithNone(url=str(tmp_path), anchor='shared')
-        assert a.signature == b.signature
+        assert a.signature() == b.signature()
         assert a.hash == b.hash
         assert a.key == b.key
 
     def test_dir_topic_renders_as_none_in_the_signature(self, tmp_path):
         """The recorded form is still `topic:name=None`, not `topic:name=DIRTOPIC`."""
-        assert 'topic:checkpoints=None' in WithDIR(url=str(tmp_path)).signature
+        assert 'topic:checkpoints=None' in WithDIR(url=str(tmp_path)).signature()
 
 
 class TestDIRTOPICInTheJournal:

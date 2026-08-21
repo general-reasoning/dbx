@@ -253,8 +253,8 @@ class TestLegacyOverride:
 
     def test_signature_never_passes_an_override(self):
         block = _pin(LegacyBlock)
-        assert block.norm() in block.signature
-        assert block.norm(legacy=False) not in block.signature
+        assert block.norm() in block.signature()
+        assert block.norm(legacy=False) not in block.signature()
 
 
 class TestLegacyOverridePropagates:

@@ -155,7 +155,7 @@ class TestBadPaths:
             TOPICS = {'data/frames': DIRTOPIC}
             def __build__(self): pass
         with pytest.raises(ValueError, match="may not contain"):
-            Slashed(url=str(tmp_path)).signature
+            Slashed(url=str(tmp_path)).signature()
 
 
 class TestValidity:

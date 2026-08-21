@@ -324,6 +324,10 @@ class DatafeatureTab(DatapointTab):
                             sample_dict[col_name] = arr[i]
                     writers['features'].write(sample_dict)
                 evaluator.clear()
+                del batch, result
+                gc.collect()
+            del inputs
+            gc.collect()
         return self
 
     def __build_streaming__(self):
@@ -366,6 +370,8 @@ class DatafeatureTab(DatapointTab):
                             sample_dict[col_name] = arr[i]
                     writers['features'].write(sample_dict)
                 evaluator.clear()
+                del batch_data, inputs, batch, result
+                gc.collect()
         return self
 
     def dataset(

@@ -2915,9 +2915,9 @@ class Datablock:
             cite=self.cite(),
             repr=self.__repr__(deslash=True),
             norm=self.norm(deslash=True),
-            signature=self.signature,
+            signature=self.signature(deslash=True),
             supernorm=self.supernorm(deslash=True),
-            supersignature=self.supersignature,
+            supersignature=self.supersignature(deslash=True),
             superhash=self.superhash,
             anchor=self.anchor,
             tag=self.tag,
@@ -4042,27 +4042,29 @@ class Datablock:
             return tuple(f"topic:{topic}" for topic in self.TOPICS)
         return ("topics:None",)
 
-    @property
-    def signature(self):
+    def signature(self, *, deslash: bool = False):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        signature = os.path.join(
-            self.norm(),
+        sig = os.path.join(
+            self.norm(deslash=deslash),
             f"version={self.version}",
             *self.signature_topics(),
         )
-        return signature
+        if deslash:
+            sig = sig.replace('\\', '')
+        return sig
 
-    @property
-    def supersignature(self):
+    def supersignature(self, *, deslash: bool = False):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
-        supersignature = os.path.join(
-            self.supernorm(),
+        sig = os.path.join(
+            self.supernorm(deslash=deslash),
             f"version={self.version}",
             *self.signature_topics(),
         )
-        return supersignature
+        if deslash:
+            sig = sig.replace('\\', '')
+        return sig
 
     @property
     def hash(self): 
@@ -4073,9 +4075,10 @@ class Datablock:
                 self._hash = self._hash_
             else:
                 sha = hashlib.sha256()
-                sha.update(self.signature.encode())
+                sig = self.signature()
+                sha.update(sig.encode())
                 self._hash = sha.hexdigest()
-                self.log.detailed(f"hash: ---------===---------\u003e {self.signature=} ---\u003e hash: {self._hash}")
+                self.log.detailed(f"hash: ---------===---------> {sig=} ---> hash: {self._hash}")
         return self._hash
 
     @property
@@ -4087,9 +4090,10 @@ class Datablock:
                 self._superhash = self._superhash_
             else:
                 sha = hashlib.sha256()
-                sha.update(self.supersignature.encode())
+                supsig = self.supersignature()
+                sha.update(supsig.encode())
                 self._superhash = sha.hexdigest()[:8]
-                self.log.detailed(f"superhash: ---------===---------\u003e {self.supersignature=} ---\u003e superhash: {self._superhash}")
+                self.log.detailed(f"superhash: ---------===---------> {supsig=} ---> superhash: {self._superhash}")
         return self._superhash
 
     ### anchorage: begin
@@ -4581,8 +4585,8 @@ class Datablock:
         self._write_str('repr', self.__repr__())
         self._write_str('norm', self.norm())
         self._write_str('supernorm', self.supernorm())
-        self._write_str('signature', self.signature)
-        self._write_str('supersignature', self.supersignature)
+        self._write_str('signature', self.signature())
+        self._write_str('supersignature', self.supersignature())
         if note is not None and not inline_note:
             self._write_str('note', note)
         #

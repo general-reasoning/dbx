@@ -316,15 +316,15 @@ class DatafeatureTab(DatapointTab):
                 result = evaluator(batch)
 
                 batch_len = n - m
+                batch_features = {
+                    col_name: result[layer_name].cpu().numpy().astype(np.float32)
+                    for col_name, layer_name in self._feature_map.items()
+                    if layer_name in result
+                }
                 for i in range(batch_len):
-                    sample_dict = {}
-                    for col_name, layer_name in self._feature_map.items():
-                        if layer_name in result:
-                            arr = result[layer_name].cpu().numpy().astype(np.float32)
-                            sample_dict[col_name] = arr[i]
-                    writers['features'].write(sample_dict)
+                    writers['features'].write({col_name: arr[i] for col_name, arr in batch_features.items()})
                 evaluator.clear()
-                del batch, result
+                del batch, result, batch_features
                 gc.collect()
             del inputs
             gc.collect()
@@ -362,15 +362,15 @@ class DatafeatureTab(DatapointTab):
                 result = evaluator(batch)
 
                 batch_len = len(batch)
+                batch_features = {
+                    col_name: result[layer_name].cpu().numpy().astype(np.float32)
+                    for col_name, layer_name in self._feature_map.items()
+                    if layer_name in result
+                }
                 for i in range(batch_len):
-                    sample_dict = {}
-                    for col_name, layer_name in self._feature_map.items():
-                        if layer_name in result:
-                            arr = result[layer_name].cpu().numpy().astype(np.float32)
-                            sample_dict[col_name] = arr[i]
-                    writers['features'].write(sample_dict)
+                    writers['features'].write({col_name: arr[i] for col_name, arr in batch_features.items()})
                 evaluator.clear()
-                del batch_data, inputs, batch, result
+                del batch_data, inputs, batch, result, batch_features
                 gc.collect()
         return self
 

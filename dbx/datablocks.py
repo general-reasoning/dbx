@@ -86,9 +86,9 @@ from .dataparts import (
 __version__ = "0.2.0"
 
 class AbsentKey:
-    """Singleton marking a key present on only ONE side of a :meth:`Datablock.diffnorm`.
+    """Singleton marking a key present on only ONE side of a :meth:`Datablock.diffsubsig`.
 
-    Needed because diffnorm reports typed values: a key whose value *is* ``None``
+    Needed because diffsubsig reports typed values: a key whose value *is* ``None``
     and a key that is missing entirely would otherwise both come back as
     ``None``, which are very different findings -- "this setting changed to None"
     versus "this setting did not exist when that build ran".
@@ -396,7 +396,7 @@ class DatajournalEntry(pd.Series):
     def cite(self):
         """Path to this entry's ``cite.txt``, or None.
 
-        Declared explicitly (unlike ``quote``/``norm``/``repr``, which resolve
+        Declared explicitly (unlike ``quote``/``subsignature``/``repr``, which resolve
         through pandas' attribute fallback to the column of the same name)
         because journals written before ``cite`` existed have no such column:
         the fallback would raise AttributeError, whereas ``.get`` returns None
@@ -433,11 +433,6 @@ class DatajournalEntry(pd.Series):
         return self._renamed_column('subsignature', 'norm')
 
     @property
-    def norm(self):
-        """Alias for subsignature on DatajournalEntry for backwards compatibility."""
-        return self.subsignature
-
-    @property
     def uuid(self):
         """The uuid of the live instance that wrote this entry, or None.
 
@@ -460,7 +455,7 @@ class DatajournalEntry(pd.Series):
     def redirection(self):
         """Where this entry sends a failed read: an ``entry_code``, a filter, or None.
 
-        Unlike ``quote``/``norm``/``message``, whose columns hold the PATH of a
+        Unlike ``quote``/``subsignature``/``message``, whose columns hold the PATH of a
         file that carries the value, this column holds the redirection itself --
         a dict recorded as ``str(dict)``, the way ``paths`` and ``topics`` are.
         There is no file to go missing, so a redirection resolves as long as the
@@ -511,8 +506,10 @@ class DatajournalEntry(pd.Series):
             key = self.hash
         elif keyby == 'superhash':
             key = self.superhash
-        elif self.keyby == 'norm':
-            key = self.norm()
+        elif keyby == 'signature':
+            key = self.signature()
+        elif self.keyby == 'subsignature':
+            key = self.subsignature()
         elif keyby == 'tag':
             key = self.tag
         elif keyby in ('taghash', 'tag_hash'):
@@ -786,7 +783,7 @@ class DatajournalEntry(pd.Series):
 
             i = entry.inst(remote=True)
             i.hash        # == entry.hash, unlike the local inst()
-            i.norm()      # forwarded to the worker, result returned here
+            i.subsignature()      # forwarded to the worker, result returned here
 
         *handle* reuses an existing :func:`remote` worker instead of starting one
         per call; it is the caller's job to ensure it was pinned compatibly.
@@ -1023,7 +1020,7 @@ class Datablock:
     VERBOSE_VAR = False
 
     # Set to True on a subclass whose artifacts were already built and are
-    # identified by hashes computed BEFORE string kwargs were quoted in norm().
+    # identified by hashes computed BEFORE string kwargs were quoted in subsignature().
     #
     # The unquoted form is ambiguous in two ways that can collide two distinct
     # blocks onto one hash:
@@ -1033,7 +1030,7 @@ class Datablock:
     #     indistinguishable from a different url plus a different anchor;
     #   * spec values -- a non-string was rendered `repr()`-then-dict-repr'd
     #     (int 5 -> "'5'") while a string was dict-repr'd once ('5' -> "'5'"),
-    #     so `n=5` and `n='5'` produced the SAME norm.
+    #     so `n=5` and `n='5'` produced the SAME subsiganture.
     #
     # LEGACY_NORM=False (the default, i.e. every NEW subclass) quotes strings
     # and reprs spec values exactly once, which removes both collisions -- and
@@ -1136,7 +1133,7 @@ class Datablock:
         # a block whose dfn says validate_cfg=False -- and it would additionally
         # persist as a dead dynamic kwarg, drifting quote()/cite() (and hence
         # the journal) from an otherwise identical block. Identity is unaffected
-        # either way: norm() reads only url/anchor/hash and spec.
+        # either way: subsignature() reads only url/anchor/hash and spec.
         validate_cfg: bool = None,
         storage_options: dict = None,
         local: str|None = None,
@@ -1268,8 +1265,8 @@ class Datablock:
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'tag_version_shorthash')
-        if self.keyby not in (None, 'hash', 'subhash', 'superhash', 'norm', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'subhash', 'superhash', 'norm', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
+        if self.keyby not in (None, 'hash', 'subhash', 'superhash', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'subhash', 'superhash', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -2972,22 +2969,22 @@ class Datablock:
 
     def __expand_spec__(self, expansion='repr', *, legacy: 'bool | None' = None):
         """
-            . legacy: override LEGACY_NORM for the 'norm' expansion.
+            . legacy: override LEGACY_NORM or LEGACY_SIGNATURE for the 'subsignature' expansion.
                 None (default) = each block uses its own flag, i.e. the
                 identity-bearing rendering. True/False forces the legacy or the
                 modern form, and PROPAGATES to nested blocks, so the whole
                 subtree is rendered the same way.
 
-            . expansion: 'repr'|'quote'|'norm'
+            . expansion: 'repr'|'quote'|'signature'
                 . specline:      str starting with '@', '$' or '#'
                 . datablock: Datablock object
                 . obj:       object
             'repr':
                 . FULL reduction
                     |obj:    repr(obj)
-            'norm':
+            'signature':
                 . DATABLOCK reduction
-                    |datablock: datablock.norm()
+                    |datablock: datablock.signature()
                     |specline:      repr(specline)
                     |obj:       repr(obj)
             'quote':
@@ -2996,8 +2993,8 @@ class Datablock:
                     |datablock: datablock.quote()
                     |obj:       repr(obj)  
         """
-        legacy_norm = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
-        if legacy_norm:
+        legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
+        if legacy:
             keys = [field.name for field in self.VAR.__dataclass_fields__.values()]
         else:
             keys = sorted([field.name for field in self.VAR.__dataclass_fields__.values()])
@@ -3009,8 +3006,8 @@ class Datablock:
             for k, v in spec.items():
                 value = getattr(self.var, k)
                 _spec_[k] = repr(value)
-        elif expansion in ('norm', 'subsignature'):
-            legacy_norm = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
+        elif expansion in ('subsignature'):
+            legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
             for k, v in spec.items():
                 raw_v = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else v
                 value = getattr(self.var, k, None)
@@ -3018,17 +3015,17 @@ class Datablock:
                     try:
                         eval_v = dataparts.eval(raw_v)
                         if isinstance(eval_v, Datablock):
-                            _spec_[k] = eval_v.subsignature(legacy=legacy_norm)
+                            _spec_[k] = eval_v.subsignature(legacy=legacy)
                         else:
                             _spec_[k] = raw_v
                     except Exception:
                         _spec_[k] = raw_v
                 elif isinstance(value, Datablock):
-                    _spec_[k] = value.subsignature(legacy=legacy_norm)
+                    _spec_[k] = value.subsignature(legacy=legacy)
                 elif isinstance(value, str):
                     _spec_[k] = value
-                elif legacy_norm:
-                    # This dict is embedded in norm() via its own repr, so a
+                elif legacy:
+                    # This dict is embedded in subsignature() via its own repr, so a
                     # value stored here as repr(value) is repr'd TWICE: int 5
                     # -> "'5'" -- byte-identical to the string '5' stored raw
                     # by the branch above. Kept for LEGACY_NORM blocks because
@@ -3094,10 +3091,6 @@ class Datablock:
         `spec` dict AND the tailkwargs, and it quotes strings in all of them
         (``tag``, ``local``, ``keyby``, ... as well as ``url``/``anchor``).
 
-        It defaults to False because :meth:`norm` and :meth:`supernorm` feed
-        :attr:`signature`: for a :attr:`LEGACY_NORM` block the unquoted form IS
-        the identity, and quoting it would orphan every artifact already
-        stored under the old hash.
         """
         def quotestr(v):
             return repr(v) if quote_strs and isinstance(v, str) else v
@@ -3193,7 +3186,7 @@ class Datablock:
     # what the block IS, so they are noise in a citation and they dominate it.
     #
     # `tag` is the one that cannot be dropped silently. It is NOT part of the
-    # identity hash (norm() is built from _rootkwargs_ + spec), but
+    # identity hash (subsignature() is built from _rootkwargs_ + spec), but
     # keyby='tag_version_shorthash' puts it in the artifact PATH, so a citation
     # without it re-evaluates to the same hash at a DIFFERENT key -- i.e. it
     # points at storage that does not hold the artifact you cited.
@@ -3298,8 +3291,7 @@ class Datablock:
 
         lines.append(f"{inner}spec={{")
         for sk in sorted(self.VAR.__dataclass_fields__):
-            # getattr resolves a specline to the Datablock it names, so nested
-            # children are detected by TYPE rather than by sniffing for a '$'.
+            raw_v = self.spec[sk] if (isinstance(getattr(self, 'spec', None), dict) and sk in self.spec) else None
             val = getattr(self.var, sk)
             if isinstance(val, Datablock):
                 rendered = val.cite(
@@ -3307,6 +3299,8 @@ class Datablock:
                     _indent=inner + IND,
                 )
                 lines.append(f"{inner}{IND}{sk!r}: {rendered},")
+            elif self.is_specline(raw_v):
+                lines.append(f"{inner}{IND}{sk!r}: {raw_v!r},")
             else:
                 lines.append(f"{inner}{IND}{sk!r}: {val!r},")
         lines.append(f"{inner}}},")
@@ -3332,34 +3326,30 @@ class Datablock:
             import pprint
             return pprint.pformat(self.subsignaturedict(legacy=legacy), indent=2, width=120)
         subsig_spec = self.__expand_spec__('subsignature', legacy=legacy)
-        legacy_norm = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
+        legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
         kwargs_dict = {
-            **(self._rootkwargs_ if legacy_norm else {}),
-            **(subsig_spec if legacy_norm else {'spec': subsig_spec}),
+            **(self._rootkwargs_ if legacy else {}),
+            **(subsig_spec if legacy else {'spec': subsig_spec}),
         }
-        subsig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy_norm)
+        subsig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy)
         if deslash:
             subsig = subsig.replace('\\', '')
         self.log.detailed(f"subsignature: ------------> {subsig_spec=}")
         self.log.detailed(f"subsignature: ------------>{subsig=}")
         return subsig
 
-    def norm(self, *, deslash: bool = False, legacy: bool | None = None):
-        """Alias for :meth:`subsignature` for backwards compatibility."""
-        return self.subsignature(deslash=deslash, legacy=legacy)
-
     @staticmethod
-    def _parse_norm(norm: str) -> dict:
-        """Parse a norm string like 'anchor(k1=v1, k2=v2)' into {k: v} dict.
+    def _parse_subsignature(subsignature: str) -> dict:
+        """Parse a subsignature string like 'anchor(k1=v1, k2=v2)' into {k: v} dict.
 
         Handles nested parens/braces/brackets and quoted strings correctly by
         tracking depth so that only top-level commas are used as separators.
         """
-        norm = norm.strip()
-        paren_start = norm.find('(')
+        subsignature = subsignature.strip()
+        paren_start = subsignature.find('(')
         if paren_start == -1:
             return {}
-        inner = norm[paren_start + 1:]
+        inner = subsignature[paren_start + 1:]
         if inner.endswith(')'):
             inner = inner[:-1]
         # Split on top-level commas (respecting nesting and quotes)
@@ -3398,7 +3388,7 @@ class Datablock:
 
         Unlike :meth:`_split_top_level` (which retains the separators so a
         citation can be re-joined verbatim), this drops them: it is for
-        *parsing* a rendered norm back into its parts.
+        *parsing* a rendered subsignature back into its parts.
         """
         out, buf, depth, quote, esc = [], [], 0, None, False
         for c in inner:
@@ -3429,7 +3419,7 @@ class Datablock:
     def _parse_dictstr(cls, text: str) -> dict:
         """Parse a rendered dict literal ``{'k': v, ...}`` into ``{k: vstr}``.
 
-        Values are left as their source text -- they may be nested norms, or
+        Values are left as their source text -- they may be nested subsignatures, or
         reprs of objects that :func:`ast.literal_eval` would reject, so nothing
         here evaluates them. Returns ``{}`` when *text* is not a dict literal or
         has no ``key: value`` pairs, which the callers treat as "leaf, not
@@ -3466,7 +3456,7 @@ class Datablock:
     def _literal(text):
         """``ast.literal_eval`` *text*, returning it unchanged if it is not a literal.
 
-        This is the deserialiser for a norm leaf. A norm is flat text, so every
+        This is the deserialiser for a subsignature leaf. A subsignature is flat text, so every
         value in it arrives as a string -- but the text itself records the type:
         a non-``LEGACY_NORM`` block renders ``ori_extent=15.0`` as ``15.0``,
         while a legacy one renders it ``'15.0'``. Evaluating the leaf recovers
@@ -3486,7 +3476,7 @@ class Datablock:
             return text
 
     @staticmethod
-    def _is_normstr(text: str) -> bool:
+    def _is_subsignaturestr(text: str) -> bool:
         """True if *text* looks like ``(k=v, ...)`` or ``fqcn(k=v, ...)``."""
         text = text.strip()
         if not text.endswith(')'):
@@ -3497,14 +3487,14 @@ class Datablock:
         return head == '' or all(p.isidentifier() for p in head.split('.'))
 
     @classmethod
-    def _structure_normval(cls, value):
-        """Recursively expand a norm VALUE into nested dicts where it is structural.
+    def _structure_subsignatureval(cls, value):
+        """Recursively expand a subsignature VALUE into nested dicts where it is structural.
 
-        A norm is flat text, so a nested block arrives as one long string --
+        A subsignature is flat text, so a nested block arrives as one long string --
         which is why a diff of two nearly-identical trees used to come back as
         a pair of multi-kilobyte blobs. Here each value is expanded when it is
-        a dict literal or a nested norm (possibly wrapped in one layer of
-        quoting, since a child norm is stored as a string VALUE in the parent's
+        a dict literal or a nested subsignature (possibly wrapped in one layer of
+        quoting, since a child subsignature is stored as a string VALUE in the parent's
         spec dict), and left exactly as-is when it is a leaf.
 
         Anything that does not parse into at least one key stays a leaf, so a
@@ -3516,19 +3506,19 @@ class Datablock:
         text = value.strip()
         inner = cls._unquote_str(text)
         if inner is not None:
-            structured = cls._structure_normval(inner)
+            structured = cls._structure_subsignatureval(inner)
             # Only adopt the unquoted form if it actually held structure;
             # otherwise keep the original text so leaves stay unambiguous.
             return structured if isinstance(structured, dict) else value
         if text.startswith('{') and text.endswith('}'):
             parsed = cls._parse_dictstr(text)
             if parsed:
-                return {k: cls._structure_normval(v) for k, v in parsed.items()}
+                return {k: cls._structure_subsignatureval(v) for k, v in parsed.items()}
             return value
-        if cls._is_normstr(text):
-            parsed = Datablock._parse_norm(text)
+        if cls._is_subsignaturestr(text):
+            parsed = Datablock._parse_subsignature(text)
             if parsed:
-                return {k: cls._structure_normval(v) for k, v in parsed.items()}
+                return {k: cls._structure_subsignatureval(v) for k, v in parsed.items()}
         return value
 
     def _journal_entry(self, journal: dict) -> 'DatajournalEntry':
@@ -3579,14 +3569,13 @@ class Datablock:
         legacy: 'bool | None' = None,
         report: bool = False,
         maxlen: 'int | None' = 160,
-        other_norm: 'str | None' = None,
     ) -> 'dict | str':
         """Diff this datablock's subsignature against another subsignature, key by key.
 
         Uses ``self.subsignature()`` as the reference (self) side.
         """
-        if other_subsignature is None and other_norm is not None:
-            other_subsignature = other_norm
+        if other_subsignature is None and other_subsignature is not None:
+            other_subsignature = other_subsignature
 
         def present(value):
             if value is ABSENT:
@@ -3621,11 +3610,11 @@ class Datablock:
         if other_subsignature is None and journal is not None:
             _entry = self._journal_entry(journal)
             other_subsignature = _entry.read('norm') or _entry.read('subsignature') or ''
-        parsed_self  = Datablock._parse_norm(self.subsignature(legacy=legacy))
-        parsed_other = Datablock._parse_norm(other_subsignature or '')
+        parsed_self  = Datablock._parse_subsignature(self.subsignature(legacy=legacy))
+        parsed_other = Datablock._parse_subsignature(other_subsignature or '')
         if recursive:
-            parsed_self = {k: self._structure_normval(v) for k, v in parsed_self.items()}
-            parsed_other = {k: self._structure_normval(v) for k, v in parsed_other.items()}
+            parsed_self = {k: self._structure_subsignatureval(v) for k, v in parsed_self.items()}
+            parsed_other = {k: self._structure_subsignatureval(v) for k, v in parsed_other.items()}
         diff = diffdict(parsed_self, parsed_other)
         if not report:
             return diff
@@ -3637,8 +3626,8 @@ class Datablock:
 
     def subsignaturedict(self, *, legacy: 'bool | None' = None) -> dict:
         """Return the subsignature parsed and structured into a nested dict."""
-        parsed = Datablock._parse_norm(self.subsignature(legacy=legacy))
-        return {k: self._structure_normval(v) for k, v in parsed.items()}
+        parsed = Datablock._parse_subsignature(self.subsignature(legacy=legacy))
+        return {k: self._structure_subsignatureval(v) for k, v in parsed.items()}
 
     def subsigdict(self, *, legacy: 'bool | None' = None) -> dict:
         """Alias for :meth:`subsignaturedict`."""
@@ -3750,7 +3739,7 @@ class Datablock:
             side from *journal*.
         journal:
             Selector dict for the journal entry to compare against, as
-            :meth:`diffnorm`. Note that a journal records a list-``TOPICS``
+            :meth:`diffsubsig`. Note that a journal records a list-``TOPICS``
             block as a mapping of :data:`DIRTOPIC`, so a list declaration and the
             equivalent dict one are indistinguishable once written -- against an
             entry they compare equal, against the live block they do not.
@@ -3798,7 +3787,7 @@ class Datablock:
             ``VERSION``). Omit it to read the other side from *journal*.
         journal:
             Selector dict for the journal entry to compare against, as
-            :meth:`diffnorm`.
+            :meth:`diffsubsig`.
         """
         if other_version is ABSENT:
             if journal is None:
@@ -3865,7 +3854,7 @@ class Datablock:
         # quote_strs is unconditional here, LEGACY_NORM or not: __repr__ is not
         # an input to signature, so quoting can only make the rendering more
         # faithful -- `url=abfss://x` is not evaluable at all, `url='abfss://x'`
-        # is. Only norm()/supernorm() have to honour the legacy form.
+        # is. Only signature()/subsignature() have to honour the legacy form.
         repr_spec = self.__expand_spec__('repr')
         r = self.__repr_from_kwargs__({
             **self._rootkwargs_,
@@ -4027,9 +4016,9 @@ class Datablock:
             key = None
         elif self.keyby == 'hash':
             key = self.hash
-        elif self.keyby in ('subhash', 'superhash'):
+        elif self.keyby in ('subhash'):
             key = self.subhash
-        elif self.keyby in ('norm', 'subsignature'):
+        elif self.keyby in ('subsignature'):
             key = self.subsignature()
         elif self.keyby == 'tag':
             key = self.tag
@@ -4469,7 +4458,7 @@ class Datablock:
         *redirection* -- an ``entry_code`` or a journal filter, normally passed
         by :meth:`UNSAFE_redirect` rather than directly -- is recorded IN the
         entry, in the ``redirection`` column, not written out to a file the way
-        *note* and ``quote``/``norm``/``spec`` are. A redirection is what
+        *note* and ``quote``/``subsignature`/``spec`` are. A redirection is what
         :meth:`read` falls back to when the data it wanted is gone, so it must
         not itself depend on a second file still being there.
         """
@@ -4600,7 +4589,7 @@ class Datablock:
         # A journal entry lives at .dbx/<anchor>/journal/<hash>/<entry>.parquet,
         # so the anchor level is a single '*' -- and confining '**' to what
         # follows 'journal/' keeps the scan off the thirteen sibling kinds
-        # (dfn, spec, norm, signature, ...) that share the anchor directory and
+        # (dfn, spec, signature, ...) that share the anchor directory and
         # outnumber the journal entries an order of magnitude.
         #
         # The pattern this replaces fanned a thread pool out over

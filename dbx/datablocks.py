@@ -1089,7 +1089,7 @@ class Datablock:
             def __call__(self):
                 if self.value is None:
                     if isinstance(self.term, str):
-                        self.value = eval(self.term)
+                        self.value = dataparts.eval(self.term)
                     else:
                         # from_datablockable passes raw Python objects
                         self.value = self.term
@@ -1878,6 +1878,11 @@ class Datablock:
         if self.validate_vars:
             valid_var = self.valid_var()
             if not all(list(valid_var.values())):
+                for k, v in valid_var.items():
+                    if not v:
+                        blk = getattr(self.var, k, None)
+                        if hasattr(blk, 'valid_topics'):
+                            self.log.error(f"Upstream Datablock '{k}' is invalid: valid_topics={blk.valid_topics()} valid_paths={blk.valid_paths()} anchorkeypath={blk.anchorkeypath}")
                 raise ValueError(f"Not all upstream Datablocks in var are valid: {valid_var=}")
         self._build_start_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         self.write_journal_entry(event="build:start",)
@@ -2991,7 +2996,11 @@ class Datablock:
                     |datablock: datablock.quote()
                     |obj:       repr(obj)  
         """
-        keys = sorted([field.name for field in self.VAR.__dataclass_fields__.values()])
+        legacy_norm = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
+        if legacy_norm:
+            keys = [field.name for field in self.VAR.__dataclass_fields__.values()]
+        else:
+            keys = sorted([field.name for field in self.VAR.__dataclass_fields__.values()])
         spec = {k: self.spec[k] if k in self.spec else getattr(self.var, k) for k in keys}
         _spec_ = {}
         if expansion == 'repr':
@@ -3001,16 +3010,20 @@ class Datablock:
                 value = getattr(self.var, k)
                 _spec_[k] = repr(value)
         elif expansion in ('norm', 'subsignature'):
-            legacy_norm = self.LEGACY_NORM if legacy is None else legacy
+            legacy_norm = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
             for k, v in spec.items():
-                value = getattr(self.var, k)
+                value = getattr(self.var, k, None)
                 if isinstance(value, Datablock):
-                    # Pass the override down, not the resolved flag: with
-                    # legacy=None each child keeps using its OWN flag, which is
-                    # what makes the default byte-identical to before.
-                    _spec_[k] = value.subsignature(legacy=legacy)
+                    _spec_[k] = value.subsignature(legacy=legacy_norm)
                 elif self.is_specline(v):
-                    _spec_[k] = v
+                    try:
+                        eval_v = dataparts.eval(v)
+                        if isinstance(eval_v, Datablock):
+                            _spec_[k] = eval_v.subsignature(legacy=legacy_norm)
+                        else:
+                            _spec_[k] = v
+                    except Exception:
+                        _spec_[k] = v
                 elif isinstance(value, str):
                     _spec_[k] = value
                 elif legacy_norm:
@@ -3239,15 +3252,7 @@ class Datablock:
             parts = []
             for k, v in kwargs.items():
                 if k == 'spec' and isinstance(v, dict):
-                    rows = []
-                    for sk, sv in v.items():
-                        if isinstance(sv, str) and self.is_specline(sv):
-                            # Nested block: indented concatenation chunks, so it
-                            # is readable without ceasing to be one string.
-                            val = self._cite_chunks(sv, IND * 3)
-                        else:
-                            val = repr(sv)
-                        rows.append(f"{IND * 2}{sk!r}: {val},\n")
+                    rows = [f"{IND * 2}{sk!r}: {repr(sv)},\n" for sk, sv in v.items()]
                     parts.append(f"{IND}spec={{\n{''.join(rows)}{IND}}}")
                 else:
                     parts.append(f"{IND}{k}={quotestr(v)}")
@@ -3320,22 +3325,16 @@ class Datablock:
         self.log.detailed(f"cite: ------------> {cite=}")
         return cite
 
-    def subsignature(self, *, deslash: bool = False, legacy: bool | None = None):
-        """The base identity string that :attr:`signature` -- and hence :attr:`hash` and :attr:`subhash` -- is built from.
-
-        ``legacy`` temporarily overrides :attr:`LEGACY_NORM`, for the whole
-        subtree (nested blocks are rendered the same way). ``None`` (the
-        default) means every block uses its own flag, which is the ONLY
-        rendering that corresponds to :attr:`subhash`; :attr:`signature` never passes
-        an override.
-        """
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
-        # computed using the older version of these methods
+    def subsignature(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = False):
+        """The base identity string that :attr:`signature` -- and hence :attr:`hash` and :attr:`subhash` -- is built from."""
+        if pretty:
+            import pprint
+            return pprint.pformat(self.subsignaturedict(legacy=legacy), indent=2, width=120)
         subsig_spec = self.__expand_spec__('subsignature', legacy=legacy)
         legacy_norm = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
         kwargs_dict = {
             **(self._rootkwargs_ if legacy_norm else {}),
-            **{'spec': subsig_spec},
+            **(subsig_spec if legacy_norm else {'spec': subsig_spec}),
         }
         subsig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy_norm)
         if deslash:
@@ -3568,9 +3567,9 @@ class Datablock:
             return DatajournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
         return self.journal(**{key: value}, **filters)
 
-    def diffnorm(
+    def diffsubsignature(
         self,
-        other_norm: 'str | None' = None,
+        other_subsignature: 'str | None' = None,
         *,
         journal: 'dict | None' = None,
         recursive: bool = True,
@@ -3579,74 +3578,16 @@ class Datablock:
         legacy: 'bool | None' = None,
         report: bool = False,
         maxlen: 'int | None' = 160,
+        other_norm: 'str | None' = None,
     ) -> 'dict | str':
-        """Diff this datablock's norm against another norm, key by key.
+        """Diff this datablock's subsignature against another subsignature, key by key.
 
-        Uses ``self.norm()`` as the reference (self) side. The other side can be
-        supplied as a raw string or read from a :class:`DatajournalEntry`. Returns a
-        **sparse** dict: only differing keys appear, and a difference inside a
-        nested block appears as a nested dict, so the leaf that actually changed
-        is at the end of a short path instead of buried in two long strings.
-
-        Leaf differences are ``(self_value, other_value)`` tuples, **typed**: a
-        norm is flat text, but the text records the type, so ``15.0`` comes back
-        as a float and ``'15.0'`` as a string (see :meth:`_literal`). A pair like
-        ``(15.0, '15.0')`` therefore says one side was rendered by a
-        ``LEGACY_NORM`` block and the other was not -- NOT that the value
-        changed. A key present on one side only carries :data:`ABSENT`, which is
-        deliberately distinct from a value that genuinely *is* ``None``.
-
-        Detection compares the raw text, not the evaluated values, so ``n=1`` vs
-        ``n=1.0`` is still reported even though ``1 == 1.0`` in Python.
-
-        Parameters
-        ----------
-        other_norm:
-            Norm string to compare against.  If ``None``, read from the
-            journal entry selected by *journal*.
-        journal:
-            Selector dict for the journal entry whose ``norm`` is the other
-            side, used as the fallback source for *other_norm* when it is
-            ``None``.  Exactly one of ``entry_path``, ``iloc``, or ``loc``
-            must be present; any other key filters the journal (see
-            :meth:`_journal_entry`).
-        recursive:
-            Descend into nested blocks and spec dicts (default). ``False``
-            restores the flat one-key-per-top-level-kwarg comparison, where a
-            single changed leaf shows up as two whole rendered subtrees.
-        deslash:
-            Strip backslashes from the reported values. A nested norm is a
-            string inside a string inside a string, so its quotes are escaped
-            once per level of depth and the deep leaves are unreadable as-is.
-            Applied to the OUTPUT only, never before parsing -- deslashing
-            first would destroy the ``\\'`` escapes the parser needs. Mostly
-            redundant now that leaves are evaluated, since evaluating a string
-            literal already resolves its escapes.
-        raw:
-            Report leaves as the verbatim source text instead of evaluating
-            them, for when the exact bytes that went into the hash are what you
-            need to see.
-        legacy:
-            Override :attr:`LEGACY_NORM` when rendering the SELF side (see
-            :meth:`norm`). The other side cannot be re-rendered -- it is text
-            already written to a journal -- so ``legacy=False`` against a
-            legacy-era journal norm makes every scalar differ (``128`` vs
-            ``'128'``), which is correct but noisy. It earns its keep comparing
-            two LIVE blocks, where you render both the same way::
-
-                a.diffnorm(b.norm(legacy=False), legacy=False)
-
-            giving typed leaves throughout even for LEGACY_NORM classes.
-        report:
-            Return a flat, readable ``path -> self/other`` text block instead
-            of the dict. One path per difference, so nothing has to be read
-            around.
-        maxlen:
-            Truncate values longer than this in the *report* only; the dict
-            always carries the full values. ``None`` disables truncation.
+        Uses ``self.subsignature()`` as the reference (self) side.
         """
+        if other_subsignature is None and other_norm is not None:
+            other_subsignature = other_norm
+
         def present(value):
-            """Evaluate a leaf for reporting. Detection already happened on the text."""
             if value is ABSENT:
                 return value
             if not raw:
@@ -3672,32 +3613,54 @@ class Datablock:
                         except Exception:
                             indistinguishable = False
                         if indistinguishable:
-                            # Evaluating erased the very thing that differs --
-                            # bare `/tmp/x` vs quoted `'/tmp/x'` both evaluate to
-                            # the same str, and `1` vs `1.0` compare equal in
-                            # Python. Report the bytes instead of two values that
-                            # print identically.
                             one, two = val1, val2
                     diff[key] = (one, two)
             return diff
 
-        if other_norm is None and journal is not None:
+        if other_subsignature is None and journal is not None:
             _entry = self._journal_entry(journal)
-            other_norm = _entry.read('norm') or ''
-        parsed_self  = Datablock._parse_norm(self.norm(legacy=legacy))
-        parsed_other = Datablock._parse_norm(other_norm or '')
+            other_subsignature = _entry.read('norm') or _entry.read('subsignature') or ''
+        parsed_self  = Datablock._parse_norm(self.subsignature(legacy=legacy))
+        parsed_other = Datablock._parse_norm(other_subsignature or '')
         if recursive:
             parsed_self = {k: self._structure_normval(v) for k, v in parsed_self.items()}
             parsed_other = {k: self._structure_normval(v) for k, v in parsed_other.items()}
         diff = diffdict(parsed_self, parsed_other)
         if not report:
             return diff
-        return self.format_diffnorm(diff, maxlen=maxlen)
+        return self.format_diff(diff, maxlen=maxlen)
 
-    #: What :meth:`diff` returns: a triple, and one whose parts have names.
-    #: ``any(d)`` is the question "did anything about this block's identity
-    #: change", since each part is empty exactly when its component did not.
-    Diff = collections.namedtuple('Diff', 'norm topics version')
+    def diffsubsig(self, *args, **kwargs):
+        """Alias for :meth:`diffsubsignature`."""
+        return self.diffsubsignature(*args, **kwargs)
+
+    def subsignaturedict(self, *, legacy: 'bool | None' = None) -> dict:
+        """Return the subsignature parsed and structured into a nested dict."""
+        parsed = Datablock._parse_norm(self.subsignature(legacy=legacy))
+        return {k: self._structure_normval(v) for k, v in parsed.items()}
+
+    def subsigdict(self, *, legacy: 'bool | None' = None) -> dict:
+        """Alias for :meth:`subsignaturedict`."""
+        return self.subsignaturedict(legacy=legacy)
+
+    def subsig(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
+        """Alias for :meth:`subsignature` (defaults to pretty=True)."""
+        return self.subsignature(deslash=deslash, legacy=legacy, pretty=pretty)
+
+    def signaturedict(self, *, deslash: bool = False) -> dict:
+        """Return the full signature structured as a dictionary."""
+        return {
+            'subsignature': self.subsignaturedict(),
+            'version': self.version,
+            'paths': getattr(self, '_paths_', None),
+            'topics': self.signature_topics(),
+        }
+
+    def sig(self, *, deslash: bool = False, pretty: bool = True):
+        """Alias for :meth:`signature` (defaults to pretty=True)."""
+        return self.signature(deslash=deslash, pretty=pretty)
+
+    Diff = collections.namedtuple('Diff', ['subsig', 'topics', 'version'])
 
     def _topic_map(self, topics):
         """A TOPICS declaration as an ordered ``{path: value}`` map, or None.
@@ -3812,7 +3775,7 @@ class Datablock:
                 diff[SIGNATURE_TOPICS] = (tuple(mine), tuple(theirs))
         if not report:
             return diff
-        return self.format_diffnorm(diff, maxlen=maxlen)
+        return self.format_diff(diff, maxlen=maxlen)
 
     def diffversion(self, other_version=ABSENT, *, journal: 'dict | None' = None):
         """Diff this block's :attr:`version` against another's.
@@ -3847,45 +3810,30 @@ class Datablock:
             return None
         return (mine, other_version)
 
-    def diff(self, other=ABSENT, *, journal: 'dict | None' = None, report: bool = False, **kwargs):
-        """Diff every component of this block's identity: ``(norm, topics, version)``.
-
-        A :attr:`signature` is a norm, a version and the topics, joined -- so
-        these three diffs between them account for every way two blocks can hash
-        differently, and ``any(block.diff(other))`` is "is this a different
-        block". Returns a :attr:`Diff` triple, whose parts are also reachable by
-        name (``.norm``, ``.topics``, ``.version``).
-
-        *other* is a :class:`Datablock` or a :class:`DatajournalEntry`; omit it
-        to read all three components from the entry *journal* selects. Extra
-        keyword arguments go to :meth:`diffnorm` (``recursive``, ``legacy``,
-        ``raw``, ``deslash``); *report* is passed to all three.
-        """
-        if other is ABSENT:
-            if journal is None:
-                raise ValueError("diff needs other= or journal=")
-            other = self._journal_entry(journal)
+    def diffsig(self, other=ABSENT, *, journal: 'dict | None' = None, **kwargs):
         if isinstance(other, Datablock):
-            other_norm = other.norm(legacy=kwargs.get('legacy'))
+            other_subsig = other.subsignature(legacy=kwargs.get('legacy'))
         elif isinstance(other, DatajournalEntry):
-            other_norm = other.read('norm') or ''
+            other_subsig = other.read('subsignature') or other.read('norm') or ''
         else:
-            raise TypeError(
-                f"diff compares against a Datablock or a DatajournalEntry, got "
-                f"{type(other).__name__}: {other!r}"
-            )
-        version = self.diffversion(other)
-        return self.Diff(
-            norm=self.diffnorm(other_norm, report=report, **kwargs),
-            topics=self.difftopics(other, report=report),
-            version=(("no differences" if version is None else
-                      f"self : {version[0]!r}\nother: {version[1]!r}"))
-                    if report else version,
+            other_subsig = other
+
+        subsig_diff = self.diffsubsignature(other_subsig, journal=journal, report=True, **kwargs)
+        topics_diff = self.difftopics(other, journal=journal, report=True)
+        version_diff = self.diffversion(other, journal=journal)
+        version_rpt = (
+            "no differences" if version_diff is None
+            else f"self : {version_diff[0]!r}\nother: {version_diff[1]!r}"
         )
+        return '\n'.join([subsig_diff, topics_diff, version_rpt])
+
+    def diff(self, *args, **kwargs):
+        """Alias for :meth:`diffsig`."""
+        return self.diffsig(*args, **kwargs)
 
     @classmethod
-    def format_diffnorm(cls, diff: dict, *, maxlen: 'int | None' = 160) -> str:
-        """Render a :meth:`diffnorm` result as one ``path`` + self/other per difference."""
+    def format_diff(cls, diff: dict, *, maxlen: 'int | None' = 160) -> str:
+        """Render a diff dict as one ``path`` + self/other per difference."""
         def crop(value):
             # repr() unconditionally: leaves are typed, so a bare rendering would
             # print the float 15.0 and the string '15.0' identically -- which is
@@ -4018,9 +3966,10 @@ class Datablock:
             return tuple(f"topic:{topic}" for topic in self.TOPICS)
         return ("topics:None",)
 
-    def signature(self, *, deslash: bool = False):
-        #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
-        # computed using the older version of these methods
+    def signature(self, *, deslash: bool = False, pretty: bool = False):
+        if pretty:
+            import pprint
+            return pprint.pformat(self.signaturedict(deslash=deslash), indent=2, width=120)
         parts = [self.subsignature(deslash=deslash)]
         if isinstance(getattr(self, 'redirect', None), dict) and self.redirect.get('paths') is not None:
             parts.append(f"_paths_={getattr(self, '_paths_', None)}")

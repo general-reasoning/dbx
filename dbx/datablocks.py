@@ -4697,10 +4697,11 @@ class Datablock:
                 elif 'message' in df.columns and 'note' not in df.columns:
                     df['note'] = df['message']
                 if 'build_datetime' in df.columns:
-                    if 'build:start:datetime' not in df.columns:
-                        df['build:start:datetime'] = df['build_datetime']
+                    if 'build:end:datetime' not in df.columns:
+                        df['build:end:datetime'] = df['build_datetime']
                     if 'datetime' not in df.columns:
                         df['datetime'] = df['build_datetime']
+                    df = df.drop(columns=['build_datetime'])
                 if 'code' not in df.columns and 'entry_code' in df.columns:
                     df['code'] = df['entry_code']
                 elif 'entry_code' not in df.columns and 'code' in df.columns:

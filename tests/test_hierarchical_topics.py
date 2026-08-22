@@ -243,9 +243,9 @@ class TestClearAndBreadcrumbs:
 class TestSignature:
 
     def test_a_nested_leaf_is_named_by_its_full_path(self, block):
-        assert 'topic:data/frames=None' in block.signature
-        assert 'topic:data/index=index.csv' in block.signature
-        assert 'topic:model=model.pt' in block.signature
+        assert 'topic:data/frames=None' in block.signature()
+        assert 'topic:data/index=index.csv' in block.signature()
+        assert 'topic:model=model.pt' in block.signature()
 
     def test_nesting_changes_identity(self, tmp_path):
         """{'a': {'b': X}} and {'a': X} are different declarations."""
@@ -259,11 +259,11 @@ class TestSignature:
 
         a = Grouped(url=str(tmp_path), anchor='s')
         b = Flat(url=str(tmp_path), anchor='s')
-        assert a.signature != b.signature
+        assert a.signature() != b.signature()
         assert a.hash != b.hash
 
     def test_hash_is_the_sha256_of_the_signature(self, block):
-        assert block.hash == hashlib.sha256(block.signature.encode()).hexdigest()
+        assert block.hash == hashlib.sha256(block.signature().encode()).hexdigest()
 
 
 class TestJournal:

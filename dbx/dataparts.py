@@ -546,6 +546,8 @@ def eval(name):
                         val = v
                     if isinstance(val, str) and (val.startswith("$") or val.startswith("@") or val.startswith("#")):
                         val = eval(val)
+                    elif isinstance(val, (dict, list, tuple)):
+                        val = eval(val)
                     kwargs[k] = val
                 else:
                     try:
@@ -553,6 +555,8 @@ def eval(name):
                     except (NameError, SyntaxError):
                         arg = bit
                     if isinstance(arg, str) and (arg.startswith("$") or arg.startswith("@") or arg.startswith("#")):
+                        arg = eval(arg)
+                    elif isinstance(arg, (dict, list, tuple)):
                         arg = eval(arg)
                     args.append(arg)
         return args, kwargs

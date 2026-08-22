@@ -433,6 +433,11 @@ class DatajournalEntry(pd.Series):
         return self._renamed_column('subsignature', 'norm')
 
     @property
+    def norm(self):
+        """Alias for subsignature on DatajournalEntry for backwards compatibility."""
+        return self.subsignature
+
+    @property
     def uuid(self):
         """The uuid of the live instance that wrote this entry, or None.
 
@@ -675,7 +680,7 @@ class DatajournalEntry(pd.Series):
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
-            target_attr = 'note' if thing in ('note', 'message') else thing
+            target_attr = 'subsignature' if thing in ('subsignature', 'norm') else ('note' if thing in ('note', 'message') else thing)
             val = getattr(self, target_attr, None)
             if val is not None:
                 path = val
@@ -1263,8 +1268,8 @@ class Datablock:
         self._revision_ = state.get('revision')
         self.capture_output = bool(state.get('capture_output', False))
         self.keyby = state.get('keyby', 'tag_version_shorthash')
-        if self.keyby not in (None, 'hash', 'subhash', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'subhash', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
+        if self.keyby not in (None, 'hash', 'subhash', 'superhash', 'norm', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'subhash', 'superhash', 'norm', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -4072,9 +4077,9 @@ class Datablock:
             key = None
         elif self.keyby == 'hash':
             key = self.hash
-        elif self.keyby == 'subhash':
+        elif self.keyby in ('subhash', 'superhash'):
             key = self.subhash
-        elif self.keyby == 'subsignature':
+        elif self.keyby in ('norm', 'subsignature'):
             key = self.subsignature()
         elif self.keyby == 'tag':
             key = self.tag
@@ -4696,6 +4701,9 @@ class Datablock:
                     df['message'] = df['note']
                 elif 'message' in df.columns and 'note' not in df.columns:
                     df['note'] = df['message']
+                # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
+                if 'build_datetime' in df.columns and 'build:end:datetime' not in df.columns:
+                    df = df.rename(columns={'build_datetime': 'build:end:datetime'})
                 if 'build_datetime' in df.columns:
                     if 'build:end:datetime' not in df.columns:
                         df['build:end:datetime'] = df['build_datetime']

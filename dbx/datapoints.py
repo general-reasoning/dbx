@@ -35,6 +35,7 @@ from .datablocks import DIRTOPIC, Datablock, Datastack
 from .datastreams import (
     BlockShuffleSampler,
     ChunkShuffleSampler,
+    SharedMemoryManager,
     ZipIterableStreamingDatasets,
     ZipStreamingDataset,
     _ShardSync,
@@ -957,10 +958,7 @@ class DatapointTable(DatapointBase, Datastack):
         try:
             return StreamingDataset(**streaming_kwargs)
         except ValueError as exc:
-            if 'Reused local directory' not in str(exc):
-                raise
-            from streaming.base.util import clean_stale_shared_memory
-            clean_stale_shared_memory()
+            SharedMemoryManager.clean_process_shared_memory()
             return StreamingDataset(**streaming_kwargs)
 
     # 3. Private and Utility Methods ────────────────────────────────
@@ -1199,8 +1197,5 @@ class DatapointFold(DatapointTable):
         try:
             return StreamingDataset(**streaming_kwargs)
         except ValueError as exc:
-            if 'Reused local directory' not in str(exc):
-                raise
-            from streaming.base.util import clean_stale_shared_memory
-            clean_stale_shared_memory()
+            SharedMemoryManager.clean_process_shared_memory()
             return StreamingDataset(**streaming_kwargs)

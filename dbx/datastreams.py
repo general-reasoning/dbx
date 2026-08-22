@@ -62,6 +62,57 @@ def _same_value(a, b):
         return False
 
 
+class SharedMemoryManager:
+    """PID-qualified shared memory prefix management for MosaicML StreamingDataset."""
+
+    _patched: bool = False
+
+    @classmethod
+    def enable_pid_prefixes(cls) -> None:
+        """Monkey-patch MosaicML streaming to use PID-qualified shared memory names.
+
+        This isolates shared memory namespaces per PID (e.g. ``p12345_0000_locals``),
+        preventing cross-process and cross-user shared memory collisions on shared nodes.
+        """
+        if cls._patched:
+            return
+        try:
+            import streaming.base.shared.prefix as shm_prefix_module
+            import streaming.base.util as shm_util_module
+
+            def _pid_get_path(prefix_int: int, name: str) -> str:
+                pid = os.getpid()
+                return f'p{pid}_{prefix_int:04}_{name}'
+
+            shm_prefix_module._get_path = _pid_get_path
+            shm_util_module._get_path = _pid_get_path
+            cls._patched = True
+        except Exception:
+            pass
+
+    @classmethod
+    def clean_process_shared_memory(cls, pid: int | None = None) -> None:
+        """Clean up shared memory segments created by the specified PID (defaults to current PID)."""
+        target_pid = pid or os.getpid()
+        try:
+            from multiprocessing.shared_memory import SharedMemory as BuiltinSharedMemory
+            from streaming.base.constant import SHM_TO_CLEAN
+            for prefix_int in range(100):
+                for shm_name in SHM_TO_CLEAN:
+                    name = f'p{target_pid}_{prefix_int:04}_{shm_name}'
+                    try:
+                        shm = BuiltinSharedMemory(name, False, 4)
+                        shm.close()
+                        shm.unlink()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
+SharedMemoryManager.enable_pid_prefixes()
+
+
 class ZipBase:
     """Merge configuration and merge logic, shared by the two zip datasets.
 
@@ -771,13 +822,13 @@ def open_datastream(index_dir, *, local=None, cache_dir=None, cache=None,
         cache_limit=cache_limit,
         **kwargs,
     )
+    SharedMemoryManager.enable_pid_prefixes()
     try:
         return StreamingDataset(**streaming_kwargs)
     except ValueError as exc:
         if 'Reused local directory' not in str(exc):
             raise
-        from streaming.base.util import clean_stale_shared_memory
-        clean_stale_shared_memory()
+        SharedMemoryManager.clean_process_shared_memory()
         return StreamingDataset(**streaming_kwargs)
 
 

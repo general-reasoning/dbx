@@ -3012,18 +3012,19 @@ class Datablock:
         elif expansion in ('norm', 'subsignature'):
             legacy_norm = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
             for k, v in spec.items():
+                raw_v = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else v
                 value = getattr(self.var, k, None)
-                if isinstance(value, Datablock):
-                    _spec_[k] = value.subsignature(legacy=legacy_norm)
-                elif self.is_specline(v):
+                if self.is_specline(raw_v):
                     try:
-                        eval_v = dataparts.eval(v)
+                        eval_v = dataparts.eval(raw_v)
                         if isinstance(eval_v, Datablock):
                             _spec_[k] = eval_v.subsignature(legacy=legacy_norm)
                         else:
-                            _spec_[k] = v
+                            _spec_[k] = raw_v
                     except Exception:
-                        _spec_[k] = v
+                        _spec_[k] = raw_v
+                elif isinstance(value, Datablock):
+                    _spec_[k] = value.subsignature(legacy=legacy_norm)
                 elif isinstance(value, str):
                     _spec_[k] = value
                 elif legacy_norm:

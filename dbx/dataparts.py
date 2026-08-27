@@ -476,11 +476,15 @@ def get_named_const_and_cxt(name):
         else:
             modname = modbit
         try:
-            mod = sys.modules.get(modname) or importlib.import_module(modname)
+            mod = sys.modules.get(modname)
+            if mod is None and "." in modname:
+                mod = sys.modules.get(modname.split(".")[-1])
+            if mod is None:
+                mod = importlib.import_module(modname)
             prefix = modname
             cxt[modname] = mod
             last_mod = mod
-        except ModuleNotFoundError:
+        except (ModuleNotFoundError, AttributeError):
             break
     if last_mod is not None:
         obj = last_mod
@@ -537,6 +541,8 @@ def eval(name):
             bits = split_top_level_items(argkwargstr)
             for bit in bits:
                 bit = bit.strip()
+                if not bit:
+                    continue
                 kwparts = split_top_level_items(bit, sep='=')
                 if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
                     k, v = kwparts[0].strip(), kwparts[1].strip()
@@ -545,7 +551,8 @@ def eval(name):
                     except (NameError, SyntaxError):
                         val = v
                     if isinstance(val, str) and (val.startswith("$") or val.startswith("@") or val.startswith("#")):
-                        val = eval(val)
+                        if k not in ('url', 'local'):
+                            val = eval(val)
                     elif isinstance(val, (dict, list, tuple)):
                         val = eval(val)
                     kwargs[k] = val
@@ -577,8 +584,9 @@ def eval(name):
     if isinstance(name, dict):
         term = {k: eval(v) for k, v in name.items()}
     elif isinstance(name, Iterable) and not isinstance(name, str):
-        term = [eval(item) for item in name]
+        term = type(name)(eval(item) for item in name)
     elif isinstance(name, str):
+        name = name.strip()
         if name.startswith("@") or name.startswith("#") or name.startswith("$"):
             _name_ = name[1:]
             funcstr, argkwargstr = get_funcstr_argkwargstr(_name_)

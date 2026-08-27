@@ -3023,7 +3023,7 @@ class Datablock:
                 elif isinstance(value, Datablock):
                     _spec_[k] = value.subsignature(legacy=legacy)
                 elif isinstance(value, str):
-                    _spec_[k] = value
+                    _spec_[k] = repr(value) if legacy else value
                 elif legacy:
                     # This dict is embedded in subsignature() via its own repr, so a
                     # value stored here as repr(value) is repr'd TWICE: int 5
@@ -3508,18 +3508,18 @@ class Datablock:
         if inner is not None:
             structured = cls._structure_subsignatureval(inner)
             # Only adopt the unquoted form if it actually held structure;
-            # otherwise keep the original text so leaves stay unambiguous.
-            return structured if isinstance(structured, dict) else value
+            # otherwise evaluate the leaf so values stay typed.
+            return structured if isinstance(structured, dict) else cls._literal(value)
         if text.startswith('{') and text.endswith('}'):
             parsed = cls._parse_dictstr(text)
             if parsed:
                 return {k: cls._structure_subsignatureval(v) for k, v in parsed.items()}
-            return value
+            return cls._literal(value)
         if cls._is_subsignaturestr(text):
             parsed = Datablock._parse_subsignature(text)
             if parsed:
                 return {k: cls._structure_subsignatureval(v) for k, v in parsed.items()}
-        return value
+        return cls._literal(value)
 
     def _journal_entry(self, journal: dict) -> 'DatajournalEntry':
         """Select a single :class:`DatajournalEntry` from a *journal* selector dict.
@@ -3800,26 +3800,28 @@ class Datablock:
             return None
         return (mine, other_version)
 
-    def diffsig(self, other=ABSENT, *, journal: 'dict | None' = None, **kwargs):
-        if isinstance(other, Datablock):
-            other_subsig = other.subsignature(legacy=kwargs.get('legacy'))
-        elif isinstance(other, DatajournalEntry):
-            other_subsig = other.read('subsignature') or other.read('norm') or ''
-        else:
-            other_subsig = other
+    def diffsig(self, *args, **kwargs):
+        """Alias for :meth:`diffsubsignature`."""
+        return self.diffsubsignature(*args, **kwargs)
 
-        subsig_diff = self.diffsubsignature(other_subsig, journal=journal, report=True, **kwargs)
-        topics_diff = self.difftopics(other, journal=journal, report=True)
-        version_diff = self.diffversion(other, journal=journal)
-        version_rpt = (
-            "no differences" if version_diff is None
-            else f"self : {version_diff[0]!r}\nother: {version_diff[1]!r}"
-        )
-        return '\n'.join([subsig_diff, topics_diff, version_rpt])
-
-    def diff(self, *args, **kwargs):
-        """Alias for :meth:`diffsig`."""
-        return self.diffsig(*args, **kwargs)
+    def diff(
+        self,
+        other=ABSENT,
+        *,
+        journal: 'dict | None' = None,
+        report: bool = False,
+        maxlen: 'int | None' = 160,
+        **kwargs,
+    ) -> 'Diff | tuple':
+        """Diff this block against another across all three signature components."""
+        subsig = self.diffsubsignature(other, journal=journal, report=report, maxlen=maxlen, **kwargs)
+        topics = self.difftopics(other, journal=journal, report=report, maxlen=maxlen)
+        version = self.diffversion(other, journal=journal)
+        if report and version is not None:
+            version = f"self : {version[0]!r}\nother: {version[1]!r}"
+        elif report:
+            version = "no differences"
+        return self.Diff(subsig, topics, version)
 
     @classmethod
     def format_diff(cls, diff: dict, *, maxlen: 'int | None' = 160) -> str:
@@ -3961,7 +3963,7 @@ class Datablock:
             import pprint
             return pprint.pformat(self.signaturedict(deslash=deslash), indent=2, width=120)
         parts = [self.subsignature(deslash=deslash)]
-        if isinstance(getattr(self, 'redirect', None), dict) and self.redirect.get('paths') is not None:
+        if getattr(self, '_paths_', None) is not None:
             parts.append(f"_paths_={getattr(self, '_paths_', None)}")
         parts.append(f"version={self.version}")
         parts.extend(self.signature_topics())

@@ -957,8 +957,9 @@ class DatapointTable(DatapointBase, Datastack):
         )
         try:
             return StreamingDataset(**streaming_kwargs)
-        except ValueError as exc:
+        except (ValueError, TypeError) as exc:
             SharedMemoryManager.clean_process_shared_memory()
+            streaming_kwargs['streams'] = self._tab_streams(slice, local)
             return StreamingDataset(**streaming_kwargs)
 
     # 3. Private and Utility Methods ────────────────────────────────
@@ -1196,6 +1197,7 @@ class DatapointFold(DatapointTable):
         )
         try:
             return StreamingDataset(**streaming_kwargs)
-        except ValueError as exc:
+        except (ValueError, TypeError) as exc:
             SharedMemoryManager.clean_process_shared_memory()
+            streaming_kwargs['streams'] = self._tab_streams(slice, local)
             return StreamingDataset(**streaming_kwargs)

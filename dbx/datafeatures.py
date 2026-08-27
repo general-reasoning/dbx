@@ -355,6 +355,7 @@ class DatafeatureTab(DatapointTab):
             return self.__build_bulk__()
 
     def __build_bulk__(self):
+        self.log.info(f"DatafeatureTab.__build_bulk__: anchorkeypath={self.anchorkeypath} hash={self.hash}")
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         datapoint_tab = self.var.datapoint_tab
 
@@ -365,11 +366,6 @@ class DatafeatureTab(DatapointTab):
         slice_specs = {"features": columns_spec}
 
         collator = self.var.collator
-        if collator is None:
-            slice_name = 'tiles' if 'tiles' in datapoint_tab.slices else (datapoint_tab.slices[0] if datapoint_tab.slices else 'tiles')
-            col_name = 'tile' if slice_name == 'tiles' else slice_name
-            collator = Datacollator(spec=dict(signals=[(slice_name, col_name)], labels=[]))
-
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             sample_data = datapoint_tab.data(*collator.slices, concat=True)
             inputs = collator(sample_data, signal_only=True, strip_keys=True)
@@ -414,10 +410,6 @@ class DatafeatureTab(DatapointTab):
         slice_specs = {"features": columns_spec}
 
         collator = self.var.collator
-        if collator is None:
-            slice_name = 'tiles' if 'tiles' in datapoint_tab.slices else (datapoint_tab.slices[0] if datapoint_tab.slices else 'tiles')
-            col_name = 'tile' if slice_name == 'tiles' else slice_name
-            collator = Datacollator(spec=dict(signals=[(slice_name, col_name)], labels=[]))
 
         dataset = datapoint_tab.dataset(*collator.slices)
         dl_kwargs = dict(self.dataloader_kwargs) if self.dataloader_kwargs else {}
@@ -624,19 +616,9 @@ class DatafeatureTable(DatapointTable):
             self._feature_map = {name: name for name in layer_names}
 
     def __tab__(self, idx: int, device: str | None = None, tag=None) -> DatafeatureTab:
-        if device is None:
-            devs = getattr(self, '_devices', None) or getattr(self, 'devices', None) or ["cuda"]
-            device = devs[idx % len(devs)]
-        dp_table = getattr(self.var, 'datapoint_table', None) or getattr(self.var, 'tilebagclip', None) or self.spec.get('datapoint_table') or self.spec.get('tilebagclip')
-        if hasattr(dp_table, 'tab'):
-            dp_tab = dp_table.tab(idx)
-            dp_tab_quote = dbx.quote(dp_tab)
-            dp_tag = dp_tab.tag
-        else:
-            dp_tab_quote = dbx.quotefn(DatapointTableTab, dp_table, idx)
-            dp_tag = f"tab_{idx:06d}"
+        datapoint_tab = self.var.datapoint_table.tab(idx)
         spec = dict(
-            datapoint_tab=dp_tab_quote,
+            datapoint_tab=datapoint_tab.quote(),
             evaluator_factory=self.spec['evaluator_factory'],
             collator=self.spec.get('collator'),
             feature_namemap=self.spec.get('feature_namemap'),
@@ -655,7 +637,7 @@ class DatafeatureTable(DatapointTable):
             streaming=self.streaming,
             dataloader_kwargs=self.dataloader_kwargs,
             revision=self.revision,
-            tag=tag if tag is not None else dp_tag,
+            tag=tag if tag is not None else datapoint_tab.tag,
         )
 
     def __block__(self, idx: int, **kwargs) -> DatafeatureTab:
@@ -814,15 +796,15 @@ class BipolarDatafeatureTab(DatapointTab):
 
         median = np.median(features, axis=0)
 
-        tile_bipolar = np.sign(features - median).astype(np.int8)
-        tile_bipolar[tile_bipolar == 0] = 1
+        _bipolar = np.sign(features - median).astype(np.int8)
+        _bipolar[_bipolar == 0] = 1
 
         if self.var.ternarize:
-            tab_mean = tile_bipolar.astype(np.float32).mean(axis=0)
+            tab_mean = _bipolar.astype(np.float32).mean(axis=0)
             uncertain = (np.round(tab_mean).astype(np.int8) == 0)
-            tile_bipolar[:, uncertain] = 0
+            _bipolar[:, uncertain] = 0
 
-        tab_mean = tile_bipolar.astype(np.float32).mean(axis=0)
+        tab_mean = _bipolar.astype(np.float32).mean(axis=0)
         thresh = self.var.threshold
         tab_bipolar = np.where(np.abs(tab_mean) >= thresh, np.sign(tab_mean), 0).astype(np.int8)
 
@@ -831,8 +813,8 @@ class BipolarDatafeatureTab(DatapointTab):
             'tab_bipolar_features': {'tab_bipolar_features': 'ndarray:int8'},
         }
         with self.slice_writers(slice_specs) as writers:
-            for i in range(len(tile_bipolar)):
-                writers['bipolar_features'].write({'bipolar_features': tile_bipolar[i]})
+            for i in range(len(_bipolar)):
+                writers['bipolar_features'].write({'bipolar_features': _bipolar[i]})
                 writers['tab_bipolar_features'].write({'tab_bipolar_features': tab_bipolar})
         return self
 

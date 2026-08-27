@@ -290,22 +290,22 @@ class TestDiff:
 
     def test_its_parts_are_named(self, tmp_path):
         d = block(Block, tmp_path).diff(block(Renamed, tmp_path))
-        norm, topics, version = d
-        assert d.norm is norm and d.topics is topics and d.version is version
+        subsig, topics, version = d
+        assert d.subsig is subsig and d.topics is topics and d.version is version
 
     def test_the_parts_are_what_the_three_methods_return(self, tmp_path):
         a, b = block(Block, tmp_path, spec=dict(x=2)), block(Versioned, tmp_path)
         d = a.diff(b)
-        assert d.norm == a.diffnorm(b.norm())
+        assert d.subsig == a.diffsubsignature(b.subsignature())
         assert d.topics == a.difftopics(b)
         assert d.version == a.diffversion(b)
 
     def test_nothing_differs_between_identical_blocks(self, tmp_path):
         assert not any(block(Block, tmp_path).diff(block(Block, tmp_path)))
 
-    def test_a_spec_change_shows_up_in_the_norm(self, tmp_path):
+    def test_a_spec_change_shows_up_in_the_subsig(self, tmp_path):
         d = block(Block, tmp_path, spec=dict(x=1)).diff(block(Block, tmp_path, spec=dict(x=2)))
-        assert d.norm and not d.topics and not d.version
+        assert d.subsig and not d.topics and not d.version
 
     def test_a_topic_change_shows_up_in_the_topics(self, tmp_path):
         d = block(Block, tmp_path).diff(block(Renamed, tmp_path))
@@ -339,10 +339,10 @@ class TestDiff:
         assert 'renamed' not in d.topics and d.topics == 'no differences'
         assert 'self : 1' in d.version and 'other: 2' in d.version
 
-    def test_diffnorm_options_are_forwarded(self, tmp_path):
+    def test_diffsubsignature_options_are_forwarded(self, tmp_path):
         a = block(Block, tmp_path, spec=dict(x=1))
         b = block(Block, tmp_path, spec=dict(x=2))
-        assert a.diff(b, recursive=False).norm == a.diffnorm(b.norm(), recursive=False)
+        assert a.diff(b, recursive=False).subsig == a.diffsubsignature(b.subsignature(), recursive=False)
 
     def test_an_other_side_is_required(self, tmp_path):
         with pytest.raises(ValueError):

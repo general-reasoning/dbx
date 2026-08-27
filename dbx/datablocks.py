@@ -3010,6 +3010,13 @@ class Datablock:
             legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
             for k, v in spec.items():
                 raw_v = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else v
+                if not self.is_specline(raw_v) and hasattr(self, 'var') and hasattr(self.var, '__dict__'):
+                    for var_val in self.var.__dict__.values():
+                        if isinstance(var_val, Datablock) and isinstance(getattr(var_val, 'spec', None), dict) and k in var_val.spec:
+                            cand = var_val.spec[k]
+                            if self.is_specline(cand):
+                                raw_v = cand
+                                break
                 value = getattr(self.var, k, None)
                 if self.is_specline(raw_v):
                     try:
@@ -3038,8 +3045,16 @@ class Datablock:
         elif expansion == 'quote' or expansion == 'cite':
             for k, v in spec.items():
                 value = getattr(self.var, k)
-                if self.is_specline(v):
-                    _spec_[k] = v
+                raw_v = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else v
+                if not self.is_specline(raw_v) and hasattr(self, 'var') and hasattr(self.var, '__dict__'):
+                    for var_val in self.var.__dict__.values():
+                        if isinstance(var_val, Datablock) and isinstance(getattr(var_val, 'spec', None), dict) and k in var_val.spec:
+                            cand = var_val.spec[k]
+                            if self.is_specline(cand):
+                                raw_v = cand
+                                break
+                if self.is_specline(raw_v):
+                    _spec_[k] = raw_v
                 elif isinstance(value, Datablock):
                     # Nested blocks are ALWAYS single-line and un-deslashed,
                     # whatever the user-facing defaults are. A nested specline

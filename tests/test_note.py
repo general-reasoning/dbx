@@ -89,7 +89,7 @@ class TestNoteParquetPrefix:
     def test_parquet_filename_starts_with_event(self, tmp_path):
         b = _make(tmp_path)
         b.note("hello", event="flag")
-        dbx_dir = os.path.join(str(tmp_path), b.anchor, '.dbx')
+        dbx_dir = str(tmp_path)
         all_parquets = []
         for root, dirs, files in os.walk(dbx_dir):
             if os.path.basename(root) != b.hash:
@@ -106,7 +106,7 @@ class TestNoteParquetPrefix:
     def test_default_event_prefix_is_note(self, tmp_path):
         b = _make(tmp_path)
         b.note("saved")
-        dbx_dir = os.path.join(str(tmp_path), b.anchor, '.dbx')
+        dbx_dir = str(tmp_path)
         all_parquets = []
         for root, dirs, files in os.walk(dbx_dir):
             if os.path.basename(root) != b.hash:
@@ -123,7 +123,7 @@ class TestNoteParquetPrefix:
     def test_custom_event_prefix(self, tmp_path):
         b = _make(tmp_path)
         b.note("saved", event="checkpoint")
-        dbx_dir = os.path.join(str(tmp_path), b.anchor, '.dbx')
+        dbx_dir = str(tmp_path)
         all_parquets = []
         for root, dirs, files in os.walk(dbx_dir):
             if os.path.basename(root) != b.hash:

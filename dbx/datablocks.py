@@ -2165,15 +2165,6 @@ class Datablock:
         )
         return self
 
-    def keep(self, note: str | None = None, message: str | None = None):
-        """Write a journal entry with event='keep' and optional *note*.
-
-        Equivalent to ``self.note(note, event='keep', inline=True)``.
-        """
-        if note is None and message is not None:
-            note = message
-        return self.note(note, event='keep', inline=True)
-
     def leave_breadcrumbs(self):
         """Touch a breadcrumb for every topic that has a location.
 
@@ -3069,14 +3060,9 @@ class Datablock:
                 elif isinstance(value, Datablock):
                     _spec_[k] = value.subsignature(legacy=legacy)
                 elif isinstance(value, str):
-                    _spec_[k] = repr(value) if legacy else value
+                    _spec_[k] = value
                 elif legacy:
-                    # This dict is embedded in subsignature() via its own repr, so a
-                    # value stored here as repr(value) is repr'd TWICE: int 5
-                    # -> "'5'" -- byte-identical to the string '5' stored raw
-                    # by the branch above. Kept for LEGACY_NORM blocks because
-                    # the collision is baked into their existing hashes.
-                    _spec_[k] = repr(repr(value))
+                    _spec_[k] = str(value)
                 else:
                     # Stored as the value itself, so the embedding repr's it
                     # exactly once: 5 -> "5", '5' -> "'5'". No collision.
@@ -3383,7 +3369,7 @@ class Datablock:
         legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
         kwargs_dict = {
             **(self._rootkwargs_ if legacy else {}),
-            **(subsig_spec if legacy else {'spec': subsig_spec}),
+            'spec': subsig_spec,
         }
         subsig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy)
         if deslash:

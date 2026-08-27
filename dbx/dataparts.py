@@ -5,6 +5,7 @@ This module contains components that do **not** depend on ``Datablock``
 (the dependency runs one way: ``datablocks`` imports from here, never back):
 Logger, OutputTee, I/O helpers, term evaluator, callable executors, etc.
 """
+import ast
 import atexit
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -101,6 +102,10 @@ def getenv(key: str, default: str|None = None) -> str:
     Intended to be referenced in speclines so that handles contain the
     symbolic ``$dbx.getenv('KEY')`` rather than the resolved path.
     """
+    if isinstance(key, str):
+        key = key.strip("'\"")
+    if isinstance(default, str):
+        default = default.strip("'\"")
     if default is not None:
         return os.environ.get(key, default)
     try:
@@ -548,21 +553,27 @@ def eval(name):
                     k, v = kwparts[0].strip(), kwparts[1].strip()
                     try:
                         val = ast.literal_eval(v)
-                    except (NameError, SyntaxError):
+                    except (NameError, SyntaxError, ValueError):
                         val = v
-                    if isinstance(val, str) and (val.startswith("$") or val.startswith("@") or val.startswith("#")):
-                        if k not in ('url', 'local'):
-                            val = eval(val)
+                    if isinstance(val, str):
+                        if val.startswith("$") or val.startswith("@") or val.startswith("#"):
+                            if k not in ('url', 'local'):
+                                val = eval(val)
+                        elif val.startswith("dbx."):
+                            val = __eval__(val, cxt)
                     elif isinstance(val, (dict, list, tuple)):
                         val = eval(val)
                     kwargs[k] = val
                 else:
                     try:
                         arg = ast.literal_eval(bit)
-                    except (NameError, SyntaxError):
+                    except (NameError, SyntaxError, ValueError):
                         arg = bit
-                    if isinstance(arg, str) and (arg.startswith("$") or arg.startswith("@") or arg.startswith("#")):
-                        arg = eval(arg)
+                    if isinstance(arg, str):
+                        if arg.startswith("$") or arg.startswith("@") or arg.startswith("#"):
+                            arg = eval(arg)
+                        elif arg.startswith("dbx."):
+                            arg = __eval__(arg, cxt)
                     elif isinstance(arg, (dict, list, tuple)):
                         arg = eval(arg)
                     args.append(arg)

@@ -85,10 +85,9 @@ class TestJournalMissingDir:
         with pytest.raises(FileNotFoundError) as exc_info:
             journal(FakeBlock, url=root)
 
-        # journal() without fqcn checks {anchor}/.dbx, not the fqcn-qualified path
+        # journal() checks the anchor path when the directory is missing
         anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
         assert anchor in str(exc_info.value)
-        assert ".dbx" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -441,3 +440,39 @@ class TestJournalBuildDatetimes:
         assert 'build:end:datetime' in result.columns, "Legacy build_datetime should be renamed"
         assert 'build_datetime' not in result.columns, "Old column name should not survive"
         assert result.iloc[0]['build:end:datetime'] == '2025-01-01T00-00-00'
+
+    def test_colocated_journal_path_and_dual_glob(self, tmp_path, monkeypatch):
+        """Journal entries are written to {anchorkeypath}/.journal/{fqcn} and both new and legacy entries are retrieved."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+
+        # 1. Create a Datablock and write a new journal entry
+        b = BuildableBlock(url=root)
+        entry_code = b.write_journal_entry(event='colocated_test')
+
+        # Verify entry file lives under b.anchorkeypath/.journal/...
+        colocated_dir = os.path.join(b.anchorkeypath, '.journal', b.fqcn, 'journal', b.hash)
+        assert os.path.exists(colocated_dir), f"Colocated journal directory {colocated_dir} does not exist"
+
+        # 2. Write a legacy journal entry under .dbx/
+        legacy_anchor = b.anchor
+        legacy_jdir = Datablock._dbxanchorpathx(root, legacy_anchor, 'journal', fqcn=b.fqcn)
+        legacy_hash_dir = os.path.join(legacy_jdir, "legacy_hash_123")
+        os.makedirs(legacy_hash_dir, exist_ok=True)
+        now_str = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+        legacy_df = pd.DataFrame([{
+            'hash': 'legacy_hash_123',
+            'datetime': now_str,
+            'event': 'legacy_test',
+            'anchor': legacy_anchor,
+            'url': root,
+            'entry_code': 'legacy_code_999',
+        }])
+        legacy_df.to_parquet(os.path.join(legacy_hash_dir, "legacy_entry.parquet"))
+
+        # 3. Read journal using Datablock.Journal and verify both entries are found
+        j = b.journal()
+        events = set(j['event'])
+        assert 'colocated_test' in events, "Colocated entry should be in journal results"
+        assert 'legacy_test' in events, "Legacy entry should be in journal results"
+

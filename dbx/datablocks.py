@@ -1213,8 +1213,18 @@ class Datablock:
         if legacy_validate is not None and state.get('validate_vars') is None:
             state['validate_vars'] = legacy_validate
 
+        def _unquote(v):
+            if isinstance(v, str):
+                v_strip = v.strip()
+                if len(v_strip) >= 2 and ((v_strip[0] == "'" and v_strip[-1] == "'") or (v_strip[0] == '"' and v_strip[-1] == '"')):
+                    try:
+                        return ast.literal_eval(v_strip)
+                    except Exception:
+                        pass
+            return v
+
         # Explicit parameters
-        self.url = state.get('url')
+        self.url = _unquote(state.get('url'))
         # Resolve specline URLs (e.g. "$dbx.getenv('KEY')") to real paths.
         self._url_ = eval(self.url) if self.url is not None else None
         if self._url_ is None:
@@ -1222,11 +1232,18 @@ class Datablock:
         if self._url_ is None:
             raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT or its alias DBX_URL")
 
-        self.local = state.get('local')
-        self.local_must_exist = bool(state.get('local_must_exist', False))
+        self.local = _unquote(state.get('local'))
+        if self.local == 'None':
+            self.local = None
+        self.local_must_exist = bool(_unquote(state.get('local_must_exist', False)))
 
-        self.storage_options = state.get('storage_options')
-        if self.storage_options is None:
+        self.storage_options = _unquote(state.get('storage_options'))
+        if isinstance(self.storage_options, str):
+            try:
+                self.storage_options = ast.literal_eval(self.storage_options)
+            except Exception:
+                pass
+        if self.storage_options is None or not isinstance(self.storage_options, dict):
             self.storage_options = default_storage_options()
 
         self.fs, self.root = fsspec.url_to_fs(self._url_, **self.storage_options)
@@ -1252,21 +1269,38 @@ class Datablock:
                     f"be auto-created on demand instead."
                 )
             self.localfs, self.localroot = fsspec.url_to_fs(self._local_, **self.storage_options)
-        self._spec_ = state.get('spec')
+        self._spec_ = _unquote(state.get('spec'))
+        if isinstance(self._spec_, str):
+            try:
+                parsed_spec = ast.literal_eval(self._spec_)
+                if isinstance(parsed_spec, dict):
+                    self._spec_ = parsed_spec
+            except Exception:
+                pass
         if self._spec_ is None:
             self.spec = asdict(self.VAR())
         else:
             self.spec = self._spec_
-        self._anchor_ = state.get('anchor')
-        self._hash_ = state.get('hash')
-        self._subhash_ = state.get('subhash')
-        self._tag_ = state.get('tag')
+        self._anchor_ = _unquote(state.get('anchor'))
+        if self._anchor_ == 'None':
+            self._anchor_ = None
+        self._hash_ = _unquote(state.get('hash'))
+        if self._hash_ == 'None':
+            self._hash_ = None
+        self._subhash_ = _unquote(state.get('subhash'))
+        if self._subhash_ == 'None':
+            self._subhash_ = None
+        self._tag_ = _unquote(state.get('tag'))
+        if self._tag_ == 'None':
+            self._tag_ = None
         
-        self._revision_ = state.get('revision')
-        self.capture_output = bool(state.get('capture_output', False))
-        self.keyby = state.get('keyby', 'tag_version_shorthash')
-        if self.keyby not in (None, 'hash', 'subhash', 'superhash', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'subhash', 'superhash', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
+        self._revision_ = _unquote(state.get('revision'))
+        if self._revision_ == 'None':
+            self._revision_ = None
+        self.capture_output = bool(_unquote(state.get('capture_output', False)))
+        self.keyby = _unquote(state.get('keyby', 'tag_version_shorthash'))
+        if self.keyby not in (None, 'hash', 'subhash', 'superhash', 'norm', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'subhash', 'superhash', 'norm', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -2361,11 +2395,7 @@ class Datablock:
 
     def _journal_hashdirpath(self):
         """The directory holding THIS block's journal entries, and no others."""
-        return os.path.join(
-            Datablock._dbxanchorpathx(self._url_, self.anchor, 'journal',
-                                      fqcn=self.fqcn, storage_options=self.storage_options),
-            self.hash,
-        )
+        return os.path.join(self.anchorkeypath, ".journal", self.fqcn, "journal", self.hash)
 
     def _recorded_redirection(self):
         """The latest redirection recorded for this block's hash, or None.
@@ -2383,9 +2413,18 @@ class Datablock:
         """
         try:
             dirpath = self._journal_hashdirpath()
-            if not self.fs.exists(dirpath):
+            legacy_dirpath = os.path.join(
+                Datablock._dbxanchorpathx(self._url_, self.anchor, 'journal',
+                                          fqcn=self.fqcn, storage_options=self.storage_options),
+                self.hash,
+            )
+            files = []
+            if self.fs.exists(dirpath):
+                files.extend(self.fs.glob(os.path.join(dirpath, '*.parquet')))
+            if self.fs.exists(legacy_dirpath):
+                files.extend(self.fs.glob(os.path.join(legacy_dirpath, '*.parquet')))
+            if not files:
                 return None
-            files = self.fs.glob(os.path.join(dirpath, '*.parquet'))
         except Exception as e:
             # Asked of every block on its first path(), including ones whose
             # storage cannot answer -- so a failure to look means "no
@@ -3037,7 +3076,7 @@ class Datablock:
                     # -> "'5'" -- byte-identical to the string '5' stored raw
                     # by the branch above. Kept for LEGACY_NORM blocks because
                     # the collision is baked into their existing hashes.
-                    _spec_[k] = repr(value)
+                    _spec_[k] = repr(repr(value))
                 else:
                     # Stored as the value itself, so the embedding repr's it
                     # exactly once: 5 -> "5", '5' -> "'5'". No collision.
@@ -3353,6 +3392,11 @@ class Datablock:
         self.log.detailed(f"subsignature: ------------>{subsig=}")
         return subsig
 
+    def norm(self, *args, **kwargs):
+        """Alias for :meth:`subsignature` for backwards compatibility."""
+        return self.subsignature(*args, **kwargs)
+
+
     @staticmethod
     def _parse_subsignature(subsignature: str) -> dict:
         """Parse a subsignature string like 'anchor(k1=v1, k2=v2)' into {k: v} dict.
@@ -3522,19 +3566,35 @@ class Datablock:
         inner = cls._unquote_str(text)
         if inner is not None:
             structured = cls._structure_subsignatureval(inner)
-            # Only adopt the unquoted form if it actually held structure;
-            # otherwise evaluate the leaf so values stay typed.
-            return structured if isinstance(structured, dict) else cls._literal(value)
+            if isinstance(structured, dict):
+                return structured
+            return value
         if text.startswith('{') and text.endswith('}'):
             parsed = cls._parse_dictstr(text)
             if parsed:
                 return {k: cls._structure_subsignatureval(v) for k, v in parsed.items()}
-            return cls._literal(value)
+            return value
         if cls._is_subsignaturestr(text):
             parsed = Datablock._parse_subsignature(text)
             if parsed:
                 return {k: cls._structure_subsignatureval(v) for k, v in parsed.items()}
-        return cls._literal(value)
+        return value
+
+    @staticmethod
+    def _parse_norm(*args, **kwargs):
+        """Alias for :meth:`_parse_subsignature` for backwards compatibility."""
+        return Datablock._parse_subsignature(*args, **kwargs)
+
+    @staticmethod
+    def _is_normstr(*args, **kwargs):
+        """Alias for :meth:`_is_subsignaturestr` for backwards compatibility."""
+        return Datablock._is_subsignaturestr(*args, **kwargs)
+
+    @classmethod
+    def _structure_normval(cls, *args, **kwargs):
+        """Alias for :meth:`_structure_subsignatureval` for backwards compatibility."""
+        return cls._structure_subsignatureval(*args, **kwargs)
+
 
     def _journal_entry(self, journal: dict) -> 'DatajournalEntry':
         """Select a single :class:`DatajournalEntry` from a *journal* selector dict.
@@ -3575,13 +3635,13 @@ class Datablock:
 
     def diffsubsignature(
         self,
-        other_subsignature: 'str | None' = None,
+        other_subsignature: 'Datablock | DatajournalEntry | str | None' = ABSENT,
         *,
-        journal: 'dict | None' = None,
-        recursive: bool = True,
-        deslash: bool = False,
+        journal: 'Datajournal | DatajournalEntry | dict | str | int | None' = None,
         raw: bool = False,
+        deslash: bool = False,
         legacy: 'bool | None' = None,
+        recursive: bool = True,
         report: bool = False,
         maxlen: 'int | None' = 160,
     ) -> 'dict | str':
@@ -3610,23 +3670,51 @@ class Datablock:
                     valdiff = diffdict(val1, val2)
                     if len(valdiff) > 0:
                         diff[key] = valdiff
-                elif val1 is ABSENT or val2 is ABSENT or val1 != val2:
+                else:
                     one, two = present(val1), present(val2)
-                    if not raw and one is not ABSENT and two is not ABSENT:
-                        try:
-                            indistinguishable = bool(one == two)
-                        except Exception:
-                            indistinguishable = False
-                        if indistinguishable:
-                            one, two = val1, val2
-                    diff[key] = (one, two)
+                    if one is ABSENT or two is ABSENT or one != two or val1 != val2:
+                        if not raw and one is not ABSENT and two is not ABSENT:
+                            try:
+                                indistinguishable = bool(one == two)
+                            except Exception:
+                                indistinguishable = False
+                            if indistinguishable and val1 != val2:
+                                one, two = val1, val2
+                        diff[key] = (one, two)
             return diff
 
-        if other_subsignature is None and journal is not None:
+        if isinstance(other_subsignature, Datablock):
+            other_subsignature = other_subsignature.subsignature(legacy=legacy)
+        elif isinstance(other_subsignature, DatajournalEntry):
+            other_subsignature = other_subsignature.read('subsignature') or other_subsignature.read('norm') or ''
+        elif (other_subsignature is None or other_subsignature is ABSENT) and journal is not None:
             _entry = self._journal_entry(journal)
-            other_subsignature = _entry.read('norm') or _entry.read('subsignature') or ''
+            other_subsignature = _entry.read('subsignature') or _entry.read('norm') or ''
+
+
         parsed_self  = Datablock._parse_subsignature(self.subsignature(legacy=legacy))
         parsed_other = Datablock._parse_subsignature(other_subsignature or '')
+
+        def _normalize_subsig_dict(d):
+            if 'spec' not in d and d:
+                root_keys = {'url', 'local', 'local_must_exist', 'storage_options', 'anchor', 'tag', 'revision', 'keyby', 'uuid16', 'redirect', 'validate_vars'}
+                spec_part = {}
+                root_part = {}
+                for k, v in d.items():
+                    if k in root_keys:
+                        root_part[k] = v
+                    else:
+                        spec_part[k] = v
+                if spec_part:
+                    root_part['spec'] = spec_part
+                    return root_part
+            return d
+
+        if 'spec' in parsed_self and 'spec' not in parsed_other:
+            parsed_other = _normalize_subsig_dict(parsed_other)
+        elif 'spec' not in parsed_self and 'spec' in parsed_other:
+            parsed_self = _normalize_subsig_dict(parsed_self)
+
         if recursive:
             parsed_self = {k: self._structure_subsignatureval(v) for k, v in parsed_self.items()}
             parsed_other = {k: self._structure_subsignatureval(v) for k, v in parsed_other.items()}
@@ -3639,6 +3727,11 @@ class Datablock:
         """Alias for :meth:`diffsubsignature`."""
         return self.diffsubsignature(*args, **kwargs)
 
+    def diffnorm(self, *args, **kwargs):
+        """Alias for :meth:`diffsubsignature` for backwards compatibility."""
+        return self.diffsubsignature(*args, **kwargs)
+
+
     def subsignaturedict(self, *, legacy: 'bool | None' = None) -> dict:
         """Return the subsignature parsed and structured into a nested dict."""
         parsed = Datablock._parse_subsignature(self.subsignature(legacy=legacy))
@@ -3647,6 +3740,11 @@ class Datablock:
     def subsigdict(self, *, legacy: 'bool | None' = None) -> dict:
         """Alias for :meth:`subsignaturedict`."""
         return self.subsignaturedict(legacy=legacy)
+
+    def normdict(self, *args, **kwargs):
+        """Alias for :meth:`subsignaturedict` for backwards compatibility."""
+        return self.subsignaturedict(*args, **kwargs)
+
 
     def subsig(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
         """Alias for :meth:`subsignature` (defaults to pretty=True)."""
@@ -3829,7 +3927,10 @@ class Datablock:
         **kwargs,
     ) -> 'Diff | tuple':
         """Diff this block against another across all three signature components."""
+        if other is not ABSENT and not isinstance(other, (Datablock, DatajournalEntry)) and journal is None:
+            raise TypeError(f"diff requires a Datablock or DatajournalEntry, got {type(other).__name__}: {other!r}")
         subsig = self.diffsubsignature(other, journal=journal, report=report, maxlen=maxlen, **kwargs)
+
         topics = self.difftopics(other, journal=journal, report=report, maxlen=maxlen)
         version = self.diffversion(other, journal=journal)
         if report and version is not None:
@@ -4033,10 +4134,11 @@ class Datablock:
             key = None
         elif self.keyby == 'hash':
             key = self.hash
-        elif self.keyby in ('subhash'):
+        elif self.keyby in ('subhash', 'superhash'):
             key = self.subhash
-        elif self.keyby in ('subsignature'):
+        elif self.keyby in ('norm', 'subsignature'):
             key = self.subsignature()
+
         elif self.keyby == 'tag':
             key = self.tag
         elif self.keyby in ('taghash', 'tag_hash'):
@@ -4373,8 +4475,7 @@ class Datablock:
         return _dbxanchorpathx
 
     def _dbxanchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True, filename_prefix: str = ''):
-        _dbxanchorpathx = Datablock._dbxanchorpathx(self._url_, self.anchor, x, fqcn=self.fqcn, storage_options=self.storage_options)
-        _dbxanchorhashpathx = os.path.join(_dbxanchorpathx, self.hash)
+        _dbxanchorhashpathx = os.path.join(self.anchorkeypath, ".journal", self.fqcn, x, self.hash)
         if ensure_dirpath:
             self.fs.makedirs(_dbxanchorhashpathx, exist_ok=True)
         if ext is None:
@@ -4384,7 +4485,7 @@ class Datablock:
 
     def _dbxjournalinstancepath(self, *, ensure_dirpath: bool = False, filename_prefix: str = ''):
         """
-        Return /root/anchor/.dbx/journal/hash/{fqcn}-{dt}.journal."""
+        Return {anchorkeypath}/.journal/{fqcn}/journal/{hash}/{fqcn}-{dt}.journal."""
         return self._dbxanchorhashpathx('journal', 'parquet', ensure_dirpath=ensure_dirpath, filename_prefix=filename_prefix)
 
     #PATHS: END
@@ -4593,36 +4694,42 @@ class Datablock:
         fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
         log = Logger()
 
-        journaldirpath = fs_full_path(fs, os.path.join(root, anchor, ".dbx"))
+        anchordirpath = fs_full_path(fs, os.path.join(root, anchor))
 
-        if not fs.exists(journaldirpath):
+        glob_patterns = [
+            os.path.join(anchordirpath, ".dbx", "*/journal/**/*.parquet"),
+            os.path.join(anchordirpath, "**/.journal", "*/journal/**/*.parquet"),
+        ]
+
+        log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} BEGIN")
+        parquet_files = []
+        with ThreadPoolExecutor(max_workers=min(n_workers, len(glob_patterns))) as glob_ex:
+            glob_futures = [glob_ex.submit(fs.glob, p) for p in glob_patterns]
+            for gf in as_completed(glob_futures):
+                try:
+                    parquet_files.extend(gf.result())
+                except Exception as e:
+                    log.warning(f"Error globbing journal files: {e}")
+
+        # Deduplicate found files while preserving order
+        seen = set()
+        unique_parquet_files = []
+        for pf in parquet_files:
+            if pf not in seen:
+                seen.add(pf)
+                unique_parquet_files.append(pf)
+        parquet_files = unique_parquet_files
+
+        if len(parquet_files) == 0 and not fs.exists(anchordirpath):
             raise FileNotFoundError(
-                f"Journal directory not found for {anchor!r}: {journaldirpath}\n"
+                f"Journal directory not found for {anchor!r}: {anchordirpath}\n"
                 f"Check that the class name / anchor and url are correct."
             )
 
-        # One '*' for the anchor level, then '**' only under 'journal/'.
-        #
-        # A journal entry lives at .dbx/<anchor>/journal/<hash>/<entry>.parquet,
-        # so the anchor level is a single '*' -- and confining '**' to what
-        # follows 'journal/' keeps the scan off the thirteen sibling kinds
-        # (dfn, spec, signature, ...) that share the anchor directory and
-        # outnumber the journal entries an order of magnitude.
-        #
-        # The pattern this replaces fanned a thread pool out over
-        # glob('**/', maxdepth=2), which matches *nothing*: a trailing slash
-        # finds no directories (fsspec 2026.6, adlfs), so no directory was ever
-        # globbed for entries and every journal came back empty even though the
-        # entries were on storage. Nor was there anything to parallelise -- the
-        # anchor level holds exactly one directory. The parallelism that pays
-        # is over the entry files, which is below and unchanged.
-        glob_pattern = os.path.join(journaldirpath, '*/journal/**/*.parquet')
-        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: {glob_pattern} BEGIN")
-        parquet_files = fs.glob(glob_pattern)
         log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
-        log.verbose(f"Retrieving journal files from {journaldirpath=} using glob: {glob_pattern} END")
+        log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} END")
 
-        log.detailed(f"READING JOURNAL: from {journaldirpath=}, files: {parquet_files}")
+        log.detailed(f"READING JOURNAL: from {anchordirpath=}, files: {parquet_files}")
         def read_entry_file(file):
             # Through `fs`, not by path: the glob above returns paths as that
             # filesystem names them -- protocol-stripped -- so handing one to

@@ -536,8 +536,8 @@ def eval(name):
         kwargs = {}
         if cxt is None:
             cxt = {}
-        cxt['dbx'] = sys.modules.get('dbx', sys.modules[__name__.split('.')[0]])
-        if len(argkwargstr) > 0:
+        cxt['dbx'] = sys.modules['dbx']
+        if argkwargstr is not None:
             bits = split_top_level_items(argkwargstr)
             for bit in bits:
                 bit = bit.strip()
@@ -547,7 +547,7 @@ def eval(name):
                 if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
                     k, v = kwparts[0].strip(), kwparts[1].strip()
                     try:
-                        val = __eval__(v, globals(), cxt)
+                        val = ast.literal_eval(v)
                     except (NameError, SyntaxError):
                         val = v
                     if isinstance(val, str) and (val.startswith("$") or val.startswith("@") or val.startswith("#")):
@@ -558,7 +558,7 @@ def eval(name):
                     kwargs[k] = val
                 else:
                     try:
-                        arg = __eval__(bit, globals(), cxt)
+                        arg = ast.literal_eval(bit)
                     except (NameError, SyntaxError):
                         arg = bit
                     if isinstance(arg, str) and (arg.startswith("$") or arg.startswith("@") or arg.startswith("#")):

@@ -99,15 +99,18 @@ class SharedMemoryManager:
             from streaming.base.constant import SHM_TO_CLEAN
             for prefix_int in range(100):
                 for shm_name in SHM_TO_CLEAN:
-                    name = f'p{target_pid}_{prefix_int:04}_{shm_name}'
-                    try:
-                        shm = BuiltinSharedMemory(name, False, 4)
-                        shm.close()
-                        shm.unlink()
-                    except Exception:
-                        pass
+                    for name in (f'p{target_pid}_{prefix_int:04}_{shm_name}', f'{prefix_int:06d}_{shm_name}'):
+                        try:
+                            shm = BuiltinSharedMemory(name, False, 4)
+                            shm.close()
+                            shm.unlink()
+                        except Exception:
+                            pass
         except Exception:
             pass
+
+# Enable PID-qualified shared memory prefixing automatically on import
+SharedMemoryManager.enable_pid_prefixes()
 
 
 SharedMemoryManager.enable_pid_prefixes()
@@ -812,7 +815,10 @@ def open_datastream(index_dir, *, local=None, cache_dir=None, cache=None,
                     f"local cache: pass local= or cache_dir="
                 )
             local = os.path.join(cache or tempfile.gettempdir(), cache_dir)
-        os.makedirs(local, exist_ok=True)
+    if isinstance(cache_limit, str) and cache_limit.lower() in ('none', 'null'):
+        cache_limit = None
+    if isinstance(cache, str) and cache.lower() in ('none', 'null'):
+        cache = None
 
     streaming_kwargs = dict(
         remote=remote,

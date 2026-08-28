@@ -665,3 +665,49 @@ class TestRestructuredRedirect:
         b_redirected = SpecialBlock(url=str(tmp_path), redirect={'paths': {'output': '/override.dat'}})
         assert b_redirected.path('output') == "/override.dat"
 
+
+class TestNewRedirectFeatures:
+
+    def test_unsafe_redirect_dict_parameter(self, tmp_path):
+        b = Built(url=str(tmp_path))
+        b.UNSAFE_redirect(redirect={'paths': {'output': '/custom/path.txt'}}, OVERRIDE=True)
+        assert b.path('output') == '/custom/path.txt'
+        assert b._paths_ == {'output': '/custom/path.txt'}
+        assert '_paths_' not in b.signature()
+        assert '_paths_' in b.type()
+
+    def test_unsafe_redirect_exactly_one_truthy(self, tmp_path):
+        b = Built(url=str(tmp_path))
+        with pytest.raises(ValueError, match="exactly one of code, filter, or paths must be truthy"):
+            b.UNSAFE_redirect(redirect={'paths': {'output': '/x'}, 'filter': {'event': 'test'}}, OVERRIDE=True)
+
+        with pytest.raises(ValueError, match="exactly one of code, filter, or paths must be truthy"):
+            b.UNSAFE_redirect(redirect={}, OVERRIDE=True)
+
+    def test_hidden_topic_redirection_and_clear(self, tmp_path):
+        b = Built(url=str(tmp_path))
+        b.UNSAFE_redirect(redirect={'paths': {'output': '/custom/path.txt'}}, OVERRIDE=True)
+        assert b.redirection is not None
+        assert b.redirection.paths == {'output': '/custom/path.txt'}
+
+        # Verify clear removes .redirection file and cache
+        b.UNSAFE_clear(OVERRIDE=True)
+        assert b._paths_ is None
+        assert b.path('output').startswith(b.anchorkeypath)
+
+    def test_datastack_unsafe_redirect_blocks(self, tmp_path):
+        from dbx.datablocks import Datastack
+
+        class DummyStack(Datastack):
+            def blocks(self):
+                return [Built(url=str(tmp_path), spec={'x': i}) for i in range(3)]
+
+        stack = DummyStack(url=str(tmp_path))
+        stack.UNSAFE_redirect_blocks(
+            redirect=lambda blk: {'paths': {'output': f"/redirected/{blk.spec['x']}.txt"}},
+            OVERRIDE=True
+        )
+
+        for blk in stack.blocks():
+            assert blk.path('output').startswith("/redirected/")
+

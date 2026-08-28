@@ -29,7 +29,7 @@ import os
 import shutil
 import sys
 import tempfile
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 import uuid
 
 
@@ -2362,11 +2362,13 @@ class Datablock:
                 continue
             for _, row in df.iterrows():
                 entry = DatajournalEntry(row, storage_options=self.storage_options)
-                if entry.redirection is None:
-                    continue
                 when = row.get('datetime')
-                if latest is None or str(when) > str(latest[0]):
-                    latest = (when, entry.redirection)
+                if entry.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
+                    if latest is None or str(when) > str(latest[0]):
+                        latest = (when, None)
+                elif entry.redirection is not None:
+                    if latest is None or str(when) > str(latest[0]):
+                        latest = (when, entry.redirection)
         return latest[1] if latest is not None else None
 
     def _redirect_entry(self, filter):
@@ -2390,54 +2392,40 @@ class Datablock:
         row = journal.get(0, dropna=True)
         return DatajournalEntry(pd.Series(row).copy(deep=True), storage_options=self.storage_options)
 
-    def UNSAFE_redirect(self, filter: dict|None = None, topic_map: dict|None = None,
-                        paths: dict|None = None, *, OVERRIDE: bool = False):
-        """Record that this block's topics are read from somewhere else.
+    def UNSAFE_redirect(self, filter: dict|str|None = None, topic_map: dict|None = None,
+                        paths: dict|None = None, redirect: dict|None = None, *, OVERRIDE: bool = False):
+        """Record that this block's topics are read from somewhere else."""
+        code_val = None
+        if isinstance(redirect, dict):
+            code_val = redirect.get('code') or redirect.get('subhash')
+            if filter is None:
+                filter = redirect.get('filter')
+            if paths is None:
+                paths = redirect.get('paths')
+            if isinstance(code_val, bool):
+                code_val = None
 
-        Exactly one of *filter* and *paths* says where.
+        if isinstance(code_val, str) and filter is None:
+            filter = {'entry_code': code_val}
+        elif isinstance(filter, str):
+            filter = {'entry_code': filter}
 
-        *filter* is a set of ``{column: value}`` pairs selecting a journal
-        entry, as :meth:`journal` filters, the first (newest) match winning --
-        so ``{'hash': other.hash, 'event': 'build:end'}`` follows that block as
-        it is rebuilt, where ``{'entry_code': code}`` is pinned to the one build
-        that code was returned for. That entry's recorded paths become this
-        block's. It is selected from THIS block's journal, which is per anchor,
-        so a filter reaches another build of this class but not another class's
-        -- unless the two were given the same ``anchor=``, or *paths* is used
-        instead, which consults no journal at all.
-
-        *topic_map* re-keys them, reading mine -> theirs: ``{'out': 'output'}``
-        says this block's ``out`` is that entry's ``output``. It applies only to
-        *filter*, there being nothing to re-key when the paths are given
-        outright, and is ignored with a warning if passed alongside *paths*.
-
-        *paths* names the locations directly, as ``{topic: path}``, nested the
-        way TOPICS is. No journal is consulted for them.
-
-        The non-None parts are packaged into a ``redirection`` dict and written
-        to a fresh journal entry. Nothing is copied, moved or validated: a
-        redirection is a note in the journal, and :attr:`path` reads it.
-
-        UNSAFE because every path this block reports then names data it did not
-        produce and whose hash does not describe it, which nothing downstream
-        can detect -- so the redirection is announced at INFO when it resolves.
-
-        Returns the ``entry_code`` of the entry recording it, or None if the
-        confirmation prompt was declined.
-        """
-        if (filter is None) == (paths is None):
+        targets = [
+            ('code', code_val if isinstance(code_val, str) else None),
+            ('filter', filter),
+            ('paths', paths),
+        ]
+        truthy_targets = [(k, v) for k, v in targets if v is not None and bool(v)]
+        if len(truthy_targets) != 1:
             raise ValueError(
-                f"UNSAFE_redirect takes exactly one of filter= and paths=, "
-                f"got {filter=}, {paths=}"
+                f"UNSAFE_redirect: exactly one of code, filter, or paths must be truthy, "
+                f"got {filter=}, {paths=}, {code_val=}"
             )
+
         if filter is not None and not (isinstance(filter, dict) and filter):
-            # An empty filter matches every entry, which would redirect to
-            # whatever was written last -- never what anyone means.
             raise ValueError(f"UNSAFE_redirect: filter must be a non-empty dict, got {filter!r}")
         if paths is not None and not (isinstance(paths, dict) and paths):
             raise ValueError(f"UNSAFE_redirect: paths must be a non-empty dict, got {paths!r}")
-        if topic_map is not None and not isinstance(topic_map, dict):
-            raise ValueError(f"UNSAFE_redirect: topic_map must be a dict, got {topic_map!r}")
         if topic_map is not None and paths is not None:
             self.log.warning(
                 f"UNSAFE_redirect: topic_map {topic_map!r} re-keys the topics of a "
@@ -2450,18 +2438,20 @@ class Datablock:
                        if v is not None}
         if not UNSAFE_allowed(f"UNSAFE_redirect to {redirection!r}", OVERRIDE=OVERRIDE):
             return None
-        # Its own journal file (see write_journal_entry): a redirect written by
-        # an instance that has already journalled must not overwrite that entry.
         code = self.write_journal_entry(
             event='UNSAFE_redirect',
             redirection=redirection,
             journal_prefix='redirect-',
         )
-        # Writing the entry resolved this block's redirection -- write_journal_entry
-        # records paths(), which consults it -- and cached the None there was at the
-        # time. Drop that, or the one instance that could not possibly be wrong about
-        # having been redirected would be the only one not to honour it.
         self.__dict__.pop('redirection', None)
+
+        if paths is not None:
+            self._paths_ = paths
+            try:
+                self._write_journal_dict('.redirection', self._paths_)
+            except Exception as e:
+                self.log.detailed(f"UNSAFE_redirect: could not write hidden topic .redirection: {e}")
+
         self.log.info(f"UNSAFE_redirect: {self.hash} -> {redirection!r} (entry {code})")
         return code
     #REDIRECT: END
@@ -2496,6 +2486,13 @@ class Datablock:
                 self.log.warning(f"EXCEPTION: {e}")
                 if throw:
                     raise (e)
+
+        try:
+            clear_path(self._dbxanchorhashpathx('.redirection', 'yaml'))
+            clear_path(self._dbxanchorhashpathx('.redirection', 'parquet'))
+        except Exception:
+            pass
+
         def clear_topic(topicpath):
             # A group names a directory but holds no data of its own; clearing
             # it means clearing what is under it.
@@ -2508,11 +2505,14 @@ class Datablock:
         if len(topics) == 0:
             for topic in self.topics():
                 clear_topic((topic,))
-            self.write_journal_entry(event="UNSAFE_clear")
+            self.write_journal_entry(event="UNSAFE_clear", redirection={'cleared': True})
         else:
             for topic in topics:
                 clear_topic(self._normtopic((topic,)))
-            self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}")
+            self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}", redirection={'cleared': True})
+
+        self._paths_ = None
+        self.__dict__.pop('redirection', None)
         return self
     
     def _UNSAFE_copy_fs(self, *, src_path, dst_path, recursive: bool = False):
@@ -4089,13 +4089,19 @@ class Datablock:
         bare: bool = False,
         local: bool = False,
     ):
-        """Return the path for a topic, using self._paths_ if available or delegating to __path__."""
-        if not local and getattr(self, '_paths_', None) is not None:
+        """Return the path for a topic, using self._paths_ or .redirection() if available, falling back onto anchorkeypath/topic."""
+        red_paths = getattr(self, '_paths_', None)
+        if red_paths is None and getattr(self, 'redirect', False):
+            red = self.redirection
+            if red is not None:
+                red_paths = red.paths if isinstance(red, self.Redirection) else (red if isinstance(red, dict) else None)
+
+        if not local and red_paths is not None:
             topicpath = self._normtopic(topicpath)
             if not topicpath:
-                res = self._paths_
+                res = red_paths
             else:
-                node = self._paths_
+                node = red_paths
                 for name in topicpath:
                     if isinstance(node, dict) and name in node:
                         node = node[name]
@@ -4108,6 +4114,7 @@ class Datablock:
                     fs = self.fs
                     res = fs._strip_protocol(res)
                 return res
+
         return self.__path__(
             *topicpath,
             ensure_dirpath=ensure_dirpath,
@@ -5022,6 +5029,39 @@ class Datastack(Datablock):
         self.log.info(f"UNSAFE_copy_blocks_from complete: {self.__class__.__name__}")
         self.write_journal_entry(event="UNSAFE_copy_blocks_from:end")
         return self
+
+    def UNSAFE_redirect_blocks(self, redirect: Callable, *, OVERRIDE: bool = False, parallelization=None, n_workers=None):
+        """Redirect each child block in the stack using redirect(block) callable."""
+        if not UNSAFE_allowed("UNSAFE_redirect_blocks", OVERRIDE=OVERRIDE):
+            return self
+
+        block_list = self.blocks()
+        par = parallelization if parallelization is not None else getattr(self, 'parallelization', None)
+        nw = n_workers if n_workers is not None else getattr(self, 'n_workers', 1)
+        self.log.info(
+            f"UNSAFE_redirect_blocks: redirecting {len(block_list)} blocks, "
+            f"parallelization={par}, n_workers={nw}"
+        )
+        self.write_journal_entry(event="UNSAFE_redirect_blocks:begin")
+
+        tag = f"REDIRECTING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={nw}]"
+        executor = callable_executor(par, n_workers=nw, tag=tag)
+
+        callables = [functools.partial(_UNSAFE_redirect_block_callable, blk, redirect) for blk in block_list]
+        executor.exec_callables(callables)
+
+        self.log.info(f"UNSAFE_redirect_blocks complete: {self.__class__.__name__}")
+        self.write_journal_entry(event="UNSAFE_redirect_blocks:end")
+        return self
+
+
+def _UNSAFE_redirect_block_callable(block, redirect_func):
+    target = redirect_func(block)
+    if target is not None:
+        if isinstance(target, dict):
+            block.UNSAFE_redirect(redirect=target, OVERRIDE=True)
+        else:
+            block.UNSAFE_redirect(target, OVERRIDE=True)
 
 
 def _fscopy_item_callable(src_item, dst_item, storage_options):

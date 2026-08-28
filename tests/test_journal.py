@@ -476,3 +476,105 @@ class TestJournalBuildDatetimes:
         assert 'colocated_test' in events, "Colocated entry should be in journal results"
         assert 'legacy_test' in events, "Legacy entry should be in journal results"
 
+
+class TestDatablockJournalArgThreading:
+
+    def test_n_workers_threaded_to_journal(self, tmp_path, monkeypatch):
+        """Datablock.journal() threads n_workers to Datablock.Journal."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        b = BuildableBlock(url=root)
+        b.build()
+
+        # Capture calls to Datablock.Journal
+        original_journal = Datablock.Journal
+        captured_kwargs = {}
+
+        def spy_journal(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return original_journal(*args, **kwargs)
+
+        monkeypatch.setattr(Datablock, 'Journal', staticmethod(spy_journal))
+
+        res = b.journal(n_workers=3)
+        assert captured_kwargs.get('n_workers') == 3
+        assert isinstance(res, Datajournal)
+        assert len(res) >= 1
+
+    def test_url_and_storage_options_threaded(self, tmp_path, monkeypatch):
+        """Datablock.journal() allows overriding url and storage_options."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root1 = str(tmp_path / "root1")
+        root2 = str(tmp_path / "root2")
+
+        b1 = BuildableBlock(url=root1)
+        b1.build()
+
+        b2 = BuildableBlock(url=root2)
+        b2.build()
+
+        # Reading root2 from b1 by explicitly passing url
+        j = b1.journal(url=root2, n_workers=2)
+        assert isinstance(j, Datajournal)
+        assert len(j) >= 1
+
+    def test_custom_logger_threaded_and_used(self, tmp_path, monkeypatch):
+        """Datablock.journal() and Datablock.Journal() preserve passed logger."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        b = BuildableBlock(url=root)
+        b.build()
+
+        class MockLogger:
+            def __init__(self):
+                self.messages = []
+            def verbose(self, msg):
+                self.messages.append(('verbose', msg))
+            def detailed(self, msg):
+                self.messages.append(('detailed', msg))
+            def warning(self, msg):
+                self.messages.append(('warning', msg))
+            def debug(self, msg):
+                self.messages.append(('debug', msg))
+
+        logger = MockLogger()
+        j = b.journal(log=logger, n_workers=2)
+        assert len(logger.messages) > 0
+        assert any("Retrieving journal files" in msg[1] for msg in logger.messages)
+
+    def test_loc_iloc_index_filter_kwargs_threaded(self, tmp_path, monkeypatch):
+        """loc, iloc, index, and filter_kwargs are properly threaded with n_workers."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        b = BuildableBlock(url=root)
+        b.build()
+
+        # loc
+        entry_loc = b.journal(loc=0, n_workers=2)
+        assert isinstance(entry_loc, DatajournalEntry)
+
+        # iloc
+        entry_iloc = b.journal(iloc=0, n_workers=2)
+        assert isinstance(entry_iloc, DatajournalEntry)
+
+        # index & filter kwargs
+        j_indexed = b.journal(event='build:end', index='event', n_workers=2)
+        assert isinstance(j_indexed, Datajournal)
+        assert 'build:end' in j_indexed.index
+
+    def test_top_level_journal_threads_n_workers(self, tmp_path, monkeypatch):
+        """Top-level journal() threads n_workers and log to Datablock.Journal."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        b = BuildableBlock(url=root)
+        b.build()
+
+        j_class = journal(BuildableBlock, url=root, n_workers=4)
+        assert isinstance(j_class, Datajournal)
+        assert len(j_class) >= 1
+
+        j_inst = journal(b, n_workers=4)
+        assert isinstance(j_inst, Datajournal)
+        assert len(j_inst) >= 1
+
+

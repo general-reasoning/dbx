@@ -219,7 +219,7 @@ def read_exec_journal(url: str | None = None, storage_options: dict | None = Non
         return pd.DataFrame(columns=['exec', 'datetime', 'id'])
 
 
-def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_options=None, index=None, **filter_kwargs):
+def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_options=None, log=None, n_workers=8, index=None, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
 
     Parameters
@@ -235,6 +235,10 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
         Storage URL.  Defaults to ``DBX_ROOT`` or its alias ``DBX_URL``.
     storage_options : dict, optional
         Storage options for fsspec.  Defaults to ``default_storage_options()``.
+    log : Logger, optional
+        Logger instance.
+    n_workers : int, default 8
+        Number of workers for reading journal files.
     index : str, optional
         Column name to set as DataFrame index on the returned Datajournal.
     **filter_kwargs
@@ -253,9 +257,19 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
     else:
         if isinstance(cls_anchor_or_df, str):
             anchor = cls_anchor_or_df
+        elif isinstance(cls_anchor_or_df, type):
+            anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
+        elif hasattr(cls_anchor_or_df, 'anchor'):
+            anchor = cls_anchor_or_df.anchor
+            if url is None and hasattr(cls_anchor_or_df, '_url_'):
+                url = cls_anchor_or_df._url_
+            if storage_options is None and hasattr(cls_anchor_or_df, 'storage_options'):
+                storage_options = cls_anchor_or_df.storage_options
+            if log is None and hasattr(cls_anchor_or_df, 'log'):
+                log = cls_anchor_or_df.log
         else:
             anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
-        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, index=index, **filter_kwargs)
+        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, **filter_kwargs)
 
 
 def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs):
@@ -4700,6 +4714,8 @@ class Datablock:
     def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index=None, **filter_kwargs):
         if log is None:
             log = Logger()
+        if n_workers is None:
+            n_workers = 8
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         if url is None:
@@ -4708,7 +4724,6 @@ class Datablock:
             storage_options = default_storage_options()
 
         fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
-        log = Logger()
 
         anchordirpath = fs_full_path(fs, os.path.join(root, anchor))
 
@@ -4808,10 +4823,20 @@ class Datablock:
             result = journal
         return result
 
-    def journal(self, loc: int = None, *, iloc: int = None, index: str | None = None, **filter_kwargs):
+    def journal(self, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index: str | None = None, **filter_kwargs):
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-        return self.Journal(self.anchor, loc=loc, iloc=iloc, url=self._url_, storage_options=self.storage_options, index=index, **filter_kwargs)
+        return self.Journal(
+            self.anchor,
+            loc=loc,
+            iloc=iloc,
+            url=self._url_ if url is None else url,
+            storage_options=self.storage_options if storage_options is None else storage_options,
+            log=getattr(self, 'log', None) if log is None else log,
+            n_workers=n_workers,
+            index=index,
+            **filter_kwargs,
+        )
 
     def lastbuilt(self, index: str | None = None):
         """Return the most recent 'build:end' DatajournalEntry, or None."""
@@ -5211,7 +5236,10 @@ class Datastack(Datablock):
 
 def _UNSAFE_redirect_block_callable(redirect_func, block, idx, *, journal: Datajournal|None = None):
     target = redirect_func(block, idx, journal=journal)
+    if not target:
+        return False
     return block.UNSAFE_redirect(**target, OVERRIDE=True)
+
 
 
 def _fscopy_item_callable(src_item, dst_item, storage_options):

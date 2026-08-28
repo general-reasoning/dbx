@@ -562,7 +562,10 @@ def eval(name):
                 if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
                     k, v = kwparts[0].strip(), kwparts[1].strip()
                     if func_is_datablock_ctor:
-                        val = v
+                        try:
+                            val = ast.literal_eval(v)
+                        except (ValueError, SyntaxError):
+                            val = v  # leave speclines/identifiers as strings
                     else:
                         try:
                             val = ast.literal_eval(v)
@@ -593,7 +596,10 @@ def eval(name):
                     kwargs[k] = val
                 else:
                     if func_is_datablock_ctor:
-                        arg = bit
+                        try:
+                            arg = ast.literal_eval(bit)
+                        except (ValueError, SyntaxError):
+                            arg = bit  # leave speclines/identifiers as strings
                     else:
                         try:
                             arg = ast.literal_eval(bit)

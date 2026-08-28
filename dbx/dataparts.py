@@ -649,7 +649,7 @@ def exec(s=None, **kwargs):
     When *s* is ``None``, the expression and keyword arguments are
     read from the command line (``sys.argv[1:]``).
     """
-    from .datablocks import Datablock
+    from .datablocks import record_exec_journal
     if s is None:
         # Command line only: may re-exec this process pinned to a revision and
         # never return.
@@ -671,8 +671,7 @@ def exec(s=None, **kwargs):
     _, cxt = get_named_const_and_cxt(s[:lb])
     cxt.update(kwargs)
     r = __eval__(s, globals(), cxt)
-    if isinstance(r, Datablock):
-        r.write_journal_entry(event="dbx:exec", note=s, inline_note=True)
+    record_exec_journal(s)
     return r
 
 

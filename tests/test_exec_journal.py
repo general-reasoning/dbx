@@ -9,6 +9,7 @@ Covers:
 """
 
 from dataclasses import dataclass
+import pandas as pd
 import pytest
 
 import dbx
@@ -33,19 +34,27 @@ class ExecSampleBlock(Datablock):
             f.write(str(self.var.val))
 
 
-def test_exec_writes_journal_entry_for_datablock(tmp_path):
-    """dbx.exec(s) must write event='dbx:exec' to the journal when s evaluates to a Datablock."""
+def test_exec_writes_journal_entry_for_datablock(tmp_path, monkeypatch):
+    """dbx.exec(s) records to $DBX_URL eval journal and NOT to the Datablock journal."""
+    dbx_url = str(tmp_path / "exec_root")
+    monkeypatch.setenv('DBX_URL', dbx_url)
+
     url = str(tmp_path / "exec_block")
     expr = f"ExecSampleBlock(url='{url}')"
     res = dbx.exec(expr, ExecSampleBlock=ExecSampleBlock)
 
     assert isinstance(res, ExecSampleBlock)
-    journal = res.journal()
-    assert len(journal) >= 1
-    exec_entries = journal[journal['event'] == 'dbx:exec']
-    assert len(exec_entries) == 1
-    entry = exec_entries.iloc[0]
-    assert entry['message'] == expr
+    res.build()
+    # Datablock journal should NOT contain note string
+    j_block = res.journal()
+    if not j_block.empty and 'event' in j_block.columns:
+        assert 'dbx:exec' not in j_block['event'].values
+
+    # $DBX_URL eval journal MUST contain the expression
+    df_eval = dbx.journal()
+    assert isinstance(df_eval, pd.DataFrame)
+    assert not df_eval.empty
+    assert expr in df_eval['exec'].values
 
 
 def test_exec_returns_non_datablock_without_journal_error():
@@ -55,8 +64,11 @@ def test_exec_returns_non_datablock_without_journal_error():
     assert dbx.exec("dict(a=1, b=2)") == {"a": 1, "b": 2}
 
 
-def test_exec_with_kwargs_and_datablock(tmp_path):
-    """dbx.exec(s, **kwargs) passes kwargs into context and journals the event."""
+def test_exec_with_kwargs_and_datablock(tmp_path, monkeypatch):
+    """dbx.exec(s, **kwargs) passes kwargs into context and records in eval journal."""
+    dbx_url = str(tmp_path / "exec_root_kw")
+    monkeypatch.setenv('DBX_URL', dbx_url)
+
     url = str(tmp_path / "exec_kw_block")
     expr = f"ExecSampleBlock(url='{url}', spec=dict(val=val_param))"
     res = dbx.exec(expr, ExecSampleBlock=ExecSampleBlock, val_param=99)
@@ -64,7 +76,5 @@ def test_exec_with_kwargs_and_datablock(tmp_path):
     assert isinstance(res, ExecSampleBlock)
     assert res.var.val == 99
 
-    journal = res.journal()
-    exec_entries = journal[journal['event'] == 'dbx:exec']
-    assert len(exec_entries) == 1
-    assert exec_entries.iloc[0]['message'] == expr
+    df_eval = dbx.journal()
+    assert expr in df_eval['exec'].values

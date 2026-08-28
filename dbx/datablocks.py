@@ -166,13 +166,66 @@ DIRTOPIC = None
 SYNTOPIC = ()
 
 
-def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, index=None, **filter_kwargs):
+class CallableStr(str):
+    def __call__(self, *args, **kwargs):
+        return str(self)
+
+
+def record_exec_journal(s: str, url: str | None = None):
+    """Record an exec expression string in the $DBX_URL/.journal/exec/ journal."""
+    dbx_url = url or os.environ.get('DBX_URL') or os.environ.get('DBX_ROOT') or './dbx'
+    exec_dir = os.path.join(dbx_url, '.journal', 'exec')
+    fs, _ = fsspec.url_to_fs(exec_dir)
+    try:
+        fs.makedirs(exec_dir, exist_ok=True)
+    except Exception:
+        pass
+    file_path = os.path.join(exec_dir, f"exec_{uuid.uuid4().hex}.parquet")
+    entry_data = {
+        'exec': str(s),
+        'datetime': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        'id': str(uuid.uuid4()),
+    }
+    df = pd.DataFrame([entry_data])
+    with fs.open(file_path, 'wb') as f:
+        df.to_parquet(f)
+
+
+def read_exec_journal(url: str | None = None, storage_options: dict | None = None) -> pd.DataFrame:
+    """Read all recorded dbx.exec() entries from the $DBX_URL/.journal/exec/ journal."""
+    dbx_url = url or os.environ.get('DBX_URL') or os.environ.get('DBX_ROOT') or './dbx'
+    exec_dir = os.path.join(dbx_url, '.journal', 'exec')
+    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
+    try:
+        if not fs.exists(exec_dir):
+            return pd.DataFrame(columns=['exec', 'datetime', 'id'])
+        files = fs.glob(os.path.join(exec_dir, '*.parquet'))
+        if not files:
+            return pd.DataFrame(columns=['exec', 'datetime', 'id'])
+        dfs = []
+        for file in files:
+            try:
+                with fs.open(file, 'rb') as f:
+                    dfs.append(pd.read_parquet(f))
+            except Exception:
+                continue
+        if not dfs:
+            return pd.DataFrame(columns=['exec', 'datetime', 'id'])
+        res = pd.concat(dfs, ignore_index=True)
+        if 'datetime' in res.columns:
+            res = res.sort_values('datetime').reset_index(drop=True)
+        return res
+    except Exception:
+        return pd.DataFrame(columns=['exec', 'datetime', 'id'])
+
+
+def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_options=None, index=None, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
 
     Parameters
     ----------
-    cls_anchor_or_df : type | str | pd.DataFrame
-        A Datablock class, an anchor string, or a raw DataFrame.
+    cls_anchor_or_df : type | str | pd.DataFrame, optional
+        A Datablock class, an anchor string, a raw DataFrame, or None to return the eval journal.
     loc : int, optional
         If given, return a single :class:`DatajournalEntry` at this label index.
     iloc : int, optional
@@ -189,8 +242,10 @@ def journal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=
 
     Returns
     -------
-    Datajournal or DatajournalEntry
+    Datajournal, DatajournalEntry, or pd.DataFrame
     """
+    if cls_anchor_or_df is None:
+        return read_exec_journal(url=url, storage_options=storage_options)
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):
@@ -412,13 +467,23 @@ class DatajournalEntry(pd.Series):
 
     @property
     def type(self):
-        """Path to this entry's ``type.txt``, or None."""
-        return self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
+        """Path or text of this entry's type."""
+        val = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
+        return CallableStr(val) if val is not None else None
+
+    def tp(self):
+        val = self.type
+        return val() if val is not None else None
 
     @property
     def signature(self):
-        """Path to this entry's ``signature.txt``, or None (falls back to legacy ``subsignature`` / ``norm`` column)."""
-        return self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm')
+        """Path or text of this entry's signature."""
+        val = self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm')
+        return CallableStr(val) if val is not None else None
+
+    def sig(self):
+        val = self.signature
+        return val() if val is not None else None
 
     @property
     def subsignature(self):

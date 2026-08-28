@@ -612,8 +612,8 @@ class TestRestructuredRedirect:
         b = Built(url=str(tmp_path), redirect={'paths': p})
         assert b._paths_ == p
         assert b.path('output') == '/custom/output.txt'
-        assert '_paths_' in b.signature()
-        assert '_paths_' not in b.subsignature()
+        assert '_paths_' in b.type()
+        assert '_paths_' not in b.signature()
 
     def test_redirect_to_code(self, tmp_path, source):
         src_block, code = source

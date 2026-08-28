@@ -369,9 +369,13 @@ class DatajournalEntry(pd.Series):
         return self.get('anchor')
 
     @property
+    def code(self):
+        return self.get('code') or self.get('subhash')
+
+    @property
     def subhash(self):
-        return self.get('subhash')
-    
+        return self.code
+
     @property
     def hash(self):
         return self.get('hash')
@@ -394,23 +398,11 @@ class DatajournalEntry(pd.Series):
 
     @property
     def cite(self):
-        """Path to this entry's ``cite.txt``, or None.
-
-        Declared explicitly (unlike ``quote``/``subsignature``/``repr``, which resolve
-        through pandas' attribute fallback to the column of the same name)
-        because journals written before ``cite`` existed have no such column:
-        the fallback would raise AttributeError, whereas ``.get`` returns None
-        and :meth:`read` degrades to None.
-        """
+        """Path to this entry's ``cite.txt``, or None."""
         return self.get('cite')
 
     def _renamed_column(self, name, legacy):
-        """Value of column *name*, falling back to the pre-rename *legacy* column.
-
-        A journal mixing entries from both eras has BOTH columns, with NaN in
-        whichever one that row predates -- so a plain ``.get(name, legacy)``
-        default is not enough; the NaN has to be treated as absent too.
-        """
+        """Value of column *name*, falling back to the pre-rename *legacy* column."""
         def absent(v):
             return v is None or (isinstance(v, float) and pd.isna(v))
         value = self.get(name)
@@ -419,37 +411,32 @@ class DatajournalEntry(pd.Series):
         return None if absent(value) else value
 
     @property
-    def signature(self):
-        """Path to this entry's ``signature.txt``, or None.
+    def type(self):
+        """Path to this entry's ``type.txt``, or None."""
+        return self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
 
-        Declared explicitly for the same reason as :attr:`cite`, and because
-        journals written before the rename recorded this column as ``hashstr``.
-        """
-        return self._renamed_column('signature', 'hashstr')
+    @property
+    def signature(self):
+        """Path to this entry's ``signature.txt``, or None (falls back to legacy ``subsignature`` / ``norm`` column)."""
+        return self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm')
 
     @property
     def subsignature(self):
-        """Path to this entry's ``subsignature.txt``, or None (falls back to legacy ``norm`` column)."""
-        return self._renamed_column('subsignature', 'norm')
+        return self.signature
 
     @property
     def uuid(self):
-        """The uuid of the live instance that wrote this entry, or None.
-
-        Shared by every entry one instance wrote; :attr:`entry_code` is what
-        distinguishes them.
-        """
+        """The uuid of the live instance that wrote this entry, or None."""
         return self.get('uuid')
 
     @property
-    def code(self):
-        """This entry's unique 32-character sha256 code hash."""
-        return self.get('code') or self.get('entry_code')
+    def id(self):
+        """This entry's own row id, or None."""
+        return self.get('id') or self.get('entry_code')
 
     @property
     def entry_code(self):
-        """This entry's own uuid -- unique to the row, or None."""
-        return self.get('entry_code')
+        return self.id
 
     @property
     def redirection(self):
@@ -824,28 +811,6 @@ class DatajournalEntry(pd.Series):
         if isinstance(proxy, Remote):
             proxy._origin = handle
         return proxy
-
-    @property
-    def bid(self):
-        """Reconstruct a Datablock.Bid from this journal entry."""
-        return Datablock.Bid(
-            hash=self.hash,
-            subhash=self.subhash,
-            version=self.version,
-            revision=self.revision,
-            dfn=self.read('dfn', safe=True) or {},
-            kwargs=self.read('kwargs', safe=True) or {},
-            spec=self.read('spec', safe=True) or {},
-            quote=self.read('quote') or '',
-            cite=self.read('cite') or '',
-            repr=self.read('repr') or '',
-            subsignature=self.read('subsignature') or self.read('norm') or '',
-            signature=self.read('signature') or '',
-            anchor=self.anchor,
-            tag=self.tag,
-            key=self.key,
-            keyby=self.keyby,
-        )
     
 
 
@@ -1038,44 +1003,6 @@ class Datablock:
     # already-computed hashes, keys and storage paths stay valid.
     LEGACY_NORM = False
     LEGACY_SIGNATURE = False
-
-    @dataclass
-    class Bid: #BlockId
-        hash: str
-        subhash: str
-        version: str
-        revision: str
-        dfn: dict
-        kwargs: dict
-        spec: dict
-        quote: str
-        cite: str
-        repr: str
-        subsignature: str
-        signature: str
-        anchor: str
-        tag: str
-        key: str
-        keyby: str
-
-        def deslash(self, attr):
-            a = getattr(self, attr)
-            if isinstance(a, str):
-                aa = a.replace('\\', '')
-            else:
-                aa = a
-            return aa
-
-        def fields(self):
-            return {f.name: f.type for f in fields(self)}
-
-        def to_dict(self, *, deslash: bool = False):
-            d = {f.name: getattr(self, f.name) for f in fields(self)}
-            if deslash:
-                for k, v in d.items():
-                    if isinstance(v, str):
-                        d[k] = v.replace('\\', '')
-            return d
 
     @dataclass
     class VAR:
@@ -1287,9 +1214,10 @@ class Datablock:
         self._hash_ = _unquote(state.get('hash'))
         if self._hash_ == 'None':
             self._hash_ = None
-        self._subhash_ = _unquote(state.get('subhash'))
-        if self._subhash_ == 'None':
-            self._subhash_ = None
+        self._code_ = _unquote(state.get('code') or state.get('subhash'))
+        if self._code_ == 'None':
+            self._code_ = None
+        self._subhash_ = self._code_
         self._tag_ = _unquote(state.get('tag'))
         if self._tag_ == 'None':
             self._tag_ = None
@@ -1299,8 +1227,8 @@ class Datablock:
             self._revision_ = None
         self.capture_output = bool(_unquote(state.get('capture_output', False)))
         self.keyby = _unquote(state.get('keyby', 'tag_version_shorthash'))
-        if self.keyby not in (None, 'hash', 'subhash', 'superhash', 'norm', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'subhash', 'superhash', 'norm', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
+        if self.keyby not in (None, 'hash', 'code', 'subhash', 'superhash', 'norm', 'signature', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'code', 'signature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -1344,7 +1272,7 @@ class Datablock:
         if isinstance(self.redirect, dict):
             self._process_redirect()
         self.__post_init__()
-        self.log.detailed(f"======--------------> bid: {self.bid}")
+        self.log.detailed(f"======--------------> code: {self.code}")
 
     def _process_redirect(self):
         if not isinstance(self.redirect, dict):
@@ -2934,26 +2862,6 @@ class Datablock:
     #IDS: BEGIN
     #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
     # computed using the older version of these methods
-    @property
-    def bid(self):
-        return self.Bid(
-            hash=self.hash,
-            subhash=self.subhash,
-            version=self.version,
-            revision=self.revision,
-            kwargs=self.kwargs,
-            spec=self.spec,
-            dfn=self.dfn,
-            quote=self.quote(deslash=True),
-            cite=self.cite(),
-            repr=self.__repr__(deslash=True),
-            subsignature=self.subsignature(deslash=True),
-            signature=self.signature(deslash=True),
-            anchor=self.anchor,
-            tag=self.tag,
-            key=self.key,
-            keyby=self.keyby,
-        )
     
     @staticmethod
     def is_specline(s):
@@ -3036,7 +2944,7 @@ class Datablock:
             for k, v in spec.items():
                 value = getattr(self.var, k)
                 _spec_[k] = repr(value)
-        elif expansion in ('subsignature'):
+        elif expansion in ('signature', 'subsignature'):
             legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
             for k, v in spec.items():
                 raw_v = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else v
@@ -3052,13 +2960,13 @@ class Datablock:
                     try:
                         eval_v = dataparts.eval(raw_v)
                         if isinstance(eval_v, Datablock):
-                            _spec_[k] = eval_v.subsignature(legacy=legacy)
+                            _spec_[k] = eval_v.signature(legacy=legacy)
                         else:
                             _spec_[k] = raw_v
                     except Exception:
                         _spec_[k] = raw_v
                 elif isinstance(value, Datablock):
-                    _spec_[k] = value.subsignature(legacy=legacy)
+                    _spec_[k] = value.signature(legacy=legacy)
                 elif isinstance(value, str):
                     _spec_[k] = value
                 elif legacy:
@@ -3360,44 +3268,43 @@ class Datablock:
         self.log.detailed(f"cite: ------------> {cite=}")
         return cite
 
-    def subsignature(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = False):
-        """The base identity string that :attr:`signature` -- and hence :attr:`hash` and :attr:`subhash` -- is built from."""
+    def signature(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = False):
+        """The base identity string that :attr:`type` -- and hence :attr:`hash` and :attr:`code` -- is built from."""
         if pretty:
             import pprint
-            return pprint.pformat(self.subsignaturedict(legacy=legacy), indent=2, width=120)
-        subsig_spec = self.__expand_spec__('subsignature', legacy=legacy)
+            return pprint.pformat(self.signaturedict(legacy=legacy), indent=2, width=120)
+        sig_spec = self.__expand_spec__('signature', legacy=legacy)
         legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
         kwargs_dict = {
             **(self._rootkwargs_ if legacy else {}),
-            'spec': subsig_spec,
+            'spec': sig_spec,
         }
-        subsig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy)
+        sig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy)
         if deslash:
-            subsig = subsig.replace('\\', '')
-        self.log.detailed(f"subsignature: ------------> {subsig_spec=}")
-        self.log.detailed(f"subsignature: ------------>{subsig=}")
-        return subsig
+            sig = sig.replace('\\', '')
+        self.log.detailed(f"signature: ------------> {sig_spec=}")
+        self.log.detailed(f"signature: ------------>{sig=}")
+        return sig
+
+    def subsignature(self, *args, **kwargs):
+        """Alias for :meth:`signature` for backwards compatibility."""
+        return self.signature(*args, **kwargs)
 
     def norm(self, *args, **kwargs):
-        """Alias for :meth:`subsignature` for backwards compatibility."""
-        return self.subsignature(*args, **kwargs)
+        """Alias for :meth:`signature` for backwards compatibility."""
+        return self.signature(*args, **kwargs)
 
 
     @staticmethod
-    def _parse_subsignature(subsignature: str) -> dict:
-        """Parse a subsignature string like 'anchor(k1=v1, k2=v2)' into {k: v} dict.
-
-        Handles nested parens/braces/brackets and quoted strings correctly by
-        tracking depth so that only top-level commas are used as separators.
-        """
-        subsignature = subsignature.strip()
-        paren_start = subsignature.find('(')
+    def _parse_signature(signature: str) -> dict:
+        """Parse a signature string like 'anchor(k1=v1, k2=v2)' into {k: v} dict."""
+        signature = signature.strip()
+        paren_start = signature.find('(')
         if paren_start == -1:
             return {}
-        inner = subsignature[paren_start + 1:]
+        inner = signature[paren_start + 1:]
         if inner.endswith(')'):
             inner = inner[:-1]
-        # Split on top-level commas (respecting nesting and quotes)
         tokens = []
         depth = 0
         quote_char = None
@@ -3428,13 +3335,11 @@ class Datablock:
         return result
 
     @staticmethod
-    def _split_top_level_items(inner: str, sep: str = ','):
-        """Split *inner* at ``sep`` occurrences that are not nested or quoted.
+    def _parse_subsignature(*args, **kwargs):
+        return Datablock._parse_signature(*args, **kwargs)
 
-        Unlike :meth:`_split_top_level` (which retains the separators so a
-        citation can be re-joined verbatim), this drops them: it is for
-        *parsing* a rendered subsignature back into its parts.
-        """
+    @staticmethod
+    def _split_top_level_items(inner: str, sep: str = ','):
         out, buf, depth, quote, esc = [], [], 0, None, False
         for c in inner:
             if esc:
@@ -3462,14 +3367,6 @@ class Datablock:
 
     @classmethod
     def _parse_dictstr(cls, text: str) -> dict:
-        """Parse a rendered dict literal ``{'k': v, ...}`` into ``{k: vstr}``.
-
-        Values are left as their source text -- they may be nested subsignatures, or
-        reprs of objects that :func:`ast.literal_eval` would reject, so nothing
-        here evaluates them. Returns ``{}`` when *text* is not a dict literal or
-        has no ``key: value`` pairs, which the callers treat as "leaf, not
-        structure".
-        """
         text = text.strip()
         if not (text.startswith('{') and text.endswith('}')):
             return {}
@@ -3487,7 +3384,6 @@ class Datablock:
 
     @staticmethod
     def _unquote_str(text: str):
-        """Return the content of *text* if it is one quoted string literal, else None."""
         text = text.strip()
         if len(text) < 2 or text[0] != text[-1] or text[0] not in ('"', "'"):
             return None
@@ -3499,30 +3395,15 @@ class Datablock:
 
     @staticmethod
     def _literal(text):
-        """``ast.literal_eval`` *text*, returning it unchanged if it is not a literal.
-
-        This is the deserialiser for a subsignature leaf. A subsignature is flat text, so every
-        value in it arrives as a string -- but the text itself records the type:
-        a non-``LEGACY_NORM`` block renders ``ori_extent=15.0`` as ``15.0``,
-        while a legacy one renders it ``'15.0'``. Evaluating the leaf recovers
-        that distinction, so a reported pair ``(15.0, '15.0')`` reads as "float
-        on one side, string on the other" instead of two identical-looking
-        strings.
-
-        Falls back to the source text for anything that is not a Python literal:
-        a bare url (``abfss://...``), an object repr (``<Foo at 0x...>``), a
-        specline, a timestamp.
-        """
         if not isinstance(text, str):
             return text
         try:
             return ast.literal_eval(text)
-        except (ValueError, SyntaxError, TypeError, MemoryError, RecursionError):
+        except Exception:
             return text
 
     @staticmethod
-    def _is_subsignaturestr(text: str) -> bool:
-        """True if *text* looks like ``(k=v, ...)`` or ``fqcn(k=v, ...)``."""
+    def _is_signaturestr(text: str) -> bool:
         text = text.strip()
         if not text.endswith(')'):
             return False
@@ -3531,73 +3412,49 @@ class Datablock:
             return False
         return head == '' or all(p.isidentifier() for p in head.split('.'))
 
+    @staticmethod
+    def _is_subsignaturestr(text: str) -> bool:
+        return Datablock._is_signaturestr(text)
+
     @classmethod
-    def _structure_subsignatureval(cls, value):
-        """Recursively expand a subsignature VALUE into nested dicts where it is structural.
-
-        A subsignature is flat text, so a nested block arrives as one long string --
-        which is why a diff of two nearly-identical trees used to come back as
-        a pair of multi-kilobyte blobs. Here each value is expanded when it is
-        a dict literal or a nested subsignature (possibly wrapped in one layer of
-        quoting, since a child subsignature is stored as a string VALUE in the parent's
-        spec dict), and left exactly as-is when it is a leaf.
-
-        Anything that does not parse into at least one key stays a leaf, so a
-        tuple like ``'(0.75, 1.5)'`` -- which is parenthesised but has no
-        ``k=v`` pairs -- is not mistaken for a block.
-        """
+    def _structure_signatureval(cls, value):
         if not isinstance(value, str):
             return value
         text = value.strip()
         inner = cls._unquote_str(text)
         if inner is not None:
-            structured = cls._structure_subsignatureval(inner)
+            structured = cls._structure_signatureval(inner)
             if isinstance(structured, dict):
                 return structured
             return value
         if text.startswith('{') and text.endswith('}'):
             parsed = cls._parse_dictstr(text)
             if parsed:
-                return {k: cls._structure_subsignatureval(v) for k, v in parsed.items()}
+                return {k: cls._structure_signatureval(v) for k, v in parsed.items()}
             return value
-        if cls._is_subsignaturestr(text):
-            parsed = Datablock._parse_subsignature(text)
+        if cls._is_signaturestr(text):
+            parsed = Datablock._parse_signature(text)
             if parsed:
-                return {k: cls._structure_subsignatureval(v) for k, v in parsed.items()}
+                return {k: cls._structure_signatureval(v) for k, v in parsed.items()}
         return value
+
+    @classmethod
+    def _structure_subsignatureval(cls, value):
+        return cls._structure_signatureval(value)
 
     @staticmethod
     def _parse_norm(*args, **kwargs):
-        """Alias for :meth:`_parse_subsignature` for backwards compatibility."""
-        return Datablock._parse_subsignature(*args, **kwargs)
+        return Datablock._parse_signature(*args, **kwargs)
 
     @staticmethod
     def _is_normstr(*args, **kwargs):
-        """Alias for :meth:`_is_subsignaturestr` for backwards compatibility."""
-        return Datablock._is_subsignaturestr(*args, **kwargs)
+        return Datablock._is_signaturestr(*args, **kwargs)
 
     @classmethod
     def _structure_normval(cls, *args, **kwargs):
-        """Alias for :meth:`_structure_subsignatureval` for backwards compatibility."""
-        return cls._structure_subsignatureval(*args, **kwargs)
-
+        return cls._structure_signatureval(*args, **kwargs)
 
     def _journal_entry(self, journal: dict) -> 'DatajournalEntry':
-        """Select a single :class:`DatajournalEntry` from a *journal* selector dict.
-
-        Exactly one of the keys ``entry_path``, ``iloc``, or ``loc`` must be
-        present:
-
-        - ``entry_path`` : path to a journal ``.parquet`` file (as stored in
-          ``Datajournal.entry_path``); the entry is read directly from it.
-        - ``iloc`` / ``loc`` : positional/label selector forwarded to
-          :meth:`journal`.
-
-        Any OTHER key is forwarded to :meth:`journal` as a column filter, so
-        ``dict(event='build:end', iloc=0)`` means "the first ``build:end``
-        entry" -- these used to be dropped silently, which made that selector
-        return the newest entry of ANY event instead.
-        """
         selectors = {k: journal[k] for k in ('entry_path', 'iloc', 'loc') if k in journal}
         filters = {k: v for k, v in journal.items() if k not in selectors}
         if len(selectors) != 1:
@@ -3619,9 +3476,9 @@ class Datablock:
             return DatajournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
         return self.journal(**{key: value}, **filters)
 
-    def diffsubsignature(
+    def diffsignature(
         self,
-        other_subsignature: 'Datablock | DatajournalEntry | str | None' = ABSENT,
+        other_signature: 'Datablock | DatajournalEntry | str | None' = ABSENT,
         *,
         journal: 'Datajournal | DatajournalEntry | dict | str | int | None' = None,
         raw: bool = False,
@@ -3631,12 +3488,14 @@ class Datablock:
         report: bool = False,
         maxlen: 'int | None' = 160,
     ) -> 'dict | str':
-        """Diff this datablock's subsignature against another subsignature, key by key.
-
-        Uses ``self.subsignature()`` as the reference (self) side.
-        """
-        if other_subsignature is None and other_subsignature is not None:
-            other_subsignature = other_subsignature
+        """Diff this datablock's signature against another signature, key by key."""
+        if isinstance(other_signature, Datablock):
+            other_signature = other_signature.signature(legacy=legacy)
+        elif isinstance(other_signature, DatajournalEntry):
+            other_signature = other_signature.read('signature') or other_signature.read('subsignature') or other_signature.read('norm') or ''
+        elif (other_signature is None or other_signature is ABSENT) and journal is not None:
+            _entry = self._journal_entry(journal)
+            other_signature = _entry.read('signature') or _entry.read('subsignature') or _entry.read('norm') or ''
 
         def present(value):
             if value is ABSENT:
@@ -3669,17 +3528,8 @@ class Datablock:
                         diff[key] = (one, two)
             return diff
 
-        if isinstance(other_subsignature, Datablock):
-            other_subsignature = other_subsignature.subsignature(legacy=legacy)
-        elif isinstance(other_subsignature, DatajournalEntry):
-            other_subsignature = other_subsignature.read('subsignature') or other_subsignature.read('norm') or ''
-        elif (other_subsignature is None or other_subsignature is ABSENT) and journal is not None:
-            _entry = self._journal_entry(journal)
-            other_subsignature = _entry.read('subsignature') or _entry.read('norm') or ''
-
-
-        parsed_self  = Datablock._parse_subsignature(self.subsignature(legacy=legacy))
-        parsed_other = Datablock._parse_subsignature(other_subsignature or '')
+        parsed_self  = Datablock._parse_signature(self.signature(legacy=legacy))
+        parsed_other = Datablock._parse_signature(other_signature or '')
 
         def _normalize_subsig_dict(d):
             if 'spec' not in d and d:
@@ -3702,52 +3552,80 @@ class Datablock:
             parsed_self = _normalize_subsig_dict(parsed_self)
 
         if recursive:
-            parsed_self = {k: self._structure_subsignatureval(v) for k, v in parsed_self.items()}
-            parsed_other = {k: self._structure_subsignatureval(v) for k, v in parsed_other.items()}
+            parsed_self = {k: self._structure_signatureval(v) for k, v in parsed_self.items()}
+            parsed_other = {k: self._structure_signatureval(v) for k, v in parsed_other.items()}
         diff = diffdict(parsed_self, parsed_other)
         if not report:
             return diff
         return self.format_diff(diff, maxlen=maxlen)
 
+    def diffsubsignature(self, *args, **kwargs):
+        return self.diffsignature(*args, **kwargs)
+
+    def diffsig(self, *args, **kwargs):
+        """Alias for :meth:`diffsignature`."""
+        return self.diffsignature(*args, **kwargs)
+
     def diffsubsig(self, *args, **kwargs):
-        """Alias for :meth:`diffsubsignature`."""
-        return self.diffsubsignature(*args, **kwargs)
+        return self.diffsignature(*args, **kwargs)
 
     def diffnorm(self, *args, **kwargs):
-        """Alias for :meth:`diffsubsignature` for backwards compatibility."""
-        return self.diffsubsignature(*args, **kwargs)
+        return self.diffsignature(*args, **kwargs)
 
+    def signaturedict(self, *, legacy: 'bool | None' = None) -> dict:
+        """Return the signature parsed and structured into a nested dict."""
+        parsed = Datablock._parse_signature(self.signature(legacy=legacy))
+        return {k: self._structure_signatureval(v) for k, v in parsed.items()}
+
+    def sigdict(self, *, legacy: 'bool | None' = None) -> dict:
+        return self.signaturedict(legacy=legacy)
 
     def subsignaturedict(self, *, legacy: 'bool | None' = None) -> dict:
-        """Return the subsignature parsed and structured into a nested dict."""
-        parsed = Datablock._parse_subsignature(self.subsignature(legacy=legacy))
-        return {k: self._structure_subsignatureval(v) for k, v in parsed.items()}
+        return self.signaturedict(legacy=legacy)
 
     def subsigdict(self, *, legacy: 'bool | None' = None) -> dict:
-        """Alias for :meth:`subsignaturedict`."""
-        return self.subsignaturedict(legacy=legacy)
+        return self.signaturedict(legacy=legacy)
 
     def normdict(self, *args, **kwargs):
-        """Alias for :meth:`subsignaturedict` for backwards compatibility."""
-        return self.subsignaturedict(*args, **kwargs)
+        return self.signaturedict(*args, **kwargs)
 
+    def sig(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
+        """Alias for :meth:`signature` (defaults to pretty=True)."""
+        return self.signature(deslash=deslash, legacy=legacy, pretty=pretty)
 
     def subsig(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
-        """Alias for :meth:`subsignature` (defaults to pretty=True)."""
-        return self.subsignature(deslash=deslash, legacy=legacy, pretty=pretty)
+        return self.signature(deslash=deslash, legacy=legacy, pretty=pretty)
 
-    def signaturedict(self, *, deslash: bool = False) -> dict:
-        """Return the full signature structured as a dictionary."""
+    def typedict(self, *, deslash: bool = False) -> dict:
+        """Return the full type structured as a dictionary."""
         return {
-            'subsignature': self.subsignaturedict(),
+            'signature': self.signaturedict(),
             'version': self.version,
             'paths': getattr(self, '_paths_', None),
             'topics': self.signature_topics(),
         }
 
-    def sig(self, *, deslash: bool = False, pretty: bool = True):
-        """Alias for :meth:`signature` (defaults to pretty=True)."""
-        return self.signature(deslash=deslash, pretty=pretty)
+    def tpdict(self, *, deslash: bool = False) -> dict:
+        return self.typedict(deslash=deslash)
+
+    def tp(self, *, deslash: bool = False, pretty: bool = True):
+        """Alias for :meth:`type` (defaults to pretty=True)."""
+        return self.type(deslash=deslash, pretty=pretty)
+
+    def type(self, *, deslash: bool = False, pretty: bool = False):
+        """Return the full type representation (signature + paths + version + topics)."""
+        if pretty:
+            import pprint
+            return pprint.pformat(self.typedict(deslash=deslash), indent=2, width=120)
+        parts = [self.signature(deslash=deslash)]
+        if getattr(self, '_paths_', None) is not None:
+            parts.append(f"_paths_={getattr(self, '_paths_', None)}")
+        parts.append(f"version={self.version}")
+        parts.extend(self.signature_topics())
+        tp = os.path.join(*parts)
+        if deslash:
+            tp = tp.replace('\\', '')
+        return tp
 
     Diff = collections.namedtuple('Diff', ['subsig', 'topics', 'version'])
 
@@ -4060,19 +3938,19 @@ class Datablock:
             return tuple(f"topic:{topic}" for topic in self.TOPICS)
         return ("topics:None",)
 
-    def signature(self, *, deslash: bool = False, pretty: bool = False):
+    def type(self, *, deslash: bool = False, pretty: bool = False):
         if pretty:
             import pprint
-            return pprint.pformat(self.signaturedict(deslash=deslash), indent=2, width=120)
-        parts = [self.subsignature(deslash=deslash)]
+            return pprint.pformat(self.typedict(deslash=deslash), indent=2, width=120)
+        parts = [self.signature(deslash=deslash)]
         if getattr(self, '_paths_', None) is not None:
             parts.append(f"_paths_={getattr(self, '_paths_', None)}")
         parts.append(f"version={self.version}")
         parts.extend(self.signature_topics())
-        sig = os.path.join(*parts)
+        tp = os.path.join(*parts)
         if deslash:
-            sig = sig.replace('\\', '')
-        return sig
+            tp = tp.replace('\\', '')
+        return tp
 
     @property
     def hash(self): 
@@ -4083,24 +3961,30 @@ class Datablock:
                 self._hash = self._hash_
             else:
                 sha = hashlib.sha256()
-                sig = self.signature()
-                sha.update(sig.encode())
+                tp = self.type()
+                sha.update(tp.encode())
                 self._hash = sha.hexdigest()
-                self.log.detailed(f"hash: ---------===---------> {sig=} ---> hash: {self._hash}")
+                self.log.detailed(f"hash: ---------===---------> {tp=} ---> hash: {self._hash}")
         return self._hash
 
     @property
-    def subhash(self):
-        if not hasattr(self, '_subhash'): 
-            if getattr(self, '_subhash_', None) is not None:
-                self._subhash = self._subhash_
+    def code(self):
+        if not hasattr(self, '_code'): 
+            if getattr(self, '_code_', None) is not None:
+                self._code = self._code_
+            elif getattr(self, '_subhash_', None) is not None:
+                self._code = self._subhash_
             else:
                 sha = hashlib.sha256()
-                subsig = self.subsignature()
-                sha.update(subsig.encode())
-                self._subhash = sha.hexdigest()
-                self.log.detailed(f"subhash: ---------===---------> {subsig=} ---> subhash: {self._subhash}")
-        return self._subhash
+                sig = self.signature()
+                sha.update(sig.encode())
+                self._code = sha.hexdigest()
+                self.log.detailed(f"code: ---------===---------> {sig=} ---> code: {self._code}")
+        return self._code
+
+    @property
+    def subhash(self):
+        return self.code
 
     ### anchorage: begin
     @property
@@ -4120,10 +4004,10 @@ class Datablock:
             key = None
         elif self.keyby == 'hash':
             key = self.hash
-        elif self.keyby in ('subhash', 'superhash'):
-            key = self.subhash
-        elif self.keyby in ('norm', 'subsignature'):
-            key = self.subsignature()
+        elif self.keyby in ('code', 'subhash', 'superhash'):
+            key = self.code
+        elif self.keyby in ('signature', 'norm', 'subsignature'):
+            key = self.signature()
 
         elif self.keyby == 'tag':
             key = self.tag
@@ -4590,8 +4474,8 @@ class Datablock:
         self._write_str('quote', self.quote())
         self._write_str('cite', self.cite())
         self._write_str('repr', self.__repr__())
-        self._write_str('subsignature', self.subsignature())
         self._write_str('signature', self.signature())
+        self._write_str('type', self.type())
         if note is not None and not inline_note:
             self._write_str('note', note)
 
@@ -4600,9 +4484,9 @@ class Datablock:
         kwargs_path = self._dbxanchorhashpathx('kwargs', 'yaml')
         quote_path = self._dbxanchorhashpathx('quote', 'txt')
         cite_path = self._dbxanchorhashpathx('cite', 'txt')
-        subsignature_path = self._dbxanchorhashpathx('subsignature', 'txt')
-        repr_path = self._dbxanchorhashpathx('repr', 'txt')
         signature_path = self._dbxanchorhashpathx('signature', 'txt')
+        repr_path = self._dbxanchorhashpathx('repr', 'txt')
+        type_path = self._dbxanchorhashpathx('type', 'txt')
         if note is not None and not inline_note:
             note_path = self._dbxanchorhashpathx('note', 'txt')
             note_val = note_path
@@ -4616,8 +4500,6 @@ class Datablock:
             has_log = False
         #
         _TOPICS = getattr(self, 'TOPICS', None)
-        # Records the full declared shape: a group's value is its own mapping,
-        # so the entry can be walked the same way the live block is.
         topics_dict = ({name: copy.deepcopy(node) for name, node in _TOPICS.items()}
                        if isinstance(_TOPICS, dict)
                        else {topic: DIRTOPIC for topic in self.topics()})
@@ -4633,12 +4515,13 @@ class Datablock:
                                          'url': self._url_,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
-                                         'subhash': self.subhash,
+                                         'code': self.code,
+                                         'subhash': self.code,
                                          'keyby': self.keyby,
                                          'key': self.key,
                                          'anchorkeypath': self.anchorkeypath,
                                          'uuid': self.uuid,
-                                         'code': code,
+                                         'id': entry_code,
                                          'entry_code': entry_code,
                                          'tag': self.tag,
                                          'topics': str(topics_dict),
@@ -4651,9 +4534,10 @@ class Datablock:
                                          'kwargs': kwargs_path,
                                          'quote': quote_path,
                                          'cite': cite_path,
-                                         'subsignature': subsignature_path,
-                                         'repr': repr_path,
                                          'signature': signature_path,
+                                         'subsignature': signature_path,
+                                         'repr': repr_path,
+                                         'type': type_path,
                                          'note': note_val,
                                          'gitrepo': dataparts.DBX_GIT_REPO,
                                          'wrkrepo': dataparts.DBX_USE_WORK_REPO,

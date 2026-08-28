@@ -158,8 +158,8 @@ class TestTopicsFromSlices:
         assert 'letters' not in LetterTable.TOPICS
 
     def test_slices_are_in_the_signature(self, table):
-        assert 'topic:numbers=SLICETOPIC' in table.signature()
-        assert 'topic:letters=SLICETOPIC' in table.signature()
+        assert 'topic:numbers=SLICETOPIC' in table.type()
+        assert 'topic:letters=SLICETOPIC' in table.type()
 
     def test_renaming_a_slice_rekeys_the_table(self, tmp_path):
         class GlyphTab(LetterTab):
@@ -697,7 +697,7 @@ class TestExtraTopics:
 
     def test_extra_topics_are_in_the_signature(self, tmp_path):
         tab = self._table(tmp_path).tab(0)
-        assert 'topic:debug/log=run.log' in tab.signature()
+        assert 'topic:debug/log=run.log' in tab.type()
         assert ('debug', 'log') in tab.leaftopics()
 
     def test_extra_topics_count_towards_validity(self, tmp_path):

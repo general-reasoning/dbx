@@ -24,26 +24,27 @@ class SampleBlock(Datablock):
             f.write('hello')
 
 
-def test_subsignature_and_norm_alias(tmp_path):
+def test_signature_and_norm_alias(tmp_path):
     block = SampleBlock(url=str(tmp_path))
-    assert block.subsignature() == block.norm()
-    assert "(spec={'param': 'value'})" in block.subsignature()
+    assert block.signature() == block.norm()
+    assert "(spec={'param': 'value'})" in block.signature()
 
 
 def test_signature_and_hashes(tmp_path):
     block = SampleBlock(url=str(tmp_path))
-    subsig = block.subsignature()
     sig = block.signature()
+    tp = block.type()
 
-    assert subsig in sig
-    assert f"version={block.version}" in sig
-    assert "topic:output=output.txt" in sig
+    assert sig in tp
+    assert f"version={block.version}" in tp
+    assert "topic:output=output.txt" in tp
 
-    expected_hash = hashlib.sha256(sig.encode()).hexdigest()
-    expected_subhash = hashlib.sha256(subsig.encode()).hexdigest()
+    expected_hash = hashlib.sha256(tp.encode()).hexdigest()
+    expected_code = hashlib.sha256(sig.encode()).hexdigest()
 
     assert block.hash == expected_hash
-    assert block.subhash == expected_subhash
+    assert block.code == expected_code
+    assert block.subhash == expected_code
 
 
 def test_super_properties_removed(tmp_path):
@@ -51,23 +52,7 @@ def test_super_properties_removed(tmp_path):
     assert not hasattr(block, 'superhash')
     assert not hasattr(block, 'supernorm')
     assert not hasattr(block, 'supersignature')
-
-
-def test_bid_fields(tmp_path):
-    block = SampleBlock(url=str(tmp_path))
-    bid = block.bid
-    fields = bid.fields()
-
-    assert 'subsignature' in fields
-    assert 'subhash' in fields
-    assert 'hash' in fields
-    assert 'superhash' not in fields
-    assert 'supernorm' not in fields
-    assert 'supersignature' not in fields
-
-    assert bid.subsignature == block.subsignature(deslash=True)
-    assert bid.subhash == block.subhash
-    assert bid.hash == block.hash
+    assert not hasattr(block, 'bid')
 
 
 def test_journal_writing_and_indexing(tmp_path):
@@ -77,8 +62,8 @@ def test_journal_writing_and_indexing(tmp_path):
     # Test standard journal call without index
     j_default = block.journal()
     assert isinstance(j_default, Datajournal)
-    assert 'subhash' in j_default.columns
-    assert 'subsignature' in j_default.columns
+    assert 'code' in j_default.columns
+    assert 'signature' in j_default.columns
     assert 'superhash' not in j_default.columns
 
     # Test journal with index='hash'
@@ -86,10 +71,10 @@ def test_journal_writing_and_indexing(tmp_path):
     assert j_indexed_hash.index.name == 'hash'
     assert block.hash in j_indexed_hash.index
 
-    # Test standalone journal function with index='subhash'
-    j_indexed_subhash = journal(SampleBlock, url=str(tmp_path), index='subhash')
-    assert j_indexed_subhash.index.name == 'subhash'
-    assert block.subhash in j_indexed_subhash.index
+    # Test standalone journal function with index='code'
+    j_indexed_code = journal(SampleBlock, url=str(tmp_path), index='code')
+    assert j_indexed_code.index.name == 'code'
+    assert block.code in j_indexed_code.index
 
 
 def test_invalid_index_raises_keyerror(tmp_path):

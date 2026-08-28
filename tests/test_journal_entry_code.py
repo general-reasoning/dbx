@@ -138,7 +138,7 @@ class TestLegacyJournals:
         b = block(tmp_path)
         b.write_journal_entry(event='note')
         entry = b.journal(loc=0)
-        assert DatajournalEntry(entry.drop('entry_code')).entry_code is None
+        assert DatajournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).entry_code is None
 
 
 class TestUuid16:

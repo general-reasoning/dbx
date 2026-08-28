@@ -257,30 +257,6 @@ class TestCiteChunks:
 # cite() as a recorded field: Bid, the journal, and DatajournalEntry
 # =====================================================================
 
-class TestCiteInBid:
-
-    def test_bid_has_a_cite_field(self, nested):
-        assert 'cite' in nested.bid.fields()
-
-    def test_bid_cite_matches_the_method(self, nested):
-        assert nested.bid.cite == nested.cite()
-
-    def test_bid_cite_is_the_readable_form_not_the_evaluable_one(self, nested):
-        """Regression guard: `cite=` must not be wired to quote().
-
-        They are easy to confuse and the failure is silent -- a Bid carrying
-        quote() under the `cite` name still looks like a plausible string.
-        """
-        bid = nested.bid
-        assert bid.cite != bid.quote
-        assert '\n' in bid.cite          # cite is pretty by default
-        assert '\n' not in bid.quote     # quote is not
-
-    def test_bid_to_dict_and_deslash_cover_cite(self, nested):
-        assert 'cite' in nested.bid.to_dict()
-        assert nested.bid.deslash('cite') == nested.cite().replace('\\', '')
-
-
 class Solo(Datablock):
     """Actually writes its topic, so build() gets past the validity check."""
     TOPICS = {'output': 'output.txt'}
@@ -307,9 +283,6 @@ class TestCiteInJournal:
         assert entry.cite is not None, "journal has no cite column"
         assert '-cite-' in entry.cite and entry.cite.endswith('.txt')
         assert entry.read('cite') == built.cite()
-
-    def test_journal_entry_bid_carries_cite(self, built):
-        assert built.journal(iloc=-1).bid.cite == built.cite()
 
     def test_cite_is_absent_not_fatal_on_an_older_journal(self):
         """Journals written before `cite` existed have no such column.

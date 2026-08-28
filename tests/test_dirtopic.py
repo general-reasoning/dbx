@@ -83,7 +83,7 @@ class TestDIRTOPICDoesNotChangeIdentity:
 
     def test_dir_topic_renders_as_none_in_the_signature(self, tmp_path):
         """The recorded form is still `topic:name=None`, not `topic:name=DIRTOPIC`."""
-        assert 'topic:checkpoints=None' in WithDIR(url=str(tmp_path)).signature()
+        assert 'topic:checkpoints=None' in WithDIR(url=str(tmp_path)).type()
 
 
 class TestDIRTOPICInTheJournal:

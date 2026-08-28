@@ -536,7 +536,7 @@ def eval(name):
             out.append(''.join(buf))
         return out
 
-    def get_named_args_kwargs(argkwargstr, cxt=None):
+    def get_named_args_kwargs(argkwargstr, cxt=None, *, func_is_datablock_ctor: bool = False):
         args = []
         kwargs = {}
         if cxt is None:
@@ -562,7 +562,29 @@ def eval(name):
                         elif val.startswith("dbx."):
                             val = __eval__(val, cxt)
                     elif isinstance(val, (dict, list, tuple)):
-                        val = eval(val)
+                        # Don't recursively eval spec dicts -- their string values
+                        # are speclines that Datablocks store and evaluate lazily.
+                        # Evaluating them here would expand e.g.
+                        # "$os.path.join(...)" -> "/mnt/labshare/..." and bake
+                        # the absolute path into self.spec, making subsignature()
+                        # emit the concrete path rather than the portable specline.
+                        from .datablocks import Datablock
+                        if func_is_datablock_ctor and k == 'spec':
+                            if not isinstance(val, dict):
+                                raise TypeError(f"spec must be a dict, got {type(val).__name__}")
+                            _val = {}
+                            """
+                                In a spec, evaluate only the Datablock args, the rest should remain unevaluated/unexpanded.
+                            """
+                            for _k, _v in val.items():
+                                _value = eval(_v)
+                                if isinstance(_value, Datablock):
+                                    _val[_k] = _value
+                                else:
+                                    _val[_k] = _v
+                            val = _val
+                        else:
+                            val = eval(val)
                     kwargs[k] = val
                 else:
                     try:
@@ -606,8 +628,10 @@ def eval(name):
             else:
                 func, cxt = get_named_const_and_cxt(funcstr)
                 cxt['dbx'] = sys.modules['dbx']
+                from .datablocks import Datablock
+                func_is_datablock_ctor = isinstance(func, type) and issubclass(func, Datablock)
                 if argkwargstr is not None:
-                    args, kwargs = get_named_args_kwargs(argkwargstr, cxt=cxt)
+                    args, kwargs = get_named_args_kwargs(argkwargstr, cxt=cxt, func_is_datablock_ctor=func_is_datablock_ctor)
                     term = func(*args, **kwargs)
                 else:
                     term = __eval__(_name_, cxt)

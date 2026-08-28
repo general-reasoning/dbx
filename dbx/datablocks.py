@@ -5112,7 +5112,7 @@ class Datastack(Datablock):
         tag = f"REDIRECTING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={nw}]"
         executor = callable_executor(par, n_workers=nw, tag=tag)
 
-        callables = [functools.partial(_UNSAFE_redirect_block_callable, blk, redirect) for blk in block_list]
+        callables = [functools.partial(_UNSAFE_redirect_block_callable, redirect, blk, idx) for idx, blk in enumerate(block_list)]
         executor.exec_callables(callables)
 
         self.log.info(f"UNSAFE_redirect_blocks complete: {self.__class__.__name__}")
@@ -5120,8 +5120,8 @@ class Datastack(Datablock):
         return self
 
 
-def _UNSAFE_redirect_block_callable(block, redirect_func):
-    target = redirect_func(block)
+def _UNSAFE_redirect_block_callable(redirect_func, block, idx):
+    target = redirect_func(block, idx)
     if target is not None:
         if isinstance(target, dict):
             block.UNSAFE_redirect(redirect=target, OVERRIDE=True)

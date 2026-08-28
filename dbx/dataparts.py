@@ -509,6 +509,15 @@ def eval(name):
     Python expressions in a context that includes imported modules.
     Iterables are evaluated element-wise.  Plain strings and other
     objects are returned as-is.
+    However, 
+        - We do not recursively eval Datablock ctor args/kwargs -- their string values
+            are speclines that Datablocks store and evaluate lazily, 
+            which preserves the Datablock's signature even after a trip through .quote().
+        - Evaluating them here would expand e.g.
+            "$os.path.join(...)" -> "/mnt/path/to/..." and bake
+            the absolute path into self.spec, making subsignature() emit
+            the concrete path rather than the portable specline, breaking
+            signature() alignment.
     """
     def split_top_level_items(inner: str, sep: str = ','):
         out, buf, depth, quote, esc = [], [], 0, None, False
@@ -549,55 +558,54 @@ def eval(name):
                 if not bit:
                     continue
                 kwparts = split_top_level_items(bit, sep='=')
+                
                 if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
                     k, v = kwparts[0].strip(), kwparts[1].strip()
-                    try:
-                        val = ast.literal_eval(v)
-                    except (NameError, SyntaxError, ValueError):
+                    if func_is_datablock_ctor:
                         val = v
-                    if isinstance(val, str):
-                        if val.startswith("$") or val.startswith("@") or val.startswith("#"):
-                            if k not in ('url', 'local'):
+                    else:
+                        try:
+                            val = ast.literal_eval(v)
+                        except (NameError, SyntaxError, ValueError):
+                            val = v
+                        if isinstance(val, str):
+                            if val.startswith("$") or val.startswith("@") or val.startswith("#"):
                                 val = eval(val)
-                        elif val.startswith("dbx."):
-                            val = __eval__(val, cxt)
-                    elif isinstance(val, (dict, list, tuple)):
-                        # Don't recursively eval spec dicts -- their string values
-                        # are speclines that Datablocks store and evaluate lazily.
-                        # Evaluating them here would expand e.g.
-                        # "$os.path.join(...)" -> "/mnt/labshare/..." and bake
-                        # the absolute path into self.spec, making subsignature()
-                        # emit the concrete path rather than the portable specline.
-                        from .datablocks import Datablock
-                        if func_is_datablock_ctor and k == 'spec':
-                            if not isinstance(val, dict):
-                                raise TypeError(f"spec must be a dict, got {type(val).__name__}")
-                            _val = {}
-                            """
-                                In a spec, evaluate only the Datablock args, the rest should remain unevaluated/unexpanded.
-                            """
-                            for _k, _v in val.items():
-                                _value = eval(_v)
-                                if isinstance(_value, Datablock):
-                                    _val[_k] = _value
-                                else:
-                                    _val[_k] = _v
-                            val = _val
-                        else:
-                            val = eval(val)
+                            elif val.startswith("dbx."):
+                                val = __eval__(val, cxt)
+                        elif isinstance(val, (dict, list, tuple)):
+                            if func_is_datablock_ctor and k == 'spec':
+                                if not isinstance(val, dict):
+                                    raise TypeError(f"spec must be a dict, got {type(val).__name__}")
+                                _val = {}
+                                """
+                                    In a spec, evaluate only the Datablock args, the rest should remain unevaluated/unexpanded.
+                                """
+                                for _k, _v in val.items():
+                                    _value = eval(_v)
+                                    if isinstance(_value, Datablock):
+                                        _val[_k] = _value
+                                    else:
+                                        _val[_k] = _v
+                                val = _val
+                            else:
+                                val = eval(val)
                     kwargs[k] = val
                 else:
-                    try:
-                        arg = ast.literal_eval(bit)
-                    except (NameError, SyntaxError, ValueError):
+                    if func_is_datablock_ctor:
                         arg = bit
-                    if isinstance(arg, str):
-                        if arg.startswith("$") or arg.startswith("@") or arg.startswith("#"):
+                    else:
+                        try:
+                            arg = ast.literal_eval(bit)
+                        except (NameError, SyntaxError, ValueError):
+                            arg = bit
+                        if isinstance(arg, str):
+                            if arg.startswith("$") or arg.startswith("@") or arg.startswith("#"):
+                                arg = eval(arg)
+                            elif arg.startswith("dbx."):
+                                arg = __eval__(arg, cxt)
+                        elif isinstance(arg, (dict, list, tuple)):
                             arg = eval(arg)
-                        elif arg.startswith("dbx."):
-                            arg = __eval__(arg, cxt)
-                    elif isinstance(arg, (dict, list, tuple)):
-                        arg = eval(arg)
                     args.append(arg)
         return args, kwargs
 

@@ -412,6 +412,31 @@ def test_datafeature_table_streaming(tmp_path):
     assert np.squeeze(feat_data["features"]["final"]).shape == (10, 8)
 
 
+def test_datapoint_table_tab_signature_commutativity(tmp_path):
+    """Verify commutativity between table.var.datapoint_table.tab(idx).signature() and table.tab(idx).var.datapoint_tab.signature()."""
+    url = str(tmp_path)
+    sampletable = DummySampleTable(
+        url=url,
+        spec=dict(samples_per_tab=5),
+        tag="sample_table",
+    )
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
+    featuretable = DatafeatureTable(
+        url=url,
+        spec=dict(
+            datapoint_table=sampletable,
+            evaluator_factory=eval_factory,
+            collator=sample_collator(),
+        ),
+        devices=["cpu"],
+        tag="feature_table",
+    )
+
+    sig_via_table = featuretable.var.datapoint_table.tab(0).signature()
+    sig_via_tab = featuretable.tab(0).var.datapoint_tab.signature()
+    assert sig_via_table == sig_via_tab
+
+
 if __name__ == "__main__":
     import sys
     dbx.dataparts.gitwrkreposetup = lambda *a, **k: None

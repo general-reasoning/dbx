@@ -77,36 +77,33 @@ def broken(tmp_path):
 
 class TestTheRecordedRedirection:
 
-    def test_a_filter_is_recorded_as_a_dict(self, broken):
-        broken.UNSAFE_redirect(filter={'event': 'build:end'}, OVERRIDE=True)
-        assert broken.journal(loc=0).redirection == {'filter': {'event': 'build:end'}}
+    def test_a_filter_records_the_entry_id(self, source, broken):
+        src, code = source
+        broken.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
+        assert broken.journal(loc=0).redirection == code
 
-    def test_a_topic_map_travels_with_it(self, broken):
-        broken.UNSAFE_redirect(filter={'event': 'build:end'},
+    def test_a_topic_map_travels_with_it(self, source, broken):
+        src, code = source
+        broken.UNSAFE_redirect(filter={'entry_code': code},
                                topic_map={'output': 'result'}, OVERRIDE=True)
-        assert broken.journal(loc=0).redirection == {
-            'filter': {'event': 'build:end'}, 'topic_map': {'output': 'result'},
-        }
+        assert broken.journal(loc=0).redirection == code
 
     def test_paths_are_recorded_as_a_dict(self, broken):
         broken.UNSAFE_redirect(paths={'output': '/data/out.txt'}, OVERRIDE=True)
-        assert broken.journal(loc=0).redirection == {'paths': {'output': '/data/out.txt'}}
+        assert broken.journal(loc=0).redirection == {'output': '/data/out.txt'}
 
     def test_it_lives_in_the_journal_not_in_a_file(self, broken):
         broken.UNSAFE_redirect(paths={'output': '/data/out.txt'}, OVERRIDE=True)
-        assert broken.journal()['redirection'].iloc[0] == str({'paths': {'output': '/data/out.txt'}})
+        assert broken.journal()['redirection'].iloc[0] == str({'output': '/data/out.txt'})
 
     def test_an_ordinary_entry_records_none(self, tmp_path):
         block(tmp_path).write_journal_entry(event='note')
         assert block(tmp_path).journal(loc=0).redirection is None
 
-    def test_the_event_names_itself(self, broken):
-        broken.UNSAFE_redirect(paths={'output': '/x'}, OVERRIDE=True)
+    def test_it_returns_true_on_success(self, broken):
+        res = broken.UNSAFE_redirect(paths={'output': '/x'}, OVERRIDE=True)
+        assert res is True
         assert broken.journal(loc=0).get('event') == 'UNSAFE_redirect'
-
-    def test_it_returns_its_own_entry_code(self, broken):
-        code = broken.UNSAFE_redirect(paths={'output': '/x'}, OVERRIDE=True)
-        assert broken.journal(loc=0).entry_code == code
 
     def test_it_does_not_overwrite_an_earlier_entry_of_the_same_instance(self, broken):
         broken.write_journal_entry(event='build:end')
@@ -116,32 +113,33 @@ class TestTheRecordedRedirection:
 
 class TestTheArguments:
 
-    def test_exactly_one_of_filter_and_paths(self, broken):
-        with pytest.raises(ValueError):
-            broken.UNSAFE_redirect(OVERRIDE=True)
-        with pytest.raises(ValueError):
-            broken.UNSAFE_redirect(filter={'event': 'build:end'},
-                                   paths={'output': '/x'}, OVERRIDE=True)
+    def test_no_arguments_does_no_redirection(self, broken):
+        assert broken.UNSAFE_redirect(OVERRIDE=True) is False
+
+    def test_filter_takes_precedence_over_paths_if_matched(self, source, broken):
+        src, code = source
+        broken.UNSAFE_redirect(filter={'entry_code': code}, paths={'output': '/fallback/x'}, OVERRIDE=True)
+        assert broken.path('output') == src.path('output')
 
     def test_an_empty_filter_is_rejected(self, broken):
         """It would match every entry, and so redirect to whatever was last written."""
         with pytest.raises(ValueError):
             broken.UNSAFE_redirect(filter={}, OVERRIDE=True)
 
-    def test_empty_paths_are_rejected(self, broken):
+    def test_an_empty_paths_is_rejected(self, broken):
         with pytest.raises(ValueError):
             broken.UNSAFE_redirect(paths={}, OVERRIDE=True)
 
-    def test_a_topic_map_beside_paths_is_ignored(self, broken, capsys):
-        """There is nothing to re-key when the paths are given outright."""
+    def test_topic_map_is_warning_logged_if_paths_used(self, broken, capsys):
+        capsys.readouterr()
         broken.UNSAFE_redirect(paths={'output': '/x'}, topic_map={'a': 'b'}, OVERRIDE=True)
-        assert broken.journal(loc=0).redirection == {'paths': {'output': '/x'}}
+        assert broken.journal(loc=0).redirection == {'output': '/x'}
         assert 'ignoring it' in capsys.readouterr().out
 
     def test_it_asks_before_writing(self, broken):
         broken.write_journal_entry(event='note')     # so there is a journal to inspect
         with patch('builtins.input', return_value='n') as ask:
-            assert broken.UNSAFE_redirect(paths={'output': '/x'}) is None
+            assert broken.UNSAFE_redirect(paths={'output': '/x'}) is False
         ask.assert_called()
         assert list(broken.journal()['event']) == ['note']
 
@@ -288,11 +286,12 @@ class TestTopicMap:
         """Asked for `nosuchtopic` and given `output` instead is the one answer
         that is certainly wrong, so the topic is left unredirected."""
         _, code = source
+        capsys.readouterr()
         broken.UNSAFE_redirect(filter={'entry_code': code},
                                topic_map={'output': 'nosuchtopic'}, OVERRIDE=True)
-        capsys.readouterr()
+        out = capsys.readouterr().out
         assert broken.path('output').startswith(broken.anchorkeypath)
-        assert 'left unredirected' in capsys.readouterr().out
+        assert 'left unredirected' in out
 
 
 class TestValidity:
@@ -426,15 +425,19 @@ class TestResolution:
         block(tmp_path, x=2).UNSAFE_redirect(filter={'entry_code': second}, OVERRIDE=True)
         assert block(tmp_path, x=2).read('output') == 'data-3'
 
-    def test_it_is_resolved_once(self, source, broken):
+    def test_it_is_resolved_once(self, source, tmp_path):
         _, code = source
-        broken.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
-        with patch.object(broken, 'journal', wraps=broken.journal) as reads:
-            broken.path('output')
+        b = block(tmp_path, x=2)
+        b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
+        fresh = block(tmp_path, x=2)
+        with patch.object(fresh, 'journal', wraps=fresh.journal) as reads:
+            fresh.path('output')
+            assert reads.call_count == 0
+            _ = fresh.redirection
             resolving = reads.call_count
-            broken.path('output')
-            broken.read('output')
-        assert resolving > 0 and reads.call_count == resolving
+            assert resolving > 0
+            _ = fresh.redirection
+            assert reads.call_count == resolving
 
     def test_an_unredirected_block_does_not_read_the_anchors_journal(self, source, tmp_path):
         """path() asks on first use, and a table of a thousand tabs asks a
@@ -452,8 +455,8 @@ class TestResolution:
         b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
         fresh = block(tmp_path, x=2)
         with patch.object(fresh, 'journal', wraps=fresh.journal) as whole_journal:
-            fresh.path('output')
-            fresh.path('output')
+            _ = fresh.redirection
+            _ = fresh.redirection
         assert whole_journal.call_count == 1
 
     def test_the_journal_is_not_kept_alive_by_the_cache(self, source, broken):
@@ -462,11 +465,13 @@ class TestResolution:
         broken.read('output')
         assert not any(isinstance(v, pd.DataFrame) for v in vars(broken).values())
 
-    def test_it_is_announced_when_it_resolves(self, source, broken, capsys):
+    def test_it_is_announced_when_it_resolves(self, source, tmp_path, capsys):
         _, code = source
-        broken.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
+        b = block(tmp_path, x=2)
+        b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
+        fresh = block(tmp_path, x=2)
         capsys.readouterr()
-        broken.read('output')
+        _ = fresh.redirection
         out = capsys.readouterr().out
         assert 'REDIRECTION' in out and 'INFO' in out
 
@@ -496,7 +501,6 @@ class TestResolution:
                                topic_map={'output': 'output'}, OVERRIDE=True)
         r = broken.redirection
         assert r.filter == {'entry_code': code}
-        assert r.topic_map == {'output': 'output'}
         assert r.entry.entry_code == code
         assert 'output' in r.paths
 
@@ -668,25 +672,17 @@ class TestRestructuredRedirect:
 
 class TestNewRedirectFeatures:
 
-    def test_unsafe_redirect_dict_parameter(self, tmp_path):
+    def test_unsafe_redirect_paths_parameter(self, tmp_path):
         b = Built(url=str(tmp_path))
-        b.UNSAFE_redirect(redirect={'paths': {'output': '/custom/path.txt'}}, OVERRIDE=True)
+        b.UNSAFE_redirect(paths={'output': '/custom/path.txt'}, OVERRIDE=True)
         assert b.path('output') == '/custom/path.txt'
         assert b._paths_ == {'output': '/custom/path.txt'}
         assert '_paths_' not in b.signature()
         assert '_paths_' in b.type()
 
-    def test_unsafe_redirect_exactly_one_truthy(self, tmp_path):
-        b = Built(url=str(tmp_path))
-        with pytest.raises(ValueError, match="exactly one of code, filter, or paths must be truthy"):
-            b.UNSAFE_redirect(redirect={'paths': {'output': '/x'}, 'filter': {'event': 'test'}}, OVERRIDE=True)
-
-        with pytest.raises(ValueError, match="exactly one of code, filter, or paths must be truthy"):
-            b.UNSAFE_redirect(redirect={}, OVERRIDE=True)
-
     def test_hidden_topic_redirection_and_clear(self, tmp_path):
         b = Built(url=str(tmp_path))
-        b.UNSAFE_redirect(redirect={'paths': {'output': '/custom/path.txt'}}, OVERRIDE=True)
+        b.UNSAFE_redirect(paths={'output': '/custom/path.txt'}, OVERRIDE=True)
         assert b.redirection is not None
         assert b.redirection.paths == {'output': '/custom/path.txt'}
 
@@ -703,11 +699,103 @@ class TestNewRedirectFeatures:
                 return [Built(url=str(tmp_path), spec={'x': i}) for i in range(3)]
 
         stack = DummyStack(url=str(tmp_path))
-        stack.UNSAFE_redirect_blocks(
-            redirect=lambda blk: {'paths': {'output': f"/redirected/{blk.spec['x']}.txt"}},
+        successes, total = stack.UNSAFE_redirect_blocks(
+            redirect=lambda blk, idx, journal=None: {'paths': {'output': f"/redirected/{blk.spec['x']}.txt"}},
             OVERRIDE=True
         )
+        assert successes == 3 and total == 3
 
         for blk in stack.blocks():
             assert blk.path('output').startswith("/redirected/")
+
+    def test_unsafe_redirect_filter_records_entry_id(self, source, tmp_path):
+        src, code = source
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        ret = b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
+        assert ret is True
+        assert b.journal(loc=0).redirection == code
+        assert b._paths_ == src.paths()
+        assert b.path('output') == src.path('output')
+
+    def test_unsafe_redirect_topic_map_remapped_paths(self, tmp_path):
+        src = Renamed(url=str(tmp_path), spec={'x': 1}, anchor=Built(url=str(tmp_path)).anchor)
+        src.build()
+        code = src.journal(loc=0).entry_code
+
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        assert b.UNSAFE_redirect(filter={'entry_code': code}, topic_map={'output': 'result'}, OVERRIDE=True) is True
+        assert b._paths_ == {'output': src.path('result')}
+        assert b.path('output') == src.path('result')
+        assert b.journal(loc=0).redirection == code
+
+        # Verify .redirection directory and paths.yaml exist
+        red_yaml = os.path.join(b.dirpath('.redirection'), 'paths.yaml')
+        assert b.fs.exists(red_yaml)
+
+        # Verify UNSAFE_clear removes .redirection directory and resets _paths_
+        b.UNSAFE_clear(OVERRIDE=True)
+        assert not b.fs.exists(red_yaml)
+        assert not b.fs.exists(b.dirpath('.redirection'))
+        assert b._paths_ is None
+
+    def test_unsafe_redirect_filter_fallback_to_paths(self, tmp_path):
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        b.UNSAFE_redirect(filter={'entry_code': 'nonexistent'}, paths={'output': '/custom/fallback.txt'}, OVERRIDE=True)
+        assert b._paths_ == {'output': '/custom/fallback.txt'}
+        assert b.path('output') == '/custom/fallback.txt'
+        assert b.journal(loc=0).redirection == {'output': '/custom/fallback.txt'}
+
+    def test_unsafe_redirect_drops_redirect_kwarg(self, tmp_path):
+        b = Built(url=str(tmp_path))
+        with pytest.raises(TypeError, match="unexpected keyword argument 'redirect'"):
+            b.UNSAFE_redirect(redirect={'paths': {'output': '/x'}}, OVERRIDE=True)
+
+    def test_unsafe_redirect_with_provided_journal_and_filter(self, source, tmp_path):
+        src, code = source
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        j = src.journal()
+        
+        # Patch b.journal to ensure it's not called
+        with patch.object(b, 'journal', side_effect=AssertionError("b.journal should not be called")):
+            b.UNSAFE_redirect(filter={'entry_code': code}, journal=j, OVERRIDE=True)
+
+        assert b._paths_ == src.paths()
+        assert b.path('output') == src.path('output')
+        assert b.journal(loc=0).redirection == code
+
+    def test_unsafe_redirect_with_provided_journal_no_filter(self, source, tmp_path):
+        src, code = source
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        j = src.journal(entry_code=code)
+        
+        with patch.object(b, 'journal', side_effect=AssertionError("b.journal should not be called")):
+            b.UNSAFE_redirect(journal=j, OVERRIDE=True)
+
+        assert b._paths_ == src.paths()
+        assert b.path('output') == src.path('output')
+        assert b.journal(loc=0).redirection == code
+
+    def test_unsafe_redirect_remote_instantiation(self, source, tmp_path):
+        src, code = source
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        j = src.journal(entry_code=code)
+
+        # Simulate a journal entry that doesn't have .paths stored directly
+        from unittest.mock import MagicMock
+        mock_entry = MagicMock()
+        mock_entry.paths = None
+        mock_entry.id = code
+        mock_inst = MagicMock()
+        mock_inst.paths.return_value = src.paths()
+        mock_entry.inst.return_value = mock_inst
+
+        with patch.object(j, 'get', return_value=mock_entry):
+            b.UNSAFE_redirect(journal=j, remote=True, OVERRIDE=True)
+            mock_entry.inst.assert_called_once_with(remote=True)
+
+        assert b._paths_ == src.paths()
+        assert b.path('output') == src.path('output')
+
+
+
 

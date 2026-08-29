@@ -700,13 +700,45 @@ class TestNewRedirectFeatures:
 
         stack = DummyStack(url=str(tmp_path))
         successes, total = stack.UNSAFE_redirect_blocks(
-            redirect=lambda blk, idx, journal=None: {'paths': {'output': f"/redirected/{blk.spec['x']}.txt"}},
+            redirector=lambda blk, idx, journal=None: {'paths': {'output': f"/redirected/{blk.spec['x']}.txt"}},
             OVERRIDE=True
         )
         assert successes == 3 and total == 3
 
         for blk in stack.blocks():
             assert blk.path('output').startswith("/redirected/")
+
+    def test_datastack_unsafe_redirect_blocks_with_journal_and_filter(self, tmp_path):
+        from dbx.datablocks import Datastack
+
+        # Build one instance so there is a journal entry for the child block anchor
+        src = Built(url=str(tmp_path), spec={'x': 100}).build()
+        src_code = src.journal(loc=0).entry_code
+
+        class DummyStack(Datastack):
+            def blocks(self):
+                return [Built(url=str(tmp_path), spec={'x': i}) for i in range(2)]
+
+        stack = DummyStack(url=str(tmp_path))
+        passed_journals = []
+
+        def redirect_fn(blk, idx, journal=None):
+            passed_journals.append(journal)
+            return {'filter': {'entry_code': src_code}}
+
+        successes, total = stack.UNSAFE_redirect_blocks(
+            redirector=redirect_fn,
+            filter={'event': 'build:end'},
+            n_workers=2,
+            OVERRIDE=True
+        )
+        assert successes == 2 and total == 2
+        assert len(passed_journals) == 2
+        assert passed_journals[0] is not None
+        assert all(passed_journals[0]['event'] == 'build:end')
+        for blk in stack.blocks():
+            assert blk.journal(loc=0).redirection == src_code
+            assert blk.path('output') == src.path('output')
 
     def test_unsafe_redirect_filter_records_entry_id(self, source, tmp_path):
         src, code = source
@@ -795,6 +827,172 @@ class TestNewRedirectFeatures:
 
         assert b._paths_ == src.paths()
         assert b.path('output') == src.path('output')
+
+    def test_unsafe_redirect_with_redirector_filter(self, source, tmp_path):
+        src, code = source
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: {'filter': {'entry_code': code}}, OVERRIDE=True)
+        assert ret is True
+        assert b.journal(loc=0).redirection == code
+        assert b._paths_ == src.paths()
+        assert b.path('output') == src.path('output')
+
+    def test_unsafe_redirect_with_redirector_paths(self, tmp_path):
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: {'paths': {'output': '/custom/path.txt'}}, OVERRIDE=True)
+        assert ret is True
+        assert b.journal(loc=0).redirection == {'output': '/custom/path.txt'}
+        assert b._paths_ == {'output': '/custom/path.txt'}
+        assert b.path('output') == '/custom/path.txt'
+
+    def test_unsafe_redirect_with_redirector_overrides_params(self, source, tmp_path):
+        src, code = source
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        # Explicit filter is 'wrong_code', but redirector returns the correct code
+        ret = b.UNSAFE_redirect(
+            redirector=lambda blk, journal=None: {'filter': {'entry_code': code}},
+            filter={'entry_code': 'wrong_code'},
+            OVERRIDE=True
+        )
+        assert ret is True
+        assert b.journal(loc=0).redirection == code
+        assert b._paths_ == src.paths()
+
+    def test_unsafe_redirect_with_redirector_returning_none(self, tmp_path):
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: None, OVERRIDE=True)
+        assert ret is False
+
+    def test_unsafe_redirect_with_redirector_returning_none_falls_back(self, source, tmp_path):
+        src, code = source
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        # Redirector returns None, but explicit filter is provided -> falls back to filter
+        ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: None, filter={'entry_code': code}, OVERRIDE=True)
+        assert ret is True
+        assert b.journal(loc=0).redirection == code
+        assert b._paths_ == src.paths()
+
+    def test_unsafe_redirect_validate_parameter(self, source, tmp_path):
+        src, code = source
+        b_valid = Built(url=str(tmp_path), spec={'x': 2})
+        # Redirect to valid source with validate=True -> succeeds
+        ret_valid = b_valid.UNSAFE_redirect(filter={'entry_code': code}, validate=True, OVERRIDE=True)
+        assert ret_valid is True
+
+        b_invalid = Built(url=str(tmp_path), spec={'x': 3})
+        # Redirect to non-existent file with validate=True -> fails (returns False)
+        ret_invalid = b_invalid.UNSAFE_redirect(paths={'output': str(tmp_path / 'nonexistent.txt')}, validate=True, OVERRIDE=True)
+        assert ret_invalid is False
+
+        b_invalid_no_validate = Built(url=str(tmp_path), spec={'x': 4})
+        # Same non-existent redirect with validate=False -> returns True
+        ret_no_val = b_invalid_no_validate.UNSAFE_redirect(paths={'output': str(tmp_path / 'nonexistent.txt')}, validate=False, OVERRIDE=True)
+        assert ret_no_val is True
+
+    def test_datastack_unsafe_redirect_blocks_validate_parameter(self, source, tmp_path):
+        from dbx.datablocks import Datastack
+        src, code = source
+
+        class DummyStack(Datastack):
+            def blocks(self):
+                return [Built(url=str(tmp_path), spec={'x': i}) for i in range(2)]
+
+        stack = DummyStack(url=str(tmp_path))
+        # Valid redirection with validate=True
+        successes, total = stack.UNSAFE_redirect_blocks(
+            redirector=lambda blk, idx, journal=None: {'filter': {'entry_code': code}},
+            validate=True,
+            OVERRIDE=True
+        )
+        assert successes == 2 and total == 2
+
+        # Invalid redirection with validate=True -> 0 successes
+        successes, total = stack.UNSAFE_redirect_blocks(
+            redirector=lambda blk, idx, journal=None: {'paths': {'output': str(tmp_path / f'nonexistent_{idx}.txt')}},
+            validate=True,
+            OVERRIDE=True
+        )
+        assert successes == 0 and total == 2
+
+    def test_unsafe_clear_redirected_block_preserves_source_data(self, source, tmp_path):
+        """UNSAFE_clear on a redirected block should only remove redirection, not the source files."""
+        src, code = source
+        assert src.valid()
+        assert src.read('output') == 'data-1'
+
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
+        assert b.valid()
+        assert b.read('output') == 'data-1'
+
+        # Clear the redirected block
+        b.UNSAFE_clear(OVERRIDE=True)
+
+        # b is no longer redirected and has no data
+        assert not b.valid()
+        assert b._paths_ is None
+
+        # src block and files MUST remain fully intact and valid
+        assert src.valid()
+        assert src.read('output') == 'data-1'
+        assert src.fs.exists(src.path('output'))
+
+    def test_unsafe_redirect_chaining(self, tmp_path):
+        """Block A is built. Block B redirects to A. Block C redirects to B."""
+        a = Built(url=str(tmp_path), spec={'x': 1}).build()
+        code_a = a.journal(loc=0).entry_code
+
+        b = Built(url=str(tmp_path), spec={'x': 2})
+        b.UNSAFE_redirect(filter={'entry_code': code_a}, OVERRIDE=True)
+        code_b = b.journal(loc=0).entry_code
+
+        # C redirects to B's journal entry
+        c = Built(url=str(tmp_path), spec={'x': 3})
+        c.UNSAFE_redirect(filter={'entry_code': code_b}, OVERRIDE=True)
+
+        assert c.valid()
+        assert c.read('output') == 'data-1'
+        assert c.path('output') == a.path('output')
+
+    def test_datastack_multiblock_redirect_and_clear_blocks(self, tmp_path):
+        """Test redirecting and clearing all child blocks in a Datastack."""
+        from dbx.datablocks import Datastack
+
+        # Build source blocks
+        src_blocks = [Built(url=str(tmp_path), spec={'x': 10 + i}).build() for i in range(3)]
+
+        class DummyStack(Datastack):
+            def blocks(self):
+                return [Built(url=str(tmp_path), spec={'x': i}) for i in range(3)]
+
+        stack = DummyStack(url=str(tmp_path))
+
+        # Redirect stack child blocks to corresponding source blocks
+        successes, total = stack.UNSAFE_redirect_blocks(
+            redirector=lambda blk, idx, journal=None: {'paths': src_blocks[idx].paths()},
+            validate=True,
+            OVERRIDE=True
+        )
+        assert successes == 3 and total == 3
+
+        for i, blk in enumerate(stack.blocks()):
+            assert blk.valid()
+            assert blk.read('output') == f'data-{10 + i}'
+
+        # Clear stack blocks
+        stack.UNSAFE_clear_blocks(OVERRIDE=True)
+
+        for blk in stack.blocks():
+            assert not blk.valid()
+            assert blk._paths_ is None
+
+        # Source blocks must remain intact
+        for i, src in enumerate(src_blocks):
+            assert src.valid()
+            assert src.read('output') == f'data-{10 + i}'
+
+
+
 
 
 

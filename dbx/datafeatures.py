@@ -558,6 +558,8 @@ class DatafeatureTab(DatapointTab):
         return len(self.var.datapoint_tab)
 
 
+
+
 class DatafeatureTable(DatapointTable):
     """A table of `DatafeatureTab` blocks built across a `DatapointTable`."""
 

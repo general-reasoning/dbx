@@ -2300,6 +2300,8 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         sys.path.insert(0, wrkrepo)
         return wrkroot, wrkrepo
 
+
+
     use_wrkrepo = os.environ.get('DBX_USE_WORK_REPO') == 'True' or revision is not None
     if use_wrkrepo and DBX_USE_WORK_REPO is None:
         if DBX_GIT_REPO is None:

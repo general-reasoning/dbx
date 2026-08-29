@@ -26,6 +26,11 @@ __version__ = "0.0.1"
 from .dataparts import *
 from .datablocks import *
 from .datapoints import *
-from .datamodels import *
+from .databackbones import *
 from .datafeatures import *
 from .dataprobes import *
+
+# Backward compatibility alias
+import sys
+from . import databackbones as datamodels
+sys.modules['dbx.datamodels'] = datamodels

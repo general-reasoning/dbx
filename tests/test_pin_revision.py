@@ -18,7 +18,7 @@ import types
 
 import pytest
 
-import dbx._pinshim  # noqa: F401  -- imported here only so the tests can reach it
+import dbx._pinshim_  # noqa: F401  -- imported here only so the tests can reach it
 
 import dbx.datablocks as dbxmod
 import dbx.dataparts as dataparts_mod
@@ -249,13 +249,13 @@ class TestRemotePinning:
 # ---------------------------------------------------------------------------
 
 class TestPinShim:
-    """dbx._pinshim runs in the worker BEFORE dbx is imported, so it may use
+    """dbx._pinshim_ runs in the worker BEFORE dbx is imported, so it may use
     nothing but the standard library. Verified against a live cluster too, where
     the hook reported `dbx_in_sys_modules_at_hook_entry: False`."""
 
     @pytest.fixture
     def shim(self):
-        import dbx._pinshim as shim
+        import dbx._pinshim_ as shim
         return shim
 
     @pytest.fixture

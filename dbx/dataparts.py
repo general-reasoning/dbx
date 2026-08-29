@@ -687,7 +687,13 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
 
     for k, v in filter_kwargs.items():
         if k not in df.columns:
-            if k == 'date' and 'datetime' in df.columns:
+            if k == 'entry_code' and 'id' in df.columns:
+                k = 'id'
+            elif k == 'subhash' and 'code' in df.columns:
+                k = 'code'
+            elif k == 'subsignature' and 'signature' in df.columns:
+                k = 'signature'
+            elif k == 'date' and 'datetime' in df.columns:
                 dt_series = pd.to_datetime(df['datetime']) if not pd.api.types.is_datetime64_any_dtype(df['datetime']) else df['datetime']
                 if isinstance(v, str):
                     target_date = pd.to_datetime(v).date()
@@ -699,9 +705,9 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
                     df = df[dt_series.dt.date.isin(target_date)]
                 else:
                     df = df[dt_series.dt.date == target_date]
+                continue
             else:
                 return df.iloc[0:0].reset_index(drop=True)
-            continue
 
         if k == 'date':
             dt_series = pd.to_datetime(df['datetime']) if not pd.api.types.is_datetime64_any_dtype(df['datetime']) else df['datetime']
@@ -2670,7 +2676,7 @@ def pintrampoline(printer=None, log=None):
 
 
 def pinshimdir(log=None):
-    """Materialise :mod:`dbx._pinshim` as an importable ``dbxpinshim`` module dir.
+    """Materialise :mod:`dbx._pinshim_` as an importable ``dbxpinshim`` module dir.
 
     Returned path is meant for Ray's ``runtime_env['working_dir']``, which Ray
     uploads -- so unlike :func:`gitpinrepos` output it needs no shared
@@ -2680,7 +2686,7 @@ def pinshimdir(log=None):
         log = Logger(name="pinshimdir")
     holder = tempfile.TemporaryDirectory(prefix='dbx-pinshim-')
     _DBX_PIN_ROOTS.append(holder)
-    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_pinshim.py')
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_pinshim_.py')
     dst = os.path.join(holder.name, 'dbxpinshim.py')
     shutil.copyfile(src, dst)
     log.verbose(f"SHIM staged {src} -> {dst}")
@@ -3099,7 +3105,7 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
         requirement instead of relocating it.
     pin_mode:
         How the worker comes up pinned. ``'pin_root'`` clones here and hands the
-        worker paths; ``'shim'`` ships :mod:`dbx._pinshim` and lets each worker
+        worker paths; ``'shim'`` ships :mod:`dbx._pinshim_` and lets each worker
         clone for itself. ``'auto'`` (default) picks ``'shim'`` when *pin_source*
         is given, or when the workers may be off-host and Ray supports the setup
         hook; otherwise ``'pin_root'``, which is cheaper on one host.

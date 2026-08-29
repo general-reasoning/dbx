@@ -1,4 +1,4 @@
-"""dbx.datamodels — Base evaluators and factories for model feature extraction."""
+"""dbx.databackbones — Base evaluators and factories for model feature extraction."""
 
 from __future__ import annotations
 
@@ -441,4 +441,3 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
         if hasattr(self, '_evaluators') and self._evaluators:
             return next(iter(self._evaluators.values())).layer_names
         return self.evaluator(device="cpu").layer_names
-

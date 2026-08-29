@@ -489,7 +489,6 @@ class Bid:
     """Reconstructed block identifier from a journal entry."""
     hash: str = None
     code: str = None
-    subhash: str = None
     version: str = None
     revision: str = None
     dfn: dict = None
@@ -498,7 +497,6 @@ class Bid:
     quote: str = None
     cite: str = None
     repr: str = None
-    subsignature: str = None
     signature: str = None
     type: str = None
     anchor: str = None
@@ -507,9 +505,8 @@ class Bid:
     keyby: str = None
 
     def __post_init__(self):
-        sig_str = self.signature or self.subsignature or ''
+        sig_str = self.signature or ''
         self.signature = CallableSignature(sig_str)
-        self.subsignature = CallableSignature(sig_str)
         self._sig = CallableSig(sig_str)
         type_str = self.type or ''
         self.type = CallableType(type_str, bid=self)
@@ -517,10 +514,6 @@ class Bid:
 
     @property
     def sig(self):
-        return self._sig
-
-    @property
-    def subsig(self):
         return self._sig
 
     @property
@@ -581,14 +574,6 @@ class DatajournalEntry(pd.Series):
         return self.get('anchor')
 
     @property
-    def code(self):
-        return self.get('code') or self.get('subhash')
-
-    @property
-    def subhash(self):
-        return self.code
-
-    @property
     def hash(self):
         return self.get('hash')
 
@@ -623,16 +608,6 @@ class DatajournalEntry(pd.Series):
         return None if absent(value) else value
 
     @property
-    def type(self):
-        """Path or text of this entry's type."""
-        val = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
-        return CallableStr(val) if val is not None else None
-
-    def tp(self):
-        val = self.type
-        return val() if val is not None else None
-
-    @property
     def signature(self):
         """Path or text of this entry's signature."""
         val = self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm')
@@ -643,8 +618,14 @@ class DatajournalEntry(pd.Series):
         return val() if val is not None else None
 
     @property
-    def subsignature(self):
-        return self.signature
+    def type(self):
+        """Path or text of this entry's type."""
+        val = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
+        return CallableStr(val) if val is not None else None
+
+    def tp(self):
+        val = self.type
+        return val() if val is not None else None
 
     @property
     def uuid(self):
@@ -657,12 +638,8 @@ class DatajournalEntry(pd.Series):
         return self.get('id') or self.get('entry_code')
 
     @property
-    def entry_code(self):
-        return self.id
-
-    @property
     def redirection(self):
-        """Where this entry sends a failed read: an ``entry_code``, a filter, or None.
+        """Where this entry sends a failed read: an ``id``, a filter, or None.
 
         Unlike ``quote``/``subsignature``/``message``, whose columns hold the PATH of a
         file that carries the value, this column holds the redirection itself --
@@ -717,8 +694,6 @@ class DatajournalEntry(pd.Series):
             key = self.superhash
         elif keyby == 'signature':
             key = self.signature()
-        elif self.keyby == 'subsignature':
-            key = self.subsignature()
         elif keyby == 'tag':
             key = self.tag
         elif keyby in ('taghash', 'tag_hash'):
@@ -773,6 +748,10 @@ class DatajournalEntry(pd.Series):
             return os.path.join(root, self.anchorkey) if root else self.anchorkey
         fs, root = fsspec.url_to_fs(url, **self.storage_options)
         return fs_full_path(fs, os.path.join(root, self.anchorkey))
+
+    @property
+    def code(self):
+        return self.get('code') or self.get('subhash')
 
     def _parse_dict_field(self, field):
         """Parse a journal column recorded as ``str(dict)`` back into a dict."""
@@ -1042,7 +1021,6 @@ class DatajournalEntry(pd.Series):
         return Bid(
             hash=self.hash,
             code=self.code,
-            subhash=self.subhash,
             version=self.version,
             revision=self.revision,
             dfn=self.read('dfn', safe=True) or {},
@@ -1051,7 +1029,6 @@ class DatajournalEntry(pd.Series):
             quote=self.read('quote') or '',
             cite=self.read('cite') or '',
             repr=self.read('repr') or '',
-            subsignature=sig_str,
             signature=sig_str,
             type=type_str,
             anchor=self.anchor,
@@ -1522,7 +1499,7 @@ class Datablock:
             target_entry = self._find_journal_entry_by_filter(filter_spec)
             if target_entry is None:
                 raise ValueError(f"redirect failed: filter {filter_spec!r} matches no journal entry")
-            code_of_target = target_entry.entry_code
+            code_of_target = target_entry.id
             resolved_paths = target_entry.paths
 
         elif paths is not None:
@@ -1545,7 +1522,7 @@ class Datablock:
 
     def _find_journal_entry_by_code(self, code: str):
         try:
-            j = self.journal(entry_code=code)
+            j = self.journal(id=code)
             if len(j) > 0:
                 return DatajournalEntry(j.iloc[0].dropna(), storage_options=self.storage_options)
         except Exception:
@@ -1559,7 +1536,10 @@ class Datablock:
                 try:
                     with fs.open(file, 'rb') as f:
                         df = pd.read_parquet(f, engine='pyarrow')
-                    if 'entry_code' in df.columns and code in df['entry_code'].values:
+                    if 'id' in df.columns and code in df['id'].values:
+                        row = df[df['id'] == code].iloc[0]
+                        return DatajournalEntry(row.dropna(), storage_options=self.storage_options)
+                    elif 'entry_code' in df.columns and code in df['entry_code'].values:
                         row = df[df['entry_code'] == code].iloc[0]
                         return DatajournalEntry(row.dropna(), storage_options=self.storage_options)
                 except Exception:
@@ -1575,7 +1555,7 @@ class Datablock:
             elif isinstance(filter_spec, str):
                 j = self.journal(event=filter_spec)
                 if len(j) == 0:
-                    j = self.journal(entry_code=filter_spec)
+                    j = self.journal(id=filter_spec)
             else:
                 return None
             if len(j) > 0:
@@ -1968,7 +1948,7 @@ class Datablock:
         # instance, which :attr:`redirection` caches.
         if self._redirected_paths_ is not None:
             entry = self.redirection.entry if self.redirection is not None else None
-            whither = (f"journal entry {entry.entry_code} (hash {entry.hash})"
+            whither = (f"journal entry {entry.id} (hash {entry.hash})"
                        if entry is not None else f"the paths {self._redirected_paths_}")
             self.log.info(
                 f"BUILD DECLINED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
@@ -2473,7 +2453,7 @@ class Datablock:
             return None
 
         if isinstance(recorded, str):
-            recorded = {'filter': {'entry_code': recorded}}
+            recorded = {'filter': {'id': recorded}}
 
         filter = recorded.get('filter')
         topic_map = recorded.get('topic_map')
@@ -2502,7 +2482,7 @@ class Datablock:
         self.__dict__['__redirected_paths__'] = resolved_paths
 
         self.log.verbose(
-            f"REDIRECTION: {self.anchorkeypath} reads from journal entry {entry.entry_code} "
+            f"REDIRECTION: {self.anchorkeypath} reads from journal entry {entry.id} "
             f"instead (hash {entry.hash}, event {entry.get('event')!r}, written "
             f"{entry.get('datetime')}), matched by {filter!r}"
             + (f", topics mapped {topic_map!r}" if topic_map else "")
@@ -2648,7 +2628,7 @@ class Datablock:
                     if latest is None or str(when) > str(latest[0]):
                         red_val = entry.redirection
                         if isinstance(red_val, str) and not red_val.startswith('{'):
-                            latest = (when, {'filter': {'entry_code': red_val}})
+                            latest = (when, {'filter': {'id': red_val}})
                         else:
                             latest = (when, red_val)
         return latest[1] if latest is not None else None
@@ -4794,9 +4774,9 @@ class Datablock:
         # A dict goes in as str(dict), the way 'paths' and 'topics' do -- one
         # parquet column cannot hold both a string and a mapping.
         redirection_value = redirection if (redirection is None or isinstance(redirection, str)) else str(redirection)
-        entry_code = uuid.uuid4().hex[:16] if getattr(self, '_uuid16_', False) else str(uuid.uuid4())
+        entry_id = uuid.uuid4().hex[:16] if getattr(self, '_uuid16_', False) else str(uuid.uuid4())
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-        code_seed = f"{self.hash}:{self.uuid}:{dt}:{event}:{entry_code}"
+        code_seed = f"{self.hash}:{self.uuid}:{dt}:{event}:{entry_id}"
         code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
 
         self._write_journal_dict('spec', self.spec)
@@ -4846,14 +4826,12 @@ class Datablock:
                                          'url': self._url_,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
-                                         'code': self.code,
-                                         'subhash': self.code,
                                          'keyby': self.keyby,
                                          'key': self.key,
                                          'anchorkeypath': self.anchorkeypath,
+                                         'code': self.code,
                                          'uuid': self.uuid,
-                                         'id': entry_code,
-                                         'entry_code': entry_code,
+                                         'id': entry_id,
                                          'tag': self.tag,
                                          'topics': str(topics_dict),
                                          'paths': str(paths_dict),
@@ -4866,9 +4844,8 @@ class Datablock:
                                          'quote': quote_path,
                                          'cite': cite_path,
                                          'signature': signature_path,
-                                         'subsignature': signature_path,
-                                         'repr': repr_path,
                                          'type': type_path,
+                                         'repr': repr_path,
                                          'note': note_val,
                                          'gitrepo': dataparts.DBX_GIT_REPO,
                                          'wrkrepo': dataparts.DBX_USE_WORK_REPO,
@@ -4877,9 +4854,9 @@ class Datablock:
             df.to_parquet(f)
         
         tagstr = f"with tag {repr(self.tag)} " if self.tag is not None else ""
-        self.log.debug(f"WROTE JOURNAL entry {entry_code} for event {repr(event)} {tagstr}"
+        self.log.debug(f"WROTE JOURNAL entry {entry_id} for event {repr(event)} {tagstr}"
                          f"to journal_path {journal_path}")
-        return entry_code
+        return entry_id
 
     @staticmethod
     def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index=None, **filter_kwargs):
@@ -4975,10 +4952,8 @@ class Datablock:
                     if 'datetime' not in df.columns:
                         df['datetime'] = df['build_datetime']
                     df = df.drop(columns=['build_datetime'])
-                if 'code' not in df.columns and 'entry_code' in df.columns:
-                    df['code'] = df['entry_code']
-                elif 'entry_code' not in df.columns and 'code' in df.columns:
-                    df['entry_code'] = df['code']
+                if 'id' not in df.columns and 'entry_code' in df.columns:
+                    df['id'] = df['entry_code']
                 leading = ['hash'] + (['uuid'] if 'uuid' in df.columns else []) + ['datetime']
                 columns = leading + [c for c in df.columns if c not in set(leading + ['event'])] + ['event']
                 df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)

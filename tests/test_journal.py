@@ -609,7 +609,27 @@ class TestDatablockJournalArgThreading:
         assert isinstance(bid.fields(), dict)
         assert 'signature' in bid.fields()
         assert 'type' in bid.fields()
+        assert 'subhash' not in bid.fields()
+        assert 'subsignature' not in bid.fields()
         assert isinstance(bid.to_dict(), dict)
+
+    def test_journal_entry_field_order_and_cleanup(self, tmp_path, monkeypatch):
+        """DatajournalEntry fields ordering and removal of subhash, subsignature, entry_code."""
+        props = [k for k, v in DatajournalEntry.__dict__.items() if isinstance(v, property)]
+        
+        # Verify removals
+        assert 'subhash' not in props
+        assert 'subsignature' not in props
+        assert 'entry_code' not in props
+        
+        # Verify ordering requirements
+        # 1. id after uuid
+        assert props.index('id') == props.index('uuid') + 1
+        # 2. code after anchorkeypath
+        assert props.index('code') == props.index('anchorkeypath') + 1
+        # 3. type after signature
+        assert props.index('type') > props.index('signature')
+
 
 
 

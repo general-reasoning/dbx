@@ -1,6 +1,6 @@
 """Pre-import pin bootstrap for dbx Ray workers. MUST NOT import dbx.
 
-This file is never imported as ``dbx._pinshim``. :func:`dbx.datablocks.remote`
+This file is never imported as ``dbx._pinshim_``. :func:`dbx.datablocks.remote`
 copies it into a scratch directory as ``dbxpinshim.py``, ships that directory to
 the workers as ``runtime_env['working_dir']``, and points
 ``runtime_env['worker_process_setup_hook']`` at :func:`setup`. Ray runs the hook

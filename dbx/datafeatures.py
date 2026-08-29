@@ -20,7 +20,7 @@ except ImportError:
 
 import dbx
 from dbx.datablocks import Datablock, Datastack, DIRTOPIC
-from dbx.datamodels import DatamodelEvaluatorFactory
+from dbx.databackbones import DatamodelEvaluatorFactory
 from dbx.datapoints import (
     DatapointTab,
     DatapointTable,

@@ -56,7 +56,10 @@ class TestEveryCallGetsItsOwnCode:
         b = block(tmp_path)
         b.build()
         entry = b.journal(loc=0)
-        assert entry.entry_code
+        assert entry.id
+        assert not hasattr(entry, 'entry_code')
+        assert not hasattr(entry, 'subhash')
+        assert not hasattr(entry, 'subsignature')
 
 
 class TestTheCodeIsRecorded:
@@ -64,29 +67,34 @@ class TestTheCodeIsRecorded:
     def test_column_is_written(self, tmp_path):
         b = block(tmp_path)
         b.write_journal_entry(event='note')
-        assert 'entry_code' in block(tmp_path).journal().columns
+        cols = block(tmp_path).journal().columns
+        assert 'id' in cols
+        assert 'code' in cols
+        assert 'entry_code' not in cols
+        assert 'subhash' not in cols
+        assert 'subsignature' not in cols
 
     def test_the_recorded_code_is_the_returned_one(self, tmp_path):
         code = block(tmp_path).write_journal_entry(event='note')
-        assert block(tmp_path).journal(loc=0).entry_code == code
+        assert block(tmp_path).journal(loc=0).id == code
 
     def test_the_journal_can_be_filtered_by_it(self, tmp_path):
         block(tmp_path).write_journal_entry(event='wanted')
         code = block(tmp_path).write_journal_entry(event='also-wanted')
-        entry = block(tmp_path).journal(entry_code=code, loc=0)
+        entry = block(tmp_path).journal(id=code, loc=0)
         assert isinstance(entry, DatajournalEntry)
         assert entry.get('event') == 'also-wanted'
 
     def test_codes_are_unique_across_the_whole_journal(self, tmp_path):
         for x in (1, 2, 3):
             block(tmp_path, x=x).build()
-        codes = list(block(tmp_path).journal()['entry_code'])
+        codes = list(block(tmp_path).journal()['id'])
         assert len(codes) == 3
         assert len(set(codes)) == 3
 
 
 class TestDistinctFromTheInstanceUuid:
-    """``uuid`` identifies the writer, ``entry_code`` the entry."""
+    """``uuid`` identifies the writer, ``id`` the entry."""
 
     def test_they_are_not_the_same_value(self, tmp_path):
         b = block(tmp_path)
@@ -101,7 +109,7 @@ class TestDistinctFromTheInstanceUuid:
         second = b.write_journal_entry(event='two', journal_prefix='b-')
         journal = block(tmp_path).journal()
         assert len(journal) == 2
-        assert set(journal['entry_code']) == {first, second}
+        assert set(journal['id']) == {first, second}
         assert journal['uuid'].nunique() == 1
 
     def test_uuid_accessor_reads_the_column(self, tmp_path):
@@ -119,8 +127,8 @@ class TestOverwriteWithinOneInstance:
         second = b.write_journal_entry(event='two')
         journal = block(tmp_path).journal()
         assert len(journal) == 1
-        assert list(journal['entry_code']) == [second]
-        assert first not in set(journal['entry_code'])
+        assert list(journal['id']) == [second]
+        assert first not in set(journal['id'])
 
     def test_build_leaves_the_end_entry_not_the_start(self, tmp_path):
         """build() writes build:start then build:end from one instance, so the
@@ -138,7 +146,7 @@ class TestLegacyJournals:
         b = block(tmp_path)
         b.write_journal_entry(event='note')
         entry = b.journal(loc=0)
-        assert DatajournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).entry_code is None
+        assert DatajournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).id is None
 
 
 class TestUuid16:

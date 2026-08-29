@@ -1606,9 +1606,8 @@ class Datablock:
         return result
 
     def valid(self):
-        red = self.redirection
-        entry = red.entry if red is not None else None
-        return self.__valid__(path=entry.anchorkeypath if entry is not None else None)
+        return self.__valid__(path=None)
+
 
     def validate(self):
         """Validate this block's data. Default implementation calls self.valid().

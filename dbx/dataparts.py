@@ -28,6 +28,8 @@ import time as time_module
 import traceback as tb
 import types
 from typing import Union, Optional, Sequence, Callable
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import fsspec
@@ -657,13 +659,98 @@ def eval(name):
     return term
 
 
+def write_exec_journal(s: str, url: str | None = None, storage_options: dict | None = None):
+    """Record an exec expression string in the $DBX_URL/.journal/exec/ journal."""
+    dbx_url = url or os.environ.get('DBX_URL') or os.environ.get('DBX_ROOT') or './dbx'
+    exec_dir = os.path.join(dbx_url, '.journal', 'exec')
+    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
+    try:
+        fs.makedirs(exec_dir, exist_ok=True)
+    except Exception:
+        pass
+    file_path = os.path.join(exec_dir, f"exec_{uuid.uuid4().hex}.parquet")
+    dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+    entry_data = {
+        'exec': str(s),
+        'datetime': dt,
+        'id': str(uuid.uuid4()),
+    }
+    df = pd.DataFrame([entry_data])
+    with fs.open(file_path, 'wb') as f:
+        df.to_parquet(f)
+
+
+def read_exec_journal(
+    url: str | None = None,
+    loc: int | None = None,
+    *,
+    iloc: int | None = None,
+    filter: dict | None = None,
+    storage_options: dict | None = None,
+    log: Logger | None = None,
+    n_workers: int = 8,
+    index: str | None = None,
+    **filter_kwargs,
+):
+    """Read recorded dbx.exec() entries from the $DBX_URL/.journal/exec/ journal."""
+    if loc is not None and iloc is not None:
+        raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
+    if n_workers is None:
+        n_workers = 8
+
+    dbx_url = url or os.environ.get('DBX_URL') or os.environ.get('DBX_ROOT') or './dbx'
+    exec_dir = os.path.join(dbx_url, '.journal', 'exec')
+    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
+    try:
+        if not fs.exists(exec_dir):
+            files = []
+        else:
+            files = fs.glob(os.path.join(exec_dir, '*.parquet'))
+    except Exception:
+        files = []
+
+    if not files:
+        df = pd.DataFrame(columns=['exec', 'datetime', 'id'])
+    else:
+        def read_file(file):
+            with fs.open(file, 'rb') as f:
+                return pd.read_parquet(f)
+
+        dfs = []
+        with ThreadPoolExecutor(max_workers=min(n_workers, max(1, len(files)))) as ex:
+            futures = [ex.submit(read_file, file) for file in files]
+            for future in as_completed(futures):
+                try:
+                    dfs.append(future.result())
+                except Exception as e:
+                    if log:
+                        log.warning(f"Skipping unreadable exec journal file: {e}")
+                    continue
+        if not dfs:
+            df = pd.DataFrame(columns=['exec', 'datetime', 'id'])
+        else:
+            df = pd.concat(dfs, ignore_index=True)
+            if 'datetime' in df.columns:
+                df = df.sort_values('datetime').reset_index(drop=True)
+
+    all_filters = dict(filter or {})
+    all_filters.update(filter_kwargs)
+
+    from .datablocks import Datajournal, DatajournalEntry
+    journal = Datajournal(df, storage_options=storage_options, index=index, **all_filters)
+    if loc is not None:
+        return DatajournalEntry(journal.loc[loc].dropna(), storage_options=storage_options)
+    elif iloc is not None:
+        return DatajournalEntry(journal.iloc[iloc].dropna(), storage_options=storage_options)
+    return journal
+
+
 def exec(s=None, **kwargs):
     """Parse and execute a dbx expression from *s* or ``sys.argv``.
 
     When *s* is ``None``, the expression and keyword arguments are
     read from the command line (``sys.argv[1:]``).
     """
-    from .datablocks import record_exec_journal
     if s is None:
         # Command line only: may re-exec this process pinned to a revision and
         # never return.
@@ -680,12 +767,12 @@ def exec(s=None, **kwargs):
                 except (NameError, SyntaxError):
                     kwargs[k] = v
     
+    write_exec_journal(s)
     lb = s.find("(")
     lb = lb if lb != -1 else len(s)
     _, cxt = get_named_const_and_cxt(s[:lb])
     cxt.update(kwargs)
     r = __eval__(s, globals(), cxt)
-    record_exec_journal(s)
     return r
 
 

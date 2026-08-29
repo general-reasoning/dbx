@@ -4,7 +4,8 @@ import pandas as pd
 import pytest
 
 import dbx
-from dbx.datablocks import Datablock, DatajournalEntry, journal, record_exec_journal, read_exec_journal
+from dbx.datablocks import Datablock, DatajournalEntry, journal
+from dbx.dataparts import write_exec_journal, read_exec_journal
 
 
 class Built(Datablock):
@@ -78,3 +79,48 @@ class TestEvalJournal:
         assert 'datetime' in df_journal.columns
         assert 'id' in df_journal.columns
         assert expr in df_journal['exec'].tolist()
+
+    def test_write_exec_journal_before_eval_failure(self, tmp_path, monkeypatch):
+        """write_exec_journal is called before __eval__ so failing expressions are recorded."""
+        dbx_url = str(tmp_path / 'dbx_root')
+        monkeypatch.setenv('DBX_URL', dbx_url)
+
+        bad_expr = "1 / 0"
+        with pytest.raises(ZeroDivisionError):
+            dbx.exec(bad_expr)
+
+        j = dbx.journal()
+        assert bad_expr in j['exec'].tolist()
+
+    def test_read_exec_journal_options(self, tmp_path, monkeypatch):
+        """read_exec_journal and dbx.journal support loc, iloc, filter, index, n_workers, and log."""
+        dbx_url = str(tmp_path / 'dbx_root')
+        monkeypatch.setenv('DBX_URL', dbx_url)
+
+        write_exec_journal("expr1", url=dbx_url)
+        write_exec_journal("expr2", url=dbx_url)
+        write_exec_journal("expr3", url=dbx_url)
+
+        # Full journal
+        j = read_exec_journal(url=dbx_url)
+        assert len(j) == 3
+
+        # iloc / loc access
+        entry_0 = read_exec_journal(url=dbx_url, iloc=0)
+        assert isinstance(entry_0, DatajournalEntry)
+        assert entry_0['exec'] == 'expr1'
+
+        entry_last = dbx.journal(iloc=2)
+        assert isinstance(entry_last, DatajournalEntry)
+        assert entry_last['exec'] == 'expr3'
+
+        # Filter
+        j_filtered = dbx.journal(exec='expr2')
+        assert len(j_filtered) == 1
+        assert j_filtered.iloc[0]['exec'] == 'expr2'
+
+        # Index
+        j_indexed = read_exec_journal(url=dbx_url, index='exec')
+        assert 'expr2' in j_indexed.index
+        assert isinstance(j_indexed.loc['expr2'], pd.Series)
+

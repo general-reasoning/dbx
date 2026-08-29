@@ -78,6 +78,8 @@ from .dataparts import (
     ls_path,
     read_str,
     read_yaml,
+    read_exec_journal,
+    write_exec_journal,
     remote,
     size,
     write_str,
@@ -86,7 +88,7 @@ from .dataparts import (
 __version__ = "0.2.0"
 
 class AbsentKey:
-    """Singleton marking a key present on only ONE side of a :meth:`Datablock.diffsubsig`.
+    """Singleton marking a key present on only ONE side of a :meth:`Datablock.diffsig`.
 
     Needed because diffsubsig reports typed values: a key whose value *is* ``None``
     and a key that is missing entirely would otherwise both come back as
@@ -171,54 +173,6 @@ class CallableStr(str):
         return str(self)
 
 
-def record_exec_journal(s: str, url: str | None = None):
-    """Record an exec expression string in the $DBX_URL/.journal/exec/ journal."""
-    dbx_url = url or os.environ.get('DBX_URL') or os.environ.get('DBX_ROOT') or './dbx'
-    exec_dir = os.path.join(dbx_url, '.journal', 'exec')
-    fs, _ = fsspec.url_to_fs(exec_dir)
-    try:
-        fs.makedirs(exec_dir, exist_ok=True)
-    except Exception:
-        pass
-    file_path = os.path.join(exec_dir, f"exec_{uuid.uuid4().hex}.parquet")
-    entry_data = {
-        'exec': str(s),
-        'datetime': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        'id': str(uuid.uuid4()),
-    }
-    df = pd.DataFrame([entry_data])
-    with fs.open(file_path, 'wb') as f:
-        df.to_parquet(f)
-
-
-def read_exec_journal(url: str | None = None, storage_options: dict | None = None) -> pd.DataFrame:
-    """Read all recorded dbx.exec() entries from the $DBX_URL/.journal/exec/ journal."""
-    dbx_url = url or os.environ.get('DBX_URL') or os.environ.get('DBX_ROOT') or './dbx'
-    exec_dir = os.path.join(dbx_url, '.journal', 'exec')
-    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
-    try:
-        if not fs.exists(exec_dir):
-            return pd.DataFrame(columns=['exec', 'datetime', 'id'])
-        files = fs.glob(os.path.join(exec_dir, '*.parquet'))
-        if not files:
-            return pd.DataFrame(columns=['exec', 'datetime', 'id'])
-        dfs = []
-        for file in files:
-            try:
-                with fs.open(file, 'rb') as f:
-                    dfs.append(pd.read_parquet(f))
-            except Exception:
-                continue
-        if not dfs:
-            return pd.DataFrame(columns=['exec', 'datetime', 'id'])
-        res = pd.concat(dfs, ignore_index=True)
-        if 'datetime' in res.columns:
-            res = res.sort_values('datetime').reset_index(drop=True)
-        return res
-    except Exception:
-        return pd.DataFrame(columns=['exec', 'datetime', 'id'])
-
-
 def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_options=None, log=None, n_workers=8, index=None, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
 
@@ -249,7 +203,16 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
     Datajournal, DatajournalEntry, or pd.DataFrame
     """
     if cls_anchor_or_df is None:
-        return read_exec_journal(url=url, storage_options=storage_options)
+        return read_exec_journal(
+            url=url,
+            loc=loc,
+            iloc=iloc,
+            storage_options=storage_options,
+            log=log,
+            n_workers=n_workers,
+            index=index,
+            **filter_kwargs,
+        )
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):

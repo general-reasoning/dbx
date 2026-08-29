@@ -15,7 +15,7 @@ import pytest
 from dataclasses import dataclass
 from unittest.mock import patch
 
-from dbx.datablocks import DIRTOPIC, Datablock, DatajournalEntry
+from dbx.datablocks import DIRTOPIC, Datablock, DatajournalEntry, Logger, LogVolume
 
 
 @pytest.fixture(autouse=True)
@@ -469,11 +469,11 @@ class TestResolution:
         _, code = source
         b = block(tmp_path, x=2)
         b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
-        fresh = block(tmp_path, x=2)
+        fresh = block(tmp_path, x=2, verbose=True)
         capsys.readouterr()
         _ = fresh.redirection
         out = capsys.readouterr().out
-        assert 'REDIRECTION' in out and 'INFO' in out
+        assert 'REDIRECTION' in out and 'VERBOSE' in out
 
     def test_a_later_redirection_is_not_seen_by_an_instance_that_looked(self, tmp_path):
         block(tmp_path, x=1).build()

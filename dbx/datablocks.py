@@ -1608,7 +1608,6 @@ class Datablock:
     def valid(self):
         return self.__valid__(path=None)
 
-
     def validate(self):
         """Validate this block's data. Default implementation calls self.valid().
 
@@ -2291,13 +2290,8 @@ class Datablock:
         except Exception as e:
             self.log.detailed(f"_redirected_paths_: could not read hidden topic .redirection: {e}")
 
-        red = self.redirection
-        if red is not None and red.paths is not None:
-            self.__dict__['__redirected_paths__'] = red.paths
-            return red.paths
-
-        self.__dict__['__redirected_paths__'] = None
         return None
+
 
 
     @_redirected_paths_.setter

@@ -520,6 +520,47 @@ class Bid:
     def tp(self):
         return self._tp
 
+    def signaturedict(self, *, legacy: 'bool | None' = None) -> dict:
+        parsed = Datablock._parse_signature(str(self.signature or ''))
+        return {k: Datablock._structure_signatureval(v) for k, v in parsed.items()}
+
+    def sigdict(self, *, legacy: 'bool | None' = None) -> dict:
+        return self.signaturedict(legacy=legacy)
+
+    def subsignaturedict(self, *, legacy: 'bool | None' = None) -> dict:
+        return self.signaturedict(legacy=legacy)
+
+    def subsigdict(self, *, legacy: 'bool | None' = None) -> dict:
+        return self.signaturedict(legacy=legacy)
+
+    def typedict(self, *, deslash: bool = False) -> dict:
+        t_str = str(self.type or '')
+        parts = t_str.split(os.sep) if os.sep in t_str else t_str.split('/')
+        topics = []
+        paths = None
+        version = self.version
+        for p in parts:
+            if p.startswith('topic:'):
+                topics.append(p)
+            elif p.startswith('_paths_='):
+                paths = p[len('_paths_='):]
+            elif p.startswith('version='):
+                ver_str = p[len('version='):]
+                try:
+                    version = int(ver_str)
+                except (ValueError, TypeError):
+                    version = None if ver_str == 'None' else ver_str
+
+        return {
+            'paths': paths,
+            'signature': self.signaturedict(legacy=None),
+            'topics': tuple(topics),
+            'version': version,
+        }
+
+    def tpdict(self, *, deslash: bool = False) -> dict:
+        return self.typedict(deslash=deslash)
+
     def deslash(self, attr):
         a = getattr(self, attr)
         if callable(a):
@@ -611,21 +652,35 @@ class DatajournalEntry(pd.Series):
     def signature(self):
         """Path or text of this entry's signature."""
         val = self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm')
-        return CallableStr(val) if val is not None else None
+        return CallableSignature(val) if val is not None else None
 
+    @property
     def sig(self):
-        val = self.signature
-        return val() if val is not None else None
+        val = self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm')
+        return CallableSig(val) if val is not None else None
 
     @property
     def type(self):
         """Path or text of this entry's type."""
         val = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
-        return CallableStr(val) if val is not None else None
+        return CallableType(val, bid=self) if val is not None else None
 
+    @property
     def tp(self):
-        val = self.type
-        return val() if val is not None else None
+        val = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
+        return CallableTp(val, bid=self) if val is not None else None
+
+    def signaturedict(self, *, legacy: 'bool | None' = None) -> dict:
+        return self.bid.signaturedict(legacy=legacy)
+
+    def sigdict(self, *, legacy: 'bool | None' = None) -> dict:
+        return self.signaturedict(legacy=legacy)
+
+    def typedict(self, *, deslash: bool = False) -> dict:
+        return self.bid.typedict(deslash=deslash)
+
+    def tpdict(self, *, deslash: bool = False) -> dict:
+        return self.typedict(deslash=deslash)
 
     @property
     def uuid(self):
@@ -867,18 +922,18 @@ class DatajournalEntry(pd.Series):
         def read_thing(thing):
             target_attr = 'subsignature' if thing in ('subsignature', 'norm') else ('note' if thing in ('note', 'message') else thing)
             val = getattr(self, target_attr, None)
-            if val is not None:
-                path = val
+            if val is not None and not (isinstance(val, float) and pd.isna(val)):
+                path = str(val)
                 _, _ext = os.path.splitext(path)
-                ext = _ext[1:]
+                ext = _ext[1:] if _ext else ''
                 try:
-                    if raw or ext == 'txt' or ext == 'log':
+                    if raw or ext in ('txt', 'log'):
                         result = read_str(path, storage_options=self.storage_options)
                     elif ext == 'yaml':
                         result = read_yaml(path, safe=safe, storage_options=self.storage_options)
                     else:
-                        raise ValueError(f"Unknown journal entry field extension for {thing}: {ext}")
-                except FileNotFoundError:
+                        result = str(val)
+                except (FileNotFoundError, OSError):
                     self.logger.warning(f"read: {thing}: file not found, returning None: {path}")
                     result = None
             else:
@@ -1016,8 +1071,9 @@ class DatajournalEntry(pd.Series):
     @property
     def bid(self):
         """Reconstruct a Bid from this journal entry."""
-        sig_str = self.read('signature', safe=True) or self.read('subsignature', safe=True) or self.read('norm', safe=True) or (str(self.signature) if self.signature is not None else '')
-        type_str = self.read('type', safe=True) or (str(self.type) if self.type is not None else '')
+        sig_str = self.read('signature', safe=True) or self.read('subsignature', safe=True) or self.read('norm', safe=True) or (str(self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm') or ''))
+        raw_type = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
+        type_str = self.read('type', safe=True) or (str(raw_type) if raw_type is not None else '')
         return Bid(
             hash=self.hash,
             code=self.code,

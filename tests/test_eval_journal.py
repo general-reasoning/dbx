@@ -36,19 +36,27 @@ class TestDatajournalEntryMethods:
 
         # Method access
         assert entry.signature() == 'test.Anchor(spec={})'
-        assert entry.sig() == 'test.Anchor(spec={})'
+        assert entry.sig() == "{'spec': '{}'}"
 
         assert entry.type() == 'test.Anchor(spec={})/version=1.0'
-        assert entry.tp() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.tp() == "{'paths': None, 'signature': {'spec': '{}'}, 'topics': (), 'version': '1.0'}"
+
+        # Bid access
+        assert entry.bid.signature == 'test.Anchor(spec={})'
+        assert entry.bid.signature() == 'test.Anchor(spec={})'
+        assert entry.bid.sig() == "{'spec': '{}'}"
+        assert entry.bid.type == 'test.Anchor(spec={})/version=1.0'
+        assert entry.bid.type() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.bid.tp() == "{'paths': None, 'signature': {'spec': '{}'}, 'topics': (), 'version': '1.0'}"
 
     def test_datajournal_entry_methods_none(self):
         series = pd.Series({'hash': '12345', 'anchor': 'test.Anchor'})
         entry = DatajournalEntry(series)
 
         assert entry.signature is None
-        assert entry.sig() is None
+        assert entry.sig is None
         assert entry.type is None
-        assert entry.tp() is None
+        assert entry.tp is None
 
 
 class TestEvalJournal:

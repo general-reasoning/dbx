@@ -124,3 +124,22 @@ class TestEvalJournal:
         assert 'expr2' in j_indexed.index
         assert isinstance(j_indexed.loc['expr2'], pd.Series)
 
+    def test_read_exec_journal_prefix_matching(self, tmp_path, monkeypatch):
+        """Prefix matching on exec (e.g. exec='autopath.') should match starting strings."""
+        dbx_url = str(tmp_path / 'dbx_root')
+        monkeypatch.setenv('DBX_URL', dbx_url)
+
+        write_exec_journal("autopath.pipeline.Run(a=1)", url=dbx_url)
+        write_exec_journal("autopath.model.Train(b=2)", url=dbx_url)
+        write_exec_journal("dbx.Datablock(x=3)", url=dbx_url)
+
+        # Single prefix match
+        j_auto = dbx.journal(exec='autopath.')
+        assert len(j_auto) == 2
+        assert all(s.startswith('autopath.') for s in j_auto['exec'])
+
+        # Multiple prefixes match
+        j_multi = dbx.journal(exec=['autopath.pipeline', 'dbx.'])
+        assert len(j_multi) == 2
+
+

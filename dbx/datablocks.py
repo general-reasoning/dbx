@@ -80,6 +80,7 @@ from .dataparts import (
     read_yaml,
     read_exec_journal,
     write_exec_journal,
+    filter_journal_frame,
     remote,
     size,
     write_str,
@@ -871,35 +872,7 @@ class Datajournal(pd.DataFrame):
         if parse_datetimes:
             if 'datetime' in df.columns and not isinstance(df['datetime'].iloc[0], datetime.datetime): # TODO: use dtype?
                 df['datetime'] = pd.to_datetime(df['datetime'], format='%Y-%m-%dT%H-%M-%S.%f')
-        for k, v in filter_kwargs.items():
-            if k == 'date':
-                if isinstance(v, str):
-                    v = pd.to_datetime(v).date()
-                elif isinstance(v, list):
-                    v = [pd.to_datetime(x).date() for x in v]
-                if isinstance(v, list):
-                    df = df[df['datetime'].dt.date.isin(v)]
-                else:
-                    df = df[df['datetime'].dt.date == v]         
-            elif k == 'hash':
-                # Prefix match: allow short hashes
-                if isinstance(v, list):
-                    df = df[df['hash'].apply(lambda h: h.startswith(tuple(v)))]
-                else:
-                    df = df[df['hash'].str.startswith(v)]
-            else:
-                if k == 'datetime':
-                    if isinstance(v, str):
-                        v = datetime.datetime.strptime(v, '%Y-%m-%dT%H-%M-%S.%f')
-                    elif isinstance(v, list) and all(isinstance(x, str) for x in v):
-                        v = [datetime.datetime.strptime(x, '%Y-%m-%dT%H-%M-%S.%f') for x in v]
-                if isinstance(v, list):
-                    df = df[df[k].isin(v)]
-                else:
-                    df = df[df[k] == v]
-
-        if filter_kwargs:
-            df = df.reset_index(drop=True)
+        df = filter_journal_frame(df, **filter_kwargs)
 
         if index is not None:
             if index in df.columns:

@@ -680,6 +680,69 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
         df.to_parquet(f)
 
 
+def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
+    """Filter a journal DataFrame by column matching, prefix matching (e.g. hash, exec, and all string columns), and date/datetime."""
+    if df is None or df.empty or not filter_kwargs:
+        return df
+
+    for k, v in filter_kwargs.items():
+        if k not in df.columns:
+            if k == 'date' and 'datetime' in df.columns:
+                dt_series = pd.to_datetime(df['datetime']) if not pd.api.types.is_datetime64_any_dtype(df['datetime']) else df['datetime']
+                if isinstance(v, str):
+                    target_date = pd.to_datetime(v).date()
+                elif isinstance(v, (list, tuple)):
+                    target_date = [pd.to_datetime(x).date() for x in v]
+                else:
+                    target_date = v
+                if isinstance(target_date, (list, tuple)):
+                    df = df[dt_series.dt.date.isin(target_date)]
+                else:
+                    df = df[dt_series.dt.date == target_date]
+            else:
+                return df.iloc[0:0].reset_index(drop=True)
+            continue
+
+        if k == 'date':
+            dt_series = pd.to_datetime(df['datetime']) if not pd.api.types.is_datetime64_any_dtype(df['datetime']) else df['datetime']
+            if isinstance(v, str):
+                target_date = pd.to_datetime(v).date()
+            elif isinstance(v, (list, tuple)):
+                target_date = [pd.to_datetime(x).date() for x in v]
+            else:
+                target_date = v
+            if isinstance(target_date, (list, tuple)):
+                df = df[dt_series.dt.date.isin(target_date)]
+            else:
+                df = df[dt_series.dt.date == target_date]
+        elif k == 'datetime':
+            if isinstance(v, str):
+                try:
+                    v_dt = datetime.datetime.strptime(v, '%Y-%m-%dT%H-%M-%S.%f')
+                except ValueError:
+                    v_dt = pd.to_datetime(v)
+            elif isinstance(v, (list, tuple)):
+                v_dt = [pd.to_datetime(x) for x in v]
+            else:
+                v_dt = v
+            if isinstance(v_dt, (list, tuple)):
+                df = df[df[k].isin(v_dt)]
+            else:
+                df = df[df[k] == v_dt]
+        elif isinstance(v, (list, tuple)):
+            if all(isinstance(x, str) for x in v):
+                df = df[df[k].apply(lambda x: isinstance(x, str) and (x in v or x.startswith(tuple(v))))]
+            else:
+                df = df[df[k].isin(v)]
+        elif isinstance(v, str):
+            df = df[df[k].apply(lambda x: isinstance(x, str) and (x == v or x.startswith(v)))]
+        else:
+            df = df[df[k] == v]
+
+    df = df.reset_index(drop=True)
+    return df
+
+
 def read_exec_journal(
     url: str | None = None,
     loc: int | None = None,
@@ -736,15 +799,7 @@ def read_exec_journal(
     all_filters = dict(filter or {})
     all_filters.update(filter_kwargs)
 
-    for k, v in all_filters.items():
-        if k in df.columns:
-            if isinstance(v, list):
-                df = df[df[k].isin(v)]
-            else:
-                df = df[df[k] == v]
-
-    if all_filters:
-        df = df.reset_index(drop=True)
+    df = filter_journal_frame(df, **all_filters)
 
     if index is not None:
         if index in df.columns:

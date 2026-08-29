@@ -2558,7 +2558,13 @@ class Datablock:
         target_paths = None
         redirect_record = None
 
-        if filter is not None and journal is not None:
+        # If the redirector gave us paths directly, use those immediately.
+        redirector_paths = paths if (redirector is not None and isinstance(res, dict) and 'paths' in res) else None
+        if redirector_paths is not None:
+            target_paths = redirector_paths
+            redirect_record = redirector_paths
+
+        if target_paths is None and filter is not None and journal is not None:
             try:
                 j = Datajournal(journal, storage_options=getattr(journal, 'storage_options', self.storage_options), **dict(filter))
                 if len(j) > 0:
@@ -2597,7 +2603,6 @@ class Datablock:
             return False
 
         remapped_paths = self._mapped_paths(target_paths, topic_map)
-
 
 
         code = self.write_journal_entry(

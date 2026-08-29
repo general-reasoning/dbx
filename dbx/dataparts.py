@@ -731,7 +731,7 @@ def read_exec_journal(
         else:
             df = pd.concat(dfs, ignore_index=True)
             if 'datetime' in df.columns:
-                df = df.sort_values('datetime').reset_index(drop=True)
+                df = df.sort_values('datetime', ascending=False).reset_index(drop=True)
 
     all_filters = dict(filter or {})
     all_filters.update(filter_kwargs)

@@ -105,14 +105,14 @@ class TestEvalJournal:
         j = read_exec_journal(url=dbx_url)
         assert len(j) == 3
 
-        # iloc / loc access
+        # iloc / loc access (most recent first)
         entry_0 = read_exec_journal(url=dbx_url, iloc=0)
         assert isinstance(entry_0, pd.Series)
-        assert entry_0['exec'] == 'expr1'
+        assert entry_0['exec'] == 'expr3'
 
         entry_last = dbx.journal(iloc=2)
         assert isinstance(entry_last, pd.Series)
-        assert entry_last['exec'] == 'expr3'
+        assert entry_last['exec'] == 'expr1'
 
         # Filter
         j_filtered = dbx.journal(exec='expr2')

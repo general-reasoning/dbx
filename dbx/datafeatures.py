@@ -355,7 +355,6 @@ class DatafeatureTab(DatapointTab):
             return self.__build_bulk__()
 
     def __build_bulk__(self):
-        self.log.info(f"DatafeatureTab.__build_bulk__: anchorkeypath={self.anchorkeypath} hash={self.hash}")
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         datapoint_tab = self.var.datapoint_tab
 
@@ -556,8 +555,6 @@ class DatafeatureTab(DatapointTab):
 
     def __len__(self) -> int:
         return len(self.var.datapoint_tab)
-
-
 
 
 class DatafeatureTable(DatapointTable):

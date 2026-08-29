@@ -1606,7 +1606,9 @@ class Datablock:
         return result
 
     def valid(self):
-        return self.__valid__(path=None)
+        red = self.redirection
+        entry = red.entry if red is not None else None
+        return self.__valid__(path=entry.anchorkeypath if entry is not None else None)
 
     def validate(self):
         """Validate this block's data. Default implementation calls self.valid().
@@ -2604,16 +2606,8 @@ class Datablock:
 
         remapped_paths = self._mapped_paths(target_paths, topic_map)
 
-
-        code = self.write_journal_entry(
-            event='UNSAFE_redirect',
-            redirection=redirect_record,
-            journal_prefix='redirect-',
-        )
-        # Invalidate @functools.cached_property cache on this instance so subsequent
-        # accesses to self.redirection re-evaluate with the updated redirection state.
-        self.__dict__.pop('redirection', None)
         self._redirected_paths_ = remapped_paths
+        self.__dict__.pop('redirection', None)
 
         try:
             red_dir = self.dirpath('.redirection', ensure=True)
@@ -2621,6 +2615,12 @@ class Datablock:
             write_yaml(self._redirected_paths_, red_yaml, storage_options=self.storage_options)
         except Exception as e:
             self.log.detailed(f"UNSAFE_redirect: could not write hidden topic .redirection: {e}")
+
+        code = self.write_journal_entry(
+            event='UNSAFE_redirect',
+            redirection=redirect_record,
+            journal_prefix='redirect-',
+        )
 
         if validate:
             val_res = self.validate()
@@ -2640,16 +2640,11 @@ class Datablock:
         def clear_path(path, *, recursive=False, throw=False):
             if path is None:
                 return
-            # Safety check: UNSAFE_clear must only clear files inside this block's own directory
-            path_str = str(path)
-            if not path_str.startswith(str(self.anchorkeypath)) and not path_str.startswith(str(self.localanchorkeypath)):
-                self.log.warning(f"UNSAFE_clear: refusing to remove {path_str} outside block {self.anchorkeypath}")
-                return
             if not self.fs.exists(path):
                 return
             self.log.verbose(f"removing {path}")
             try:
-                if path.startswith("gs://"):
+                if isinstance(path, str) and path.startswith("gs://"):
                     """
                     Circumvent bugs in fsspec.
                     """

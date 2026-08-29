@@ -2340,14 +2340,14 @@ class Datablock:
         paths = recorded.get('paths')
 
         if paths is not None:
-            self.log.info(
+            self.log.verbose(
                 f"REDIRECTION: {self.anchorkeypath} reads from the given paths instead: {paths}"
             )
             self.__dict__['__redirected_paths__'] = paths
             return self.Redirection(paths=paths, entry=None, filter=None, topic_map=None)
 
         if filter is None and isinstance(recorded, dict) and not ('filter' in recorded or 'paths' in recorded or 'topic_map' in recorded):
-            self.log.info(
+            self.log.verbose(
                 f"REDIRECTION: {self.anchorkeypath} reads from the given paths instead: {recorded}"
             )
             self.__dict__['__redirected_paths__'] = recorded
@@ -2361,7 +2361,7 @@ class Datablock:
         resolved_paths = self._mapped_paths(entry.paths, topic_map)
         self.__dict__['__redirected_paths__'] = resolved_paths
 
-        self.log.info(
+        self.log.verbose(
             f"REDIRECTION: {self.anchorkeypath} reads from journal entry {entry.entry_code} "
             f"instead (hash {entry.hash}, event {entry.get('event')!r}, written "
             f"{entry.get('datetime')}), matched by {filter!r}"
@@ -2629,7 +2629,7 @@ class Datablock:
                 self.log.warning(f"UNSAFE_redirect: block {self.hash} remains invalid after redirection")
                 return False
 
-        self.log.info(f"UNSAFE_redirect: {self.hash} -> {redirect_record!r} (entry {code})")
+        self.log.verbose(f"UNSAFE_redirect: {self.hash} -> {redirect_record!r} (entry {code})")
         return True
     #REDIRECT: END
 
@@ -2709,8 +2709,6 @@ class Datablock:
         self.log.info(msg)
         return self
 
-
-    
     def _UNSAFE_copy_fs(self, *, src_path, dst_path, recursive: bool = False):
         """Copy a single file or directory between two fsspec paths.
 
@@ -5251,11 +5249,12 @@ class Datastack(Datablock):
         tuple[int, int]
             (successes, total)
         """
+        allowed = UNSAFE_allowed("UNSAFE_redirect_blocks", OVERRIDE=OVERRIDE)
         if redirector is None:
             raise ValueError("UNSAFE_redirect_blocks requires a redirector callable")
         block_list = self.blocks()
         total = len(block_list)
-        if not UNSAFE_allowed("UNSAFE_redirect_blocks", OVERRIDE=OVERRIDE):
+        if not allowed:
             return 0, total
 
         par = parallelization if parallelization is not None else getattr(self, 'parallelization', None)

@@ -374,7 +374,186 @@ def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs)
 
 
 
+class CallableSignature(CallableStr):
+    def __call__(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = False, **kwargs):
+        if pretty:
+            import pprint
+            parsed = Datablock._parse_signature(str(self))
+            sig_dict = {k: Datablock._structure_signatureval(v) for k, v in parsed.items()}
+            return pprint.pformat(sig_dict, indent=2, width=120)
+        s = str(self)
+        if deslash:
+            s = s.replace('\\', '')
+        return s
+
+
+class CallableSig(CallableStr):
+    def __call__(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True, **kwargs):
+        if pretty:
+            import pprint
+            parsed = Datablock._parse_signature(str(self))
+            sig_dict = {k: Datablock._structure_signatureval(v) for k, v in parsed.items()}
+            return pprint.pformat(sig_dict, indent=2, width=120)
+        s = str(self)
+        if deslash:
+            s = s.replace('\\', '')
+        return s
+
+
+class CallableType(CallableStr):
+    def __new__(cls, val='', bid=None):
+        instance = super().__new__(cls, val)
+        instance._bid = bid
+        return instance
+
+    def __call__(self, *, deslash: bool = False, pretty: bool = False, **kwargs):
+        if pretty:
+            import pprint
+            try:
+                t_str = str(self)
+                parts = t_str.split(os.sep) if os.sep in t_str else t_str.split('/')
+                topics = []
+                paths = None
+                version = self._bid.version if self._bid is not None else None
+                sig_part = str(self._bid.signature) if self._bid is not None else ''
+                for p in parts:
+                    if p.startswith('topic:'):
+                        topics.append(p)
+                    elif p.startswith('_paths_='):
+                        paths = p[len('_paths_='):]
+                    elif p.startswith('version='):
+                        ver_str = p[len('version='):]
+                        version = None if ver_str == 'None' else ver_str
+
+                sig_dict = Datablock._parse_signature(sig_part)
+                sig_dict = {k: Datablock._structure_signatureval(v) for k, v in sig_dict.items()}
+                d = {
+                    'paths': paths,
+                    'signature': sig_dict,
+                    'topics': tuple(topics),
+                    'version': version,
+                }
+                return pprint.pformat(d, indent=2, width=120)
+            except Exception:
+                pass
+        t = str(self)
+        if deslash:
+            t = t.replace('\\', '')
+        return t
+
+
+class CallableTp(CallableStr):
+    def __new__(cls, val='', bid=None):
+        instance = super().__new__(cls, val)
+        instance._bid = bid
+        return instance
+
+    def __call__(self, *, deslash: bool = False, pretty: bool = True, **kwargs):
+        if pretty:
+            import pprint
+            try:
+                t_str = str(self)
+                parts = t_str.split(os.sep) if os.sep in t_str else t_str.split('/')
+                topics = []
+                paths = None
+                version = self._bid.version if self._bid is not None else None
+                sig_part = str(self._bid.signature) if self._bid is not None else ''
+                for p in parts:
+                    if p.startswith('topic:'):
+                        topics.append(p)
+                    elif p.startswith('_paths_='):
+                        paths = p[len('_paths_='):]
+                    elif p.startswith('version='):
+                        ver_str = p[len('version='):]
+                        version = None if ver_str == 'None' else ver_str
+
+                sig_dict = Datablock._parse_signature(sig_part)
+                sig_dict = {k: Datablock._structure_signatureval(v) for k, v in sig_dict.items()}
+                d = {
+                    'paths': paths,
+                    'signature': sig_dict,
+                    'topics': tuple(topics),
+                    'version': version,
+                }
+                return pprint.pformat(d, indent=2, width=120)
+            except Exception:
+                pass
+        t = str(self)
+        if deslash:
+            t = t.replace('\\', '')
+        return t
+
+
+@dataclass
+class Bid:
+    """Reconstructed block identifier from a journal entry."""
+    hash: str = None
+    code: str = None
+    subhash: str = None
+    version: str = None
+    revision: str = None
+    dfn: dict = None
+    kwargs: dict = None
+    spec: dict = None
+    quote: str = None
+    cite: str = None
+    repr: str = None
+    subsignature: str = None
+    signature: str = None
+    type: str = None
+    anchor: str = None
+    tag: str = None
+    key: str = None
+    keyby: str = None
+
+    def __post_init__(self):
+        sig_str = self.signature or self.subsignature or ''
+        self.signature = CallableSignature(sig_str)
+        self.subsignature = CallableSignature(sig_str)
+        self._sig = CallableSig(sig_str)
+        type_str = self.type or ''
+        self.type = CallableType(type_str, bid=self)
+        self._tp = CallableTp(type_str, bid=self)
+
+    @property
+    def sig(self):
+        return self._sig
+
+    @property
+    def subsig(self):
+        return self._sig
+
+    @property
+    def tp(self):
+        return self._tp
+
+    def deslash(self, attr):
+        a = getattr(self, attr)
+        if callable(a):
+            a = a()
+        if isinstance(a, str):
+            return a.replace('\\', '')
+        return a
+
+    def fields(self):
+        return {f.name: f.type for f in fields(self)}
+
+    def to_dict(self, *, deslash: bool = False):
+        d = {}
+        for f in fields(self):
+            val = getattr(self, f.name)
+            if isinstance(val, CallableStr):
+                val = str(val)
+            d[f.name] = val
+        if deslash:
+            for k, v in d.items():
+                if isinstance(v, str):
+                    d[k] = v.replace('\\', '')
+        return d
+
+
 class DatajournalEntry(pd.Series):
+    Bid = Bid
     """A single row from a Datablock journal, with convenience accessors.
 
     Inherits from :class:`pandas.Series` so all standard pandas
@@ -854,7 +1033,32 @@ class DatajournalEntry(pd.Series):
         if isinstance(proxy, Remote):
             proxy._origin = handle
         return proxy
-    
+
+    @property
+    def bid(self):
+        """Reconstruct a Bid from this journal entry."""
+        sig_str = self.read('signature', safe=True) or self.read('subsignature', safe=True) or self.read('norm', safe=True) or (str(self.signature) if self.signature is not None else '')
+        type_str = self.read('type', safe=True) or (str(self.type) if self.type is not None else '')
+        return Bid(
+            hash=self.hash,
+            code=self.code,
+            subhash=self.subhash,
+            version=self.version,
+            revision=self.revision,
+            dfn=self.read('dfn', safe=True) or {},
+            kwargs=self.read('kwargs', safe=True) or {},
+            spec=self.read('spec', safe=True) or {},
+            quote=self.read('quote') or '',
+            cite=self.read('cite') or '',
+            repr=self.read('repr') or '',
+            subsignature=sig_str,
+            signature=sig_str,
+            type=type_str,
+            anchor=self.anchor,
+            tag=self.tag,
+            key=self.key,
+            keyby=self.keyby,
+        )
 
 
 class Datajournal(pd.DataFrame):

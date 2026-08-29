@@ -577,4 +577,39 @@ class TestDatablockJournalArgThreading:
         assert isinstance(j_inst, Datajournal)
         assert len(j_inst) >= 1
 
+    def test_journal_entry_bid(self, tmp_path, monkeypatch):
+        """DatajournalEntry.bid reconstructs a Bid object with signature/sig and type/tp accessors."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        root = str(tmp_path)
+        b = BuildableBlock(url=root)
+        b.build()
+
+        assert not hasattr(b, 'bid')
+
+        entry = b.journal(iloc=0)
+        assert isinstance(entry, DatajournalEntry)
+        assert hasattr(entry, 'bid')
+
+        bid = entry.bid
+        assert bid.hash == b.hash
+        assert bid.code == b.code
+
+        # signature & sig as properties and callable methods
+        assert str(bid.signature) == b.signature()
+        assert bid.signature() == b.signature()
+        assert bid.signature(pretty=True) == b.signature(pretty=True)
+        assert bid.sig() == b.sig()
+
+        # type & tp as properties and callable methods
+        assert str(bid.type) == b.type()
+        assert bid.type() == b.type()
+        assert bid.tp() == b.tp()
+
+        # dict & fields helpers
+        assert isinstance(bid.fields(), dict)
+        assert 'signature' in bid.fields()
+        assert 'type' in bid.fields()
+        assert isinstance(bid.to_dict(), dict)
+
+
 

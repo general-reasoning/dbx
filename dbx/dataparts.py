@@ -736,13 +736,27 @@ def read_exec_journal(
     all_filters = dict(filter or {})
     all_filters.update(filter_kwargs)
 
-    from .datablocks import Datajournal, DatajournalEntry
-    journal = Datajournal(df, storage_options=storage_options, index=index, **all_filters)
+    for k, v in all_filters.items():
+        if k in df.columns:
+            if isinstance(v, list):
+                df = df[df[k].isin(v)]
+            else:
+                df = df[df[k] == v]
+
+    if all_filters:
+        df = df.reset_index(drop=True)
+
+    if index is not None:
+        if index in df.columns:
+            df = df.set_index(index)
+        else:
+            raise KeyError(f"Column {index!r} not found in journal DataFrame")
+
     if loc is not None:
-        return DatajournalEntry(journal.loc[loc].dropna(), storage_options=storage_options)
+        return df.loc[loc].dropna()
     elif iloc is not None:
-        return DatajournalEntry(journal.iloc[iloc].dropna(), storage_options=storage_options)
-    return journal
+        return df.iloc[iloc].dropna()
+    return df
 
 
 def exec(s=None, **kwargs):

@@ -2663,9 +2663,11 @@ class Datablock:
                 if throw:
                     raise (e)
 
+        had_redirection = False
         try:
             red_dir = self.dirpath('.redirection')
             if self.fs.exists(red_dir):
+                had_redirection = True
                 self.log.info(f"UNSAFE_clear: removing .redirection for {self.anchorkeypath} (the underlying block being redirected to is not affected)")
                 clear_path(red_dir, recursive=True)
         except Exception:
@@ -2693,8 +2695,12 @@ class Datablock:
                 clear_topic(self._normtopic((topic,)))
             self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}", redirection={'cleared': True})
 
-        self.log.info(f"UNSAFE_clear: cleared block {self.hash} (redirection removed)")
+        msg = f"UNSAFE_clear: cleared block {self.hash}"
+        if had_redirection:
+            msg += " (redirection removed)"
+        self.log.info(msg)
         return self
+
 
     
     def _UNSAFE_copy_fs(self, *, src_path, dst_path, recursive: bool = False):

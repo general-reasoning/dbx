@@ -2640,6 +2640,11 @@ class Datablock:
         def clear_path(path, *, recursive=False, throw=False):
             if path is None:
                 return
+            # Safety check: UNSAFE_clear must only clear files inside this block's own directory
+            path_str = str(path)
+            if not path_str.startswith(str(self.anchorkeypath)) and not path_str.startswith(str(self.localanchorkeypath)):
+                self.log.warning(f"UNSAFE_clear: refusing to remove {path_str} outside block {self.anchorkeypath}")
+                return
             if not self.fs.exists(path):
                 return
             self.log.verbose(f"removing {path}")
@@ -2653,10 +2658,13 @@ class Datablock:
                     client = storage.Client()
                     bits = path.removeprefix("gs://").split("/")
                     bucket_name = bits[0]
-                    prefix = "/".join(bits[1:])
+                    blob_name = "/".join(bits[1:])
                     bucket = client.get_bucket(bucket_name)
-                    blobs = bucket.list_blobs(prefix=prefix)
-                    for blob in blobs:
+                    if recursive:
+                        blobs = bucket.list_blobs(prefix=blob_name)
+                        bucket.delete_blobs(blobs)
+                    else:
+                        blob = bucket.get_blob(blob_name)
                         blob.delete()
                 else:
                     self.fs.rm(path, recursive=recursive)
@@ -2689,7 +2697,7 @@ class Datablock:
                 clear_path(self.dirpath(*topicpath), recursive=True)
                 return
             for leaf in self._leaves_under(*topicpath):
-                clear_path(self.path(*leaf), recursive=self._is_dir_topic(*leaf))
+                clear_path(self.__path__(*leaf), recursive=self._is_dir_topic(*leaf))
 
         if len(topics) == 0:
             for topic in self.topics():

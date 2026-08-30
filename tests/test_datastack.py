@@ -504,5 +504,93 @@ class TestValidateAndCustomCallable(unittest.TestCase):
         self.assertEqual(len(cleared_custom), 2)
 
 
+class TestValidAndRedirectedBlocks(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        os.environ.setdefault('DBX_ROOT', self.tmpdir)
+        os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
+
+    def test_valid_blocks_and_valid_tabs(self):
+        import pandas as pd
+        stack = SimpleStack(
+            url=os.path.join(self.tmpdir, 'valid_stack'),
+            spec=dict(total_items=12, block_size=3),  # 4 blocks: 0, 1, 2, 3
+            parallelization='multithreading',
+            n_workers=2,
+        )
+        self.assertIsInstance(stack.valid_blocks(), pd.Series)
+        self.assertIsInstance(stack.valid_tabs(), pd.Series)
+        self.assertEqual(stack.valid_blocks().tolist(), [False, False, False, False])
+        self.assertEqual(stack.valid_tabs().tolist(), [False, False, False, False])
+
+        # Test overrides
+        self.assertEqual(stack.valid_blocks(parallelization='inline').tolist(), [False, False, False, False])
+        self.assertEqual(stack.valid_tabs(n_workers=1).tolist(), [False, False, False, False])
+
+        # Build blocks 0 and 2
+        stack.block(0).build()
+        stack.block(2).build()
+
+        self.assertEqual(stack.valid_blocks().tolist(), [True, False, True, False])
+        self.assertEqual(stack.valid_tabs().tolist(), [True, False, True, False])
+        self.assertEqual(stack.valid_blocks(parallelization='inline').tolist(), [True, False, True, False])
+
+        # Test false_only and true_only
+        self.assertEqual(stack.valid_blocks(false_only=True).index.tolist(), [1, 3])
+        self.assertEqual(stack.valid_blocks(true_only=True).index.tolist(), [0, 2])
+        with self.assertRaises(ValueError):
+            stack.valid_blocks(false_only=True, true_only=True)
+
+        self.assertTrue(stack.valid_block(0))
+        self.assertFalse(stack.valid_block(1))
+        self.assertTrue(stack.valid_tab(2))
+        self.assertFalse(stack.valid_tab(3))
+
+        stack.build()
+        self.assertEqual(stack.valid_blocks().tolist(), [True, True, True, True])
+        self.assertEqual(stack.valid_tabs().tolist(), [True, True, True, True])
+        self.assertTrue(stack.valid_blocks(false_only=True).empty)
+        self.assertEqual(stack.valid_blocks(true_only=True).index.tolist(), [0, 1, 2, 3])
+
+    def test_redirected_blocks_and_redirected_tabs(self):
+        import pandas as pd
+        src_stack = SimpleStack(
+            url=os.path.join(self.tmpdir, 'red_src_stack'),
+            spec=dict(total_items=9, block_size=3),  # 3 blocks: 0, 1, 2
+        ).build()
+
+        dst_stack = SimpleStack(
+            url=os.path.join(self.tmpdir, 'red_dst_stack'),
+            spec=dict(total_items=9, block_size=3),
+            parallelization='multithreading',
+            n_workers=2,
+        )
+        self.assertIsInstance(dst_stack.redirected_blocks(), pd.Series)
+        self.assertIsInstance(dst_stack.redirected_tabs(), pd.Series)
+        self.assertEqual(dst_stack.redirected_blocks().tolist(), [False, False, False])
+        self.assertEqual(dst_stack.redirected_tabs().tolist(), [False, False, False])
+
+        # Test overrides
+        self.assertEqual(dst_stack.redirected_blocks(parallelization='inline').tolist(), [False, False, False])
+
+        dst_stack.block(1).UNSAFE_redirect(paths=src_stack.block(1).paths(), OVERRIDE=True)
+
+        self.assertTrue(dst_stack.block(1).redirected())
+        self.assertFalse(dst_stack.block(0).redirected())
+        self.assertTrue(dst_stack.redirected_block(1))
+        self.assertFalse(dst_stack.redirected_block(0))
+        self.assertTrue(dst_stack.redirected_tab(1))
+        self.assertFalse(dst_stack.redirected_tab(0))
+        self.assertEqual(dst_stack.redirected_blocks().tolist(), [False, True, False])
+        self.assertEqual(dst_stack.redirected_tabs().tolist(), [False, True, False])
+        self.assertEqual(dst_stack.redirected_blocks(parallelization='inline').tolist(), [False, True, False])
+
+        # Test false_only and true_only
+        self.assertEqual(dst_stack.redirected_blocks(false_only=True).index.tolist(), [0, 2])
+        self.assertEqual(dst_stack.redirected_blocks(true_only=True).index.tolist(), [1])
+        with self.assertRaises(ValueError):
+            dst_stack.redirected_blocks(false_only=True, true_only=True)
+
+
 if __name__ == "__main__":
     unittest.main()

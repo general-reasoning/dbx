@@ -115,12 +115,9 @@ class DatapointBase(Datablock):
         super().__init__(*args, cache_limit=cache_limit, **kwargs)
 
     def valid_slice(self, slice) -> bool:
-        """True when *slice* has a **non-empty** `index.json`."""
+        """True when *slice* has an `index.json` on disk."""
         try:
-            index_path = self.slice_index_path(slice)
-            if not self.fs.exists(index_path):
-                return False
-            return bool(json.loads(self.fs.cat(index_path)).get('shards'))
+            return self.fs.exists(self.slice_index_path(slice))
         except Exception:
             return False
 
@@ -729,16 +726,7 @@ class DatapointTable(DatapointBase, Datastack):
                 f"Building {self.__class__.__name__}: filtering {len(callables)} tabs using "
                 f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
             )
-
-            filter_exec_kwargs = self._executor_kwargs(
-                tag=f"FILTERING {len(callables)} tabs [{self.__class__.__name__}]"
-            )
-            filter_executor = self.executor_cls(**filter_exec_kwargs)
-            checkers = [
-                self.TabValidChecker(getattr(c, 'tab_idx', getattr(c, 'idx', i)))
-                for i, c in enumerate(callables)
-            ]
-            validity = filter_executor.exec_callables(checkers, self)
+            validity = self.valid_tabs()
 
             to_build_callables = []
             callable_results = []
@@ -888,6 +876,14 @@ class DatapointTable(DatapointBase, Datastack):
             return self.tab(i).valid()
         return self.tab(i).valid()
 
+    valid_block = valid_tab
+
+    def redirected_tab(self, i: int) -> bool:
+        """Return whether the tab at index *i* is redirected."""
+        return self.tab(i).redirected()
+
+    redirected_block = redirected_tab
+
     def valid_slice(self, slice) -> bool:
         return all(
             self.tab(idx).valid_slice(slice) for idx in range(self.n_tabs)
@@ -971,12 +967,10 @@ class DatapointTable(DatapointBase, Datastack):
             datapoints.extend(self.tab(idx).data(slice, **kwargs))
         return datapoints
 
-    class TabValidChecker:
-        def __init__(self, tab_idx: int):
-            self.tab_idx = tab_idx
-
-        def __call__(self, table):
-            return table.valid_tab(self.tab_idx)
+    TabValidChecker = Datastack.DatablockValidityChecker
+    TabRedirectedChecker = Datastack.DatablockRedirectionChecker
+    DatablockValidityChecker = Datastack.DatablockValidityChecker
+    DatablockRedirectionChecker = Datastack.DatablockRedirectionChecker
 
     class TabMaker(Datastack.BlockMaker):
         """Lightweight callable that forms and optionally builds a tab."""
@@ -1149,6 +1143,14 @@ class DatapointFold(DatapointTable):
     def valid_tab(self, idx: int) -> bool:
         real_idx = self.tab_indices[idx]
         return self.var.partition.datapoint_table.valid_tab(real_idx)
+
+    valid_block = valid_tab
+
+    def redirected_tab(self, idx: int) -> bool:
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.datapoint_table.redirected_tab(real_idx)
+
+    redirected_block = redirected_tab
 
     def _write_tab_path(self, idx: int):
         real_idx = self.tab_indices[idx]

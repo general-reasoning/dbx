@@ -2491,10 +2491,21 @@ class Datablock:
 
         An informational property describing how this block is redirected.
         """
+        return self._get_redirection()
+
+    def get_redirection(self, journal=None):
+        """Where this block reads from instead, as a :attr:`Redirection`, or None.
+
+        If *journal* is provided, use it directly to find matching redirection entries
+        instead of reloading journal files from storage.
+        """
+        return self._get_redirection(journal=journal)
+
+    def _get_redirection(self, journal=None):
         if not getattr(self, 'redirect', False):
             return None
 
-        recorded = self._recorded_redirection()
+        recorded = self._recorded_redirection(journal=journal)
         if recorded is None:
             if '__redirected_paths__' in self.__dict__ and self.__dict__['__redirected_paths__'] is not None:
                 return self.Redirection(paths=self.__dict__['__redirected_paths__'], entry=None, filter=None, topic_map=None)
@@ -2529,7 +2540,7 @@ class Datablock:
             self.__dict__['__redirected_paths__'] = recorded
             return self.Redirection(paths=recorded, entry=None, filter=None, topic_map=None)
 
-        entry = self._redirect_entry(filter)
+        entry = self._redirect_entry(filter, journal=journal)
         if entry is None:
             self.log.warning(f"redirection: filter {filter!r} matches no journal entry")
             return None
@@ -2544,6 +2555,20 @@ class Datablock:
             + (f", topics mapped {topic_map!r}" if topic_map else "")
         )
         return self.Redirection(paths=resolved_paths, entry=entry, filter=filter, topic_map=topic_map)
+
+    def redirected(self) -> bool:
+        """True if this block is redirected (checks presence of hidden .redirection topic without reading the journal)."""
+        if not getattr(self, 'redirect', False):
+            return False
+        if '__redirected_paths__' in self.__dict__ and self.__dict__['__redirected_paths__'] is not None:
+            return True
+        red_dir = os.path.join(self.anchorkeypath, '.redirection')
+        red_yaml = os.path.join(red_dir, 'paths.yaml')
+        try:
+            return self.fs.exists(red_yaml) or self.fs.exists(red_dir)
+        except Exception as e:
+            self.log.detailed(f"redirected: error checking .redirection topic: {e}")
+            return False
 
 
     def _mapped_paths(self, paths, topic_map):
@@ -2641,12 +2666,32 @@ class Datablock:
         """The directory holding THIS block's journal entries, and no others."""
         return os.path.join(self.anchorkeypath, ".journal", self.fqcn, "journal", self.hash)
 
-    def _recorded_redirection(self):
+    def _recorded_redirection(self, journal=None):
         """The latest redirection recorded for this block's hash, or None.
 
         Latest, because a redirection is a correction and the newest one is the
         one still meant.
         """
+        if journal is not None and isinstance(journal, pd.DataFrame) and not journal.empty:
+            if 'hash' in journal.columns and 'redirection' in journal.columns:
+                sub = journal[journal['hash'] == self.hash]
+                if not sub.empty:
+                    latest = None
+                    for _, row in sub.iterrows():
+                        entry = DatajournalEntry(row, storage_options=self.storage_options)
+                        when = row.get('datetime')
+                        if entry.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
+                            if latest is None or str(when) > str(latest[0]):
+                                latest = (when, None)
+                        elif entry.redirection is not None:
+                            if latest is None or str(when) > str(latest[0]):
+                                red_val = entry.redirection
+                                if isinstance(red_val, str) and not red_val.startswith('{'):
+                                    latest = (when, {'filter': {'id': red_val}})
+                                else:
+                                    latest = (when, red_val)
+                    if latest is not None:
+                        return latest[1]
         try:
             dirpath = self._journal_hashdirpath()
             legacy_dirpath = os.path.join(
@@ -2689,17 +2734,34 @@ class Datablock:
                             latest = (when, red_val)
         return latest[1] if latest is not None else None
 
-    def _redirect_entry(self, filter):
+    def _redirect_entry(self, filter, journal=None):
         """The FIRST journal entry matching *filter*, or None."""
         try:
-            journal = self.journal(**dict(filter))
+            if journal is not None and isinstance(journal, pd.DataFrame) and not journal.empty:
+                j = journal
+                for k, v in filter.items():
+                    if k in j.columns:
+                        j = j[j[k] == v]
+                    elif k == 'entry_code' and 'id' in j.columns:
+                        j = j[j['id'] == v]
+                    elif k == 'id' and 'entry_code' in j.columns:
+                        j = j[j['entry_code'] == v]
+                    else:
+                        j = pd.DataFrame()
+                        break
+            else:
+                j = self.journal(**dict(filter))
         except (KeyError, FileNotFoundError, TypeError) as e:
             self.log.warning(f"redirection filter {filter!r} is not usable: {e}")
             return None
-        if len(journal) == 0:
+        if len(j) == 0:
             return None
-        row = journal.get(0, dropna=True)
-        return DatajournalEntry(pd.Series(row).copy(deep=True), storage_options=self.storage_options)
+        if hasattr(j, 'get') and 0 in j.index:
+            row = j.get(0, dropna=True)
+            return DatajournalEntry(pd.Series(row).copy(deep=True), storage_options=self.storage_options)
+        else:
+            row = j.iloc[0]
+            return DatajournalEntry(row.dropna(), storage_options=self.storage_options)
 
     def UNSAFE_redirect(self, *, redirector: Callable|None = None, journal: Datajournal|None = None, filter: dict|None = None, topic_map: dict|None = None,
                         paths: dict|None = None, validate: bool = False, remote: bool | Remote = False, OVERRIDE: bool = False):
@@ -5065,6 +5127,8 @@ def UNSAFE_clear_block_from_callable(block, topics, clear_dirpath):
     block.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
     return block
 
+UNSAFE_clear_block_callable = UNSAFE_clear_block_from_callable
+
 
 def UNSAFE_copy_block_from_callable(block, anchorkeypath, overwrite=False, topicpaths=None, validate=True, always_copy_whole_dirpath=False):
     """Module-level callable for UNSAFE_copy_blocks_from (must be picklable).
@@ -5080,6 +5144,26 @@ def UNSAFE_copy_block_from_callable(block, anchorkeypath, overwrite=False, topic
     """
     block.UNSAFE_copy_from(anchorkeypath, OVERRIDE=True, overwrite=overwrite, topicpaths=topicpaths, validate=validate, always_copy_whole_dirpath=always_copy_whole_dirpath, show_progress=False)
     return block
+
+
+class DatablockValidityChecker:
+    """Lightweight callable that checks if a block at index `idx` is valid."""
+    def __init__(self, idx: int):
+        self.idx = idx
+        self.tab_idx = idx
+
+    def __call__(self, stack):
+        return stack.valid_block(self.idx)
+
+
+class DatablockRedirectionChecker:
+    """Lightweight callable that checks if a block at index `idx` is redirected."""
+    def __init__(self, idx: int):
+        self.idx = idx
+        self.tab_idx = idx
+
+    def __call__(self, stack):
+        return stack.redirected_block(self.idx)
 
 
 class Datastack(Datablock):
@@ -5245,15 +5329,105 @@ class Datastack(Datablock):
         indices = tqdm.tqdm(range(n), desc=f"Forming {n} blocks") if n > 100 else range(n)
         return [self.block(idx) for idx in indices]
 
-    def valid_blocks(self) -> list[bool]:
-        """Return a list of booleans, one per block, indicating validity."""
-        return [s.valid() for s in self.blocks()]
+    def block_journal(self, **kwargs) -> Datajournal | None:
+        """Return the Datajournal for child blocks, or None if no blocks exist or journal fails to load."""
+        if self.n_blocks == 0:
+            return None
+        try:
+            return self.block(0).journal(**kwargs)
+        except Exception as e:
+            self.log.detailed(f"block_journal: could not load journal for child blocks: {e}")
+            return None
+
+    tab_journal = block_journal
+
+    def valid_block(self, idx: int) -> bool:
+        """Return whether the block at index *idx* is valid."""
+        return self.block(idx).valid()
+
+    def redirected_block(self, idx: int) -> bool:
+        """Return whether the block at index *idx* is redirected."""
+        return self.block(idx).redirected()
+
+    def valid_blocks(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
+        """Return a pandas Series of booleans, one per block, indicating validity (parallelized)."""
+        if false_only and true_only:
+            raise ValueError("false_only and true_only are mutually exclusive")
+        n = self.n_blocks
+        if n == 0:
+            return pd.Series([], dtype=bool)
+        executors = self._get_executors_()
+        key = (parallelization or getattr(self, 'parallelization', None) or "inline").lower()
+        if key not in executors:
+            raise ValueError(
+                f"Unknown parallelization {key!r}. Choose from {list(executors)}"
+            )
+        executor_cls = executors[key]
+        exec_kwargs = self._executor_kwargs(
+            tag=f"CHECKING VALIDITY of {n} blocks [{self.__class__.__name__}]",
+            n_workers=n_workers,
+            executor_cls=executor_cls,
+            **kwargs,
+        )
+        executor = executor_cls(**exec_kwargs)
+        checkers = [self.DatablockValidityChecker(i) for i in range(n)]
+        results = executor.exec_callables(checkers, self)
+        series = pd.Series(results, dtype=bool)
+        if false_only:
+            return series[~series]
+        if true_only:
+            return series[series]
+        return series
+
+    def redirected_blocks(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
+        """Return a pandas Series of booleans, one per block, indicating redirection (parallelized)."""
+        if false_only and true_only:
+            raise ValueError("false_only and true_only are mutually exclusive")
+        n = self.n_blocks
+        if n == 0:
+            return pd.Series([], dtype=bool)
+        executors = self._get_executors_()
+        key = (parallelization or getattr(self, 'parallelization', None) or "inline").lower()
+        if key not in executors:
+            raise ValueError(
+                f"Unknown parallelization {key!r}. Choose from {list(executors)}"
+            )
+        executor_cls = executors[key]
+        exec_kwargs = self._executor_kwargs(
+            tag=f"CHECKING REDIRECTION of {n} blocks [{self.__class__.__name__}]",
+            n_workers=n_workers,
+            executor_cls=executor_cls,
+            **kwargs,
+        )
+        executor = executor_cls(**exec_kwargs)
+        checkers = [self.DatablockRedirectionChecker(i) for i in range(n)]
+        results = executor.exec_callables(checkers, self)
+        series = pd.Series(results, dtype=bool)
+        if false_only:
+            return series[~series]
+        if true_only:
+            return series[series]
+        return series
+
+    valid_tab = valid_block
+    redirected_tab = redirected_block
+    valid_tabs = valid_blocks
+    redirected_tabs = redirected_blocks
+
+    DatablockValidityChecker = DatablockValidityChecker
+    DatablockRedirectionChecker = DatablockRedirectionChecker
+    BlockValidChecker = DatablockValidityChecker
+    BlockRedirectedChecker = DatablockRedirectionChecker
+    TabValidChecker = DatablockValidityChecker
+    TabRedirectedChecker = DatablockRedirectionChecker
 
     # -- Default build logic ------------------------------------------------------
 
-    def _executor_kwargs(self, tag: str | None = None) -> dict:
+    def _executor_kwargs(self, tag: str | None = None, n_workers: int | None = None, executor_cls=None, **kwargs) -> dict:
+        nw = n_workers if n_workers is not None else getattr(self, 'n_workers', 1)
+        cls = executor_cls or self.executor_cls
         executor_kwargs = dict(
-            n_workers=self.n_workers,
+            n_workers=nw,
             tag=tag or f"EXECUTING [{self.__class__.__name__}]",
         )
         if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
@@ -5262,12 +5436,13 @@ class Datastack(Datablock):
             executor_kwargs['shuffle_callables'] = self.shuffle_callables
         if (hasattr(self, 'multiprocessing_start_method')
                 and self.multiprocessing_start_method is not None
-                and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
+                and issubclass(cls, MultiprocessingCallableExecutor)):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
         if getattr(self, 'devices', None) is not None:
             executor_kwargs['devices'] = self.devices
         if getattr(self, 'work_stealing', False):
             executor_kwargs['work_stealing'] = True
+        executor_kwargs.update(kwargs)
         return executor_kwargs
 
     def __build__(self, *args, **kwargs):

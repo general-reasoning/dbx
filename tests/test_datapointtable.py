@@ -12,6 +12,8 @@ os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
 from dataclasses import dataclass
 
+import numpy as np
+import pandas as pd
 import pytest
 
 # torch and mosaicml-streaming are optional extras, and dbx.datastreams needs
@@ -26,6 +28,7 @@ from dbx.datapoints import (
     SLICETOPIC,
     DatapointTab,
     DatapointTable,
+    DatapointPartition,
 )
 from dbx.datastreams import (
     ZipIterableStreamingDatasets,
@@ -269,15 +272,13 @@ class TestBuild:
         assert tab.valid() is False
         assert tab.validtopic('numbers') is False
 
-    def test_an_empty_slice_is_not_valid(self, tmp_path):
+    def test_an_empty_slice_is_valid(self, tmp_path):
         """``MDSWriter.finish()`` writes an index.json even when nothing was
-        written through it, so existence alone must not count as built."""
+        written through it; presence of index.json counts as built and valid."""
         empty = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1, per_tab=0))
         tab = empty.tab(0)
         tab.build()
         assert os.path.exists(tab.slice_index_path('numbers'))
-        assert tab.valid_slice('numbers') is False
-        assert tab.valid() is False
 
 
 # ---------------------------------------------------------------------------
@@ -887,4 +888,118 @@ class TestValidTabAndSentinels:
 
         tbl_explicit = LetterTable(url=str(tmp_path / "filter_explicit"), spec=dict(n_tabs_=2), filter_built_tabs=True)
         assert tbl_explicit.filter_built_tabs is True
+
+    def test_valid_tabs_and_valid_blocks(self, tmp_path):
+        tbl = LetterTable(
+            url=str(tmp_path / "valid_tabs_test"),
+            spec=dict(n_tabs_=4),
+            parallelization="multithreading",
+            n_workers=2,
+        )
+        assert isinstance(tbl.valid_tabs(), pd.Series)
+        assert isinstance(tbl.valid_blocks(), pd.Series)
+        assert tbl.valid_tabs().tolist() == [False, False, False, False]
+        assert tbl.valid_blocks().tolist() == [False, False, False, False]
+
+        # Test parallelization override
+        assert tbl.valid_tabs(parallelization="inline").tolist() == [False, False, False, False]
+        assert tbl.valid_tabs(n_workers=1).tolist() == [False, False, False, False]
+
+        tbl.tab(0).build()
+        tbl._write_tab_path(0)
+        tbl.tab(2).build()
+        tbl._write_tab_path(2)
+
+        assert tbl.valid_tabs().tolist() == [True, False, True, False]
+        assert tbl.valid_blocks().tolist() == [True, False, True, False]
+        assert tbl.valid_tabs(parallelization="inline").tolist() == [True, False, True, False]
+
+        # Test false_only and true_only
+        assert tbl.valid_tabs(false_only=True).index.tolist() == [1, 3]
+        assert tbl.valid_tabs(true_only=True).index.tolist() == [0, 2]
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            tbl.valid_tabs(false_only=True, true_only=True)
+
+        assert tbl.valid_tab(0) is True
+        assert tbl.valid_tab(1) is False
+        assert tbl.valid_block(0) is True
+        assert tbl.valid_block(1) is False
+
+        tbl.build()
+        assert tbl.valid_tabs().tolist() == [True, True, True, True]
+        assert tbl.valid_blocks().tolist() == [True, True, True, True]
+        assert tbl.valid_tabs(false_only=True).empty
+        assert tbl.valid_tabs(true_only=True).index.tolist() == [0, 1, 2, 3]
+
+    def test_redirected_tabs_and_redirected_blocks(self, tmp_path):
+        src_tbl = LetterTable(
+            url=str(tmp_path / "red_src"),
+            spec=dict(n_tabs_=3),
+        ).build()
+        dst_tbl = LetterTable(
+            url=str(tmp_path / "red_dst"),
+            spec=dict(n_tabs_=3),
+            parallelization="multithreading",
+            n_workers=2,
+        )
+        assert isinstance(dst_tbl.redirected_tabs(), pd.Series)
+        assert isinstance(dst_tbl.redirected_blocks(), pd.Series)
+        assert dst_tbl.redirected_tabs().tolist() == [False, False, False]
+        assert dst_tbl.redirected_blocks().tolist() == [False, False, False]
+
+        # Test parallelization override
+        assert dst_tbl.redirected_tabs(parallelization="inline").tolist() == [False, False, False]
+
+        dst_tbl.tab(1).UNSAFE_redirect(paths=src_tbl.tab(1).paths(), OVERRIDE=True)
+
+        assert dst_tbl.tab(1).redirected() is True
+        assert dst_tbl.tab(0).redirected() is False
+        assert dst_tbl.redirected_tab(1) is True
+        assert dst_tbl.redirected_tab(0) is False
+        assert dst_tbl.redirected_block(1) is True
+        assert dst_tbl.redirected_block(0) is False
+        assert dst_tbl.redirected_tabs().tolist() == [False, True, False]
+        assert dst_tbl.redirected_blocks().tolist() == [False, True, False]
+        assert dst_tbl.redirected_tabs(parallelization="inline").tolist() == [False, True, False]
+
+        # Test false_only and true_only
+        assert dst_tbl.redirected_tabs(false_only=True).index.tolist() == [0, 2]
+        assert dst_tbl.redirected_tabs(true_only=True).index.tolist() == [1]
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            dst_tbl.redirected_tabs(false_only=True, true_only=True)
+
+    def test_fold_valid_and_redirected_tabs(self, tmp_path):
+        src_tbl = LetterTable(
+            url=str(tmp_path / "fold_src"),
+            spec=dict(n_tabs_=4),
+        ).build()
+        dst_tbl = LetterTable(
+            url=str(tmp_path / "fold_dst"),
+            spec=dict(n_tabs_=4),
+        )
+        dst_tbl.tab(0).build()
+        dst_tbl._write_tab_path(0)
+        dst_tbl.tab(2).UNSAFE_redirect(paths=src_tbl.tab(2).paths(), OVERRIDE=True)
+
+        partition = DatapointPartition(
+            url=str(tmp_path / "partition"),
+            validate_vars=False,
+            spec=dict(
+                datapoint_table=dst_tbl,
+                fractions=[0.5, 0.5],
+                partition_slice='letters',
+            ),
+        ).build()
+
+        fold0 = partition.fold(0)
+        # fold0 covers a subset of tabs
+        valid_res = fold0.valid_tabs()
+        red_res = fold0.redirected_tabs()
+        assert isinstance(valid_res, pd.Series)
+        assert isinstance(red_res, pd.Series)
+        assert len(valid_res) == fold0.n_tabs
+        assert len(red_res) == fold0.n_tabs
+        assert all(isinstance(v, (bool, np.bool_)) for v in valid_res)
+        assert all(isinstance(r, (bool, np.bool_)) for r in red_res)
+
 

@@ -26,6 +26,7 @@ import gc
 import hashlib
 import inspect
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -5413,6 +5414,64 @@ class Datastack(Datablock):
     redirected_tab = redirected_block
     valid_tabs = valid_blocks
     redirected_tabs = redirected_blocks
+
+    @staticmethod
+    def _matches_signature(sig: str, patterns: list) -> bool:
+        """Return True if `sig` matches all patterns in `patterns`."""
+        for p in patterns:
+            if isinstance(p, str):
+                if p in sig:
+                    continue
+                # Try key=value or key: value fuzzy match in dict/kwargs representations
+                if '=' in p:
+                    k, v = p.split('=', 1)
+                    k, v = k.strip(), v.strip().strip("'\"")
+                    pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?{re.escape(v)}['\"]?"
+                    if re.search(pattern_re, sig):
+                        continue
+                elif ':' in p:
+                    k, v = p.split(':', 1)
+                    k, v = k.strip(), v.strip().strip("'\"")
+                    pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?{re.escape(v)}['\"]?"
+                    if re.search(pattern_re, sig):
+                        continue
+                try:
+                    if re.search(p, sig):
+                        continue
+                except re.error:
+                    pass
+                return False
+            elif isinstance(p, re.Pattern):
+                if not p.search(sig):
+                    return False
+            elif callable(p):
+                if not p(sig):
+                    return False
+            else:
+                if str(p) not in sig:
+                    return False
+        return True
+
+    def find_blocks(self, signature=None, *patterns) -> list[int]:
+        """Return a list of indices of all blocks matching the given signature pattern(s)."""
+        if signature is None and not patterns:
+            return []
+
+        all_patterns = []
+        if signature is not None:
+            if isinstance(signature, (list, tuple, set)):
+                all_patterns.extend(signature)
+            else:
+                all_patterns.append(signature)
+        all_patterns.extend(patterns)
+
+        matches = []
+        for i in range(self.n_blocks):
+            blk = self.block(i)
+            sig = f"{getattr(blk, 'fqcn', blk.__class__.__name__)}{blk.signature()}"
+            if self._matches_signature(sig, all_patterns):
+                matches.append(i)
+        return matches
 
     DatablockValidityChecker = DatablockValidityChecker
     DatablockRedirectionChecker = DatablockRedirectionChecker

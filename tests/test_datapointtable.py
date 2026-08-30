@@ -858,6 +858,23 @@ class TestValidTabAndSentinels:
         assert tbl.valid_tab(0)
         assert tbl.valid_tab(1)
 
+    def test_find_tabs(self, tmp_path):
+        tbl = LetterTable(
+            url=str(tmp_path / "find_table"),
+            spec=dict(n_tabs_=4),
+        )
+        assert tbl.find_tabs("base=0") == [0]
+        assert tbl.find_blocks("base=3") == [1]
+        assert tbl.find_tabs(["base=6"]) == [2]
+        assert tbl.find_tabs(["LetterTab", "base=9"]) == [3]
+
+        # Match multiple
+        assert tbl.find_tabs("LetterTab") == [0, 1, 2, 3]
+        assert tbl.find_blocks("LetterTab") == [0, 1, 2, 3]
+
+        # No match
+        assert tbl.find_tabs("nonexistent") == []
+
     def test_parallel_filtering_skips_already_valid_tabs(self, tmp_path):
         tbl = LetterTable(
             url=str(tmp_path / "filter_test"),

@@ -591,6 +591,23 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
         with self.assertRaises(ValueError):
             dst_stack.redirected_blocks(false_only=True, true_only=True)
 
+    def test_find_blocks(self):
+        stack = SimpleStack(
+            url=os.path.join(self.tmpdir, 'find_stack'),
+            spec=dict(total_items=12, block_size=3),  # 4 blocks: idx 0, 1, 2, 3
+        )
+        # Block 0 has idx=0, Block 1 has idx=1, etc. in their spec/signature
+        self.assertEqual(stack.find_blocks(signature="idx=0"), [0])
+        self.assertEqual(stack.find_blocks(signature="idx=1"), [1])
+        self.assertEqual(stack.find_blocks("idx=2"), [2])
+        self.assertEqual(stack.find_blocks(["idx=3"]), [3])
+
+        # Match multiple
+        self.assertEqual(stack.find_blocks("CounterBlock"), [0, 1, 2, 3])
+
+        # Non-existent pattern
+        self.assertEqual(stack.find_blocks("nonexistent_pattern"), [])
+
 
 if __name__ == "__main__":
     unittest.main()

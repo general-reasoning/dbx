@@ -884,6 +884,10 @@ class DatapointTable(DatapointBase, Datastack):
 
     redirected_block = redirected_tab
 
+    def find_tabs(self, signature=None, *patterns) -> list[int]:
+        """Return a list of indices of all tabs matching the given signature pattern(s)."""
+        return self.find_blocks(signature, *patterns)
+
     def valid_slice(self, slice) -> bool:
         return all(
             self.tab(idx).valid_slice(slice) for idx in range(self.n_tabs)

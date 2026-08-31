@@ -510,7 +510,7 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
         os.environ.setdefault('DBX_ROOT', self.tmpdir)
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
-    def test_valid_blocks_and_valid_tabs(self):
+    def test_valid_blocks(self):
         import pandas as pd
         stack = SimpleStack(
             url=os.path.join(self.tmpdir, 'valid_stack'),
@@ -519,20 +519,17 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
             n_workers=2,
         )
         self.assertIsInstance(stack.valid_blocks(), pd.Series)
-        self.assertIsInstance(stack.valid_tabs(), pd.Series)
         self.assertEqual(stack.valid_blocks().tolist(), [False, False, False, False])
-        self.assertEqual(stack.valid_tabs().tolist(), [False, False, False, False])
 
         # Test overrides
         self.assertEqual(stack.valid_blocks(parallelization='inline').tolist(), [False, False, False, False])
-        self.assertEqual(stack.valid_tabs(n_workers=1).tolist(), [False, False, False, False])
+        self.assertEqual(stack.valid_blocks(n_workers=1).tolist(), [False, False, False, False])
 
         # Build blocks 0 and 2
         stack.block(0).build()
         stack.block(2).build()
 
         self.assertEqual(stack.valid_blocks().tolist(), [True, False, True, False])
-        self.assertEqual(stack.valid_tabs().tolist(), [True, False, True, False])
         self.assertEqual(stack.valid_blocks(parallelization='inline').tolist(), [True, False, True, False])
 
         # Test false_only and true_only
@@ -543,16 +540,15 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
 
         self.assertTrue(stack.valid_block(0))
         self.assertFalse(stack.valid_block(1))
-        self.assertTrue(stack.valid_tab(2))
-        self.assertFalse(stack.valid_tab(3))
+        self.assertTrue(stack.valid_block(2))
+        self.assertFalse(stack.valid_block(3))
 
         stack.build()
         self.assertEqual(stack.valid_blocks().tolist(), [True, True, True, True])
-        self.assertEqual(stack.valid_tabs().tolist(), [True, True, True, True])
         self.assertTrue(stack.valid_blocks(false_only=True).empty)
         self.assertEqual(stack.valid_blocks(true_only=True).index.tolist(), [0, 1, 2, 3])
 
-    def test_redirected_blocks_and_redirected_tabs(self):
+    def test_redirected_blocks(self):
         import pandas as pd
         src_stack = SimpleStack(
             url=os.path.join(self.tmpdir, 'red_src_stack'),
@@ -566,9 +562,7 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
             n_workers=2,
         )
         self.assertIsInstance(dst_stack.redirected_blocks(), pd.Series)
-        self.assertIsInstance(dst_stack.redirected_tabs(), pd.Series)
         self.assertEqual(dst_stack.redirected_blocks().tolist(), [False, False, False])
-        self.assertEqual(dst_stack.redirected_tabs().tolist(), [False, False, False])
 
         # Test overrides
         self.assertEqual(dst_stack.redirected_blocks(parallelization='inline').tolist(), [False, False, False])
@@ -579,10 +573,7 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
         self.assertFalse(dst_stack.block(0).redirected())
         self.assertTrue(dst_stack.redirected_block(1))
         self.assertFalse(dst_stack.redirected_block(0))
-        self.assertTrue(dst_stack.redirected_tab(1))
-        self.assertFalse(dst_stack.redirected_tab(0))
         self.assertEqual(dst_stack.redirected_blocks().tolist(), [False, True, False])
-        self.assertEqual(dst_stack.redirected_tabs().tolist(), [False, True, False])
         self.assertEqual(dst_stack.redirected_blocks(parallelization='inline').tolist(), [False, True, False])
 
         # Test false_only and true_only
@@ -591,10 +582,60 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
         with self.assertRaises(ValueError):
             dst_stack.redirected_blocks(false_only=True, true_only=True)
 
+    def test_validate_blocks(self):
+        import pandas as pd
+
+        class CustomValidateBlock(CounterBlock):
+            def __validate__(self, threshold: int = 0, **kwargs):
+                return self.valid() and (self.var.idx >= threshold)
+
+        class CustomValidateStack(Datastack):
+            @dataclass
+            class VAR(Datablock.VAR):
+                total_items: int = 12
+                block_size: int = 3
+
+            TOPICS = {'stack_meta': 'stack_meta.txt'}
+
+            @property
+            def n_blocks(self):
+                return 4
+
+            def __block__(self, idx):
+                return CustomValidateBlock(url=self.url, spec=dict(idx=idx))
+
+        stack = CustomValidateStack(
+            url=os.path.join(self.tmpdir, 'validate_stack'),
+            parallelization='multithreading',
+            n_workers=2,
+        )
+        # Before building: all invalid
+        self.assertIsInstance(stack.validate_blocks(), pd.Series)
+        self.assertEqual(stack.validate_blocks().tolist(), [False, False, False, False])
+
+        # Build all blocks
+        for i in range(4):
+            stack.block(i).build()
+
+        # Default threshold=0 -> all True
+        self.assertEqual(stack.validate_blocks().tolist(), [True, True, True, True])
+
+        # Forward kwargs: threshold=2 -> indices >= 2 are True
+        self.assertEqual(stack.validate_blocks(threshold=2).tolist(), [False, False, True, True])
+        self.assertEqual(stack.validate_blocks(threshold=2, false_only=True).index.tolist(), [0, 1])
+        self.assertEqual(stack.validate_blocks(threshold=2, true_only=True).index.tolist(), [2, 3])
+
+        # Overrides and single block validation
+        self.assertEqual(stack.validate_blocks(threshold=3, parallelization='inline').tolist(), [False, False, False, True])
+        self.assertTrue(stack.validate_block(3, threshold=2))
+        self.assertFalse(stack.validate_block(1, threshold=2))
+
     def test_find_blocks(self):
         stack = SimpleStack(
             url=os.path.join(self.tmpdir, 'find_stack'),
             spec=dict(total_items=12, block_size=3),  # 4 blocks: idx 0, 1, 2, 3
+            parallelization='multithreading',
+            n_workers=2,
         )
         # Block 0 has idx=0, Block 1 has idx=1, etc. in their spec/signature
         self.assertEqual(stack.find_blocks(signature="idx=0"), [0])
@@ -602,11 +643,49 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
         self.assertEqual(stack.find_blocks("idx=2"), [2])
         self.assertEqual(stack.find_blocks(["idx=3"]), [3])
 
-        # Match multiple
+        # Test overrides
+        self.assertEqual(stack.find_blocks("idx=0", parallelization='inline'), [0])
+        self.assertEqual(stack.find_blocks("idx=1", n_workers=1, work_stealing=True), [1])
+
+        # Match multiple (single string)
         self.assertEqual(stack.find_blocks("CounterBlock"), [0, 1, 2, 3])
+
+        # Tuple (ANDed)
+        self.assertEqual(stack.find_blocks(signature=("CounterBlock", "idx=1")), [1])
+        self.assertEqual(stack.find_blocks("CounterBlock", "idx=1"), [1])
+        self.assertEqual(stack.find_blocks(signature=("idx=0", "idx=1")), [])
+
+        # List of strings (ORed)
+        self.assertEqual(stack.find_blocks(signature=["idx=0", "idx=2"]), [0, 2])
+
+        # List of tuples (OR of ANDs)
+        self.assertEqual(
+            stack.find_blocks(signature=[("CounterBlock", "idx=0"), ("CounterBlock", "idx=3")]),
+            [0, 3],
+        )
+
+        # Test tag matching
+        stack.block(1)._tag_ = "tagged_run_1"
+        stack.block(3)._tag_ = "tagged_run_3"
+        self.assertEqual(stack.find_blocks(tag="tagged_run_1"), [1])
+        self.assertEqual(stack.find_blocks(tag=("tagged", "run_1")), [1])
+        self.assertEqual(stack.find_blocks(tag=["tagged_run_1", "tagged_run_3"]), [1, 3])
+        self.assertEqual(stack.find_blocks(tag=[("tagged", "1"), ("tagged", "3")]), [1, 3])
+        self.assertEqual(stack.find_blocks(signature="idx=1", tag="tagged_run_1"), [1])
+        self.assertEqual(stack.find_blocks(signature="idx=0", tag="tagged_run_1"), [])
+
+        # Test path matching
+        self.assertEqual(stack.find_blocks(path="block.txt"), [0, 1, 2, 3])
+        self.assertEqual(stack.find_blocks(path=("block", "block.txt")), [0, 1, 2, 3])
+        self.assertEqual(stack.find_blocks(path=["block.txt", "nonexistent"]), [0, 1, 2, 3])
+        self.assertEqual(stack.find_blocks(signature="idx=1", path="block.txt"), [1])
+        self.assertEqual(stack.find_blocks(signature="idx=1", tag="tagged_run_1", path="block.txt"), [1])
+        self.assertEqual(stack.find_blocks(path="nonexistent_path"), [])
 
         # Non-existent pattern
         self.assertEqual(stack.find_blocks("nonexistent_pattern"), [])
+        self.assertEqual(stack.find_blocks(tag="nonexistent_tag"), [])
+        self.assertEqual(stack.find_blocks(path="nonexistent_path"), [])
 
 
 if __name__ == "__main__":

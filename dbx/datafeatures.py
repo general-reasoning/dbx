@@ -759,6 +759,23 @@ class DatafeatureTable(DatapointTable):
     def n_tabs(self) -> int:
         return self.var.datapoint_table.n_tabs
 
+    def validate_tab(self, i: int, **kwargs) -> bool:
+        """Return whether the tab at index *i* validates."""
+        signature1 = self.tab(i).var.datapoint_tab.signature()
+        signature2 = self.var.datapoint_table.tab(i).signature()
+        coherent_signatures = (signature1 == signature2)
+        if not coherent_signatures:
+            raise ValueError(f"tab({i}).var.datapoint_tab.signature: {signature1} " 
+                             f"does not match var.datapoint_table.tab({i}): {signature2}")
+        feature_dataset_len = self.tab(i).dataset().__len__()
+        point_dataset_len = self.tab(i).var.datapoint_tab.dataset().__len__()
+        coherent_datasets = feature_dataset_len == point_dataset_len
+        if not coherent_datasets:
+            raise ValueError(f"tab({i}).dataset().__len__(): {feature_dataset_len} does not match"
+                             f"tab({i}).var.datapoint_table.dataset().__len__(): {point_dataset_len}"
+            )
+        return coherent_signatures and coherent_datasets and self.tab(i).validate(**kwargs)
+
 
 class BipolarDatafeatureTab(DatapointTab):
     """Bipolar (median-thresholded) encoding of a `DatafeatureTab`.

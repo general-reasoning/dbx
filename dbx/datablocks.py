@@ -1787,12 +1787,12 @@ class Datablock:
         entry = red.entry if red is not None else None
         return self.__valid__(path=entry.anchorkeypath if entry is not None else None)
 
-    def validate(self):
+    def validate(self, **kwargs):
         """Validate this block's data. Default implementation calls self.valid().
 
         Specializations may override it to perform custom validation logic.
         """
-        return self.__validate__()
+        return self.__validate__(**kwargs)
 
     def __valid__(self, path: str|None = None):
         """Whether this block's data is there; override to decide differently.
@@ -1807,7 +1807,7 @@ class Datablock:
         """
         return self.valid_topics(reduce=True)
 
-    def __validate__(self):
+    def __validate__(self, **kwargs):
         """Whether this block's data is there and is correct; override to decide differently.
         """
         return self.valid()
@@ -5167,6 +5167,49 @@ class DatablockRedirectionChecker:
         return stack.redirected_block(self.idx)
 
 
+class DatablockValidationChecker:
+    """Lightweight callable that checks if a block at index `idx` validates."""
+    def __init__(self, idx: int, **kwargs):
+        self.idx = idx
+        self.tab_idx = idx
+        self.kwargs = kwargs
+
+    def __call__(self, stack):
+        return stack.validate_block(self.idx, **self.kwargs)
+
+
+class DatablockSignatureMatcher:
+    """Lightweight callable that checks if a block at index `idx` matches signature, tag, and/or path pattern clauses."""
+    def __init__(
+        self,
+        idx: int,
+        signature_clauses: list[tuple] | None = None,
+        tag_clauses: list[tuple] | None = None,
+        path_clauses: list[tuple] | None = None,
+    ):
+        self.idx = idx
+        self.tab_idx = idx
+        self.signature_clauses = signature_clauses
+        self.tag_clauses = tag_clauses
+        self.path_clauses = path_clauses
+
+    def __call__(self, stack):
+        blk = stack.block(self.idx)
+        if self.signature_clauses:
+            sig = f"{getattr(blk, 'fqcn', blk.__class__.__name__)}{blk.signature()}"
+            if not stack._matches_sig_clauses(sig, self.signature_clauses):
+                return False
+        if self.tag_clauses:
+            tag = getattr(blk, 'tag', None)
+            if not stack._matches_tag_clauses(tag, self.tag_clauses):
+                return False
+        if self.path_clauses:
+            paths = stack._get_block_paths(blk)
+            if not stack._matches_path_clauses(paths, self.path_clauses):
+                return False
+        return True
+
+
 class Datastack(Datablock):
     """Abstract Datablock that orchestrates the building of multiple child
     Datablocks (blocks).
@@ -5271,7 +5314,7 @@ class Datastack(Datablock):
         key = (getattr(self, 'parallelization', None) or "inline").lower()
         if key not in executors:
             raise ValueError(
-                f"Unknown parallelization {self.parallelization!r}. "
+                f"Unknown parallelization {getattr(self, 'parallelization', None)!r}. "
                 f"Choose from {list(executors)}"
             )
         return executors[key]
@@ -5358,7 +5401,13 @@ class Datastack(Datablock):
         if n == 0:
             return pd.Series([], dtype=bool)
         executors = self._get_executors_()
-        key = (parallelization or getattr(self, 'parallelization', None) or "inline").lower()
+        if parallelization is not None:
+            key = parallelization.lower()
+        elif n_workers is not None:
+            key = 'multithreading' if n_workers > 0 else 'inline'
+        else:
+            default_par = getattr(self, 'parallelization', None) or 'inline'
+            key = default_par.lower()
         if key not in executors:
             raise ValueError(
                 f"Unknown parallelization {key!r}. Choose from {list(executors)}"
@@ -5388,7 +5437,13 @@ class Datastack(Datablock):
         if n == 0:
             return pd.Series([], dtype=bool)
         executors = self._get_executors_()
-        key = (parallelization or getattr(self, 'parallelization', None) or "inline").lower()
+        if parallelization is not None:
+            key = parallelization.lower()
+        elif n_workers is not None:
+            key = 'multithreading' if n_workers > 0 else 'inline'
+        else:
+            default_par = getattr(self, 'parallelization', None) or 'inline'
+            key = default_par.lower()
         if key not in executors:
             raise ValueError(
                 f"Unknown parallelization {key!r}. Choose from {list(executors)}"
@@ -5410,75 +5465,261 @@ class Datastack(Datablock):
             return series[series]
         return series
 
-    valid_tab = valid_block
-    redirected_tab = redirected_block
-    valid_tabs = valid_blocks
-    redirected_tabs = redirected_blocks
+    def validate_block(self, idx: int, **kwargs) -> bool:
+        """Return whether the block at index *idx* validates."""
+        return self.block(idx).validate(**kwargs)
+
+    def validate_blocks(
+        self,
+        parallelization: str | None = None,
+        n_workers: int | None = None,
+        work_stealing: bool | None = None,
+        false_only: bool = False,
+        true_only: bool = False,
+        **kwargs,
+    ) -> pd.Series:
+        """Return a pandas Series of booleans, one per block, indicating validation result (parallelized)."""
+        if false_only and true_only:
+            raise ValueError("false_only and true_only are mutually exclusive")
+        n = self.n_blocks
+        if n == 0:
+            return pd.Series([], dtype=bool)
+        executors = self._get_executors_()
+        if parallelization is not None:
+            key = parallelization.lower()
+        elif n_workers is not None:
+            key = 'multithreading' if n_workers > 0 else 'inline'
+        else:
+            default_par = getattr(self, 'parallelization', None) or 'inline'
+            key = default_par.lower()
+        if key not in executors:
+            raise ValueError(
+                f"Unknown parallelization {key!r}. Choose from {list(executors)}"
+            )
+        executor_cls = executors[key]
+        exec_kwargs = self._executor_kwargs(
+            tag=f"VALIDATING {n} blocks [{self.__class__.__name__}]",
+            n_workers=n_workers,
+            executor_cls=executor_cls,
+            **({"work_stealing": work_stealing} if work_stealing is not None else {}),
+        )
+        executor = executor_cls(**exec_kwargs)
+        checkers = [self.DatablockValidationChecker(i, **kwargs) for i in range(n)]
+        results = executor.exec_callables(checkers, self)
+        series = pd.Series(results, dtype=bool)
+        if false_only:
+            return series[~series]
+        if true_only:
+            return series[series]
+        return series
 
     @staticmethod
-    def _matches_signature(sig: str, patterns: list) -> bool:
-        """Return True if `sig` matches all patterns in `patterns`."""
-        for p in patterns:
-            if isinstance(p, str):
-                if p in sig:
-                    continue
-                # Try key=value or key: value fuzzy match in dict/kwargs representations
-                if '=' in p:
-                    k, v = p.split('=', 1)
-                    k, v = k.strip(), v.strip().strip("'\"")
-                    pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?{re.escape(v)}['\"]?"
-                    if re.search(pattern_re, sig):
-                        continue
-                elif ':' in p:
-                    k, v = p.split(':', 1)
-                    k, v = k.strip(), v.strip().strip("'\"")
-                    pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?{re.escape(v)}['\"]?"
-                    if re.search(pattern_re, sig):
-                        continue
-                try:
-                    if re.search(p, sig):
-                        continue
-                except re.error:
-                    pass
-                return False
-            elif isinstance(p, re.Pattern):
-                if not p.search(sig):
-                    return False
-            elif callable(p):
-                if not p(sig):
-                    return False
-            else:
-                if str(p) not in sig:
-                    return False
-        return True
+    def _normalize_pattern_spec(spec, *extra_patterns) -> list[tuple]:
+        """Normalize pattern spec into list of tuples: OR of ANDs.
 
-    def find_blocks(self, signature=None, *patterns) -> list[int]:
-        """Return a list of indices of all blocks matching the given signature pattern(s)."""
-        if signature is None and not patterns:
+        - single string/pattern: `[(pattern,)]`
+        - tuple: `[(p1, p2, ...)]` (ANDed)
+        - list of strings: `[(s1,), (s2,), ...]` (ORed)
+        - list of tuples: `[(p1, p2), (p3, p4)]` (OR of ANDs)
+        - spec + extra_patterns: `[(spec, *extra_patterns)]` (ANDed)
+        """
+        if spec is None and not extra_patterns:
             return []
 
-        all_patterns = []
-        if signature is not None:
-            if isinstance(signature, (list, tuple, set)):
-                all_patterns.extend(signature)
-            else:
-                all_patterns.append(signature)
-        all_patterns.extend(patterns)
+        if extra_patterns:
+            first = [spec] if spec is not None else []
+            return [tuple(first + list(extra_patterns))]
 
-        matches = []
-        for i in range(self.n_blocks):
-            blk = self.block(i)
-            sig = f"{getattr(blk, 'fqcn', blk.__class__.__name__)}{blk.signature()}"
-            if self._matches_signature(sig, all_patterns):
-                matches.append(i)
-        return matches
+        if isinstance(spec, list):
+            clauses = []
+            for item in spec:
+                if isinstance(item, tuple):
+                    clauses.append(item)
+                elif isinstance(item, list):
+                    clauses.append(tuple(item))
+                else:
+                    clauses.append((item,))
+            return clauses
+        elif isinstance(spec, tuple):
+            return [spec]
+        else:
+            return [(spec,)]
+
+    @staticmethod
+    def _match_single_sig_pattern(sig: str, p) -> bool:
+        if isinstance(p, str):
+            if p in sig:
+                return True
+            # Try key=value or key: value fuzzy match in dict/kwargs representations
+            if '=' in p:
+                k, v = p.split('=', 1)
+                k, v = k.strip(), v.strip().strip("'\"")
+                pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?{re.escape(v)}['\"]?"
+                if re.search(pattern_re, sig):
+                    return True
+            elif ':' in p:
+                k, v = p.split(':', 1)
+                k, v = k.strip(), v.strip().strip("'\"")
+                pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?{re.escape(v)}['\"]?"
+                if re.search(pattern_re, sig):
+                    return True
+            try:
+                if re.search(p, sig):
+                    return True
+            except re.error:
+                pass
+            return False
+        elif isinstance(p, re.Pattern):
+            return bool(p.search(sig))
+        elif callable(p):
+            return bool(p(sig))
+        else:
+            return str(p) in sig
+
+    @classmethod
+    def _matches_sig_clauses(cls, sig: str, clauses: list[tuple]) -> bool:
+        if not clauses:
+            return True
+        for clause in clauses:
+            if all(cls._match_single_sig_pattern(sig, p) for p in clause):
+                return True
+        return False
+
+    @staticmethod
+    def _match_single_tag_pattern(text: str | None, p) -> bool:
+        if text is None:
+            return False
+        if isinstance(p, str):
+            if p in text:
+                return True
+            try:
+                if re.search(p, text):
+                    return True
+            except re.error:
+                pass
+            return False
+        elif isinstance(p, re.Pattern):
+            return bool(p.search(text))
+        elif callable(p):
+            return bool(p(text))
+        else:
+            return str(p) in text
+
+    @classmethod
+    def _matches_tag_clauses(cls, tag: str | None, clauses: list[tuple]) -> bool:
+        if not clauses:
+            return True
+        if tag is None:
+            return False
+        for clause in clauses:
+            if all(cls._match_single_tag_pattern(tag, p) for p in clause):
+                return True
+        return False
+
+    @classmethod
+    def _collect_path_strings(cls, val, out: list[str]):
+        if isinstance(val, str):
+            out.append(val)
+        elif isinstance(val, dict):
+            for v in val.values():
+                cls._collect_path_strings(v, out)
+        elif isinstance(val, (list, tuple, set)):
+            for v in val:
+                cls._collect_path_strings(v, out)
+
+    @classmethod
+    def _get_block_paths(cls, blk) -> list[str]:
+        """Extract all path strings for a block."""
+        paths_list = []
+        try:
+            p = blk.paths()
+            cls._collect_path_strings(p, paths_list)
+        except Exception:
+            pass
+        if hasattr(blk, 'anchorkeypath'):
+            try:
+                akp = blk.anchorkeypath
+                if akp and akp not in paths_list:
+                    paths_list.append(akp)
+            except Exception:
+                pass
+        return paths_list
+
+    @classmethod
+    def _matches_path_clauses(cls, block_paths: list[str], clauses: list[tuple]) -> bool:
+        if not clauses:
+            return True
+        if not block_paths:
+            return False
+        for clause in clauses:
+            if all(any(cls._match_single_tag_pattern(path_str, p) for path_str in block_paths) for p in clause):
+                return True
+        return False
+
+    def find_blocks(
+        self,
+        signature=None,
+        *patterns,
+        tag=None,
+        path=None,
+        parallelization: str | None = None,
+        n_workers: int | None = None,
+        work_stealing: bool | None = None,
+        **kwargs,
+    ) -> list[int]:
+        """Return a list of indices of all blocks matching signature, tag, and/or path pattern(s) (parallelized)."""
+        sig_clauses = self._normalize_pattern_spec(signature, *patterns)
+        tag_clauses = self._normalize_pattern_spec(tag)
+        path_clauses = self._normalize_pattern_spec(path)
+
+        if not sig_clauses and not tag_clauses and not path_clauses:
+            return []
+
+        n = self.n_blocks
+        if n == 0:
+            return []
+
+        executors = self._get_executors_()
+        if parallelization is not None:
+            key = parallelization.lower()
+        elif n_workers is not None:
+            key = 'multithreading' if n_workers > 0 else 'inline'
+        else:
+            default_par = getattr(self, 'parallelization', None) or 'inline'
+            key = default_par.lower()
+        if key not in executors:
+            raise ValueError(
+                f"Unknown parallelization {key!r}. Choose from {list(executors)}"
+            )
+        executor_cls = executors[key]
+        exec_kwargs = self._executor_kwargs(
+            tag=f"FINDING BLOCKS matching sig={sig_clauses} tag={tag_clauses} path={path_clauses} in {n} blocks [{self.__class__.__name__}]",
+            n_workers=n_workers,
+            executor_cls=executor_cls,
+            **({"work_stealing": work_stealing} if work_stealing is not None else {}),
+            **kwargs,
+        )
+        executor = executor_cls(**exec_kwargs)
+        matchers = [
+            self.DatablockSignatureMatcher(
+                i,
+                signature_clauses=sig_clauses if sig_clauses else None,
+                tag_clauses=tag_clauses if tag_clauses else None,
+                path_clauses=path_clauses if path_clauses else None,
+            )
+            for i in range(n)
+        ]
+        results = executor.exec_callables(matchers, self)
+        return [i for i, matched in enumerate(results) if matched]
 
     DatablockValidityChecker = DatablockValidityChecker
     DatablockRedirectionChecker = DatablockRedirectionChecker
+    DatablockValidationChecker = DatablockValidationChecker
+    DatablockSignatureMatcher = DatablockSignatureMatcher
     BlockValidChecker = DatablockValidityChecker
     BlockRedirectedChecker = DatablockRedirectionChecker
-    TabValidChecker = DatablockValidityChecker
-    TabRedirectedChecker = DatablockRedirectionChecker
+    BlockValidationChecker = DatablockValidationChecker
+    BlockSignatureMatcher = DatablockSignatureMatcher
 
     # -- Default build logic ------------------------------------------------------
 
@@ -5631,12 +5872,12 @@ class Datastack(Datablock):
         return self
 
     def UNSAFE_redirect_blocks(self, *, redirector: Callable = None, filter: dict = {}, validate: bool = False, OVERRIDE: bool = False, parallelization=None, n_workers=None):
-        """Redirect each child block in the stack using redirector(block, idx, journal=journal) callable.
+        """Redirect each child block in the stack using redirector(block, stack, idx, journal=journal) callable.
 
         Parameters
         ----------
         redirector : Callable
-            Callable with signature ``redirector(block, idx, journal=journal) -> dict | None``.
+            Callable with signature ``redirector(block, stack, idx, journal=journal) -> dict | None``.
             Returns kwargs for ``block.UNSAFE_redirect(**target)``, or None/empty if not redirecting.
         filter : dict, default {}
             Column filter kwargs passed to ``journal()`` when reading the child block's journal.
@@ -5680,7 +5921,7 @@ class Datastack(Datablock):
         tag = f"REDIRECTING {total} blocks [{self.__class__.__name__}, n_workers={nw}]"
         executor = callable_executor(par, n_workers=nw, tag=tag)
 
-        callables = [functools.partial(_UNSAFE_redirect_block_callable, redirector, blk, idx, journal=journal, validate=validate) for idx, blk in enumerate(block_list)]
+        callables = [functools.partial(_UNSAFE_redirect_block_callable, redirector, blk, self, idx, journal=journal, validate=validate) for idx, blk in enumerate(block_list)]
         results = executor.exec_callables(callables)
 
         successes = sum(1 for r in results if r is True) if results else 0
@@ -5690,8 +5931,8 @@ class Datastack(Datablock):
         return successes, total
 
 
-def _UNSAFE_redirect_block_callable(redirector, block, idx, *, journal: Datajournal|None = None, validate: bool = False):
-    target = redirector(block, idx, journal=journal)
+def _UNSAFE_redirect_block_callable(redirector, block, stack, idx, *, journal: Datajournal|None = None, validate: bool = False):
+    target = redirector(block, stack, idx, journal=journal)
     if not target:
         return False
     kwargs = dict(target)
@@ -5700,7 +5941,12 @@ def _UNSAFE_redirect_block_callable(redirector, block, idx, *, journal: Datajour
     if 'journal' not in kwargs:
         kwargs['journal'] = journal
     kwargs['OVERRIDE'] = True
-    return block.UNSAFE_redirect(**kwargs)
+    redirected = block.UNSAFE_redirect(**kwargs)
+    if validate and redirected:
+        validated = stack.validate_block(idx)
+        if not validated:
+            return False
+    return bool(redirected)
 
 
 

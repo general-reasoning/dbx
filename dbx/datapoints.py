@@ -13,6 +13,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 
 import numpy as np
+import pandas as pd
 
 try:
     import torch
@@ -884,9 +885,46 @@ class DatapointTable(DatapointBase, Datastack):
 
     redirected_block = redirected_tab
 
-    def find_tabs(self, signature=None, *patterns) -> list[int]:
-        """Return a list of indices of all tabs matching the given signature pattern(s)."""
-        return self.find_blocks(signature, *patterns)
+    def valid_tabs(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
+        """Return a pandas Series of booleans, one per tab, indicating validity (parallelized)."""
+        return self.valid_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, **kwargs)
+
+    def redirected_tabs(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
+        """Return a pandas Series of booleans, one per tab, indicating redirection (parallelized)."""
+        return self.redirected_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, **kwargs)
+
+    def validate_tab(self, i: int, **kwargs) -> bool:
+        """Return whether the tab at index *i* validates."""
+        return self.tab(i).validate(**kwargs)
+
+    validate_block = validate_tab
+
+    def validate_tabs(
+        self,
+        parallelization: str | None = None,
+        n_workers: int | None = None,
+        work_stealing: bool | None = None,
+        false_only: bool = False,
+        true_only: bool = False,
+        **kwargs,
+    ) -> pd.Series:
+        """Return a pandas Series of booleans, one per tab, indicating validation result (parallelized)."""
+        return self.validate_blocks(
+            parallelization=parallelization,
+            n_workers=n_workers,
+            work_stealing=work_stealing,
+            false_only=false_only,
+            true_only=true_only,
+            **kwargs,
+        )
+
+    def find_tabs(self, signature=None, *patterns, tag=None, path=None, parallelization: str | None = None, n_workers: int | None = None, work_stealing: bool | None = None, **kwargs) -> list[int]:
+        """Return a list of indices of all tabs matching the given signature, tag, and/or path pattern(s) (parallelized)."""
+        return self.find_blocks(signature, *patterns, tag=tag, path=path, parallelization=parallelization, n_workers=n_workers, work_stealing=work_stealing, **kwargs)
+
+    def tab_journal(self, **kwargs) -> Datajournal | None:
+        """Return the Datajournal for child tabs, or None if no tabs exist or journal fails to load."""
+        return self.block_journal(**kwargs)
 
     def valid_slice(self, slice) -> bool:
         return all(
@@ -999,6 +1037,12 @@ class DatapointTable(DatapointBase, Datastack):
             skipped = tab.valid()
             if build and not skipped:
                 tab.build()
+                if tbl is not None and hasattr(tbl, 'validate_tab'):
+                    validated = tbl.validate_tab(self.idx)
+                else:
+                    validated = tab.validate()
+                if not validated:
+                    raise ValueError(f"Tab {self.idx} of {tbl} failed to validate")
                 if hasattr(tbl, '_write_tab_path'):
                     tbl._write_tab_path(self.idx)
                 elif hasattr(tbl, '_write_tab_built'):
@@ -1155,6 +1199,12 @@ class DatapointFold(DatapointTable):
         return self.var.partition.datapoint_table.redirected_tab(real_idx)
 
     redirected_block = redirected_tab
+
+    def validate_tab(self, idx: int, **kwargs) -> bool:
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.datapoint_table.validate_tab(real_idx, **kwargs)
+
+    validate_block = validate_tab
 
     def _write_tab_path(self, idx: int):
         real_idx = self.tab_indices[idx]

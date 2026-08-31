@@ -862,18 +862,43 @@ class TestValidTabAndSentinels:
         tbl = LetterTable(
             url=str(tmp_path / "find_table"),
             spec=dict(n_tabs_=4),
+            parallelization="multithreading",
+            n_workers=2,
         )
         assert tbl.find_tabs("base=0") == [0]
         assert tbl.find_blocks("base=3") == [1]
-        assert tbl.find_tabs(["base=6"]) == [2]
-        assert tbl.find_tabs(["LetterTab", "base=9"]) == [3]
+        assert tbl.find_tabs(("LetterTab", "base=9")) == [3]
+        assert tbl.find_tabs(["LetterTab", "base=9"]) == [0, 1, 2, 3]
+
+        # Test overrides
+        assert tbl.find_tabs("base=0", parallelization="inline") == [0]
+        assert tbl.find_blocks("base=3", n_workers=1, work_stealing=True) == [1]
 
         # Match multiple
         assert tbl.find_tabs("LetterTab") == [0, 1, 2, 3]
         assert tbl.find_blocks("LetterTab") == [0, 1, 2, 3]
 
+        # Test tag matching
+        tbl.tab(1)._tag_ = "sample_tag_1"
+        tbl.tab(2)._tag_ = "sample_tag_2"
+        assert tbl.find_tabs(tag="sample_tag_1") == [1]
+        assert tbl.find_tabs(tag=["sample_tag_1"]) == [1]
+        assert tbl.find_tabs(tag="sample_tag") == [1, 2]
+        assert tbl.find_tabs(signature="base=3", tag="sample_tag_1") == [1]
+        assert tbl.find_tabs(signature="base=0", tag="sample_tag_1") == []
+
+        # Test path matching
+        assert tbl.find_tabs(path="note.txt") == [0, 1, 2, 3]
+        assert tbl.find_tabs(path="sample_tag_1") == [1]
+        assert tbl.find_tabs(path=("sample_tag_2", "letters")) == [2]
+        assert tbl.find_tabs(path=["tab_000000", "tab_000003"]) == [0, 3]
+        assert tbl.find_tabs(signature="base=3", path="sample_tag_1") == [1]
+        assert tbl.find_tabs(signature="base=0", path="sample_tag_1") == []
+
         # No match
         assert tbl.find_tabs("nonexistent") == []
+        assert tbl.find_tabs(tag="nonexistent_tag") == []
+        assert tbl.find_tabs(path="nonexistent_path") == []
 
     def test_parallel_filtering_skips_already_valid_tabs(self, tmp_path):
         tbl = LetterTable(

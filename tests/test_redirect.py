@@ -700,7 +700,7 @@ class TestNewRedirectFeatures:
 
         stack = DummyStack(url=str(tmp_path))
         successes, total = stack.UNSAFE_redirect_blocks(
-            redirector=lambda blk, idx, journal=None: {'paths': {'output': f"/redirected/{blk.spec['x']}.txt"}},
+            redirector=lambda blk, stack, idx, journal=None: {'paths': {'output': f"/redirected/{blk.spec['x']}.txt"}},
             OVERRIDE=True
         )
         assert successes == 3 and total == 3
@@ -722,7 +722,7 @@ class TestNewRedirectFeatures:
         stack = DummyStack(url=str(tmp_path))
         passed_journals = []
 
-        def redirect_fn(blk, idx, journal=None):
+        def redirect_fn(blk, stack, idx, journal=None):
             passed_journals.append(journal)
             return {'filter': {'entry_code': src_code}}
 
@@ -900,7 +900,7 @@ class TestNewRedirectFeatures:
         stack = DummyStack(url=str(tmp_path))
         # Valid redirection with validate=True
         successes, total = stack.UNSAFE_redirect_blocks(
-            redirector=lambda blk, idx, journal=None: {'filter': {'entry_code': code}},
+            redirector=lambda blk, stack, idx, journal=None: {'filter': {'entry_code': code}},
             validate=True,
             OVERRIDE=True
         )
@@ -908,7 +908,7 @@ class TestNewRedirectFeatures:
 
         # Invalid redirection with validate=True -> 0 successes
         successes, total = stack.UNSAFE_redirect_blocks(
-            redirector=lambda blk, idx, journal=None: {'paths': {'output': str(tmp_path / f'nonexistent_{idx}.txt')}},
+            redirector=lambda blk, stack, idx, journal=None: {'paths': {'output': str(tmp_path / f'nonexistent_{idx}.txt')}},
             validate=True,
             OVERRIDE=True
         )
@@ -969,7 +969,7 @@ class TestNewRedirectFeatures:
 
         # Redirect stack child blocks to corresponding source blocks
         successes, total = stack.UNSAFE_redirect_blocks(
-            redirector=lambda blk, idx, journal=None: {'paths': src_blocks[idx].paths()},
+            redirector=lambda blk, stack, idx, journal=None: {'paths': src_blocks[idx].paths()},
             validate=True,
             OVERRIDE=True
         )

@@ -19,9 +19,10 @@ from sklearn.metrics import classification_report
 
 import dbx
 from dbx.datablocks import Datablock
-from dbx.datafeatures import DatafeatureTable, DatafeatureTab
+from dbx.datafeatures import DatafeatureTable, DatafeatureTab, Datacollator
 from dbx.dataparts import (
     Logger,
+    callable_executor,
     read_npz,
     read_pickle,
     read_tensor,
@@ -274,6 +275,111 @@ class DatafeatureAffineLogisticProbe(Datablock):
         return {str(c): float(r) for c, r in zip(classes, ratios)}
 
 
+class TabFeatureStatsCallable:
+    """Worker callable that forms a tab from table, extracts feature/signal data, and computes stats."""
+
+    def __init__(
+        self,
+        table: Any,
+        tab_idx: int | None,
+        feat_slice: str | None = None,
+        feat_col: str | None = None,
+        sig_slice: str | None = None,
+        sig_col: str | None = None,
+        normalization: str | None = None,
+        collator: Any = None,
+    ):
+        self.table = table
+        self.tab_idx = tab_idx
+        self.feat_slice = feat_slice
+        self.feat_col = feat_col
+        self.sig_slice = sig_slice
+        self.sig_col = sig_col
+        self.normalization = normalization
+        self.collator = collator
+
+    def __call__(self):
+        collator = self.collator
+        if collator is None and hasattr(self.table, 'var') and hasattr(self.table.var, 'collator'):
+            collator = self.table.var.collator
+
+        if collator is not None:
+            feat_slice, feat_col = collator.signal_pairs[0]
+            sig_slice, sig_col = collator.label_pairs[0] if collator.label_pairs else (None, None)
+        else:
+            feat_slice, feat_col = self.feat_slice, self.feat_col
+            sig_slice, sig_col = self.sig_slice, self.sig_col
+
+        if self.tab_idx is not None:
+            tab = self.table.tab(self.tab_idx)
+            feat_data = tab.data(feat_slice, concat=True)[feat_slice]
+            sig_data = tab.data(sig_slice, concat=True)[sig_slice] if sig_slice is not None else None
+            del tab
+        else:
+            feat_data = self.table.data(feat_slice, concat=True)[feat_slice]
+            sig_data = self.table.data(sig_slice, concat=True)[sig_slice] if sig_slice is not None else None
+
+        if isinstance(feat_data, dict):
+            tab_f = feat_data.get(feat_col, next(iter(feat_data.values())))
+        else:
+            tab_f = feat_data
+        del feat_data
+
+        if torch is not None and isinstance(tab_f, torch.Tensor):
+            arr = tab_f.float()
+        else:
+            arr = torch.from_numpy(np.array(tab_f)).float()
+        del tab_f
+
+        arr = normalize_features(arr, self.normalization).numpy()
+        if arr.ndim == 1:
+            arr = arr.reshape(1, -1)
+
+        result = {
+            'arr': arr,
+            'f_mean': np.mean(arr, axis=0),
+            'f_std': np.std(arr, axis=0),
+            'f_median': np.median(arr, axis=0),
+            'f_min': np.min(arr, axis=0),
+            'f_max': np.max(arr, axis=0),
+            'f_norm': np.mean(np.linalg.norm(arr, axis=-1)),
+        }
+
+        if sig_slice is not None and sig_data is not None:
+            if isinstance(sig_data, dict):
+                tab_s = sig_data.get(sig_col, next(iter(sig_data.values())))
+            else:
+                tab_s = sig_data
+            del sig_data
+
+            s_arr = np.array(tab_s)
+            del tab_s
+
+            if s_arr.ndim == 1:
+                s_arr_2d = s_arr.reshape(-1, 1)
+            else:
+                s_arr_2d = s_arr
+
+            result['s_arr'] = s_arr
+            if np.issubdtype(s_arr_2d.dtype, np.number):
+                result['s_mean'] = np.mean(s_arr_2d, axis=0)
+                result['s_std'] = np.std(s_arr_2d, axis=0)
+                result['s_median'] = np.median(s_arr_2d, axis=0)
+                result['s_min'] = np.min(s_arr_2d, axis=0)
+                result['s_max'] = np.max(s_arr_2d, axis=0)
+                result['s_norm'] = np.mean(np.linalg.norm(s_arr_2d, axis=-1))
+            else:
+                result['s_mean'] = np.array([0.0])
+                result['s_std'] = np.array([0.0])
+                result['s_median'] = np.array([0.0])
+                result['s_min'] = np.array([0.0])
+                result['s_max'] = np.array([0.0])
+                result['s_norm'] = 0.0
+
+        gc.collect()
+        return result
+
+
 class DatafeatureStatsProbe(Datablock):
     """Per-layer statistics for a DatafeatureTable.
 
@@ -325,81 +431,79 @@ class DatafeatureStatsProbe(Datablock):
         collator: Datacollator
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
 
+    def __init__(
+        self,
+        *args,
+        parallelization: str | None = None,
+        n_workers: int = 1,
+        work_stealing: bool = False,
+        works_stealing: bool = False,
+        **kwargs,
+    ):
+        ws = work_stealing or works_stealing
+        super().__init__(
+            *args,
+            parallelization=parallelization,
+            n_workers=n_workers,
+            work_stealing=ws,
+            **kwargs,
+        )
+
     def __post_init__(self):
         super().__post_init__()
         assert self.var.normalization in NORMALIZATION_MODES, f"Unknown normalization mode: {self.var.normalization!r}"
+        self.parallelization = getattr(self, 'parallelization', None) or 'inline'
+        self.n_workers = getattr(self, 'n_workers', 1)
+        self.work_stealing = getattr(self, 'work_stealing', getattr(self, 'works_stealing', False))
 
     def __build__(self):
+        self.log.verbose(f"DatafeatureStatsProbe.__build__: BEGIN {self.anchorkeypath}")
         table = self.var.feature_table
         collator = self.var.collator
 
-        data_dict = table.data(*collator.slices, concat=True)
-        feat_tensor, sig_tensor = collator(data_dict, strip_keys=True)
-
-        # The aggregate stats come off the collated whole above; the per-tab
-        # breakdowns below have to address one column of one slice at a time,
-        # so they follow the FIRST pair of each side. A collator naming several
-        # is collated whole all the same -- only the breakdown narrows.
-        feat_slice, feat_col = collator.signal_pairs[0]
         if len(collator.signal_pairs) > 1:
             self.log.warning(
                 f"{self.__class__.__name__}: per-tab feature stats describe "
-                f"{(feat_slice, feat_col)!r} only, of {collator.signal_pairs!r}"
+                f"{collator.signal_pairs[0]!r} only, of {collator.signal_pairs!r}"
             )
-        if collator.label_pairs:
-            sig_slice, sig_col = collator.label_pairs[0]
-            if len(collator.label_pairs) > 1:
-                self.log.warning(
-                    f"{self.__class__.__name__}: per-tab signal stats describe "
-                    f"{(sig_slice, sig_col)!r} only, of {collator.label_pairs!r}"
-                )
-        else:
-            sig_slice, sig_col = None, None
+        if len(collator.label_pairs) > 1:
+            self.log.warning(
+                f"{self.__class__.__name__}: per-tab signal stats describe "
+                f"{collator.label_pairs[0]!r} only, of {collator.label_pairs!r}"
+            )
 
-        if torch is not None and isinstance(feat_tensor, torch.Tensor):
-            feat_tensor = feat_tensor.float()
-        else:
-            feat_tensor = torch.from_numpy(np.array(feat_tensor)).float()
+        n_tabs = table.n_tabs if hasattr(table, 'n_tabs') and table.n_tabs > 0 else 1
+        self.log.verbose(
+            f"DatafeatureStatsProbe.__build__: compute tab feature/signal stats in parallel ({n_tabs} tabs, "
+            f"parallelization={self.parallelization!r}, n_workers={self.n_workers}): BEGIN"
+        )
+        tag = f"COMPUTING TAB STATS [{self.__class__.__name__}, n_workers={self.n_workers}]"
+        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
+        if getattr(self, 'work_stealing', False):
+            executor_kwargs['work_stealing'] = self.work_stealing
+        executor = callable_executor(self.parallelization, **executor_kwargs)
 
-        if torch is not None and isinstance(sig_tensor, torch.Tensor):
-            sig_tensor = sig_tensor.float()
-        else:
-            sig_tensor = torch.from_numpy(np.array(sig_tensor)).float()
-        
-
-        # Extract per-tab feature data
         if hasattr(table, 'n_tabs') and table.n_tabs > 0:
-            tab_feat_list = []
-            for i in range(table.n_tabs):
-                tab_data = table.tab(i).data(feat_slice, concat=True)[feat_slice]
-                if isinstance(tab_data, dict):
-                    tab_data = tab_data.get(feat_col, next(iter(tab_data.values())))
-                tab_feat_list.append(tab_data)
+            callables = [
+                TabFeatureStatsCallable(table, i, collator=collator, normalization=self.var.normalization)
+                for i in range(table.n_tabs)
+            ]
         else:
-            tab_data = table.data(feat_slice, concat=True)[feat_slice]
-            if isinstance(tab_data, dict):
-                tab_data = tab_data.get(feat_col, next(iter(tab_data.values())))
-            tab_feat_list = [tab_data]
+            callables = [
+                TabFeatureStatsCallable(table, None, collator=collator, normalization=self.var.normalization)
+            ]
 
-        all_feats = []
-        tab_f_means, tab_f_stds, tab_f_medians, tab_f_mins, tab_f_maxs, tab_f_norms = [], [], [], [], [], []
+        results = executor.exec_callables(callables)
+        self.log.verbose("DatafeatureStatsProbe.__build__: compute tab feature/signal stats in parallel: END")
 
-        for tab_f in tab_feat_list:
-            if torch is not None and isinstance(tab_f, torch.Tensor):
-                arr = tab_f.float()
-            else:
-                arr = torch.from_numpy(np.array(tab_f)).float()
-            arr = normalize_features(arr, self.var.normalization).numpy()
-            if arr.ndim == 1:
-                arr = arr.reshape(1, -1)
-
-            all_feats.append(arr)
-            tab_f_means.append(np.mean(arr, axis=0))
-            tab_f_stds.append(np.std(arr, axis=0))
-            tab_f_medians.append(np.median(arr, axis=0))
-            tab_f_mins.append(np.min(arr, axis=0))
-            tab_f_maxs.append(np.max(arr, axis=0))
-            tab_f_norms.append(np.mean(np.linalg.norm(arr, axis=-1)))
+        self.log.info(f"DatafeatureStatsProbe.__build__: aggregate tab feature statistics ({len(results)} tabs): BEGIN")
+        all_feats = [res['arr'] for res in results]
+        tab_f_means = [res['f_mean'] for res in results]
+        tab_f_stds = [res['f_std'] for res in results]
+        tab_f_medians = [res['f_median'] for res in results]
+        tab_f_mins = [res['f_min'] for res in results]
+        tab_f_maxs = [res['f_max'] for res in results]
+        tab_f_norms = [res['f_norm'] for res in results]
 
         concat_feats = np.concatenate(all_feats, axis=0)
 
@@ -418,47 +522,17 @@ class DatafeatureStatsProbe(Datablock):
         write_npz(self.path('tab_feature', 'min', ensure_dirpath=True), tab_feature_min=np.stack(tab_f_mins))
         write_npz(self.path('tab_feature', 'max', ensure_dirpath=True), tab_feature_max=np.stack(tab_f_maxs))
         write_npz(self.path('tab_feature', 'norms', ensure_dirpath=True), tab_feature_norms=np.array(tab_f_norms))
+        self.log.info("DatafeatureStatsProbe.__build__: aggregate tab feature statistics: END")
 
-        # Extract per-tab signal data if signal is configured
-        if sig_slice is not None:
-            if hasattr(table, 'n_tabs') and table.n_tabs > 0:
-                tab_sig_list = []
-                for i in range(table.n_tabs):
-                    s_data = table.tab(i).data(sig_slice, concat=True)[sig_slice]
-                    if isinstance(s_data, dict):
-                        s_data = s_data.get(sig_col, next(iter(s_data.values())))
-                    tab_sig_list.append(s_data)
-            else:
-                s_data = table.data(sig_slice, concat=True)[sig_slice]
-                if isinstance(s_data, dict):
-                    s_data = s_data.get(sig_col, next(iter(s_data.values())))
-                tab_sig_list = [s_data]
-
-            all_sigs = []
-            tab_s_means, tab_s_stds, tab_s_medians, tab_s_mins, tab_s_maxs, tab_s_norms = [], [], [], [], [], []
-
-            for tab_s in tab_sig_list:
-                s_arr = np.array(tab_s)
-                if s_arr.ndim == 1:
-                    s_arr_2d = s_arr.reshape(-1, 1)
-                else:
-                    s_arr_2d = s_arr
-                all_sigs.append(s_arr)
-
-                if np.issubdtype(s_arr_2d.dtype, np.number):
-                    tab_s_means.append(np.mean(s_arr_2d, axis=0))
-                    tab_s_stds.append(np.std(s_arr_2d, axis=0))
-                    tab_s_medians.append(np.median(s_arr_2d, axis=0))
-                    tab_s_mins.append(np.min(s_arr_2d, axis=0))
-                    tab_s_maxs.append(np.max(s_arr_2d, axis=0))
-                    tab_s_norms.append(np.mean(np.linalg.norm(s_arr_2d, axis=-1)))
-                else:
-                    tab_s_means.append(np.array([0.0]))
-                    tab_s_stds.append(np.array([0.0]))
-                    tab_s_medians.append(np.array([0.0]))
-                    tab_s_mins.append(np.array([0.0]))
-                    tab_s_maxs.append(np.array([0.0]))
-                    tab_s_norms.append(0.0)
+        if collator.label_pairs:
+            self.log.info(f"DatafeatureStatsProbe.__build__: aggregate tab signal statistics ({len(results)} tabs): BEGIN")
+            all_sigs = [res['s_arr'] for res in results]
+            tab_s_means = [res['s_mean'] for res in results]
+            tab_s_stds = [res['s_std'] for res in results]
+            tab_s_medians = [res['s_median'] for res in results]
+            tab_s_mins = [res['s_min'] for res in results]
+            tab_s_maxs = [res['s_max'] for res in results]
+            tab_s_norms = [res['s_norm'] for res in results]
 
             try:
                 concat_sigs = np.concatenate(all_sigs, axis=0)
@@ -482,10 +556,12 @@ class DatafeatureStatsProbe(Datablock):
             write_npz(self.path('tab_signal', 'min', ensure_dirpath=True), tab_signal_min=np.array(tab_s_mins, dtype=object))
             write_npz(self.path('tab_signal', 'max', ensure_dirpath=True), tab_signal_max=np.array(tab_s_maxs, dtype=object))
             write_npz(self.path('tab_signal', 'norms', ensure_dirpath=True), tab_signal_norms=np.array(tab_s_norms))
+            self.log.info("DatafeatureStatsProbe.__build__: aggregate tab signal statistics: END")
         else:
             signal_count = np.array(len(concat_feats))
             write_npz(self.path('signal', 'count', ensure_dirpath=True), signal_count=signal_count)
 
+        self.log.verbose(f"DatafeatureStatsProbe.__build__: END {self.anchorkeypath}")
         return self
 
     def __read__(self, *topicpath):

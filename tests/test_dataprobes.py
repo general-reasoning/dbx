@@ -206,6 +206,51 @@ def test_datafeature_stats_probe(tmp_path):
     assert stats_probe.read('signal', 'count') == 10
 
 
+def test_datafeature_stats_probe_parallel(tmp_path):
+    url = str(tmp_path)
+
+    sampletable = DummySampleTable(
+        url=url,
+        spec=dict(samples_per_tab=5),
+        tag="sample_table_stats_par",
+    ).build()
+
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
+
+    featuretable = DatafeatureTable(
+        url=url,
+        spec=dict(
+            datapoint_table=sampletable,
+            evaluator_factory=eval_factory,
+            collator=Datacollator(spec=dict(
+                signals=[("samples", "samples")],
+                labels=[("labels", "labels")],
+            )),
+        ),
+        devices=["cpu"],
+        tag="feature_table_stats_par",
+    ).build()
+
+    stats_probe = DatafeatureStatsProbe(
+        url=url,
+        spec=dict(
+            feature_table=featuretable,
+            collator=Datacollator(spec=dict(
+                signals=[("features", "final")],
+                labels=[("samples", "samples")],
+            )),
+        ),
+        parallelization='multithreading',
+        n_workers=2,
+        work_stealing=True,
+        tag="stats_probe_par",
+    ).build()
+
+    assert stats_probe.valid()
+    assert stats_probe.feature_mean.shape == (8,)
+    assert stats_probe.tab_feature_mean.shape == (2, 8)
+
+
 if __name__ == "__main__":
     import sys
     dbx.dataparts.gitwrkreposetup = lambda *a, **k: None

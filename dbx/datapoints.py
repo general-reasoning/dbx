@@ -439,7 +439,7 @@ class DatapointBase(Datablock):
         node = self._topicnode(*topicpath)
         return self._node_is_dirtopic(node)
 
-    def slice_names(self, slices) -> tuple:
+    def _slicenames(self, slices) -> tuple:
         """Normalize a `*slices` varargs tuple; empty means *all* slices."""
         if len(slices) == 1 and isinstance(slices[0], (tuple, list)):
             slices = tuple(slices[0])
@@ -452,6 +452,10 @@ class DatapointBase(Datablock):
                 f"available are {list(self.slices)}"
             )
         return tuple(slices)
+
+    def slice_names(self, slices) -> tuple:
+        """Normalize a `*slices` varargs tuple; empty means *all* slices."""
+        return self._slicenames(slices)
 
     def _ensure_cacheroot(self, cache=None) -> str:
         cacheroot = cache or self.cacheroot

@@ -162,6 +162,7 @@ class TestDatastreamPassesItsCacheDown:
         remote_table.datastream('numbers')
         first = {s.local for s in opened[0]['streams']}
         remote_table._slicenames = lambda slices: tuple(slices)   # accept a second name
+        remote_table.slice_names = lambda slices: tuple(slices)   # accept a second name
         remote_table.datastream('letters')
         second = {s.local for s in opened[1]['streams']}
         assert not (first & second)

@@ -251,6 +251,51 @@ def test_datafeature_stats_probe_parallel(tmp_path):
     assert stats_probe.tab_feature_mean.shape == (2, 8)
 
 
+def test_datafeature_affine_logistic_probe_parallel(tmp_path):
+    url = str(tmp_path)
+
+    sampletable = DummySampleTable(
+        url=url,
+        spec=dict(samples_per_tab=5),
+        tag="sample_table_log_par",
+    ).build()
+
+    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
+
+    featuretable = DatafeatureTable(
+        url=url,
+        spec=dict(
+            datapoint_table=sampletable,
+            evaluator_factory=eval_factory,
+            collator=Datacollator(spec=dict(
+                signals=[("samples", "samples")],
+                labels=[("labels", "labels")],
+            )),
+        ),
+        devices=["cpu"],
+        tag="feature_table_log_par",
+    ).build()
+
+    probe = DatafeatureAffineLogisticProbe(
+        url=url,
+        spec=dict(
+            feature_table=featuretable,
+            collator=Datacollator(spec=dict(
+                signals=[("features", "final")],
+                labels=[("labels", "labels")],
+            )),
+            evaluation_fraction=0.8,
+        ),
+        parallelization='multithreading',
+        n_workers=2,
+        work_stealing=True,
+        tag="probe_log_par",
+    ).build()
+
+    assert probe.valid()
+    assert probe.read('coef').shape[1] == 8
+
+
 if __name__ == "__main__":
     import sys
     dbx.dataparts.gitwrkreposetup = lambda *a, **k: None

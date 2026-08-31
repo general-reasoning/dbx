@@ -150,6 +150,60 @@ class DatafeatureAffineLogisticProber:
         return report1, report2
 
 
+class TabAffineLogisticCallable:
+    """Worker callable that loads a single tab's collated features and labels for DatafeatureAffineLogisticProbe."""
+
+    def __init__(self, probe: Any, tab_idx: int | None):
+        self.probe = probe
+        self.tab_idx = tab_idx
+
+    def __call__(self):
+        table = self.probe.var.feature_table
+        collator = self.probe.var.collator
+        normalization = self.probe.var.normalization
+        aggregation = self.probe.var.aggregation
+
+        if self.tab_idx is not None:
+            tab = table.tab(self.tab_idx)
+            data_dict = tab.data(*collator.slices, concat=True)
+            del tab
+        else:
+            data_dict = table.data(*collator.slices, concat=True)
+
+        raw_features, raw_labels = collator(data_dict, strip_keys=True)
+        del data_dict
+
+        if torch is not None and isinstance(raw_features, torch.Tensor):
+            feat_tensor = raw_features.float()
+        else:
+            feat_tensor = torch.from_numpy(np.array(raw_features)).float()
+        del raw_features
+
+        feat_tensor = normalize_features(feat_tensor, normalization)
+
+        if feat_tensor.dim() == 3:  # (N_tabs, N_tiles, D)
+            if aggregation == "mean":
+                sample_features = feat_tensor.mean(dim=1)
+        elif feat_tensor.dim() == 2:  # (N_samples, D)
+            sample_features = feat_tensor
+        else:
+            sample_features = feat_tensor.reshape(len(raw_labels), -1)
+        del feat_tensor
+
+        labels = np.array(raw_labels)
+        del raw_labels
+
+        if labels.ndim > 1 and labels.shape[-1] == 1:
+            labels = labels.squeeze(-1)
+
+        result = {
+            'features': sample_features,
+            'labels': labels,
+        }
+        gc.collect()
+        return result
+
+
 class DatafeatureAffineLogisticProbe(Datablock):
     """Fit a logistic classifier on sample-level features for a single layer.
 
@@ -173,59 +227,81 @@ class DatafeatureAffineLogisticProbe(Datablock):
         feature_table: DatafeatureTable | DatafeatureTab
         collator: Datacollator
         fit_intercept: bool = True
-        evaluation_fraction: float = 0.8
+        evaluation_fraction: float = 0.2
         aggregation: str = "mean"
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
+
+    def __init__(
+        self,
+        *args,
+        parallelization: str | None = None,
+        n_workers: int = 1,
+        work_stealing: bool = False,
+        works_stealing: bool = False,
+        **kwargs,
+    ):
+        ws = work_stealing or works_stealing
+        super().__init__(
+            *args,
+            parallelization=parallelization,
+            n_workers=n_workers,
+            work_stealing=ws,
+            **kwargs,
+        )
 
     def __post_init__(self):
         super().__post_init__()
         assert self.var.aggregation in ["mean"], f"Unknown aggregation: {self.var.aggregation}"
         assert self.var.normalization in NORMALIZATION_MODES, f"Unknown normalization mode: {self.var.normalization!r}"
+        self.parallelization = getattr(self, 'parallelization', None) or 'inline'
+        self.n_workers = getattr(self, 'n_workers', 1)
+        self.work_stealing = getattr(self, 'work_stealing', getattr(self, 'works_stealing', False))
         self._prober = DatafeatureAffineLogisticProber(log=self.log)
 
     def __build__(self):
         self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")
         table = self.var.feature_table
-        collator = self.var.collator
 
-        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: data loading: BEGIN")
         n_tabs = table.n_tabs if hasattr(table, 'n_tabs') and table.n_tabs > 0 else 1
-        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: data loading ({n_tabs} tabs): BEGIN")
-        data_dict = table.data(*collator.slices, concat=True)
-        raw_features, raw_labels = collator(data_dict, strip_keys=True)
-        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: data loading: END")
-        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: data loading ({n_tabs} tabs): END")
+        self.log.verbose(
+            f"DatafeatureAffineLogisticProbe.__build__: data loading in parallel ({n_tabs} tabs, "
+            f"parallelization={self.parallelization!r}, n_workers={self.n_workers}): BEGIN"
+        )
+        tag = f"COMPUTING LOGISTIC DATA [{self.__class__.__name__}, n_workers={self.n_workers}]"
+        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
+        if getattr(self, 'work_stealing', False):
+            executor_kwargs['work_stealing'] = self.work_stealing
+        executor = callable_executor(self.parallelization, **executor_kwargs)
 
-        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature normalization and aggregation: BEGIN")
-        if torch is not None and isinstance(raw_features, torch.Tensor):
-            feat_tensor = raw_features.float()
+        if hasattr(table, 'n_tabs') and table.n_tabs > 0:
+            callables = [TabAffineLogisticCallable(self, i) for i in range(table.n_tabs)]
         else:
-            feat_tensor = torch.from_numpy(np.array(raw_features)).float()
+            callables = [TabAffineLogisticCallable(self, None)]
 
-        feat_tensor = normalize_features(feat_tensor, self.var.normalization)
+        results = executor.exec_callables(callables)
+        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: data loading in parallel: END")
 
-        if feat_tensor.dim() == 3:  # (N_tabs, N_tiles, D)
-            if self.var.aggregation == "mean":
-                sample_features = feat_tensor.mean(dim=1)
-        elif feat_tensor.dim() == 2:  # (N_samples, D)
-            sample_features = feat_tensor
+        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature aggregation: BEGIN")
+        all_features = [res['features'] for res in results]
+        all_labels = [res['labels'] for res in results]
+
+        if torch is not None and isinstance(all_features[0], torch.Tensor):
+            sample_features = torch.cat(all_features, dim=0)
         else:
-            sample_features = feat_tensor.reshape(len(raw_labels), -1)
+            sample_features = np.concatenate(all_features, axis=0)
 
-        labels = np.array(raw_labels)
-        if labels.ndim > 1 and labels.shape[-1] == 1:
-            labels = labels.squeeze(-1)
+        labels = np.concatenate(all_labels, axis=0)
 
         assert len(labels) == len(sample_features), (
             f"len(labels) != len(sample_features): {len(labels)} != {len(sample_features)}"
         )
-        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature normalization and aggregation: END")
+        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature aggregation: END")
 
         self.log.verbose("DatafeatureAffineLogisticProbe.__build__: fitting and evaluation: BEGIN")
         write_npz(self.path('labels', ensure_dirpath=True), labels=labels)
         write_tensor(sample_features, self.path('features', ensure_dirpath=True))
 
-        X = sample_features.numpy()
+        X = sample_features.numpy() if hasattr(sample_features, 'numpy') else np.array(sample_features)
         y = labels
         N = len(y)
         ntrain = int(N * self.var.evaluation_fraction)

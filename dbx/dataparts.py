@@ -680,8 +680,54 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
         df.to_parquet(f)
 
 
+def _match_single_journal_val(x, p) -> bool:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return False
+    if isinstance(p, str):
+        x_str = str(x)
+        if p in x_str:
+            return True
+        if '=' in p:
+            k_sub, v_sub = p.split('=', 1)
+            k_sub, v_sub = k_sub.strip(), v_sub.strip().strip("'\"")
+            pattern_re = rf"['\"]?{re.escape(k_sub)}['\"]?\s*[:=]\s*['\"]?[^,;)\n]*?{re.escape(v_sub)}"
+            if re.search(pattern_re, x_str):
+                return True
+        elif ':' in p:
+            k_sub, v_sub = p.split(':', 1)
+            k_sub, v_sub = k_sub.strip(), v_sub.strip().strip("'\"")
+            pattern_re = rf"['\"]?{re.escape(k_sub)}['\"]?\s*[:=]\s*['\"]?[^,;)\n]*?{re.escape(v_sub)}"
+            if re.search(pattern_re, x_str):
+                return True
+        try:
+            if re.search(p, x_str):
+                return True
+        except re.error:
+            pass
+        return False
+    elif isinstance(p, re.Pattern):
+        return bool(p.search(str(x)))
+    elif callable(p):
+        return bool(p(x))
+    else:
+        if x == p:
+            return True
+        return str(p) in str(x)
+
+
+def _match_journal_filter(x, spec) -> bool:
+    if isinstance(spec, tuple):
+        # ANDed
+        return all(_match_single_journal_val(x, p) for p in spec)
+    elif isinstance(spec, list):
+        # ORed
+        return any(_match_journal_filter(x, item) for item in spec)
+    else:
+        return _match_single_journal_val(x, spec)
+
+
 def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
-    """Filter a journal DataFrame by column matching, prefix matching (e.g. hash, exec, and all string columns), and date/datetime."""
+    """Filter a journal DataFrame by column matching, substring/pattern matching anywhere in the string, and date/datetime."""
     if df is None or df.empty or not filter_kwargs:
         return df
 
@@ -735,15 +781,8 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
                 df = df[df[k].isin(v_dt)]
             else:
                 df = df[df[k] == v_dt]
-        elif isinstance(v, (list, tuple)):
-            if all(isinstance(x, str) for x in v):
-                df = df[df[k].apply(lambda x: isinstance(x, str) and (x in v or x.startswith(tuple(v))))]
-            else:
-                df = df[df[k].isin(v)]
-        elif isinstance(v, str):
-            df = df[df[k].apply(lambda x: isinstance(x, str) and (x == v or x.startswith(v)))]
         else:
-            df = df[df[k] == v]
+            df = df[df[k].apply(lambda x: _match_journal_filter(x, v))]
 
     df = df.reset_index(drop=True)
     return df

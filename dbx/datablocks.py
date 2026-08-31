@@ -5554,13 +5554,13 @@ class Datastack(Datablock):
             if '=' in p:
                 k, v = p.split('=', 1)
                 k, v = k.strip(), v.strip().strip("'\"")
-                pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?{re.escape(v)}['\"]?"
+                pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?[^,;)\n]*?{re.escape(v)}"
                 if re.search(pattern_re, sig):
                     return True
             elif ':' in p:
                 k, v = p.split(':', 1)
                 k, v = k.strip(), v.strip().strip("'\"")
-                pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?{re.escape(v)}['\"]?"
+                pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?[^,;)\n]*?{re.escape(v)}"
                 if re.search(pattern_re, sig):
                     return True
             try:
@@ -5592,6 +5592,18 @@ class Datastack(Datablock):
         if isinstance(p, str):
             if p in text:
                 return True
+            if '=' in p:
+                k, v = p.split('=', 1)
+                k, v = k.strip(), v.strip().strip("'\"")
+                pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?[^,;)\n]*?{re.escape(v)}"
+                if re.search(pattern_re, text):
+                    return True
+            elif ':' in p:
+                k, v = p.split(':', 1)
+                k, v = k.strip(), v.strip().strip("'\"")
+                pattern_re = rf"['\"]?{re.escape(k)}['\"]?\s*[:=]\s*['\"]?[^,;)\n]*?{re.escape(v)}"
+                if re.search(pattern_re, text):
+                    return True
             try:
                 if re.search(p, text):
                     return True
@@ -5668,7 +5680,15 @@ class Datastack(Datablock):
         **kwargs,
     ) -> list[int]:
         """Return a list of indices of all blocks matching signature, tag, and/or path pattern(s) (parallelized)."""
-        sig_clauses = self._normalize_pattern_spec(signature, *patterns)
+        executor_kw_names = {
+            'executor_cls', 'worker_done_timeout_sec', 'shuffle_callables',
+            'start_method', 'multiprocessing_start_method', 'devices'
+        }
+        extra_filter_kwargs = {k: v for k, v in kwargs.items() if k not in executor_kw_names}
+        clean_kwargs = {k: v for k, v in kwargs.items() if k in executor_kw_names}
+
+        extra_sig_patterns = [f"{k}={v}" for k, v in extra_filter_kwargs.items()]
+        sig_clauses = self._normalize_pattern_spec(signature, *(list(patterns) + extra_sig_patterns))
         tag_clauses = self._normalize_pattern_spec(tag)
         path_clauses = self._normalize_pattern_spec(path)
 
@@ -5697,7 +5717,7 @@ class Datastack(Datablock):
             n_workers=n_workers,
             executor_cls=executor_cls,
             **({"work_stealing": work_stealing} if work_stealing is not None else {}),
-            **kwargs,
+            **clean_kwargs,
         )
         executor = executor_cls(**exec_kwargs)
         matchers = [

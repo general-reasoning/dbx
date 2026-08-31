@@ -189,9 +189,12 @@ class DatafeatureAffineLogisticProbe(Datablock):
         collator = self.var.collator
 
         self.log.verbose("DatafeatureAffineLogisticProbe.__build__: data loading: BEGIN")
+        n_tabs = table.n_tabs if hasattr(table, 'n_tabs') and table.n_tabs > 0 else 1
+        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: data loading ({n_tabs} tabs): BEGIN")
         data_dict = table.data(*collator.slices, concat=True)
         raw_features, raw_labels = collator(data_dict, strip_keys=True)
         self.log.verbose("DatafeatureAffineLogisticProbe.__build__: data loading: END")
+        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: data loading ({n_tabs} tabs): END")
 
         self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature normalization and aggregation: BEGIN")
         if torch is not None and isinstance(raw_features, torch.Tensor):

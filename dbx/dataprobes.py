@@ -184,12 +184,16 @@ class DatafeatureAffineLogisticProbe(Datablock):
         self._prober = DatafeatureAffineLogisticProber(log=self.log)
 
     def __build__(self):
+        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")
         table = self.var.feature_table
         collator = self.var.collator
 
+        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: data loading: BEGIN")
         data_dict = table.data(*collator.slices, concat=True)
         raw_features, raw_labels = collator(data_dict, strip_keys=True)
+        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: data loading: END")
 
+        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature normalization and aggregation: BEGIN")
         if torch is not None and isinstance(raw_features, torch.Tensor):
             feat_tensor = raw_features.float()
         else:
@@ -212,7 +216,9 @@ class DatafeatureAffineLogisticProbe(Datablock):
         assert len(labels) == len(sample_features), (
             f"len(labels) != len(sample_features): {len(labels)} != {len(sample_features)}"
         )
+        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature normalization and aggregation: END")
 
+        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: fitting and evaluation: BEGIN")
         write_npz(self.path('labels', ensure_dirpath=True), labels=labels)
         write_tensor(sample_features, self.path('features', ensure_dirpath=True))
 
@@ -241,7 +247,9 @@ class DatafeatureAffineLogisticProbe(Datablock):
         write_tensor(torch.from_numpy(clf.coef_), self.path('coef', ensure_dirpath=True))
         write_tensor(torch.from_numpy(clf.intercept_), self.path('intercept', ensure_dirpath=True))
         write_npz(self.path('classes', ensure_dirpath=True), classes=clf.classes_)
+        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: fitting and evaluation: END")
 
+        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: END {self.anchorkeypath}")
         return self
 
     def __read__(self, *topicpath):

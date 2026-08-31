@@ -441,7 +441,7 @@ class DatafeatureTab(DatapointTab):
     def dataset(
         self,
         *slices,
-        datapoint_slices: list | None = None,
+        upstream: list | None = None,
         mode='map',
         columns=None,
         shared=None,
@@ -461,8 +461,8 @@ class DatafeatureTab(DatapointTab):
         if not requested:
             requested = list(self.slices)
 
-        if datapoint_slices:
-            for s in datapoint_slices:
+        if upstream:
+            for s in upstream:
                 if s not in requested:
                     requested.append(s)
 
@@ -492,7 +492,7 @@ class DatafeatureTab(DatapointTab):
             zip_validator=zip_validator,
         )
 
-    def data(self, *slices, datapoint_slices: list | None = None, concat=True):
+    def data(self, *slices, upstream: list | None = None, concat=True):
         requested = list(slices)
         if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
             if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
@@ -505,8 +505,8 @@ class DatafeatureTab(DatapointTab):
         if not requested:
             requested = list(self.slices)
 
-        if datapoint_slices:
-            for s in datapoint_slices:
+        if upstream:
+            for s in upstream:
                 if s not in requested:
                     requested.append(s)
 
@@ -645,7 +645,7 @@ class DatafeatureTable(DatapointTable):
     def dataset(
         self,
         *slices,
-        datapoint_slices: list | None = None,
+        upstream: list | None = None,
         mode='map',
         columns=None,
         shared=None,
@@ -665,8 +665,8 @@ class DatafeatureTable(DatapointTable):
         if not requested:
             requested = list(self.slices)
 
-        if datapoint_slices:
-            for s in datapoint_slices:
+        if upstream:
+            for s in upstream:
                 if s not in requested:
                     requested.append(s)
 
@@ -696,7 +696,7 @@ class DatafeatureTable(DatapointTable):
             zip_validator=zip_validator,
         )
 
-    def data(self, *slices, datapoint_slices: list | None = None, concat=True):
+    def data(self, *slices, upstream: list | None = None, concat=True):
         requested = list(slices)
         if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
             if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
@@ -709,8 +709,8 @@ class DatafeatureTable(DatapointTable):
         if not requested:
             requested = list(self.slices)
 
-        if datapoint_slices:
-            for s in datapoint_slices:
+        if upstream:
+            for s in upstream:
                 if s not in requested:
                     requested.append(s)
 

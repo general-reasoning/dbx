@@ -364,8 +364,7 @@ class TestDatasetMode:
         assert list(built_table.dataset(mode='iter', batch_size=3)) == expected
 
     def test_iter_mode_respects_projection(self, built_table):
-        ds = built_table.dataset(mode='iter', batch_size=3,
-                                 columns={'numbers': ['idx']})
+        ds = built_table.dataset(('numbers', 'idx'), 'letters', mode='iter', batch_size=3)
         assert set(next(iter(ds))) == {'idx', 'label'}
 
     def test_iter_mode_demands_a_batch_size(self, built_table):
@@ -502,10 +501,8 @@ class TestFlushEvery:
         """Shuffled and still paired: 'big' carries idx too, so a mispairing
         shows up as the two slices' idx disagreeing."""
         table = sized(tmp_path, flush_every=8)
-        ds = table.dataset(mode='iter', batch_size=4, shuffle=True,
-                           shuffle_seed=17, columns={'small': ['idx'],
-                                                     'big': ['idx']},
-                           shared={'idx'}, validate_shared=True)
+        ds = table.dataset(('small', 'idx'), ('big', 'idx'), mode='iter', batch_size=4, shuffle=True,
+                           shuffle_seed=17, shared={'idx'}, validate_shared=True)
         seen = [s['idx'] for s in ds]
         assert sorted(seen) == list(range(24))
         assert seen != list(range(24)), "shuffle=True did not shuffle"
@@ -632,12 +629,20 @@ class TestDatastream:
 class TestZipPolicy:
 
     def test_columns_project_a_slice(self, built_table):
-        ds = built_table.dataset(columns=[('numbers', 'square')])
+        ds = built_table.dataset(('numbers', 'square'), 'letters')
         assert set(ds[0]) == {'square', 'idx', 'label'}
 
+    def test_combined_slice_columns(self, built_table):
+        ds1 = built_table.dataset(("numbers", ["square", "idx"]))
+        ds2 = built_table.dataset(("numbers", "square"), ("numbers", "idx"))
+        assert set(ds1[0]) == set(ds2[0]) == {'square', 'idx'}
+
+        ds3 = built_table.dataset(("numbers", "square"), "letters")
+        assert 'square' in ds3[0] and 'label' in ds3[0]
+
     def test_columns_reject_an_unopened_slice(self, built_table):
-        with pytest.raises(KeyError, match='not among'):
-            built_table.dataset('letters', columns=[('numbers', 'square')])
+        with pytest.raises(KeyError, match='unknown slice'):
+            built_table.dataset(('invalid_slice', 'square'))
 
     def test_shared_keys_are_validated(self, built_table):
         """'idx' is written to both slices in lockstep, so it must agree."""

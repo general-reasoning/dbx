@@ -152,7 +152,7 @@ class DatapointBase(Datablock):
         **kwargs
             Passed to `_read_slice()`.
         """
-        names = self._slicenames(slices)
+        names = self.slice_names(slices)
         if len(names) == 1 and slices:
             res = self._read_slice(names[0], **kwargs)
             return concat_data(res) if concat else res
@@ -163,7 +163,7 @@ class DatapointBase(Datablock):
 
     def datastream(self, slice, **kwargs) -> StreamingDataset:
         """One slice as a live `StreamingDataset`."""
-        self._slicenames((slice,))
+        self.slice_names((slice,)) # check slice existence/name correctnless
         cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
         kwargs.setdefault('cache_dir', f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
         kwargs.setdefault('cache', self.cacheroot)
@@ -172,7 +172,7 @@ class DatapointBase(Datablock):
 
     def dataset(
         self,
-        *slices,
+        *slice_columns,
         mode='map',
         columns=None,
         shared=None,
@@ -183,14 +183,20 @@ class DatapointBase(Datablock):
         cache_limit=None,
         **kwargs,
     ):
-        """The named slices, zipped into one `Dataset`.
+        """The named slices (with optional per-slice column filtering), zipped into one `Dataset`.
 
         Parameters
         ----------
+        *slice_columns : str | tuple[str, str | list[str] | tuple[str, ...]]
+            Positional arguments where each item is either:
+            - `str`: slice name for all columns (e.g. `"features"`)
+            - `(slice, column)` tuple: slice name and specific column (e.g. `("features", "col1")`)
+            - `(slice, [col1, col2])` tuple: slice name and list of columns.
+            Passing multiple `(slice, col)` tuples for the same slice accumulates their columns.
+            If no positional arguments are passed, defaults to all slices with all columns.
         mode : {'map', 'iter'}
             How the slices are read.
-        columns : list[tuple[str, str]] | dict | None
-            Specified as a list of `(slice, column)` tuples.
+        columns : legacy keyword parameter for backwards compatibility.
         cache_limit : float or str, optional
             Limit on cache size for streaming downloads.
         """
@@ -203,40 +209,69 @@ class DatapointBase(Datablock):
                 f"{self.__class__.__name__}.dataset(mode='iter') needs batch_size=: "
                 f"iterating partitions each slice over ranks and workers in whole batches."
             )
-        names = self._slicenames(slices)
+
+        items = list(slice_columns)
+        if len(items) == 1 and isinstance(items[0], (list, tuple)):
+            first = items[0]
+            if isinstance(first, list) or not (len(first) == 2 and isinstance(first[0], str) and first[0] in self.slices):
+                items = list(first)
 
         if columns is not None:
             if isinstance(columns, dict):
-                col_list = []
                 for s_name, cols in columns.items():
                     if isinstance(cols, (list, tuple)):
                         for c in cols:
-                            col_list.append((s_name, c))
+                            items.append((s_name, c))
                     else:
-                        col_list.append((s_name, cols))
-                columns = col_list
+                        items.append((s_name, cols))
+            elif isinstance(columns, (list, tuple)):
+                items.extend(columns)
 
-            if not isinstance(columns, (list, tuple)):
-                raise TypeError(
-                    f"{self.__class__.__name__}.dataset: columns must be a list of (slice, column) tuples, got {columns!r}"
-                )
-            for col_item in columns:
-                if not (isinstance(col_item, (tuple, list)) and len(col_item) == 2):
-                    raise ValueError(
-                        f"{self.__class__.__name__}.dataset: each column entry must be a (slice, column) tuple, got {col_item!r}"
-                    )
-                s_name = str(col_item[0])
-                if s_name not in names:
-                    raise KeyError(
-                        f"{self.__class__.__name__}.dataset: columns names slice {s_name!r}, which is not among opened slices {list(names)}"
-                    )
-
-            per_slice_columns = []
-            for name in names:
-                cols = [str(c) for (s, c) in columns if str(s) == name]
-                per_slice_columns.append(cols if cols else None)
-        else:
+        if not items:
+            names = self.slice_names(())
             per_slice_columns = None
+        else:
+            slice_order = []
+            slice_cols_map = {}
+            has_column_filter = False
+
+            for item in items:
+                if isinstance(item, str):
+                    s_name, cols = item, None
+                elif isinstance(item, (tuple, list)) and len(item) == 2:
+                    s_name = str(item[0])
+                    c_val = item[1]
+                    if isinstance(c_val, (list, tuple)):
+                        cols = [str(c) for c in c_val]
+                    else:
+                        cols = [str(c_val)]
+                    has_column_filter = True
+                else:
+                    raise ValueError(
+                        f"{self.__class__.__name__}.dataset: each slice_column entry must be a slice name (str) "
+                        f"or a (slice, column) pair, got {item!r}"
+                    )
+
+                if s_name not in slice_cols_map:
+                    slice_order.append(s_name)
+                    slice_cols_map[s_name] = list(cols) if cols is not None else None
+                else:
+                    if slice_cols_map[s_name] is not None:
+                        if cols is None:
+                            slice_cols_map[s_name] = None
+                        else:
+                            for c in cols:
+                                if c not in slice_cols_map[s_name]:
+                                    slice_cols_map[s_name].append(c)
+
+            names = self.slice_names(slice_order)
+
+            if has_column_filter:
+                per_slice_columns = [slice_cols_map[name] for name in names]
+                if all(c is None for c in per_slice_columns):
+                    per_slice_columns = None
+            else:
+                per_slice_columns = None
 
         if cache_limit is not None:
             kwargs['cache_limit'] = cache_limit
@@ -255,7 +290,7 @@ class DatapointBase(Datablock):
 
     def stats(self, *slices, **kwargs):
         """User-defined summary of the named slices."""
-        names = self._slicenames(slices)
+        names = self.slice_names(slices)
         if len(names) == 1 and slices:
             return self.__stats__(names[0], **kwargs)
         return {name: self.__stats__(name, **kwargs) for name in names}
@@ -270,7 +305,7 @@ class DatapointBase(Datablock):
         """Row counts per shard for the specified slice."""
         if slice is None:
             raise TypeError(f"{self.__class__.__name__}.shard_sizes requires an explicit slice argument")
-        slice = self._slicenames((slice,))[0]
+        slice = self.slice_names((slice,))[0]
         sizes = []
         if hasattr(self, 'n_tabs'):
             for idx in range(self.n_tabs):
@@ -356,18 +391,17 @@ class DatapointBase(Datablock):
         slice: str,
         *,
         block_size: int | None = None,
+        chunk_size: int | None = None,
         seed: int = 0,
         fixed_epoch: bool = False,
     ) -> ChunkShuffleSampler:
-        """Deprecated alias of :meth:`chunk_shuffle_sampler`; *block_size* is *chunk_size*.
-
-        A chunk was called a block before the name moved to what it describes
-        -- consecutive indices, which are a shard's worth of rows, not a block.
-        The sampler itself still answers to :class:`BlockShuffleSampler` and to
-        ``block_size``, and so does this.
-        """
+        """Alias for `chunk_shuffle_sampler` with `block_size` support."""
+        size = chunk_size if chunk_size is not None else block_size
         return self.chunk_shuffle_sampler(
-            slice, chunk_size=block_size, seed=seed, fixed_epoch=fixed_epoch,
+            slice,
+            chunk_size=size,
+            seed=seed,
+            fixed_epoch=fixed_epoch,
         )
 
     def verify_slice_row_counts_match(self) -> dict[str, int]:
@@ -405,7 +439,7 @@ class DatapointBase(Datablock):
         node = self._topicnode(*topicpath)
         return self._node_is_dirtopic(node)
 
-    def _slicenames(self, slices) -> tuple:
+    def slice_names(self, slices) -> tuple:
         """Normalize a `*slices` varargs tuple; empty means *all* slices."""
         if len(slices) == 1 and isinstance(slices[0], (tuple, list)):
             slices = tuple(slices[0])
@@ -993,7 +1027,7 @@ class DatapointTable(DatapointBase, Datastack):
         return self.blocks()
 
     def datastream(self, slice, **kwargs) -> StreamingDataset:
-        self._slicenames((slice,))
+        self.slice_names((slice,))
         cacheroot = self._ensure_cacheroot(kwargs.pop('cache', None))
         cache_dir = kwargs.pop('cache_dir',
                                f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
@@ -1253,7 +1287,7 @@ class DatapointFold(DatapointTable):
         return datapoints
 
     def datastream(self, slice, **kwargs) -> StreamingDataset:
-        self._slicenames((slice,))
+        self.slice_names((slice,))
         cacheroot = self._ensure_cacheroot(kwargs.pop('cache', None))
         cache_dir = kwargs.pop('cache_dir',
                                f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")

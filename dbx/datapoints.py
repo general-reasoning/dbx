@@ -10,7 +10,7 @@ import os
 import shutil
 import tempfile
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -32,9 +32,8 @@ except ImportError as exc:  # pragma: no cover
         "Install it with:  pip install datablocks[streaming]"
     ) from exc
 
-from .datablocks import DIRTOPIC, Datablock, Datastack
+from .datablocks import DIRTOPIC, Datablock, Datastack, Datajournal
 from .datastreams import (
-    BlockShuffleSampler,
     ChunkShuffleSampler,
     SharedMemoryManager,
     ZipIterableStreamingDatasets,
@@ -1008,11 +1007,6 @@ class DatapointTable(DatapointBase, Datastack):
         for idx in indices:
             datapoints.extend(self.tab(idx).data(slice, **kwargs))
         return datapoints
-
-    TabValidChecker = Datastack.DatablockValidityChecker
-    TabRedirectedChecker = Datastack.DatablockRedirectionChecker
-    DatablockValidityChecker = Datastack.DatablockValidityChecker
-    DatablockRedirectionChecker = Datastack.DatablockRedirectionChecker
 
     class TabMaker(Datastack.BlockMaker):
         """Lightweight callable that forms and optionally builds a tab."""

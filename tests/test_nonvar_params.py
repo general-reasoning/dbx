@@ -30,17 +30,17 @@ class CustomParamBlock(Datablock):
     class VAR(Datablock.VAR):
         val: int = 10
 
-    def __init__(self, *args, device_batch_size: int = 64, feature_devices: list | None = None, **kwargs):
+    def __init__(self, *args, device_batch_size: int = 64, devices: list | None = None, **kwargs):
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
-            feature_devices=feature_devices or ["cuda:0"],
+            devices=devices or ["cuda:0"],
             **kwargs,
         )
 
     def __post_init__(self):
         super().__post_init__()
-        self._devices = getattr(self, 'feature_devices', None) or ["cuda:0"]
+        self._devices = getattr(self, 'devices', None) or ["cuda:0"]
         self.device_batch_size = getattr(self, 'device_batch_size', 64)
 
     def __build__(self):
@@ -86,7 +86,7 @@ class CustomParamStack(Datastack):
 def test_nonvar_params_pickle_roundtrip(tmp_path):
     """Non-VAR parameters must survive pickle.dumps / pickle.loads."""
     url = str(tmp_path / "block")
-    block = CustomParamBlock(url=url, device_batch_size=128, feature_devices=["cuda:0", "cuda:1"])
+    block = CustomParamBlock(url=url, device_batch_size=128, devices=["cuda:0", "cuda:1"])
     assert block.device_batch_size == 128
     assert block._devices == ["cuda:0", "cuda:1"]
 
@@ -100,7 +100,7 @@ def test_nonvar_params_pickle_roundtrip(tmp_path):
 def test_nonvar_params_deepcopy(tmp_path):
     """Non-VAR parameters must survive copy.deepcopy()."""
     url = str(tmp_path / "block")
-    block = CustomParamBlock(url=url, device_batch_size=256, feature_devices=["cuda:2"])
+    block = CustomParamBlock(url=url, device_batch_size=256, devices=["cuda:2"])
     copied = copy.deepcopy(block)
 
     assert copied.device_batch_size == 256
@@ -110,8 +110,8 @@ def test_nonvar_params_deepcopy(tmp_path):
 def test_nonvar_params_do_not_affect_hash(tmp_path):
     """Changing non-VAR parameters must NOT change the block hash."""
     url = str(tmp_path / "block")
-    block1 = CustomParamBlock(url=url, device_batch_size=32, feature_devices=["cuda:0"])
-    block2 = CustomParamBlock(url=url, device_batch_size=128, feature_devices=["cuda:1", "cuda:2"])
+    block1 = CustomParamBlock(url=url, device_batch_size=32, devices=["cuda:0"])
+    block2 = CustomParamBlock(url=url, device_batch_size=128, devices=["cuda:1", "cuda:2"])
 
     assert block1.hash == block2.hash
 

@@ -319,11 +319,10 @@ class DatafeatureTab(DatapointTab):
         dataloader_kwargs: dict | None = None,
         **kwargs,
     ):
-        feature_device = kwargs.pop('feature_device', device)
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
-            feature_device=feature_device,
+            device=device,
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
             **kwargs,
@@ -331,7 +330,7 @@ class DatafeatureTab(DatapointTab):
 
     def __post_init__(self):
         super().__post_init__()
-        self.device = getattr(self, 'feature_device', None) or getattr(self, 'device', 'cpu')
+        self.device = getattr(self, 'device', 'cpu')
         self.device_batch_size = getattr(self, 'device_batch_size', 64)
         self.streaming = getattr(self, 'streaming', False)
         self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
@@ -583,11 +582,10 @@ class DatafeatureTable(DatapointTable):
         filter_built_tabs: bool = False,
         **kwargs,
     ):
-        feature_devices = kwargs.pop('feature_devices', devices or ["cpu"])
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
-            feature_devices=feature_devices,
+            devices=devices,
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
             filter_built_tabs=filter_built_tabs,
@@ -600,7 +598,9 @@ class DatafeatureTable(DatapointTable):
         self.streaming = getattr(self, 'streaming', False)
         self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
         self.filter_built_tabs = getattr(self, 'filter_built_tabs', False)
-        self._devices = getattr(self, 'feature_devices', None) or getattr(self, 'devices', None) or ["cpu"]
+        self.device_batch_size = getattr(self, 'device_batch_size', 64)
+        self.devices = getattr(self, 'devices', None) or ["cpu"]
+        self._devices = self.devices
         factory = self.var.evaluator_factory
         layer_names = factory.layer_names if factory is not None else []
         namemap = self.var.feature_namemap

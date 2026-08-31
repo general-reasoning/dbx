@@ -5360,7 +5360,17 @@ class Datastack(Datablock):
         except NotImplementedError:
             pass
         if idx not in self._blocks_:
-            s = self.__block__(idx)
+            try:
+                s = self.__block__(idx)
+            except NotImplementedError:
+                if self.__class__.blocks is not Datastack.blocks:
+                    blist = self.blocks()
+                    if 0 <= idx < len(blist):
+                        s = blist[idx]
+                    else:
+                        raise IndexError(f"Block index {idx} out of range for {self.__class__.__name__} with {len(blist)} blocks")
+                else:
+                    raise
             keyby_val = getattr(self, 'keyby', None)
             if keyby_val is not None:
                 s = s.set(keyby=keyby_val)

@@ -5123,12 +5123,12 @@ class Datablock:
         running_entries = j[(j['event'] == 'build:start') & (j['hash'].isin(running_hashes))]
         return DatajournalEntry(running_entries.iloc[0].dropna(), storage_options=self.storage_options)
 
-def UNSAFE_clear_block_from_callable(block, topics, clear_dirpath):
+def UNSAFE_clear_block_callable(block, topics=(), clear_dirpath=False, *, stack=None, idx=None, **kwargs):
     """Module-level callable for UNSAFE_clear_blocks (must be picklable)."""
     block.UNSAFE_clear(*topics, OVERRIDE=True, clear_dirpath=clear_dirpath)
+    if stack is not None and idx is not None:
+        stack._remove_block_path(idx)
     return block
-
-UNSAFE_clear_block_callable = UNSAFE_clear_block_from_callable
 
 
 def UNSAFE_copy_block_from_callable(block, anchorkeypath, overwrite=False, topicpaths=None, validate=True, always_copy_whole_dirpath=False):
@@ -5151,7 +5151,6 @@ class DatablockValidityChecker:
     """Lightweight callable that checks if a block at index `idx` is valid."""
     def __init__(self, idx: int):
         self.idx = idx
-        self.tab_idx = idx
 
     def __call__(self, stack):
         return stack.valid_block(self.idx)
@@ -5161,7 +5160,6 @@ class DatablockRedirectionChecker:
     """Lightweight callable that checks if a block at index `idx` is redirected."""
     def __init__(self, idx: int):
         self.idx = idx
-        self.tab_idx = idx
 
     def __call__(self, stack):
         return stack.redirected_block(self.idx)
@@ -5171,7 +5169,6 @@ class DatablockValidationChecker:
     """Lightweight callable that checks if a block at index `idx` validates."""
     def __init__(self, idx: int, **kwargs):
         self.idx = idx
-        self.tab_idx = idx
         self.kwargs = kwargs
 
     def __call__(self, stack):
@@ -5188,7 +5185,6 @@ class DatablockSignatureMatcher:
         path_clauses: list[tuple] | None = None,
     ):
         self.idx = idx
-        self.tab_idx = idx
         self.signature_clauses = signature_clauses
         self.tag_clauses = tag_clauses
         self.path_clauses = path_clauses
@@ -5393,10 +5389,11 @@ class Datastack(Datablock):
             self.log.detailed(f"block_journal: could not load journal for child blocks: {e}")
             return None
 
-    tab_journal = block_journal
-
     def valid_block(self, idx: int) -> bool:
         """Return whether the block at index *idx* is valid."""
+        if self._block_paths_topic():
+            if self._check_block_path(idx):
+                return True
         return self.block(idx).valid()
 
     def redirected_block(self, idx: int) -> bool:
@@ -5477,7 +5474,12 @@ class Datastack(Datablock):
 
     def validate_block(self, idx: int, **kwargs) -> bool:
         """Return whether the block at index *idx* validates."""
-        return self.block(idx).validate(**kwargs)
+        if self.block(idx).validate(**kwargs):
+            self._write_block_path(idx)
+            return True
+        else:
+            self._remove_block_path(idx)
+            return False
 
     def validate_blocks(
         self,
@@ -5805,7 +5807,98 @@ class Datastack(Datablock):
     def __stack__(self, results=None):
         return self
 
-    def UNSAFE_clear_blocks(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False, callable=UNSAFE_clear_block_from_callable):
+    def _block_paths_topic(self) -> str | None:
+        topics = self.topics()
+        if 'block_paths' in topics:
+            return 'block_paths'
+        return None
+
+    def _write_block_path(self, i: int):
+        topic_name = self._block_paths_topic()
+        if not topic_name:
+            return
+        block_dir = self.path(topic_name, ensure_dirpath=True)
+        sentinel_path = os.path.join(block_dir, f"block_{i}.path")
+        anchorkeypath = self.block(i).anchorkeypath
+        with self.fs.open(sentinel_path, 'w') as f:
+            f.write(anchorkeypath)
+        if hasattr(self, '_built_block_set_cache'):
+            self._built_block_set_cache.add(i)
+
+    def _remove_block_path(self, i: int):
+        topic_name = self._block_paths_topic()
+        if not topic_name:
+            return
+        try:
+            block_dir = self.path(topic_name)
+            sentinel_path = os.path.join(block_dir, f"block_{i}.path")
+            if self.fs.exists(sentinel_path):
+                self.fs.rm(sentinel_path)
+        except Exception:
+            pass
+        if hasattr(self, '_built_block_set_cache') and self._built_block_set_cache is not None:
+            self._built_block_set_cache.discard(i)
+
+    def _built_block_set(self) -> set[int]:
+        if not hasattr(self, '_built_block_set_cache'):
+            topic_name = self._block_paths_topic()
+            if not topic_name:
+                self._built_block_set_cache = set()
+            else:
+                try:
+                    block_dir = self.path(topic_name)
+                    if not self.fs.exists(block_dir):
+                        self._built_block_set_cache = set()
+                    else:
+                        files = self.fs.ls(block_dir, detail=False)
+                        indices = set()
+                        for f in files:
+                            fname = os.path.basename(f)
+                            if fname.startswith('block_') and fname.endswith('.path'):
+                                try:
+                                    idx = int(fname.removeprefix('block_').removesuffix('.path'))
+                                    indices.add(idx)
+                                except ValueError:
+                                    pass
+                        self._built_block_set_cache = indices
+                except Exception:
+                    self._built_block_set_cache = set()
+        return self._built_block_set_cache
+
+    def _check_block_path(self, i: int) -> bool:
+        topic_name = self._block_paths_topic()
+        if not topic_name:
+            return False
+        if i in self._built_block_set():
+            return True
+        try:
+            block_dir = self.path(topic_name)
+            sentinel_path = os.path.join(block_dir, f"block_{i}.path")
+            return self.fs.exists(sentinel_path)
+        except Exception:
+            return False
+
+    def UNSAFE_clear_block(self, idx: int, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
+        """Clear a single child block's data.
+
+        Parameters
+        ----------
+        idx : int
+            Index of the block to clear.
+        *topics : str
+            Forwarded to the block's ``UNSAFE_clear()``.
+        OVERRIDE : bool
+            If ``True``, skip the interactive confirmation.
+        clear_dirpath : bool
+            Forwarded to the block's ``UNSAFE_clear()``.
+        """
+        if not UNSAFE_allowed("UNSAFE_clear_block", OVERRIDE=OVERRIDE):
+            return self.block(idx)
+
+        blk = self.block(idx)
+        return UNSAFE_clear_block_callable(blk, topics, clear_dirpath, stack=self, idx=idx)
+
+    def UNSAFE_clear_blocks(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False, callable=UNSAFE_clear_block_callable):
         """Clear all block data, parallelized using the stack's builder settings.
 
         The interactive UNSAFE confirmation prompt is shown **once** at the
@@ -5820,7 +5913,7 @@ class Datastack(Datablock):
             If ``True``, skip the interactive confirmation.
         clear_dirpath : bool
             Forwarded to each block's ``UNSAFE_clear()``.
-        callable : callable, default UNSAFE_clear_block_from_callable
+        callable : callable, default UNSAFE_clear_block_callable
             Callable invoked per block to execute the clear operation.
         """
         if not UNSAFE_allowed("UNSAFE_clear_blocks", OVERRIDE=OVERRIDE):
@@ -5841,7 +5934,7 @@ class Datastack(Datablock):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
         executor = callable_executor(self.parallelization, **executor_kwargs)
 
-        callables = [functools.partial(callable, blk, topics, clear_dirpath) for blk in block_list]
+        callables = [functools.partial(callable, blk, topics, clear_dirpath, stack=self, idx=idx) for idx, blk in enumerate(block_list)]
         executor.exec_callables(callables)
 
         self.log.info(f"UNSAFE_clear_blocks complete: {self.__class__.__name__}")

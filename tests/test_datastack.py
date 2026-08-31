@@ -310,6 +310,89 @@ class TestDatastackClearBlocks(unittest.TestCase):
             content = blk.read('block')
             self.assertEqual(content, f"built:{blk.var.idx}")
 
+    def test_clear_single_block(self):
+        """UNSAFE_clear_block clears only the specified block."""
+        stack = self._build_stack()
+        for i in range(stack.n_blocks):
+            self.assertTrue(stack.valid_block(i))
+
+        # Clear block 1
+        stack.UNSAFE_clear_block(1, OVERRIDE=True)
+        self.assertTrue(stack.valid_block(0))
+        self.assertFalse(stack.valid_block(1))
+        self.assertTrue(stack.valid_block(2))
+
+    def test_datapoint_table_clear_tab_removes_sentinel(self):
+        """UNSAFE_clear_tab/block on DatapointTable removes .path file so valid_tab/block returns False."""
+        from dbx.datapoints import DatapointTable, DatapointTab, SLICETOPIC
+
+        class MinimalTab(DatapointTab):
+            VERSION = 1
+            TOPICS = {'data': SLICETOPIC}
+            COLUMNS = {'data': {'x': 'int'}}
+            def __build__(self):
+                with self.slice_writers(self.COLUMNS) as writers:
+                    writers['data'].write({'x': 1})
+
+        class MinimalTable(DatapointTable):
+            VERSION = 1
+            TAB = MinimalTab
+            @property
+            def n_tabs(self):
+                return 2
+
+        tbl = MinimalTable(url=os.path.join(self.tmpdir, 'tbl')).build()
+        self.assertTrue(tbl.valid_tab(0))
+        self.assertTrue(tbl.valid_block(0))
+        self.assertTrue(tbl._check_tab_path(0))
+
+        tbl.UNSAFE_clear_tab(0, OVERRIDE=True)
+        self.assertFalse(tbl._check_tab_path(0))
+        self.assertFalse(tbl.valid_tab(0))
+        self.assertFalse(tbl.valid_block(0))
+        self.assertTrue(tbl.valid_tab(1))
+
+    def test_validate_block_updates_sentinel_path(self):
+        """validate_block updates on-disk .path sentinel file (writes on pass, removes on fail)."""
+        from dbx.datapoints import DatapointTable, DatapointTab, SLICETOPIC
+
+        class ValidatableTab(DatapointTab):
+            VERSION = 1
+            TOPICS = {'data': SLICETOPIC}
+            COLUMNS = {'data': {'x': 'int'}}
+            def __build__(self):
+                with self.slice_writers(self.COLUMNS) as writers:
+                    writers['data'].write({'x': 1})
+            def validate(self, **kwargs):
+                return self.valid()
+
+        class ValidatableTable(DatapointTable):
+            VERSION = 1
+            TAB = ValidatableTab
+            @property
+            def n_tabs(self):
+                return 2
+
+        tbl = ValidatableTable(url=os.path.join(self.tmpdir, 'val_tbl')).build()
+        self.assertTrue(tbl._check_tab_path(0))
+
+        # Invalidate tab 0 data directly
+        tbl.tab(0).UNSAFE_clear(OVERRIDE=True)
+        # Force sentinel presence to simulate stale sentinel
+        tbl._write_tab_path(0)
+        self.assertTrue(tbl._check_tab_path(0))
+        # validate_block should return False and remove the sentinel path
+        self.assertFalse(tbl.validate_block(0))
+        self.assertFalse(tbl._check_tab_path(0))
+
+        # Now rebuild tab 0, and remove sentinel manually
+        tbl.tab(0).build()
+        tbl._remove_tab_path(0)
+        self.assertFalse(tbl._check_tab_path(0))
+        # validate_block should return True and write the sentinel path
+        self.assertTrue(tbl.validate_block(0))
+        self.assertTrue(tbl._check_tab_path(0))
+
     def test_returns_self(self):
         """UNSAFE_clear_blocks should return the stack itself."""
         stack = self._build_stack()
@@ -484,11 +567,11 @@ class TestValidateAndCustomCallable(unittest.TestCase):
         cleared_custom = []
         copied_custom = []
 
-        from dbx.datablocks import UNSAFE_clear_block_from_callable, UNSAFE_copy_block_from_callable
+        from dbx.datablocks import UNSAFE_clear_block_callable, UNSAFE_copy_block_from_callable
 
-        def custom_clear(block, topics, clear_dirpath):
+        def custom_clear(block, topics, clear_dirpath, **kwargs):
             cleared_custom.append(block.var.idx)
-            return UNSAFE_clear_block_from_callable(block, topics, clear_dirpath)
+            return UNSAFE_clear_block_callable(block, topics, clear_dirpath, **kwargs)
 
         def custom_copy(block, anchorkeypath, overwrite=False, topicpaths=None, validate=True, always_copy_whole_dirpath=False):
             copied_custom.append(block.var.idx)

@@ -866,8 +866,26 @@ class DatapointTable(DatapointBase, Datastack):
         except Exception:
             return False
 
+    def _remove_tab_path(self, i: int):
+        topic_name = self._tab_paths_topic()
+        if not topic_name:
+            return
+        try:
+            tab_dir = self.path(topic_name)
+            for prefix in ('tab_', 'block_'):
+                sentinel_path = os.path.join(tab_dir, f"{prefix}{i}.path")
+                if self.fs.exists(sentinel_path):
+                    self.fs.rm(sentinel_path)
+        except Exception:
+            pass
+        if hasattr(self, '_built_tab_set_cache') and self._built_tab_set_cache is not None:
+            self._built_tab_set_cache.discard(i)
+
     _write_tab_built = _write_tab_path
     _check_tab_built = _check_tab_path
+    _remove_tab_built = _remove_tab_path
+    _write_block_path = _write_tab_path
+    _remove_block_path = _remove_tab_path
 
     def valid_tab(self, i: int) -> bool:
         if self._tab_paths_topic():
@@ -892,11 +910,11 @@ class DatapointTable(DatapointBase, Datastack):
         """Return a pandas Series of booleans, one per tab, indicating redirection (parallelized)."""
         return self.redirected_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, **kwargs)
 
-    def validate_tab(self, i: int, **kwargs) -> bool:
-        """Return whether the tab at index *i* validates."""
-        return self.tab(i).validate(**kwargs)
+    validate_tab = Datastack.validate_block
+    validate_block = Datastack.validate_block
 
-    validate_block = validate_tab
+    UNSAFE_clear_tab = Datastack.UNSAFE_clear_block
+    UNSAFE_clear_tabs = Datastack.UNSAFE_clear_blocks
 
     def validate_tabs(
         self,
@@ -1208,8 +1226,15 @@ class DatapointFold(DatapointTable):
         real_idx = self.tab_indices[idx]
         return self.var.partition.datapoint_table._check_tab_path(real_idx)
 
+    def _remove_tab_path(self, idx: int):
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.datapoint_table._remove_tab_path(real_idx)
+
     _write_tab_built = _write_tab_path
     _check_tab_built = _check_tab_path
+    _remove_tab_built = _remove_tab_path
+    _write_block_path = _write_tab_path
+    _remove_block_path = _remove_tab_path
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
         return self.tab(idx)

@@ -100,9 +100,6 @@ def _to_tensor(inputs, device=None) -> torch.Tensor:
     return t.to(device) if device is not None else t
 
 
-
-
-
 def _extract_pair_data(data_dict, pair: tuple[str, str]):
     s_name, c_name = pair[0], pair[1]
     if isinstance(data_dict, dict) and s_name in data_dict:
@@ -162,16 +159,16 @@ class Datacollator(Datablock):
         if signal_only:
             if strip_keys:
                 return sig_arr
-            return {'signal': sig_arr}
+            return {'signals': sig_arr}
 
         if strip_keys:
             if len(self.var.labels) > 0:
                 return (sig_arr, lbl_arr)
             return (sig_arr,)
 
-        res = {'signal': sig_arr}
+        res = {'signals': sig_arr}
         if len(self.var.labels) > 0:
-            res['label'] = lbl_arr
+            res['labels'] = lbl_arr
         return res
 
     @property

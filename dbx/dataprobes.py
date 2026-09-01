@@ -80,6 +80,15 @@ def normalize_features(features: Any, mode: str | None) -> Any:
             raise ValueError(f"Unknown normalization mode {mode!r}")
 
 
+def aggregate_features(features, aggregation):
+    if aggregation is not None: 
+        if aggregation != 'mean':
+            raise ValueError(f"Unknown aggregation: {aggregation}")
+        else:
+            features = features.mean(dim=-1)
+    return features
+
+
 class DatafeatureAffineLogisticProber:
     """Standalone logistic regression evaluator for data features.
 
@@ -153,7 +162,7 @@ class DatafeatureAffineLogisticProber:
 class TabAffineLogisticCallable:
     """Worker callable that loads a single tab's collated features and labels for DatafeatureAffineLogisticProbe."""
 
-    def __init__(self, probe: Any, tab_idx: int | None):
+    def __init__(self, probe: Any, tab_idx: int):
         self.probe = probe
         self.tab_idx = tab_idx
 
@@ -163,32 +172,22 @@ class TabAffineLogisticCallable:
         normalization = self.probe.var.normalization
         aggregation = self.probe.var.aggregation
 
-        if self.tab_idx is not None:
-            tab = table.tab(self.tab_idx)
-            data_dict = tab.data(*collator.slices, concat=True)
-            del tab
-        else:
-            data_dict = table.data(*collator.slices, concat=True)
-
-        raw_features, raw_labels = collator(data_dict, strip_keys=True)
+        tab = table.tab(self.tab_idx)
+        data_dict = tab.data(*collator.slices, concat=True)
+        del tab
+        
+        collated = collator(data_dict, strip_keys=True)
         del data_dict
 
+        raw_features, raw_labels = collated['signals'], collated['labels']
         if torch is not None and isinstance(raw_features, torch.Tensor):
             feat_tensor = raw_features.float()
         else:
             feat_tensor = torch.from_numpy(np.array(raw_features)).float()
         del raw_features
-
-        feat_tensor = normalize_features(feat_tensor, normalization)
-
-        if feat_tensor.dim() == 3:  # (N_tabs, N_tiles, D)
-            if aggregation == "mean":
-                sample_features = feat_tensor.mean(dim=1)
-        elif feat_tensor.dim() == 2:  # (N_samples, D)
-            sample_features = feat_tensor
-        else:
-            sample_features = feat_tensor.reshape(len(raw_labels), -1)
-        del feat_tensor
+        features = feat_tensor.reshape(len(feat_tensor), -1)
+        features = aggregate_features(features, aggregation)
+        features = normalize_features(features, normalization)
 
         labels = np.array(raw_labels)
         del raw_labels
@@ -197,7 +196,7 @@ class TabAffineLogisticCallable:
             labels = labels.squeeze(-1)
 
         result = {
-            'features': sample_features,
+            'signals': features,
             'labels': labels,
         }
         gc.collect()
@@ -215,7 +214,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
 
     TOPICS = {
         'labels': 'labels.npz',
-        'features': 'features.npy',
+        'signals': 'signals.npy',
         'evaluation_report': 'evaluation_report.pkl',
         'coef': 'coef.npy',
         'intercept': 'intercept.npy',
@@ -282,7 +281,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
         self.log.verbose("DatafeatureAffineLogisticProbe.__build__: data loading in parallel: END")
 
         self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature aggregation: BEGIN")
-        all_features = [res['features'] for res in results]
+        all_features = [res['signals'] for res in results]
         all_labels = [res['labels'] for res in results]
 
         if torch is not None and isinstance(all_features[0], torch.Tensor):
@@ -312,8 +311,9 @@ class DatafeatureAffineLogisticProbe(Datablock):
         self.log.verbose(
             f"FITTING LogisticRegression "
             f"(fit_intercept={self.var.fit_intercept}, "
-            f"feature={self.var.collator.signal_pairs!r}, "
-            f"label={self.var.collator.label_pairs!r}, "
+            f"signals={self.var.collator.signal_pairs!r}, "
+            f"labels={self.var.collator.label_pairs!r}, "
+            f"aggregation={self.var.aggregation!r}, "
             f"normalization={self.var.normalization!r})"
         )
         clf = LogisticRegression(fit_intercept=self.var.fit_intercept)

@@ -136,15 +136,30 @@ class ZipBase:
     * **Per-source column projection** (*columns*), so a caller can say
       "frames, and only these two annotation columns" without paying to
       materialise the rest of the annotation row.
-    * **Collision handling that need not be silent** (*shared*,
-      *on_conflict*).  Sources written by one builder legitimately share
-      bookkeeping keys, so a merge conflict is normal and worth resolving
-      deliberately rather than by source ordering.
+    * **Rows that cannot collide** (*names*, *nested*).  Sources written by
+      one builder legitimately share bookkeeping columns, so the source's
+      name is part of every key and both values survive -- rather than one
+      of them winning by source ordering.
+    * **Alignment checking that need not be silent** (*shared*,
+      *validate_shared*), for the shared columns that are now kept side by
+      side and so can be compared.
 
     Parameters
     ----------
     *datasets
         One or more ``StreamingDataset`` instances to zip.
+    names : sequence[str]
+        Source names, positionally parallel to *datasets* -- normally the
+        slice names.  Required, and required to be distinct: every row is
+        keyed by them under either value of *nested*.
+    nested : bool
+        How a merged row is keyed.  ``True`` (the default) gives
+        ``{name: {column: value}}``, keeping each source's columns in their
+        own sub-dict; ``False`` flattens to ``{(name, column): value}``.
+        Both are collision-free -- the source name is part of every key --
+        which is the point: two slices may carry the same column name and
+        both values survive, where the older un-named flat row could keep
+        only one of them.
     columns : sequence | None
         Per-dataset column projection, positionally parallel to *datasets*.
         Entry *i* is either ``None`` ("every column of dataset *i*") or an
@@ -156,25 +171,17 @@ class ZipBase:
         guessing wrong silently reinterprets the caller's data as a
         projection spec.
     shared : iterable[str] | None
-        Keys expected in more than one source.  Exempt from *on_conflict*;
-        the first source's value wins.
+        Columns expected in more than one source.  Every keying keeps all of
+        them, so this only marks which ones *validate_shared* compares.
     validate_shared : bool
         Assert that every *shared* key present in more than one source holds
         an equal value at the same index -- which is what makes a mis-zipped
         stream loud instead of silently misaligned.  Off by default: it
         costs a comparison per shared key per item.
-    on_conflict : {'last', 'first', 'error'}
-        What to do when two sources supply the same key after projection and
-        it is not in *shared*.  Defaults to ``'last'``, which is a plain
-        dict merge in source order and what this class has always done;
-        ``'error'`` raises ``KeyError`` naming the key and the source
-        positions.
     skip_none : bool
-        Drop ``None`` values while merging, so a source carrying a key as
-        ``None`` does not mask another's real value.  On by default, again
-        for continuity -- but a projection that means to carry a genuinely
-        null column wants ``skip_none=False`` and an explicit *shared* /
-        *on_conflict* policy instead.
+        Drop ``None`` values while projecting, so a row does not carry a
+        column the source left empty.  On by default; a projection that
+        means to carry a genuinely null column wants ``skip_none=False``.
     zip_validator : callable | None
         Optional callable ``(idx, *samples) → None`` that is invoked
         with the flat index and the individual sample dicts **before**
@@ -183,14 +190,10 @@ class ZipBase:
         datasets).
     """
 
-    def __init__(self, *datasets, columns=None, shared=None,
-                 validate_shared=False, on_conflict='last', skip_none=True,
+    def __init__(self, *datasets, names, nested=True,
+                 columns=None, shared=None,
+                 validate_shared=False, skip_none=True,
                  zip_validator=None):
-        if on_conflict not in ('last', 'first', 'error'):
-            raise ValueError(
-                f"on_conflict must be 'last', 'first' or 'error', "
-                f"got {on_conflict!r}"
-            )
         what = self.__class__.__name__
         if not datasets:
             raise ValueError(f"{what} needs at least one dataset")
@@ -206,70 +209,112 @@ class ZipBase:
                 f"columns must be positionally parallel to datasets: got "
                 f"{len(columns)} entries for {len(datasets)} datasets"
             )
+
+        # Required, not defaulted: both keyings write the source's name into
+        # every row, and a positional stand-in ('0', '1') would key real data
+        # by a number that silently shifts when the caller reorders the slices.
+        names = [str(n) for n in names]
+        if len(names) != len(datasets):
+            raise ValueError(
+                f"{what}: names must be positionally parallel to datasets: "
+                f"got {len(names)} entries for {len(datasets)} datasets"
+            )
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        if duplicates:
+            raise ValueError(
+                f"{what}: duplicate source name(s) {duplicates} would key two "
+                f"sources to one entry"
+            )
+
         self.datasets = datasets
+        self.names = names
+        self.nested = bool(nested)
         self.columns = [None if cols is None else list(cols) for cols in columns]
         self.shared = set(shared or ())
         self.validate_shared = validate_shared
-        self.on_conflict = on_conflict
         self.skip_none = skip_none
         self.zip_validator = zip_validator
 
     def __len__(self):
         return len(self.datasets[0])
 
+    def _project(self, pos, sample, idx):
+        """One source's sample as an ordered ``[(column, value)]`` list.
+
+        Column order is the caller's projection order when there is one, and
+        otherwise the order the source wrote them in -- never a set's order.
+        Downstream code stacks these into an array whose axes are positional,
+        so an order that varied between processes would silently permute the
+        axis rather than fail.
+        """
+        cols = self.columns[pos]
+        if cols is None:
+            items = list(sample.items())
+        else:
+            missing = [c for c in cols if c not in sample]
+            if missing:
+                raise KeyError(
+                    f"{self.__class__.__name__} source {pos} has no column(s) "
+                    f"{missing} at index {idx}; it provides {sorted(sample)}"
+                )
+            items = [(c, sample[c]) for c in cols]
+        if self.skip_none:
+            items = [(k, v) for k, v in items if v is not None]
+        return items
+
+    def _check_shared(self, idx, projected):
+        """Assert that every *shared* column agrees across the sources holding it.
+
+        Alignment checking, not merging: two slices written in lockstep carry
+        the same bookkeeping column, and a shuffle that mispairs them shows up
+        here as a disagreement. Hoisted out of the merge because it says
+        nothing about how a row is keyed -- it is equally meaningful when
+        nesting keeps the two values in separate sub-dicts, where the flat
+        merge that used to host this check never runs at all.
+        """
+        if not (self.shared and self.validate_shared):
+            return
+        what = self.__class__.__name__
+        seen = {}
+        for pos, items in enumerate(projected):
+            for key, value in items:
+                if key not in self.shared:
+                    continue
+                if key not in seen:
+                    seen[key] = (pos, value)
+                elif not _same_value(seen[key][1], value):
+                    raise ValueError(
+                        f"{what}: shared key {key!r} disagrees "
+                        f"between source {seen[key][0]} and source {pos} at "
+                        f"index {idx} -- the streams are not aligned"
+                    )
+
     def _merge(self, idx, samples) -> dict:
-        """Project and merge one sample per source into one dict.
+        """Project and merge one sample per source into one row.
 
         *idx* only labels the item in error messages and is what the
         *zip_validator* is handed.  It is a physical sample index in
         ``ZipStreamingDataset`` and a position within the stream in
         ``ZipIterableStreamingDatasets`` -- the merge itself never uses it
         to address anything, so the difference does not matter here.
+
+        The row is keyed by :attr:`nested`. Either keying is collision-free,
+        because a source's name is part of every key, so nothing here decides
+        which of two values to keep -- both are kept, under distinct keys.
         """
-        what = self.__class__.__name__
         if self.zip_validator is not None:
             self.zip_validator(idx, *samples)
 
-        merged = {}
-        origin = {}
-        for pos, (sample, cols) in enumerate(zip(samples, self.columns)):
-            if cols is None:
-                items = sample.items()
-            else:
-                missing = [c for c in cols if c not in sample]
-                if missing:
-                    raise KeyError(
-                        f"{what} source {pos} has no column(s) "
-                        f"{missing} at index {idx}; it provides {sorted(sample)}"
-                    )
-                items = ((c, sample[c]) for c in cols)
+        projected = [self._project(pos, sample, idx)
+                     for pos, sample in enumerate(samples)]
+        self._check_shared(idx, projected)
 
-            for key, value in items:
-                if self.skip_none and value is None:
-                    continue
-                if key not in merged:
-                    merged[key] = value
-                    origin[key] = pos
-                    continue
-                if key in self.shared:
-                    if self.validate_shared and not _same_value(merged[key], value):
-                        raise ValueError(
-                            f"{what}: shared key {key!r} disagrees "
-                            f"between source {origin[key]} and source {pos} at "
-                            f"index {idx} -- the streams are not aligned"
-                        )
-                    continue
-                if self.on_conflict == 'error':
-                    raise KeyError(
-                        f"{what}: key {key!r} supplied by both "
-                        f"source {origin[key]} and source {pos}. Project it "
-                        f"away, or pass shared={{{key!r}, ...}} if both are "
-                        f"expected to carry it, or set on_conflict='first'/'last'."
-                    )
-                if self.on_conflict == 'last':
-                    merged[key] = value
-                    origin[key] = pos
-        return merged
+        if self.nested:
+            return {name: dict(items)
+                    for name, items in zip(self.names, projected)}
+        return {(name, key): value
+                for name, items in zip(self.names, projected)
+                for key, value in items}
 
 
 class ZipStreamingDataset(ZipBase, Dataset):
@@ -389,7 +434,7 @@ class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
         Verify at construction that all shuffling sources shard identically.
         On by default.  Sources that are not ``StreamingDataset``\\ s, or are
         not shuffling, carry no shard metadata to check and are skipped.
-    *datasets, columns, shared, validate_shared, on_conflict, skip_none, zip_validator
+    *datasets, names, nested, columns, shared, validate_shared, skip_none, zip_validator
         As ``ZipBase``.
     """
 

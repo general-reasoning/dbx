@@ -22,6 +22,7 @@ import dbx
 from dbx.datablocks import Datablock, Datastack, DIRTOPIC
 from dbx.databackbones import DatamodelEvaluatorFactory
 from dbx.datapoints import (
+    DatapointBase,
     DatapointTab,
     DatapointTable,
     DatapointTableTab,
@@ -133,47 +134,62 @@ class Datacollator(Datablock):
         labels: list[tuple[str, str]]
         length: int | None = None
 
-    def __call__(self, datapoints: list[dict], *, strip_keys: bool = False, signal_only: bool = False) -> dict[str, np.ndarray] | tuple[np.ndarray, ...] | np.ndarray:
-        """Collate a batch of datapoint dicts into collated arrays.
+    def __call__(self, datapoints, *, signal_only: bool = False):
+        """Collate a batch of datapoint rows into signal (and label) arrays.
 
         Parameters
         ----------
-        datapoints : list[dict]
-            List of datapoint sample dicts containing slice/column features and labels.
+        datapoints : list[dict] | dict
+            Either one row per sample -- what a `DataLoader` over
+            `dataset()` yields -- or one already-stacked mapping per slice,
+            which is what `data(*collator.slices(), concat=True)` hands back.
+            Both are keyed ``{slice: {column: ...}}``; they are told apart by
+            whether the outer object is a list, not by a flag, because the
+            callers that pass a whole slice at a time (a feature build, a
+            probe fit) are the same ones that pass batches elsewhere.
+        signal_only : bool
+            Return the signal array bare, rather than a tuple.
 
         Returns
         -------
-        dict[str, np.ndarray] | tuple[np.ndarray, ...] | np.ndarray
-            Collated signals and labels, formatted according to VAR options (length, strip_keys, signal_only).
+        np.ndarray | tuple[np.ndarray, ...]
+            The signal array alone when *signal_only*; otherwise
+            ``(signals, labels)``, or ``(signals,)`` when no labels are
+            declared. Never a dict: every caller either unpacks positionally
+            or wants the one array, and a mapping only invited the two to be
+            addressed by names that had to agree across three files.
         """
         sig_arr = self._collate_pairs(datapoints, self.var.signals)
-        lbl_arr = self._collate_pairs(datapoints, self.var.labels)
 
         length = self.var.length
-        if length is not None:
-            if hasattr(sig_arr, 'ndim') and sig_arr.ndim >= 1 and sig_arr.shape[-1] > length:
-                sig_arr = sig_arr[..., :length]
-            if hasattr(lbl_arr, 'ndim') and lbl_arr.ndim >= 1 and lbl_arr.shape[-1] > length:
-                lbl_arr = lbl_arr[..., :length]
+        if length is not None and getattr(sig_arr, 'ndim', 0) >= 1 and sig_arr.shape[-1] > length:
+            sig_arr = sig_arr[..., :length]
 
         if signal_only:
-            if strip_keys:
-                return sig_arr
-            return {'signals': sig_arr}
+            return sig_arr
 
-        if strip_keys:
-            if len(self.var.labels) > 0:
-                return (sig_arr, lbl_arr)
+        if not self.var.labels:
             return (sig_arr,)
 
-        res = {'signals': sig_arr}
-        if len(self.var.labels) > 0:
-            res['labels'] = lbl_arr
-        return res
+        lbl_arr = self._collate_pairs(datapoints, self.var.labels)
+        if length is not None and getattr(lbl_arr, 'ndim', 0) >= 1 and lbl_arr.shape[-1] > length:
+            lbl_arr = lbl_arr[..., :length]
+        return (sig_arr, lbl_arr)
 
-    @property
     def slices(self):
-        return list(set([p[0] for p in self.var.signals] + [p[0] for p in self.var.labels]))
+        """The slices these pairs name, deduplicated, in declaration order.
+
+        Order-preserving rather than ``set``-derived: this is splatted into
+        ``dataset(*collator.slices())`` and ``data(*collator.slices())``, where
+        position decides the order sources are zipped in. Python hashes str
+        with a per-process seed, so a set here put a different slice order in
+        front of every worker and every rerun -- which is not something a
+        config-addressed build can afford, and not something it would report.
+        """
+        seen = {}
+        for s_name, _ in self.signal_pairs + self.label_pairs:
+            seen[s_name] = None
+        return list(seen)
 
     @property
     def signal_pairs(self) -> tuple[tuple[str, str], ...]:
@@ -209,32 +225,50 @@ class Datacollator(Datablock):
             arr = np.copy(arr)
         return arr
 
-    def _collate_batch(self, batch: dict, norm_pairs) -> np.ndarray:
-        """Collate a ``{slice: data}`` mapping, in which the batch is ALREADY stacked.
+    @staticmethod
+    def _pick(row, s_name, c_name, what):
+        """The value at ``(s_name, c_name)`` in one nested row, or a clear error.
 
-        This is what ``data(*collator.slices, concat=True)`` hands back -- one
-        entry per slice, each holding every sample of it -- as opposed to the
-        list of per-sample dicts a DataLoader yields. Both reach __call__, and
-        they are told apart by shape rather than by a flag, because the callers
-        that pass a whole slice at a time (a feature build, a probe fit) are the
-        same ones that pass batches elsewhere.
-
-        One pair passes its array through untouched, so a single-signal collation
-        keeps the shape the slice was written with -- which is what a model is
-        then fed. Several are stacked along a new axis 1, mirroring the signals
-        axis of the per-sample form.
+        Exact, with no fallbacks. The previous version walked the row with
+        ``next(iter(val.values()))`` when a name did not match, which meant a
+        misspelled column, a renamed slice, or a row that had lost its slice
+        level all silently produced *some* array -- an arbitrary one -- and
+        the build wrote it as if it were the requested feature.
         """
-        arrays = []
-        for s_name, c_name in norm_pairs:
-            val = batch[s_name] if s_name in batch else batch
-            if isinstance(val, dict):
-                val = val.get(c_name, next(iter(val.values())))
-            arrays.append(self._as_array(val))
+        try:
+            slice_row = row[s_name]
+        except (KeyError, TypeError):
+            raise KeyError(
+                f"{what}: row has no slice {s_name!r}; it provides "
+                f"{sorted(row) if isinstance(row, dict) else type(row).__name__}"
+            ) from None
+        try:
+            return slice_row[c_name]
+        except (KeyError, TypeError):
+            raise KeyError(
+                f"{what}: slice {s_name!r} has no column {c_name!r}; it provides "
+                f"{sorted(slice_row) if isinstance(slice_row, dict) else type(slice_row).__name__}"
+            ) from None
+
+    def _collate_batch(self, batch: dict, norm_pairs) -> np.ndarray:
+        """Collate a ``{slice: {column: values}}`` mapping already stacked over rows.
+
+        This is what ``data(*collator.slices(), concat=True)`` hands back, as
+        opposed to the list of per-row dicts a DataLoader yields.
+
+        One pair passes its array through untouched, so a single-signal
+        collation keeps the shape the slice was written with -- which is what
+        a model is then fed. Several are stacked along a new axis 1,
+        mirroring the signals axis of the per-sample form.
+        """
+        what = f"{self.__class__.__name__}._collate_batch"
+        arrays = [self._as_array(self._pick(batch, s_name, c_name, what))
+                  for s_name, c_name in norm_pairs]
         if len(arrays) == 1:
             return arrays[0]
         return np.stack(arrays, axis=1)
 
-    def _collate_pairs(self, datapoints: list[dict], pairs: list[tuple[str, str]]) -> np.ndarray:
+    def _collate_pairs(self, datapoints, pairs) -> np.ndarray:
         if not pairs:
             return np.array([])
 
@@ -243,21 +277,12 @@ class Datacollator(Datablock):
         if isinstance(datapoints, dict):
             return self._collate_batch(datapoints, norm_pairs)
 
+        what = f"{self.__class__.__name__}._collate_pairs"
         batch_items = []
 
         for dp in datapoints:
-            dp_signals = []
-            for s_name, c_name in norm_pairs:
-                val = dp.get(s_name, dp) if isinstance(dp, dict) else dp
-                while isinstance(val, dict) and len(val) > 0:
-                    if c_name and c_name in val:
-                        val = val[c_name]
-                    elif c_name and c_name.replace('features_', '') in val:
-                        val = val[c_name.replace('features_', '')]
-                    else:
-                        val = next(iter(val.values()))
-
-                dp_signals.append(self._as_array(val))
+            dp_signals = [self._as_array(self._pick(dp, s_name, c_name, what))
+                          for s_name, c_name in norm_pairs]
 
             norm_signals = []
             for sig in dp_signals:
@@ -286,7 +311,151 @@ class Datacollator(Datablock):
             return np.concatenate(batch_items, axis=0)
 
 
-class DatafeatureTab(DatapointTab):
+class _UpstreamSlices:
+    """Slice routing for a block that reads its own slices and an upstream block's.
+
+    `DatafeatureTab` owns ``features`` and borrows the sample slices of the
+    `DatapointTab` it was built from; `DatafeatureTable` does the same over a
+    `DatapointTable`. Both answer `dataset()` and `data()` for either, so both
+    need the same three things: work out which block owns a requested slice,
+    keep the caller's order, and refuse a name that two blocks both claim.
+    """
+
+    #: VAR field(s) that may hold the upstream block, most specific first.
+    UPSTREAM_VAR: tuple[str, ...] = ()
+
+    def _upstream_block(self):
+        for attr in self.UPSTREAM_VAR:
+            block = getattr(self.var, attr, None)
+            if block is None:
+                block = getattr(self, attr, None)
+            if block is not None:
+                return block
+        return None
+
+    @staticmethod
+    def _norm_items(slice_columns):
+        """``*slice_columns`` as an ordered ``[(slice, columns | None)]`` list."""
+        items = list(slice_columns)
+        if len(items) == 1 and isinstance(items[0], (list, tuple)):
+            first = items[0]
+            paired = (len(first) == 2 and isinstance(first[0], str)
+                      and isinstance(first[1], (str, list, tuple)))
+            if not paired:
+                items = list(first)
+        out = []
+        for item in items:
+            if isinstance(item, (tuple, list)) and len(item) == 2:
+                s_name, spec = str(item[0]), item[1]
+                cols = ([str(c) for c in spec] if isinstance(spec, (list, tuple))
+                        else [str(spec)])
+            else:
+                s_name, cols = str(item), None
+            out.append((s_name, cols))
+        return out
+
+    def _route(self, slice_columns, upstream=None):
+        """Resolve a request into an ordered ``[(block, slice, columns)]`` list.
+
+        Raises when the upstream block declares a slice this block also owns.
+        Rows are keyed by slice name, so two blocks claiming one name have no
+        way to both appear in a row -- and silently preferring either one is
+        how a caller ends up reading features while believing it asked for
+        samples.
+        """
+        what = self.__class__.__name__
+        block = self._upstream_block()
+        own = tuple(self.slices())
+        up = tuple(block.slices()) if block is not None else ()
+
+        clash = sorted(set(own) & set(up))
+        if clash:
+            raise KeyError(
+                f"{what}: upstream {type(block).__name__} declares slice(s) "
+                f"{clash}, which this block also owns ({list(own)}). A row is "
+                f"keyed by slice name and cannot hold both -- rename the "
+                f"upstream slice."
+            )
+
+        items = self._norm_items(slice_columns) or [(s, None) for s in own]
+        if upstream:
+            asked = {s for s, _ in items}
+            items = items + [(str(s), None) for s in upstream if str(s) not in asked]
+
+        routed, seen = [], {}
+        for s_name, cols in items:
+            if s_name in own:
+                owner = self
+            elif s_name in up:
+                owner = block
+            else:
+                raise KeyError(
+                    f"{what}: unknown slice {s_name!r}; "
+                    f"available slices are {list(own) + list(up)}"
+                )
+            if s_name in seen:
+                pos = seen[s_name]
+                _, _, prev = routed[pos]
+                merged = None if (prev is None or cols is None) else \
+                    prev + [c for c in cols if c not in prev]
+                routed[pos] = (owner, s_name, merged)
+            else:
+                seen[s_name] = len(routed)
+                routed.append((owner, s_name, cols))
+        return routed
+
+    def dataset(self, *slices, upstream: list | None = None, mode='map',
+                nested=True, columns=None, shared=None, validate_shared=False,
+                skip_none=True, zip_validator=None, **kwargs):
+        """The requested slices -- this block's and the upstream block's -- zipped.
+
+        Keyed exactly as `DatapointBase.dataset()`, so a row is
+        ``{'features': {layer: value}, sample_slice: {column: value}, ...}``.
+        """
+        if mode not in ('map', 'iter'):
+            raise ValueError(
+                f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}"
+            )
+        routed = self._route(slices, upstream)
+        datasets = [owner.datastream(s_name, **kwargs) for owner, s_name, _ in routed]
+        names = [s_name for _, s_name, _ in routed]
+        per_slice_columns = [cols for _, _, cols in routed]
+        if all(c is None for c in per_slice_columns):
+            per_slice_columns = columns
+
+        zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
+        return zip_cls(
+            *datasets,
+            names=names,
+            nested=nested,
+            columns=per_slice_columns,
+            shared=shared,
+            validate_shared=validate_shared,
+            skip_none=skip_none,
+            zip_validator=zip_validator,
+        )
+
+    def data(self, *slices, upstream: list | None = None, nested=True,
+             concat=True, **kwargs):
+        """The requested slices read whole, keyed as `dataset()` keys one row.
+
+        A table reads its own slice through `DatapointTable._read_slice`,
+        which already runs over every tab, so nothing here concatenates tabs
+        by hand.
+        """
+        routed = self._route(slices, upstream)
+        out = {}
+        for owner, s_name, cols in routed:
+            spec = (s_name, cols) if cols else s_name
+            out[s_name] = DatapointBase.data(owner, spec, concat=concat, **kwargs)[s_name]
+        if nested:
+            return out
+        return {(s_name, c): vals
+                for s_name, cols in out.items()
+                for c, vals in cols.items()}
+
+
+class DatafeatureTab(_UpstreamSlices, DatapointTab):
     """A tab storing multi-layer feature activations captured by an evaluator.
 
     Inherits access to the slices of the upstream `sampletab`. Calling `dataset()`
@@ -294,6 +463,7 @@ class DatafeatureTab(DatapointTab):
     using the `ZipStreamingDataset` mechanism.
     """
 
+    UPSTREAM_VAR = ('datapoint_tab',)
     VERSION = 1
     TOPICS = {'features': SLICETOPIC}
 
@@ -362,8 +532,8 @@ class DatafeatureTab(DatapointTab):
 
         collator = self.var.collator
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
-            sample_data = datapoint_tab.data(*collator.slices, concat=True)
-            inputs = collator(sample_data, signal_only=True, strip_keys=True)
+            sample_data = datapoint_tab.data(*collator.slices(), concat=True)
+            inputs = collator(sample_data, signal_only=True)
             inputs = _to_tensor(inputs, "cpu")
 
             n_samples = len(inputs)
@@ -406,7 +576,7 @@ class DatafeatureTab(DatapointTab):
 
         collator = self.var.collator
 
-        dataset = datapoint_tab.dataset(*collator.slices)
+        dataset = datapoint_tab.dataset(*collator.slices())
         dl_kwargs = dict(self.dataloader_kwargs) if self.dataloader_kwargs else {}
         dl_kwargs.setdefault('batch_size', self.device_batch_size)
         dl_kwargs.setdefault('collate_fn', _passthrough_collate)
@@ -416,7 +586,7 @@ class DatafeatureTab(DatapointTab):
 
         with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
             for batch_data in dataloader:
-                inputs = collator(batch_data, signal_only=True, strip_keys=True)
+                inputs = collator(batch_data, signal_only=True)
                 batch = _to_tensor(inputs, self.device)
                 result = evaluator(batch)
 
@@ -435,128 +605,17 @@ class DatafeatureTab(DatapointTab):
         gc.collect()
         return self
 
-    def dataset(
-        self,
-        *slices,
-        upstream: list | None = None,
-        mode='map',
-        columns=None,
-        shared=None,
-        validate_shared=False,
-        on_conflict='last',
-        skip_none=True,
-        zip_validator=None,
-        **kwargs,
-    ):
-        if mode not in ('map', 'iter'):
-            raise ValueError(f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}")
-
-        requested = list(slices)
-        if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            requested = list(requested[0])
-
-        if not requested:
-            requested = list(self.slices)
-
-        if upstream:
-            for s in upstream:
-                if s not in requested:
-                    requested.append(s)
-
-        dp_block = getattr(self.var, 'datapoint_tab', None) or getattr(self.var, 'datapoint_table', None)
-
-        datasets = []
-        for s in requested:
-            s_name = s[0] if isinstance(s, (tuple, list)) else str(s)
-            if s_name in self.slices:
-                datasets.append(self.datastream(s_name, **kwargs))
-            elif dp_block is not None and s_name in dp_block.slices:
-                datasets.append(dp_block.datastream(s_name, **kwargs))
-            else:
-                avail = list(self.slices) + (list(dp_block.slices) if dp_block else [])
-                raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
-                )
-
-        zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
-        return zip_cls(
-            *datasets,
-            columns=columns,
-            shared=shared,
-            validate_shared=validate_shared,
-            on_conflict=on_conflict,
-            skip_none=skip_none,
-            zip_validator=zip_validator,
-        )
-
-    def data(self, *slices, upstream: list | None = None, concat=True):
-        requested = list(slices)
-        if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
-                requested = list(requested[0])
-            elif len(requested[0]) == 2 and isinstance(requested[0][0], str) and isinstance(requested[0][1], str):
-                requested = [requested[0]]
-            else:
-                requested = list(requested[0])
-
-        if not requested:
-            requested = list(self.slices)
-
-        if upstream:
-            for s in upstream:
-                if s not in requested:
-                    requested.append(s)
-
-        result = {}
-        for item in requested:
-            if isinstance(item, (tuple, list)) and len(item) == 2:
-                s_name, c_name = str(item[0]), str(item[1])
-            else:
-                s_name, c_name = str(item), None
-
-            if s_name == 'features' or s_name in self.slices:
-                raw_data = _extract_slice_data(super().data('features', concat=concat), 'features')
-                if c_name is not None:
-                    if isinstance(raw_data, dict):
-                        target_col = c_name if c_name in raw_data else raw_data.get(c_name.replace('features_', ''), next(iter(raw_data.values())))
-                        if isinstance(target_col, str) and target_col in raw_data:
-                            result['features'] = {c_name: raw_data[target_col]}
-                        else:
-                            result['features'] = {c_name: target_col}
-                    else:
-                        result['features'] = {c_name: raw_data}
-                else:
-                    result['features'] = raw_data
-            elif self.var.datapoint_tab is not None and s_name in self.var.datapoint_tab.slices:
-                dp_data = _extract_slice_data(self.var.datapoint_tab.data(s_name, concat=concat), s_name)
-                if c_name is not None and isinstance(dp_data, dict):
-                    result[s_name] = {c_name: dp_data.get(c_name, next(iter(dp_data.values())))}
-                else:
-                    result[s_name] = dp_data
-            else:
-                col_key = s_name.replace('features_', '')
-                raw_data = _extract_slice_data(super().data('features', concat=concat), 'features')
-                if isinstance(raw_data, dict) and col_key in raw_data:
-                    result[s_name] = raw_data[col_key]
-                elif isinstance(raw_data, dict) and s_name in raw_data:
-                    result[s_name] = raw_data[s_name]
-                else:
-                    avail = list(self.slices) + (list(self.var.datapoint_tab.slices) if self.var.datapoint_tab else [])
-                    raise KeyError(
-                        f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
-                    )
-        return result
-
     # 2. Properties and Accessors ───────────────────────────────────
 
     def __len__(self) -> int:
         return len(self.var.datapoint_tab)
 
 
-class DatafeatureTable(DatapointTable):
+class DatafeatureTable(_UpstreamSlices, DatapointTable):
     """A table of `DatafeatureTab` blocks built across a `DatapointTable`."""
 
     TAB = DatafeatureTab
+    UPSTREAM_VAR = ('datapoint_table',)
     VERSION = 1
 
     @dataclass
@@ -639,117 +698,6 @@ class DatafeatureTable(DatapointTable):
     def __block__(self, idx: int, **kwargs) -> DatafeatureTab:
         return self.__tab__(idx, **kwargs)
 
-    def dataset(
-        self,
-        *slices,
-        upstream: list | None = None,
-        mode='map',
-        columns=None,
-        shared=None,
-        validate_shared=False,
-        on_conflict='last',
-        skip_none=True,
-        zip_validator=None,
-        **kwargs,
-    ):
-        if mode not in ('map', 'iter'):
-            raise ValueError(f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}")
-
-        requested = list(slices)
-        if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            requested = list(requested[0])
-
-        if not requested:
-            requested = list(self.slices)
-
-        if upstream:
-            for s in upstream:
-                if s not in requested:
-                    requested.append(s)
-
-        dp_block = getattr(self.var, 'datapoint_table', None) or getattr(self.var, 'datapoint_tab', None)
-
-        datasets = []
-        for s in requested:
-            s_name = s[0] if isinstance(s, (tuple, list)) else str(s)
-            if s_name in self.slices:
-                datasets.append(self.datastream(s_name, **kwargs))
-            elif dp_block is not None and s_name in dp_block.slices:
-                datasets.append(dp_block.datastream(s_name, **kwargs))
-            else:
-                avail = list(self.slices) + (list(dp_block.slices) if dp_block else [])
-                raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
-                )
-
-        zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
-        return zip_cls(
-            *datasets,
-            columns=columns,
-            shared=shared,
-            validate_shared=validate_shared,
-            on_conflict=on_conflict,
-            skip_none=skip_none,
-            zip_validator=zip_validator,
-        )
-
-    def data(self, *slices, upstream: list | None = None, concat=True):
-        requested = list(slices)
-        if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
-                requested = list(requested[0])
-            elif len(requested[0]) == 2 and isinstance(requested[0][0], str) and isinstance(requested[0][1], str):
-                requested = [requested[0]]
-            else:
-                requested = list(requested[0])
-
-        if not requested:
-            requested = list(self.slices)
-
-        if upstream:
-            for s in upstream:
-                if s not in requested:
-                    requested.append(s)
-
-        result = {}
-        for item in requested:
-            if isinstance(item, (tuple, list)) and len(item) == 2:
-                s_name, c_name = str(item[0]), str(item[1])
-            else:
-                s_name, c_name = str(item), None
-
-            if s_name == 'features' or s_name in self.slices:
-                tab_results = [self.tab(i).data((s_name, c_name) if c_name else s_name, concat=concat) for i in range(self.n_tabs)]
-                feat_datas = [tr.get('features', tr) for tr in tab_results]
-                if concat:
-                    if isinstance(feat_datas[0], dict):
-                        col_keys = feat_datas[0].keys()
-                        result['features'] = {
-                            k: np.concatenate([fd[k] for fd in feat_datas], axis=0) if isinstance(feat_datas[0][k], np.ndarray) else concat_data([fd[k] for fd in feat_datas])
-                            for k in col_keys
-                        }
-                    elif isinstance(feat_datas[0], np.ndarray):
-                        result['features'] = np.concatenate(feat_datas, axis=0)
-                    else:
-                        result['features'] = concat_data(feat_datas)
-                else:
-                    result['features'] = feat_datas
-            elif self.var.datapoint_table is not None and s_name in self.var.datapoint_table.slices:
-                dp_data = _extract_slice_data(self.var.datapoint_table.data(s_name, concat=concat), s_name)
-                result[s_name] = dp_data
-            else:
-                col_key = s_name.replace('features_', '')
-                tab_results = [self.tab(i).data(('features', col_key), concat=concat) for i in range(self.n_tabs)]
-                feat_datas = [tr.get('features', tr)[col_key] for tr in tab_results if isinstance(tr.get('features', tr), dict) and col_key in tr.get('features', tr)]
-                if concat and feat_datas:
-                    if isinstance(feat_datas[0], np.ndarray):
-                        result[s_name] = np.concatenate(feat_datas, axis=0)
-                    else:
-                        result[s_name] = concat_data(feat_datas)
-                else:
-                    result[s_name] = feat_datas
-        return result
-
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
@@ -774,13 +722,14 @@ class DatafeatureTable(DatapointTable):
         return coherent_signatures and coherent_datasets and self.tab(i).validate(**kwargs)
 
 
-class BipolarDatafeatureTab(DatapointTab):
+class BipolarDatafeatureTab(_UpstreamSlices, DatapointTab):
     """Bipolar (median-thresholded) encoding of a `DatafeatureTab`.
 
     Maps continuous features to ``{-1, +1}^d`` via ``sign(features - median)``,
     and computes a tab-level bipolar signature ``{-1, 0, +1}^d`` by thresholding the mean.
     """
 
+    UPSTREAM_VAR = ('featuretab',)
     VERSION = 1
     TOPICS = {
         'bipolar_features': SLICETOPIC,
@@ -831,102 +780,26 @@ class BipolarDatafeatureTab(DatapointTab):
                 writers['tab_bipolar_features'].write({'tab_bipolar_features': tab_bipolar})
         return self
 
-    def dataset(
-        self,
-        *slices,
-        mode='map',
-        columns=None,
-        shared=None,
-        validate_shared=False,
-        on_conflict='last',
-        skip_none=True,
-        zip_validator=None,
-        **kwargs,
-    ):
-        if mode not in ('map', 'iter'):
-            raise ValueError(f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}")
-
-        requested = list(slices)
-        if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            requested = list(requested[0])
-
-        if not requested:
-            requested = list(self.slices)
-
-        datasets = []
-        for s in requested:
-            if s in self.slices:
-                datasets.append(self.datastream(s, **kwargs))
-            elif self.featuretab is not None and s in self.featuretab.slices:
-                datasets.append(self.featuretab.dataset(s, mode=mode, **kwargs))
-            else:
-                avail = list(self.slices) + (list(self.featuretab.slices) if self.featuretab else [])
-                raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s!r}; available slices are {avail}"
-                )
-
-        zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
-        return zip_cls(
-            *datasets,
-            columns=columns,
-            shared=shared,
-            validate_shared=validate_shared,
-            on_conflict=on_conflict,
-            skip_none=skip_none,
-            zip_validator=zip_validator,
-        )
-
-    def data(self, *slices, concat=True):
-        requested = list(slices)
-        if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
-                requested = list(requested[0])
-            elif len(requested[0]) == 2 and isinstance(requested[0][0], str) and (requested[0][0] in ('features', 'samples', 'labels') or requested[0][0] in self.slices):
-                requested = [requested[0]]
-            else:
-                requested = list(requested[0])
-
-        if not requested:
-            requested = list(self.slices)
-
-        result = {}
-        for item in requested:
-            if isinstance(item, (tuple, list)) and len(item) == 2:
-                s_name, c_name = str(item[0]), str(item[1])
-            else:
-                s_name, c_name = str(item), None
-
-            if s_name in self.slices:
-                result[s_name] = _extract_slice_data(super().data(s_name, concat=concat), s_name)
-            elif self.featuretab is not None and s_name in self.featuretab.slices:
-                result[s_name] = _extract_slice_data(self.featuretab.data(item, concat=concat), s_name)
-            else:
-                avail = list(self.slices) + (list(self.featuretab.slices) if self.featuretab else [])
-                raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
-                )
-        return result
-
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
     def featuretab(self) -> DatafeatureTab:
         return self.var.featuretab
 
-    @property
     def available_slices(self) -> tuple[str, ...]:
-        own = tuple(self.slices)
-        upstream = tuple(self.featuretab.slices) if self.featuretab is not None else ()
+        own = tuple(self.slices())
+        upstream = tuple(self.featuretab.slices()) if self.featuretab is not None else ()
         return own + upstream
 
     def __len__(self) -> int:
         return len(self.featuretab)
 
 
-class BipolarDatafeatureTable(DatapointTable):
+class BipolarDatafeatureTable(_UpstreamSlices, DatapointTable):
     """A table of `BipolarDatafeatureTab` blocks built over a `DatafeatureTable`."""
 
     TAB = BipolarDatafeatureTab
+    UPSTREAM_VAR = ('featuretable',)
     VERSION = 1
 
     @dataclass
@@ -960,90 +833,6 @@ class BipolarDatafeatureTable(DatapointTable):
     def __block__(self, idx: int, **kwargs) -> BipolarDatafeatureTab:
         return self.__tab__(idx, **kwargs)
 
-    def dataset(
-        self,
-        *slices,
-        mode='map',
-        columns=None,
-        shared=None,
-        validate_shared=False,
-        on_conflict='last',
-        skip_none=True,
-        zip_validator=None,
-        **kwargs,
-    ):
-        if mode not in ('map', 'iter'):
-            raise ValueError(f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}")
-
-        requested = list(slices)
-        if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            requested = list(requested[0])
-
-        if not requested:
-            requested = list(self.slices)
-
-        datasets = []
-        for s in requested:
-            s_name = s[0] if isinstance(s, (tuple, list)) else str(s)
-            if s_name in self.slices:
-                datasets.append(self.datastream(s_name, **kwargs))
-            elif self.featuretable is not None and s_name in self.featuretable.slices:
-                datasets.append(self.featuretable.dataset(s_name, mode=mode, **kwargs))
-            else:
-                avail = list(self.slices) + (list(self.featuretable.slices) if self.featuretable else [])
-                raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
-                )
-
-        zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
-        return zip_cls(
-            *datasets,
-            columns=columns,
-            shared=shared,
-            validate_shared=validate_shared,
-            on_conflict=on_conflict,
-            skip_none=skip_none,
-            zip_validator=zip_validator,
-        )
-
-    def data(self, *slices, concat=True):
-        requested = list(slices)
-        if len(requested) == 1 and isinstance(requested[0], (tuple, list)):
-            if len(requested[0]) > 0 and isinstance(requested[0][0], (tuple, list)):
-                requested = list(requested[0])
-            elif len(requested[0]) == 2 and isinstance(requested[0][0], str) and (requested[0][0] in ('features', 'samples', 'labels') or requested[0][0] in self.slices):
-                requested = [requested[0]]
-            else:
-                requested = list(requested[0])
-
-        if not requested:
-            requested = list(self.slices)
-
-        result = {}
-        for item in requested:
-            if isinstance(item, (tuple, list)) and len(item) == 2:
-                s_name, c_name = str(item[0]), str(item[1])
-            else:
-                s_name, c_name = str(item), None
-
-            if s_name in self.slices:
-                tab_data = [self.tab(i).data(s_name, concat=concat)[s_name] for i in range(self.n_tabs)]
-                if concat:
-                    if isinstance(tab_data[0], np.ndarray):
-                        result[s_name] = np.concatenate(tab_data, axis=0)
-                    else:
-                        result[s_name] = concat_data(tab_data, dtype=self.SLICE_DTYPES.get(s_name))
-                else:
-                    result[s_name] = tab_data
-            elif self.featuretable is not None and s_name in self.featuretable.slices:
-                result[s_name] = _extract_slice_data(self.featuretable.data(item, concat=concat), s_name)
-            else:
-                avail = list(self.slices) + (list(self.featuretable.slices) if self.featuretable else [])
-                raise KeyError(
-                    f"{self.__class__.__name__}: unknown slice {s_name!r}; available slices are {avail}"
-                )
-        return result
-
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
@@ -1054,8 +843,7 @@ class BipolarDatafeatureTable(DatapointTable):
     def n_tabs(self) -> int:
         return self.featuretable.n_tabs
 
-    @property
     def available_slices(self) -> tuple[str, ...]:
-        own = tuple(self.slices)
-        upstream = tuple(self.featuretable.slices) if self.featuretable is not None else ()
+        own = tuple(self.slices())
+        upstream = tuple(self.featuretable.slices()) if self.featuretable is not None else ()
         return own + upstream

@@ -74,7 +74,8 @@ class LetterTab(DatapointTab):
             f.write(f"tab note")
 
     def __stats__(self, slice_name):
-        return {'n_samples': len(self.data(slice_name))}
+        cols = self.data(slice_name)[slice_name]
+        return {'n_samples': len(next(iter(cols.values())))}
 
 
 class LetterTable(DatapointTable):
@@ -124,22 +125,23 @@ class TestTopicsFromSlices:
     def test_declared_topics_are_kept(self):
         assert LetterTab.TOPICS['note'] == 'note.txt'
 
-    def test_table_slices_equal_tab_slices(self):
+    def test_table_slices_equal_tab_slices(self, tmp_path):
         """Table slices come from TAB, not from table's own TOPICS."""
-        assert LetterTable.slices == LetterTab.slices
+        table = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        assert table.slices() == LetterTab(url=str(tmp_path)).slices()
         assert 'numbers' not in LetterTable.TOPICS
 
     def test_table_keeps_its_inherited_topics(self):
         assert LetterTable.TOPICS['tabs'] is DIRTOPIC
         assert LetterTable.TOPICS['done'] == 'done'
 
-    def test_docstring_example_subclass_extends_topics_and_slices(self):
+    def test_docstring_example_subclass_extends_topics_and_slices(self, tmp_path):
         """The DatapointTab docstring's DebuggableFrameTab example."""
         class Debuggable(LetterTab):
             TOPICS = {'debug': {'plots': DIRTOPIC}, 'depth': SLICETOPIC}
 
         assert Debuggable.TOPICS['debug'] == {'plots': DIRTOPIC}
-        assert 'depth' in Debuggable.slices
+        assert 'depth' in Debuggable(url=str(tmp_path)).slices()
 
     def test_topics_do_not_accumulate_down_the_hierarchy(self):
         """A subclass declaring TOPICS does not accumulate parent TOPICS unless explicitly specified."""
@@ -171,10 +173,10 @@ class TestTopicsFromSlices:
         class GlyphTable(LetterTable):
             TAB = GlyphTab
 
-        assert 'glyphs' in GlyphTable.slices
         assert 'glyphs' not in GlyphTable.TOPICS
         a = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
         b = GlyphTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        assert 'glyphs' in b.slices()
         assert a.hash != b.hash
 
     def test_unknown_slice_is_rejected(self, table):
@@ -252,7 +254,7 @@ class TestBuild:
         monkeypatch.setattr(type(tab.fs), 'put_file', recording_put_file)
         tab.build(stage=True)
 
-        assert uploaded.count('index.json') == len(tab.slices)
+        assert uploaded.count('index.json') == len(tab.slices())
         runs, current = [], []
         for name in uploaded:
             current.append(name)
@@ -290,7 +292,7 @@ class TestTabIndexes:
     def test_one_index_per_tab_and_slice(self, built_table):
         for idx in range(built_table.n_tabs):
             tab = built_table.tab(idx)
-            for name in built_table.slices:
+            for name in built_table.slices():
                 assert os.path.exists(tab.slice_index_path(name))
 
 
@@ -301,16 +303,38 @@ class TestTabIndexes:
 class TestRead:
 
     def test_tab_data_returns_its_own_samples(self, built_table):
-        assert [s['label'] for s in built_table.tab(1).data('letters')] == \
+        assert built_table.tab(1).data('letters')['letters']['label'] == \
             ['lbl3', 'lbl4', 'lbl5']
 
     def test_table_data_concatenates_the_tabs(self, built_table):
-        assert [s['idx'] for s in built_table.data('numbers')] == list(range(9))
+        assert built_table.data('numbers')['numbers']['idx'] == list(range(9))
+
+    def test_data_is_keyed_by_slice_even_for_one_slice(self, built_table):
+        """No special case: one slice is a mapping like any other count, so a
+        consumer never has to ask which shape it was handed."""
+        one = built_table.data('numbers')
+        assert set(one) == {'numbers'}
+        assert set(one['numbers']) == {'idx', 'square'}
+
+    def test_data_mirrors_a_dataset_row(self, built_table):
+        """data() keys exactly as dataset() keys one row, with every row's
+        value stacked at the leaf."""
+        data = built_table.data()
+        row = built_table.dataset()[3]
+        assert set(data) == set(row)
+        for slice_name in row:
+            assert set(data[slice_name]) == set(row[slice_name])
+            for col, value in row[slice_name].items():
+                assert data[slice_name][col][3] == value
+
+    def test_data_can_key_by_pair(self, built_table):
+        flat = built_table.data(nested=False)
+        assert flat[('numbers', 'idx')] == list(range(9))
 
     def test_data_with_no_slice_returns_every_slice(self, built_table):
         data = built_table.data()
-        assert set(data) == set(built_table.slices)
-        assert len(data['numbers']) == 9
+        assert set(data) == set(built_table.slices())
+        assert len(data['numbers']['idx']) == 9
 
     def test_read_addresses_a_slice(self, built_table):
         assert built_table.read('letters') == built_table.data('letters')
@@ -318,23 +342,33 @@ class TestRead:
     def test_dataset_zips_every_slice(self, built_table):
         ds = built_table.dataset()
         assert len(ds) == 9
-        assert set(ds[0]) == {'idx', 'square', 'label'}
+        assert ds[0] == {'numbers': {'idx': 0, 'square': 0},
+                         'letters': {'idx': 0, 'label': 'lbl0'}}
+
+    def test_a_column_two_slices_share_survives_in_both(self, built_table):
+        """'idx' is written to both slices.  The flat merge could keep only
+        one of them; keying by slice keeps both, and makes them comparable."""
+        row = built_table.dataset()[4]
+        assert row['numbers']['idx'] == 4
+        assert row['letters']['idx'] == 4
 
     def test_dataset_is_index_aligned(self, built_table):
         ds = built_table.dataset()
         for i in range(len(ds)):
             sample = ds[i]
-            assert sample['square'] == sample['idx'] ** 2
-            assert sample['label'] == f"lbl{sample['idx']}"
+            idx = sample['numbers']['idx']
+            assert sample['numbers']['square'] == idx ** 2
+            assert sample['letters']['label'] == f"lbl{idx}"
 
     def test_dataset_opens_only_the_named_slices(self, built_table):
         ds = built_table.dataset('letters')
-        assert set(ds[0]) == {'idx', 'label'}
+        assert set(ds[0]) == {'letters'}
+        assert set(ds[0]['letters']) == {'idx', 'label'}
 
     def test_tab_dataset_covers_only_that_tab(self, built_table):
         ds = built_table.tab(2).dataset()
         assert len(ds) == 3
-        assert [ds[i]['idx'] for i in range(3)] == [6, 7, 8]
+        assert [ds[i]['numbers']['idx'] for i in range(3)] == [6, 7, 8]
 
     def test_stats_per_slice(self, built_table):
         assert built_table.stats('numbers') == {'n_samples': 9}
@@ -365,7 +399,9 @@ class TestDatasetMode:
 
     def test_iter_mode_respects_projection(self, built_table):
         ds = built_table.dataset(('numbers', 'idx'), 'letters', mode='iter', batch_size=3)
-        assert set(next(iter(ds))) == {'idx', 'label'}
+        row = next(iter(ds))
+        assert set(row) == {'numbers', 'letters'}
+        assert set(row['numbers']) == {'idx'}
 
     def test_iter_mode_demands_a_batch_size(self, built_table):
         """StreamingDataset only complains on the first batch, from inside a
@@ -471,7 +507,7 @@ class TestFlushEvery:
 
     def test_the_data_still_reads_back_whole(self, tmp_path):
         table = sized(tmp_path, flush_every=8)
-        assert [s['idx'] for s in table.data('small')] == list(range(24))
+        assert table.data('small')['small']['idx'] == list(range(24))
         assert len(table.dataset()) == 24
 
     def test_size_limit_firing_first_is_an_error(self, tmp_path):
@@ -503,7 +539,7 @@ class TestFlushEvery:
         table = sized(tmp_path, flush_every=8)
         ds = table.dataset(('small', 'idx'), ('big', 'idx'), mode='iter', batch_size=4, shuffle=True,
                            shuffle_seed=17, shared={'idx'}, validate_shared=True)
-        seen = [s['idx'] for s in ds]
+        seen = [s['small']['idx'] for s in ds]
         assert sorted(seen) == list(range(24))
         assert seen != list(range(24)), "shuffle=True did not shuffle"
 
@@ -614,7 +650,7 @@ class TestDatastream:
 
     def test_dataset_is_the_zip_of_datastreams(self, built_table):
         zipped = built_table.dataset()
-        assert len(zipped.datasets) == len(built_table.slices)
+        assert len(zipped.datasets) == len(built_table.slices())
         assert len(zipped) == len(built_table.datastream('numbers'))
 
     def test_datastream_rejects_an_unknown_slice(self, built_table):
@@ -630,34 +666,51 @@ class TestZipPolicy:
 
     def test_columns_project_a_slice(self, built_table):
         ds = built_table.dataset(('numbers', 'square'), 'letters')
-        assert set(ds[0]) == {'square', 'idx', 'label'}
+        assert ds[0] == {'numbers': {'square': 0},
+                         'letters': {'idx': 0, 'label': 'lbl0'}}
 
     def test_combined_slice_columns(self, built_table):
         ds1 = built_table.dataset(("numbers", ["square", "idx"]))
         ds2 = built_table.dataset(("numbers", "square"), ("numbers", "idx"))
-        assert set(ds1[0]) == set(ds2[0]) == {'square', 'idx'}
+        assert set(ds1[0]['numbers']) == set(ds2[0]['numbers']) == {'square', 'idx'}
 
         ds3 = built_table.dataset(("numbers", "square"), "letters")
-        assert 'square' in ds3[0] and 'label' in ds3[0]
+        assert 'square' in ds3[0]['numbers'] and 'label' in ds3[0]['letters']
 
     def test_columns_reject_an_unopened_slice(self, built_table):
         with pytest.raises(KeyError, match='unknown slice'):
             built_table.dataset(('invalid_slice', 'square'))
 
     def test_shared_keys_are_validated(self, built_table):
-        """'idx' is written to both slices in lockstep, so it must agree."""
-        ds = built_table.dataset(shared={'idx'}, validate_shared=True,
-                                 on_conflict='error')
-        assert [ds[i]['idx'] for i in range(len(ds))] == list(range(9))
+        """'idx' is written to both slices in lockstep, so it must agree.
 
-    def test_an_unshared_collision_can_be_an_error(self, built_table):
-        with pytest.raises(KeyError, match="supplied by both source"):
-            built_table.dataset(on_conflict='error')[0]
+        Still meaningful with no merge left to police: it checks alignment,
+        and keying by slice gives it strictly more to check, because both
+        copies of 'idx' are now kept rather than one overwriting the other.
+        """
+        ds = built_table.dataset(shared={'idx'}, validate_shared=True)
+        assert [ds[i]['numbers']['idx'] for i in range(len(ds))] == list(range(9))
 
-    def test_default_merge_is_unchanged(self, built_table):
-        """No policy arguments: a plain last-wins merge, as before."""
+    def test_a_misaligned_shared_key_is_caught(self, built_table):
+        """The check fires on disagreement, not on mere co-occurrence."""
+        from dbx.datastreams import ZipStreamingDataset
+
+        class D(list):
+            def __getitem__(self, i):
+                return list.__getitem__(self, i)
+
+        a, b = D([{'idx': 0}]), D([{'idx': 9}])
+        zipped = ZipStreamingDataset(a, b, names=['a', 'b'],
+                                     shared={'idx'}, validate_shared=True)
+        with pytest.raises(ValueError, match='not aligned'):
+            zipped[0]
+
+    def test_two_slices_may_both_carry_a_column(self, built_table):
+        """What replaced on_conflict: nothing is dropped, so nothing has to
+        decide which copy wins."""
         ds = built_table.dataset()
-        assert ds[0]['idx'] == 0 and ds[0]['square'] == 0
+        assert ds[0]['numbers'] == {'idx': 0, 'square': 0}
+        assert ds[0]['letters'] == {'idx': 0, 'label': 'lbl0'}
 
 
 # ---------------------------------------------------------------------------
@@ -805,8 +858,8 @@ class TestTableSampler:
 
     def test_every_slice_agrees_on_length(self, built_table):
         """The lockstep contract, read off the indexes without opening them."""
-        assert len({built_table.n_rows(s) for s in built_table.slices}) == 1
-        assert len(built_table.verify_slice_row_counts_match()) == len(built_table.slices)
+        assert len({built_table.n_rows(s) for s in built_table.slices()}) == 1
+        assert len(built_table.verify_slice_row_counts_match()) == len(built_table.slices())
 
     def test_sampler_defaults_chunk_size_to_the_shard_capacity(self, built_table):
         sampler = built_table.chunk_shuffle_sampler('numbers')
@@ -825,7 +878,7 @@ class TestTableSampler:
         from torch.utils.data import DataLoader
         ds = built_table.dataset()
         loader = DataLoader(ds, sampler=built_table.chunk_shuffle_sampler('numbers', seed=1), batch_size=2)
-        seen = [int(i) for batch in loader for i in batch['idx']]
+        seen = [int(i) for batch in loader for i in batch['numbers']['idx']]
         assert sorted(seen) == list(range(len(ds)))
 
 

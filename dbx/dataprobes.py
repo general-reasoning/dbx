@@ -80,15 +80,6 @@ def normalize_features(features: Any, mode: str | None) -> Any:
             raise ValueError(f"Unknown normalization mode {mode!r}")
 
 
-def aggregate_features(features, aggregation):
-    if aggregation is not None: 
-        if aggregation != 'mean':
-            raise ValueError(f"Unknown aggregation: {aggregation}")
-        else:
-            features = features.mean(dim=-1)
-    return features
-
-
 class DatafeatureAffineLogisticProber:
     """Standalone logistic regression evaluator for data features.
 
@@ -113,13 +104,17 @@ class DatafeatureAffineLogisticProber:
             return np.array(X)
 
     @staticmethod
-    def evaluate_features(Xy: tuple[Any, Any], *, fraction: float = 0.8, fit_intercept: bool = True) -> str:
-        """Train/test a LogisticRegression and return the classification report."""
+    def evaluate_features(Xy: tuple[Any, Any], *, training_fraction: float = 0.8,
+                          fit_intercept: bool = True) -> str:
+        """Train/test a LogisticRegression and return the classification report.
+
+        *training_fraction* is the share fitted on; the remainder is scored.
+        """
         features, labels = Xy
         features = DatafeatureAffineLogisticProber.ndarray(features)
         labels = DatafeatureAffineLogisticProber.ndarray(labels)
         N = len(labels)
-        ntrain = int(N * fraction)
+        ntrain = int(N * training_fraction)
         perm = np.random.permutation(N)
         X_train, y_train = features[perm[:ntrain]], labels[perm[:ntrain]]
         X_test, y_test = features[perm[ntrain:]], labels[perm[ntrain:]]
@@ -134,7 +129,7 @@ class DatafeatureAffineLogisticProber:
         Xy1: tuple[Any, Any],
         Xy2: tuple[Any, Any],
         *,
-        fraction: float = 0.8,
+        training_fraction: float = 0.8,
         fit_intercept: bool = True,
         tags: tuple[str, str] = ("(1)", "(2)"),
         log: Logger | None = None,
@@ -145,12 +140,12 @@ class DatafeatureAffineLogisticProber:
         label1, label2 = tags
         log.verbose(f"EVALUATING features: {label1}: started at {datetime.datetime.now()}")
         report1 = DatafeatureAffineLogisticProber.evaluate_features(
-            Xy1, fraction=fraction, fit_intercept=fit_intercept
+            Xy1, training_fraction=training_fraction, fit_intercept=fit_intercept
         )
         log.verbose(f"EVALUATING features: {label1}: finished at {datetime.datetime.now()}")
         log.verbose(f"EVALUATING features: {label2}: started at {datetime.datetime.now()}")
         report2 = DatafeatureAffineLogisticProber.evaluate_features(
-            Xy2, fraction=fraction, fit_intercept=fit_intercept
+            Xy2, training_fraction=training_fraction, fit_intercept=fit_intercept
         )
         log.verbose(f"EVALUATING features: {label2}: finished at {datetime.datetime.now()}")
 
@@ -159,62 +154,166 @@ class DatafeatureAffineLogisticProber:
         return report1, report2
 
 
-class TabAffineLogisticCallable:
-    """Worker callable that loads a single tab's collated features and labels for DatafeatureAffineLogisticProbe."""
+def _pair_key(pair: tuple[str, str]) -> str:
+    """The stable name a ``(slice, column)`` pair is stored under.
 
-    def __init__(self, probe: Any, tab_idx: int):
+    The pair, not the bare column name: two slices may carry a column of the
+    same name, and keying by the column alone would silently drop one of them
+    -- the same collision `dataset()` keys its rows to avoid.
+    """
+    return f"{pair[0]}.{pair[1]}"
+
+
+def _pair_array(collator: Datacollator, data: dict, pair: tuple[str, str]) -> np.ndarray:
+    """One ``(slice, column)`` of a ``{slice: {column: values}}`` mapping, as an array.
+
+    Addressed exactly, through the collator's own lookup, so a pair naming a
+    column that is not there raises instead of resolving to whatever the
+    mapping happened to hold first.
+    """
+    value = Datacollator._pick(data, pair[0], pair[1], f"dataprobes: pair {pair!r}")
+    return Datacollator._as_array(value)
+
+
+def signal_matrix(collator: Datacollator, data: dict, *,
+                  aggregation: str | None = None,
+                  normalization: str | None = None):
+    """Every signal pair flattened and concatenated into one ``(N, D)`` matrix.
+
+    This is what "treat all features as a single vector" means concretely: the
+    pairs are laid end to end along the feature axis, so column ``j`` of the
+    result -- and so coefficient ``j`` of a fitted classifier -- belongs to
+    exactly one pair.
+
+    Order is ``collator.signal_pairs``, which is the order they were declared.
+    That matters more here than anywhere else in the codebase: the layout is
+    baked into the fitted coefficients, so a signal order that varied between
+    processes would produce models whose coefficients could not be compared,
+    comparable-looking reports notwithstanding, and nothing would say so.
+    Hence the returned *layout*, which is stored beside the model.
+
+    Returns
+    -------
+    (X, layout)
+        *X* is ``(N, D)`` float32.  *layout* is one
+        ``(slice, column, width)`` per pair, in the same order, with the
+        widths summing to ``D``.
+    """
+    if not collator.signal_pairs:
+        raise ValueError("signal_matrix: the collator declares no signals")
+
+    blocks, layout = [], []
+    for pair in collator.signal_pairs:
+        arr = np.asarray(_pair_array(collator, data, pair), dtype=np.float32)
+        if arr.ndim == 0:
+            raise ValueError(
+                f"signal_matrix: pair {pair!r} is a scalar, not a per-sample column"
+            )
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        if aggregation is not None:
+            arr = aggregate_features_np(arr, aggregation)
+        flat = arr.reshape(len(arr), -1)
+        blocks.append(flat)
+        layout.append((pair[0], pair[1], int(flat.shape[1])))
+
+    rows = {b.shape[0] for b in blocks}
+    if len(rows) != 1:
+        raise ValueError(
+            f"signal_matrix: signal pairs disagree on sample count: "
+            f"{ {p: b.shape[0] for p, b in zip(collator.signal_pairs, blocks)} }"
+        )
+
+    X = blocks[0] if len(blocks) == 1 else np.concatenate(blocks, axis=1)
+    X = np.asarray(normalize_features(X, normalization), dtype=np.float32)
+    return X, layout
+
+
+def aggregate_features_np(arr: np.ndarray, aggregation: str):
+    """Collapse the axes between the sample axis and the feature axis.
+
+    For ``(N, T, D)`` token features this averages over ``T`` and leaves
+    ``(N, D)``; for an already-flat ``(N, D)`` it is the identity.  The point
+    of aggregating before the flatten in `signal_matrix` is that afterwards
+    there is no token axis left to average over -- only one long vector, whose
+    mean is a single number per sample.
+    """
+    if aggregation != 'mean':
+        raise ValueError(f"Unknown aggregation: {aggregation!r}")
+    if arr.ndim <= 2:
+        return arr
+    return arr.mean(axis=tuple(range(1, arr.ndim - 1)))
+
+
+def label_vector(collator: Datacollator, data: dict) -> np.ndarray:
+    """The single label pair as a 1-D array of per-sample labels."""
+    pairs = collator.label_pairs
+    if len(pairs) != 1:
+        raise ValueError(
+            f"label_vector: a classifier fits one label column, but the "
+            f"collator declares {len(pairs)}: {pairs!r}"
+        )
+    y = np.asarray(_pair_array(collator, data, pairs[0]))
+    y = y.reshape(len(y), -1)
+    if y.shape[1] != 1:
+        raise ValueError(
+            f"label_vector: label pair {pairs[0]!r} has width {y.shape[1]}, "
+            f"but a classifier fits a single label per sample"
+        )
+    return y.ravel()
+
+
+class TabAffineLogisticCallable:
+    """Worker callable that loads one tab's concatenated signal matrix and labels."""
+
+    def __init__(self, probe: Any, tab_idx: int | None):
         self.probe = probe
         self.tab_idx = tab_idx
 
     def __call__(self):
         table = self.probe.var.feature_table
         collator = self.probe.var.collator
-        normalization = self.probe.var.normalization
-        aggregation = self.probe.var.aggregation
 
-        tab = table.tab(self.tab_idx)
-        data_dict = tab.data(*collator.slices, concat=True)
-        del tab
-        
-        collated = collator(data_dict, strip_keys=True)
-        del data_dict
+        block = table if self.tab_idx is None else table.tab(self.tab_idx)
+        data = block.data(*collator.slices(), concat=True)
+        del block
 
-        raw_features, raw_labels = collated['signals'], collated['labels']
-        if torch is not None and isinstance(raw_features, torch.Tensor):
-            feat_tensor = raw_features.float()
-        else:
-            feat_tensor = torch.from_numpy(np.array(raw_features)).float()
-        del raw_features
-        features = feat_tensor.reshape(len(feat_tensor), -1)
-        features = aggregate_features(features, aggregation)
-        features = normalize_features(features, normalization)
+        X, layout = signal_matrix(
+            collator, data,
+            aggregation=self.probe.var.aggregation,
+            normalization=self.probe.var.normalization,
+        )
+        y = label_vector(collator, data)
+        del data
 
-        labels = np.array(raw_labels)
-        del raw_labels
-
-        if labels.ndim > 1 and labels.shape[-1] == 1:
-            labels = labels.squeeze(-1)
-
-        result = {
-            'signals': features,
-            'labels': labels,
-        }
+        if len(X) != len(y):
+            raise ValueError(
+                f"{type(self).__name__}: tab {self.tab_idx} has {len(X)} feature "
+                f"rows and {len(y)} labels"
+            )
         gc.collect()
-        return result
+        return {'signals': X, 'labels': y, 'layout': layout}
 
 
 class DatafeatureAffineLogisticProbe(Datablock):
-    """Fit a logistic classifier on sample-level features for a single layer.
+    """Fit a logistic classifier on the concatenation of every signal column.
 
-    Persists the fitted classifier's `coef_`, `intercept_`, and `classes_` arrays
-    so that the separating hyperplane can be inspected after building.
+    All signal pairs are treated as one vector per sample: each is flattened
+    and they are laid end to end, in declaration order, so the fitted
+    ``coef_`` has one coefficient per (pair, position).  That layout is stored
+    as the ``columns`` topic, which is what makes a coefficient attributable
+    to a feature after the fact.
+
+    Persists the fitted classifier's ``coef_``, ``intercept_`` and
+    ``classes_`` so the separating hyperplane can be inspected after building.
     """
 
-    VERSION = 1
+    VERSION = 2
 
     TOPICS = {
         'labels': 'labels.npz',
-        'signals': 'signals.npy',
+        'features': 'features.npy',
+        'columns': 'columns.pkl',
         'evaluation_report': 'evaluation_report.pkl',
         'coef': 'coef.npy',
         'intercept': 'intercept.npy',
@@ -226,8 +325,11 @@ class DatafeatureAffineLogisticProbe(Datablock):
         feature_table: DatafeatureTable | DatafeatureTab
         collator: Datacollator
         fit_intercept: bool = True
-        evaluation_fraction: float = 0.2
-        aggregation: str = "mean"
+        training_fraction: float = 0.8
+        # Not 'mean': aggregation collapses the axes between sample and
+        # feature, which only exist for token-shaped features.  Defaulting it
+        # on averaged away whatever the caller actually asked to probe.
+        aggregation: str | None = None
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
 
     def __init__(
@@ -250,60 +352,53 @@ class DatafeatureAffineLogisticProbe(Datablock):
 
     def __post_init__(self):
         super().__post_init__()
-        assert self.var.aggregation in ["mean"], f"Unknown aggregation: {self.var.aggregation}"
+        assert self.var.aggregation in (None, "mean"), f"Unknown aggregation: {self.var.aggregation}"
         assert self.var.normalization in NORMALIZATION_MODES, f"Unknown normalization mode: {self.var.normalization!r}"
         self.parallelization = getattr(self, 'parallelization', None) or 'inline'
         self.n_workers = getattr(self, 'n_workers', 1)
         self.work_stealing = getattr(self, 'work_stealing', getattr(self, 'works_stealing', False))
         self._prober = DatafeatureAffineLogisticProber(log=self.log)
 
-    def __build__(self):
-        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")
+    def _tab_results(self, tag: str, make_callable):
         table = self.var.feature_table
-
-        n_tabs = table.n_tabs if hasattr(table, 'n_tabs') and table.n_tabs > 0 else 1
-        self.log.verbose(
-            f"DatafeatureAffineLogisticProbe.__build__: data loading in parallel ({n_tabs} tabs, "
-            f"parallelization={self.parallelization!r}, n_workers={self.n_workers}): BEGIN"
-        )
-        tag = f"COMPUTING LOGISTIC DATA [{self.__class__.__name__}, n_workers={self.n_workers}]"
-        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
+        n_tabs = getattr(table, 'n_tabs', 0) or 0
+        executor_kwargs = dict(n_workers=self.n_workers,
+                               tag=f"{tag} [{self.__class__.__name__}, n_workers={self.n_workers}]")
         if getattr(self, 'work_stealing', False):
             executor_kwargs['work_stealing'] = self.work_stealing
         executor = callable_executor(self.parallelization, **executor_kwargs)
+        indices = list(range(n_tabs)) if n_tabs > 0 else [None]
+        return executor.exec_callables([make_callable(i) for i in indices])
 
-        if hasattr(table, 'n_tabs') and table.n_tabs > 0:
-            callables = [TabAffineLogisticCallable(self, i) for i in range(table.n_tabs)]
-        else:
-            callables = [TabAffineLogisticCallable(self, None)]
+    def __build__(self):
+        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")
 
-        results = executor.exec_callables(callables)
-        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: data loading in parallel: END")
-
-        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature aggregation: BEGIN")
-        all_features = [res['signals'] for res in results]
-        all_labels = [res['labels'] for res in results]
-
-        if torch is not None and isinstance(all_features[0], torch.Tensor):
-            sample_features = torch.cat(all_features, dim=0)
-        else:
-            sample_features = np.concatenate(all_features, axis=0)
-
-        labels = np.concatenate(all_labels, axis=0)
-
-        assert len(labels) == len(sample_features), (
-            f"len(labels) != len(sample_features): {len(labels)} != {len(sample_features)}"
+        results = self._tab_results(
+            "COMPUTING LOGISTIC DATA",
+            lambda i: TabAffineLogisticCallable(self, i),
         )
-        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: feature aggregation: END")
 
-        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: fitting and evaluation: BEGIN")
-        write_npz(self.path('labels', ensure_dirpath=True), labels=labels)
-        write_tensor(sample_features, self.path('features', ensure_dirpath=True))
+        # Every tab must lay its columns out identically, or the rows being
+        # stacked here do not describe the same feature at the same position.
+        layouts = {tuple(res['layout']) for res in results}
+        if len(layouts) != 1:
+            raise ValueError(
+                f"{self.__class__.__name__}: tabs disagree on the signal column "
+                f"layout: {sorted(layouts)}"
+            )
+        layout = list(layouts.pop())
 
-        X = sample_features.numpy() if hasattr(sample_features, 'numpy') else np.array(sample_features)
-        y = labels
+        X = np.concatenate([res['signals'] for res in results], axis=0)
+        y = np.concatenate([res['labels'] for res in results], axis=0)
+        if len(X) != len(y):
+            raise ValueError(f"len(labels) != len(features): {len(y)} != {len(X)}")
+
+        write_npz(self.path('labels', ensure_dirpath=True), labels=y)
+        write_tensor(torch.from_numpy(X), self.path('features', ensure_dirpath=True))
+        write_pickle(layout, self.path('columns', ensure_dirpath=True))
+
         N = len(y)
-        ntrain = int(N * self.var.evaluation_fraction)
+        ntrain = int(N * self.var.training_fraction)
         perm = np.random.permutation(N)
         X_train, y_train = X[perm[:ntrain]], y[perm[:ntrain]]
         X_test, y_test = X[perm[ntrain:]], y[perm[ntrain:]]
@@ -313,20 +408,19 @@ class DatafeatureAffineLogisticProbe(Datablock):
             f"(fit_intercept={self.var.fit_intercept}, "
             f"signals={self.var.collator.signal_pairs!r}, "
             f"labels={self.var.collator.label_pairs!r}, "
+            f"layout={layout!r}, "
             f"aggregation={self.var.aggregation!r}, "
             f"normalization={self.var.normalization!r})"
         )
         clf = LogisticRegression(fit_intercept=self.var.fit_intercept)
         clf.fit(X_train, y_train)
-        y_pred = clf.predict(X_test)
-        report = classification_report(y_test, y_pred)
+        report = classification_report(y_test, clf.predict(X_test))
         self.log.verbose(f"Classification report:\n{report}")
 
         write_pickle(report, self.path('evaluation_report', ensure_dirpath=True))
         write_tensor(torch.from_numpy(clf.coef_), self.path('coef', ensure_dirpath=True))
         write_tensor(torch.from_numpy(clf.intercept_), self.path('intercept', ensure_dirpath=True))
         write_npz(self.path('classes', ensure_dirpath=True), classes=clf.classes_)
-        self.log.verbose("DatafeatureAffineLogisticProbe.__build__: fitting and evaluation: END")
 
         self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: END {self.anchorkeypath}")
         return self
@@ -334,183 +428,141 @@ class DatafeatureAffineLogisticProbe(Datablock):
     def __read__(self, *topicpath):
         if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
             topicpath = tuple(topicpath[0])
-
         topic = str(topicpath[0])
-        if topic in ('labels', 'sample_labels', 'bag_labels'):
-            result = read_npz(self.path('labels'), 'labels')['labels']
-        elif topic in ('features', 'sample_features', 'bag_features'):
-            result = read_tensor(self.path('features'))
-        elif topic == 'evaluation_report':
-            result = read_pickle(self.path('evaluation_report'))
-        elif topic == 'coef':
-            result = read_tensor(self.path('coef'))
-        elif topic == 'intercept':
-            result = read_tensor(self.path('intercept'))
-        elif topic == 'classes':
-            result = read_npz(self.path('classes'), 'classes')['classes']
-        else:
-            raise ValueError(f"Unknown topic: {topic!r}")
-        return result
+
+        if topic == 'labels':
+            return read_npz(self.path('labels'), 'labels')['labels']
+        if topic == 'features':
+            return read_tensor(self.path('features'))
+        if topic == 'columns':
+            return read_pickle(self.path('columns'))
+        if topic == 'evaluation_report':
+            return read_pickle(self.path('evaluation_report'))
+        if topic in ('coef', 'intercept'):
+            return read_tensor(self.path(topic))
+        if topic == 'classes':
+            return read_npz(self.path('classes'), 'classes')['classes']
+        raise ValueError(f"Unknown topic: {topic!r}")
+
+    def feature_columns(self) -> list[tuple[str, str, int]]:
+        """One ``(slice, column, offset)`` per column of ``coef_``.
+
+        Expands the stored layout, so a coefficient index can be named:
+        ``feature_columns()[j]`` says which pair column ``j`` came from and
+        which position within it.
+        """
+        out = []
+        for s_name, c_name, width in self.read('columns'):
+            out.extend((s_name, c_name, i) for i in range(width))
+        return out
 
     def asphericity(self) -> dict[str, float]:
         """Per-class ratio ``||intercept|| / ||coef||``."""
         coef = self.read('coef')
         intercept = self.read('intercept')
         classes = self.read('classes')
-        coef_norms = coef.norm(dim=1)
-        ratios = intercept.abs() / coef_norms
+        ratios = intercept.abs() / coef.norm(dim=1)
         return {str(c): float(r) for c, r in zip(classes, ratios)}
 
 
-class TabFeatureStatsCallable:
-    """Worker callable that forms a tab from table, extracts feature/signal data, and computes stats."""
+#: Statistics computed per feature column.  Each becomes a topic holding one
+#: array per column, and each has a per-tab counterpart under ``tab_<name>``.
+COLUMN_STATS = ('mean', 'std', 'median', 'min', 'max', 'norm')
 
-    def __init__(
-        self,
-        table: Any,
-        tab_idx: int | None,
-        feat_slice: str | None = None,
-        feat_col: str | None = None,
-        sig_slice: str | None = None,
-        sig_col: str | None = None,
-        normalization: str | None = None,
-        collator: Any = None,
-    ):
-        self.table = table
+
+def column_stats(arr: np.ndarray) -> dict[str, np.ndarray]:
+    """The `COLUMN_STATS` of one column's ``(N, ...)`` stack of values.
+
+    Reductions run over the sample axis and so keep the shape of a single
+    sample; ``norm`` is the exception, being one L2 norm per sample and so
+    ``(N,)``.
+    """
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    return {
+        'mean': np.mean(arr, axis=0),
+        'std': np.std(arr, axis=0),
+        'median': np.median(arr, axis=0),
+        'min': np.min(arr, axis=0),
+        'max': np.max(arr, axis=0),
+        'norm': np.linalg.norm(arr.reshape(len(arr), -1), axis=-1),
+    }
+
+
+class TabColumnStatsCallable:
+    """Worker callable returning one tab's per-column values, ready to describe."""
+
+    def __init__(self, probe: Any, tab_idx: int | None):
+        self.probe = probe
         self.tab_idx = tab_idx
-        self.feat_slice = feat_slice
-        self.feat_col = feat_col
-        self.sig_slice = sig_slice
-        self.sig_col = sig_col
-        self.normalization = normalization
-        self.collator = collator
 
     def __call__(self):
-        collator = self.collator
-        if collator is None and hasattr(self.table, 'var') and hasattr(self.table.var, 'collator'):
-            collator = self.table.var.collator
+        table = self.probe.var.feature_table
+        collator = self.probe.var.collator
+        normalization = self.probe.var.normalization
+        signals = set(collator.signal_pairs)
 
-        if collator is not None:
-            feat_slice, feat_col = collator.signal_pairs[0]
-            sig_slice, sig_col = collator.label_pairs[0] if collator.label_pairs else (None, None)
-        else:
-            feat_slice, feat_col = self.feat_slice, self.feat_col
-            sig_slice, sig_col = self.sig_slice, self.sig_col
+        block = table if self.tab_idx is None else table.tab(self.tab_idx)
+        data = block.data(*collator.slices(), concat=True)
+        del block
 
-        if self.tab_idx is not None:
-            tab = self.table.tab(self.tab_idx)
-            feat_data = tab.data(feat_slice, concat=True)[feat_slice]
-            sig_data = tab.data(sig_slice, concat=True)[sig_slice] if sig_slice is not None else None
-            del tab
-        else:
-            feat_data = self.table.data(feat_slice, concat=True)[feat_slice]
-            sig_data = self.table.data(sig_slice, concat=True)[sig_slice] if sig_slice is not None else None
+        columns, counts = {}, set()
+        for pair in collator.signal_pairs + collator.label_pairs:
+            arr = np.asarray(_pair_array(collator, data, pair))
+            if not np.issubdtype(arr.dtype, np.number):
+                raise TypeError(
+                    f"{type(self).__name__}: column {_pair_key(pair)!r} has dtype "
+                    f"{arr.dtype}, which has no mean or median. Drop it from the "
+                    f"collator, or describe a numeric encoding of it instead."
+                )
+            arr = arr.astype(np.float64)
+            if pair in signals and normalization is not None:
+                arr = np.asarray(normalize_features(arr, normalization))
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+            counts.add(len(arr))
+            columns[_pair_key(pair)] = arr
+        del data
 
-        if isinstance(feat_data, dict):
-            tab_f = feat_data.get(feat_col, next(iter(feat_data.values())))
-        else:
-            tab_f = feat_data
-        del feat_data
-
-        if torch is not None and isinstance(tab_f, torch.Tensor):
-            arr = tab_f.float()
-        else:
-            arr = torch.from_numpy(np.array(tab_f)).float()
-        del tab_f
-
-        arr = normalize_features(arr, self.normalization).numpy()
-        if arr.ndim == 1:
-            arr = arr.reshape(1, -1)
-
-        result = {
-            'arr': arr,
-            'f_mean': np.mean(arr, axis=0),
-            'f_std': np.std(arr, axis=0),
-            'f_median': np.median(arr, axis=0),
-            'f_min': np.min(arr, axis=0),
-            'f_max': np.max(arr, axis=0),
-            'f_norm': np.mean(np.linalg.norm(arr, axis=-1)),
-        }
-
-        if sig_slice is not None and sig_data is not None:
-            if isinstance(sig_data, dict):
-                tab_s = sig_data.get(sig_col, next(iter(sig_data.values())))
-            else:
-                tab_s = sig_data
-            del sig_data
-
-            s_arr = np.array(tab_s)
-            del tab_s
-
-            if s_arr.ndim == 1:
-                s_arr_2d = s_arr.reshape(-1, 1)
-            else:
-                s_arr_2d = s_arr
-
-            result['s_arr'] = s_arr
-            if np.issubdtype(s_arr_2d.dtype, np.number):
-                result['s_mean'] = np.mean(s_arr_2d, axis=0)
-                result['s_std'] = np.std(s_arr_2d, axis=0)
-                result['s_median'] = np.median(s_arr_2d, axis=0)
-                result['s_min'] = np.min(s_arr_2d, axis=0)
-                result['s_max'] = np.max(s_arr_2d, axis=0)
-                result['s_norm'] = np.mean(np.linalg.norm(s_arr_2d, axis=-1))
-            else:
-                result['s_mean'] = np.array([0.0])
-                result['s_std'] = np.array([0.0])
-                result['s_median'] = np.array([0.0])
-                result['s_min'] = np.array([0.0])
-                result['s_max'] = np.array([0.0])
-                result['s_norm'] = 0.0
-
+        if len(counts) > 1:
+            raise ValueError(
+                f"{type(self).__name__}: columns disagree on sample count: {sorted(counts)}"
+            )
         gc.collect()
-        return result
+        return {'columns': columns, 'n_rows': counts.pop() if counts else 0}
 
 
 class DatafeatureStatsProbe(Datablock):
-    """Per-layer statistics for a DatafeatureTable.
+    """Per-column statistics for a DatafeatureTable or DatafeatureTab.
 
-    Computes overall feature/signal statistics and tab-granularity statistics
-    for a DatafeatureTable or DatafeatureTab.
+    One topic per statistic -- ``mean``, ``std``, ``median``, ``min``,
+    ``max``, ``norm`` -- with the feature columns underneath it, keyed
+    ``"<slice>.<column>"``.  That is the shape `dataset()` and `data()` give
+    the data itself, so a statistic is addressed the way the thing it
+    describes is::
+
+        probe.read('mean')                    -> {'features.final': array(8,), ...}
+        probe.read('mean', 'features.final')  -> array(8,)
+
+    Every signal and label pair the collator declares is described, not only
+    the first.  Keying by pair rather than by bare column name is what makes
+    room for all of them: two slices may carry a column of the same name, and
+    the old flat naming could hold only one.
+
+    ``tab_<statistic>`` is the same statistic per tab, stacked over tabs, so a
+    column's spread across tabs sits beside its spread over the whole table.
+    Whole-table statistics are computed over the concatenated rows rather than
+    averaged from the per-tab ones -- a mean of tab means is the table mean
+    only when the tabs are equal-sized, and a median or a min never is.
+
+    TOPICS is built per instance from the collator's pairs, as the columns are
+    a property of what this probe was asked to describe rather than of the
+    class.
     """
 
-    VERSION = 1
+    VERSION = 2
 
-    TOPICS = {
-        'feature': {
-            'mean': 'feature_mean.npz',
-            'std': 'feature_std.npz',
-            'median': 'feature_median.npz',
-            'min': 'feature_min.npz',
-            'max': 'feature_max.npz',
-            'norms': 'feature_norms.npz',
-        },
-        'tab_feature': {
-            'mean': 'tab_feature_mean.npz',
-            'std': 'tab_feature_std.npz',
-            'median': 'tab_feature_median.npz',
-            'min': 'tab_feature_min.npz',
-            'max': 'tab_feature_max.npz',
-            'norms': 'tab_feature_norms.npz',
-        },
-        'signal': {
-            'count': 'unique_signal_count.npz',
-            'mean': 'signal_mean.npz',
-            'std': 'signal_std.npz',
-            'median': 'signal_median.npz',
-            'min': 'signal_min.npz',
-            'max': 'signal_max.npz',
-            'norms': 'signal_norms.npz',
-        },
-        'tab_signal': {
-            'mean': 'tab_signal_mean.npz',
-            'std': 'tab_signal_std.npz',
-            'median': 'tab_signal_median.npz',
-            'min': 'tab_signal_min.npz',
-            'max': 'tab_signal_max.npz',
-            'norms': 'tab_signal_norms.npz',
-        },
-    }
+    TOPICS = {'count': 'count.npz'}
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -542,111 +594,45 @@ class DatafeatureStatsProbe(Datablock):
         self.parallelization = getattr(self, 'parallelization', None) or 'inline'
         self.n_workers = getattr(self, 'n_workers', 1)
         self.work_stealing = getattr(self, 'work_stealing', getattr(self, 'works_stealing', False))
+        # The leaf is just a filename: path() renders the topic path itself as
+        # directories, so the statistic and the column already name the folder.
+        self.TOPICS = {
+            'count': 'count.npz',
+            **{name: {key: 'stat.npz' for key in self.column_keys}
+               for name in COLUMN_STATS},
+            **{f'tab_{name}': {key: 'stat.npz' for key in self.column_keys}
+               for name in COLUMN_STATS},
+        }
+
+    @property
+    def column_keys(self) -> list[str]:
+        """The columns this probe describes, in the collator's declared order."""
+        collator = self.var.collator
+        return [_pair_key(p) for p in collator.signal_pairs + collator.label_pairs]
 
     def __build__(self):
         self.log.verbose(f"DatafeatureStatsProbe.__build__: BEGIN {self.anchorkeypath}")
         table = self.var.feature_table
-        collator = self.var.collator
 
-        if len(collator.signal_pairs) > 1:
-            self.log.warning(
-                f"{self.__class__.__name__}: per-tab feature stats describe "
-                f"{collator.signal_pairs[0]!r} only, of {collator.signal_pairs!r}"
-            )
-        if len(collator.label_pairs) > 1:
-            self.log.warning(
-                f"{self.__class__.__name__}: per-tab signal stats describe "
-                f"{collator.label_pairs[0]!r} only, of {collator.label_pairs!r}"
-            )
-
-        n_tabs = table.n_tabs if hasattr(table, 'n_tabs') and table.n_tabs > 0 else 1
-        self.log.verbose(
-            f"DatafeatureStatsProbe.__build__: compute tab feature/signal stats in parallel ({n_tabs} tabs, "
-            f"parallelization={self.parallelization!r}, n_workers={self.n_workers}): BEGIN"
-        )
-        tag = f"COMPUTING TAB STATS [{self.__class__.__name__}, n_workers={self.n_workers}]"
-        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
+        n_tabs = getattr(table, 'n_tabs', 0) or 0
+        executor_kwargs = dict(n_workers=self.n_workers,
+                               tag=f"COMPUTING TAB STATS [{self.__class__.__name__}, n_workers={self.n_workers}]")
         if getattr(self, 'work_stealing', False):
             executor_kwargs['work_stealing'] = self.work_stealing
         executor = callable_executor(self.parallelization, **executor_kwargs)
+        indices = list(range(n_tabs)) if n_tabs > 0 else [None]
+        results = executor.exec_callables([TabColumnStatsCallable(self, i) for i in indices])
 
-        if hasattr(table, 'n_tabs') and table.n_tabs > 0:
-            callables = [
-                TabFeatureStatsCallable(table, i, collator=collator, normalization=self.var.normalization)
-                for i in range(table.n_tabs)
-            ]
-        else:
-            callables = [
-                TabFeatureStatsCallable(table, None, collator=collator, normalization=self.var.normalization)
-            ]
+        for key in self.column_keys:
+            per_tab = [column_stats(res['columns'][key]) for res in results]
+            whole = column_stats(np.concatenate([res['columns'][key] for res in results], axis=0))
+            for name in COLUMN_STATS:
+                write_npz(self.path(name, key, ensure_dirpath=True), stat=whole[name])
+                write_npz(self.path(f'tab_{name}', key, ensure_dirpath=True),
+                          stat=np.stack([tab[name] for tab in per_tab]))
 
-        results = executor.exec_callables(callables)
-        self.log.verbose("DatafeatureStatsProbe.__build__: compute tab feature/signal stats in parallel: END")
-
-        self.log.info(f"DatafeatureStatsProbe.__build__: aggregate tab feature statistics ({len(results)} tabs): BEGIN")
-        all_feats = [res['arr'] for res in results]
-        tab_f_means = [res['f_mean'] for res in results]
-        tab_f_stds = [res['f_std'] for res in results]
-        tab_f_medians = [res['f_median'] for res in results]
-        tab_f_mins = [res['f_min'] for res in results]
-        tab_f_maxs = [res['f_max'] for res in results]
-        tab_f_norms = [res['f_norm'] for res in results]
-
-        concat_feats = np.concatenate(all_feats, axis=0)
-
-        # Overall feature stats
-        write_npz(self.path('feature', 'mean', ensure_dirpath=True), feature_mean=np.mean(concat_feats, axis=0))
-        write_npz(self.path('feature', 'std', ensure_dirpath=True), feature_std=np.std(concat_feats, axis=0))
-        write_npz(self.path('feature', 'median', ensure_dirpath=True), feature_median=np.median(concat_feats, axis=0))
-        write_npz(self.path('feature', 'min', ensure_dirpath=True), feature_min=np.min(concat_feats, axis=0))
-        write_npz(self.path('feature', 'max', ensure_dirpath=True), feature_max=np.max(concat_feats, axis=0))
-        write_npz(self.path('feature', 'norms', ensure_dirpath=True), feature_norms=np.linalg.norm(concat_feats, axis=-1))
-
-        # Tab feature stats
-        write_npz(self.path('tab_feature', 'mean', ensure_dirpath=True), tab_feature_mean=np.stack(tab_f_means))
-        write_npz(self.path('tab_feature', 'std', ensure_dirpath=True), tab_feature_std=np.stack(tab_f_stds))
-        write_npz(self.path('tab_feature', 'median', ensure_dirpath=True), tab_feature_median=np.stack(tab_f_medians))
-        write_npz(self.path('tab_feature', 'min', ensure_dirpath=True), tab_feature_min=np.stack(tab_f_mins))
-        write_npz(self.path('tab_feature', 'max', ensure_dirpath=True), tab_feature_max=np.stack(tab_f_maxs))
-        write_npz(self.path('tab_feature', 'norms', ensure_dirpath=True), tab_feature_norms=np.array(tab_f_norms))
-        self.log.info("DatafeatureStatsProbe.__build__: aggregate tab feature statistics: END")
-
-        if collator.label_pairs:
-            self.log.info(f"DatafeatureStatsProbe.__build__: aggregate tab signal statistics ({len(results)} tabs): BEGIN")
-            all_sigs = [res['s_arr'] for res in results]
-            tab_s_means = [res['s_mean'] for res in results]
-            tab_s_stds = [res['s_std'] for res in results]
-            tab_s_medians = [res['s_median'] for res in results]
-            tab_s_mins = [res['s_min'] for res in results]
-            tab_s_maxs = [res['s_max'] for res in results]
-            tab_s_norms = [res['s_norm'] for res in results]
-
-            try:
-                concat_sigs = np.concatenate(all_sigs, axis=0)
-            except Exception:
-                concat_sigs = np.array(all_sigs, dtype=object)
-
-            signal_count = np.array(len(np.unique(concat_sigs, axis=0)) if concat_sigs.ndim > 0 else len(concat_sigs))
-            write_npz(self.path('signal', 'count', ensure_dirpath=True), signal_count=signal_count)
-
-            if np.issubdtype(concat_sigs.dtype, np.number):
-                write_npz(self.path('signal', 'mean', ensure_dirpath=True), signal_mean=np.mean(concat_sigs, axis=0))
-                write_npz(self.path('signal', 'std', ensure_dirpath=True), signal_std=np.std(concat_sigs, axis=0))
-                write_npz(self.path('signal', 'median', ensure_dirpath=True), signal_median=np.median(concat_sigs, axis=0))
-                write_npz(self.path('signal', 'min', ensure_dirpath=True), signal_min=np.min(concat_sigs, axis=0))
-                write_npz(self.path('signal', 'max', ensure_dirpath=True), signal_max=np.max(concat_sigs, axis=0))
-                write_npz(self.path('signal', 'norms', ensure_dirpath=True), signal_norms=np.linalg.norm(concat_sigs, axis=-1))
-
-            write_npz(self.path('tab_signal', 'mean', ensure_dirpath=True), tab_signal_mean=np.array(tab_s_means, dtype=object))
-            write_npz(self.path('tab_signal', 'std', ensure_dirpath=True), tab_signal_std=np.array(tab_s_stds, dtype=object))
-            write_npz(self.path('tab_signal', 'median', ensure_dirpath=True), tab_signal_median=np.array(tab_s_medians, dtype=object))
-            write_npz(self.path('tab_signal', 'min', ensure_dirpath=True), tab_signal_min=np.array(tab_s_mins, dtype=object))
-            write_npz(self.path('tab_signal', 'max', ensure_dirpath=True), tab_signal_max=np.array(tab_s_maxs, dtype=object))
-            write_npz(self.path('tab_signal', 'norms', ensure_dirpath=True), tab_signal_norms=np.array(tab_s_norms))
-            self.log.info("DatafeatureStatsProbe.__build__: aggregate tab signal statistics: END")
-        else:
-            signal_count = np.array(len(concat_feats))
-            write_npz(self.path('signal', 'count', ensure_dirpath=True), signal_count=signal_count)
+        write_npz(self.path('count', ensure_dirpath=True),
+                  count=np.array(sum(res['n_rows'] for res in results)))
 
         self.log.verbose(f"DatafeatureStatsProbe.__build__: END {self.anchorkeypath}")
         return self
@@ -654,119 +640,29 @@ class DatafeatureStatsProbe(Datablock):
     def __read__(self, *topicpath):
         if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
             topicpath = tuple(topicpath[0])
+        topic = str(topicpath[0])
 
-        if len(topicpath) == 2:
-            group, key = str(topicpath[0]), str(topicpath[1])
-            npz_key = f"{group}_{key}" if group != 'signal' or key != 'count' else 'signal_count'
-            return read_npz(self.path(group, key), npz_key)[npz_key]
-
+        if topic == 'count':
+            return int(read_npz(self.path('count'), 'count')['count'])
+        if topic not in self.TOPICS:
+            raise ValueError(
+                f"Unknown topic: {topic!r}; expected one of {sorted(self.TOPICS)}"
+            )
         if len(topicpath) == 1:
-            topic = str(topicpath[0])
-            # Support single string group read (e.g. read('feature') -> dict of stats)
-            if topic in self.TOPICS and isinstance(self.TOPICS[topic], dict):
-                return {sub_k: self.read(topic, sub_k) for sub_k in self.TOPICS[topic]}
-            # Direct backward compatibility mapping for single string key reads
-            if topic in ('tile_count', 'distinct_tile_count', 'signal_count'):
-                return read_npz(self.path('signal', 'count'), 'signal_count')['signal_count']
-            elif topic in ('tile_feature_mean', 'feature_mean'):
-                return read_npz(self.path('feature', 'mean'), 'feature_mean')['feature_mean']
-            elif topic in ('tile_feature_std', 'feature_std'):
-                return read_npz(self.path('feature', 'std'), 'feature_std')['feature_std']
-            elif topic in ('tile_feature_median', 'feature_median'):
-                return read_npz(self.path('feature', 'median'), 'feature_median')['feature_median']
-            elif topic in ('tile_feature_min', 'feature_min'):
-                return read_npz(self.path('feature', 'min'), 'feature_min')['feature_min']
-            elif topic in ('tile_feature_max', 'feature_max'):
-                return read_npz(self.path('feature', 'max'), 'feature_max')['feature_max']
-            elif topic in ('tile_feature_norms', 'feature_norms'):
-                return read_npz(self.path('feature', 'norms'), 'feature_norms')['feature_norms']
-            elif topic in ('bag_feature_mean', 'sample_feature_mean', 'tab_feature_mean'):
-                return read_npz(self.path('tab_feature', 'mean'), 'tab_feature_mean')['tab_feature_mean']
-            elif topic in ('bag_feature_std', 'sample_feature_std', 'tab_feature_std'):
-                return read_npz(self.path('tab_feature', 'std'), 'tab_feature_std')['tab_feature_std']
-            elif topic == 'tab_feature_median':
-                return read_npz(self.path('tab_feature', 'median'), 'tab_feature_median')['tab_feature_median']
-            elif topic == 'tab_feature_min':
-                return read_npz(self.path('tab_feature', 'min'), 'tab_feature_min')['tab_feature_min']
-            elif topic == 'tab_feature_max':
-                return read_npz(self.path('tab_feature', 'max'), 'tab_feature_max')['tab_feature_max']
-            elif topic == 'tab_feature_norms':
-                return read_npz(self.path('tab_feature', 'norms'), 'tab_feature_norms')['tab_feature_norms']
-            elif topic == 'signal_mean':
-                return read_npz(self.path('signal', 'mean'), 'signal_mean')['signal_mean']
-            elif topic == 'signal_std':
-                return read_npz(self.path('signal', 'std'), 'signal_std')['signal_std']
-            elif topic == 'signal_median':
-                return read_npz(self.path('signal', 'median'), 'signal_median')['signal_median']
-            elif topic == 'signal_min':
-                return read_npz(self.path('signal', 'min'), 'signal_min')['signal_min']
-            elif topic == 'signal_max':
-                return read_npz(self.path('signal', 'max'), 'signal_max')['signal_max']
-            elif topic == 'signal_norms':
-                return read_npz(self.path('signal', 'norms'), 'signal_norms')['signal_norms']
-            elif topic == 'tab_signal_mean':
-                return read_npz(self.path('tab_signal', 'mean'), 'tab_signal_mean')['tab_signal_mean']
-            elif topic == 'tab_signal_std':
-                return read_npz(self.path('tab_signal', 'std'), 'tab_signal_std')['tab_signal_std']
-            elif topic == 'tab_signal_median':
-                return read_npz(self.path('tab_signal', 'median'), 'tab_signal_median')['tab_signal_median']
-            elif topic == 'tab_signal_min':
-                return read_npz(self.path('tab_signal', 'min'), 'tab_signal_min')['tab_signal_min']
-            elif topic == 'tab_signal_max':
-                return read_npz(self.path('tab_signal', 'max'), 'tab_signal_max')['tab_signal_max']
-            elif topic == 'tab_signal_norms':
-                return read_npz(self.path('tab_signal', 'norms'), 'tab_signal_norms')['tab_signal_norms']
+            return {key: self.read(topic, key) for key in self.column_keys}
 
-        return read_npz(self.path(*topicpath), str(topicpath[-1]))[str(topicpath[-1])]
+        key = str(topicpath[1])
+        if key not in self.column_keys:
+            raise KeyError(
+                f"{self.__class__.__name__}.read({topic!r}, {key!r}): no such column; "
+                f"this probe describes {self.column_keys}"
+            )
+        return read_npz(self.path(topic, key), 'stat')['stat']
 
     @functools.cached_property
-    def feature_mean(self):
-        return self.read('feature', 'mean')
+    def columns(self) -> list[str]:
+        return self.column_keys
 
     @functools.cached_property
-    def feature_std(self):
-        return self.read('feature', 'std')
-
-    @functools.cached_property
-    def feature_median(self):
-        return self.read('feature', 'median')
-
-    @functools.cached_property
-    def feature_min(self):
-        return self.read('feature', 'min')
-
-    @functools.cached_property
-    def feature_max(self):
-        return self.read('feature', 'max')
-
-    @functools.cached_property
-    def feature_norms(self):
-        return self.read('feature', 'norms')
-
-    @functools.cached_property
-    def tab_feature_mean(self):
-        return self.read('tab_feature', 'mean')
-
-    @functools.cached_property
-    def tab_feature_std(self):
-        return self.read('tab_feature', 'std')
-
-    @functools.cached_property
-    def tab_feature_median(self):
-        return self.read('tab_feature', 'median')
-
-    @functools.cached_property
-    def tab_feature_min(self):
-        return self.read('tab_feature', 'min')
-
-    @functools.cached_property
-    def tab_feature_max(self):
-        return self.read('tab_feature', 'max')
-
-    @functools.cached_property
-    def tab_feature_norms(self):
-        return self.read('tab_feature', 'norms')
-
-    @functools.cached_property
-    def signal_count(self):
-        return self.read('signal', 'count')
+    def count(self) -> int:
+        return self.read('count')

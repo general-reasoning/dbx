@@ -95,8 +95,10 @@ def test_datapoint_partition_and_fold(table, tmp_path):
     assert fold0.n_tabs == len(indices0)
     assert fold1.n_tabs == len(indices1)
 
-    data0 = fold0.data('numbers')
-    data1 = fold1.data('numbers')
+    # data() is column-major and keyed by slice, so a row count comes from a
+    # column rather than from len() of the returned mapping.
+    data0 = fold0.data('numbers')['numbers']['idx']
+    data1 = fold1.data('numbers')['numbers']['idx']
 
     assert len(data0) + len(data1) == table.n_rows('numbers')
     assert fold0.n_rows('numbers') == len(data0)

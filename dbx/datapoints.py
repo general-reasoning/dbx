@@ -50,47 +50,6 @@ from .datastreams import (
 SLICETOPIC = 'SLICETOPIC'
 
 
-class _slices_descriptor:
-    """``slices`` read off the class as readily as off an instance.
-
-    A subclass's slices are a property of how it was DECLARED, so they are
-    asked for at class level -- ``LetterTable.slices``, ``'depth' in
-    Debuggable.slices`` -- as often as they are asked of a block. A plain
-    ``@property`` answers only the second, handing back the descriptor itself
-    for the first.
-
-    Derived on each access rather than frozen at class creation, so a TOPICS
-    assigned or amended after the class body still reports its slices, and an
-    instance overriding TOPICS (as :class:`DatapointFold` does) is read through.
-    """
-
-    def __get__(self, obj, owner=None):
-        target = owner if obj is None else obj
-        return DatapointBase._find_slice_topics(getattr(target, 'TOPICS', None))
-
-
-class _table_slices_descriptor:
-    """``slices`` for a `DatapointTable`, derived from TAB's slices.
-
-    A table does not declare slice topics in its own TOPICS (they belong to the
-    tab). Its slices are the TAB's slices -- the same set, but accessed via the
-    TAB class rather than by inspecting the table's TOPICS.
-
-    Falls back to reading the instance/class TOPICS if TAB is not set or is not
-    a proper DatapointBase subclass (e.g. DatapointFold, which overrides TOPICS
-    at instance level and computes its TAB dynamically).
-    """
-
-    def __get__(self, obj, owner=None):
-        target = owner if obj is None else obj
-        tab = getattr(target, 'TAB', None)
-        if isinstance(tab, type) and issubclass(tab, DatapointBase):
-            return tab.slices
-        # Fallback: read from own TOPICS (covers DatapointFold and intermediate
-        # bases that have no TAB yet).
-        return DatapointBase._find_slice_topics(getattr(target, 'TOPICS', None))
-
-
 class DatapointBase(Datablock):
     """Base class for sliced datapoint blocks (DatapointTab and DatapointTable).
 
@@ -126,7 +85,7 @@ class DatapointBase(Datablock):
         topicpath = self._normtopic(topicpath)
         if topicpath:
             topic_str = '/'.join(topicpath)
-            if topic_str in self.slices:
+            if topic_str in self.slices():
                 return self.valid_slice(topic_str)
         return super().valid_topic(*topicpath)
 
@@ -138,28 +97,77 @@ class DatapointBase(Datablock):
 
     # 2. Properties and Accessors ───────────────────────────────────
 
-    slices = _slices_descriptor()
+    def slices(self):
+        """The names of this block's slice topics, in declaration order.
 
-    def data(self, *slices, concat: bool = False, **kwargs):
-        """Every row of the named slices, decoded into a list (or concatenated).
+        A method rather than a property, mirroring :meth:`topics`, which it is
+        the slice-only filter of.
+
+        Derived on each call rather than frozen at class creation, so a TOPICS
+        assigned or amended after the class body still reports its slices, and
+        an instance overriding TOPICS -- as :class:`DatapointFold` does -- is
+        read through.
+        """
+        return DatapointBase._find_slice_topics(getattr(self, 'TOPICS', None))
+
+    def data(self, *slice_columns, nested=True, concat: bool = False,
+             columns=None, **kwargs):
+        """Every row of the named slices, keyed exactly as `dataset()` keys one row.
+
+        The mirror of `dataset()`: same ``*slice_columns`` spec, same
+        ``nested`` keying, and the same guarantee that no two slices can
+        collide. Where `dataset()` gives one row at a time with a scalar at
+        each leaf, this gives the whole slice at once with every row's value
+        stacked at that leaf::
+
+            dataset(nested=True)[i]  ->  {slice: {column: value}}
+            data(nested=True)        ->  {slice: {column: [value, ...]}}
+
+        so a caller that can address one can address the other unchanged.
+
+        Column-major throughout, and with no special case for a single
+        slice. Both of those were previously otherwise: one slice returned a
+        bare list rather than a mapping, so ``data(s)`` and ``data(s, t)``
+        had different shapes and every consumer had to guess which it held.
 
         Parameters
         ----------
-        *slices : str
-            Slice names to read.
+        *slice_columns
+            As `dataset()`: a slice name, a ``(slice, column)`` pair, or a
+            ``(slice, [columns])`` pair. No arguments means every slice.
+        nested : bool
+            True (the default) keys as ``{slice: {column: ...}}``; False
+            keys as ``{(slice, column): ...}``.
         concat : bool, optional
-            If True, concatenate/stack tensors/ndarrays along a new first dimension.
+            Stack each column's values into one array along a new leading
+            axis.  Left False, a leaf is the plain list of per-row values.
         **kwargs
             Passed to `_read_slice()`.
         """
-        names = self.slice_names(slices)
-        if len(names) == 1 and slices:
-            res = self._read_slice(names[0], **kwargs)
-            return concat_data(res) if concat else res
-        res = {name: self._read_slice(name, **kwargs) for name in names}
-        if concat:
-            return {name: concat_data(val) for name, val in res.items()}
-        return res
+        names, per_slice_columns = self._parse_slice_columns(slice_columns, columns)
+
+        out = {}
+        for pos, name in enumerate(names):
+            rows = self._read_slice(name, **kwargs)
+            cols = per_slice_columns[pos] if per_slice_columns else None
+            if cols is None:
+                cols = list(rows[0]) if rows else []
+            else:
+                missing = [c for c in cols if rows and c not in rows[0]]
+                if missing:
+                    raise KeyError(
+                        f"{self.__class__.__name__}.data: slice {name!r} has no "
+                        f"column(s) {missing}; it provides {sorted(rows[0])}"
+                    )
+            out[name] = {c: concat_data([r[c] for r in rows]) if concat
+                         else [r[c] for r in rows]
+                         for c in cols}
+
+        if nested:
+            return out
+        return {(name, c): vals
+                for name, cols in out.items()
+                for c, vals in cols.items()}
 
     def datastream(self, slice, **kwargs) -> StreamingDataset:
         """One slice as a live `StreamingDataset`."""
@@ -170,50 +178,22 @@ class DatapointBase(Datablock):
         kwargs.setdefault('cache_limit', cache_limit)
         return open_datastream(self.path(*slice.split('/')), **kwargs)
 
-    def dataset(
-        self,
-        *slice_columns,
-        mode='map',
-        columns=None,
-        shared=None,
-        validate_shared=False,
-        on_conflict='last',
-        skip_none=True,
-        zip_validator=None,
-        cache_limit=None,
-        **kwargs,
-    ):
-        """The named slices (with optional per-slice column filtering), zipped into one `Dataset`.
+    def _parse_slice_columns(self, slice_columns, columns=None):
+        """Normalize a ``*slice_columns`` spec into ``(names, per_slice_columns)``.
 
-        Parameters
-        ----------
-        *slice_columns : str | tuple[str, str | list[str] | tuple[str, ...]]
-            Positional arguments where each item is either:
-            - `str`: slice name for all columns (e.g. `"features"`)
-            - `(slice, column)` tuple: slice name and specific column (e.g. `("features", "col1")`)
-            - `(slice, [col1, col2])` tuple: slice name and list of columns.
-            Passing multiple `(slice, col)` tuples for the same slice accumulates their columns.
-            If no positional arguments are passed, defaults to all slices with all columns.
-        mode : {'map', 'iter'}
-            How the slices are read.
-        columns : legacy keyword parameter for backwards compatibility.
-        cache_limit : float or str, optional
-            Limit on cache size for streaming downloads.
+        Shared by `dataset()` and `data()` so the two accept exactly the same
+        spec: a bare slice name, a ``(slice, column)`` pair, or a
+        ``(slice, [columns])`` pair, in any mixture. The two differ in what
+        they do with a slice, never in how a caller names one.
+
+        *names* is in the order the slices were asked for -- position decides
+        which source is zipped where, so it is derived from the caller's
+        sequence and never from a set.
         """
-        if mode not in ('map', 'iter'):
-            raise ValueError(
-                f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}"
-            )
-        if mode == 'iter' and not isinstance(kwargs.get('batch_size'), int):
-            raise ValueError(
-                f"{self.__class__.__name__}.dataset(mode='iter') needs batch_size=: "
-                f"iterating partitions each slice over ranks and workers in whole batches."
-            )
-
         items = list(slice_columns)
         if len(items) == 1 and isinstance(items[0], (list, tuple)):
             first = items[0]
-            if isinstance(first, list) or not (len(first) == 2 and isinstance(first[0], str) and first[0] in self.slices):
+            if isinstance(first, list) or not (len(first) == 2 and isinstance(first[0], str) and first[0] in self.slices()):
                 items = list(first)
 
         if columns is not None:
@@ -273,6 +253,55 @@ class DatapointBase(Datablock):
             else:
                 per_slice_columns = None
 
+        return names, per_slice_columns
+
+    def dataset(
+        self,
+        *slice_columns,
+        mode='map',
+        nested=True,
+        columns=None,
+        shared=None,
+        validate_shared=False,
+        skip_none=True,
+        zip_validator=None,
+        cache_limit=None,
+        **kwargs,
+    ):
+        """The named slices (with optional per-slice column filtering), zipped into one `Dataset`.
+
+        Parameters
+        ----------
+        *slice_columns : str | tuple[str, str | list[str] | tuple[str, ...]]
+            Positional arguments where each item is either:
+            - `str`: slice name for all columns (e.g. `"features"`)
+            - `(slice, column)` tuple: slice name and specific column (e.g. `("features", "col1")`)
+            - `(slice, [col1, col2])` tuple: slice name and list of columns.
+            Passing multiple `(slice, col)` tuples for the same slice accumulates their columns.
+            If no positional arguments are passed, defaults to all slices with all columns.
+        mode : {'map', 'iter'}
+            How the slices are read.
+        nested : bool
+            Row keying, as `ZipBase`. True (the default) gives
+            ``{slice: {column: value}}``; False gives ``{(slice, column): value}``.
+            Both keep every column of every slice, including a column two
+            slices happen to share.
+        columns : legacy keyword parameter for backwards compatibility.
+        cache_limit : float or str, optional
+            Limit on cache size for streaming downloads.
+        """
+        if mode not in ('map', 'iter'):
+            raise ValueError(
+                f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}"
+            )
+        if mode == 'iter' and not isinstance(kwargs.get('batch_size'), int):
+            raise ValueError(
+                f"{self.__class__.__name__}.dataset(mode='iter') needs batch_size=: "
+                f"iterating partitions each slice over ranks and workers in whole batches."
+            )
+
+        names, per_slice_columns = self._parse_slice_columns(slice_columns, columns)
+
         if cache_limit is not None:
             kwargs['cache_limit'] = cache_limit
 
@@ -280,10 +309,11 @@ class DatapointBase(Datablock):
         zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
         return zip_cls(
             *datasets,
+            names=names,
+            nested=nested,
             columns=per_slice_columns,
             shared=shared,
             validate_shared=validate_shared,
-            on_conflict=on_conflict,
             skip_none=skip_none,
             zip_validator=zip_validator,
         )
@@ -413,7 +443,7 @@ class DatapointBase(Datablock):
             Mapping from slice name to total row count.
         """
         counts = {}
-        for s in self.slices:
+        for s in self.slices():
             counts[s] = self.n_rows(s)
         unique_counts = set(counts.values())
         if len(unique_counts) > 1:
@@ -444,12 +474,12 @@ class DatapointBase(Datablock):
         if len(slices) == 1 and isinstance(slices[0], (tuple, list)):
             slices = tuple(slices[0])
         if not slices:
-            return self.slices
-        unknown = [s for s in slices if s not in self.slices]
+            return self.slices()
+        unknown = [s for s in slices if s not in self.slices()]
         if unknown:
             raise KeyError(
                 f"{self.__class__.__name__}: unknown slice(s) {unknown}; "
-                f"available are {list(self.slices)}"
+                f"available are {list(self.slices())}"
             )
         return tuple(slices)
 
@@ -540,17 +570,17 @@ class DatapointTab(DatapointBase):
     def __build__(self, *args, **kwargs):
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement __build__(): write every "
-            f"slice in {list(self.slices) or ['...']} in lockstep via self.slice_writers(slices)"
+            f"slice in {list(self.slices()) or ['...']} in lockstep via self.slice_writers(slices)"
         )
 
     def __stats__(self, slice, **kwargs) -> dict:
-        return {'n_rows': len(self.data(slice))}
+        return {'n_rows': len(self._read_slice(slice))}
 
     def __read__(self, *topicpath):
         topicpath = self._normtopic(topicpath)
         if topicpath:
             topic_str = '/'.join(topicpath)
-            if topic_str in self.slices:
+            if topic_str in self.slices():
                 return self.data(topic_str)
         raise NotImplementedError(
             f"{self.__class__.__name__}.__read__ override to read {'/'.join(topicpath)!r}"
@@ -570,7 +600,7 @@ class DatapointTab(DatapointBase):
         slices : dict
             `{slice_name: {column: mds_type}}`, one entry per declared slice.
         """
-        names = self.slices
+        names = self.slices()
         missing = [name for name in names if name not in slices]
         if missing:
             raise ValueError(
@@ -655,7 +685,7 @@ class DatapointTable(DatapointBase, Datastack):
     (such as ``bag_lens``). The tab's slice topics are NOT merged into the
     table's TOPICS -- they belong to the tab, not the table.
 
-    The table's `slices` attribute is derived from ``TAB.slices`` rather than
+    The table's `slices()` is derived from ``TAB``'s slice topics rather than
     from ``TOPICS``, so slice routing (``data()``, ``dataset()``,
     ``valid_slice()``) continues to work without polluting ``TOPICS``. Pointing
     a table at a differently-sliced TAB still rekeys the table because the TAB
@@ -673,7 +703,22 @@ class DatapointTable(DatapointBase, Datastack):
     TOPICS = {'tabs': DIRTOPIC, 'tab_paths': DIRTOPIC, 'done': 'done'}
 
     #: Slices come from TAB, not from this table's own TOPICS.
-    slices = _table_slices_descriptor()
+    def slices(self):
+        """The TAB's slices: a table declares none of its own.
+
+        Slice topics belong to the tab, so a table reads them off ``TAB``
+        rather than out of its own TOPICS -- which is what keeps them out of
+        the table's TOPICS while leaving slice routing (`data()`, `dataset()`,
+        `valid_slice()`) working.
+
+        Falls back to its own TOPICS when TAB is unset or is not a
+        `DatapointBase` -- as for :class:`DatapointFold`, which overrides
+        TOPICS per instance and computes its TAB dynamically.
+        """
+        tab = getattr(self, 'TAB', None)
+        if isinstance(tab, type) and issubclass(tab, DatapointBase):
+            return DatapointBase._find_slice_topics(getattr(tab, 'TOPICS', None))
+        return DatapointBase._find_slice_topics(getattr(self, 'TOPICS', None))
 
     Tab = staticmethod(DatapointTableTab)
 
@@ -726,7 +771,7 @@ class DatapointTable(DatapointBase, Datastack):
         n = self.n_tabs
         self.log.info(
             "%s: %d tabs x %d slices %s",
-            self.__class__.__name__, n, len(self.slices), list(self.slices),
+            self.__class__.__name__, n, len(self.slices()), list(self.slices()),
         )
         devices = getattr(self, '_devices', None) or getattr(self, 'devices', None)
         device_mapping = kwargs.get('device_mapping', None)
@@ -827,7 +872,7 @@ class DatapointTable(DatapointBase, Datastack):
         """
         topicpath = self._normtopic(topicpath)
         topic_str = '/'.join(topicpath)
-        if topic_str in self.slices:
+        if topic_str in self.slices():
             # Bypass _topicnode: slices are not in TOPICS but are valid reads.
             return self.__read__(*topicpath)
         return super().read(*topicpath)
@@ -836,7 +881,7 @@ class DatapointTable(DatapointBase, Datastack):
         topicpath = self._normtopic(topicpath)
         if topicpath:
             topic_str = '/'.join(topicpath)
-            if topic_str in self.slices:
+            if topic_str in self.slices():
                 return self.data(topic_str)
         topic_name = self._tab_paths_topic()
         if topic_name and topicpath == (topic_name,):
@@ -1003,9 +1048,12 @@ class DatapointTable(DatapointBase, Datastack):
         # Then the TAB's slice topics, in the same format Datastack uses.
         tab = self.TAB
         if isinstance(tab, type) and issubclass(tab, DatapointBase):
+            # TAB is a class here, and slices() is an instance method as
+            # topics() is, so the shared helper does the work rather than an
+            # unbound call.
             slice_segments = tuple(
                 f"topic:{name}=SLICETOPIC"
-                for name in tab.slices
+                for name in DatapointBase._find_slice_topics(getattr(tab, 'TOPICS', None))
             )
         else:
             slice_segments = ()
@@ -1061,7 +1109,7 @@ class DatapointTable(DatapointBase, Datastack):
         indices = range(self.n_tabs) if tabs is None else tabs
         datapoints = []
         for idx in indices:
-            datapoints.extend(self.tab(idx).data(slice, **kwargs))
+            datapoints.extend(self.tab(idx)._read_slice(slice, **kwargs))
         return datapoints
 
     class TabMaker(Datastack.BlockMaker):
@@ -1130,7 +1178,7 @@ class DatapointPartition(Datablock):
 
         p_slice = self.var.partition_slice
         if isinstance(p_slice, int):
-            slice_name = table.slices[p_slice]
+            slice_name = table.slices()[p_slice]
         else:
             slice_name = p_slice
 
@@ -1222,9 +1270,8 @@ class DatapointFold(DatapointTable):
     def TAB(self):
         return getattr(self.var.partition.datapoint_table, 'TAB', None)
 
-    @property
     def slices(self):
-        return self.var.partition.datapoint_table.slices
+        return self.var.partition.datapoint_table.slices()
 
     @property
     def TOPICS(self):
@@ -1287,7 +1334,7 @@ class DatapointFold(DatapointTable):
             indices = tabs
         datapoints = []
         for idx in indices:
-            datapoints.extend(self.tab(idx).data(slice, **kwargs))
+            datapoints.extend(self.tab(idx)._read_slice(slice, **kwargs))
         return datapoints
 
     def datastream(self, slice, **kwargs) -> StreamingDataset:

@@ -376,28 +376,60 @@ def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs)
 
 
 class CallableSignature(CallableStr):
+    """A signature string already rendered and stored, e.g. on a journal row.
+
+    ``legacy=`` selects which rendering to PRODUCE, so it has nothing to act
+    on here -- the rendering happened before this string was stored. Passing
+    it raises rather than being quietly ignored; ask the block itself
+    (``block.signature(legacy=...)``) for the other rendering.
+    """
+
     def __call__(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = False, **kwargs):
-        if pretty:
-            import pprint
-            parsed = Datablock._parse_signature(str(self))
-            sig_dict = {k: Datablock._structure_signatureval(v) for k, v in parsed.items()}
-            return pprint.pformat(sig_dict, indent=2, width=120)
+        if legacy is not None:
+            raise TypeError(
+                f"{type(self).__name__}: legacy= chooses how a signature is "
+                f"rendered, but this one is already rendered and stored. Call "
+                f"signature(legacy={legacy!r}) on the block instead."
+            )
         s = str(self)
+        # Before parsing, not after: stripping backslashes from the formatted
+        # output would eat repr's escapes inside the leaves.
         if deslash:
             s = s.replace('\\', '')
+        if pretty:
+            import pprint
+            parsed = Datablock._parse_signature(s)
+            sig_dict = {k: Datablock._structure_from_signature_text(v) for k, v in parsed.items()}
+            return pprint.pformat(sig_dict, indent=2, width=120)
         return s
 
 
 class CallableSig(CallableStr):
+    """A signature string already rendered and stored, e.g. on a journal row.
+
+    ``legacy=`` selects which rendering to PRODUCE, so it has nothing to act
+    on here -- the rendering happened before this string was stored. Passing
+    it raises rather than being quietly ignored; ask the block itself
+    (``block.signature(legacy=...)``) for the other rendering.
+    """
+
     def __call__(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True, **kwargs):
-        if pretty:
-            import pprint
-            parsed = Datablock._parse_signature(str(self))
-            sig_dict = {k: Datablock._structure_signatureval(v) for k, v in parsed.items()}
-            return pprint.pformat(sig_dict, indent=2, width=120)
+        if legacy is not None:
+            raise TypeError(
+                f"{type(self).__name__}: legacy= chooses how a signature is "
+                f"rendered, but this one is already rendered and stored. Call "
+                f"signature(legacy={legacy!r}) on the block instead."
+            )
         s = str(self)
+        # Before parsing, not after: stripping backslashes from the formatted
+        # output would eat repr's escapes inside the leaves.
         if deslash:
             s = s.replace('\\', '')
+        if pretty:
+            import pprint
+            parsed = Datablock._parse_signature(s)
+            sig_dict = {k: Datablock._structure_from_signature_text(v) for k, v in parsed.items()}
+            return pprint.pformat(sig_dict, indent=2, width=120)
         return s
 
 
@@ -427,7 +459,7 @@ class CallableType(CallableStr):
                         version = None if ver_str == 'None' else ver_str
 
                 sig_dict = Datablock._parse_signature(sig_part)
-                sig_dict = {k: Datablock._structure_signatureval(v) for k, v in sig_dict.items()}
+                sig_dict = {k: Datablock._structure_from_signature_text(v) for k, v in sig_dict.items()}
                 d = {
                     'paths': paths,
                     'signature': sig_dict,
@@ -469,7 +501,7 @@ class CallableTp(CallableStr):
                         version = None if ver_str == 'None' else ver_str
 
                 sig_dict = Datablock._parse_signature(sig_part)
-                sig_dict = {k: Datablock._structure_signatureval(v) for k, v in sig_dict.items()}
+                sig_dict = {k: Datablock._structure_from_signature_text(v) for k, v in sig_dict.items()}
                 d = {
                     'paths': paths,
                     'signature': sig_dict,
@@ -521,18 +553,32 @@ class Bid:
     def tp(self):
         return self._tp
 
-    def signaturedict(self, *, legacy: 'bool | None' = None) -> dict:
-        parsed = Datablock._parse_signature(str(self.signature or ''))
-        return {k: Datablock._structure_signatureval(v) for k, v in parsed.items()}
+    def signaturedict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        """As `Datablock.signaturedict`, over the signature recorded on this row.
 
-    def sigdict(self, *, legacy: 'bool | None' = None) -> dict:
-        return self.signaturedict(legacy=legacy)
+        The recorded signature is one rendering already chosen, so *legacy*
+        has nothing to select; it raises rather than being ignored.
+        """
+        if legacy is not None:
+            raise TypeError(
+                f"{type(self).__name__}.signaturedict: legacy= chooses how a "
+                f"signature is rendered, but this row records one already "
+                f"rendered. Call signaturedict(legacy=...) on the block instead."
+            )
+        text = str(self.signature or '')
+        if deslash:
+            text = text.replace('\\', '')
+        parsed = Datablock._parse_signature(text)
+        return {k: Datablock._structure_from_signature_text(v) for k, v in parsed.items()}
 
-    def subsignaturedict(self, *, legacy: 'bool | None' = None) -> dict:
-        return self.signaturedict(legacy=legacy)
+    def sigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signaturedict(legacy=legacy, deslash=deslash)
 
-    def subsigdict(self, *, legacy: 'bool | None' = None) -> dict:
-        return self.signaturedict(legacy=legacy)
+    def subsignaturedict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signaturedict(legacy=legacy, deslash=deslash)
+
+    def subsigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signaturedict(legacy=legacy, deslash=deslash)
 
     def typedict(self, *, deslash: bool = False) -> dict:
         t_str = str(self.type or '')
@@ -554,7 +600,7 @@ class Bid:
 
         return {
             'paths': paths,
-            'signature': self.signaturedict(legacy=None),
+            'signature': self.signaturedict(deslash=deslash),
             'topics': tuple(topics),
             'version': version,
         }
@@ -671,11 +717,11 @@ class DatajournalEntry(pd.Series):
         val = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
         return CallableTp(val, bid=self) if val is not None else None
 
-    def signaturedict(self, *, legacy: 'bool | None' = None) -> dict:
-        return self.bid.signaturedict(legacy=legacy)
+    def signaturedict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.bid.signaturedict(legacy=legacy, deslash=deslash)
 
-    def sigdict(self, *, legacy: 'bool | None' = None) -> dict:
-        return self.signaturedict(legacy=legacy)
+    def sigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signaturedict(legacy=legacy, deslash=deslash)
 
     def typedict(self, *, deslash: bool = False) -> dict:
         return self.bid.typedict(deslash=deslash)
@@ -1256,6 +1302,114 @@ class Datablock:
     # already-computed hashes, keys and storage paths stay valid.
     LEGACY_NORM = False
     LEGACY_SIGNATURE = False
+
+    #: Render signature/type the pre-typing way.  LEGACY_SIGNATURE is accepted
+    #: as an equivalent spelling, and LEGACY_NORM still implies it, so a
+    #: subclass already pinned to the old rendering keeps its hashes without
+    #: being touched.
+    LEGACY_TYPING = False
+
+    @staticmethod
+    def _coerce_to_annotation(value, annotation):
+        """*value* as its declared type, when it arrived as text.
+
+        VAR is a dataclass with real annotations, but nothing enforces them, so
+        ``shard_size='256'`` reaches a field declared ``int``. Left alone it
+        renders quoted and hashes differently from ``256`` -- the same config
+        silently becoming two blocks. Coercion is attempted only for a string
+        standing in for a non-string field, and only when it is unambiguous:
+        anything that does not parse, or parses to the wrong type, is returned
+        untouched rather than guessed at.
+        """
+        if not isinstance(value, str):
+            return value
+        text = str(annotation)
+        # No declared type to coerce toward: `object`/`Any` accept anything, and
+        # a str-compatible field may legitimately hold text that looks like a
+        # literal. Coercing under `v: object` would re-collide `v=5` with
+        # `v='5'`, which is precisely what the non-legacy rendering exists to
+        # tell apart.
+        if annotation in (object, str, 'object', 'str', None, '') or 'str' in text \
+                or 'object' in text or 'Any' in text:
+            return value
+        try:
+            parsed = ast.literal_eval(value)
+        except Exception:
+            return value
+        if isinstance(annotation, type):
+            # Exact type, not isinstance: bool is an int subclass, so `'True'`
+            # on an `int` field would otherwise arrive as True.
+            return parsed if type(parsed) is annotation else value
+        # A string annotation (`int | None`, a forward ref): accept the literal
+        # only when it clearly denoted something other than text.
+        return value if isinstance(parsed, str) else parsed
+
+    def _typed_specdict(self, *, legacy: 'bool | None' = None) -> dict:
+        """The spec as real Python values -- ints as ints, blocks as sub-dicts.
+
+        Built from ``self.var``, NOT by parsing the rendered signature. The
+        rendering is text, and reading it back gives text: that is why
+        ``sigdict()`` used to report ``'256'`` for a field holding ``256``,
+        with no coercion bug anywhere in sight.
+
+        Speclines stay strings, since a specline IS a string; every other leaf
+        is its declared type.
+        """
+        legacy = self._legacy_typing(legacy)
+        fields = self.VAR.__dataclass_fields__
+        keys = [f.name for f in fields.values()]
+        if not legacy:
+            keys = sorted(keys)
+
+        out = {}
+        for k in keys:
+            value = getattr(self.var, k)
+            raw = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else value
+            if isinstance(value, Datablock):
+                out[k] = value._typed_specdict(legacy=legacy)
+            elif self.is_specline(raw):
+                # A specline standing for a block renders as that block, the
+                # same as holding the block directly -- which is what keeps
+                # quote() -> eval() identity-preserving, since the round trip
+                # turns one into the other. Only a specline denoting something
+                # that is NOT a block stays text.
+                try:
+                    evaluated = dataparts.eval(raw)
+                except Exception:
+                    evaluated = None
+                out[k] = (evaluated._typed_specdict(legacy=legacy)
+                          if isinstance(evaluated, Datablock) else raw)
+            else:
+                out[k] = self._coerce_to_annotation(value, fields[k].type)
+        return out
+
+    def _legacy_norm(self) -> bool:
+        """Whether the pre-LEGACY_NORM rendering applies: root kwargs, str()'d spec.
+
+        Untouched by the typing change, and deliberately SEPARATE from
+        :meth:`_legacy_typing`. signature() and hash are relocatable -- free of
+        url -- and only this flag has ever decided otherwise. Tying the typing
+        opt-out to it would put a url into the identity of every block pinned
+        for typing, which is the opposite of preserving it.
+        """
+        return bool(getattr(self, 'LEGACY_SIGNATURE', False)
+                    or getattr(self, 'LEGACY_NORM', False))
+
+    def _legacy_typing(self, legacy: 'bool | None' = None) -> bool:
+        """Whether to render the pre-typing way: text leaves, nested blocks as strings.
+
+        Independent of :meth:`_legacy_norm`: this chooses the TYPING, and that
+        one chooses whether root kwargs are in the identity. A block pinned
+        here keeps exactly the rendering it had, relocatable or not.
+
+        An explicit *legacy* wins, and propagates to nested blocks, so a whole
+        subtree renders one way.
+        """
+        if legacy is not None:
+            return bool(legacy)
+        return bool(getattr(self, 'LEGACY_TYPING', False)
+                    or getattr(self, 'LEGACY_SIGNATURE', False)
+                    or getattr(self, 'LEGACY_NORM', False))
 
     @dataclass
     class VAR:
@@ -3338,7 +3492,8 @@ class Datablock:
                 self._revision = self._revision_
         return self._revision
 
-    def __expand_spec__(self, expansion='repr', *, legacy: 'bool | None' = None):
+    def __expand_spec__(self, expansion='repr', *, legacy: 'bool | None' = None,
+                        legacy_typing: 'bool | None' = None):
         """
             . legacy: override LEGACY_NORM or LEGACY_SIGNATURE for the 'subsignature' expansion.
                 None (default) = each block uses its own flag, i.e. the
@@ -3364,7 +3519,12 @@ class Datablock:
                     |datablock: datablock.quote()
                     |obj:       repr(obj)  
         """
-        legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
+        legacy = self._legacy_norm() if legacy is None else legacy
+        # The TYPING choice a nested child must inherit. Separate from *legacy*
+        # above, which is the norm flag: signature(legacy=...) selects typing,
+        # so passing the norm flag down there rendered children the new way
+        # inside a parent pinned to the old one.
+        legacy_typing = self._legacy_typing(legacy_typing)
         if legacy:
             keys = [field.name for field in self.VAR.__dataclass_fields__.values()]
         else:
@@ -3378,7 +3538,6 @@ class Datablock:
                 value = getattr(self.var, k)
                 _spec_[k] = repr(value)
         elif expansion in ('signature', 'subsignature'):
-            legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
             for k, v in spec.items():
                 raw_v = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else v
                 if not self.is_specline(raw_v) and hasattr(self, 'var') and hasattr(self.var, '__dict__'):
@@ -3393,13 +3552,15 @@ class Datablock:
                     try:
                         eval_v = dataparts.eval(raw_v)
                         if isinstance(eval_v, Datablock):
-                            _spec_[k] = eval_v.signature(legacy=legacy)
+                            _spec_[k] = eval_v.signature(
+                                legacy_typing=legacy_typing, legacy_signature=legacy)
                         else:
                             _spec_[k] = raw_v
                     except Exception:
                         _spec_[k] = raw_v
                 elif isinstance(value, Datablock):
-                    _spec_[k] = value.signature(legacy=legacy)
+                    _spec_[k] = value.signature(
+                        legacy_typing=legacy_typing, legacy_signature=legacy)
                 elif isinstance(value, str):
                     _spec_[k] = value
                 elif legacy:
@@ -3433,9 +3594,10 @@ class Datablock:
                         _spec_[k] = value.quote(pretty=False, deslash=0)
                     else:
                         _spec_[k] = value.cite(pretty=False, deslash=0)
-                elif isinstance(value, str):
-                    _spec_[k] = value
                 else:
+                    # The value itself, whatever its type, so the embedding
+                    # repr's it exactly once. Strings had their own arm doing
+                    # exactly this, which read as a special case and was not.
                     _spec_[k] = value
         else:
             raise ValueError(f"Unknown expansion: {repr(expansion)}")
@@ -3701,21 +3863,53 @@ class Datablock:
         self.log.detailed(f"cite: ------------> {cite=}")
         return cite
 
-    def signature(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = False):
-        """The base identity string that :attr:`type` -- and hence :attr:`hash` and :attr:`code` -- is built from."""
+    def signature(self, *, deslash: bool = False, legacy: bool | None = None,
+                  legacy_typing: bool | None = None,
+                  legacy_signature: bool | None = None, pretty: bool = False):
+        """The base identity string that :attr:`type` -- and hence :attr:`hash` and :attr:`code` -- is built from.
+
+        Two independent opt-outs, because they were two different things
+        sharing one name:
+
+        *legacy_typing* renders leaves as text and nested blocks as embedded
+        strings -- the pre-typing form. *legacy_signature* puts the root
+        kwargs (url) into the identity -- the pre-LEGACY_NORM form, and the
+        only thing that has ever made a signature non-relocatable. Pinning the
+        typing does not turn it on.
+
+        ``legacy=`` is the era switch and sets BOTH -- which is what it has
+        always meant, back when they were one thing. The two named arguments
+        override it individually.
+        """
+        if legacy_typing is None:
+            legacy_typing = legacy
+        if legacy_signature is None:
+            legacy_signature = legacy
+        legacy_typing = self._legacy_typing(legacy_typing)
+        norm = self._legacy_norm() if legacy_signature is None else bool(legacy_signature)
         if pretty:
             import pprint
-            return pprint.pformat(self.signaturedict(legacy=legacy), indent=2, width=120)
-        sig_spec = self.__expand_spec__('signature', legacy=legacy)
-        legacy = (getattr(self, 'LEGACY_SIGNATURE', False) or self.LEGACY_NORM) if legacy is None else legacy
-        kwargs_dict = {
-            **(self._rootkwargs_ if legacy else {}),
-            'spec': sig_spec,
-        }
-        sig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not legacy)
+            return pprint.pformat(
+                self.signaturedict(legacy_typing=legacy_typing, legacy_signature=norm,
+                                   deslash=deslash), indent=2, width=120)
+        if legacy_typing:
+            #CAUTION! This branch is what already-built blocks hashed with, and
+            # is the pre-change code verbatim. The NORM flag alone decides root
+            # kwargs and quoting, exactly as before -- so a relocatable block
+            # pinned for typing stays relocatable.
+            sig_spec = self.__expand_spec__('signature', legacy=norm, legacy_typing=True)
+            kwargs_dict = {**(self._rootkwargs_ if norm else {}), 'spec': sig_spec}
+            sig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not norm)
+        else:
+            # Rendered FROM the typed dict, so the text and the dict cannot
+            # disagree, and a leaf is quoted exactly when it is a string.
+            # Root kwargs only on explicit opt-in: signature and hash are
+            # relocatable, and nothing about typing changes that.
+            root = ''.join(f"{k}={v!r}, " for k, v in self._rootkwargs_.items()) if norm else ''
+            sig = f"({root}spec={self._typed_specdict(legacy=False)!r})"
         if deslash:
             sig = sig.replace('\\', '')
-        self.log.detailed(f"signature: ------------> {sig_spec=}")
+        self.log.detailed(f"signature: ------------> legacy={legacy}")
         self.log.detailed(f"signature: ------------>{sig=}")
         return sig
 
@@ -3848,6 +4042,26 @@ class Datablock:
     @staticmethod
     def _is_subsignaturestr(text: str) -> bool:
         return Datablock._is_signaturestr(text)
+
+    @classmethod
+    def _structure_from_signature_text(cls, value):
+        """Structure a signature value, recovering typed leaves where it can.
+
+        A non-legacy signature is a faithful ``repr`` of a typed dict, so
+        ``literal_eval`` reconstructs it exactly -- an ``int`` comes back an
+        ``int``, not the substring ``'256'``. This is the read-side
+        counterpart for anything holding a rendered signature rather than the
+        block, such as a journal row.
+
+        Falls back to `_structure_signatureval` when the text does not parse,
+        which is the legacy rendering and anything carrying a specline.
+        """
+        if not isinstance(value, str):
+            return value
+        try:
+            return ast.literal_eval(value.strip())
+        except Exception:
+            return cls._structure_signatureval(value)
 
     @classmethod
     def _structure_signatureval(cls, value):
@@ -4005,19 +4219,38 @@ class Datablock:
     def diffnorm(self, *args, **kwargs):
         return self.diffsignature(*args, **kwargs)
 
-    def signaturedict(self, *, legacy: 'bool | None' = None) -> dict:
-        """Return the signature parsed and structured into a nested dict."""
-        parsed = Datablock._parse_signature(self.signature(legacy=legacy))
-        return {k: self._structure_signatureval(v) for k, v in parsed.items()}
+    def signaturedict(self, *, legacy: 'bool | None' = None,
+                      legacy_typing: 'bool | None' = None,
+                      legacy_signature: 'bool | None' = None,
+                      deslash: bool = False) -> dict:
+        """The signature as a nested dict of correctly-typed values.
 
-    def sigdict(self, *, legacy: 'bool | None' = None) -> dict:
-        return self.signaturedict(legacy=legacy)
+        Built from ``var`` via `_typed_specdict`, so an ``int`` field comes
+        back an ``int``. Speclines stay strings.
 
-    def subsignaturedict(self, *, legacy: 'bool | None' = None) -> dict:
-        return self.signaturedict(legacy=legacy)
+        Under LEGACY_TYPING it is the old thing: the rendered signature parsed
+        back into text leaves. *deslash* applies to that rendering before it is
+        parsed -- stripping backslashes from the formatted output afterwards
+        would eat the escapes ``repr`` put inside the leaves.
+        """
+        if legacy_typing is None:
+            legacy_typing = legacy
+        if legacy_signature is None:
+            legacy_signature = legacy
+        if self._legacy_typing(legacy_typing):
+            parsed = Datablock._parse_signature(self.signature(
+                legacy_typing=True, legacy_signature=legacy_signature, deslash=deslash))
+            return {k: self._structure_from_signature_text(v) for k, v in parsed.items()}
+        return {'spec': self._typed_specdict(legacy=False)}
 
-    def subsigdict(self, *, legacy: 'bool | None' = None) -> dict:
-        return self.signaturedict(legacy=legacy)
+    def sigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signaturedict(legacy=legacy, deslash=deslash)
+
+    def subsignaturedict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signaturedict(legacy=legacy, deslash=deslash)
+
+    def subsigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signaturedict(legacy=legacy, deslash=deslash)
 
     def normdict(self, *args, **kwargs):
         return self.signaturedict(*args, **kwargs)
@@ -4029,28 +4262,34 @@ class Datablock:
     def subsig(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
         return self.signature(deslash=deslash, legacy=legacy, pretty=pretty)
 
-    def typedict(self, *, deslash: bool = False) -> dict:
+    def typedict(self, *, deslash: bool = False, legacy: 'bool | None' = None,
+                 legacy_typing: 'bool | None' = None,
+                 legacy_signature: 'bool | None' = None) -> dict:
         """Return the full type structured as a dictionary."""
         return {
-            'signature': self.signaturedict(),
+            'signature': self.signaturedict(
+                legacy=legacy, legacy_typing=legacy_typing,
+                legacy_signature=legacy_signature, deslash=deslash),
             'version': self.version,
             'paths': getattr(self, '_paths_', None),
             'topics': self.signature_topics(),
         }
 
-    def tpdict(self, *, deslash: bool = False) -> dict:
-        return self.typedict(deslash=deslash)
+    def tpdict(self, *, deslash: bool = False, legacy: 'bool | None' = None) -> dict:
+        return self.typedict(deslash=deslash, legacy=legacy)
 
-    def tp(self, *, deslash: bool = False, pretty: bool = True):
+    def tp(self, *, deslash: bool = False, legacy: 'bool | None' = None, pretty: bool = True):
         """Alias for :meth:`type` (defaults to pretty=True)."""
-        return self.type(deslash=deslash, pretty=pretty)
+        return self.type(deslash=deslash, legacy=legacy, pretty=pretty)
 
-    def type(self, *, deslash: bool = False, pretty: bool = False):
+    def type(self, *, deslash: bool = False, legacy: 'bool | None' = None, pretty: bool = False):
         """Return the full type representation (signature + paths + version + topics)."""
+        legacy = self._legacy_typing(legacy)
         if pretty:
             import pprint
-            return pprint.pformat(self.typedict(deslash=deslash), indent=2, width=120)
-        parts = [self.signature(deslash=deslash)]
+            return pprint.pformat(
+                self.typedict(deslash=deslash, legacy=legacy), indent=2, width=120)
+        parts = [self.signature(deslash=deslash, legacy=legacy)]
         if getattr(self, '_paths_', None) is not None:
             parts.append(f"_paths_={getattr(self, '_paths_', None)}")
         parts.append(f"version={self.version}")
@@ -4371,11 +4610,21 @@ class Datablock:
             return tuple(f"topic:{topic}" for topic in self.TOPICS)
         return ("topics:None",)
 
-    def type(self, *, deslash: bool = False, pretty: bool = False):
+    def type(self, *, deslash: bool = False, legacy: 'bool | None' = None,
+             legacy_typing: 'bool | None' = None,
+             legacy_signature: 'bool | None' = None, pretty: bool = False):
+        if legacy_typing is None:
+            legacy_typing = legacy
+        if legacy_signature is None:
+            legacy_signature = legacy
+        legacy_typing = self._legacy_typing(legacy_typing)
         if pretty:
             import pprint
-            return pprint.pformat(self.typedict(deslash=deslash), indent=2, width=120)
-        parts = [self.signature(deslash=deslash)]
+            return pprint.pformat(
+                self.typedict(deslash=deslash, legacy_typing=legacy_typing,
+                              legacy_signature=legacy_signature), indent=2, width=120)
+        parts = [self.signature(deslash=deslash, legacy_typing=legacy_typing,
+                                legacy_signature=legacy_signature)]
         if self.__dict__.get('__redirected_paths__') is not None:
             parts.append(f"_redirected_paths_={self.__dict__['__redirected_paths__']}")
         parts.append(f"version={self.version}")

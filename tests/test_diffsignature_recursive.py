@@ -73,22 +73,20 @@ class TestRecursiveDescent:
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED')
         diff = b.diffsubsig(a.subsignature())
-        assert diff == {'spec': {'mid': {'spec': {'leaf': {'spec': {
-            'label': ('CHANGED', 'leaf')}}}}}}
+        assert diff == {'spec': {'mid': {'leaf': {'label': ('CHANGED', 'leaf')}}}}
 
     def test_only_the_differing_leaf_appears(self, tmp_path):
         """Sparse: siblings that match must not be carried along."""
         diff = _tree(tmp_path, seed=7).diffsubsig(_tree(tmp_path).subsignature())
-        assert diff == {'spec': {'mid': {'spec': {'seed': (7, 42)}}}}
-        assert 'leaf' not in diff['spec']['mid']['spec']
+        assert diff == {'spec': {'mid': {'seed': (7, 42)}}}
+        assert 'leaf' not in diff['spec']['mid']
 
     def test_two_changes_at_different_depths(self, tmp_path):
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED', epochs=99)
         diff = b.diffsubsig(a.subsignature())
         assert diff['spec']['epochs'] == (99, 10)
-        assert diff['spec']['mid']['spec']['leaf']['spec']['label'] == (
-            'CHANGED', 'leaf')
+        assert diff['spec']['mid']['leaf']['label'] == ('CHANGED', 'leaf')
 
     def test_flat_mode_keeps_the_whole_subtree(self, tmp_path):
         a = _tree(tmp_path)
@@ -97,10 +95,14 @@ class TestRecursiveDescent:
         assert set(flat) == {'spec'}
         self_side, other_side = flat['spec']
         assert not isinstance(self_side, tuple), "flat mode descended anyway"
-        assert len(repr(self_side)) > 100, "the whole subtree should be one value"
+        assert 'leaf' in repr(self_side), "the whole subtree should be one value"
         # raw=True is the un-deserialised form: one long string, as rendered.
         raw_self = b.diffsubsig(a.subsignature(), recursive=False, raw=True)['spec'][0]
-        assert isinstance(raw_self, str) and len(raw_self) > 100
+        # One value covering the whole subtree, not a per-leaf descent. It is
+        # shorter than it used to be because the nested block is now an inline
+        # dict rather than an escaped string of an escaped string.
+        assert isinstance(raw_self, str)
+        assert 'leaf' in raw_self and 'seed' in raw_self
 
     def test_no_difference_is_empty(self, tmp_path):
         a = _tree(tmp_path)
@@ -122,7 +124,7 @@ class TestTupleValuesStayLeaves:
         a = _tree(tmp_path, ratio=(0.75, 1.5))
         b = _tree(tmp_path, ratio=(0.5, 2.0))
         diff = b.diffsubsig(a.subsignature())
-        leafdiff = diff['spec']['mid']['spec']['leaf']['spec']
+        leafdiff = diff['spec']['mid']['leaf']
         assert 'ratio' in leafdiff
         # Evaluated back into real tuples, not left as text.
         assert leafdiff['ratio'] == ((0.5, 2.0), (0.75, 1.5))
@@ -148,12 +150,22 @@ class TestTupleValuesStayLeaves:
 class TestDeslash:
 
     def test_deslash_strips_escapes_from_reported_values(self, tmp_path):
+        """Escapes arise where a nested block is embedded as a quoted STRING.
+
+        The non-legacy rendering nests a dict inline and so carries none; the
+        legacy one still does, which is where this guard now applies.
+        """
+        class LegacyTree(Top):
+            LEGACY_TYPING = True
+
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED')
-        raw = b.diffsubsig(a.subsignature(), recursive=False, raw=True)['spec'][0]
+        la = LegacyTree(url=str(tmp_path), spec=dict(mid=a.var.mid, epochs=10))
+        lb = LegacyTree(url=str(tmp_path), spec=dict(mid=b.var.mid, epochs=10))
+        raw = lb.diffsubsig(la.subsignature(), recursive=False, raw=True)['spec'][0]
         assert '\\' in raw, "expected the flat form to carry escapes"
-        clean = b.diffsubsig(a.subsignature(), recursive=False, raw=True,
-                           deslash=True)['spec'][0]
+        clean = lb.diffsubsig(la.subsignature(), recursive=False, raw=True,
+                              deslash=True)['spec'][0]
         assert '\\' not in clean
 
     def test_deslash_does_not_break_parsing(self, tmp_path):
@@ -176,7 +188,7 @@ class TestReport:
         b = _tree(tmp_path, label='CHANGED', epochs=99)
         text = b.diffsubsig(a.subsignature(), report=True)
         assert 'spec.epochs' in text
-        assert 'spec.mid.spec.leaf.spec.label' in text
+        assert 'spec.mid.leaf.label' in text
         assert text.count('self :') == 2
 
     def test_report_says_so_when_identical(self, tmp_path):
@@ -188,7 +200,7 @@ class TestReport:
         b = _tree(tmp_path, label='x' * 400)
         text = b.diffsubsig(a.subsignature(), report=True, maxlen=40)
         assert '(+' in text and 'chars)' in text
-        full = b.diffsubsig(a.subsignature())['spec']['mid']['spec']['leaf']['spec']['label'][0]
+        full = b.diffsubsig(a.subsignature())['spec']['mid']['leaf']['label'][0]
         assert full == 'x' * 400
 
     def test_maxlen_none_disables_truncation(self, tmp_path):

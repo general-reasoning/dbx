@@ -33,3 +33,47 @@ os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
 def pytest_unconfigure(config):
     shutil.rmtree(_TESTROOT, ignore_errors=True)
+
+
+# --- pinned tests ----------------------------------------------------------
+#
+# `@pytest.mark.pinned` marks a test that states an INVARIANT rather than the
+# shape the code happens to have. The suite holds both kinds, and they call for
+# opposite responses when they fail:
+#
+#   an ordinary test  -- may encode a decision that has since changed, so the
+#                        test is sometimes the thing to update
+#   a pinned test     -- states something that must remain true, so a failure
+#                        is a regression and the CODE is what changes
+#
+# Nothing enforces this; a marker cannot. What it does is make the distinction
+# visible at the moment it matters -- in the failure output -- rather than
+# leaving it to whoever is looking to guess which kind they are holding.
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "pinned: an invariant; a failure is a regression, so fix the code not the test",
+    )
+
+
+def pytest_runtest_makereport(item, call):
+    if call.when == 'call' and call.excinfo is not None and item.get_closest_marker('pinned'):
+        item.config.stash.setdefault(_PINNED_FAILURES, []).append(item.nodeid)
+
+
+_PINNED_FAILURES = __import__('pytest').StashKey[list]()
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    failed = config.stash.get(_PINNED_FAILURES, [])
+    if not failed:
+        return
+    terminalreporter.write_sep('=', 'PINNED TEST FAILURES', red=True, bold=True)
+    terminalreporter.write_line(
+        "These state invariants, not current behaviour. A failure here is a "
+        "regression:", red=True)
+    terminalreporter.write_line(
+        "fix the code -- do not edit the test to agree with it.", red=True)
+    for nodeid in failed:
+        terminalreporter.write_line(f"  {nodeid}")

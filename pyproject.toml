@@ -97,3 +97,15 @@ exclude = ["tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A marker that quietly does not apply is worse than no marker: a misspelled
+# `pinned` would leave the test looking guarded while the failure report said
+# nothing. Unregistered markers are a collection error, not a warning.
+addopts = "--strict-markers"
+markers = [
+    # A pinned test states an invariant the code must satisfy, not a shape the
+    # code currently has. When one fails, the CODE is wrong: fix it, do not
+    # edit the test to agree with the new behaviour. Removing or relaxing a
+    # pinned assertion needs a deliberate decision that the invariant no longer
+    # holds -- which is a design change, not a test fix.
+    "pinned: an invariant; a failure is a regression, so fix the code not the test",
+]

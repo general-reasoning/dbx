@@ -577,58 +577,90 @@ class TestDatablockJournalArgThreading:
         assert isinstance(j_inst, Datajournal)
         assert len(j_inst) >= 1
 
-    def test_journal_entry_bid(self, tmp_path, monkeypatch):
-        """DatajournalEntry.bid reconstructs a Bid object with signature/sig and type/tp accessors."""
+    def test_journal_entry_block(self, tmp_path, monkeypatch):
+        """entry.block is a Datablock-SHAPED view of the recorded row."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        root = str(tmp_path)
-        b = BuildableBlock(url=root)
+        b = BuildableBlock(url=str(tmp_path))
         b.build()
 
-        assert not hasattr(b, 'bid')
+        assert not hasattr(b, 'block')          # a live block is not a view
+        assert not hasattr(b, 'bid')            # Bid is gone
 
         entry = b.journal(iloc=0)
         assert isinstance(entry, DatajournalEntry)
-        assert hasattr(entry, 'bid')
+        block = entry.block
 
-        bid = entry.bid
-        assert bid.hash == b.hash
-        assert bid.code == b.code
+        assert block.hash == b.hash
+        assert block.code == b.code
+        assert block.anchor == b.anchor
 
-        # signature & sig as properties and callable methods
-        assert str(bid.signature) == b.signature()
-        assert bid.signature() == b.signature()
-        assert bid.signature(pretty=True) == b.signature(pretty=True)
-        assert bid.sig() == b.sig()
+        # The SHAPE is mirrored, not merely the names: these are calls on both.
+        assert block.signature() == b.signature()
+        assert block.sig() == b.sig()
+        assert block.type() == b.type()
+        assert block.tp() == b.tp()
+        assert block.paths() == b.paths()
+        assert block.topics() == b.topics()
 
-        # type & tp as properties and callable methods
-        assert str(bid.type) == b.type()
-        assert bid.type() == b.type()
-        assert bid.tp() == b.tp()
+        # The entry is NOT mirrored: the Datablock-shaped API lives on the
+        # Block. Note hasattr() cannot tell you that -- a pandas Series
+        # resolves an unknown attribute to a COLUMN of the same name, so
+        # `entry.paths` still answers, with the raw recorded string.
+        for name in ('paths', 'topics', 'signature', 'type', 'ls', 'anchor'):
+            assert name not in type(entry).__dict__, f"{name!r} belongs on Block"
+        assert isinstance(entry.get('topics'), str)        # the column, unparsed
+        assert block.topics() == ['output']                # parsed, Datablock-shaped
 
-        # dict & fields helpers
-        assert isinstance(bid.fields(), dict)
-        assert 'signature' in bid.fields()
-        assert 'type' in bid.fields()
-        assert 'subhash' not in bid.fields()
-        assert 'subsignature' not in bid.fields()
-        assert isinstance(bid.to_dict(), dict)
+        assert isinstance(block.to_dict(), dict)
+        assert 'signature' in block.fields() and 'type' in block.fields()
+        assert 'subhash' not in block.fields() and 'subsignature' not in block.fields()
+
+    def test_block_refuses_to_re_render(self, tmp_path, monkeypatch):
+        """The row holds one rendering; legacy* choose how one is produced."""
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        b = BuildableBlock(url=str(tmp_path))
+        b.build()
+        block = b.journal(iloc=0).block
+        for kw in ({'legacy': True}, {'legacy_typing': True}, {'legacy_signature': True}):
+            with pytest.raises(TypeError, match='already rendered'):
+                block.signature(**kw)
+
+    def test_block_carries_no_storage_or_build_api(self, tmp_path, monkeypatch):
+        """It mimics what the ROW determines -- not the entry, not a build.
+
+        `read` is the sharp one: Datablock.read reads a TOPIC and
+        DatajournalEntry.read reads a journal COLUMN, so the same name would
+        mean two things.
+        """
+        monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
+        b = BuildableBlock(url=str(tmp_path))
+        b.build()
+        block = b.journal(iloc=0).block
+        # `read` is the sharp one and stays off Block; build/valid are the
+        # entry's business too. `ls`/`list`/`size` DO belong here -- they mimic
+        # Datablock and read only what the row recorded.
+        for name in ('read', 'build', 'valid', 'path'):
+            assert not hasattr(block, name), f"Block should not carry {name!r}"
+        for name in ('ls', 'list', 'size'):
+            assert hasattr(block, name), f"Block should carry {name!r}"
 
     def test_journal_entry_field_order_and_cleanup(self, tmp_path, monkeypatch):
-        """DatajournalEntry fields ordering and removal of subhash, subsignature, entry_code."""
+        """DatajournalEntry member ordering, and removal of the renamed fields."""
+        members = list(DatajournalEntry.__dict__)
         props = [k for k, v in DatajournalEntry.__dict__.items() if isinstance(v, property)]
-        
+
         # Verify removals
-        assert 'subhash' not in props
-        assert 'subsignature' not in props
-        assert 'entry_code' not in props
-        
-        # Verify ordering requirements
-        # 1. id after uuid
-        assert props.index('id') == props.index('uuid') + 1
-        # 2. code after anchorkeypath
-        assert props.index('code') == props.index('anchorkeypath') + 1
-        # 3. type after signature
-        assert props.index('type') > props.index('signature')
+        assert 'subhash' not in members
+        assert 'subsignature' not in members
+        assert 'entry_code' not in members
+        assert 'bid' not in members and 'Bid' not in members
+        assert 'message' not in members          # replaced by note
+
+        # The Datablock-shaped members moved to Block; the entry keeps only
+        # what manipulates the entry, plus `.block` itself.
+        assert 'block' in members
+        for name in ('anchor', 'hash', 'paths', 'topics', 'signature', 'type', 'ls'):
+            assert name not in members, f"{name!r} belongs on Block now"
 
 
 

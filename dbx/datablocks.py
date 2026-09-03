@@ -434,9 +434,9 @@ class CallableSig(CallableStr):
 
 
 class CallableType(CallableStr):
-    def __new__(cls, val='', bid=None):
+    def __new__(cls, val='', block=None):
         instance = super().__new__(cls, val)
-        instance._bid = bid
+        instance._block = block
         return instance
 
     def __call__(self, *, deslash: bool = False, pretty: bool = False, **kwargs):
@@ -447,8 +447,8 @@ class CallableType(CallableStr):
                 parts = t_str.split(os.sep) if os.sep in t_str else t_str.split('/')
                 topics = []
                 paths = None
-                version = self._bid.version if self._bid is not None else None
-                sig_part = str(self._bid.signature) if self._bid is not None else ''
+                version = self._block.version if self._block is not None else None
+                sig_part = str(self._block.signature()) if self._block is not None else ''
                 for p in parts:
                     if p.startswith('topic:'):
                         topics.append(p)
@@ -476,9 +476,9 @@ class CallableType(CallableStr):
 
 
 class CallableTp(CallableStr):
-    def __new__(cls, val='', bid=None):
+    def __new__(cls, val='', block=None):
         instance = super().__new__(cls, val)
-        instance._bid = bid
+        instance._block = block
         return instance
 
     def __call__(self, *, deslash: bool = False, pretty: bool = True, **kwargs):
@@ -489,8 +489,8 @@ class CallableTp(CallableStr):
                 parts = t_str.split(os.sep) if os.sep in t_str else t_str.split('/')
                 topics = []
                 paths = None
-                version = self._bid.version if self._bid is not None else None
-                sig_part = str(self._bid.signature) if self._bid is not None else ''
+                version = self._block.version if self._block is not None else None
+                sig_part = str(self._block.signature()) if self._block is not None else ''
                 for p in parts:
                     if p.startswith('topic:'):
                         topics.append(p)
@@ -517,87 +517,85 @@ class CallableTp(CallableStr):
         return t
 
 
-@dataclass
-class Bid:
-    """Reconstructed block identifier from a journal entry."""
-    hash: str = None
-    code: str = None
-    version: str = None
-    revision: str = None
-    dfn: dict = None
-    kwargs: dict = None
-    spec: dict = None
-    quote: str = None
-    cite: str = None
-    repr: str = None
-    signature: str = None
-    type: str = None
-    anchor: str = None
-    tag: str = None
-    key: str = None
-    keyby: str = None
+class Block:
+    """A `Datablock`-shaped view of one journal entry.
 
-    def __post_init__(self):
-        sig_str = self.signature or ''
-        self.signature = CallableSignature(sig_str)
-        self._sig = CallableSig(sig_str)
-        type_str = self.type or ''
-        self.type = CallableType(type_str, bid=self)
-        self._tp = CallableTp(type_str, bid=self)
+    Everything here is READ OFF THE ROW -- the block as it was when the entry
+    was written -- and nothing is recomputed. That is the point: a live block
+    recomputes its identity from today's rendering, which is how
+    ``inst().paths()`` comes back naming a directory that was never written.
+    This answers with what was actually built.
 
-    @property
-    def sig(self):
-        return self._sig
+    It mimics the parts of `Datablock` the row DETERMINES, and stops there.
+    Not the entry: `ls`, `list`, `size` and `read` are the entry's, they go to
+    storage, and `Datablock.read` reads a TOPIC while `DatajournalEntry.read`
+    reads a journal COLUMN -- one name with two meanings is worse than no
+    name. Nor does it build or validate.
 
-    @property
-    def tp(self):
-        return self._tp
+    The API shape is mirrored, not merely the names: what is a property on
+    `Datablock` is a property here, what is a method there is a method here.
+    So ``paths()``, ``signature()``, ``type()`` are calls and ``hash``,
+    ``anchor``, ``key`` are not, and code written against a live block reads
+    one of these unchanged. Accessors with no `Datablock` counterpart
+    (``gitrepo``, ``url``, ``id``, ``keyby``) are here too, because they
+    describe the block rather than the journal.
+    """
 
-    def signaturedict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        """As `Datablock.signaturedict`, over the signature recorded on this row.
+    # 1. Declared API ---------------------------------------------------
 
-        The recorded signature is one rendering already chosen, so *legacy*
-        has nothing to select; it raises rather than being ignored.
+    def __init__(self, entry: 'DatajournalEntry'):
+        self._entry = entry
+
+    def __repr__(self):
+        return f"Block({self.anchor}/{self.hash})"
+
+    def signature(self, *, deslash: bool = False, **kwargs):
+        """The recorded signature TEXT.
+
+        A method, as on `Datablock` -- but with nothing left to render: the row
+        holds one rendering, chosen when it was written. ``legacy=`` and its
+        kin therefore raise rather than being ignored.
         """
-        if legacy is not None:
-            raise TypeError(
-                f"{type(self).__name__}.signaturedict: legacy= chooses how a "
-                f"signature is rendered, but this row records one already "
-                f"rendered. Call signaturedict(legacy=...) on the block instead."
-            )
-        text = str(self.signature or '')
+        self._reject_rendering_choice('signature', kwargs)
+        val = self._signature_text(self._entry)
+        return val.replace('\\', '') if (deslash and val) else val
+
+    def sig(self, *, deslash: bool = False, pretty: bool = True, **kwargs):
+        val = self._signature_text(self._entry)
+        return CallableSig(val)(deslash=deslash, pretty=pretty) if val else None
+
+    def type(self, *, deslash: bool = False, **kwargs):
+        """The recorded type TEXT."""
+        self._reject_rendering_choice('type', kwargs)
+        val = self._type_text(self._entry)
+        return val.replace('\\', '') if (deslash and val) else val
+
+    def tp(self, *, deslash: bool = False, pretty: bool = True, **kwargs):
+        val = self._type_text(self._entry)
+        return CallableTp(val, block=self)(deslash=deslash, pretty=pretty) if val else None
+
+    def signaturedict(self, *, deslash: bool = False, **kwargs) -> dict:
+        """As `Datablock.signaturedict`, over the signature this row records."""
+        self._reject_rendering_choice('signaturedict', kwargs)
+        text = self._signature_text(self._entry) or ''
         if deslash:
             text = text.replace('\\', '')
         parsed = Datablock._parse_signature(text)
         return {k: Datablock._structure_from_signature_text(v) for k, v in parsed.items()}
 
-    def sigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.signaturedict(legacy=legacy, deslash=deslash)
+    def sigdict(self, *, deslash: bool = False, **kwargs) -> dict:
+        return self.signaturedict(deslash=deslash, **kwargs)
 
-    def subsignaturedict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.signaturedict(legacy=legacy, deslash=deslash)
-
-    def subsigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.signaturedict(legacy=legacy, deslash=deslash)
-
-    def typedict(self, *, deslash: bool = False) -> dict:
-        t_str = str(self.type or '')
-        parts = t_str.split(os.sep) if os.sep in t_str else t_str.split('/')
-        topics = []
-        paths = None
-        version = self.version
-        for p in parts:
-            if p.startswith('topic:'):
-                topics.append(p)
-            elif p.startswith('_paths_='):
-                paths = p[len('_paths_='):]
-            elif p.startswith('version='):
-                ver_str = p[len('version='):]
-                try:
-                    version = int(ver_str)
-                except (ValueError, TypeError):
-                    version = None if ver_str == 'None' else ver_str
-
+    def typedict(self, *, deslash: bool = False, **kwargs) -> dict:
+        self._reject_rendering_choice('typedict', kwargs)
+        version, paths, topics = self.version, None, []
+        for part in self._type_parts(self._type_text(self._entry) or ''):
+            if part.startswith('topic:'):
+                topics.append(part)
+            elif part.startswith('_paths_='):
+                paths = part[len('_paths_='):]
+            elif part.startswith('version='):
+                version = self._as_version(part[len('version='):])
         return {
             'paths': paths,
             'signature': self.signaturedict(deslash=deslash),
@@ -605,36 +603,360 @@ class Bid:
             'version': version,
         }
 
-    def tpdict(self, *, deslash: bool = False) -> dict:
-        return self.typedict(deslash=deslash)
+    def tpdict(self, *, deslash: bool = False, **kwargs) -> dict:
+        return self.typedict(deslash=deslash, **kwargs)
+
+    def paths(self) -> dict:
+        """Recorded ``{topic: path}`` mapping.
+
+        A method, as `Datablock.paths` is -- and the reason this class exists:
+        the paths the build actually wrote, not paths derived from an identity
+        recomputed under today's rendering.
+        """
+        return self._dict_column(self._entry, 'paths')
+
+    def topics(self) -> list:
+        """The recorded topic names, as `Datablock.topics` answers.
+
+        Names, not the ``{name: filename}`` mapping the column holds: this
+        mirrors the live API, and the mapping is the entry's own business --
+        read it off the row when you want it.
+        """
+        return list(self._dict_column(self._entry, 'topics'))
+
+    def cite(self, **kwargs):
+        """Path to this entry's ``cite.txt``, or None."""
+        return self._entry.get('cite')
+
+    def note(self):
+        """Path to or content of this entry's note, or None."""
+        return DatajournalEntry.column(self._entry, 'note')
+
+    def is_topicgroup(self, *topicpath):
+        """True when the recorded entry for *topicpath* is a group of topics."""
+        return isinstance(self._walk(self.TOPICS,
+                                     self._normtopic(topicpath)), dict)
+
+    def ls(self, *topicpath, detail=False):
+        """List what is at the recorded path for a topic.
+
+        As `Datablock.ls`, but resolving the path from what the row RECORDED
+        rather than from an identity recomputed today. A group concatenates
+        its members' listings.
+        """
+        topicpath = self._normtopic(topicpath)
+        p = self._topic_path(*topicpath)
+        fs = self._fs(self._entry)
+        if isinstance(p, dict):
+            return [e for leaf in self._leaf_paths(p)
+                    for e in ls_path(fs, leaf, False, detail=detail)]
+        return ls_path(fs, p, self._is_dir_topic(*topicpath), detail=detail)
+
+    def list(self, *topicpath):
+        """Detailed, recursive listing of every file under the topic path.
+
+        As `Datablock.list`, over the recorded paths.
+        """
+        topicpath = self._normtopic(topicpath)
+        p = self._topic_path(*topicpath)
+        fs = self._fs(self._entry)
+        if isinstance(p, dict):
+            return [e for leaf in self._leaf_paths(p)
+                    for e in list_path(fs, leaf, False)]
+        return list_path(fs, p, self._is_dir_topic(*topicpath))
+
+    def size(self, *topicpath):
+        """Total bytes under the topic path. As `Datablock.size`."""
+        return size(self.list(*self._normtopic(topicpath)))
+
+    def to_dict(self, *, deslash: bool = False) -> dict:
+        d = {name: getattr(self, name) for name in (
+            'hash', 'code', 'version', 'revision', 'gitrepo', 'url',
+            'anchor', 'tag', 'key', 'keyby', 'uuid', 'id')}
+        d.update({name: getattr(self, name)() for name in
+                  ('signature', 'type', 'cite', 'note')})
+        d['paths'] = self.paths()
+        d['topics'] = self.topics()
+        if deslash:
+            d = {k: v.replace('\\', '') if isinstance(v, str) else v for k, v in d.items()}
+        return d
+
+    def fields(self) -> dict:
+        return self.to_dict()
 
     def deslash(self, attr):
         a = getattr(self, attr)
         if callable(a):
             a = a()
-        if isinstance(a, str):
-            return a.replace('\\', '')
-        return a
+        return a.replace('\\', '') if isinstance(a, str) else a
 
-    def fields(self):
-        return {f.name: f.type for f in fields(self)}
+    # 2. Accessors ------------------------------------------------------
 
-    def to_dict(self, *, deslash: bool = False):
-        d = {}
-        for f in fields(self):
-            val = getattr(self, f.name)
-            if isinstance(val, CallableStr):
-                val = str(val)
-            d[f.name] = val
-        if deslash:
-            for k, v in d.items():
-                if isinstance(v, str):
-                    d[k] = v.replace('\\', '')
-        return d
+    @property
+    def TOPICS(self):
+        """The recorded ``{topic: filename_or_DIRTOPIC}`` mapping.
+
+        Named for `Datablock.TOPICS`, which is the same thing declared rather
+        than recorded -- so `topics()` answers with names on both, and this
+        carries what each name maps to.
+        """
+        return self._dict_column(self._entry, 'topics')
+
+    @property
+    def anchor(self):
+        return self._entry.get('anchor')
+
+    @property
+    def hash(self):
+        return self._entry.get('hash')
+
+    @property
+    def code(self):
+        return self._entry.get('code') or self._entry.get('subhash')
+
+    @property
+    def version(self):
+        return self._entry.get('version')
+
+    @property
+    def uuid(self):
+        """The uuid of the live instance that wrote this entry, or None."""
+        return self._entry.get('uuid')
+
+    @property
+    def id(self):
+        """This entry's own row id, or None."""
+        return self._entry.get('id') or self._entry.get('entry_code')
+
+    @property
+    def tag(self):
+        return self._entry.get('tag')
+
+    @property
+    def keyby(self):
+        return self._entry.get('keyby', 'tag_version_shorthash')
+
+    @property
+    def revision(self):
+        return self._entry.get('revision')
+
+    @property
+    def gitrepo(self):
+        """The repo(s) the block was built from.
+
+        No live counterpart: a block knows which revision produced it only for
+        as long as the journal remembers.
+        """
+        return self._entry.get('gitrepo')
+
+    @property
+    def url(self):
+        return self._entry.get('url')
+
+    @property
+    def root(self):
+        """Protocol-free root derived from ``url`` via ``fsspec.url_to_fs``."""
+        url = self._entry.get('url')
+        if url is None:
+            return self._entry.get('root')  # legacy fallback
+        _, root = fsspec.url_to_fs(url, **self._entry.storage_options)
+        return root
+
+    @property
+    def key(self):
+        """The key, recorded if the row has one and reconstructed if not."""
+        recorded = DatajournalEntry.column(self._entry, 'key')
+        if recorded is not None:
+            return recorded
+        return self._key_from(self.keyby, self.hash, self.tag, self.version,
+                              signature=lambda: self.signature())
+
+    @property
+    def anchorkey(self):
+        key = self.key
+        return os.path.join(self.anchor, key) if key else self.anchor
+
+    @property
+    def anchorkeypath(self):
+        recorded = DatajournalEntry.column(self._entry, 'anchorkeypath')
+        if recorded is not None:
+            return recorded
+        url = self._entry.get('url')
+        if url is None:
+            root = self._entry.get('root')  # legacy: only 'root' available
+            return os.path.join(root, self.anchorkey) if root else self.anchorkey
+        fs, root = fsspec.url_to_fs(url, **self._entry.storage_options)
+        return fs_full_path(fs, os.path.join(root, self.anchorkey))
+
+    @functools.cached_property
+    def redirection(self):
+        """Where this entry sends a failed read: an ``id``, a filter, or None.
+
+        Unlike ``quote``/``signature``/``note``, whose columns hold the PATH of
+        a file carrying the value, this column holds the redirection itself --
+        a dict recorded as ``str(dict)``, the way ``paths`` and ``topics`` are.
+        There is no file to go missing, so it resolves as long as the journal
+        does. None when the row records none, and for every row in a journal
+        written before the column existed.
+        """
+        raw = self._entry.get('redirection')
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            return None
+        if isinstance(raw, dict):
+            return raw
+        raw = str(raw)
+        if not raw:
+            return None
+        return ast.literal_eval(raw) if raw.startswith('{') else raw
+
+    # 3. Helpers --------------------------------------------------------
+    # Static, and scoped here rather than left as private methods on the
+    # entry: they belong to this class, and a pandas Series shares its
+    # attribute namespace with every column name in the journal.
+
+    @staticmethod
+    def _fs(entry):
+        url = entry.get('url') or entry.get('root')  # legacy fallback
+        fs, _ = fsspec.url_to_fs(url, **entry.storage_options)
+        return fs
+
+    @staticmethod
+    def _walk(mapping, topicpath):
+        """Descend a recorded mapping one segment per level; None if absent."""
+        node = mapping
+        for name in topicpath:
+            if not isinstance(node, dict) or name not in node:
+                return None
+            node = node[name]
+        return node
+
+    @staticmethod
+    def _normtopic(topicpath):
+        if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
+            return tuple(topicpath[0])
+        return tuple(topicpath)
+
+    @staticmethod
+    def _leaf_paths(node):
+        """Every recorded path at or below *node*, flattened."""
+        if isinstance(node, dict):
+            return [p for child in node.values() for p in Block._leaf_paths(child)]
+        return [node]
+
+    def _topic_path(self, *topicpath):
+        topicpath = self._normtopic(topicpath)
+        paths = self.paths()
+        node = self._walk(paths, topicpath)
+        if node is None and self._walk(self.TOPICS, topicpath) is None:
+            raise KeyError(
+                f"topic {'/'.join(topicpath)!r} not recorded in this journal entry's "
+                f"paths; available topics: {sorted(paths)}"
+            )
+        return node
+
+    def _is_dir_topic(self, *topicpath):
+        """A directory topic: the recorded TOPICS filename is :data:`DIRTOPIC`."""
+        return self._walk(self.TOPICS,
+                          self._normtopic(topicpath)) is DIRTOPIC
+
+    def _is_syntopic(self, *topicpath):
+        """A :data:`SYNTOPIC` topic -- recorded as synthetic, with no location."""
+        node = self._walk(self.TOPICS, self._normtopic(topicpath))
+        return isinstance(node, tuple) and len(node) == 0
+
+    @staticmethod
+    def _signature_text(entry):
+        """The signature TEXT, read through the column when it holds a path.
+
+        `Datablock.signature` answers with the signature itself, so this does
+        too. The column may hold the text or the path of a file carrying it,
+        depending on when the row was written.
+        """
+        for name in ('signature', 'subsignature', 'norm'):
+            val = entry.read(name, safe=True)
+            if val:
+                return val
+        raw = DatajournalEntry.column(entry, 'signature')
+        return str(raw) if raw is not None else None
+
+    @staticmethod
+    def _type_text(entry):
+        """The type TEXT, read through the column when it holds a path."""
+        val = entry.read('type', safe=True)
+        if val:
+            return val
+        raw = DatajournalEntry.column(entry, 'type')
+        return str(raw) if raw is not None else None
+
+    @staticmethod
+    def _dict_column(entry, field):
+        """A journal column recorded as ``str(dict)``, back as a dict."""
+        raw = entry.get(field)
+        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+            return {}
+        if isinstance(raw, dict):
+            return raw
+        return ast.literal_eval(raw)
+
+    @staticmethod
+    def _type_parts(text):
+        return text.split(os.sep) if os.sep in text else text.split('/')
+
+    @staticmethod
+    def _as_version(text):
+        try:
+            return int(text)
+        except (ValueError, TypeError):
+            return None if text == 'None' else text
+
+    @staticmethod
+    def _key_from(keyby, hash, tag, version, signature=None):
+        """Reconstruct a key from recorded fields, mirroring `Datablock.key`.
+
+        *signature* is deferred: keying by it is rare, and resolving it may
+        read a file the column only names.
+        """
+        if keyby is None:
+            return None
+        if keyby == 'hash':
+            return hash
+        if keyby == 'signature':
+            return signature() if signature is not None else None
+        if keyby == 'tag':
+            return tag
+        if keyby in ('taghash', 'tag_hash'):
+            return hash if tag is None else f"{tag}/{hash[:8]}"
+        if keyby == 'version_hash':
+            return f"version={version}/{hash[:8]}" if version is not None else hash
+        if keyby in ('tag_version_hash', 'tag_version_shorthash'):
+            parts = []
+            if tag is not None:
+                parts.append(tag)
+            if version is not None:
+                parts.append(f"version={version}")
+            parts.append(hash[:8] if (keyby == 'tag_version_shorthash' or parts) else hash)
+            return '/'.join(parts)
+        return hash  # fallback
+
+    @staticmethod
+    def _reject_rendering_choice(what, kwargs):
+        """Refuse ``legacy*=`` on a rendering that was already produced.
+
+        They choose how a signature is PRODUCED, and this one was produced when
+        the entry was written. Accepting and ignoring them would answer a
+        question about one rendering with the text of another.
+        """
+        offending = sorted(k for k in kwargs
+                           if k.startswith('legacy') and kwargs[k] is not None)
+        if offending:
+            raise TypeError(
+                f"Block.{what}: {offending} choose how a signature is rendered, "
+                f"but this row records one already rendered. Ask the block "
+                f"itself ({what}(legacy_typing=...)) for another rendering."
+            )
 
 
 class DatajournalEntry(pd.Series):
-    Bid = Bid
     """A single row from a Datablock journal, with convenience accessors.
 
     Inherits from :class:`pandas.Series` so all standard pandas
@@ -655,320 +977,17 @@ class DatajournalEntry(pd.Series):
         self.logger = logger
 
     def __tag__(self):
-        return f"DatajournalEntry:{self.anchor}/{self.hash}"
+        return f"DatajournalEntry:{self.get('anchor')}/{self.get('hash')}"
 
-    @property
-    def anchor(self):
-        return self.get('anchor')
-
-    @property
-    def hash(self):
-        return self.get('hash')
-
-    @property
-    def url(self):
-        return self.get('url')
-
-    @property
-    def revision(self):
-        return self.get('revision')
-
-    @property
-    def gitrepo(self):
-        return self.get('gitrepo')
-
-    @property
-    def version(self):
-        return self.get('version')
-
-    @property
-    def cite(self):
-        """Path to this entry's ``cite.txt``, or None."""
-        return self.get('cite')
-
-    def _renamed_column(self, name, legacy):
-        """Value of column *name*, falling back to the pre-rename *legacy* column."""
-        def absent(v):
-            return v is None or (isinstance(v, float) and pd.isna(v))
-        value = self.get(name)
-        if absent(value):
-            value = self.get(legacy)
-        return None if absent(value) else value
-
-    @property
-    def signature(self):
-        """Path or text of this entry's signature."""
-        val = self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm')
-        return CallableSignature(val) if val is not None else None
-
-    @property
-    def sig(self):
-        val = self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm')
-        return CallableSig(val) if val is not None else None
-
-    @property
-    def type(self):
-        """Path or text of this entry's type."""
-        val = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
-        return CallableType(val, bid=self) if val is not None else None
-
-    @property
-    def tp(self):
-        val = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
-        return CallableTp(val, bid=self) if val is not None else None
-
-    def signaturedict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.bid.signaturedict(legacy=legacy, deslash=deslash)
-
-    def sigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.signaturedict(legacy=legacy, deslash=deslash)
-
-    def typedict(self, *, deslash: bool = False) -> dict:
-        return self.bid.typedict(deslash=deslash)
-
-    def tpdict(self, *, deslash: bool = False) -> dict:
-        return self.typedict(deslash=deslash)
-
-    @property
-    def uuid(self):
-        """The uuid of the live instance that wrote this entry, or None."""
-        return self.get('uuid')
-
-    @property
-    def id(self):
-        """This entry's own row id, or None."""
-        return self.get('id') or self.get('entry_code')
-
-    @property
-    def redirection(self):
-        """Where this entry sends a failed read: an ``id``, a filter, or None.
-
-        Unlike ``quote``/``subsignature``/``message``, whose columns hold the PATH of a
-        file that carries the value, this column holds the redirection itself --
-        a dict recorded as ``str(dict)``, the way ``paths`` and ``topics`` are.
-        There is no file to go missing, so a redirection resolves as long as the
-        journal does.
-
-        None for an entry that records no redirection, and for every entry in a
-        journal written before the column existed.
-        """
-        raw = self.get('redirection')
-        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-            return None
-        if isinstance(raw, dict):
-            return raw
-        raw = str(raw)
-        if not raw:
-            return None
-        return ast.literal_eval(raw) if raw.startswith('{') else raw
-
-    @property
-    def note(self):
-        """Path to or content of this entry's note, or None."""
-        return self._renamed_column('note', 'message')
-
-    @property
-    def message(self):
-        """Legacy alias for :attr:`note`."""
-        return self.note
-
-    @property
-    def keyby(self):
-        return self.get('keyby', 'tag_version_shorthash')
-
-    @property
-    def tag(self):
-        return self.get('tag')
-
-    @property
-    def key(self):
-        """Reconstruct the key from journal fields, mirroring Datablock.key."""
-        recorded_key = self.get('key')
-        if recorded_key is not None and not (isinstance(recorded_key, float) and pd.isna(recorded_key)):
-            return recorded_key
-            
-        keyby = self.keyby
-        if keyby is None:
-            key = None
-        elif keyby == 'hash':
-            key = self.hash
-        elif keyby == 'superhash':
-            key = self.superhash
-        elif keyby == 'signature':
-            key = self.signature()
-        elif keyby == 'tag':
-            key = self.tag
-        elif keyby in ('taghash', 'tag_hash'):
-            if self.tag is None:
-                key = self.hash
-            else:
-                key = f"{self.tag}/{self.hash[:8]}"
-        elif keyby == 'version_hash':
-            if self.version is not None:
-                key = f"version={self.version}/{self.hash[:8]}"
-            else:
-                key = self.hash
-        elif keyby in ('tag_version_hash', 'tag_version_shorthash'):
-            parts = []
-            if self.tag is not None:
-                parts.append(self.tag)
-            if self.version is not None:
-                parts.append(f"version={self.version}")
-            if keyby == 'tag_version_shorthash' or parts:
-                parts.append(self.hash[:8])
-            else:
-                parts.append(self.hash)
-            key = '/'.join(parts)
-        else:
-            key = self.hash  # fallback
-        return key
-
-    @property
-    def anchorkey(self):
-        key = self.key
-        return os.path.join(self.anchor, key) if key else self.anchor
-
-    @property
-    def root(self):
-        """Protocol-free root derived from ``url`` via ``fsspec.url_to_fs``."""
-        url = self.get('url')
-        if url is None:
-            return self.get('root')  # legacy fallback
-        _, root = fsspec.url_to_fs(url, **self.storage_options)
-        return root
-
-    @property
-    def anchorkeypath(self):
-        recorded_path = self.get('anchorkeypath')
-        if recorded_path is not None and not (isinstance(recorded_path, float) and pd.isna(recorded_path)):
-            return recorded_path
-            
-        url = self.get('url')
-        if url is None:
-            # Legacy fallback when only 'root' is available
-            root = self.get('root')
-            return os.path.join(root, self.anchorkey) if root else self.anchorkey
-        fs, root = fsspec.url_to_fs(url, **self.storage_options)
-        return fs_full_path(fs, os.path.join(root, self.anchorkey))
-
-    @property
-    def code(self):
-        return self.get('code') or self.get('subhash')
-
-    def _parse_dict_field(self, field):
-        """Parse a journal column recorded as ``str(dict)`` back into a dict."""
-        raw = self.get(field)
-        if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-            return {}
-        if isinstance(raw, dict):
-            return raw
-        return ast.literal_eval(raw)
-
-    @property
-    def paths(self):
-        """Recorded ``{topic: path}`` mapping (parsed from the ``paths`` column)."""
-        return self._parse_dict_field('paths')
-
-    @property
-    def topics(self):
-        """Recorded ``{topic: filename_or_DIR}`` mapping (parsed from ``topics``).
-
-        A :data:`DIRTOPIC` (``None``) value marks a directory topic (list-TOPICS, or
-        dict-TOPICS with a :data:`DIRTOPIC` filename).
-        """
-        return self._parse_dict_field('topics')
-
-    def _fs(self):
-        url = self.get('url')
-        if url is None:
-            url = self.get('root')  # legacy fallback
-        fs, _ = fsspec.url_to_fs(url, **self.storage_options)
-        return fs
-
-    @staticmethod
-    def _walk(mapping, topicpath):
-        """Descend a recorded mapping one segment per level; None if absent."""
-        node = mapping
-        for name in topicpath:
-            if not isinstance(node, dict) or name not in node:
-                return None
-            node = node[name]
-        return node
-
-    @staticmethod
-    def _normtopic(topicpath):
-        if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
-            return tuple(topicpath[0])
-        return tuple(topicpath)
-
-    def _leaf_paths(self, node):
-        """Every recorded path at or below *node*, flattened."""
-        if isinstance(node, dict):
-            return [p for child in node.values() for p in self._leaf_paths(child)]
-        return [node]
-
-    def _topic_path(self, *topicpath):
-        topicpath = self._normtopic(topicpath)
-        paths = self.paths
-        node = self._walk(paths, topicpath)
-        if node is None and self._walk(self.topics, topicpath) is None:
-            raise KeyError(
-                f"topic {'/'.join(topicpath)!r} not recorded in this journal entry's "
-                f"paths; available topics: {sorted(paths)}"
-            )
-        return node
-
-    def _is_dir_topic(self, *topicpath):
-        """A directory topic when the recorded TOPICS filename is :data:`DIRTOPIC`."""
-        node = self._walk(self.topics, self._normtopic(topicpath))
-        return node is DIRTOPIC
-
-    def _is_syntopic(self, *topicpath):
-        """A :data:`SYNTOPIC` topic -- recorded as synthetic, with no location."""
-        node = self._walk(self.topics, self._normtopic(topicpath))
-        return isinstance(node, tuple) and len(node) == 0
-
-    def is_topicgroup(self, *topicpath):
-        """True when the recorded entry for *topicpath* is a group of topics."""
-        return isinstance(self._walk(self.topics, self._normtopic(topicpath)), dict)
-
-    def ls(self, *topicpath, detail=False):
-        """List the contents at this entry's recorded path for a topic.
-
-        Mirrors :meth:`Datablock.ls`, but resolves the path from the
-        journal entry's recorded :attr:`paths` rather than a live block.
-        A group concatenates its members' listings.
-        """
-        topicpath = self._normtopic(topicpath)
-        p = self._topic_path(*topicpath)
-        if isinstance(p, dict):
-            return [e for leaf in self._leaf_paths(p)
-                    for e in ls_path(self._fs(), leaf, False, detail=detail)]
-        return ls_path(self._fs(), p, self._is_dir_topic(*topicpath), detail=detail)
-
-    def list(self, *topicpath):
-        """Detailed, recursive listing of every file under this entry's topic path.
-
-        Mirrors :meth:`Datablock.list`, resolving the path from :attr:`paths`.
-        """
-        topicpath = self._normtopic(topicpath)
-        p = self._topic_path(*topicpath)
-        if isinstance(p, dict):
-            return [e for leaf in self._leaf_paths(p)
-                    for e in list_path(self._fs(), leaf, False)]
-        return list_path(self._fs(), p, self._is_dir_topic(*topicpath))
-
-    def size(self, *topicpath):
-        """Total size in bytes of all files under this entry's topic path.
-
-        Mirrors :meth:`Datablock.size`, resolving the path from :attr:`paths`.
-        """
-        return size(self.list(*self._normtopic(topicpath)))
+    # 1. Declared API ---------------------------------------------------
 
     def read(self, *things, raw: bool = False, deslash: bool = False, safe: bool = False):
         def read_thing(thing):
             target_attr = 'subsignature' if thing in ('subsignature', 'norm') else ('note' if thing in ('note', 'message') else thing)
-            val = getattr(self, target_attr, None)
+            # The COLUMN, not the accessor: the Datablock-shaped accessors are
+            # methods now, and getattr would hand back a bound method whose
+            # str() is its repr rather than the path the column holds.
+            val = self.column(self, target_attr)
             if val is not None and not (isinstance(val, float) and pd.isna(val)):
                 path = str(val)
                 _, _ext = os.path.splitext(path)
@@ -1038,7 +1057,7 @@ class DatajournalEntry(pd.Series):
         project repo but never ``dbx``, which is already imported -- so a block
         whose hash depends on ``dbx`` rendering that has since changed comes back
         with a DIFFERENT hash, and therefore different paths, than the entry
-        records. :meth:`rinst` is the way around that.
+        records. :meth:`rinst` (aka :meth:`trueinst`) is the way around that.
 
         ``remote=True`` instantiates on a Ray worker pinned to this entry's own
         revision and returns a proxy (see :meth:`rinst`). Pass an existing
@@ -1115,30 +1134,60 @@ class DatajournalEntry(pd.Series):
             proxy._origin = handle
         return proxy
 
+    def trueinst(self, gitrepo=None, revision='journal_entry', *, handle=None, **remote_kwargs):
+        """Alias for :meth:`rinst` -- the instantiation whose hash is the recorded one.
+
+        Named for what distinguishes it from :meth:`inst`: the local one cannot
+        rewind ``dbx``, which is already imported, so a block whose identity
+        depends on rendering that has since changed comes back under a hash the
+        entry never had -- and paths that hold nothing. This one is pinned
+        before its interpreter starts, so it comes back as the block that was
+        actually built.
+        """
+        return self.rinst(gitrepo=gitrepo, revision=revision, handle=handle, **remote_kwargs)
+
+    # 2. Accessors ------------------------------------------------------
+
     @property
-    def bid(self):
-        """Reconstruct a Bid from this journal entry."""
-        sig_str = self.read('signature', safe=True) or self.read('subsignature', safe=True) or self.read('norm', safe=True) or (str(self._renamed_column('signature', 'subsignature') or self._renamed_column('subsignature', 'norm') or ''))
-        raw_type = self._renamed_column('type', 'signature') or self._renamed_column('signature', 'hashstr')
-        type_str = self.read('type', safe=True) or (str(raw_type) if raw_type is not None else '')
-        return Bid(
-            hash=self.hash,
-            code=self.code,
-            version=self.version,
-            revision=self.revision,
-            dfn=self.read('dfn', safe=True) or {},
-            kwargs=self.read('kwargs', safe=True) or {},
-            spec=self.read('spec', safe=True) or {},
-            quote=self.read('quote') or '',
-            cite=self.read('cite') or '',
-            repr=self.read('repr') or '',
-            signature=sig_str,
-            type=type_str,
-            anchor=self.anchor,
-            tag=self.tag,
-            key=self.key,
-            keyby=self.keyby,
-        )
+    def block(self):
+        """This entry's `Block`: the block as it was when the entry was written.
+
+        The Datablock-shaped API lives there, and the accessors on this class
+        forward to it, so ``entry.paths()`` and ``entry.block.paths()`` are the
+        same call. Reach for ``.block`` when you want to hand something a
+        block-like object rather than a pandas row.
+        """
+        return Block(self)
+
+    # 3. Helpers --------------------------------------------------------
+
+    #: Column-name chains, oldest spelling last. A journal written before a
+    #: rename still resolves, and one written after does not pay for the
+    #: fallback.
+    COLUMN_CHAINS = {
+        'subsignature': ('subsignature', 'norm'),
+        'note': ('note', 'message'),
+        'signature': ('signature', 'subsignature', 'norm'),
+        'type': ('type', 'signature', 'hashstr'),
+    }
+
+    @staticmethod
+    def column(entry, name):
+        """The first present value along *name*'s rename chain, or None."""
+        for candidate in DatajournalEntry.COLUMN_CHAINS.get(name, (name,)):
+            value = entry.get(candidate)
+            if value is not None and not (isinstance(value, float) and pd.isna(value)):
+                return value
+        return None
+
+    def _renamed_column(self, name, legacy):
+        """Value of column *name*, falling back to the pre-rename *legacy* column."""
+        def absent(v):
+            return v is None or (isinstance(v, float) and pd.isna(v))
+        value = self.get(name)
+        if absent(value):
+            value = self.get(legacy)
+        return None if absent(value) else value
 
 
 class Datajournal(pd.DataFrame):
@@ -1707,14 +1756,14 @@ class Datablock:
             target_entry = self._find_journal_entry_by_code(code_of_target)
             if target_entry is None:
                 raise ValueError(f"redirect failed: no journal entry found for code {code_of_target!r}")
-            resolved_paths = target_entry.paths
+            resolved_paths = target_entry.block.paths()
 
         elif filter_spec is not None:
             target_entry = self._find_journal_entry_by_filter(filter_spec)
             if target_entry is None:
                 raise ValueError(f"redirect failed: filter {filter_spec!r} matches no journal entry")
-            code_of_target = target_entry.id
-            resolved_paths = target_entry.paths
+            code_of_target = target_entry.block.id
+            resolved_paths = target_entry.block.paths()
 
         elif paths is not None:
             code_of_target = None
@@ -1942,7 +1991,7 @@ class Datablock:
     def valid(self):
         red = self.redirection
         entry = red.entry if red is not None else None
-        return self.__valid__(path=entry.anchorkeypath if entry is not None else None)
+        return self.__valid__(path=entry.block.anchorkeypath if entry is not None else None)
 
     def validate(self, **kwargs):
         """Validate this block's data. Default implementation calls self.valid().
@@ -2162,7 +2211,7 @@ class Datablock:
         # instance, which :attr:`redirection` caches.
         if self._redirected_paths_ is not None:
             entry = self.redirection.entry if self.redirection is not None else None
-            whither = (f"journal entry {entry.id} (hash {entry.hash})"
+            whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
                        if entry is not None else f"the paths {self._redirected_paths_}")
             self.log.info(
                 f"BUILD DECLINED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
@@ -2703,12 +2752,12 @@ class Datablock:
             self.log.warning(f"redirection: filter {filter!r} matches no journal entry")
             return None
 
-        resolved_paths = self._mapped_paths(entry.paths, topic_map)
+        resolved_paths = self._mapped_paths(entry.block.paths(), topic_map)
         self.__dict__['__redirected_paths__'] = resolved_paths
 
         self.log.verbose(
-            f"REDIRECTION: {self.anchorkeypath} reads from journal entry {entry.id} "
-            f"instead (hash {entry.hash}, event {entry.get('event')!r}, written "
+            f"REDIRECTION: {self.anchorkeypath} reads from journal entry {entry.block.id} "
+            f"instead (hash {entry.block.hash}, event {entry.get('event')!r}, written "
             f"{entry.get('datetime')}), matched by {filter!r}"
             + (f", topics mapped {topic_map!r}" if topic_map else "")
         )
@@ -2838,12 +2887,12 @@ class Datablock:
                     for _, row in sub.iterrows():
                         entry = DatajournalEntry(row, storage_options=self.storage_options)
                         when = row.get('datetime')
-                        if entry.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
+                        if entry.block.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
                             if latest is None or str(when) > str(latest[0]):
                                 latest = (when, None)
-                        elif entry.redirection is not None:
+                        elif entry.block.redirection is not None:
                             if latest is None or str(when) > str(latest[0]):
-                                red_val = entry.redirection
+                                red_val = entry.block.redirection
                                 if isinstance(red_val, str) and not red_val.startswith('{'):
                                     latest = (when, {'filter': {'id': red_val}})
                                 else:
@@ -2880,12 +2929,12 @@ class Datablock:
             for _, row in df.iterrows():
                 entry = DatajournalEntry(row, storage_options=self.storage_options)
                 when = row.get('datetime')
-                if entry.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
+                if entry.block.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
                     if latest is None or str(when) > str(latest[0]):
                         latest = (when, None)
-                elif entry.redirection is not None:
+                elif entry.block.redirection is not None:
                     if latest is None or str(when) > str(latest[0]):
-                        red_val = entry.redirection
+                        red_val = entry.block.redirection
                         if isinstance(red_val, str) and not red_val.startswith('{'):
                             latest = (when, {'filter': {'id': red_val}})
                         else:
@@ -2967,13 +3016,13 @@ class Datablock:
                 j = Datajournal(journal, storage_options=getattr(journal, 'storage_options', self.storage_options), **dict(filter))
                 if len(j) > 0:
                     entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else DatajournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
-                    target_paths = entry.paths
+                    target_paths = entry.block.paths()
                     if target_paths is None or not isinstance(target_paths, dict):
                         try:
                             target_paths = entry.inst(remote=remote).paths()
                         except Exception as e:
                             self.log.detailed(f"UNSAFE_redirect: entry.inst() failed: {e}")
-                    redirect_record = entry.id
+                    redirect_record = entry.block.id
             except Exception as e:
                 self.log.warning(f"UNSAFE_redirect: filter {filter!r} failed on journal: {e}")
 
@@ -2986,13 +3035,13 @@ class Datablock:
                 j = journal if isinstance(journal, Datajournal) else Datajournal(journal, storage_options=self.storage_options)
                 if len(j) > 0:
                     entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else DatajournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
-                    target_paths = entry.paths
+                    target_paths = entry.block.paths()
                     if target_paths is None or not isinstance(target_paths, dict):
                         try:
                             target_paths = entry.inst(remote=remote).paths()
                         except Exception as e:
                             self.log.detailed(f"UNSAFE_redirect: entry.inst() failed: {e}")
-                    redirect_record = entry.id
+                    redirect_record = entry.block.id
             except Exception as e:
                 self.log.warning(f"UNSAFE_redirect: failed reading journal: {e}")
 
@@ -3402,7 +3451,7 @@ class Datablock:
         """
         entry = self.journal(**journal)
         return self.UNSAFE_copy_from(
-            entry.anchorkeypath,
+            entry.block.anchorkeypath,
             OVERRIDE=OVERRIDE,
             overwrite=overwrite,
             topicpaths=topicpaths,
@@ -4345,7 +4394,7 @@ class Datablock:
             # A journal records a list-TOPICS block as a mapping of DIRTOPIC,
             # so the two render alike from an entry even though they do not from
             # the blocks themselves. Compare two LIVE blocks to see that one.
-            other_topics = other_topics.topics
+            other_topics = other_topics.block.TOPICS
         elif isinstance(other_topics, str):
             other_topics = ast.literal_eval(other_topics)
         topicmap = self._topic_map(other_topics)

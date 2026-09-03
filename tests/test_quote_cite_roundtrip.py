@@ -280,8 +280,8 @@ class TestCiteInJournal:
 
     def test_build_writes_cite_txt(self, built):
         entry = built.journal(iloc=-1)
-        assert entry.cite is not None, "journal has no cite column"
-        assert '-cite-' in entry.cite and entry.cite.endswith('.txt')
+        assert entry.block.cite() is not None, "journal has no cite column"
+        assert '-cite-' in entry.block.cite() and entry.block.cite().endswith('.txt')
         assert entry.read('cite') == built.cite()
 
     def test_cite_is_absent_not_fatal_on_an_older_journal(self):
@@ -294,5 +294,5 @@ class TestCiteInJournal:
         import pandas as pd
         from dbx.datablocks import DatajournalEntry
         entry = DatajournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B'}))
-        assert entry.cite is None
+        assert entry.block.cite() is None
         assert entry.read('cite') is None

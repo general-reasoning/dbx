@@ -66,7 +66,7 @@ def source(tmp_path):
     """A built block, and the entry_code of the entry recording that build."""
     b = block(tmp_path, x=1)
     b.build()
-    return b, b.journal(loc=0).id
+    return b, b.journal(loc=0).block.id
 
 
 @pytest.fixture
@@ -80,17 +80,17 @@ class TestTheRecordedRedirection:
     def test_a_filter_records_the_entry_id(self, source, broken):
         src, code = source
         broken.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
-        assert broken.journal(loc=0).redirection == code
+        assert broken.journal(loc=0).block.redirection == code
 
     def test_a_topic_map_travels_with_it(self, source, broken):
         src, code = source
         broken.UNSAFE_redirect(filter={'entry_code': code},
                                topic_map={'output': 'result'}, OVERRIDE=True)
-        assert broken.journal(loc=0).redirection == code
+        assert broken.journal(loc=0).block.redirection == code
 
     def test_paths_are_recorded_as_a_dict(self, broken):
         broken.UNSAFE_redirect(paths={'output': '/data/out.txt'}, OVERRIDE=True)
-        assert broken.journal(loc=0).redirection == {'output': '/data/out.txt'}
+        assert broken.journal(loc=0).block.redirection == {'output': '/data/out.txt'}
 
     def test_it_lives_in_the_journal_not_in_a_file(self, broken):
         broken.UNSAFE_redirect(paths={'output': '/data/out.txt'}, OVERRIDE=True)
@@ -98,7 +98,7 @@ class TestTheRecordedRedirection:
 
     def test_an_ordinary_entry_records_none(self, tmp_path):
         block(tmp_path).write_journal_entry(event='note')
-        assert block(tmp_path).journal(loc=0).redirection is None
+        assert block(tmp_path).journal(loc=0).block.redirection is None
 
     def test_it_returns_true_on_success(self, broken):
         res = broken.UNSAFE_redirect(paths={'output': '/x'}, OVERRIDE=True)
@@ -133,7 +133,7 @@ class TestTheArguments:
     def test_topic_map_is_warning_logged_if_paths_used(self, broken, capsys):
         capsys.readouterr()
         broken.UNSAFE_redirect(paths={'output': '/x'}, topic_map={'a': 'b'}, OVERRIDE=True)
-        assert broken.journal(loc=0).redirection == {'output': '/x'}
+        assert broken.journal(loc=0).block.redirection == {'output': '/x'}
         assert 'ignoring it' in capsys.readouterr().out
 
     def test_it_asks_before_writing(self, broken):
@@ -257,7 +257,7 @@ class TestTopicMap:
         doing the redirecting, and a journal is per anchor."""
         src = Renamed(url=str(tmp_path), spec={'x': 1}, anchor=Built(url=str(tmp_path)).anchor)
         src.build()
-        return src, src.journal(loc=0).id
+        return src, src.journal(loc=0).block.id
 
     def test_a_topic_reads_from_the_mapped_one(self, renamed_source, broken):
         src, code = renamed_source
@@ -275,7 +275,7 @@ class TestTopicMap:
         """Topics line up by name to begin with; the map only adds to that."""
         src = TwoTopics(url=str(tmp_path), spec={'x': 1})
         src.build()
-        code = src.journal(loc=0).id
+        code = src.journal(loc=0).block.id
         b = block(tmp_path, x=2, cls=TwoTopics)
         b.UNSAFE_redirect(filter={'entry_code': code},
                           topic_map={'output': 'notes'}, OVERRIDE=True)
@@ -419,8 +419,8 @@ class TestResolution:
         """A redirection is a correction: the newest is the one still meant."""
         block(tmp_path, x=1).build()
         block(tmp_path, x=3).build()
-        first = block(tmp_path, x=1).journal(hash=block(tmp_path, x=1).hash, loc=0).id
-        second = block(tmp_path, x=3).journal(hash=block(tmp_path, x=3).hash, loc=0).id
+        first = block(tmp_path, x=1).journal(hash=block(tmp_path, x=1).hash, loc=0).block.id
+        second = block(tmp_path, x=3).journal(hash=block(tmp_path, x=3).hash, loc=0).block.id
         block(tmp_path, x=2).UNSAFE_redirect(filter={'entry_code': first}, OVERRIDE=True)
         block(tmp_path, x=2).UNSAFE_redirect(filter={'entry_code': second}, OVERRIDE=True)
         assert block(tmp_path, x=2).read('output') == 'data-3'
@@ -478,8 +478,8 @@ class TestResolution:
     def test_a_later_redirection_is_not_seen_by_an_instance_that_looked(self, tmp_path):
         block(tmp_path, x=1).build()
         block(tmp_path, x=3).build()
-        first = block(tmp_path, x=1).journal(hash=block(tmp_path, x=1).hash, loc=0).id
-        second = block(tmp_path, x=3).journal(hash=block(tmp_path, x=3).hash, loc=0).id
+        first = block(tmp_path, x=1).journal(hash=block(tmp_path, x=1).hash, loc=0).block.id
+        second = block(tmp_path, x=3).journal(hash=block(tmp_path, x=3).hash, loc=0).block.id
 
         broken = block(tmp_path, x=2)
         broken.UNSAFE_redirect(filter={'entry_code': first}, OVERRIDE=True)
@@ -493,7 +493,7 @@ class TestResolution:
         broken.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
         assert broken.redirection is not None
         del broken.redirection
-        assert broken.redirection.entry.id == code
+        assert broken.redirection.entry.block.id == code
 
     def test_the_resolution_names_its_parts(self, source, broken):
         _, code = source
@@ -501,7 +501,7 @@ class TestResolution:
                                topic_map={'output': 'output'}, OVERRIDE=True)
         r = broken.redirection
         assert r.filter == {'id': code}
-        assert r.entry.id == code
+        assert r.entry.block.id == code
         assert 'output' in r.paths
 
     def test_paths_resolve_without_an_entry(self, broken):
@@ -538,7 +538,7 @@ class TestLegacyRedirections:
         broken.write_journal_entry(event='UNSAFE_redirect', redirection=code,
                                    journal_prefix='redirect-')
         fresh = Built(url=broken._url_, spec={'x': 2})
-        assert fresh.redirection.entry.id == code
+        assert fresh.redirection.entry.block.id == code
         assert fresh.read('output') == 'data-1'
 
 
@@ -631,7 +631,7 @@ class TestRestructuredRedirect:
 
         # Check target journal entry
         j_target = src_block.journal(event='redirection:target', loc=0)
-        assert j_target.read('message') == j_source.id
+        assert j_target.read('message') == j_source.block.id
 
         # Check subsignature does NOT include _paths_ when redirecting to code
         assert '_paths_' not in b.subsignature()
@@ -646,7 +646,7 @@ class TestRestructuredRedirect:
         assert j_source.read('message') == code
 
         j_target = src_block.journal(event='redirection:target', loc=0)
-        assert j_target.read('message') == j_source.id
+        assert j_target.read('message') == j_source.block.id
 
     def test_redirect_code_not_found(self, tmp_path):
         with pytest.raises(ValueError, match="no journal entry found"):
@@ -713,7 +713,7 @@ class TestNewRedirectFeatures:
 
         # Build one instance so there is a journal entry for the child block anchor
         src = Built(url=str(tmp_path), spec={'x': 100}).build()
-        src_code = src.journal(loc=0).id
+        src_code = src.journal(loc=0).block.id
 
         class DummyStack(Datastack):
             def blocks(self):
@@ -737,7 +737,7 @@ class TestNewRedirectFeatures:
         assert passed_journals[0] is not None
         assert all(passed_journals[0]['event'] == 'build:end')
         for blk in stack.blocks():
-            assert blk.journal(loc=0).redirection == src_code
+            assert blk.journal(loc=0).block.redirection == src_code
             assert blk.path('output') == src.path('output')
 
     def test_unsafe_redirect_filter_records_entry_id(self, source, tmp_path):
@@ -745,20 +745,20 @@ class TestNewRedirectFeatures:
         b = Built(url=str(tmp_path), spec={'x': 2})
         ret = b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
         assert ret is True
-        assert b.journal(loc=0).redirection == code
+        assert b.journal(loc=0).block.redirection == code
         assert b._paths_ == src.paths()
         assert b.path('output') == src.path('output')
 
     def test_unsafe_redirect_topic_map_remapped_paths(self, tmp_path):
         src = Renamed(url=str(tmp_path), spec={'x': 1}, anchor=Built(url=str(tmp_path)).anchor)
         src.build()
-        code = src.journal(loc=0).id
+        code = src.journal(loc=0).block.id
 
         b = Built(url=str(tmp_path), spec={'x': 2})
         assert b.UNSAFE_redirect(filter={'entry_code': code}, topic_map={'output': 'result'}, OVERRIDE=True) is True
         assert b._paths_ == {'output': src.path('result')}
         assert b.path('output') == src.path('result')
-        assert b.journal(loc=0).redirection == code
+        assert b.journal(loc=0).block.redirection == code
 
         # Verify .redirection directory and paths.yaml exist
         red_yaml = os.path.join(b.dirpath('.redirection'), 'paths.yaml')
@@ -775,7 +775,7 @@ class TestNewRedirectFeatures:
         b.UNSAFE_redirect(filter={'entry_code': 'nonexistent'}, paths={'output': '/custom/fallback.txt'}, OVERRIDE=True)
         assert b._paths_ == {'output': '/custom/fallback.txt'}
         assert b.path('output') == '/custom/fallback.txt'
-        assert b.journal(loc=0).redirection == {'output': '/custom/fallback.txt'}
+        assert b.journal(loc=0).block.redirection == {'output': '/custom/fallback.txt'}
 
     def test_unsafe_redirect_drops_redirect_kwarg(self, tmp_path):
         b = Built(url=str(tmp_path))
@@ -793,7 +793,7 @@ class TestNewRedirectFeatures:
 
         assert b._paths_ == src.paths()
         assert b.path('output') == src.path('output')
-        assert b.journal(loc=0).redirection == code
+        assert b.journal(loc=0).block.redirection == code
 
     def test_unsafe_redirect_with_provided_journal_no_filter(self, source, tmp_path):
         src, code = source
@@ -805,7 +805,7 @@ class TestNewRedirectFeatures:
 
         assert b._paths_ == src.paths()
         assert b.path('output') == src.path('output')
-        assert b.journal(loc=0).redirection == code
+        assert b.journal(loc=0).block.redirection == code
 
     def test_unsafe_redirect_remote_instantiation(self, source, tmp_path):
         src, code = source
@@ -815,8 +815,8 @@ class TestNewRedirectFeatures:
         # Simulate a journal entry that doesn't have .paths stored directly
         from unittest.mock import MagicMock
         mock_entry = MagicMock()
-        mock_entry.paths = None
-        mock_entry.id = code
+        mock_entry.block.paths.return_value = None
+        mock_entry.block.id = code
         mock_inst = MagicMock()
         mock_inst.paths.return_value = src.paths()
         mock_entry.inst.return_value = mock_inst
@@ -833,7 +833,7 @@ class TestNewRedirectFeatures:
         b = Built(url=str(tmp_path), spec={'x': 2})
         ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: {'filter': {'entry_code': code}}, OVERRIDE=True)
         assert ret is True
-        assert b.journal(loc=0).redirection == code
+        assert b.journal(loc=0).block.redirection == code
         assert b._paths_ == src.paths()
         assert b.path('output') == src.path('output')
 
@@ -841,7 +841,7 @@ class TestNewRedirectFeatures:
         b = Built(url=str(tmp_path), spec={'x': 2})
         ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: {'paths': {'output': '/custom/path.txt'}}, OVERRIDE=True)
         assert ret is True
-        assert b.journal(loc=0).redirection == {'output': '/custom/path.txt'}
+        assert b.journal(loc=0).block.redirection == {'output': '/custom/path.txt'}
         assert b._paths_ == {'output': '/custom/path.txt'}
         assert b.path('output') == '/custom/path.txt'
 
@@ -855,7 +855,7 @@ class TestNewRedirectFeatures:
             OVERRIDE=True
         )
         assert ret is True
-        assert b.journal(loc=0).redirection == code
+        assert b.journal(loc=0).block.redirection == code
         assert b._paths_ == src.paths()
 
     def test_unsafe_redirect_with_redirector_returning_none(self, tmp_path):
@@ -869,7 +869,7 @@ class TestNewRedirectFeatures:
         # Redirector returns None, but explicit filter is provided -> falls back to filter
         ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: None, filter={'entry_code': code}, OVERRIDE=True)
         assert ret is True
-        assert b.journal(loc=0).redirection == code
+        assert b.journal(loc=0).block.redirection == code
         assert b._paths_ == src.paths()
 
     def test_unsafe_redirect_validate_parameter(self, source, tmp_path):
@@ -940,11 +940,11 @@ class TestNewRedirectFeatures:
     def test_unsafe_redirect_chaining(self, tmp_path):
         """Block A is built. Block B redirects to A. Block C redirects to B."""
         a = Built(url=str(tmp_path), spec={'x': 1}).build()
-        code_a = a.journal(loc=0).id
+        code_a = a.journal(loc=0).block.id
 
         b = Built(url=str(tmp_path), spec={'x': 2})
         b.UNSAFE_redirect(filter={'entry_code': code_a}, OVERRIDE=True)
-        code_b = b.journal(loc=0).id
+        code_b = b.journal(loc=0).block.id
 
         # C redirects to B's journal entry
         c = Built(url=str(tmp_path), spec={'x': 3})

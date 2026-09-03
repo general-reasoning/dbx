@@ -56,7 +56,7 @@ class TestEveryCallGetsItsOwnCode:
         b = block(tmp_path)
         b.build()
         entry = b.journal(loc=0)
-        assert entry.id
+        assert entry.block.id
         assert not hasattr(entry, 'entry_code')
         assert not hasattr(entry, 'subhash')
         assert not hasattr(entry, 'subsignature')
@@ -146,7 +146,7 @@ class TestLegacyJournals:
         b = block(tmp_path)
         b.write_journal_entry(event='note')
         entry = b.journal(loc=0)
-        assert DatajournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).id is None
+        assert DatajournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).block.id is None
 
 
 class TestUuid16:

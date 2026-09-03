@@ -92,7 +92,7 @@ class TestDIRTOPICInTheJournal:
         b = WithDIR(url=str(tmp_path))
         b.build()
         entry = b.journal(iloc=-1)
-        assert entry.topics['checkpoints'] is None
-        assert entry.topics['logs'] == 'train.log'
-        assert entry._is_dir_topic('checkpoints')
-        assert not entry._is_dir_topic('logs')
+        assert entry.block.TOPICS['checkpoints'] is None
+        assert entry.block.TOPICS['logs'] == 'train.log'
+        assert entry.block._is_dir_topic('checkpoints')
+        assert not entry.block._is_dir_topic('logs')

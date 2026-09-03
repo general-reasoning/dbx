@@ -83,14 +83,16 @@ class TestSignatureInJournal:
 
     def test_build_writes_type_txt(self, built):
         entry = built.journal(iloc=-1)
-        assert entry.type is not None, "journal has no type column"
-        assert '-type-' in entry.type
-        assert entry.type.endswith('.txt')
+        # The COLUMN is a path to the type file; Block.type() resolves it to
+        # the type TEXT, as Datablock.type() does.
+        assert entry.get('type') is not None, "journal has no type column"
+        assert '-type-' in entry.get('type')
+        assert entry.get('type').endswith('.txt')
         assert entry.read('type') == built.type()
 
     def test_build_writes_signature_txt(self, built):
         entry = built.journal(iloc=-1)
-        assert entry.signature is not None
+        assert entry.block.signature() is not None
         assert entry.read('signature') == built.signature()
 
 
@@ -106,27 +108,27 @@ class TestPreRenameJournals:
     def test_legacy_hashstr_column_is_read_as_type(self):
         entry = self._entry(hashstr='/j/x-hashstr-1.txt',
                             norm='/j/x-norm-1.txt')
-        assert entry.type == '/j/x-hashstr-1.txt'
-        assert entry.signature == '/j/x-norm-1.txt'
+        assert entry.block.type() == '/j/x-hashstr-1.txt'
+        assert entry.block.signature() == '/j/x-norm-1.txt'
 
     def test_new_column_wins_when_both_are_present(self):
         entry = self._entry(type='/j/new.txt', signature='/j/old.txt')
-        assert entry.type == '/j/new.txt'
+        assert entry.block.type() == '/j/new.txt'
 
     def test_nan_in_the_new_column_still_falls_back(self):
         entry = self._entry(type=float('nan'), signature='/j/old.txt')
-        assert entry.type == '/j/old.txt'
+        assert entry.block.type() == '/j/old.txt'
 
     def test_absent_in_both_degrades_to_none(self):
         entry = self._entry()
-        assert entry.type is None
-        assert entry.signature is None
+        assert entry.block.type() is None
+        assert entry.block.signature() is None
         assert entry.read('type') is None
         assert entry.read('signature') is None
 
     def test_nan_in_both_degrades_to_none(self):
         entry = self._entry(type=float('nan'), signature=float('nan'))
-        assert entry.type is None
+        assert entry.block.type() is None
 
     def test_a_real_mixed_era_journal_reads_both_rows(self, built):
         """End to end: an old row and a new row concatenated into one frame."""
@@ -138,7 +140,7 @@ class TestPreRenameJournals:
                              'norm': '/j/legacy-norm.txt'})
         frame = pd.DataFrame([old_row, pd.Series(dict(new_row))])
 
-        assert DatajournalEntry(frame.iloc[0]).type == '/j/legacy-hashstr.txt'
-        assert DatajournalEntry(frame.iloc[0]).signature == '/j/legacy-norm.txt'
-        assert DatajournalEntry(frame.iloc[1]).type == new_row.type
-        assert DatajournalEntry(frame.iloc[1]).signature == new_row.signature
+        assert DatajournalEntry.column(DatajournalEntry(frame.iloc[0]), 'type') == '/j/legacy-hashstr.txt'
+        assert DatajournalEntry.column(DatajournalEntry(frame.iloc[0]), 'signature') == '/j/legacy-norm.txt'
+        assert DatajournalEntry.column(DatajournalEntry(frame.iloc[1]), 'type') == new_row.type
+        assert DatajournalEntry.column(DatajournalEntry(frame.iloc[1]), 'signature') == new_row.signature

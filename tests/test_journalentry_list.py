@@ -5,12 +5,12 @@ These mirror Datablock.ls/.list/.size but resolve the topic path from
 the journal entry's recorded ``paths`` field rather than a live block.
 
 Verifies:
-1. entry.paths / entry.topics parse the recorded stringified dicts.
-2. entry.list() on a single-file topic returns that file's detail dict.
-3. entry.size() equals the file's byte length.
-4. entry.list() on a directory topic recurses (incl. nested files).
-5. entry.size() sums all (nested) file sizes.
-6. entry.ls()/.list()/.size() agree with the block's own methods.
+1. entry.block.paths() / entry.block.topics() parse the recorded stringified dicts.
+2. entry.block.list() on a single-file topic returns that file's detail dict.
+3. entry.block.size() equals the file's byte length.
+4. entry.block.list() on a directory topic recurses (incl. nested files).
+5. entry.block.size() sums all (nested) file sizes.
+6. entry.block.ls()/.list()/.size() agree with the block's own methods.
 7. An unrecorded topic raises KeyError.
 """
 import os
@@ -70,21 +70,22 @@ class TestRecordedFields:
 
     def test_paths_and_topics_single(self, tmp_path):
         block, entry = _built(SingleTopicBlock, tmp_path)
-        assert 'output' in entry.paths
-        assert os.path.basename(entry.paths['output']) == 'output.txt'
-        assert entry.topics.get('output') == 'output.txt'
+        assert 'output' in entry.block.paths()
+        assert os.path.basename(entry.block.paths()['output']) == 'output.txt'
+        assert entry.block.topics() == ['output']        # names, as Datablock
+        assert entry.block.TOPICS['output'] == 'output.txt'   # what each maps to
 
     def test_topics_marks_dir(self, tmp_path):
         block, entry = _built(DirTopicBlock, tmp_path)
-        assert 'images' in entry.paths
-        assert entry.topics.get('images') is None
+        assert 'images' in entry.block.paths()
+        assert entry.block.TOPICS['images'] is None            # DIRTOPIC
 
 
 class TestSingleFileTopic:
 
     def test_list_returns_the_file(self, tmp_path):
         block, entry = _built(SingleTopicBlock, tmp_path)
-        result = entry.list('output')
+        result = entry.block.list('output')
         assert len(result) == 1
         assert isinstance(result[0], dict)
         assert os.path.basename(result[0]['name']) == 'output.txt'
@@ -92,14 +93,14 @@ class TestSingleFileTopic:
 
     def test_topicsize_matches_bytes(self, tmp_path):
         block, entry = _built(SingleTopicBlock, tmp_path)
-        assert entry.size('output') == 10
+        assert entry.block.size('output') == 10
 
 
 class TestDirTopic:
 
     def test_list_recurses(self, tmp_path):
         block, entry = _built(DirTopicBlock, tmp_path)
-        result = entry.list('images')
+        result = entry.block.list('images')
         basenames = sorted(os.path.basename(e['name']) for e in result)
         assert basenames == ['deep.bin', 'file_0.bin', 'file_1.bin', 'file_2.bin']
         for e in result:
@@ -108,20 +109,20 @@ class TestDirTopic:
     def test_topicsize_sums_all(self, tmp_path):
         block, entry = _built(DirTopicBlock, tmp_path)
         # 3 * 16 + 32 = 80
-        assert entry.size('images') == 80
+        assert entry.block.size('images') == 80
 
 
 class TestMatchesBlock:
 
     def test_agrees_with_block_single(self, tmp_path):
         block, entry = _built(SingleTopicBlock, tmp_path)
-        assert sorted(entry.ls('output')) == sorted(block.ls('output'))
-        assert entry.size('output') == block.size('output')
+        assert sorted(entry.block.ls('output')) == sorted(block.ls('output'))
+        assert entry.block.size('output') == block.size('output')
 
     def test_agrees_with_block_dir(self, tmp_path):
         block, entry = _built(DirTopicBlock, tmp_path)
-        assert entry.size('images') == block.size('images')
-        entry_names = sorted(os.path.basename(e['name']) for e in entry.list('images'))
+        assert entry.block.size('images') == block.size('images')
+        entry_names = sorted(os.path.basename(e['name']) for e in entry.block.list('images'))
         block_names = sorted(os.path.basename(e['name']) for e in block.list('images'))
         assert entry_names == block_names
 
@@ -131,4 +132,4 @@ class TestMissingTopic:
     def test_unknown_topic_raises(self, tmp_path):
         block, entry = _built(SingleTopicBlock, tmp_path)
         with pytest.raises(KeyError):
-            entry.list('nonexistent')
+            entry.block.list('nonexistent')

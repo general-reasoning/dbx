@@ -157,21 +157,21 @@ class TestSYNTOPICInTheJournal:
     def test_recorded_and_read_back(self, block):
         block.build()
         entry = block.journal(iloc=-1)
-        assert entry.topics['cache'] == SYNTOPIC
-        assert entry.paths['cache'] is None
-        assert entry._is_syntopic('cache')
-        assert not entry._is_dir_topic('cache')
+        assert entry.block.TOPICS['cache'] == SYNTOPIC
+        assert entry.block.paths()['cache'] is None
+        assert entry.block._is_syntopic('cache')
+        assert not entry.block._is_dir_topic('cache')
 
     def test_entry_listing_is_empty(self, block):
         block.build()
         entry = block.journal(iloc=-1)
-        assert entry.ls('cache') == []
-        assert entry.size('cache') == 0
+        assert entry.block.ls('cache') == []
+        assert entry.block.size('cache') == 0
 
     def test_dirtopic_and_syntopic_stay_distinct_through_the_journal(self, block):
         """A round trip through str(dict) must not turn () into None."""
         block.build()
-        topics = block.journal(iloc=-1).topics
+        topics = block.journal(iloc=-1).block.TOPICS
         assert topics['masks'] is DIRTOPIC
         assert topics['cache'] == SYNTOPIC
         assert topics['masks'] is not topics['cache']

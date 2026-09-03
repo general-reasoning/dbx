@@ -40,15 +40,18 @@ class TestAnchorKeyPath(unittest.TestCase):
         series = pd.Series(data)
         entry = DatajournalEntry(series)
         
-        self.assertTrue(hasattr(entry, 'anchorkey'))
-        self.assertTrue(hasattr(entry, 'anchorkeypath'))
+        # They are Datablock-shaped, so they live on the Block view, not on
+        # the entry -- which would otherwise fall through to column lookup.
+        self.assertFalse(hasattr(entry, 'anchorkey'))
+        self.assertTrue(hasattr(entry.block, 'anchorkey'))
+        self.assertTrue(hasattr(entry.block, 'anchorkeypath'))
         
         expected_anchorkey = os.path.join(data['anchor'], data['hash'][:8])
-        self.assertEqual(entry.anchorkey, expected_anchorkey)
+        self.assertEqual(entry.block.anchorkey, expected_anchorkey)
         
         fs, root = fsspec.url_to_fs(data['url'])
         expected_anchorkeypath = fs_full_path(fs, os.path.join(root, expected_anchorkey))
-        self.assertEqual(entry.anchorkeypath, expected_anchorkeypath)
+        self.assertEqual(entry.block.anchorkeypath, expected_anchorkeypath)
 
     def test_journal_entry_anchorkeypath_legacy_root(self):
         """DatajournalEntry.anchorkeypath still works with legacy 'root' field."""
@@ -63,7 +66,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         
         expected_anchorkey = os.path.join(data['anchor'], data['hash'][:8])
         expected_anchorkeypath = os.path.join(data['root'], expected_anchorkey)
-        self.assertEqual(entry.anchorkeypath, expected_anchorkeypath)
+        self.assertEqual(entry.block.anchorkeypath, expected_anchorkeypath)
 
 
 if __name__ == "__main__":

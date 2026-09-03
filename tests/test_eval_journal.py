@@ -30,33 +30,29 @@ class TestDatajournalEntryMethods:
         })
         entry = DatajournalEntry(series)
 
-        # Property access
-        assert entry.signature == 'test.Anchor(spec={})'
-        assert entry.type == 'test.Anchor(spec={})/version=1.0'
+        # The ENTRY: properties over the row's own columns.
+        assert entry.block.signature() == 'test.Anchor(spec={})'
+        assert entry.block.type() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.block.signature() == 'test.Anchor(spec={})'
+        assert entry.block.sig() == "{'spec': {}}"
+        assert entry.block.type() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.block.tp() == "{'paths': None, 'signature': {'spec': {}}, 'topics': (), 'version': '1.0'}"
 
-        # Method access
-        assert entry.signature() == 'test.Anchor(spec={})'
-        assert entry.sig() == "{'spec': {}}"
-
-        assert entry.type() == 'test.Anchor(spec={})/version=1.0'
-        assert entry.tp() == "{'paths': None, 'signature': {'spec': {}}, 'topics': (), 'version': '1.0'}"
-
-        # Bid access
-        assert entry.bid.signature == 'test.Anchor(spec={})'
-        assert entry.bid.signature() == 'test.Anchor(spec={})'
-        assert entry.bid.sig() == "{'spec': {}}"
-        assert entry.bid.type == 'test.Anchor(spec={})/version=1.0'
-        assert entry.bid.type() == 'test.Anchor(spec={})/version=1.0'
-        assert entry.bid.tp() == "{'paths': None, 'signature': {'spec': {}}, 'topics': (), 'version': '1.0'}"
+        # The BLOCK: Datablock-shaped, so these are calls, not properties.
+        assert entry.block.signature() == 'test.Anchor(spec={})'
+        assert entry.block.type() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.block.sig() == "{'spec': {}}"
 
     def test_datajournal_entry_methods_none(self):
         series = pd.Series({'hash': '12345', 'anchor': 'test.Anchor'})
         entry = DatajournalEntry(series)
 
-        assert entry.signature is None
-        assert entry.sig is None
-        assert entry.type is None
-        assert entry.tp is None
+        assert entry.block.signature() is None
+        assert entry.block.sig() is None
+        assert entry.block.type() is None
+        assert entry.block.tp() is None
+        assert entry.block.signature() is None
+        assert entry.block.type() is None
 
 
 class TestEvalJournal:

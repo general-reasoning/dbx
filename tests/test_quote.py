@@ -166,11 +166,14 @@ class TestCiteStringQuoting:
             f"but got {after_spec!r} in: {q}"
         )
 
-    def test_hash_kwarg_is_repr_quoted(self, tmp_path):
-        """When hash is explicitly set, it's a string and cite() must quote it."""
-        block = _make_block(SimpleBlock, tmp_path, hash='abc123')
-        q = block.quote()
-        assert "hash='abc123'" in q
+    def test_hash_cannot_be_pinned(self, tmp_path):
+        """A block's identity is sha256(type()) and nothing else.
+
+        A pinned hash could disagree with the block it was attached to, so it
+        is refused rather than silently deciding where artifacts are read from.
+        """
+        with pytest.raises(TypeError, match='hash= is gone'):
+            _make_block(SimpleBlock, tmp_path, hash='abc123')
 
     def test_quote_overall_format(self, tmp_path):
         """Verify the full format: $fqcn(url='...', spec={...})."""
@@ -187,19 +190,17 @@ class TestCiteStringQuoting:
         assert 'spec={' in q
 
     def test_quote_with_all_rootkwargs(self, tmp_path):
-        """When root, anchor, and hash are all set, all should be repr-quoted."""
-        block = _make_block(SimpleBlock, tmp_path,
-                            anchor='custom.anchor', hash='deadbeef')
+        """When url and anchor are set, both should be repr-quoted."""
+        block = _make_block(SimpleBlock, tmp_path, anchor='custom.anchor')
         q = block.quote()
         root_str = str(tmp_path)
         assert f"url='{root_str}'" in q
         assert "anchor='custom.anchor'" in q
-        assert "hash='deadbeef'" in q
-        # All three should appear before spec=
+        assert 'hash=' not in q, "hash is derived, never carried"
+        # Both should appear before spec=
         spec_idx = q.index('spec=')
         assert q.index('url=') < spec_idx
         assert q.index('anchor=') < spec_idx
-        assert q.index('hash=') < spec_idx
 
 
 # ---------------------------------------------------------------------------

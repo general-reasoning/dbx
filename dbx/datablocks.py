@@ -1447,7 +1447,6 @@ class Datablock:
         url: str = None,
         spec: Optional[Union[str, dict]] = None,
         anchor: str = None,
-        hash: str|None = None,
         tag: str|None = None,
         info: bool = None,
         verbose: bool = None,
@@ -1491,7 +1490,6 @@ class Datablock:
             'url': url,
             'spec': spec,
             'anchor': anchor,
-            'hash': hash,
             'tag': tag,
             'info': info,
             'verbose': verbose,
@@ -1618,9 +1616,14 @@ class Datablock:
         self._anchor_ = _unquote(state.get('anchor'))
         if self._anchor_ == 'None':
             self._anchor_ = None
-        self._hash_ = _unquote(state.get('hash'))
-        if self._hash_ == 'None':
-            self._hash_ = None
+        if state.get('hash') not in (None, 'None'):
+            raise TypeError(
+                f"{self.__class__.__name__}: hash= is gone. A block's identity "
+                f"is sha256(type()) and nothing else, so a pinned hash could "
+                f"disagree with the block it was attached to. To read a block "
+                f"identified by older code, pin the rendering that produced "
+                f"that hash with LEGACY_TYPING / LEGACY_SIGNATURE."
+            )
         self._code_ = _unquote(state.get('code') or state.get('subhash'))
         if self._code_ == 'None':
             self._code_ = None
@@ -3610,8 +3613,6 @@ class Datablock:
             rootkwargs['url'] = self.url
         if self._anchor_ is not None:
             rootkwargs['anchor'] = self._anchor_
-        if self._hash_ is not None:
-            rootkwargs['hash'] = self._hash_
         return rootkwargs
     
     @functools.cached_property
@@ -4638,15 +4639,12 @@ class Datablock:
     def hash(self): 
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hash
         # computed with the older code.
-        if not hasattr(self, '_hash'): 
-            if self._hash_ is not None:
-                self._hash = self._hash_
-            else:
-                sha = hashlib.sha256()
-                tp = self.type()
-                sha.update(tp.encode())
-                self._hash = sha.hexdigest()
-                self.log.detailed(f"hash: ---------===---------> {tp=} ---> hash: {self._hash}")
+        if not hasattr(self, '_hash'):
+            sha = hashlib.sha256()
+            tp = self.type()
+            sha.update(tp.encode())
+            self._hash = sha.hexdigest()
+            self.log.detailed(f"hash: ---------===---------> {tp=} ---> hash: {self._hash}")
         return self._hash
 
     @property

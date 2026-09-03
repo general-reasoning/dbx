@@ -146,7 +146,7 @@ class TestNoteMessageNotInline:
         b.note("stored in file", event="flag")
         j = b.journal()
         row = j[j['event'] == 'flag'].iloc[-1]
-        msg = row['message']
+        msg = row['note']
         assert msg is not None
         # Should be a filesystem path, not the raw message
         assert msg != "stored in file"
@@ -157,7 +157,7 @@ class TestNoteMessageNotInline:
         b.note("payload text", event="flag")
         j = b.journal()
         row = j[j['event'] == 'flag'].iloc[-1]
-        with open(row['message']) as f:
+        with open(row['note']) as f:
             assert f.read().strip() == "payload text"
 
 
@@ -169,14 +169,14 @@ class TestNoteMessageInline:
         b.note("inline msg", event="flag", inline=True)
         j = b.journal()
         row = j[j['event'] == 'flag'].iloc[-1]
-        assert row['message'] == "inline msg"
+        assert row['note'] == "inline msg"
 
     def test_no_message_file_written_for_inline(self, tmp_path):
         b = _make(tmp_path)
         b.note("no file", event="flag", inline=True)
         j = b.journal()
         row = j[j['event'] == 'flag'].iloc[-1]
-        msg = row['message']
+        msg = row['note']
         # The value is the raw string, not a path that exists on disk
         assert not os.path.exists(msg)
 
@@ -190,7 +190,7 @@ class TestNoteNoMessage:
         j = b.journal()
         row = j[j['event'] == 'ping'].iloc[-1]
         import pandas as pd
-        assert pd.isna(row.get('message', None)) or row.get('message') is None
+        assert pd.isna(row.get('message', None)) or row.get('note') is None
 
     def test_no_message_default_event(self, tmp_path):
         b = _make(tmp_path)
@@ -198,7 +198,7 @@ class TestNoteNoMessage:
         j = b.journal()
         row = j[j['event'] == 'note'].iloc[-1]
         import pandas as pd
-        assert pd.isna(row.get('message', None)) or row.get('message') is None
+        assert pd.isna(row.get('message', None)) or row.get('note') is None
 
 
 class TestNoteMultipleInstances:
@@ -224,9 +224,9 @@ class TestNoteMultipleInstances:
         rows = j[j['event'] == 'flag'].sort_values('datetime').reset_index(drop=True)
         assert len(rows) == 2
         # First: file path
-        assert os.path.exists(rows.loc[0, 'message'])
+        assert os.path.exists(rows.loc[0, 'note'])
         # Second: literal string
-        assert rows.loc[1, 'message'] == "inline-msg"
+        assert rows.loc[1, 'note'] == "inline-msg"
 
 
 class TestNoteReturnsSelf:

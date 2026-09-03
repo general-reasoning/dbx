@@ -1129,9 +1129,7 @@ class DatapointTable(DatapointBase, Datastack):
                 return {'tab_idx': self.idx, 'skipped': True}
 
             tab = tbl.__block__(self.idx, **self.kwargs)
-            keyby_val = getattr(tbl, 'keyby', None)
-            if keyby_val is not None:
-                tab = tab.set(keyby=keyby_val)
+            tab = tbl._adopt(tab, keyby=True)
             skipped = tab.valid()
             if build and not skipped:
                 tab.build()

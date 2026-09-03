@@ -672,7 +672,7 @@ class Block:
     def to_dict(self, *, deslash: bool = False) -> dict:
         d = {name: getattr(self, name) for name in (
             'hash', 'code', 'version', 'revision', 'gitrepo', 'url',
-            'anchor', 'tag', 'key', 'keyby', 'uuid', 'id')}
+            'anchor', 'tag', 'key', 'keyby', 'session', 'id')}
         d.update({name: getattr(self, name)() for name in
                   ('signature', 'type', 'cite', 'note')})
         d['paths'] = self.paths()
@@ -719,9 +719,13 @@ class Block:
         return self._entry.get('version')
 
     @property
-    def uuid(self):
-        """The uuid of the live instance that wrote this entry, or None."""
-        return self._entry.get('uuid')
+    def session(self):
+        """The run that wrote this entry, or None.
+
+        Shared by every entry of that run, across blocks -- unlike ``id``,
+        which is unique per row, and ``hash``, which is per block.
+        """
+        return self._entry.get('session')
 
     @property
     def id(self):
@@ -1349,6 +1353,19 @@ class Datablock:
     # and reprs spec values exactly once, which removes both collisions -- and
     # necessarily changes the hash. Existing subclasses set it to True so their
     # already-computed hashes, keys and storage paths stay valid.
+    #: Journal column order: identity first, then when, then where, then what
+    #: was recorded, and the event last. Columns not listed here are kept, in
+    #: their own order, just ahead of 'event'.
+    JOURNAL_COLUMNS = [
+        'hash', 'code', 'session', 'id',
+        'datetime', 'build:start:datetime', 'build:end:datetime',
+        'version', 'dbx_version', 'revision',
+        'url', 'anchor', 'keyby', 'key', 'anchorkeypath', 'tag',
+        'topics', 'paths',
+        'spec', 'dfn', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type',
+        'gitrepo', 'entry_path', 'event',
+    ]
+
     LEGACY_NORM = False
     LEGACY_SIGNATURE = False
 
@@ -1505,6 +1522,10 @@ class Datablock:
         revision: str = None,
         keyby: str = 'tag_version_shorthash',
         uuid16: bool = False,
+        # Shared by every block of one run, and generated when not given. A
+        # block's own identity does not depend on it, so it stays out of the
+        # signature; it is how the journal groups the entries of a run.
+        session: str | None = None,
         # When a read fails, follow a redirection recorded by UNSAFE_redirect()
         # and read from the entry it names instead. See :meth:`read`.
         redirect: bool = True,
@@ -1548,6 +1569,7 @@ class Datablock:
             'revision': revision,
             'keyby': keyby,
             'uuid16': uuid16,
+            'session': session,
             'redirect': redirect,
             'validate_vars': validate_vars if validate_cfg is None else validate_cfg,
             'storage_options': storage_options,
@@ -1693,6 +1715,9 @@ class Datablock:
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
             )
         self._uuid16_ = state.get('uuid16', False)
+        self._session_ = _unquote(state.get('session'))
+        if self._session_ == 'None':
+            self._session_ = None
         # Redirection config: dict(code=..., filter=..., paths=...) or legacy bool
         self.redirect = state.get('redirect')
         self.validate_vars = state.get('validate_vars', True)
@@ -2598,7 +2623,9 @@ class Datablock:
                 continue
             self.write_journal_entry(event=f"build_tree:{s}:begin")
             self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: BEGIN --------------------------------")
-            c.build_tree(*args, deep=deep, **kwargs)   
+            # A child built as part of this tree belongs to this run. VAR is
+            # where it was constructed, which is too early to know that.
+            self._adopt(c).build_tree(*args, deep=deep, **kwargs)
             self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: END --------------------------------")
             self.write_journal_entry(event=f"build_tree:{s}:end")
         if not exclude_self:
@@ -3523,10 +3550,35 @@ class Datablock:
         return __version__
 
     @property
-    def uuid(self):
-        if not hasattr(self, '_uuid'):
-            self._uuid = uuid.uuid4().hex[:16] if getattr(self, '_uuid16_', False) else str(uuid.uuid4())
-        return self._uuid
+    def session(self):
+        """The run this block belongs to: given, or generated once and kept.
+
+        One live instance keeps one session for as long as it is alive, and a
+        whole build tree shares it, because `build_tree` and `Datastack.block`
+        hand it down. That is what makes a run's journal entries findable
+        together -- ``id`` identifies one row and ``hash`` one block, but
+        neither says "these were written by the same run".
+
+        Not part of :attr:`signature`, so which run built a block cannot
+        change what the block IS.
+        """
+        if getattr(self, '_session_', None) is None:
+            self._session_ = (uuid.uuid4().hex[:16]
+                              if getattr(self, '_uuid16_', False) else str(uuid.uuid4()))
+        return self._session_
+
+    def _adopt(self, child, *, keyby: bool = False):
+        """Hand *child* what it should inherit from this block.
+
+        Called by the framework AFTER the user's hook returns, so a subclass
+        that only overrides ``__block__`` never has to think about it.
+        """
+        kw = {'session': self.session}
+        if keyby:
+            keyby_val = getattr(self, 'keyby', None)
+            if keyby_val is not None:
+                kw['keyby'] = keyby_val
+        return child.set(**kw)
     
     @property
     def revision(self):
@@ -3670,7 +3722,9 @@ class Datablock:
         tailkwargs = {
             k: v
             for k, v in state.items()
-            if k not in ['url', 'anchor', 'hash', 'spec']          
+            # 'session' groups a run's journal entries; pinning one into a
+            # recorded quote would have inst() rejoin a run that is over.
+            if k not in ['url', 'anchor', 'hash', 'spec', 'session']
         }
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
@@ -5147,7 +5201,7 @@ class Datablock:
         ``entry_code`` is a fresh uuid per call, and it is the only field that
         identifies a *row*.  Everything else on an entry describes the block
         or the moment: ``hash`` and ``key`` are shared by every entry of that
-        block, ``uuid`` by every entry of one live instance, and ``datetime``
+        block, ``session`` by every entry of one run, and ``datetime``
         is only as unique as its resolution -- two entries written inside the
         same microsecond, or by two processes at once, collide.  So a caller
         holding an ``entry_code`` can address exactly the row it wrote:
@@ -5191,7 +5245,7 @@ class Datablock:
         redirection_value = redirection if (redirection is None or isinstance(redirection, str)) else str(redirection)
         entry_id = uuid.uuid4().hex[:16] if getattr(self, '_uuid16_', False) else str(uuid.uuid4())
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-        code_seed = f"{self.hash}:{self.uuid}:{dt}:{event}:{entry_id}"
+        code_seed = f"{self.hash}:{self.session}:{dt}:{event}:{entry_id}"
         code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
 
         self._write_journal_dict('spec', self.spec)
@@ -5245,7 +5299,7 @@ class Datablock:
                                          'key': self.key,
                                          'anchorkeypath': self.anchorkeypath,
                                          'code': self.code,
-                                         'uuid': self.uuid,
+                                         'session': self.session,
                                          'id': entry_id,
                                          'tag': self.tag,
                                          'topics': str(topics_dict),
@@ -5354,10 +5408,13 @@ class Datablock:
                 # Backward compat: rename legacy 'context' column to 'note' and alias 'message'
                 if 'context' in df.columns and 'note' not in df.columns:
                     df = df.rename(columns={'context': 'note'})
-                if 'note' in df.columns and 'message' not in df.columns:
-                    df['message'] = df['note']
-                elif 'message' in df.columns and 'note' not in df.columns:
-                    df['note'] = df['message']
+                if 'message' in df.columns:
+                    # Replaced by 'note'. Old rows are read under the new name;
+                    # the old one is not carried forward.
+                    if 'note' not in df.columns:
+                        df = df.rename(columns={'message': 'note'})
+                    else:
+                        df = df.drop(columns=['message'])
                 # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
                 if 'build_datetime' in df.columns and 'build:end:datetime' not in df.columns:
                     df = df.rename(columns={'build_datetime': 'build:end:datetime'})
@@ -5367,10 +5424,23 @@ class Datablock:
                     if 'datetime' not in df.columns:
                         df['datetime'] = df['build_datetime']
                     df = df.drop(columns=['build_datetime'])
-                if 'id' not in df.columns and 'entry_code' in df.columns:
-                    df['id'] = df['entry_code']
-                leading = ['hash'] + (['uuid'] if 'uuid' in df.columns else []) + ['datetime']
-                columns = leading + [c for c in df.columns if c not in set(leading + ['event'])] + ['event']
+                # Renamed columns, each applied only when the new name is
+                # absent -- a journal spanning the rename has both, and the
+                # new one is the one that was written deliberately.
+                for legacy, current in (('entry_code', 'id'),
+                                        ('subhash', 'code'),
+                                        ('uuid', 'session')):
+                    if legacy in df.columns and current not in df.columns:
+                        df = df.rename(columns={legacy: current})
+                    elif legacy in df.columns:
+                        df = df.drop(columns=[legacy])
+                columns = [c for c in Datablock.JOURNAL_COLUMNS
+                           if c in df.columns and c != 'event']
+                # Anything unlisted keeps its place at the back, ahead of
+                # 'event', so a column added later still shows up.
+                columns += [c for c in df.columns if c not in set(columns + ['event'])]
+                if 'event' in df.columns:
+                    columns.append('event')
                 df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)
                 df = df.rename(columns={'build_log': 'log'})
             else:
@@ -5663,9 +5733,7 @@ class Datastack(Datablock):
                         raise IndexError(f"Block index {idx} out of range for {self.__class__.__name__} with {len(blist)} blocks")
                 else:
                     raise
-            keyby_val = getattr(self, 'keyby', None)
-            if keyby_val is not None:
-                s = s.set(keyby=keyby_val)
+            s = self._adopt(s, keyby=True)
             self._blocks_[idx] = s
         return self._blocks_[idx]
 

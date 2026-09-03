@@ -175,7 +175,49 @@ class CallableStr(str):
         return str(self)
 
 
-def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_options=None, log=None, n_workers=8, index=None, **filter_kwargs):
+def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Canonical ``type`` and ``signature`` columns, decided per ROW.
+
+    The two names have meant different things at different times::
+
+        <= 2026-08-03          type is 'hashstr',   signature is 'norm'
+        2026-08-03 .. 08-27    type is 'signature', signature is 'subsignature'/'norm'
+        >= 2026-08-27          type is 'type',      signature is 'signature'
+
+    So a column literally named ``signature`` holds today's TYPE in the middle
+    era. A journal frame concatenates rows from every era and a column is
+    frame-wide, so no rename can sort that out: ``df['signature']`` would still
+    mean one thing on some rows and another on the rest. Deciding it per row
+    can, and the discriminator is in the data -- a row carrying a ``type``
+    value is a modern one.
+
+    `DatajournalEntry.COLUMN_CHAINS` resolves the same thing lazily, per
+    access, which is why the ACCESSORS are right either way. This is for the
+    frame itself, so that filtering on ``type`` or reading ``df['signature']``
+    means what it says -- most of the point of a journal being a DataFrame.
+    """
+    if df is None or df.empty:
+        return df
+
+    def col(name):
+        return df[name] if name in df.columns else pd.Series(pd.NA, index=df.index)
+
+    modern = col('type').notna()
+    middle = ~modern & col('signature').notna()
+
+    # Vectorised, not row-wise: a journal runs to thousands of rows and this
+    # happens on every read.
+    type_col = col('type').where(modern, col('signature').where(middle, col('hashstr')))
+    sig_col = col('signature').where(
+        modern, col('subsignature').fillna(col('norm')).where(middle, col('norm')))
+
+    df = df.copy()
+    df['type'] = type_col
+    df['signature'] = sig_col
+    return df
+
+
+def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
 
     Parameters
@@ -197,6 +239,10 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
         Number of workers for reading journal files.
     index : str, optional
         Column name to set as DataFrame index on the returned Datajournal.
+    unnormalized : bool, default False
+        Leave the era-dependent ``type``/``signature`` columns exactly as
+        recorded. By default they are resolved per row, so the frame means
+        what it says -- see `normalize_journal_frame`.
     **filter_kwargs
         Forwarded to :class:`Datajournal` for filtering.
 
@@ -1199,11 +1245,16 @@ class Datajournal(pd.DataFrame):
 
     def __init__(self, df: pd.DataFrame|None, *, storage_options: dict = None,
                  parse_datetimes: bool = True, logger: Logger = Logger(),
-                 index: str | None = None, **filter_kwargs):
+                 index: str | None = None, unnormalized: bool = False, **filter_kwargs):
         
         # Guard against an empty journal (no parquet files written yet).
         if df is None:
             df = pd.DataFrame()
+
+        # Before filtering: a filter on 'type' or 'signature' should mean the
+        # same thing on every row, which is what normalising decides.
+        if not unnormalized:
+            df = normalize_journal_frame(df)
 
         # Process the dataframe before calling super().__init__()
         if parse_datetimes:
@@ -5328,7 +5379,7 @@ class Datablock:
         return entry_id
 
     @staticmethod
-    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index=None, **filter_kwargs):
+    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, **filter_kwargs):
         if log is None:
             log = Logger()
         if n_workers is None:
@@ -5445,7 +5496,8 @@ class Datablock:
                 df = df.rename(columns={'build_log': 'log'})
             else:
                 df = None
-        journal = Datajournal(df, storage_options=storage_options, index=index, **filter_kwargs)
+        journal = Datajournal(df, storage_options=storage_options, index=index,
+                              unnormalized=unnormalized, **filter_kwargs)
         if loc is not None:
             result = DatajournalEntry(journal.loc[loc].dropna(), storage_options=storage_options)
         elif iloc is not None:
@@ -5454,7 +5506,7 @@ class Datablock:
             result = journal
         return result
 
-    def journal(self, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index: str | None = None, **filter_kwargs):
+    def journal(self, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index: str | None = None, unnormalized: bool = False, **filter_kwargs):
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         return self.Journal(
@@ -5466,6 +5518,7 @@ class Datablock:
             log=getattr(self, 'log', None) if log is None else log,
             n_workers=n_workers,
             index=index,
+            unnormalized=unnormalized,
             **filter_kwargs,
         )
 

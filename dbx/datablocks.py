@@ -170,6 +170,147 @@ DIRTOPIC = None
 SYNTOPIC = ()
 
 
+class _TopicMarkerMeta(type):
+    """Renders a topic marker as the declaration that made it.
+
+    A leaf reaches :meth:`Datablock.signature_topics` as ``str(node)``, and the
+    journal records ``str(TOPICS)``, which ``repr``s it -- so a marker has to
+    spell itself the same way in both, and that spelling has to be text that
+    :func:`literal_topics` reads back into this very class.
+    """
+
+    #: ``{name: marker}`` for every marker a declaration may name, so a recorded
+    #: ``{'masks': DIR}`` reads back as the class DIR while ``{'masks': 'DIR'}``
+    #: stays a topic stored in a file called ``DIR``.
+    REGISTRY = {}
+
+    # 1. Declared API ---------------------------------------------------
+
+    def __init__(cls, name, bases, namespace, **kwargs):
+        super().__init__(name, bases, namespace, **kwargs)
+        # A parameterised marker -- SLICE(idx='int') -- is a subclass carrying
+        # `columns`, and is not a name anything may be declared under: it
+        # renders as the call that made it and reads back through that call.
+        if not namespace.get('columns'):
+            _TopicMarkerMeta.REGISTRY.setdefault(name, cls)
+
+    def __repr__(cls):
+        columns = cls.__dict__.get('columns')
+        if not columns:
+            return cls.__name__
+        return f"{cls.__name__}({_render_columns(columns)})"
+
+    __str__ = __repr__
+
+
+class TOPICMARKER(metaclass=_TopicMarkerMeta):
+    """Base of the topic markers: :class:`DIR`, :class:`SYNTHETIC`, ``SLICE``.
+
+    A marker says what a topic IS.  The sentinels say it by what value they
+    happen to be -- :data:`DIRTOPIC` is ``None`` and :data:`SYNTOPIC` the empty
+    tuple -- which a reader has to know by heart and which a filename can be
+    mistaken for.  A marker is a CLASS and never a string, so ``{'masks': DIR}``
+    and ``{'masks': 'DIR'}`` are different declarations and stay different
+    everywhere: the first is a directory topic, the second a topic stored in a
+    file named ``DIR``.  Which is why a filename renders quoted under the flag
+    and a marker does not -- see :meth:`Datablock._topictext`.
+
+    A declaration that holds a marker IS a modern one -- there is nothing else
+    it could mean, so nothing announces it.  It may hold no sentinel as well:
+    one declaration renders one way, and the two spellings render differently
+    (``topic:masks=DIR`` against ``topic:masks=None``, and a filename quoted
+    against bare), so a mixture is refused rather than left to render half of
+    itself each way.
+
+    Which also means a marker re-keys the block that adopts it.  The type string
+    is what the hash is taken over, and every leaf of a modern declaration
+    renders differently from how it did: adopt them on a new class, or accept
+    that the old artifacts are orphaned.
+    """
+
+
+class SYNTHETIC(TOPICMARKER):
+    """A synthetic topic: presented, never stored.  :data:`SYNTOPIC` as a marker.
+
+    ``path()`` and ``dirpath()`` are both ``None``, nothing is created, listed,
+    copied or cleared for it, and it is vacuously valid.
+    """
+
+
+class DIR(TOPICMARKER):
+    """A directory topic: the topic IS the directory.  :data:`DIRTOPIC` as a marker.
+
+    A location, unlike :class:`SYNTHETIC` -- a real directory that merely has no
+    filename inside it.
+    """
+
+
+def _is_topicmarker(node, kind=TOPICMARKER):
+    """True when *node* is the marker *kind*, or a parameterisation of it.
+
+    Markers are classes, so this is the test that keeps a filename out: a
+    string is never a marker however it is spelled.
+    """
+    return isinstance(node, type) and issubclass(node, kind)
+
+
+def _render_columns(columns):
+    """A marker's ``columns`` as the call arguments that reconstruct it.
+
+    Keyword form when every name is an identifier, which is what a declaration
+    almost always looks like, and the mapping form when one is not -- ``SLICE``
+    accepts both, so either rendering reads back as the same marker.
+    """
+    if all(isinstance(name, str) and name.isidentifier() for name in columns):
+        return ', '.join(f"{name}={coltype!r}" for name, coltype in columns.items())
+    return repr(dict(columns))
+
+
+def literal_topics(text):
+    """A recorded ``str(TOPICS)`` back as a TOPICS declaration.
+
+    :func:`ast.literal_eval` with the markers added to its grammar: a bare name
+    is the marker declared under it, and a call is that marker parameterised.
+    So the distinction a declaration drew between ``DIR`` and ``'DIR'`` survives
+    a round trip through the journal, where both are just text in a column.
+
+    A parse, not an eval -- nothing outside the marker registry is resolved, and
+    no expression is executed.
+    """
+    try:
+        return ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        pass
+    return _topic_literal(ast.parse(text, mode='eval').body)
+
+
+def _topic_literal(node):
+    """One :mod:`ast` node of a recorded TOPICS as the value it stands for."""
+    if isinstance(node, ast.Dict):
+        return {_topic_literal(k): _topic_literal(v)
+                for k, v in zip(node.keys, node.values)}
+    if isinstance(node, ast.Name):
+        return _marker_named(node.id)
+    if isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name):
+            raise ValueError(f"recorded TOPICS: {ast.dump(node.func)} is not a marker")
+        marker = _marker_named(node.func.id)
+        args = [_topic_literal(arg) for arg in node.args]
+        return marker(*args, **{kw.arg: _topic_literal(kw.value) for kw in node.keywords})
+    return ast.literal_eval(node)
+
+
+def _marker_named(name):
+    """The marker declared under *name*, or a ValueError naming what is known."""
+    marker = _TopicMarkerMeta.REGISTRY.get(name)
+    if marker is None:
+        raise ValueError(
+            f"recorded TOPICS names {name!r}, which is not a topic marker; "
+            f"known markers are {sorted(_TopicMarkerMeta.REGISTRY)}"
+        )
+    return marker
+
+
 class CallableStr(str):
     def __call__(self, *args, **kwargs):
         return str(self)
@@ -668,7 +809,7 @@ class Block:
         mirrors the live API, and the mapping is the entry's own business --
         read it off the row when you want it.
         """
-        return list(self._dict_column(self._entry, 'topics'))
+        return list(self._dict_column(self._entry, 'topics', parse=literal_topics))
 
     def cite(self, **kwargs):
         """Path to this entry's ``cite.txt``, or None."""
@@ -746,7 +887,7 @@ class Block:
         than recorded -- so `topics()` answers with names on both, and this
         carries what each name maps to.
         """
-        return self._dict_column(self._entry, 'topics')
+        return self._dict_column(self._entry, 'topics', parse=literal_topics)
 
     @property
     def anchor(self):
@@ -905,14 +1046,14 @@ class Block:
         return node
 
     def _is_dir_topic(self, *topicpath):
-        """A directory topic: the recorded TOPICS filename is :data:`DIRTOPIC`."""
-        return self._walk(self.TOPICS,
-                          self._normtopic(topicpath)) is DIRTOPIC
+        """A directory topic: recorded as :data:`DIRTOPIC` or the :class:`DIR` marker."""
+        node = self._walk(self.TOPICS, self._normtopic(topicpath))
+        return node is DIRTOPIC or _is_topicmarker(node, DIR)
 
     def _is_syntopic(self, *topicpath):
-        """A :data:`SYNTOPIC` topic -- recorded as synthetic, with no location."""
+        """A synthetic topic -- recorded as :data:`SYNTOPIC` or the :class:`SYNTHETIC` marker."""
         node = self._walk(self.TOPICS, self._normtopic(topicpath))
-        return isinstance(node, tuple) and len(node) == 0
+        return (isinstance(node, tuple) and len(node) == 0) or _is_topicmarker(node, SYNTHETIC)
 
     @staticmethod
     def _signature_text(entry):
@@ -939,14 +1080,19 @@ class Block:
         return str(raw) if raw is not None else None
 
     @staticmethod
-    def _dict_column(entry, field):
-        """A journal column recorded as ``str(dict)``, back as a dict."""
+    def _dict_column(entry, field, parse=None):
+        """A journal column recorded as ``str(dict)``, back as a dict.
+
+        *parse* is how the text is read, :func:`ast.literal_eval` by default and
+        :func:`literal_topics` for the topics column, whose values may be topic
+        markers rather than literals.
+        """
         raw = entry.get(field)
         if raw is None or (isinstance(raw, float) and pd.isna(raw)):
             return {}
         if isinstance(raw, dict):
             return raw
-        return ast.literal_eval(raw)
+        return (parse or ast.literal_eval)(raw)
 
     @staticmethod
     def _type_parts(text):
@@ -1527,6 +1673,76 @@ class Datablock:
         return bool(getattr(self, 'LEGACY_TYPING', False)
                     or getattr(self, 'LEGACY_SIGNATURE', False)
                     or getattr(self, 'LEGACY_NORM', False))
+
+    @staticmethod
+    def _topictext(node, modern):
+        """A topic leaf as the text that follows the ``=`` in its segment.
+
+        In a *modern* declaration a filename is QUOTED and a marker is not,
+        which is what keeps the rendering injective now that a leaf can be
+        either: bare, a topic stored in a file called ``DIR`` and a :class:`DIR`
+        topic would both render ``topic:masks=DIR`` and collide onto one hash
+        while meaning different things -- a file in the one and a directory in
+        the other.
+
+        A declaration spelled with the sentinels renders every leaf bare, as it
+        always has, so no existing hash moves.  Which is the other half of why
+        the two spellings may not be mixed: the quotes are themselves a
+        re-keying, and one declaration cannot re-key half of itself.
+        """
+        if modern and isinstance(node, str):
+            return repr(node)
+        return str(node)
+
+    def _modern_topics(self, topics=ABSENT) -> bool:
+        """Whether *topics* is spelled with the markers rather than the sentinels.
+
+        Derived from the declaration rather than announced by a flag: a TOPICS
+        holding a marker is a modern one, and there is nothing else it could
+        mean.  Derived on each call, so a TOPICS assigned or amended after the
+        class body -- or computed per instance, as
+        :class:`~dbx.datapoints.DatapointFold`'s is -- is answered as it stands.
+
+        A declaration holding both spellings has no era, and raises rather than
+        rendering half of itself each way.
+        """
+        if topics is ABSENT:
+            topics = getattr(self, 'TOPICS', None)
+        modern, legacy = self._topic_spellings(topics)
+        if modern and legacy:
+            raise ValueError(
+                f"{self.__class__.__name__}: TOPICS mixes the topic markers with "
+                f"the sentinels they replace -- {modern} against {legacy}. The two "
+                f"render differently, so one declaration cannot be both: spell "
+                f"every topic the one way or the other"
+            )
+        return bool(modern)
+
+    def _topic_spellings(self, topics, prefix=()):
+        """The leaf paths declared as markers, and those declared as sentinels.
+
+        A filename belongs to neither: it is spelled the same either way, and
+        only its rendering differs.
+        """
+        modern, legacy = [], []
+        if not isinstance(topics, dict):
+            return modern, legacy
+        for name, node in topics.items():
+            path = prefix + (str(name),)
+            if isinstance(node, dict):
+                nested = self._topic_spellings(node, path)
+                modern.extend(nested[0])
+                legacy.extend(nested[1])
+            elif _is_topicmarker(node):
+                modern.append('/'.join(path))
+            elif self._node_is_sentinel(node):
+                legacy.append('/'.join(path))
+        return modern, legacy
+
+    @staticmethod
+    def _node_is_sentinel(node):
+        """True when node is one of the sentinels the markers replace."""
+        return node is DIRTOPIC or (isinstance(node, tuple) and len(node) == 0)
 
     @dataclass
     class VAR:
@@ -2179,6 +2395,9 @@ class Datablock:
             )
         if not self.has_topics():
             raise KeyError(f"{self.__class__.__name__} declares no TOPICS")
+        # For the side effect: a declaration mixing the two spellings has no era
+        # and says so here, rather than surfacing as a rendering later.
+        self._modern_topics()
         if self._topics_is_list:
             if len(topicpath) > 1:
                 raise KeyError(
@@ -2198,17 +2417,19 @@ class Datablock:
                 )
 
             node = node[name]
-            if not isinstance(node, (dict, str)) and node is not DIRTOPIC \
-                    and not self._node_is_syntopic(node):
+            if not (isinstance(node, (dict, str)) or node is DIRTOPIC
+                    or self._node_is_syntopic(node) or _is_topicmarker(node)):
                 raise TypeError(
                     f"TOPICS entry {'/'.join(topicpath[:i+1])!r} is {node!r}; "
-                    f"expected a filename, DIRTOPIC, SYNTOPIC, or a dict of these"
+                    f"expected a filename, a topic marker, DIRTOPIC, SYNTOPIC, "
+                    f"or a dict of these"
                 )
         return node
 
     @staticmethod
     def _node_is_syntopic(node):
-        return isinstance(node, tuple) and len(node) == 0
+        """True when node is :data:`SYNTOPIC` or the :class:`SYNTHETIC` marker."""
+        return (isinstance(node, tuple) and len(node) == 0) or _is_topicmarker(node, SYNTHETIC)
 
     @staticmethod
     def _check_topicname(name):
@@ -2248,8 +2469,12 @@ class Datablock:
 
     @staticmethod
     def _node_is_dirtopic(node):
-        """True when node is DIRTOPIC."""
-        return node is DIRTOPIC
+        """True when node is :data:`DIRTOPIC` or the :class:`DIR` marker.
+
+        A parameterised marker is a subclass of the one it parameterises, so
+        ``SLICE(idx='int')`` -- a slice IS a directory -- lands here too.
+        """
+        return node is DIRTOPIC or _is_topicmarker(node, DIR)
 
     def _is_dir_topic(self, *topicpath):
         """True when the topic resolves to a directory rather than a file.
@@ -4468,10 +4693,13 @@ class Datablock:
         """
         if isinstance(topics, dict):
             out = {}
+            # The era of the declaration in hand, which for the other side of a
+            # difftopics() is not necessarily this block's own.
+            modern = self._modern_topics(topics)
 
             def walk(node, prefix):
                 if not isinstance(node, dict):
-                    out['/'.join(prefix)] = str(node)
+                    out['/'.join(prefix)] = self._topictext(node, modern)
                     return
                 for name, child in node.items():
                     walk(child, prefix + (str(name),))
@@ -4501,7 +4729,7 @@ class Datablock:
             # the blocks themselves. Compare two LIVE blocks to see that one.
             other_topics = other_topics.block.TOPICS
         elif isinstance(other_topics, str):
-            other_topics = ast.literal_eval(other_topics)
+            other_topics = literal_topics(other_topics)
         topicmap = self._topic_map(other_topics)
         return self._render_topic_map(topicmap), topicmap
 
@@ -4759,7 +4987,8 @@ class Datablock:
             # A leaf is named by its full path, so a nested topic reads
             # "topic:data/frames=None". A flat TOPICS has one-segment paths and
             # renders byte-identically to before -- the hash does not move.
-            return tuple(f"topic:{'/'.join(tp)}={self._topicnode(*tp)}"
+            modern = self._modern_topics()
+            return tuple(f"topic:{'/'.join(tp)}={self._topictext(self._topicnode(*tp), modern)}"
                          for tp in self.leaftopics())
         if hasattr(self, "TOPICS") and isinstance(self.TOPICS, list):
             return tuple(f"topic:{topic}" for topic in self.TOPICS)

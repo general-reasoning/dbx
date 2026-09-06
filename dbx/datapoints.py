@@ -32,7 +32,15 @@ except ImportError as exc:  # pragma: no cover
         "Install it with:  pip install datablocks[streaming]"
     ) from exc
 
-from .datablocks import DIRTOPIC, Datablock, Datastack, Datajournal
+from .datablocks import (
+    DIR,
+    DIRTOPIC,
+    Datablock,
+    Datajournal,
+    Datastack,
+    _TopicMarkerMeta,
+    _is_topicmarker,
+)
 from .datastreams import (
     ChunkShuffleSampler,
     SharedMemoryManager,
@@ -48,6 +56,75 @@ from .datastreams import (
 
 #: Topic marker indicating an MDS slice stream directory inside a block.
 SLICETOPIC = 'SLICETOPIC'
+
+
+class _SliceMeta(_TopicMarkerMeta):
+    """Makes ``SLICE(idx='int')`` a marker carrying those columns.
+
+    A call returns a SUBCLASS rather than an instance, so everything a TOPICS
+    declaration holds is a class and one test -- :func:`_is_topicmarker` --
+    recognises the lot of them.
+    """
+
+    # 1. Declared API ---------------------------------------------------
+
+    def __call__(cls, *mapping, **typed):
+        if mapping and (typed or len(mapping) > 1 or not isinstance(mapping[0], dict)):
+            raise TypeError(
+                f"{cls.__name__} takes its columns as keywords -- "
+                f"{cls.__name__}(idx='int', image='jpeg') -- or as a single mapping "
+                f"when a column name is not an identifier"
+            )
+        columns = dict(mapping[0]) if mapping else dict(typed)
+        for name, coltype in columns.items():
+            cls._check_column(name, coltype)
+        return _SliceMeta(cls.__name__, (cls,), {'columns': columns})
+
+
+class SLICE(DIR, metaclass=_SliceMeta):
+    """One independently-readable MDS stream directory.  ``SLICETOPIC`` as a marker.
+
+    A :class:`~dbx.datablocks.DIR`, because a slice IS a directory -- so every
+    test that asks whether a topic is one answers for a slice without knowing
+    what a slice is.
+
+    Declared with its columns and their MDS types::
+
+        TOPICS = {'frames': SLICE(idx='int', image='jpeg')}
+
+    which is the point of it.  The sentinel named a slice and said nothing about
+    its shape, so the columns lived in whatever dict ``__build__`` happened to
+    hand the writers, reached no hash, and could change under artifacts that
+    went on claiming to be the same block.  The marker renders as
+    ``topic:frames=SLICE(idx='int', image='jpeg')``, so adding, dropping,
+    retyping or REORDERING a column re-keys the block.  Order counts because MDS
+    rows are read back in the order they were written, and a projection that
+    permuted an axis rather than failing is the bug this forecloses.
+
+    The declaration is what `DatapointTab.slice_writers` writes, so it takes no
+    argument when every slice declares its columns.  A bare ``SLICE`` declares
+    none, and is the sentinel's behaviour under the marker's spelling: the
+    columns are then the writer's to supply.
+    """
+
+    #: Empty on the bare marker, and set by the call that parameterises it.
+    columns = {}
+
+    # 3. Helpers --------------------------------------------------------
+
+    @staticmethod
+    def _check_column(name, coltype):
+        """Refuse a column that would render into an ambiguous type string."""
+        for text, what in ((name, 'column name'), (coltype, 'column type')):
+            if not isinstance(text, str):
+                raise TypeError(f"SLICE {what} must be a string, got {text!r}")
+            if '/' in text:
+                raise ValueError(
+                    f"SLICE {what} {text!r} may not contain '/': the marker is "
+                    f"rendered into the type string, whose segments are '/'-joined, "
+                    f"so a '/' would let two declarations render alike and collide "
+                    f"onto one hash"
+                )
 
 
 class DatapointBase(Datablock):
@@ -109,6 +186,17 @@ class DatapointBase(Datablock):
         read through.
         """
         return DatapointBase._find_slice_topics(getattr(self, 'TOPICS', None))
+
+    def declared_columns(self, slice) -> 'dict | None':
+        """The columns *slice* declares, as ``{column: mds_type}``, or None.
+
+        None when nothing was declared -- the :data:`SLICETOPIC` sentinel, or a
+        bare :class:`SLICE` -- so the columns are still the writer's to supply.
+        A declaration, unlike what a writer is handed, is in the block's hash.
+        """
+        node = self._topicnode(*slice.split('/'))
+        columns = getattr(node, 'columns', None) if _is_topicmarker(node, SLICE) else None
+        return dict(columns) if columns else None
 
     def data(self, *slice_columns, nested=True, concat: bool = False,
              columns=None, **kwargs):
@@ -457,9 +545,24 @@ class DatapointBase(Datablock):
         return os.path.join(self.path(*slice.split('/')), 'index.json')
 
     @staticmethod
+    def _node_is_sentinel(node):
+        """True when node is a sentinel the markers replace, :data:`SLICETOPIC` included.
+
+        Which is what stops a :class:`SLICE` and a ``SLICETOPIC`` sharing one
+        declaration: they are the same topic said two ways, and the two ways
+        render differently.
+        """
+        return Datablock._node_is_sentinel(node) or node == SLICETOPIC
+
+    @staticmethod
     def _node_is_dirtopic(node):
-        """True when node is DIRTOPIC or SLICETOPIC."""
-        return node is DIRTOPIC or node == SLICETOPIC or node is SLICETOPIC
+        """True when node is a directory topic, :data:`SLICETOPIC` included.
+
+        A :class:`SLICE` is a :class:`~dbx.datablocks.DIR`, so the base test
+        already covers the marker.  What this adds is the sentinel, which is a
+        string and would otherwise read as a file named ``SLICETOPIC``.
+        """
+        return Datablock._node_is_dirtopic(node) or node == SLICETOPIC
 
     def _is_dir_topic(self, *topicpath):
         """True when the topic resolves to a directory rather than a file."""
@@ -548,7 +651,7 @@ class DatapointBase(Datablock):
             return ()
         for key, val in topics_dict.items():
             current = prefix + (key,)
-            if val == SLICETOPIC or val is SLICETOPIC:
+            if _is_topicmarker(val, SLICE) or val == SLICETOPIC:
                 slice_topics.append('/'.join(current) if len(current) > 1 else key)
             elif isinstance(val, dict):
                 slice_topics.extend(DatapointBase._find_slice_topics(val, current))
@@ -591,22 +694,20 @@ class DatapointTab(DatapointBase):
     # 3. Utility and Private Methods ────────────────────────────────
 
     @contextlib.contextmanager
-    def slice_writers(self, slices, *, stage: bool = None, cache=None,
+    def slice_writers(self, slices=None, *, stage: bool = None, cache=None,
                       flush_every: int = None, **writer_kwargs):
         """One `MDSWriter` per slice, as `{slice: writer}`.
 
         Parameters
         ----------
-        slices : dict
+        slices : dict, optional
             `{slice_name: {column: mds_type}}`, one entry per declared slice.
+            Omit it when every slice declares its own columns -- `SLICE(idx='int')`
+            -- and the declaration is written. Passing columns that disagree with
+            a declaration is refused: the declared ones are in this block's hash.
         """
         names = self.slices()
-        missing = [name for name in names if name not in slices]
-        if missing:
-            raise ValueError(
-                f"{self.__class__.__name__}.slice_writers: no columns for "
-                f"slice(s) {missing}; every declared slice must be written"
-            )
+        slices = self._writable_columns(slices, names)
 
         if stage is None:
             stage = not self.is_local_fs
@@ -653,6 +754,43 @@ class DatapointTab(DatapointBase):
         finally:
             if staging is not None:
                 shutil.rmtree(staging, ignore_errors=True)
+
+    def _writable_columns(self, slices, names):
+        """The `{slice: {column: type}}` to write, declaration and argument agreed.
+
+        The declaration wins wherever there is one, because it is what the hash
+        was taken over -- an argument may restate it and no more. Where there is
+        none, the argument is all there is, as it always was.
+
+        Order is compared along with names and types: MDS reads a row back in
+        the order it was written, and the declaration renders in its own order
+        into the hash, so a permutation is a different slice by both accounts.
+        """
+        declared = {name: self.declared_columns(name) for name in names}
+        if slices is None:
+            undeclared = [name for name, columns in declared.items() if not columns]
+            if undeclared:
+                raise ValueError(
+                    f"{self.__class__.__name__}.slice_writers: no columns for "
+                    f"slice(s) {undeclared}; declare them -- SLICE(idx='int') -- "
+                    f"or pass them"
+                )
+            return declared
+        missing = [name for name in names if name not in slices]
+        if missing:
+            raise ValueError(
+                f"{self.__class__.__name__}.slice_writers: no columns for "
+                f"slice(s) {missing}; every declared slice must be written"
+            )
+        for name, columns in declared.items():
+            if columns and list(slices[name].items()) != list(columns.items()):
+                raise ValueError(
+                    f"{self.__class__.__name__}.slice_writers: slice {name!r} is "
+                    f"declared {self._topicnode(*name.split('/'))} but would be "
+                    f"written {dict(slices[name])!r}; the declared columns are in "
+                    f"this block's hash, so the two may not differ"
+                )
+        return slices
 
     def _read_slice(self, slice, **kwargs):
         return read_mds_shard(
@@ -1035,16 +1173,22 @@ class DatapointTable(DatapointBase, Datastack):
         return super().__stats__(slice, **kwargs)
 
     def signature_topics(self):
-        """Own TOPICS segments plus the TAB's slice-topic segments.
+        """Own TOPICS segments -- plus, in a sentinel declaration, the TAB's slices.
 
-        Slice topics no longer live in this table's TOPICS, but they must still
-        appear in the signature so that pointing a table at a differently-sliced
-        TAB changes its hash. The output is byte-identical to what the old
-        accumulating behaviour produced (slice topics rendered as
-        ``topic:<name>=SLICETOPIC``), so no existing hashes are invalidated.
+        A table's slices are the TAB's declaration and not the table's, and a
+        block has no business carrying another's topics in its own identity: the
+        TAB is already part of this table, so a differently-sliced TAB is already
+        a different table. A table that declares its own topics with the markers
+        carries only its own.
+
+        The accumulating form is kept for every table spelled the older way, and
+        byte-identically (slice topics rendered as ``topic:<name>=SLICETOPIC``),
+        so no existing hash moves.
         """
         # Own (non-slice) topics come first, in declaration order.
         own = super().signature_topics()
+        if self._modern_topics():
+            return own
         # Then the TAB's slice topics, in the same format Datastack uses.
         tab = self.TAB
         if isinstance(tab, type) and issubclass(tab, DatapointBase):

@@ -676,6 +676,25 @@ class DatapointTab(DatapointBase):
             f"slice in {list(self.slices()) or ['...']} in lockstep via self.slice_writers(slices)"
         )
 
+    def __validate__(self, **kwargs):
+        """As `Datablock.__validate__`, and the slices must agree on their length.
+
+        The write-time count in `slice_writers` catches a tab that wrote its
+        slices unequally. This reads the finished ``index.json`` files instead
+        of trusting the write path, so it also answers for a tab that arrived by
+        copy or redirection, or whose upload stopped half way -- and `TabMaker`
+        calls it after every build and refuses the tab if it says no.
+
+        On the tab and not on `DatapointBase`: a table's `shard_sizes()` opens
+        the index of every tab, so the same override on the table would turn one
+        validate() into a read per tab per slice. It needs no such thing -- a
+        table is valid only when every tab of it validated.
+        """
+        if not super().__validate__(**kwargs):
+            return False
+        self.verify_slice_row_counts_match()
+        return True
+
     def __stats__(self, slice, **kwargs) -> dict:
         return {'n_rows': len(self._read_slice(slice))}
 
@@ -736,16 +755,24 @@ class DatapointTab(DatapointBase):
             )
 
         writers = {}
-        sync = _ShardSync(flush_every) if flush_every else None
+        # Always, not only when flush_every asks for shared shard boundaries.
+        # The count is what catches a tab that wrote one slice and skipped
+        # another for some item -- an early continue, a swallowed per-item
+        # exception, a branch that writes two of three -- and left the slices
+        # mis-zipped. Nothing downstream can see that: a map-mode zip pairs
+        # index i with index i whatever they mean, so every row pairs one item's
+        # image with another item's pose and no read ever raises. Tying the
+        # check to flush_every made the guarantee a side effect of wanting
+        # row-sized shards, which nothing said and nobody would guess.
+        sync = _ShardSync(flush_every)
         try:
             for name in names:
                 writer = MDSWriter(
                     out=outdirs[name], columns=slices[name], **writer_kwargs,
                 )
-                writers[name] = sync.track(name, writer) if sync else writer
+                writers[name] = sync.track(name, writer)
             yield writers
-            if sync is not None:
-                sync.check_lockstep(self.__class__.__name__)
+            sync.check_lockstep(self.__class__.__name__)
             for writer in writers.values():
                 writer.finish()
             if staging is not None:

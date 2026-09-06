@@ -640,9 +640,14 @@ class _CountingWriter:
         # and it is invisible afterwards, since a ragged index looks exactly
         # like a correctly built one.  Catch it here, where the cause is still
         # nameable, rather than letting the shuffle silently misalign.
-        n_shards = len(self._writer.shards)
+        #
+        # Only when there are shard boundaries to hold: without flush_every this
+        # proxy is counting and nothing more, and where MDSWriter chooses to end
+        # a shard is its own business.
+        holding = self._sync.every is not None
+        n_shards = len(self._writer.shards) if holding else 0
         self._writer.write(sample)
-        if len(self._writer.shards) > n_shards and self.n_written % self._sync.every:
+        if holding and len(self._writer.shards) > n_shards and self.n_written % self._sync.every:
             raise ValueError(
                 f"slice {self.name!r} hit its size_limit after "
                 f"{self.n_written} samples and started a new shard there, "
@@ -685,7 +690,13 @@ class _CountingWriter:
 
 
 class _ShardSync:
-    """Breaks a group of writers onto a new shard at the same sample counts.
+    """Counts a group of writers, and breaks them onto a new shard together.
+
+    Two jobs, and only the second is optional.  Counting says whether the tab
+    wrote every slice once per item -- the invariant the slices exist to keep,
+    since sample i of one must describe what sample i of another does -- and
+    costs an increment per write, so it is always on.  Breaking them onto a
+    shared shard boundary is what ``flush_every`` asks for.
 
     The condition is deliberately "every writer has written the same number
     of samples, and that number is a multiple of *every*" rather than
@@ -696,7 +707,11 @@ class _ShardSync:
     the condition, which is what ``check_lockstep()`` reports at the end.
     """
 
-    def __init__(self, every: int):
+    def __init__(self, every: 'int | None' = None):
+        #: None counts without ever rotating: the lockstep COUNT is what says
+        #: whether a tab wrote its slices one sample per item, and that question
+        #: is worth answering on every build.  Sharing shard boundaries is a
+        #: separate thing to want, and only that one costs anything.
         self.every = every
         self.writers = []
 
@@ -706,6 +721,8 @@ class _ShardSync:
         return counting
 
     def wrote(self, writer: _CountingWriter):
+        if self.every is None:
+            return  # counting only: there is no boundary to break onto
         if writer.n_written % self.every:
             return
         if any(w.n_written != writer.n_written for w in self.writers):

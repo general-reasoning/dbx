@@ -9,6 +9,7 @@ import torch.nn as nn
 import dbx
 from dbx.datafeatures import Datacollator
 from dbx import (
+    DIRTOPIC,
     SLICETOPIC,
     DatafeatureTab,
     DatafeatureTable,
@@ -47,6 +48,10 @@ class DummySampleTab(DatapointTab):
 
 class DummySampleTable(DatapointTable):
     TAB = DummySampleTab
+
+    #: This table roots its tabs inside itself -- see __tab__ -- so it declares
+    #: the directory to root them in. The base no longer does.
+    TOPICS = {'tabs': DIRTOPIC, **DatapointTable.TOPICS}
 
     @dataclass
     class VAR(DatapointTable.VAR):

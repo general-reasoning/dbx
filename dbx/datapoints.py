@@ -58,8 +58,8 @@ from .datastreams import (
 SLICETOPIC = 'SLICETOPIC'
 
 
-class _SliceMeta(_TopicMarkerMeta):
-    """Makes ``SLICE(idx='int')`` a marker carrying those columns.
+class _DataSliceMeta(_TopicMarkerMeta):
+    """Makes ``DATASLICE(idx='int')`` a marker carrying those columns.
 
     A call returns a SUBCLASS rather than an instance, so everything a TOPICS
     declaration holds is a class and one test -- :func:`_is_topicmarker` --
@@ -78,10 +78,10 @@ class _SliceMeta(_TopicMarkerMeta):
         columns = dict(mapping[0]) if mapping else dict(typed)
         for name, coltype in columns.items():
             cls._check_column(name, coltype)
-        return _SliceMeta(cls.__name__, (cls,), {'columns': columns})
+        return _DataSliceMeta(cls.__name__, (cls,), {'columns': columns})
 
 
-class SLICE(DIR, metaclass=_SliceMeta):
+class DATASLICE(DIR, metaclass=_DataSliceMeta):
     """One independently-readable MDS stream directory.  ``SLICETOPIC`` as a marker.
 
     A :class:`~dbx.datablocks.DIR`, because a slice IS a directory -- so every
@@ -90,19 +90,19 @@ class SLICE(DIR, metaclass=_SliceMeta):
 
     Declared with its columns and their MDS types::
 
-        TOPICS = {'frames': SLICE(idx='int', image='jpeg')}
+        TOPICS = {'frames': DATASLICE(idx='int', image='jpeg')}
 
     which is the point of it.  The sentinel named a slice and said nothing about
     its shape, so the columns lived in whatever dict ``__build__`` happened to
     hand the writers, reached no hash, and could change under artifacts that
     went on claiming to be the same block.  The marker renders as
-    ``topic:frames=SLICE(idx='int', image='jpeg')``, so adding, dropping,
+    ``topic:frames=DATASLICE(idx='int', image='jpeg')``, so adding, dropping,
     retyping or REORDERING a column re-keys the block.  Order counts because MDS
     rows are read back in the order they were written, and a projection that
     permuted an axis rather than failing is the bug this forecloses.
 
     The declaration is what `DatapointTab.slice_writers` writes, so it takes no
-    argument when every slice declares its columns.  A bare ``SLICE`` declares
+    argument when every slice declares its columns.  A bare ``DATASLICE`` declares
     none, and is the sentinel's behaviour under the marker's spelling: the
     columns are then the writer's to supply.
     """
@@ -117,10 +117,10 @@ class SLICE(DIR, metaclass=_SliceMeta):
         """Refuse a column that would render into an ambiguous type string."""
         for text, what in ((name, 'column name'), (coltype, 'column type')):
             if not isinstance(text, str):
-                raise TypeError(f"SLICE {what} must be a string, got {text!r}")
+                raise TypeError(f"DATASLICE {what} must be a string, got {text!r}")
             if '/' in text:
                 raise ValueError(
-                    f"SLICE {what} {text!r} may not contain '/': the marker is "
+                    f"DATASLICE {what} {text!r} may not contain '/': the marker is "
                     f"rendered into the type string, whose segments are '/'-joined, "
                     f"so a '/' would let two declarations render alike and collide "
                     f"onto one hash"
@@ -191,11 +191,11 @@ class DatapointBase(Datablock):
         """The columns *slice* declares, as ``{column: mds_type}``, or None.
 
         None when nothing was declared -- the :data:`SLICETOPIC` sentinel, or a
-        bare :class:`SLICE` -- so the columns are still the writer's to supply.
+        bare :class:`DATASLICE` -- so the columns are still the writer's to supply.
         A declaration, unlike what a writer is handed, is in the block's hash.
         """
         node = self._topicnode(*slice.split('/'))
-        columns = getattr(node, 'columns', None) if _is_topicmarker(node, SLICE) else None
+        columns = getattr(node, 'columns', None) if _is_topicmarker(node, DATASLICE) else None
         return dict(columns) if columns else None
 
     def data(self, *slice_columns, nested=True, concat: bool = False,
@@ -548,7 +548,7 @@ class DatapointBase(Datablock):
     def _node_is_sentinel(node):
         """True when node is a sentinel the markers replace, :data:`SLICETOPIC` included.
 
-        Which is what stops a :class:`SLICE` and a ``SLICETOPIC`` sharing one
+        Which is what stops a :class:`DATASLICE` and a ``SLICETOPIC`` sharing one
         declaration: they are the same topic said two ways, and the two ways
         render differently.
         """
@@ -558,7 +558,7 @@ class DatapointBase(Datablock):
     def _node_is_dirtopic(node):
         """True when node is a directory topic, :data:`SLICETOPIC` included.
 
-        A :class:`SLICE` is a :class:`~dbx.datablocks.DIR`, so the base test
+        A :class:`DATASLICE` is a :class:`~dbx.datablocks.DIR`, so the base test
         already covers the marker.  What this adds is the sentinel, which is a
         string and would otherwise read as a file named ``SLICETOPIC``.
         """
@@ -651,7 +651,7 @@ class DatapointBase(Datablock):
             return ()
         for key, val in topics_dict.items():
             current = prefix + (key,)
-            if _is_topicmarker(val, SLICE) or val == SLICETOPIC:
+            if _is_topicmarker(val, DATASLICE) or val == SLICETOPIC:
                 slice_topics.append('/'.join(current) if len(current) > 1 else key)
             elif isinstance(val, dict):
                 slice_topics.extend(DatapointBase._find_slice_topics(val, current))
@@ -702,7 +702,7 @@ class DatapointTab(DatapointBase):
         ----------
         slices : dict, optional
             `{slice_name: {column: mds_type}}`, one entry per declared slice.
-            Omit it when every slice declares its own columns -- `SLICE(idx='int')`
+            Omit it when every slice declares its own columns -- `DATASLICE(idx='int')`
             -- and the declaration is written. Passing columns that disagree with
             a declaration is refused: the declared ones are in this block's hash.
         """
@@ -772,7 +772,7 @@ class DatapointTab(DatapointBase):
             if undeclared:
                 raise ValueError(
                     f"{self.__class__.__name__}.slice_writers: no columns for "
-                    f"slice(s) {undeclared}; declare them -- SLICE(idx='int') -- "
+                    f"slice(s) {undeclared}; declare them -- DATASLICE(idx='int') -- "
                     f"or pass them"
                 )
             return declared
@@ -819,9 +819,9 @@ class DatapointTable(DatapointBase, Datastack):
     """A table of DatapointTabs, sliced the same way as its tabs.
 
     A table's TOPICS only contains what the table itself owns: the structural
-    topics (``tabs``, ``done``) and any extra file topics the subclass declares
-    (such as ``bag_lens``). The tab's slice topics are NOT merged into the
-    table's TOPICS -- they belong to the tab, not the table.
+    topics (``tab_paths``, ``done``) and any extra file topics the subclass
+    declares (such as ``bag_lens``). The tab's slice topics are NOT merged into
+    the table's TOPICS -- they belong to the tab, not the table.
 
     The table's `slices()` is derived from ``TAB``'s slice topics rather than
     from ``TOPICS``, so slice routing (``data()``, ``dataset()``,
@@ -835,10 +835,17 @@ class DatapointTable(DatapointBase, Datastack):
 
     TAB = None
 
-    #: The topics the table machinery itself writes and reads: the directory
-    #: the tabs live in, and the marker that says the stack completed. Subclasses
-    #: extending TOPICS explicitly include DatapointTable.TOPICS if desired.
-    TOPICS = {'tabs': DIRTOPIC, 'tab_paths': DIRTOPIC, 'done': 'done'}
+    #: The topics the table machinery itself writes and reads: the sentinels
+    #: recording which tabs are built, and the marker that says the stack
+    #: completed. Subclasses extending TOPICS explicitly include
+    #: DatapointTable.TOPICS if desired.
+    #:
+    #: A ``tabs`` directory was declared here too, and nothing ever wrote into
+    #: it: a tab is config-addressed on the table's own url and lands beside the
+    #: table rather than inside it. A subclass that wants its tabs nested still
+    #: declares ``tabs`` itself and roots them there -- which is what it always
+    #: was, an addressable location rather than something the machinery used.
+    TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
 
     #: Slices come from TAB, not from this table's own TOPICS.
     def slices(self):
@@ -902,7 +909,6 @@ class DatapointTable(DatapointBase, Datastack):
         return None
 
     def __split__(self, *args, **kwargs):
-        self.path('tabs', ensure_dirpath=True)
         topic_name = self._tab_paths_topic()
         if topic_name:
             self.path(topic_name, ensure_dirpath=True)
@@ -1024,12 +1030,10 @@ class DatapointTable(DatapointBase, Datastack):
         topic_name = self._tab_paths_topic()
         if topic_name and topicpath == (topic_name,):
             return self.path(topic_name)
-        if topicpath == ('tabs',):
-            return self.path('tabs')
         if topicpath == ('done',):
             return self.valid()
         raise NotImplementedError(
-            f"{self.__class__.__name__}.__read__ answers only slices, 'tabs', 'built_tabs', 'tab_paths' and 'done'; "
+            f"{self.__class__.__name__}.__read__ answers only slices, 'built_tabs', 'tab_paths' and 'done'; "
             f"override it to read {'/'.join(topicpath)!r}"
         )
 

@@ -2,7 +2,7 @@
 
 ``DIRTOPIC`` is ``None`` and ``SYNTOPIC`` is ``()``: values chosen so they
 cannot collide with a filename, which a reader still has to know by heart.
-``DIR`` and ``SYNTHETIC`` say the same things as themselves, and ``SLICE`` says
+``DIR`` and ``SYNTHETIC`` say the same things as themselves, and ``DATASLICE`` says
 the one thing no sentinel could -- what columns the slice has, which is the
 reason the markers exist at all.  Under ``SLICETOPIC`` a slice's columns lived
 in whatever dict ``__build__`` happened to hand the writers: they reached no
@@ -29,7 +29,7 @@ from dbx.datablocks import DIR, DIRTOPIC, SYNTHETIC, SYNTOPIC, Datablock, litera
 
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datapoints import SLICE, SLICETOPIC, DatapointTab, DatapointTable
+from dbx.datapoints import DATASLICE, SLICETOPIC, DatapointTab, DatapointTable
 
 
 @pytest.fixture(autouse=True)
@@ -63,7 +63,7 @@ class Sentinels(Datablock):
 
 class MarkedTab(DatapointTab):
     VERSION = 1
-    TOPICS = {'numbers': SLICE(idx='int', square='int'), 'note': 'note.txt'}
+    TOPICS = {'numbers': DATASLICE(idx='int', square='int'), 'note': 'note.txt'}
 
     @dataclass
     class VAR(DatapointTab.VAR):
@@ -80,7 +80,7 @@ class MarkedTab(DatapointTab):
 class MarkedTable(DatapointTable):
     VERSION = 1
     TAB = MarkedTab
-    TOPICS = {'tabs': DIR, 'tab_paths': DIR, 'done': 'done'}
+    TOPICS = {'tab_paths': DIR, 'done': 'done'}
 
     @dataclass
     class VAR(DatapointTable.VAR):
@@ -157,7 +157,7 @@ class TestTheDeclarationDecidesTheEra:
 
     def test_the_two_slice_spellings_are_a_mixture_too(self, tmp_path):
         class Mixed(DatapointTab):
-            TOPICS = {'a': SLICE(idx='int'), 'b': SLICETOPIC}
+            TOPICS = {'a': DATASLICE(idx='int'), 'b': SLICETOPIC}
 
             def __build__(self):
                 pass
@@ -181,22 +181,22 @@ class TestTheDeclarationDecidesTheEra:
 class TestMarkersRenderAsThemselves:
 
     def test_a_slice_renders_with_its_columns(self, tmp_path):
-        assert "topic:numbers=SLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).type()
+        assert "topic:numbers=DATASLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).type()
 
     def test_a_bare_slice_renders_as_the_bare_marker(self, tmp_path):
         class Bare(DatapointTab):
-            TOPICS = {'numbers': SLICE}
+            TOPICS = {'numbers': DATASLICE}
 
             def __build__(self):
                 pass
 
-        assert 'topic:numbers=SLICE' in block(Bare, tmp_path).type()
+        assert 'topic:numbers=DATASLICE' in block(Bare, tmp_path).type()
 
     def test_a_markers_own_arguments_keep_their_quotes(self, tmp_path):
-        assert "SLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).type()
+        assert "DATASLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).type()
 
     def test_the_markers_are_exported_from_the_package(self):
-        assert (dbx.DIR, dbx.SYNTHETIC, dbx.SLICE) == (DIR, SYNTHETIC, SLICE)
+        assert (dbx.DIR, dbx.SYNTHETIC, dbx.DATASLICE) == (DIR, SYNTHETIC, DATASLICE)
 
 
 class TestAMarkerBehavesAsTheSentinelItReplaces:
@@ -254,13 +254,13 @@ class TestAMarkerIsNotItsName:
 
     def test_a_parameterised_marker_and_the_string_of_its_call(self, tmp_path):
         class Both(DatapointTab):
-            TOPICS = {'numbers': SLICE(idx='int'), 'x': "SLICE(idx='int')"}
+            TOPICS = {'numbers': DATASLICE(idx='int'), 'x': "DATASLICE(idx='int')"}
 
             def __build__(self):
                 pass
 
         marker, filename = block(Both, tmp_path).signature_topics()
-        assert marker == "topic:numbers=SLICE(idx='int')"
+        assert marker == "topic:numbers=DATASLICE(idx='int')"
         assert filename != marker.replace('numbers', 'x')
 
     def test_a_recorded_marker_reads_back_as_the_marker(self):
@@ -273,7 +273,7 @@ class TestAMarkerIsNotItsName:
         assert read == {'masks': 'DIR'} and read['masks'] is not DIR
 
     def test_a_recorded_slice_keeps_its_columns(self):
-        read = literal_topics(str({'numbers': SLICE(idx='int', square='int')}))
+        read = literal_topics(str({'numbers': DATASLICE(idx='int', square='int')}))
         assert read['numbers'].columns == {'idx': 'int', 'square': 'int'}
 
     def test_an_unknown_name_is_not_evaluated(self):
@@ -293,7 +293,7 @@ class TestASlicesColumnsAreItsIdentity:
 
     def _tab(self, tmp_path, columns):
         class Tab(DatapointTab):
-            TOPICS = {'numbers': SLICE(**columns)}
+            TOPICS = {'numbers': DATASLICE(**columns)}
 
             def __build__(self):
                 pass
@@ -334,7 +334,7 @@ class TestTheDeclarationIsWhatGetsWritten:
 
     def test_columns_that_disagree_are_refused(self, tmp_path):
         class Disagreeing(DatapointTab):
-            TOPICS = {'numbers': SLICE(idx='int')}
+            TOPICS = {'numbers': DATASLICE(idx='int')}
 
             def __build__(self):
                 with self.slice_writers({'numbers': {'idx': 'str'}}):
@@ -345,7 +345,7 @@ class TestTheDeclarationIsWhatGetsWritten:
 
     def test_a_reordering_is_a_disagreement(self, tmp_path):
         class Reordered(DatapointTab):
-            TOPICS = {'numbers': SLICE(idx='int', square='int')}
+            TOPICS = {'numbers': DATASLICE(idx='int', square='int')}
 
             def __build__(self):
                 with self.slice_writers({'numbers': {'square': 'int', 'idx': 'int'}}):
@@ -356,7 +356,7 @@ class TestTheDeclarationIsWhatGetsWritten:
 
     def test_a_restatement_is_allowed(self, tmp_path):
         class Restated(DatapointTab):
-            TOPICS = {'numbers': SLICE(idx='int')}
+            TOPICS = {'numbers': DATASLICE(idx='int')}
 
             def __build__(self):
                 with self.slice_writers({'numbers': {'idx': 'int'}}) as writers:
@@ -377,7 +377,7 @@ class TestSliceWritersTakesTheDeclaration:
 
     def test_a_bare_slice_still_needs_its_columns_passed(self, tmp_path):
         class Bare(DatapointTab):
-            TOPICS = {'numbers': SLICE}
+            TOPICS = {'numbers': DATASLICE}
 
             def __build__(self):
                 with self.slice_writers():
@@ -415,25 +415,25 @@ class TestSliceColumnsAreChecked:
 
     def test_a_column_name_with_a_slash_is_refused(self):
         with pytest.raises(ValueError, match="may not contain"):
-            SLICE(**{'a/b': 'int'})
+            DATASLICE(**{'a/b': 'int'})
 
     def test_a_column_type_with_a_slash_is_refused(self):
         with pytest.raises(ValueError, match="may not contain"):
-            SLICE(idx='ndarray/int8')
+            DATASLICE(idx='ndarray/int8')
 
     def test_a_column_type_must_be_a_string(self):
         with pytest.raises(TypeError, match="must be a string"):
-            SLICE(idx=int)
+            DATASLICE(idx=int)
 
     def test_a_name_that_is_not_an_identifier_uses_the_mapping_form(self):
-        marker = SLICE({'my col': 'int'})
+        marker = DATASLICE({'my col': 'int'})
         assert marker.columns == {'my col': 'int'}
-        assert str(marker) == "SLICE({'my col': 'int'})"
+        assert str(marker) == "DATASLICE({'my col': 'int'})"
         assert literal_topics(str({'s': marker}))['s'].columns == {'my col': 'int'}
 
     def test_a_mapping_and_keywords_together_are_refused(self):
         with pytest.raises(TypeError, match="as keywords"):
-            SLICE({'a': 'int'}, b='int')
+            DATASLICE({'a': 'int'}, b='int')
 
 
 # ---------------------------------------------------------------------------

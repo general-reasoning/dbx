@@ -132,8 +132,9 @@ class TestTopicsFromSlices:
         assert 'numbers' not in LetterTable.TOPICS
 
     def test_table_keeps_its_inherited_topics(self):
-        assert LetterTable.TOPICS['tabs'] is DIRTOPIC
+        assert LetterTable.TOPICS['tab_paths'] is DIRTOPIC
         assert LetterTable.TOPICS['done'] == 'done'
+        assert 'tabs' not in LetterTable.TOPICS
 
     def test_docstring_example_subclass_extends_topics_and_slices(self, tmp_path):
         """The DatapointTab docstring's DebuggableFrameTab example."""

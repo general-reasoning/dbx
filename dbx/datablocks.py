@@ -188,7 +188,7 @@ class _TopicMarkerMeta(type):
 
     def __init__(cls, name, bases, namespace, **kwargs):
         super().__init__(name, bases, namespace, **kwargs)
-        # A parameterised marker -- SLICE(idx='int') -- is a subclass carrying
+        # A parameterised marker -- DATASLICE(idx='int') -- is a subclass carrying
         # `columns`, and is not a name anything may be declared under: it
         # renders as the call that made it and reads back through that call.
         if not namespace.get('columns'):
@@ -204,7 +204,7 @@ class _TopicMarkerMeta(type):
 
 
 class TOPICMARKER(metaclass=_TopicMarkerMeta):
-    """Base of the topic markers: :class:`DIR`, :class:`SYNTHETIC`, ``SLICE``.
+    """Base of the topic markers: :class:`DIR`, :class:`SYNTHETIC`, ``DATASLICE``.
 
     A marker says what a topic IS.  The sentinels say it by what value they
     happen to be -- :data:`DIRTOPIC` is ``None`` and :data:`SYNTOPIC` the empty
@@ -258,7 +258,7 @@ def _render_columns(columns):
     """A marker's ``columns`` as the call arguments that reconstruct it.
 
     Keyword form when every name is an identifier, which is what a declaration
-    almost always looks like, and the mapping form when one is not -- ``SLICE``
+    almost always looks like, and the mapping form when one is not -- ``DATASLICE``
     accepts both, so either rendering reads back as the same marker.
     """
     if all(isinstance(name, str) and name.isidentifier() for name in columns):
@@ -2472,7 +2472,7 @@ class Datablock:
         """True when node is :data:`DIRTOPIC` or the :class:`DIR` marker.
 
         A parameterised marker is a subclass of the one it parameterises, so
-        ``SLICE(idx='int')`` -- a slice IS a directory -- lands here too.
+        ``DATASLICE(idx='int')`` -- a slice IS a directory -- lands here too.
         """
         return node is DIRTOPIC or _is_topicmarker(node, DIR)
 

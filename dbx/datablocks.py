@@ -1747,17 +1747,98 @@ class Datablock:
     @dataclass
     class VAR:
         class LazyLoader:
-            def __init__(self, term):
+            """One VAR field: its term, resolved on first read and kept.
+
+            Also the one place every VAR value passes on its way to the
+            identity -- hash -> type() -> signature() -> _typed_specdict() ->
+            getattr(self.var, name) -- which is why the check that a value CAN
+            be rendered deterministically lives here rather than at the two
+            places that render one.
+            """
+
+            #: Distinct from None, which is an ordinary resolved value and a very
+            #: common VAR default. With None as the sentinel a field holding one
+            #: re-resolves on every read, so a specline evaluating to None was
+            #: re-eval'd forever.
+            _UNSET = object()
+
+            def __init__(self, term, name=None, owner=None, exempt=False):
                 self.term = term
-                self.value = None
+                self.name = name
+                self.owner = owner
+                self.exempt = exempt
+                self.value = self._UNSET
+
             def __call__(self):
-                if self.value is None:
+                if self.value is self._UNSET:
                     if isinstance(self.term, str):
                         self.value = dataparts.eval(self.term)
                     else:
                         # from_datablockable passes raw Python objects
                         self.value = self.term
+                    self._check_renderable()
                 return self.value
+
+            def _check_renderable(self):
+                """Refuse a value the identity cannot render deterministically.
+
+                A VAR leaf that is neither a Datablock nor plain data falls
+                through to repr() when the signature is rendered, and for a
+                class with no content-bearing __repr__ that is
+                ``<C object at 0x...>``: a memory address, inside the string the
+                hash is taken over. The block then hashes differently on every
+                construction, and since set() is a deepcopy-and-reconstruct the
+                address moves on every call -- so a Datastack writes its children
+                under one key and looks them up under another, finds nothing,
+                and rebuilds over the top of what it already has.
+
+                A specline is exempt whatever it resolves to: the identity
+                renders the LINE for anything that does not resolve to a block,
+                so the resolved object never reaches it.
+
+                Structural rather than a search for the address. A __repr__
+                added to quiet the symptom leaves the hole open -- two values
+                with different content and one repr collide onto a single hash,
+                and nothing here could tell.
+                """
+                if self.exempt or Datablock.is_specline(self.term):
+                    return
+                if self._renders_deterministically(self.value):
+                    return
+                owner = self.owner or 'VAR'
+                name = self.name or '<field>'
+                raise TypeError(
+                    f"{owner}.VAR.{name} holds a {type(self.value).__name__}, which "
+                    f"this block's identity cannot render deterministically: a leaf "
+                    f"that is neither a Datablock nor plain data reaches the "
+                    f"signature through repr(), and an object without a "
+                    f"content-bearing __repr__ renders its memory address there. The "
+                    f"block would hash differently on every construction, and a stack "
+                    f"would look its children up under a key it never wrote. Hold a "
+                    f"Datablock, or a specline naming one, or reduce it to plain "
+                    f"data; or record the exemption as {owner}.VAR_IDENTITY_EXEMPTIONS "
+                    f"= {{{name!r}}}, which accepts whatever repr() makes of it"
+                )
+
+            @classmethod
+            def _renders_deterministically(cls, value):
+                """True when repr(*value*) is a function of its content alone.
+
+                Deliberately a whitelist. Everything on it renders the same in
+                any process, from any address, so two blocks configured alike
+                hash alike -- which is the whole of what identity promises.
+                """
+                if isinstance(value, Datablock):
+                    return True
+                if value is None or isinstance(value, (str, bytes, bool, int, float)):
+                    return True
+                if isinstance(value, (list, tuple, set, frozenset)):
+                    return all(cls._renders_deterministically(v) for v in value)
+                if isinstance(value, dict):
+                    return all(cls._renders_deterministically(k)
+                               and cls._renders_deterministically(v)
+                               for k, v in value.items())
+                return False
 
         def __getattribute__(self, name):
             attr = super().__getattribute__(name)
@@ -1773,6 +1854,15 @@ class Datablock:
     # Spec keys whose upstream subtree valid_var()/valid_tree() must not descend
     # into. Supersedes the retired VALIDATE_CFG_EXEMPTIONS.
     TREE_SKIP_VALIDATION = {}
+
+    #: VAR field names exempt from :meth:`VAR.LazyLoader._check_renderable` --
+    #: the check that a value can be rendered into the identity deterministically.
+    #: An exemption does not take the field out of the identity: it goes on
+    #: rendering through repr(), address and all, and the hash moves with it. It
+    #: says only that this class knows, which is why it is written on the class
+    #: rather than switched on from the environment -- it belongs where the next
+    #: reader of the declaration will see it.
+    VAR_IDENTITY_EXEMPTIONS = frozenset()
 
     def __init__(
         self,
@@ -3770,7 +3860,14 @@ class Datablock:
         for field in fields(var):
             term = getattr(var, field.name)
             if issubclass(self.VAR, Datablock.VAR):
-                getter = Datablock.VAR.LazyLoader(term)
+                # Named, so a refusal says which field is at fault rather than
+                # leaving it to be bisected.
+                getter = Datablock.VAR.LazyLoader(
+                    term,
+                    name=field.name,
+                    owner=self.__class__.__name__,
+                    exempt=field.name in (getattr(self, 'VAR_IDENTITY_EXEMPTIONS', None) or ()),
+                )
             else:
                 getter = eval(term)
             replacements[field.name] = getter

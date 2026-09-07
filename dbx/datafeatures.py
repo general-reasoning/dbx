@@ -914,3 +914,14 @@ class BipolarDatafeatureTable(_UpstreamSlices, DatapointTable):
         own = tuple(self.slices())
         upstream = tuple(self.featuretable.slices()) if self.featuretable is not None else ()
         return own + upstream
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Shorter names
+# ═══════════════════════════════════════════════════════════════════════
+
+#: Aliases, as ``Datatab``/``Datatable`` are in :mod:`dbx.datapoints` -- plain
+#: assignments, so the alias is the class itself and no identity moves. See the
+#: note there.
+FeatureTab = DatafeatureTab
+FeatureTable = DatafeatureTable

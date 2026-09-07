@@ -1592,3 +1592,22 @@ class DatapointFold(DatapointTable):
             SharedMemoryManager.clean_process_shared_memory()
             streaming_kwargs['streams'] = self._tab_streams(slice, local)
             return StreamingDataset(**streaming_kwargs)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Shorter names
+# ═══════════════════════════════════════════════════════════════════════
+
+#: Aliases, and deliberately assignments rather than subclasses: the alias IS
+#: the class, so ``Datatab is DatapointTab``, and there is no second VAR, no
+#: second MRO and no way for the two spellings to drift.
+#:
+#: Nothing about identity moves, in this repo or downstream. A block's hash is
+#: sha256 of its ``type()``, which is signature + version + topics and names no
+#: class at all; the one place a class name IS recorded -- :attr:`fqcn`, in the
+#: storage path -- is the name of the subclass being built, not of the base it
+#: was declared from. So a downstream class that switches
+#: ``class Cell(DatapointTab)`` to ``class Cell(Datatab)`` keeps the hash and
+#: the path it had. What WOULD move it is renaming ``Cell``.
+Datatab = DatapointTab
+Datatable = DatapointTable

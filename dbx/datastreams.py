@@ -232,6 +232,11 @@ class ZipBase:
         self.columns = [None if cols is None else list(cols) for cols in columns]
         self.shared = set(shared or ())
         self.validate_shared = validate_shared
+        # Whether the shared keys have been shown to be comparable -- carried by
+        # two sources or more, so that something actually compares them. Settled
+        # on the first row, off the row itself, since a projection can drop a
+        # column the sources do hold.
+        self._shared_comparable = False
         self.skip_none = skip_none
         self.zip_validator = zip_validator
 
@@ -274,12 +279,15 @@ class ZipBase:
         """
         if not (self.shared and self.validate_shared):
             return
+        if len(projected) < 2:
+            return  # one source aligns with nothing; there is no pairing to check
         what = self.__class__.__name__
-        seen = {}
+        seen, carried = {}, {}
         for pos, items in enumerate(projected):
             for key, value in items:
                 if key not in self.shared:
                     continue
+                carried[key] = carried.get(key, 0) + 1
                 if key not in seen:
                     seen[key] = (pos, value)
                 elif not _same_value(seen[key][1], value):
@@ -288,6 +296,32 @@ class ZipBase:
                         f"between source {seen[key][0]} and source {pos} at "
                         f"index {idx} -- the streams are not aligned"
                     )
+        if not self._shared_comparable:
+            self._check_shared_is_comparable(carried)
+
+    def _check_shared_is_comparable(self, carried):
+        """Refuse a shared key that only one source carries.
+
+        A key present in one source is compared against nothing, so the loop
+        above passes it every time and the alignment it was named to check goes
+        unchecked -- and reads as checked, which is worse than not asking. It is
+        the failure mode of naming the shared columns once, on the block, rather
+        than at each call: the block cannot know which slices a caller will read
+        together, so it has to be told here that its answer did not apply.
+
+        Once per zip, on the first row: which columns a row carries is fixed by
+        the sources and the projection, both settled before any row is read.
+        """
+        lonely = sorted(k for k in self.shared if carried.get(k, 0) < 2)
+        if lonely:
+            raise ValueError(
+                f"{self.__class__.__name__}: shared key(s) {lonely} are carried "
+                f"by fewer than two of the {len(self.datasets)} sources read, so "
+                f"nothing compares them and the alignment they name is not being "
+                f"checked. Read sources that carry them, project them back in, or "
+                f"stop naming them shared."
+            )
+        self._shared_comparable = True
 
     def _merge(self, idx, samples) -> dict:
         """Project and merge one sample per source into one row.

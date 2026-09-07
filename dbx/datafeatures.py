@@ -324,6 +324,32 @@ class _UpstreamSlices:
     #: VAR field(s) that may hold the upstream block, most specific first.
     UPSTREAM_VAR: tuple[str, ...] = ()
 
+    def __post_init__(self):
+        super().__post_init__()
+        # As DatapointBase does for shared_slice_columns, and for the same
+        # reason: a bare str is iterable, so 'idx' left unnormalised would be
+        # read as four one-letter columns.
+        self.shared_upstream_column = self._norm_shared_columns(
+            getattr(self, 'shared_upstream_column', None)
+        )
+
+    def _shared_defaults(self, shared, validate_shared):
+        """As `DatapointBase._shared_defaults`, from `shared_upstream_column` first.
+
+        This block's alignment question spans two blocks -- is feature row *i*
+        the features OF sample row *i*? -- so the column that answers it is one
+        the upstream slice holds and this block carried through when it was
+        built. That is a different declaration from the columns this block's own
+        slices share, and it takes precedence over it, since a zip that reaches
+        across the two blocks is the one where drift is possible.
+        """
+        declared = getattr(self, 'shared_upstream_column', None)
+        if shared is None and declared is not None:
+            shared = declared
+            if validate_shared is None:
+                validate_shared = True
+        return super()._shared_defaults(shared, validate_shared)
+
     def _upstream_block(self):
         for attr in self.UPSTREAM_VAR:
             block = getattr(self.var, attr, None)
@@ -405,18 +431,26 @@ class _UpstreamSlices:
         return routed
 
     def dataset(self, *slices, upstream: list | None = None, mode='map',
-                nested=True, columns=None, shared=None, validate_shared=False,
+                nested=True, columns=None, shared=None, validate_shared=None,
                 skip_none=True, zip_validator=None, **kwargs):
         """The requested slices -- this block's and the upstream block's -- zipped.
 
         Keyed exactly as `DatapointBase.dataset()`, so a row is
         ``{'features': {layer: value}, sample_slice: {column: value}, ...}``.
+
+        *shared* defaults to this block's ``shared_upstream_column``, and
+        *validate_shared* to True when it does -- so whether the features are
+        still paired with the samples they were computed from is settled by
+        whoever built the block, once, rather than by every consumer of it. A
+        column only one of the sources read carries is refused: it would be
+        compared against nothing and read as checked.
         """
         if mode not in ('map', 'iter'):
             raise ValueError(
                 f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}"
             )
         routed = self._route(slices, upstream)
+        shared, validate_shared = self._shared_defaults(shared, validate_shared)
         datasets = [owner.datastream(s_name, **kwargs) for owner, s_name, _ in routed]
         names = [s_name for _, s_name, _ in routed]
         per_slice_columns = [cols for _, _, cols in routed]
@@ -484,6 +518,7 @@ class DatafeatureTab(_UpstreamSlices, DatapointTab):
         device: str = "cpu",
         streaming: bool = False,
         dataloader_kwargs: dict | None = None,
+        shared_upstream_column: 'str | None' = None,
         **kwargs,
     ):
         super().__init__(
@@ -492,6 +527,7 @@ class DatafeatureTab(_UpstreamSlices, DatapointTab):
             device=device,
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
+            shared_upstream_column=shared_upstream_column,
             **kwargs,
         )
 
@@ -636,6 +672,7 @@ class DatafeatureTable(_UpstreamSlices, DatapointTable):
         streaming: bool = False,
         dataloader_kwargs: dict | None = None,
         filter_built_tabs: bool = False,
+        shared_upstream_column: 'str | None' = None,
         **kwargs,
     ):
         super().__init__(
@@ -645,6 +682,7 @@ class DatafeatureTable(_UpstreamSlices, DatapointTable):
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
             filter_built_tabs=filter_built_tabs,
+            shared_upstream_column=shared_upstream_column,
             **kwargs,
         )
 

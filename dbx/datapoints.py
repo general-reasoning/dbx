@@ -147,8 +147,23 @@ class DatapointBase(Datablock):
 
     # 1. Datablock Protocol Methods ─────────────────────────────────
 
-    def __init__(self, *args, cache_limit=None, **kwargs):
-        super().__init__(*args, cache_limit=cache_limit, **kwargs)
+    def __init__(self, *args, cache_limit=None, shared_slice_columns=None, **kwargs):
+        super().__init__(
+            *args,
+            cache_limit=cache_limit,
+            shared_slice_columns=shared_slice_columns,
+            **kwargs,
+        )
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Read back off self, so a block reconstructed through __setstate__ is
+        # normalised too -- and normalised at once, because a bare str is
+        # iterable: left as one, 'pool' would be read as ('p','o','o','l') and
+        # four columns nothing has would be compared.
+        self.shared_slice_columns = self._norm_shared_columns(
+            getattr(self, 'shared_slice_columns', None)
+        )
 
     def valid_slice(self, slice) -> bool:
         """True when *slice* has an `index.json` on disk."""
@@ -350,7 +365,7 @@ class DatapointBase(Datablock):
         nested=True,
         columns=None,
         shared=None,
-        validate_shared=False,
+        validate_shared=None,
         skip_none=True,
         zip_validator=None,
         cache_limit=None,
@@ -375,6 +390,24 @@ class DatapointBase(Datablock):
             Both keep every column of every slice, including a column two
             slices happen to share.
         columns : legacy keyword parameter for backwards compatibility.
+        shared : sequence, optional
+            Columns two or more of the slices read here are expected to hold
+            the same value of, row for row. Defaults to this block's
+            ``shared_slice_columns``, which is where it belongs: which columns
+            the slices share is a fact about how they were WRITTEN, and the
+            caller is the wrong party to know it. A key that only one of the
+            sources read carries is refused rather than passed vacuously.
+        validate_shared : bool, optional
+            Whether to compare them. None -- the default -- means yes when
+            *shared* came from the block's own declaration, and no when a caller
+            passed *shared* itself, which is how it behaved before.
+
+            Redundant under ``mode='map'``, where the zip pairs physical index
+            *i* with index *i* and cannot drift. It is the only runtime guard
+            under ``mode='iter'``: there the shuffle seed is
+            ``shuffle_seed + epoch`` and ``next_epoch`` is per slice, so reading
+            one slice out of band advances that slice alone into a different
+            permutation, and every row after it pairs unrelated samples.
         cache_limit : float or str, optional
             Limit on cache size for streaming downloads.
         """
@@ -389,6 +422,7 @@ class DatapointBase(Datablock):
             )
 
         names, per_slice_columns = self._parse_slice_columns(slice_columns, columns)
+        shared, validate_shared = self._shared_defaults(shared, validate_shared)
 
         if cache_limit is not None:
             kwargs['cache_limit'] = cache_limit
@@ -589,6 +623,30 @@ class DatapointBase(Datablock):
     def slice_names(self, slices) -> tuple:
         """Normalize a `*slices` varargs tuple; empty means *all* slices."""
         return self._slicenames(slices)
+
+    @staticmethod
+    def _norm_shared_columns(shared):
+        """A ``shared`` declaration as a tuple, or None.  A bare str is one name."""
+        if shared is None:
+            return None
+        if isinstance(shared, str):
+            return (shared,)
+        return tuple(str(c) for c in shared)
+
+    def _shared_defaults(self, shared, validate_shared):
+        """``(shared, validate_shared)`` with this block's declaration applied.
+
+        The declaration only fills in for a caller that said nothing. A caller
+        who passes ``shared=`` gets what it asked for, and gets it unvalidated
+        unless it says otherwise -- which is what ``validate_shared=False``
+        meant before this defaulting existed.
+        """
+        declared = getattr(self, 'shared_slice_columns', None)
+        if shared is None and declared is not None:
+            shared = declared
+            if validate_shared is None:
+                validate_shared = True
+        return shared, bool(validate_shared)
 
     def _ensure_cacheroot(self, cache=None) -> str:
         cacheroot = cache or self.cacheroot

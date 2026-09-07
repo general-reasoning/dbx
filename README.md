@@ -159,12 +159,12 @@ See [DATASTACK.md](DATASTACK.md) for `__split__` / `__stack__`, shared state and
 
 ### DatapointTab & DatapointTable
 
-`dbx.datapoints` (needs the `torch` and `streaming` extras) adds a `Datablock` /
+`dbx.datatables` (needs the `torch` and `streaming` extras) adds a `Datablock` /
 `Datastack` pair for datasets stored as parallel MDS streams — *slices* — that
 can be zipped into one `torch.utils.data.Dataset` on demand:
 
 ```python
-from dbx.datapoints import DatapointTab, DatapointTable
+from dbx.datatables import Datatab, Datatable            # or DatapointTab, DatapointTable
 
 class FrameTab(DatapointTab):
     SLICES = ('frames', 'annotations')

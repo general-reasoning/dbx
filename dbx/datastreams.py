@@ -11,7 +11,7 @@ Usage::
 
     from dbx.datastreams import ZipStreamingDataset          # map-style
     from dbx.datastreams import ZipIterableStreamingDatasets  # iterator-style
-    from dbx.datapoints import DatapointTab, DatapointTable
+    from dbx.datatables import Datatab, Datatable
 """
 
 from __future__ import annotations

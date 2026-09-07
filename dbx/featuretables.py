@@ -1,4 +1,4 @@
-"""dbx.datafeatures — Datablock / Datastack feature tables and bipolar encodings."""
+"""dbx.featuretables — Datablock / Datastack feature tables and bipolar encodings."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ except ImportError:
 import dbx
 from dbx.datablocks import Datablock, Datastack, DIRTOPIC
 from dbx.databackbones import DatamodelEvaluatorFactory
-from dbx.datapoints import (
+from dbx.datatables import (
     DatapointBase,
     DatapointTab,
     DatapointTable,
@@ -920,8 +920,29 @@ class BipolarDatafeatureTable(_UpstreamSlices, DatapointTable):
 #  Shorter names
 # ═══════════════════════════════════════════════════════════════════════
 
-#: Aliases, as ``Datatab``/``Datatable`` are in :mod:`dbx.datapoints` -- plain
+#: Aliases, as ``Datatab``/``Datatable`` are in :mod:`dbx.datatables` -- plain
 #: assignments, so the alias is the class itself and no identity moves. See the
 #: note there.
 FeatureTab = DatafeatureTab
 FeatureTable = DatafeatureTable
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  The module this file used to be
+# ═══════════════════════════════════════════════════════════════════════
+
+#: This file was ``dbx/datafeatures.py``. See the note at the foot of
+#: :mod:`dbx.datatables` for why a module name reaches identity; it matters
+#: most here, since these are the classes configured by spec and built
+#: directly, so it is their own `fqcn` -- not a subclass's -- that every
+#: feature artifact is stored under.
+_LEGACY_MODULE = 'dbx.datafeatures'
+for _obj in (
+    Datacollator,
+    DatafeatureTab,
+    DatafeatureTable,
+    BipolarDatafeatureTab,
+    BipolarDatafeatureTable,
+):
+    _obj.__module__ = _LEGACY_MODULE
+del _obj

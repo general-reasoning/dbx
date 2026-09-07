@@ -19,7 +19,7 @@ from sklearn.metrics import classification_report
 
 import dbx
 from dbx.datablocks import Datablock
-from dbx.datafeatures import DatafeatureTable, DatafeatureTab, Datacollator
+from dbx.featuretables import DatafeatureTable, DatafeatureTab, Datacollator
 from dbx.dataparts import (
     Logger,
     callable_executor,

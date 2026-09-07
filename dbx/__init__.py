@@ -25,12 +25,32 @@ __version__ = "0.0.1"
 
 from .dataparts import *
 from .datablocks import *
-from .datapoints import *
+from .datatables import *
 from .databackbones import *
-from .datafeatures import *
+from .featuretables import *
 from .dataprobes import *
 
 # Backward compatibility alias
 import sys
 from . import databackbones as datamodels
 sys.modules['dbx.datamodels'] = datamodels
+
+# The names datatables and featuretables used to have, aliased the same way.
+#
+# Load-bearing rather than a courtesy to importers: a class's `fqcn` is its
+# `__module__` plus its name, `anchor` falls back to `fqcn`, and both
+# `anchorkeypath` and the journal directory are built from that -- so these
+# strings are recorded in artifacts on disk. `quotefn` renders `__module__`
+# into a specline too, and a specline stands in a spec as text, hence in a
+# hash. See the note at the foot of dbx/datatables.py.
+#
+# The SAME module object under two names, never a shim that forwards to it. A
+# forwarder has a namespace of its own, so
+# `monkeypatch.setattr(dbx.datapoints, 'StreamingDataset', ...)` would patch
+# the forwarder while the code under test read the name out of its own module
+# -- leaving the patch a silent no-op, and a test that believed it had stubbed
+# a remote read performing one instead. One object cannot drift from itself.
+from . import datatables as datapoints
+from . import featuretables as datafeatures
+sys.modules['dbx.datapoints'] = datapoints
+sys.modules['dbx.datafeatures'] = datafeatures

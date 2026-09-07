@@ -1701,7 +1701,7 @@ class Datablock:
         holding a marker is a modern one, and there is nothing else it could
         mean.  Derived on each call, so a TOPICS assigned or amended after the
         class body -- or computed per instance, as
-        :class:`~dbx.datapoints.DatapointFold`'s is -- is answered as it stands.
+        :class:`~dbx.datatables.DatapointFold`'s is -- is answered as it stands.
 
         A declaration holding both spellings has no era, and raises rather than
         rendering half of itself each way.

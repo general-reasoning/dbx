@@ -20,7 +20,7 @@ try:
     from torch.utils.data import Dataset, IterableDataset
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "dbx.datapoints requires PyTorch.  "
+        "dbx.datatables requires PyTorch.  "
         "Install it with:  pip install datablocks[torch]"
     ) from exc
 
@@ -28,7 +28,7 @@ try:
     from streaming import MDSWriter, Stream, StreamingDataset
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "dbx.datapoints requires mosaicml-streaming.  "
+        "dbx.datatables requires mosaicml-streaming.  "
         "Install it with:  pip install datablocks[streaming]"
     ) from exc
 
@@ -1611,3 +1611,34 @@ class DatapointFold(DatapointTable):
 #: the path it had. What WOULD move it is renaming ``Cell``.
 Datatab = DatapointTab
 Datatable = DatapointTable
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  The module this file used to be
+# ═══════════════════════════════════════════════════════════════════════
+
+#: This file was ``dbx/datapoints.py``, and a module name is not cosmetic here:
+#: `fqcn` is ``__module__`` + ``__name__``, `anchor` falls back to it, and
+#: `anchorkeypath` and the journal directory are built from that -- so every
+#: artifact ever built by one of these classes is stored under a path spelling
+#: the OLD module. Worse, `quotefn` renders ``fn.__module__`` into a specline,
+#: and a specline stands in a spec as text, so a spec naming one of these would
+#: hash differently under a new module name.
+#:
+#: Hence: the names below keep the module they were defined in before the
+#: rename. `dbx/datapoints.py` remains as a shim so the string still resolves,
+#: and the pair of them is what makes the rename cost nothing. Setting
+#: ``__module__`` rather than special-casing `fqcn` also fixes pickle and
+#: `quotefn` at the same time, and cannot be inherited: Python gives every
+#: class the module it was defined in, so a subclass elsewhere is unaffected.
+_LEGACY_MODULE = 'dbx.datapoints'
+for _obj in (
+    DatapointBase,
+    DatapointTab,
+    DatapointTable,
+    DatapointPartition,
+    DatapointFold,
+    DatapointTableTab,
+):
+    _obj.__module__ = _LEGACY_MODULE
+del _obj

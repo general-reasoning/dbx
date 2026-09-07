@@ -4,12 +4,17 @@
 **parallel MDS streams**, called *slices*, that can be zipped back into one
 `torch.utils.data.Dataset` on demand.
 
-Both live in `dbx.datapoints`, which needs `torch` and `mosaicml-streaming`
+Both live in `dbx.datatables`, which needs `torch` and `mosaicml-streaming`
 at import time:
 
 ```python
-from dbx.datapoints import DatapointTab, DatapointTable
+from dbx.datatables import Datatab, Datatable            # or DatapointTab, DatapointTable
 ```
+
+`Datatab`/`Datatable` are aliases of `DatapointTab`/`DatapointTable` — the same
+classes, so neither spelling changes a hash.  `dbx.datapoints` also still
+resolves, and is not going away: a class's module name is part of the path its
+artifacts are stored under, so the old name is recorded on disk.
 
 ## Why slices
 

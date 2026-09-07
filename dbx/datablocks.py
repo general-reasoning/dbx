@@ -6032,8 +6032,8 @@ class Datastack(Datablock):
             }
         return cls._executors_cache
 
-    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False, work_stealing: bool = False, **kwargs):
-        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, devices=devices, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, shuffle_callables=shuffle_callables, work_stealing=work_stealing, **kwargs)
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, result_idle_timeout_sec: float | None = None, shuffle_callables: bool = False, work_stealing: bool = False, **kwargs):
+        super().__init__(*args, parallelization=parallelization, n_workers=n_workers, devices=devices, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, result_idle_timeout_sec=result_idle_timeout_sec, shuffle_callables=shuffle_callables, work_stealing=work_stealing, **kwargs)
         # Early validation only — executor_cls is a property so deepcopy/setstate paths work.
         executors = self._get_executors_()
         key = (self.parallelization or "inline").lower()
@@ -6436,7 +6436,8 @@ class Datastack(Datablock):
     ) -> list[int]:
         """Return a list of indices of all blocks matching signature, tag, and/or path pattern(s) (parallelized)."""
         executor_kw_names = {
-            'executor_cls', 'worker_done_timeout_sec', 'shuffle_callables',
+            'executor_cls', 'worker_done_timeout_sec', 'result_idle_timeout_sec',
+            'shuffle_callables',
             'start_method', 'multiprocessing_start_method', 'devices'
         }
         extra_filter_kwargs = {k: v for k, v in kwargs.items() if k not in executor_kw_names}
@@ -6507,6 +6508,8 @@ class Datastack(Datablock):
         )
         if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
             executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec
+        if getattr(self, 'result_idle_timeout_sec', None) is not None:
+            executor_kwargs['result_idle_timeout_sec'] = self.result_idle_timeout_sec
         if hasattr(self, 'shuffle_callables') and self.shuffle_callables:
             executor_kwargs['shuffle_callables'] = self.shuffle_callables
         if (hasattr(self, 'multiprocessing_start_method')
@@ -6720,6 +6723,8 @@ class Datastack(Datablock):
         executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
         if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
             executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec
+        if getattr(self, 'result_idle_timeout_sec', None) is not None:
+            executor_kwargs['result_idle_timeout_sec'] = self.result_idle_timeout_sec
         if hasattr(self, 'shuffle_callables') and self.shuffle_callables:
             executor_kwargs['shuffle_callables'] = self.shuffle_callables
         if (hasattr(self, 'multiprocessing_start_method')

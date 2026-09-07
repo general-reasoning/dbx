@@ -1088,6 +1088,92 @@ class _CallableExecutorBase_:
         """Hook called in the main process right after all workers have been started."""
         pass
 
+    # ------------------------------------------------------------------
+    # Main-process collection (shared by exec_callables and its streaming twin)
+    # ------------------------------------------------------------------
+
+    #: How long the main loop will wait for the NEXT result before giving up on
+    #: the queue. Hours, because that is what the quantity means: it is the gap
+    #: between consecutive results, not a limit on the run, so anything shorter
+    #: than the slowest single callable trips on a healthy run. A 101-tab MDS
+    #: build with hour-long tabs tripped the old 1000s default every time.
+    #:
+    #: It cannot rescue a wedged worker and does not pretend to: the join below
+    #: waits on `is_alive()` whatever this is set to, so shortening it buys no
+    #: recovery -- only an earlier stop to reading a queue that has gone quiet.
+    #: Which is why it is a backstop and not a deadline.
+    RESULT_IDLE_TIMEOUT_SEC = 4 * 60 * 60
+
+    #: How often the drain-and-join reports that it is still waiting. A
+    #: legitimate wait here is long, and a silent one is indistinguishable from
+    #: a hang -- which is what it used to look like, at log.debug.
+    JOIN_REPORT_EVERY_SEC = 30
+
+    def _result_idle_timeout(self):
+        """Seconds to wait for the next result. See `RESULT_IDLE_TIMEOUT_SEC`.
+
+        Deliberately NOT ``worker_done_timeout_sec``, which used to serve here
+        as well. That one is the worker's wait for its stop sentinel -- which is
+        what its name says -- and a value chosen for it was being applied to a
+        completely different question, in the direction that loses results.
+        """
+        value = getattr(self, 'result_idle_timeout_sec', None)
+        return self.RESULT_IDLE_TIMEOUT_SEC if value is None else value
+
+    def _log_result_idle_timeout(self, timeout, done_count, total, received):
+        """Say what timed out, that it is an idle timeout, and which items are missing.
+
+        At WARNING: the visible symptom is a progress bar that stops and a
+        process that looks hung for hours, so the one line explaining it has to
+        be one the operator sees. Shared by both result loops, which used to
+        carry two messages -- only one of which worked out what was missing.
+        """
+        missing = sorted(set(range(total)) - set(received))
+        self.log.warning(
+            f"result_queue idle for {timeout}s with {done_count}/{total} results in. "
+            f"This is an INTER-RESULT timeout, not a limit on the run: a callable "
+            f"that takes longer than {timeout}s to produce anything trips it on a "
+            f"perfectly healthy run, and result_idle_timeout_sec= is the knob. No "
+            f"further work will be handed out, and results still in flight are "
+            f"collected as the workers finish. Missing item indices "
+            f"({len(missing)}): {missing[:20]}{'...' if len(missing) > 20 else ''}"
+        )
+
+    def _drain_until_workers_exit(self, workers, result_queue, on_success=None):
+        """Read *result_queue* until every worker has exited, reporting as it goes.
+
+        A worker that had already begun a ``result_queue.put()`` when the main
+        loop stopped reading may be blocked writing into a full pipe, and would
+        then never reach its own exit -- the documented Queue/Process.join
+        deadlock. So this keeps reading regardless.
+
+        *on_success* is what makes the reading worth doing: given it, a result
+        that arrives after the timeout is KEPT rather than dropped on the floor,
+        which is the difference between a premature idle timeout costing a run
+        its results and costing it nothing at all. Left None -- on the paths
+        that are about to re-raise -- the messages are simply discarded.
+        """
+        drained = 0
+        last_report = time_module.monotonic()
+        while any(w.is_alive() for w in workers):
+            try:
+                msg = result_queue.get(timeout=1)
+            except Exception:
+                msg = None
+            if msg is not None:
+                drained += 1
+                if on_success is not None and msg[0]:
+                    on_success(msg)
+            now = time_module.monotonic()
+            if now - last_report >= self.JOIN_REPORT_EVERY_SEC:
+                alive = sum(1 for w in workers if w.is_alive())
+                self.log.info(
+                    f"Still waiting on {alive}/{len(workers)} worker(s) to finish "
+                    f"in-flight work; {drained} late result message(s) collected"
+                )
+                last_report = now
+        return drained
+
     @staticmethod
     def _eval_ctx_args_kwargs(ctx_args, ctx_kwargs):
         """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``.
@@ -1362,28 +1448,29 @@ class _CallableExecutorBase_:
                 # Progress bar is created AFTER forking so child processes
                 # do not inherit a live tqdm instance and redraw it on exit.
                 progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=False))
+                def _keep(msg):
+                    """Store one success message. Used by the loop and the drain
+                    alike, so a result that arrives after the timeout is late
+                    rather than lost."""
+                    nonlocal done_count
+                    _, _worker_idx, batch = msg
+                    for item_idx, item_payload in batch:
+                        orig_idx = perm[item_idx] if perm is not None else item_idx
+                        payloads[orig_idx] = item_payload
+                        done_count += 1
+                    progress_bar.update(len(batch))
+
                 while done_count < len(callables):
                     try:
-                        msg = result_queue.get(timeout=self.worker_done_timeout_sec
-                                               if hasattr(self, 'worker_done_timeout_sec')
-                                               else 1000)
+                        msg = result_queue.get(timeout=self._result_idle_timeout())
                     except Exception:
-                        # Timed out — some results never arrived.
-                        received = {i for i, p in enumerate(payloads) if p is not None}
-                        missing = sorted(set(range(len(callables))) - received)
-                        self.log.info(
-                            f"result_queue timeout: received {done_count}/{len(callables)} results. "
-                            f"Missing item indices ({len(missing)}): {missing[:20]}"
-                            f"{'...' if len(missing) > 20 else ''}"
+                        self._log_result_idle_timeout(
+                            self._result_idle_timeout(), done_count, len(callables),
+                            {i for i, p in enumerate(payloads) if p is not None},
                         )
                         break
                     if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])
-                        _, worker_idx, batch = msg
-                        for item_idx, item_payload in batch:
-                            orig_idx = perm[item_idx] if perm is not None else item_idx
-                            payloads[orig_idx] = item_payload
-                            done_count += 1
-                        progress_bar.update(len(batch))
+                        _keep(msg)
                     else:       # failure: (False, worker_idx, item_idx, (exc, tbstr))
                         _, worker_idx, item_idx, (pexc, ptbstr) = msg
                         self.log.info(
@@ -1405,17 +1492,10 @@ class _CallableExecutorBase_:
                 self.log.debug("Feeding done_queue")
                 for _ in workers:
                     done_queue.put(None)
-                # A worker that already started a result_queue.put() before the
-                # abort/timeout above may be blocked writing into a full pipe.
-                # Since nothing else drains result_queue past this point, that
-                # worker would otherwise never return, and w.join() below would
-                # hang forever (the documented multiprocessing Queue/Process.join
-                # deadlock). Keep draining until every worker has exited.
-                while any(w.is_alive() for w in workers):
-                    try:
-                        result_queue.get(timeout=1)
-                    except Exception:
-                        pass
+                # Keeping what arrives, not merely unblocking the writer: the
+                # workers are still running and still producing, and those
+                # results used to be pulled off the queue and thrown away.
+                self._drain_until_workers_exit(workers, result_queue, on_success=_keep)
                 self.log.debug("Joining workers")
                 for w in workers:
                     w.join()
@@ -1489,54 +1569,86 @@ class _CallableExecutorBase_:
                 pending = {}        # item_idx -> payload
                 next_to_yield = 0   # index of the next item to emit
                 emit_buf = []       # accumulator for batch_size > 1 mode
+                timed_out = False
+                stopped = False
+
+                def _stop_workers():
+                    """Hand every worker its stop sentinel, once.
+
+                    Before the recovery drain and not only in the `finally`: a
+                    worker that has finished its item is blocked in
+                    ``done_queue.get(timeout=worker_done_timeout_sec)``, so a
+                    drain that waits for it to exit without having sent the
+                    sentinel waits out that timeout instead -- which is exactly
+                    the appearance of a hang this change exists to remove.
+                    """
+                    nonlocal stopped
+                    if not stopped:
+                        stopped = True
+                        for _ in workers:
+                            done_queue.put(None)
+
+                def _keep(msg):
+                    """Store one success message. Storing only, no yielding: this
+                    is also the drain's callback, and a callback cannot yield."""
+                    nonlocal done_count
+                    _, _worker_idx, batch = msg
+                    done_count += len(batch)
+                    progress_bar.update(len(batch))
+                    for item_idx, payload in batch:
+                        pending[item_idx] = payload
+
+                def _emit():
+                    """Whatever is contiguous from next_to_yield, in input order."""
+                    nonlocal next_to_yield, emit_buf
+                    while next_to_yield in pending:
+                        p = pending.pop(next_to_yield)
+                        next_to_yield += 1
+                        if self.batch_size is not None and self.batch_size > 1:
+                            emit_buf.append(p)
+                            if len(emit_buf) >= self.batch_size:
+                                yield emit_buf
+                                emit_buf = []
+                        else:
+                            yield p
+
                 while done_count < len(callables):
                     try:
-                        msg = result_queue.get(timeout=self.worker_done_timeout_sec
-                                               if hasattr(self, 'worker_done_timeout_sec')
-                                               else 1000)
+                        msg = result_queue.get(timeout=self._result_idle_timeout())
                     except Exception:
-                        # Timed out — some results never arrived.
-                        self.log.info(
-                            f"result_queue timeout: received {done_count}/{len(callables)} results. "
-                            f"Missing items. Stream will terminate early."
+                        self._log_result_idle_timeout(
+                            self._result_idle_timeout(), done_count, len(callables),
+                            set(range(next_to_yield)) | set(pending),
                         )
+                        timed_out = True
                         break
                     if msg[0]:  # success: (True, worker_idx, [(item_idx, payload), ...])
-                        _, worker_idx, batch = msg
-                        done_count += len(batch)
-                        progress_bar.update(len(batch))
-                        for item_idx, payload in batch:
-                            pending[item_idx] = payload
-                        # Drain pending in strict input order
-                        while next_to_yield in pending:
-                            p = pending.pop(next_to_yield)
-                            next_to_yield += 1
-                            if self.batch_size is not None and self.batch_size > 1:
-                                emit_buf.append(p)
-                                if len(emit_buf) >= self.batch_size:
-                                    yield emit_buf
-                                    emit_buf = []
-                            else:
-                                yield p
+                        _keep(msg)
+                        yield from _emit()
                     else:       # failure: (False, worker_idx, item_idx, (exc, tbstr))
                         _, worker_idx, item_idx, (e, ptbstr) = msg
                         abort_event.set()
                         break
+                if timed_out:
+                    # An idle timeout stops the scheduling, not the collecting:
+                    # the workers are still finishing what they took, and those
+                    # results used to be pulled off the queue and dropped. Out
+                    # here rather than in the finally below, because a generator
+                    # may not yield while it is being closed.
+                    _stop_workers()
+                    self._drain_until_workers_exit(workers, result_queue, on_success=_keep)
+                    yield from _emit()
                 # Yield any remainder (last partial batch)
                 if emit_buf:
                     yield emit_buf
             finally:
-                for _ in workers:
-                    done_queue.put(None)
-                # See exec_callables: drain result_queue until every worker has
-                # exited, otherwise a worker blocked writing a result into a
-                # full pipe (because we stopped reading above) would hang
-                # w.join() forever.
-                while any(w.is_alive() for w in workers):
-                    try:
-                        result_queue.get(timeout=1)
-                    except Exception:
-                        pass
+                _stop_workers()
+                # Discarding here, unlike exec_callables: this runs on the paths
+                # that are ending the stream -- a worker exception, or a consumer
+                # that stopped iterating -- and a generator being closed may not
+                # yield, so there is nowhere for a late result to go. The
+                # recoverable case is handled above, before the finally.
+                self._drain_until_workers_exit(workers, result_queue)
                 for w in workers:
                     w.join()
                 if e is not None:
@@ -1569,6 +1681,7 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
 
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000,
+                 result_idle_timeout_sec: float = None,
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
                  devices: list | None = None,
@@ -1577,6 +1690,7 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         self.batch_size = batch_size
         self.tag = tag
         self.worker_done_timeout_sec = worker_done_timeout_sec
+        self.result_idle_timeout_sec = result_idle_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
         self.devices = devices
@@ -1629,6 +1743,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
 
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
                  start_method: str = 'spawn', worker_done_timeout_sec: int = 1000,
+                 result_idle_timeout_sec: float = None,
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
                  devices: list | None = None,
@@ -1637,6 +1752,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         self.batch_size = batch_size
         self.tag = tag
         self.worker_done_timeout_sec = worker_done_timeout_sec
+        self.result_idle_timeout_sec = result_idle_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
         self.devices = devices

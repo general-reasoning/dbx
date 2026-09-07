@@ -43,18 +43,44 @@ def test_multithreading_executor_args():
     res = ex.execute(funcs, 5)
     assert res == [10] * 5
 
-def test_multithreading_executor_timeout():
-    # Set a very short timeout to simulate deadlock
-    ex = MultithreadingCallableExecutor(n_workers=2, worker_done_timeout_sec=0.1)
+@pytest.mark.pinned
+def test_multithreading_executor_idle_timeout_keeps_late_results():
+    """A result a worker produced may not be discarded.
+
+    `result_idle_timeout_sec` is the gap allowed between consecutive results,
+    not a limit on the run, so a callable slower than the gap trips it on a
+    perfectly healthy run. It used to `break` and then drain the queue into the
+    void: the workers kept running, kept producing, and every payload that
+    arrived was thrown away. The results are recoverable, so losing them is a
+    bug however the timeout is configured.
+    """
+    ex = MultithreadingCallableExecutor(n_workers=2, result_idle_timeout_sec=0.1)
     funcs = [
         functools.partial(dummy_func, 1),
-        functools.partial(delay_func, 2, delay=0.5), # will cause timeout
+        functools.partial(delay_func, 2, delay=0.5),  # outlives the idle timeout
         functools.partial(dummy_func, 3),
     ]
-    res = ex.execute(funcs)
-    # Because of the timeout, at least one payload should be None
-    assert None in res
-    assert len(res) == 3
+    assert ex.execute(funcs) == [2, 4, 6]
+
+
+def test_idle_timeout_says_what_it_is_and_names_its_knob(capsys):
+    """The visible symptom is a stalled progress bar and a process that looks
+    hung, so the one line explaining it has to be at a level that is seen."""
+    ex = MultithreadingCallableExecutor(n_workers=2, result_idle_timeout_sec=0.1)
+    ex.execute([functools.partial(delay_func, 1, delay=0.5)])
+    out = capsys.readouterr().out
+    assert 'WARNING' in out
+    assert 'INTER-RESULT' in out
+    assert 'result_idle_timeout_sec' in out
+
+
+def test_the_worker_done_knob_no_longer_drives_the_result_loop():
+    """The two were one knob, and a value chosen for the worker's wait on its
+    stop sentinel was being applied to the main loop's wait for results -- in
+    the direction that lost them."""
+    ex = MultithreadingCallableExecutor(n_workers=2, worker_done_timeout_sec=0.1)
+    assert ex._result_idle_timeout() == ex.RESULT_IDLE_TIMEOUT_SEC
+    assert ex.RESULT_IDLE_TIMEOUT_SEC >= 3600
 
 # ---------------------------------------------------------
 # MultiprocessingCallableExecutor Tests
@@ -79,18 +105,20 @@ def test_multiprocessing_executor_args():
     res = ex.execute(funcs, 5)
     assert res == [10] * 5
 
-def test_multiprocessing_executor_timeout():
-    # Set a very short timeout to simulate deadlock
-    ex = MultiprocessingCallableExecutor(n_workers=2, worker_done_timeout_sec=0.1)
+@pytest.mark.pinned
+def test_multiprocessing_executor_idle_timeout_keeps_late_results():
+    """As the threading case: a produced result is not thrown away.
+
+    Across processes as well, where the drain also has to keep reading so a
+    worker blocked writing into a full pipe can finish and be joined.
+    """
+    ex = MultiprocessingCallableExecutor(n_workers=2, result_idle_timeout_sec=0.1)
     funcs = [
         functools.partial(dummy_func, 1),
-        functools.partial(delay_func, 2, delay=0.5), # will cause timeout
+        functools.partial(delay_func, 2, delay=0.5),  # outlives the idle timeout
         functools.partial(dummy_func, 3),
     ]
-    res = ex.execute(funcs)
-    # Because of the timeout, at least one payload should be None
-    assert None in res
-    assert len(res) == 3
+    assert ex.execute(funcs) == [2, 4, 6]
 
 # ---------------------------------------------------------
 # InlineCallableExecutor Tests

@@ -509,6 +509,35 @@ class DatafeatureTab(_UpstreamSlices, DatapointTab):
         feature_namemap: dict[str, str] | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
+    # TODO: carry `shared_upstream_column` through into the features slice at
+    # build time, so the cross-block alignment check has something to compare.
+    #
+    # As it stands `columns_spec` is built from `_feature_map` alone, so the
+    # features slice holds layer columns and nothing else. A stock feature tab
+    # therefore has no column in common with its upstream sample slices, and
+    # setting shared_upstream_column= on one is refused at read time ("carried
+    # by fewer than two of the sources read") rather than checking anything.
+    # Which is the right refusal -- it says the check cannot run -- but it means
+    # the declaration is only usable by a subclass whose __build__ writes an id
+    # of its own.
+    #
+    # Three things it needs, and why it was not done alongside the read-time
+    # default:
+    #
+    #   * It must be VAR, not the kwarg it is now. Writing the column changes
+    #     the bytes, so two feature tabs -- one carrying it, one not -- hold
+    #     different data, and as a kwarg they would share a hash. That is the
+    #     fault VAR.LazyLoader._check_renderable exists to prevent, arrived at
+    #     from the other side.
+    #   * It needs the column's MDS type, which only a DATASLICE-declared
+    #     upstream states (`datapoint_tab.declared_columns(slice)`). Under the
+    #     SLICETOPIC sentinel nothing declares it, and inferring a type from a
+    #     value that has already been through MDS is guesswork -- so this may
+    #     have to require a declared upstream, and say so.
+    #   * Both build paths have to write it: __build_bulk__ can take it out of
+    #     the `sample_data` it already read, but __build_streaming__ sees rows
+    #     only as whatever _passthrough_collate made of the batch.
+
     # 1. Datablock / Datastream Protocol Methods ─────────────────────
 
     def __init__(

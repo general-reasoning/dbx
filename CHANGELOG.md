@@ -335,6 +335,18 @@ All notable changes to this project will be documented in this file.
 - **`Datablock.format_diffnorm(diff)`** — renders a `diffnorm` dict as text.
 
 ### Fixed
+- **`entry.inst()` raised `AttributeError` on any entry journaled without a git
+  repo.** An entry is a Series built with `dropna()`, so a column recorded null
+  loses its LABEL, and attribute access — which a Series answers out of its index —
+  raises where every reader expects `None`. `revision` and `gitrepo` are null
+  whenever neither `DBX_GIT_REPO` nor `DBX_USE_WORK_REPO` is set (a pip-installed
+  dbx, a container without the checkout), and `inst()` defaults to
+  `revision='journal_entry'` — so it failed on exactly the entries that recorded no
+  revision, taking `UNSAFE_redirect()` with it. `instantiate()` and `rinst()` now
+  read both through `DatajournalEntry.column()`, and `None` means what
+  `instantiate()`'s own default already means: the current environment. Latent
+  since the `dropna()` arrived in `loc=`/`iloc=`; invisible wherever a repo is
+  configured, since then the revision is a real sha.
 - **A remote tab was cached where mosaic guessed, not where the table said.**
   `DatapointTable.datastream()` (and `DatapointFold`'s) computed a cache directory,
   created it, and then never passed it on, so every `Stream` over a remote tab was left

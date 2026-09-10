@@ -1235,12 +1235,12 @@ class DatajournalEntry(pd.Series):
     
     def instantiate(self, gitrepo=None, revision=None):
         if revision == 'journal_entry':
-            revision = self.revision
+            revision = self.column(self, 'revision')
             self.logger.verbose(f"Instantiating {self.__tag__()} with revision from journal entry {revision}")
         else:
             self.logger.verbose(f"Instantiating {self.__tag__()} with revision {revision}")
         if gitrepo == 'journal_entry':
-            gitrepo = self.gitrepo
+            gitrepo = self.column(self, 'gitrepo')
             self.logger.verbose(f"Instantiating {self.__tag__()} with gitrepo from journal entry {gitrepo}")
         else:
             self.logger.verbose(f"Instantiating {self.__tag__()} with gitrepo {gitrepo}")
@@ -1306,7 +1306,7 @@ class DatajournalEntry(pd.Series):
                     f"an existing handle, whose pinning is already fixed"
                 )
         if revision == 'journal_entry':
-            revision = self.revision
+            revision = self.column(self, 'revision')
 
         quote = self.read('quote', raw=True)
         if quote is None:
@@ -1369,7 +1369,13 @@ class DatajournalEntry(pd.Series):
 
     @staticmethod
     def column(entry, name):
-        """The first present value along *name*'s rename chain, or None."""
+        """The first present value along *name*'s rename chain, or None.
+
+        The way to read ANY column, rename chain or not. An entry is a Series
+        built with `dropna` (see `Datablock.Journal`), so a column that was
+        recorded null is not merely None on the row -- its label is gone, and
+        ``entry.name`` raises AttributeError where the reader expected None.
+        """
         for candidate in DatajournalEntry.COLUMN_CHAINS.get(name, (name,)):
             value = entry.get(candidate)
             if value is not None and not (isinstance(value, float) and pd.isna(value)):

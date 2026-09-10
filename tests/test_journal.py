@@ -14,6 +14,7 @@ import pandas as pd
 
 import dbx.datablocks as dbxmod
 from dbx.datablocks import journal, Datablock, Datajournal, DatajournalEntry
+import dbx.dataparts as dataparts
 
 
 # ---------------------------------------------------------------------------
@@ -665,3 +666,59 @@ class TestDatablockJournalArgThreading:
 
 
 
+
+# ---------------------------------------------------------------------------
+# 8. A column recorded null
+# ---------------------------------------------------------------------------
+
+def _unbuilt_without_git(tmp_path, monkeypatch):
+    """A block whose journal entry will record no revision and no gitrepo."""
+    monkeypatch.setattr(dataparts, 'DBX_GIT_REPO', None)
+    monkeypatch.setattr(dataparts, 'DBX_USE_WORK_REPO', None)
+    return BuildableBlock(url=str(tmp_path))
+
+
+@pytest.mark.pinned
+class TestANullColumnReadsAsNone:
+    """A column recorded null must read back as None, not as a missing field.
+
+    An entry is a Series built with ``dropna`` (`Datablock.Journal`), so a
+    column whose value was null loses its LABEL -- and attribute access, which
+    a Series answers out of its index, raises AttributeError where every
+    reader expects None. ``revision`` and ``gitrepo`` are null on every block
+    journaled with no git repo configured, which is how `inst()` -- whose
+    default is to take the revision the entry recorded -- came to fail on
+    exactly the entries that recorded none.
+
+    What must hold is that a recorded null reads as None wherever it is read.
+    Whether the label survives the row is `Datablock.Journal`'s business.
+    """
+
+    def test_the_entry_really_recorded_no_revision(self, tmp_path, monkeypatch):
+        """The guard: with a revision recorded, everything below passes vacuously."""
+        block = _unbuilt_without_git(tmp_path, monkeypatch)
+        block.build()
+        frame = block.journal()
+        assert 'revision' in frame.columns, "the column is written whatever its value"
+        assert frame['revision'].isna().all(), "no git repo: nothing to record"
+        assert frame['gitrepo'].isna().all()
+
+    def test_a_null_column_reads_as_none(self, tmp_path, monkeypatch):
+        block = _unbuilt_without_git(tmp_path, monkeypatch)
+        block.build()
+        entry = block.journal(iloc=0)
+        assert DatajournalEntry.column(entry, 'revision') is None
+        assert DatajournalEntry.column(entry, 'gitrepo') is None
+        assert entry.block.revision is None
+        assert entry.block.gitrepo is None
+
+    def test_inst_falls_back_to_the_current_environment(self, tmp_path, monkeypatch):
+        """``inst()`` takes the entry's revision, and 'none recorded' is an answer.
+
+        None means the current environment -- what `instantiate()` already
+        means by its own default -- not an entry that cannot be instantiated.
+        """
+        block = _unbuilt_without_git(tmp_path, monkeypatch)
+        block.build()
+        entry = block.journal(iloc=0)
+        assert entry.inst().hash == block.hash

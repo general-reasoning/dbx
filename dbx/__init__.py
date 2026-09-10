@@ -19,6 +19,22 @@ dataparts
 datablocks
     :class:`Datablock`, :class:`Datastack`, journaling, git-revision
     tracking, remote execution via Ray.
+
+Modules NOT imported here
+-------------------------
+``import dbx`` must work without torch, so two modules are imported by name
+instead -- ``from dbx.datastreams import ...``, ``from dbx.datastills import
+...``:
+
+datastreams
+    Shard-backed dataset/loader plumbing: :class:`ZipStreamingDataset`,
+    :class:`ChunkShuffleSampler`, :class:`ResumableDataLoader`,
+    ``block_split_indices``, ``val_loader_workers``. Needs torch, and
+    mosaicml-streaming for the MDS parts.
+datastills
+    One training run as a Datablock: :class:`Datastill`,
+    :class:`Datalightning`, :class:`Dataweights`, ``scaffold_still``. Needs
+    lightning.
 """
 
 __version__ = "0.0.1"

@@ -4,6 +4,59 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`dbx.datastills`: `Datastill`, `Datalightning`, `Dataweights`.** One training run
+  as a config-addressed Datablock — topics `ckpts`/`logs`, the `_COMPLETE` marker,
+  the checkpoint save/upload/free/resume dance, the TensorBoard log symlink, the
+  atexit sync, the `UNSAFE_*` helpers, the `Trainer` assembly and a generic
+  `dataloaders()`. Every training pipeline in soundworld had grown its own copy of
+  all of it; `IJEPAsaurUSStill` shed ~930 lines becoming a subclass, with its hash,
+  key, signature, `quote()` and `cite()` byte-identical (its `VAR` is inherited
+  whole, so the field *order* a `LEGACY_NORM` block hashes can only be the base's).
+
+  Two ways to say what to train. **Explicit mode** puts a `Datalightning` in
+  `VAR.lightning`, which is what you want when the module's construction has
+  upstream artifacts of its own. **cfg mode** names two ordinary classes — `Model`
+  and `Lightning`, importing nothing from dbx — and mirrors their `cfg_`-prefixed
+  keyword arguments into the still's own `VAR`; a name declared on both is one VAR
+  field passed to both, which is the right reading for a knob like `crop_size` that
+  two objects must agree about. `Datastill.export()` then writes a standalone module
+  carrying that configuration as literals, with no dbx in it.
+
+  The mirrored `VAR` is checked-in source, generated once by `scaffold_still()`,
+  **not** reflected at import time: `_typed_specdict` walks every `VAR` field into
+  the hash, so a `cfg_` knob added in a file that does not mention dbx would
+  silently re-key every run of that model. As source, that movement is a diff.
+  `__check_cfg__` raises on construction if the two have drifted apart, and refuses
+  a `cfg_` name that collides with one of `Datastill`'s own fields (`cfg_ckpt` is
+  initial weights; `VAR.ckpt` is the run to resume from — one field cannot be both).
+
+  `VAR.ckpt` holding another *block* is a **warm start**: its latest checkpoint is
+  loaded weights-only, at step 0, with a fresh optimizer, and only until this run
+  has a checkpoint of its own. Carrying a different run's optimizer moments and
+  epoch counter over is not a resume, it is a way to lose a training run quietly —
+  a source that already reached its own `max_epochs` leaves the new one with
+  nothing to do, so `fit()` returns at once and the `_COMPLETE` marker lands over
+  an untrained model. (The stills in soundworld took the old reading, which is why
+  `IJEPAsaurUSPoseStill`'s phase-1 chains passed `var_reset_optimizer_state=True`
+  or ran short.) A bare *path* in `VAR.ckpt` still resumes in full — that is how
+  you point a run at its own checkpoint that has moved, and the escape hatch from
+  the new default. A warm start that matches none of the model's parameter names
+  now raises rather than training from random init behind a banner that says
+  otherwise.
+
+  Not imported by `dbx/__init__.py`: it needs lightning at module scope, so import
+  it by name, exactly as for `dbx.datastreams`. New `[lightning]` extra.
+- **`dbx.datastreams`: `block_split_indices`, `block_split_ranges`,
+  `val_loader_workers`.** The split counterpart of `ChunkShuffleSampler`, and here
+  for the same reason: a per-sample-random train/val split scatters both halves
+  across the whole table and defeats the local shard cache as thoroughly as no
+  split at all. `val_loader_workers` caps a validation loader that reads
+  `val_max_batches` batches so it stops prefetching (and discarding) an order of
+  magnitude more shards than it reads, evicting the training working set every time
+  it validates. In `datastreams` rather than `datastills` so that torch-only code
+  can use them without pulling in lightning.
+
 ### Breaking Changes
 - **Renamed `Datablock.CONFIG` → `Datablock.VAR` and `.cfg` / `.config` → `.var`.**
   Both old names are kept as aliases, so existing subclasses keep working unchanged:

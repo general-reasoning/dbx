@@ -59,6 +59,12 @@ streaming = [
     "datablocks[torch]",
     "mosaicml-streaming>=0.7",
 ]
+lightning = [
+    # dbx.datastills only, which imports lightning at module scope -- which is
+    # why dbx/__init__.py does not import it, exactly as for dbx.datastreams.
+    "datablocks[torch]",
+    "lightning>=2.0",
+]
 azure = [
     # The fsspec driver for abfs:// and abfss:// urls. Nothing imports it --
     # fsspec resolves it from the url -- so its absence surfaces only when a
@@ -71,7 +77,7 @@ dev = [
     "twine",
 ]
 all = [
-    "datablocks[ray,torch,streaming,azure,dev]",
+    "datablocks[ray,torch,streaming,lightning,azure,dev]",
 ]
 
 [project.urls]

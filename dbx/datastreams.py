@@ -649,6 +649,110 @@ class ResumableDataLoader(DataLoader):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+#  Block-granular splitting and loader sizing
+# ═══════════════════════════════════════════════════════════════════════
+#
+# The split counterpart of dbx.datastreams.ChunkShuffleSampler, and here for
+# the same reason: consecutive sample indices in a shard-backed table live in
+# the same shard, so a per-sample-random train/val split scatters both halves
+# across the whole table and defeats the local shard cache just as thoroughly
+# as no split at all. Splitting whole contiguous blocks leaves each half a
+# union of contiguous runs.
+
+def block_split_ranges(n: int, block_size: int, fractions, seed: int = 0) -> list:
+    """Partition ``range(n)`` into groups at block granularity, as ranges.
+
+    Each group comes back as ascending, maximally-merged ``(start, end)``
+    pairs: adjacent selected blocks coalesce, so three consecutive 2048-blocks
+    are one ``(s, s + 6144)`` range rather than three.
+
+    See :func:`block_split_indices` for the ``fractions`` semantics.
+    """
+    fractions = list(fractions)
+    if any(f is None for f in fractions[:-1]):
+        raise ValueError(f"only the last entry in `fractions` may be None: {fractions}")
+    total = sum(f for f in fractions if f is not None)
+    if total > 1.0:
+        raise ValueError(f"fractions sum to {total}, which exceeds 1.0: {fractions}")
+
+    num_blocks = (n + block_size - 1) // block_size
+    block_order = shuffled_block_order(num_blocks, seed)
+
+    groups = []
+    start_pos = 0
+    for frac in fractions:
+        if frac is None:
+            blocks = sorted(block_order[start_pos:])
+            start_pos = num_blocks
+        else:
+            count = int(frac * num_blocks)
+            blocks = sorted(block_order[start_pos:start_pos + count])
+            start_pos += count
+        ranges = []
+        for b in blocks:
+            s, e = b * block_size, min(b * block_size + block_size, n)
+            if ranges and ranges[-1][1] == s:
+                ranges[-1] = (ranges[-1][0], e)
+            else:
+                ranges.append((s, e))
+        groups.append(ranges)
+    return groups
+
+
+def block_split_indices(n: int, block_size: int, fractions, seed: int = 0) -> list:
+    """Partition ``range(n)`` into ``len(fractions)`` groups at block granularity.
+
+    Whole blocks, not individual samples, are assigned to each group, so a
+    group stays a union of contiguous index ranges.  Each group's indices come
+    back ascending -- pair with
+    :class:`~dbx.datastreams.ChunkShuffleSampler` for a shuffled iteration
+    order on top.
+
+    Parameters
+    ----------
+    n : int
+        Length of the index space to split (e.g. ``len(dataset)``).
+    block_size : int
+        Consecutive indices per block.
+    fractions : Sequence[float | None]
+        Fraction of the *blocks* per group, in order.  At most the **last**
+        entry may be ``None``, meaning "every remaining block" -- which is
+        what a plain train/val split wants (``[0.8, None]``), since two
+        independently-rounded fractions summing to 1.0 can leave a block or
+        two assigned to neither.  Give every entry a float when the leftover
+        should be deliberately unused (``[0.05, 0.02]`` -- a 7% smoke test).
+    seed : int
+        Seed for the block-order shuffle.
+    """
+    return [
+        [i for s, e in ranges for i in range(s, e)]
+        for ranges in block_split_ranges(n, block_size, fractions, seed=seed)
+    ]
+
+
+def val_loader_workers(num_workers, prefetch_factor, val_max_batches):
+    """Right-size a validation loader that only ever consumes a few batches.
+
+    A DataLoader prefetches ``num_workers * prefetch_factor`` batches.  With
+    ``val_max_batches=1`` that is 12 workers x 4 = 48 batches fetched to
+    consume **one**, and because each worker walks its own slice of the index
+    space those 48 batches touch ~48x as many shards as the validation reads.
+    Under a cache limit that evicts, the discarded prefetches push the training
+    working set out of the cache, so every validation is followed by a burst of
+    re-downloads.
+
+    Returns ``(num_workers, prefetch_factor)`` capped so the loader fetches at
+    most one batch beyond what will be read.  ``val_max_batches=None`` ("read
+    the whole split") passes through untouched.
+    """
+    if not val_max_batches or num_workers <= 0:
+        return num_workers, prefetch_factor
+    workers = max(1, min(num_workers, val_max_batches))
+    prefetch = max(1, min(prefetch_factor, -(-val_max_batches // workers) + 1))
+    return workers, prefetch
+
+
+# ═══════════════════════════════════════════════════════════════════════
 #  Lockstep shard boundaries
 # ═══════════════════════════════════════════════════════════════════════
 

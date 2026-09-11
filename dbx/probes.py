@@ -1,4 +1,4 @@
-"""dbx.dataprobes — Generic feature probes and utilities for DatafeatureTables."""
+"""dbx.probes — Generic feature probes and utilities for feature tables."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ def normalize_features(features: Any, mode: str | None) -> Any:
             raise ValueError(f"Unknown normalization mode {mode!r}")
 
 
-class DatafeatureAffineLogisticProber:
+class FeatureAffineLogisticProber:
     """Standalone logistic regression evaluator for data features.
 
     Provides static `evaluate_features` and `evaluate_features2`
@@ -111,8 +111,8 @@ class DatafeatureAffineLogisticProber:
         *training_fraction* is the share fitted on; the remainder is scored.
         """
         features, labels = Xy
-        features = DatafeatureAffineLogisticProber.ndarray(features)
-        labels = DatafeatureAffineLogisticProber.ndarray(labels)
+        features = FeatureAffineLogisticProber.ndarray(features)
+        labels = FeatureAffineLogisticProber.ndarray(labels)
         N = len(labels)
         ntrain = int(N * training_fraction)
         perm = np.random.permutation(N)
@@ -139,12 +139,12 @@ class DatafeatureAffineLogisticProber:
         log = log or Logger()
         label1, label2 = tags
         log.verbose(f"EVALUATING features: {label1}: started at {datetime.datetime.now()}")
-        report1 = DatafeatureAffineLogisticProber.evaluate_features(
+        report1 = FeatureAffineLogisticProber.evaluate_features(
             Xy1, training_fraction=training_fraction, fit_intercept=fit_intercept
         )
         log.verbose(f"EVALUATING features: {label1}: finished at {datetime.datetime.now()}")
         log.verbose(f"EVALUATING features: {label2}: started at {datetime.datetime.now()}")
-        report2 = DatafeatureAffineLogisticProber.evaluate_features(
+        report2 = FeatureAffineLogisticProber.evaluate_features(
             Xy2, training_fraction=training_fraction, fit_intercept=fit_intercept
         )
         log.verbose(f"EVALUATING features: {label2}: finished at {datetime.datetime.now()}")
@@ -171,7 +171,7 @@ def _pair_array(collator: Datacollator, data: dict, pair: tuple[str, str]) -> np
     column that is not there raises instead of resolving to whatever the
     mapping happened to hold first.
     """
-    value = Datacollator._pick(data, pair[0], pair[1], f"dataprobes: pair {pair!r}")
+    value = Datacollator._pick(data, pair[0], pair[1], f"probes: pair {pair!r}")
     return Datacollator._as_array(value)
 
 
@@ -295,7 +295,7 @@ class TabAffineLogisticCallable:
         return {'signals': X, 'labels': y, 'layout': layout}
 
 
-class DatafeatureAffineLogisticProbe(Datablock):
+class FeatureAffineLogisticProbe(Datablock):
     """Fit a logistic classifier on the concatenation of every signal column.
 
     All signal pairs are treated as one vector per sample: each is flattened
@@ -357,7 +357,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
         self.parallelization = getattr(self, 'parallelization', None) or 'inline'
         self.n_workers = getattr(self, 'n_workers', 1)
         self.work_stealing = getattr(self, 'work_stealing', getattr(self, 'works_stealing', False))
-        self._prober = DatafeatureAffineLogisticProber(log=self.log)
+        self._prober = FeatureAffineLogisticProber(log=self.log)
 
     def _tab_results(self, tag: str, make_callable):
         table = self.var.feature_table
@@ -371,7 +371,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
         return executor.exec_callables([make_callable(i) for i in indices])
 
     def __build__(self):
-        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")
+        self.log.verbose(f"FeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")
 
         results = self._tab_results(
             "COMPUTING LOGISTIC DATA",
@@ -422,7 +422,7 @@ class DatafeatureAffineLogisticProbe(Datablock):
         write_tensor(torch.from_numpy(clf.intercept_), self.path('intercept', ensure_dirpath=True))
         write_npz(self.path('classes', ensure_dirpath=True), classes=clf.classes_)
 
-        self.log.verbose(f"DatafeatureAffineLogisticProbe.__build__: END {self.anchorkeypath}")
+        self.log.verbose(f"FeatureAffineLogisticProbe.__build__: END {self.anchorkeypath}")
         return self
 
     def __read__(self, *topicpath):
@@ -532,7 +532,7 @@ class TabColumnStatsCallable:
         return {'columns': columns, 'n_rows': counts.pop() if counts else 0}
 
 
-class DatafeatureStatsProbe(Datablock):
+class FeatureStatsProbe(Datablock):
     """Per-column statistics for a DatafeatureTable or DatafeatureTab.
 
     One topic per statistic -- ``mean``, ``std``, ``median``, ``min``,
@@ -611,7 +611,7 @@ class DatafeatureStatsProbe(Datablock):
         return [_pair_key(p) for p in collator.signal_pairs + collator.label_pairs]
 
     def __build__(self):
-        self.log.verbose(f"DatafeatureStatsProbe.__build__: BEGIN {self.anchorkeypath}")
+        self.log.verbose(f"FeatureStatsProbe.__build__: BEGIN {self.anchorkeypath}")
         table = self.var.feature_table
 
         n_tabs = getattr(table, 'n_tabs', 0) or 0
@@ -634,7 +634,7 @@ class DatafeatureStatsProbe(Datablock):
         write_npz(self.path('count', ensure_dirpath=True),
                   count=np.array(sum(res['n_rows'] for res in results)))
 
-        self.log.verbose(f"DatafeatureStatsProbe.__build__: END {self.anchorkeypath}")
+        self.log.verbose(f"FeatureStatsProbe.__build__: END {self.anchorkeypath}")
         return self
 
     def __read__(self, *topicpath):
@@ -666,3 +666,20 @@ class DatafeatureStatsProbe(Datablock):
     @functools.cached_property
     def count(self) -> int:
         return self.read('count')
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  The names these classes used to have
+# ═══════════════════════════════════════════════════════════════════════
+
+#: This file was ``dbx/dataprobes.py``, which still resolves as an alias onto
+#: this module object -- see the note in ``dbx/__init__.py``. The ``Feature``
+#: prefix matches `FeatureTab` / `FeatureTable` in :mod:`dbx.featuretables`,
+#: which is what these probe.
+#:
+#: As in :mod:`dbx.backbones`, the class aliases are for source and not for
+#: identity: nothing was ever built as one of these -- the probes in soundworld
+#: are subclasses, reporting their own fqcn.
+DatafeatureAffineLogisticProber = FeatureAffineLogisticProber
+DatafeatureAffineLogisticProbe = FeatureAffineLogisticProbe
+DatafeatureStatsProbe = FeatureStatsProbe

@@ -15,9 +15,15 @@ places that outlive the source:
   under a new module name.
 
 So the classes keep ``__module__`` as it was, and the old dotted paths are
-aliased onto the same module objects -- the way ``dbx.datamodels`` already is
-onto :mod:`dbx.databackbones`.  Neither half is a courtesy to importers: the
-strings are recorded in artifacts on disk, which do not get to be migrated.
+aliased onto the same module objects.  Neither half is a courtesy to
+importers: the strings are recorded in artifacts on disk, which do not get to
+be migrated.
+
+``dbx.databackbones``, ``dbx.datamodels`` and ``dbx.dataprobes`` are aliased
+the same way, onto :mod:`dbx.backbones` and :mod:`dbx.probes`.  The classes in
+those two were renamed as well, so their `fqcn` moved and no pinning could
+have held it -- see the note at the foot of each.  Nothing was ever built as
+one of them, which is why that was allowed and is not allowed here.
 
 Aliases and not forwarding shims, because a forwarder has a namespace of its
 own.  ``monkeypatch.setattr(dbx.datapoints, 'StreamingDataset', ...)`` would
@@ -36,7 +42,7 @@ pytest.importorskip("streaming", reason="mosaicml-streaming is an optional depen
 import dbx
 import dbx.datafeatures
 import dbx.datapoints
-from dbx import datatables, featuretables
+from dbx import backbones, datatables, featuretables, probes
 
 #: The fqcn every artifact of these classes is stored under. Hard-coded, because
 #: the whole point is that they are not free to move.
@@ -158,3 +164,132 @@ class TestTheOldModulePathsAreTheSameModule:
             assert got == ('tab', 7)
         finally:
             del sys.modules['dbx.datapoints']._ShimTable
+
+
+class TestTheRenamedBackboneAndProbeModules:
+    """``dbx.databackbones``, ``dbx.datamodels`` and ``dbx.dataprobes``.
+
+    The files are ``dbx/backbones.py`` and ``dbx/probes.py`` now, and the
+    classes in them shed a ``Data`` prefix that said nothing -- an evaluator is
+    not a datablock. Unlike the datatables rename, the CLASS names moved too,
+    so no amount of pinning could have held their `fqcn`; that was allowed
+    because nothing was ever built as one of them. Every backbone builder and
+    probe downstream is a subclass, reporting its own module and its own name.
+    """
+
+    def test_the_old_module_paths_are_the_same_objects(self):
+        import sys
+        assert sys.modules['dbx.databackbones'] is backbones
+        assert sys.modules['dbx.datamodels'] is backbones
+        assert sys.modules['dbx.dataprobes'] is probes
+
+    def test_patching_one_name_is_visible_under_the_other(self, monkeypatch):
+        """Aliases, not forwarders -- see the class above."""
+        sentinel = object()
+        monkeypatch.setattr(dbx.dataprobes, 'LogisticRegression', sentinel)
+        assert probes.LogisticRegression is sentinel
+
+    def test_the_old_class_names_resolve(self):
+        assert backbones.DatamodelEvaluator is backbones.ModelEvaluator
+        assert backbones.DatamodelEvaluatorFactory is backbones.ModelEvaluatorBuilder
+        assert backbones.DataformerEvaluator is backbones.TransformerEvaluator
+        assert backbones.DataformerEvaluatorFactory is backbones.TransformerEvaluatorBuilder
+        assert probes.DatafeatureAffineLogisticProbe is probes.FeatureAffineLogisticProbe
+        assert probes.DatafeatureAffineLogisticProber is probes.FeatureAffineLogisticProber
+        assert probes.DatafeatureStatsProbe is probes.FeatureStatsProbe
+
+    def test_the_old_dotted_paths_resolve_end_to_end(self):
+        """A recorded specline is a dotted path off `dbx`, so the old module
+        AND the old class name have to resolve together."""
+        import importlib
+        m = importlib.import_module('dbx.databackbones')
+        assert m.DatamodelEvaluatorFactory is backbones.ModelEvaluatorBuilder
+        assert importlib.import_module('dbx.dataprobes').DatafeatureStatsProbe \
+            is probes.FeatureStatsProbe
+
+    def test_the_new_names_report_the_new_module(self):
+        """The guard. These renames DID move `fqcn`, and the tests above would
+        pass just as well if nothing had moved at all."""
+        assert backbones.ModelEvaluatorBuilder.__module__ == 'dbx.backbones'
+        assert probes.FeatureStatsProbe.__module__ == 'dbx.probes'
+        assert backbones.ModelEvaluatorBuilder.__name__ == 'ModelEvaluatorBuilder'
+
+
+class TestTheStillsModuleGotNoAlias:
+    """``dbx.datastills`` is gone, deliberately.
+
+    An alias exists to keep a RECORDED string resolving. That module is a week
+    old, was never released, and no artifact anywhere is stored under a
+    ``dbx.datastills.*`` anchor -- so there is no such string, and an alias
+    would only be a second name to keep true.
+    """
+
+    def test_the_old_module_path_is_gone(self):
+        import importlib
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module('dbx.datastills')
+
+    def test_the_old_class_names_still_resolve(self):
+        """Source compatibility, which is all they are for."""
+        stills = pytest.importorskip('dbx.stills',
+                                     reason="lightning is an optional dependency")
+        assert stills.Datastill is stills.Still
+        assert stills.Datalightning is stills.LightningBuilder
+        assert stills.Dataweights is stills.Weights
+
+
+class TestTheRenamedModulesResolveUnderTheirOldNames:
+    """``dbx.databackbones``, ``dbx.datamodels``, ``dbx.dataprobes``.
+
+    Same aliasing as `dbx.datapoints` above, and for a weaker reason: the
+    classes in these two were renamed too, so their `fqcn` moved and no amount
+    of aliasing holds a storage path. What the pair of aliases -- module AND
+    class -- does hold is that a recorded specline naming an old dotted path
+    still EVALUATES, which is what a spec does with one.
+    """
+
+    def test_the_old_module_paths_are_the_same_objects(self):
+        import sys
+        from dbx import backbones, probes
+        assert sys.modules['dbx.databackbones'] is backbones
+        assert sys.modules['dbx.datamodels'] is backbones
+        assert sys.modules['dbx.dataprobes'] is probes
+
+    def test_the_old_class_names_are_the_same_objects(self):
+        from dbx import backbones, probes
+        assert backbones.DatamodelEvaluator is backbones.ModelEvaluator
+        assert backbones.DatamodelEvaluatorFactory is backbones.ModelEvaluatorBuilder
+        assert backbones.DataformerEvaluator is backbones.TransformerEvaluator
+        assert backbones.DataformerEvaluatorFactory is backbones.TransformerEvaluatorBuilder
+        assert probes.DatafeatureAffineLogisticProber is probes.FeatureAffineLogisticProber
+        assert probes.DatafeatureAffineLogisticProbe is probes.FeatureAffineLogisticProbe
+        assert probes.DatafeatureStatsProbe is probes.FeatureStatsProbe
+
+    def test_an_old_dotted_path_still_resolves_end_to_end(self):
+        """Module alias plus class alias, which is what a specline needs."""
+        import dbx
+        from dbx import backbones
+        assert dbx.databackbones.DatamodelEvaluatorFactory is backbones.ModelEvaluatorBuilder
+        assert dbx.datamodels.DataformerEvaluator is backbones.TransformerEvaluator
+
+    def test_the_new_names_are_exported_from_the_package(self):
+        import dbx
+        from dbx import backbones, probes
+        assert dbx.ModelEvaluatorBuilder is backbones.ModelEvaluatorBuilder
+        assert dbx.FeatureStatsProbe is probes.FeatureStatsProbe
+
+    def test_dbx_datastills_deliberately_does_not_resolve(self):
+        """`dbx.stills` gets NO module alias, unlike the two above.
+
+        Not an oversight: it is a week old, was never released, and no
+        artifact anywhere is stored under a ``dbx.datastills.*`` anchor -- so
+        there is no recorded string for an alias to keep resolving. The class
+        names ARE aliased, for source that imports them.
+        """
+        import importlib
+        import dbx.stills
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module('dbx.datastills')
+        assert dbx.stills.Datastill is dbx.stills.Still
+        assert dbx.stills.Datalightning is dbx.stills.LightningBuilder
+        assert dbx.stills.Dataweights is dbx.stills.Weights

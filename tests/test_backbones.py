@@ -1,14 +1,14 @@
-"""test_datamodels.py — Tests for DatamodelEvaluator/Factory and DataformerEvaluator/Factory."""
+"""test_backbones.py — Tests for ModelEvaluator/Builder and TransformerEvaluator/Builder."""
 
 import pytest
 import torch
 import torch.nn as nn
 
 from dbx import (
-    DatamodelEvaluator,
-    DatamodelEvaluatorFactory,
-    DataformerEvaluator,
-    DataformerEvaluatorFactory,
+    ModelEvaluator,
+    ModelEvaluatorBuilder,
+    TransformerEvaluator,
+    TransformerEvaluatorBuilder,
 )
 
 
@@ -39,21 +39,21 @@ class DummyTransformer(nn.Module):
         return out
 
 
-class DummyModelEvaluatorFactory(DatamodelEvaluatorFactory):
+class DummyModelEvaluatorBuilder(ModelEvaluatorBuilder):
     @property
     def model(self):
         return DummyModel()
 
 
-class DummyTransformerEvaluatorFactory(DataformerEvaluatorFactory):
+class DummyTransformerEvaluatorBuilder(TransformerEvaluatorBuilder):
     @property
     def model(self):
         return DummyTransformer()
 
 
-def test_datamodel_evaluator_basic():
+def test_model_evaluator_basic():
     model = DummyModel()
-    evaluator = DatamodelEvaluator(
+    evaluator = ModelEvaluator(
         model=model,
         capture_layers=["layer1"],
         capture_final=True,
@@ -74,20 +74,20 @@ def test_datamodel_evaluator_basic():
     assert len(evaluator.layer_features) == 0
 
 
-def test_datamodel_evaluator_factory():
-    factory = DummyModelEvaluatorFactory(
+def test_model_evaluator_builder():
+    factory = DummyModelEvaluatorBuilder(
         spec=dict(capture_layers=["layer1"], capture_final=True)
     )
     ev1 = factory.evaluator(device="cpu")
     ev2 = factory.evaluator(device="cpu")
     assert ev1 is ev2
-    assert isinstance(ev1, DatamodelEvaluator)
+    assert isinstance(ev1, ModelEvaluator)
     assert ev1.layer_names == ["layer1", "final"]
 
 
-def test_dataformer_evaluator_blocks_and_cls_only():
+def test_transformer_evaluator_blocks_and_cls_only():
     model = DummyTransformer()
-    evaluator = DataformerEvaluator(
+    evaluator = TransformerEvaluator(
         model=model,
         capture_blocks=[0, -1],
         capture_final=True,
@@ -108,9 +108,9 @@ def test_dataformer_evaluator_blocks_and_cls_only():
     assert res["final"].shape == (2, 8)
 
 
-def test_dataformer_evaluator_all_blocks():
+def test_transformer_evaluator_all_blocks():
     model = DummyTransformer()
-    evaluator = DataformerEvaluator(
+    evaluator = TransformerEvaluator(
         model=model,
         capture_blocks="all",
         capture_final=False,
@@ -127,23 +127,23 @@ def test_dataformer_evaluator_all_blocks():
     assert res["block.0"].shape == (2, 5, 8)
 
 
-def test_dataformer_evaluator_factory():
-    factory = DummyTransformerEvaluatorFactory(
+def test_transformer_evaluator_builder():
+    factory = DummyTransformerEvaluatorBuilder(
         spec=dict(capture_blocks=[0, 1], cls_token_only=True, capture_final=True)
     )
     assert factory.layer_names == ["block.0", "block.1", "final"]
     ev1 = factory.evaluator(device="cpu")
     ev2 = factory.evaluator(device="cpu")
     assert ev1 is ev2
-    assert isinstance(ev1, DataformerEvaluator)
+    assert isinstance(ev1, TransformerEvaluator)
     assert ev1.layer_names == ["block.0", "block.1", "final"]
-    factory_all = DummyTransformerEvaluatorFactory(
+    factory_all = DummyTransformerEvaluatorBuilder(
         spec=dict(capture_blocks="all", capture_final=True)
     )
     assert factory_all.layer_names == ["block.0", "block.1", "block.2", "final"]
 
 
-class TransformedModelEvaluatorFactory(DatamodelEvaluatorFactory):
+class TransformedModelEvaluatorBuilder(ModelEvaluatorBuilder):
     @property
     def model(self):
         return DummyModel()
@@ -153,7 +153,7 @@ class TransformedModelEvaluatorFactory(DatamodelEvaluatorFactory):
         return lambda x: x * 2.0
 
 
-class TransformedDataformerEvaluatorFactory(DataformerEvaluatorFactory):
+class TransformedTransformerEvaluatorBuilder(TransformerEvaluatorBuilder):
     @property
     def model(self):
         return DummyTransformer()
@@ -163,13 +163,13 @@ class TransformedDataformerEvaluatorFactory(DataformerEvaluatorFactory):
         return lambda x: x * 3.0
 
 
-def test_datamodel_evaluator_factory_transform():
-    factory_default = DummyModelEvaluatorFactory()
+def test_model_evaluator_builder_transform():
+    factory_default = DummyModelEvaluatorBuilder()
     ev_default = factory_default.evaluator(device="cpu")
     if torch is not None:
         assert isinstance(ev_default.transform, torch.nn.Identity)
 
-    factory_custom = TransformedModelEvaluatorFactory(spec=dict(capture_final=True))
+    factory_custom = TransformedModelEvaluatorBuilder(spec=dict(capture_final=True))
     ev_custom = factory_custom.evaluator(device="cpu")
     x = torch.ones(2, 4)
     res_custom = ev_custom(x)
@@ -180,8 +180,8 @@ def test_datamodel_evaluator_factory_transform():
     torch.testing.assert_close(res_custom["final"], expected_out)
 
 
-def test_dataformer_evaluator_factory_transform():
-    factory_custom = TransformedDataformerEvaluatorFactory(
+def test_transformer_evaluator_builder_transform():
+    factory_custom = TransformedTransformerEvaluatorBuilder(
         spec=dict(capture_blocks=[0], capture_final=True)
     )
     ev_custom = factory_custom.evaluator(device="cpu")

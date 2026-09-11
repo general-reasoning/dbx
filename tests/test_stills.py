@@ -1,4 +1,4 @@
-"""test_datastills.py — Datastill, Datalightning, Dataweights, the cfg_ protocol.
+"""test_stills.py — Still, LightningBuilder, Weights, the cfg_ protocol.
 
 The training-loop tests really do train: a 72-parameter linear model over a
 synthetic dataset for two epochs, which is fast and is the only way to pin what
@@ -17,11 +17,11 @@ pytest.importorskip('lightning')
 import lightning as L
 
 from dbx.datablocks import Datablock
-from dbx.datastills import (
+from dbx.stills import (
     Cfgparam,
-    Datalightning,
-    Datastill,
-    Dataweights,
+    LightningBuilder,
+    Still,
+    Weights,
     cfg_params,
     scaffold_still,
 )
@@ -62,7 +62,7 @@ class ToyLightning(L.LightningModule):
         x, _raw = batch
         self.log('val/loss', self.model(x).square().mean())
 
-    # the data adapter Datastill.dataloaders() asks for
+    # the data adapter Still.dataloaders() asks for
     def val_dataset_kwargs(self):
         return {'return_raw': True}
 
@@ -92,12 +92,12 @@ class ToyBuilder(Datablock):
         return ToyDataset(self.var.n, self.var.width, return_raw)
 
 
-class ToyStill(Datastill):
+class ToyStill(Still):
     VERSION = 1
     Model, Lightning = ToyModel, ToyLightning
 
     @dataclass
-    class VAR(Datastill.VAR):
+    class VAR(Still.VAR):
         width: int = 8
         depth: int = 1
         init_ckpt: str = None
@@ -189,24 +189,24 @@ class TestCfgDriftIsRefused:
     """The VAR is checked-in source, so it can fall behind what it mirrors."""
 
     def test_a_missing_var_field_raises_on_construction(self, tmp_path):
-        class Drifted(Datastill):
+        class Drifted(Still):
             VERSION = 1
             Model, Lightning = ToyModel, ToyLightning
 
             @dataclass
-            class VAR(Datastill.VAR):
+            class VAR(Still.VAR):
                 width: int = 8      # depth / init_ckpt / learning_rate missing
 
         with pytest.raises(TypeError, match="missing a field"):
             Drifted(url=str(tmp_path), tag='d')
 
     def test_the_error_names_every_field_to_add(self, tmp_path):
-        class Drifted(Datastill):
+        class Drifted(Still):
             VERSION = 1
             Model, Lightning = ToyModel, ToyLightning
 
             @dataclass
-            class VAR(Datastill.VAR):
+            class VAR(Still.VAR):
                 width: int = 8
 
         with pytest.raises(TypeError) as e:
@@ -221,7 +221,7 @@ class TestCfgDriftIsRefused:
             def __init__(self, *, cfg_ckpt: str = None):
                 super().__init__()
 
-        class CollidingStill(Datastill):
+        class CollidingStill(Still):
             VERSION = 1
             Model, Lightning = Colliding, ToyLightning
 
@@ -231,7 +231,7 @@ class TestCfgDriftIsRefused:
     def test_an_explicit_mode_still_is_not_checked(self, tmp_path):
         """No Model/Lightning means no cfg surface to drift from."""
 
-        class Explicit(Datastill):
+        class Explicit(Still):
             VERSION = 1
 
         Explicit(url=str(tmp_path), tag='e')   # must not raise
@@ -258,9 +258,9 @@ class TestIdentity:
     @pytest.mark.pinned
     def test_datastill_takes_the_corrected_norm(self):
         """A new class must NOT inherit the legacy rendering."""
-        assert Datastill.LEGACY_NORM is False
-        assert Datalightning.LEGACY_NORM is False
-        assert Dataweights.LEGACY_NORM is False
+        assert Still.LEGACY_NORM is False
+        assert LightningBuilder.LEGACY_NORM is False
+        assert Weights.LEGACY_NORM is False
 
     @pytest.mark.pinned
     def test_datalightning_declares_no_topics(self):
@@ -271,7 +271,7 @@ class TestIdentity:
         the base would move the hash of every subclass that already has
         artifacts -- which is exactly what IJEPAsaurUSLightning is.
         """
-        assert 'TOPICS' not in vars(Datalightning)
+        assert 'TOPICS' not in vars(LightningBuilder)
 
     @pytest.mark.pinned
     def test_datastill_var_field_order(self):
@@ -279,7 +279,7 @@ class TestIdentity:
         legacy block's spec in __dataclass_fields__ order. Reordering, or
         inserting in the middle, re-keys every such block.
         """
-        assert list(Datastill.VAR.__dataclass_fields__) == [
+        assert list(Still.VAR.__dataclass_fields__) == [
             'lightning', 'training_dataset_builder', 'validation_dataset_builder',
             'train_val_split', 'dataset_seed', 'block_shuffle_size', 'ckpt',
             'from_scratch', 'reset_optimizer_state', 'max_epochs',
@@ -335,11 +335,11 @@ class TestDataloaders:
 
     def test_val_shuffle_off_means_no_val_sampler(self, tmp_path):
         _, val = make_still(tmp_path, val_shuffle=False).dataloaders()
-        assert not isinstance(val.sampler, Datastill.Sampler)
+        assert not isinstance(val.sampler, Still.Sampler)
 
     def test_val_shuffle_on_gives_a_fixed_order_sampler(self, tmp_path):
         _, val = make_still(tmp_path, val_shuffle=True).dataloaders()
-        assert isinstance(val.sampler, Datastill.Sampler)
+        assert isinstance(val.sampler, Still.Sampler)
         before = list(iter(val.sampler))
         val.sampler.set_epoch(7)
         assert list(iter(val.sampler)) == before
@@ -381,7 +381,7 @@ class TestLoaderHardening:
     """
 
     def test_every_loader_is_built_through_the_one_constructor(self):
-        src = inspect.getsource(Datastill.dataloaders)
+        src = inspect.getsource(Still.dataloaders)
         assert 'DataLoader(' not in src, (
             "dataloaders() constructs a loader directly; route it through "
             "_dataloader() so worker_init_fn cannot be forgotten on one of them"
@@ -389,7 +389,7 @@ class TestLoaderHardening:
         assert src.count('self._dataloader(') == 2
 
     def test_the_one_constructor_always_passes_worker_init_fn(self):
-        src = inspect.getsource(Datastill._dataloader)
+        src = inspect.getsource(Still._dataloader)
         assert 'worker_init_fn=self.worker_init_fn()' in src
 
     def test_a_subclass_hook_reaches_both_loaders(self, tmp_path):
@@ -600,18 +600,18 @@ class TestCkptStep:
         ('no-step-here.ckpt', -1),
     ])
     def test_parses_the_step_out_of_the_filename(self, name, step):
-        assert Datastill._ckpt_step(name) == step
+        assert Still._ckpt_step(name) == step
 
     def test_sorts_numerically_not_lexically(self):
         names = ['step=9.ckpt', 'step=10.ckpt', 'step=100.ckpt']
-        assert sorted(names, key=Datastill._ckpt_step) == names
+        assert sorted(names, key=Still._ckpt_step) == names
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Datalightning
+#  LightningBuilder
 # ═══════════════════════════════════════════════════════════════════════
 
-class TestDatalightning:
+class TestLightning:
     def test_valid_reflects_nested_var_blocks(self, tmp_path):
         class Upstream(Datablock):
             VERSION = 1
@@ -622,11 +622,11 @@ class TestDatalightning:
                     f.write('x')
                 return self
 
-        class Wrapper(Datalightning):
+        class Wrapper(LightningBuilder):
             VERSION = 1
 
             @dataclass
-            class VAR(Datalightning.VAR):
+            class VAR(LightningBuilder.VAR):
                 upstream: object = None
 
             def __lightning_module__(self):
@@ -652,11 +652,11 @@ class TestDatalightning:
             VERSION = 1
             TOPICS = {'thing': 'thing.txt'}
 
-        class Wrapper(Datalightning):
+        class Wrapper(LightningBuilder):
             VERSION = 1
 
             @dataclass
-            class VAR(Datalightning.VAR):
+            class VAR(LightningBuilder.VAR):
                 upstream: object = None
 
             def __lightning_module__(self):
@@ -671,7 +671,7 @@ class TestDatalightning:
 
     def test_calling_build_directly_raises(self, tmp_path):
         """The guard that does fire: nothing may quietly no-op here."""
-        class Wrapper(Datalightning):
+        class Wrapper(LightningBuilder):
             VERSION = 1
 
             def __lightning_module__(self):
@@ -681,7 +681,7 @@ class TestDatalightning:
             Wrapper(url=str(tmp_path), tag='w').__build__()
 
     def test_the_module_is_cached(self, tmp_path):
-        class Wrapper(Datalightning):
+        class Wrapper(LightningBuilder):
             VERSION = 1
 
             def __lightning_module__(self):
@@ -691,20 +691,20 @@ class TestDatalightning:
         assert w.lightning_module is w.lightning_module
 
     def test_an_unimplemented_module_says_so(self, tmp_path):
-        class Wrapper(Datalightning):
+        class Wrapper(LightningBuilder):
             VERSION = 1
 
         with pytest.raises(NotImplementedError, match="__lightning_module__"):
             Wrapper(url=str(tmp_path), tag='w').lightning_module
 
     def test_a_datalightning_in_var_supplies_the_still_its_module(self, tmp_path):
-        class Wrapper(Datalightning):
+        class Wrapper(LightningBuilder):
             VERSION = 1
 
             def __lightning_module__(self):
                 return ToyLightning(ToyModel(), cfg_learning_rate=0.123)
 
-        class ExplicitStill(Datastill):
+        class ExplicitStill(Still):
             VERSION = 1
 
         wrapper = Wrapper(url=str(tmp_path), tag='w')
@@ -712,7 +712,7 @@ class TestDatalightning:
         assert still.lightning_module.lr == 0.123
 
     def test_neither_mode_configured_says_so(self, tmp_path):
-        class Empty(Datastill):
+        class Empty(Still):
             VERSION = 1
 
         with pytest.raises(ValueError, match="nothing to train"):
@@ -720,12 +720,12 @@ class TestDatalightning:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Dataweights
+#  Weights
 # ═══════════════════════════════════════════════════════════════════════
 
-class TestDataweights:
+class TestWeights:
     def test_no_ckpt_is_trivially_valid_and_has_no_local_path(self, tmp_path):
-        w = Dataweights(url=str(tmp_path), tag='none', spec=dict(ckpt=None))
+        w = Weights(url=str(tmp_path), tag='none', spec=dict(ckpt=None))
         assert w.valid() is True
         w.build()
         assert w.path_local() is None
@@ -733,7 +733,7 @@ class TestDataweights:
     def test_fetches_persists_and_hands_back_a_local_path(self, tmp_path):
         src = tmp_path / 'src.pt'
         torch.save({'k': torch.zeros(3)}, src)
-        w = Dataweights(url=str(tmp_path / 'store'), tag='w',
+        w = Weights(url=str(tmp_path / 'store'), tag='w',
                         spec=dict(ckpt=str(src)))
         assert w.valid() is False
         w.build()
@@ -745,7 +745,7 @@ class TestDataweights:
     def test_a_truncated_blob_is_not_valid(self, tmp_path):
         src = tmp_path / 'src.pt'
         torch.save({'k': torch.zeros(3)}, src)
-        w = Dataweights(url=str(tmp_path / 'store'), tag='w', spec=dict(ckpt=str(src)))
+        w = Weights(url=str(tmp_path / 'store'), tag='w', spec=dict(ckpt=str(src)))
         w.build()
         with open(w.path('weights'), 'r+b') as f:
             f.truncate(16)
@@ -755,7 +755,7 @@ class TestDataweights:
         src = tmp_path / 'real.pt'
         torch.save({'k': 1}, src)
 
-        class Registry(Dataweights):
+        class Registry(Weights):
             VERSION = 1
             WEIGHTS = {'published-v1': str(src)}
 
@@ -780,7 +780,7 @@ class TestDataweights:
 
 class TestScaffold:
     def _exec(self, src):
-        ns = {'Datastill': Datastill, 'dataclass': dataclass,
+        ns = {'Still': Still, 'dataclass': dataclass,
               'ToyModel': ToyModel, 'ToyLightning': ToyLightning}
         exec(compile(src, '<scaffold>', 'exec'), ns)
         return ns
@@ -894,7 +894,7 @@ class TestExport:
             make_still(tmp_path).export(path=str(path), ckpt=None, overwrite=False)
 
     def test_explicit_mode_has_no_generic_export(self, tmp_path):
-        class Explicit(Datastill):
+        class Explicit(Still):
             VERSION = 1
 
         with pytest.raises(NotImplementedError, match="cfg mode"):

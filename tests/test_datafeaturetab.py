@@ -10,8 +10,8 @@ from dbx import (
     SLICETOPIC,
     DatapointTab,
     DatapointTable,
-    DatamodelEvaluator,
-    DatamodelEvaluatorFactory,
+    ModelEvaluator,
+    ModelEvaluatorBuilder,
     DatafeatureTab,
     DatafeatureTable,
     BipolarDatafeatureTab,
@@ -83,7 +83,7 @@ class DummyModel(nn.Module):
         return self.fc(x)
 
 
-class DummyModelEvaluatorFactory(DatamodelEvaluatorFactory):
+class DummyModelEvaluatorFactory(ModelEvaluatorBuilder):
     @property
     def model(self):
         return DummyModel()

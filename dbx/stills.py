@@ -1,4 +1,4 @@
-"""dbx.datastills — :class:`Datastill`, the training-run Datablock.
+"""dbx.stills — :class:`Still`, the training-run Datablock.
 
 A *still* is one training run, addressed by its configuration: its weights and
 its TensorBoard logs live under a key derived from the hash of everything that
@@ -11,20 +11,24 @@ one of each.
 Not imported by ``dbx/__init__.py``
 -----------------------------------
 ``import dbx`` must work without torch, and this module needs both torch and
-lightning at module scope.  Import it by name -- ``from dbx.datastills import
-Datastill`` -- exactly as :mod:`dbx.datastreams` is imported.
+lightning at module scope.  Import it by name -- ``from dbx.stills import
+Still`` -- exactly as :mod:`dbx.datastreams` is imported.
 
 Two ways to say what to train
 -----------------------------
 **Explicit mode** puts a Datablock in ``VAR.lightning`` and reads
 ``.lightning_module`` off it -- one more block in the tree, with an identity of
 its own, which is what you want when the module's own construction has upstream
-artifacts (downloaded weights, a warm-start still).  :class:`Datalightning` is
-the base for that block.
+artifacts (downloaded weights, a warm-start still).
+:class:`LightningBuilder` is the base for that block.
 
 **cfg mode** names two ordinary classes -- ``Model`` and ``Lightning``, which
 import nothing from dbx -- and mirrors their ``cfg_``-prefixed keyword
-arguments into this block's own ``VAR``::
+arguments into this block's own ``VAR``.
+
+``Still.Lightning`` is the cfg-mode attribute and :class:`LightningBuilder`
+the explicit-mode block; the Builder suffix is what keeps the bare word free
+for the attribute, which is the one a still author writes::
 
     class MyModel(nn.Module):
         def __init__(self, *, cfg_embed_dim=768, cfg_depth=12): ...
@@ -34,12 +38,12 @@ arguments into this block's own ``VAR``::
         def train_transform(self): ...
         def train_collate_fn(self): ...
 
-    class MyStill(Datastill):
+    class MyStill(Still):
         VERSION = 1
         Model, Lightning = MyModel, MyLightning
 
         @dataclass
-        class VAR(Datastill.VAR):
+        class VAR(Still.VAR):
             embed_dim: int = 768
             depth: int = 12
             learning_rate: float = 1e-4
@@ -63,7 +67,7 @@ does not mention dbx.
 
 So the VAR is checked-in source.  A hash movement then shows up in a diff,
 where it can be argued with.  What is checked at runtime is only that the two
-have not drifted apart: :meth:`Datastill.__check_cfg__` raises if a ``cfg_``
+have not drifted apart: :meth:`Still.__check_cfg__` raises if a ``cfg_``
 argument exists that no VAR field feeds, which turns a silent re-keying into a
 loud construction error.
 
@@ -105,9 +109,9 @@ from dbx.datastreams import (
 
 __all__ = [
     'Cfgparam',
-    'Datalightning',
-    'Datastill',
-    'Dataweights',
+    'LightningBuilder',
+    'Still',
+    'Weights',
     'cfg_params',
     'scaffold_still',
     # Re-exported from dbx.datastreams, which is torch-only: importing this
@@ -230,10 +234,10 @@ def cfg_params(roles: dict, *, prefix: str = CFG_PREFIX) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Datalightning — the Datablock that owns a LightningModule
+# LightningBuilder — the Datablock that owns a LightningModule
 # ═══════════════════════════════════════════════════════════════════════
 
-class Datalightning(Datablock):
+class LightningBuilder(Datablock):
     """A Datablock whose whole job is to build one ``LightningModule``.
 
     It writes nothing.  It exists so that a module's *construction* --
@@ -321,10 +325,10 @@ class Datalightning(Datablock):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Dataweights — a weight file as an addressed artifact
+# Weights — a weight file as an addressed artifact
 # ═══════════════════════════════════════════════════════════════════════
 
-class Dataweights(Datablock):
+class Weights(Datablock):
     """One set of pre-trained weights, persisted under its own identity.
 
     A model class should not fetch its own weights: where they came from is an
@@ -388,12 +392,12 @@ class Dataweights(Datablock):
     def __build__(self):
         """Fetch the weights into the ``weights`` topic, unless none are wanted."""
         if self.var.ckpt is None:
-            self.log.info("Dataweights: ckpt=None -- random initialisation, nothing to fetch")
+            self.log.info("Weights: ckpt=None -- random initialisation, nothing to fetch")
             return self
 
         url = self.source_url()
         dest = self.path('weights', ensure_dirpath=True)
-        self.log.info("Dataweights: fetching %s -> %s", url, dest)
+        self.log.info("Weights: fetching %s -> %s", url, dest)
         # Streamed in chunks rather than read whole: these are multi-GB files,
         # and fsspec.open takes the http(s)/abfs(s)/file url a registry might
         # name, which self.pull() cannot -- pull's source must already be a
@@ -404,7 +408,7 @@ class Dataweights(Datablock):
                 if not chunk:
                     break
                 dst.write(chunk)
-        self.log.info("Dataweights: persisted %s", dest)
+        self.log.info("Weights: persisted %s", dest)
         return self
 
     # 2. Properties and accessors ──────────────────────────────
@@ -437,7 +441,7 @@ class Dataweights(Datablock):
             self.pull(self.path('weights'), dest, show_progress=True)
         if not self._is_intact(dest):
             raise RuntimeError(
-                f"Dataweights: {dest} is not a readable archive after download "
+                f"Weights: {dest} is not a readable archive after download "
                 f"from {self.path('weights')}; the persisted blob is truncated -- "
                 f"UNSAFE_clear() this block and rebuild it"
             )
@@ -453,10 +457,10 @@ class Dataweights(Datablock):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Datastill — one training run
+# Still — one training run
 # ═══════════════════════════════════════════════════════════════════════
 
-class Datastill(Datablock):
+class Still(Datablock):
     """One Lightning training run, addressed by its configuration.
 
     Two topics: ``ckpts`` (the checkpoints, plus a ``_COMPLETE`` marker) and
@@ -467,7 +471,7 @@ class Datastill(Datablock):
     What a subclass has to supply
     -----------------------------
     * The module to train -- either ``VAR.lightning`` holding a
-      :class:`Datalightning`, or ``Model``/``Lightning`` class attributes and
+      :class:`LightningBuilder`, or ``Model``/``Lightning`` class attributes and
       the matching ``cfg_`` VAR fields (see the module docstring).
     * A dataset builder in ``VAR.training_dataset_builder``: anything with a
       ``.dataset(transform=...)`` method.  ``VAR.validation_dataset_builder``
@@ -509,6 +513,10 @@ class Datastill(Datablock):
 
     #: The classes cfg mode dispatches to.  Left None in explicit mode, where
     #: ``VAR.lightning`` supplies the module instead.
+    #:
+    #: ``Lightning`` here is a plain ``LightningModule`` subclass, not the
+    #: :class:`LightningBuilder` block that wraps one -- which is what
+    #: ``VAR.lightning`` holds, and why that class carries the suffix.
     Model: Optional[type] = None
     Lightning: Optional[type] = None
 
@@ -541,7 +549,7 @@ class Datastill(Datablock):
         # inserting one here is not.
         #
         # --- What to train ---
-        lightning: object = None                    # a Datalightning, in explicit mode
+        lightning: object = None                    # a LightningBuilder, in explicit mode
         training_dataset_builder: object = None     # anything with .dataset(transform=)
         validation_dataset_builder: object = None   # optional; else a split of the above
         train_val_split: float = 0.8
@@ -587,7 +595,7 @@ class Datastill(Datablock):
         batch_size: int = 16
         still_seed: int = 42
 
-    #: VAR names Datastill itself defines. A cfg_ argument may not take one:
+    #: VAR names Still itself defines. A cfg_ argument may not take one:
     #: the meanings differ (`cfg_ckpt` on a model is its initial weights;
     #: `VAR.ckpt` on a still is the run it resumes from), and one field cannot
     #: carry both. Computed rather than listed, so it cannot fall behind VAR.
@@ -679,8 +687,8 @@ class Datastill(Datablock):
         if self.Lightning is None:
             raise ValueError(
                 f"{type(self).__name__} has neither VAR.lightning nor a Lightning "
-                f"class: nothing to train. Put a Datalightning in VAR.lightning, or "
-                f"set the Model/Lightning class attributes (see dbx.datastills)"
+                f"class: nothing to train. Put a LightningBuilder in VAR.lightning, or "
+                f"set the Model/Lightning class attributes (see dbx.stills)"
             )
         model = self.model()
         return self.Lightning(model, **self.lightning_cfg)
@@ -731,7 +739,7 @@ class Datastill(Datablock):
         if reserved:
             raise TypeError(
                 f"{type(self).__name__}: {[CFG_PREFIX + n for n in reserved]} would "
-                f"land on VAR field(s) {reserved}, which {Datastill.__name__} already "
+                f"land on VAR field(s) {reserved}, which {Still.__name__} already "
                 f"defines and means something else -- `ckpt` is the checkpoint this "
                 f"RUN resumes from, `batch_size` is the loader's. One field cannot be "
                 f"both. Rename the {CFG_PREFIX} argument(s) on your Model/Lightning "
@@ -746,7 +754,7 @@ class Datastill(Datablock):
                 f"defaults and go unrecorded in this block's identity. Add them to "
                 f"VAR (note that doing so re-keys this block, since every VAR field "
                 f"is hashed), or regenerate the class with "
-                f"dbx.datastills.scaffold_still()"
+                f"dbx.stills.scaffold_still()"
             )
 
     # 3. Local working directories ──────────────────────────────────
@@ -1762,7 +1770,7 @@ class Datastill(Datablock):
     #: Marker written into every generated module's docstring.  :meth:`export`
     #: refuses to overwrite a file that lacks it, so a hand-written module
     #: cannot be clobbered by a stray path argument.
-    EXPORT_MARKER = "AUTO-GENERATED by Datastill.export()"
+    EXPORT_MARKER = "AUTO-GENERATED by Still.export()"
 
     #: Markers written under earlier names.  Recognised for the overwrite check
     #: only, so a module generated before a rename stays regenerable rather
@@ -1781,7 +1789,7 @@ class Datastill(Datablock):
         default can silently point it at a different run.
 
         Only available in cfg mode.  In explicit mode the module's
-        construction lives in a ``Datalightning`` and there is no general way
+        construction lives in a ``LightningBuilder`` and there is no general way
         to restate it, so a subclass that wants an export writes its own (see
         ``IJEPAsaurUSStill.export`` in soundworld for one that splices in
         vendored source).
@@ -1905,9 +1913,9 @@ class Datastill(Datablock):
 # scaffold_still — the VAR, written down
 # ═══════════════════════════════════════════════════════════════════════
 
-def scaffold_still(Model, Lightning, *, name, version=1, base='Datastill',
+def scaffold_still(Model, Lightning, *, name, version=1, base='Still',
                    entrypoint=None, docstring=None):
-    """The source of a :class:`Datastill` subclass mirroring the ``cfg_`` surface.
+    """The source of a :class:`Still` subclass mirroring the ``cfg_`` surface.
 
     Deterministic code generation, run once and the result committed -- not
     reflection at import time.  The difference matters because every VAR field
@@ -1925,7 +1933,7 @@ def scaffold_still(Model, Lightning, *, name, version=1, base='Datastill',
         Class name for the generated still.
     version : int, default 1
         Its ``VERSION``.
-    base : str, default ``'Datastill'``
+    base : str, default ``'Still'``
         Base class name, as it will be spelled in the generated source.
     entrypoint : str, optional
         When given, also emit a pipeline function of that name taking
@@ -1941,7 +1949,7 @@ def scaffold_still(Model, Lightning, *, name, version=1, base='Datastill',
         Python source.  Write it next to the model, read it, commit it.
     """
     params = cfg_params({'model': Model, 'lightning': Lightning})
-    reserved = sorted(n for n in params if n in Datastill.RESERVED_VAR_NAMES)
+    reserved = sorted(n for n in params if n in Still.RESERVED_VAR_NAMES)
     if reserved:
         raise ValueError(
             f"cannot mirror {[CFG_PREFIX + n for n in reserved]}: {base} already "
@@ -1960,7 +1968,7 @@ def scaffold_still(Model, Lightning, *, name, version=1, base='Datastill',
     doc = docstring or (
         f"Training run for :class:`{Model.__name__}` via "
         f":class:`{Lightning.__name__}`.\n\n"
-        f"    Generated by ``dbx.datastills.scaffold_still``. The VAR fields below "
+        f"    Generated by ``dbx.stills.scaffold_still``. The VAR fields below "
         f"mirror\n    the ``{CFG_PREFIX}`` arguments of those two classes; every one of them "
         f"is\n    hashed into this block's storage key, so adding, removing or "
         f"re-defaulting\n    one re-keys every run. Regenerate rather than hand-editing, "
@@ -1968,11 +1976,11 @@ def scaffold_still(Model, Lightning, *, name, version=1, base='Datastill',
     )
 
     lines = [
-        f"# Generated by dbx.datastills.scaffold_still({Model.__name__}, "
+        f"# Generated by dbx.stills.scaffold_still({Model.__name__}, "
         f"{Lightning.__name__}).",
         "# Needs, in the module this lands in:",
         "#     from dataclasses import dataclass, field",
-        f"#     from dbx.datastills import {base}",
+        f"#     from dbx.stills import {base}",
         f"#     from <your module> import {Model.__name__}, {Lightning.__name__}",
         '',
         '',
@@ -2059,3 +2067,19 @@ def _entrypoint_source(fname: str, clsname: str, params: dict) -> list:
         '',
     ])
     return lines
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  The names these classes used to have
+# ═══════════════════════════════════════════════════════════════════════
+
+#: This file was ``dbx/datastills.py``. It gets no module alias, unlike
+#: :mod:`dbx.backbones` and :mod:`dbx.probes`: it is a week old, has never been
+#: released, and no artifact anywhere is stored under a ``dbx.datastills.*``
+#: anchor -- and a recorded string that resolves is the only thing a module
+#: alias buys.
+#:
+#: The class names are aliased for source that already imports them.
+Datastill = Still
+Datalightning = LightningBuilder
+Dataweights = Weights

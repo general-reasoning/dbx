@@ -23,7 +23,7 @@ datablocks
 Modules NOT imported here
 -------------------------
 ``import dbx`` must work without torch, so two modules are imported by name
-instead -- ``from dbx.datastreams import ...``, ``from dbx.datastills import
+instead -- ``from dbx.datastreams import ...``, ``from dbx.stills import
 ...``:
 
 datastreams
@@ -31,9 +31,9 @@ datastreams
     :class:`ChunkShuffleSampler`, :class:`ResumableDataLoader`,
     ``block_split_indices``, ``val_loader_workers``. Needs torch, and
     mosaicml-streaming for the MDS parts.
-datastills
-    One training run as a Datablock: :class:`Datastill`,
-    :class:`Datalightning`, :class:`Dataweights`, ``scaffold_still``. Needs
+stills
+    One training run as a Datablock: :class:`Still`,
+    :class:`LightningBuilder`, :class:`Weights`, ``scaffold_still``. Needs
     lightning.
 """
 
@@ -42,16 +42,11 @@ __version__ = "0.0.1"
 from .dataparts import *
 from .datablocks import *
 from .datatables import *
-from .databackbones import *
+from .backbones import *
 from .featuretables import *
-from .dataprobes import *
+from .probes import *
 
-# Backward compatibility alias
-import sys
-from . import databackbones as datamodels
-sys.modules['dbx.datamodels'] = datamodels
-
-# The names datatables and featuretables used to have, aliased the same way.
+# The names these modules used to have.
 #
 # Load-bearing rather than a courtesy to importers: a class's `fqcn` is its
 # `__module__` plus its name, `anchor` falls back to `fqcn`, and both
@@ -66,7 +61,19 @@ sys.modules['dbx.datamodels'] = datamodels
 # the forwarder while the code under test read the name out of its own module
 # -- leaving the patch a silent no-op, and a test that believed it had stubbed
 # a remote read performing one instead. One object cannot drift from itself.
+import sys
 from . import datatables as datapoints
 from . import featuretables as datafeatures
+from . import backbones as databackbones
+from . import backbones as datamodels
+from . import probes as dataprobes
 sys.modules['dbx.datapoints'] = datapoints
 sys.modules['dbx.datafeatures'] = datafeatures
+sys.modules['dbx.databackbones'] = databackbones
+sys.modules['dbx.datamodels'] = datamodels
+sys.modules['dbx.dataprobes'] = dataprobes
+
+# `dbx.stills` was `dbx.datastills` and gets no alias: it is a week old, has
+# never been released, and nothing was ever built under a `dbx.datastills.*`
+# anchor -- so there is no recorded string to keep resolving, which is the
+# only thing an alias is for.

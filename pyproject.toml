@@ -40,8 +40,8 @@ dependencies = [
     "pandas>=2.0",
     "pyarrow>=14.0",
     "pyyaml>=6.0",
-    # Core, not an extra: dbx.dataprobes imports sklearn at module scope --
-    # unguarded, unlike torch beside it -- and dbx/__init__ imports dataprobes,
+    # Core, not an extra: dbx.probes imports sklearn at module scope --
+    # unguarded, unlike torch beside it -- and dbx/__init__ imports probes,
     # so without this `import dbx` itself fails.
     "scikit-learn>=1.9.0",
     "tqdm>=4.60",
@@ -60,7 +60,7 @@ streaming = [
     "mosaicml-streaming>=0.7",
 ]
 lightning = [
-    # dbx.datastills only, which imports lightning at module scope -- which is
+    # dbx.stills only, which imports lightning at module scope -- which is
     # why dbx/__init__.py does not import it, exactly as for dbx.datastreams.
     "datablocks[torch]",
     "lightning>=2.0",

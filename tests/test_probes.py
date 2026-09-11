@@ -1,4 +1,4 @@
-"""test_dataprobes.py — Unit tests for DatafeatureAffineLogisticProbe and DatafeatureStatsProbe."""
+"""test_probes.py — Unit tests for FeatureAffineLogisticProbe and FeatureStatsProbe."""
 
 from dataclasses import dataclass
 import numpy as np
@@ -15,11 +15,11 @@ from dbx import (
     DatafeatureTable,
     DatapointTab,
     DatapointTable,
-    DatamodelEvaluator,
-    DatamodelEvaluatorFactory,
-    DatafeatureAffineLogisticProbe,
-    DatafeatureAffineLogisticProber,
-    DatafeatureStatsProbe,
+    ModelEvaluator,
+    ModelEvaluatorBuilder,
+    FeatureAffineLogisticProbe,
+    FeatureAffineLogisticProber,
+    FeatureStatsProbe,
     normalize_features,
 )
 
@@ -81,7 +81,7 @@ class DummyModel(nn.Module):
         return self.fc(x)
 
 
-class DummyModelEvaluatorFactory(DatamodelEvaluatorFactory):
+class DummyModelEvaluatorFactory(ModelEvaluatorBuilder):
     @property
     def model(self):
         return DummyModel()
@@ -129,7 +129,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
         tag="feature_table",
     ).build()
 
-    probe = DatafeatureAffineLogisticProbe(
+    probe = FeatureAffineLogisticProbe(
         url=url,
         spec=dict(
             feature_table=featuretable,
@@ -181,7 +181,7 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
         tag="feature_table_multi",
     ).build()
 
-    probe = DatafeatureAffineLogisticProbe(
+    probe = FeatureAffineLogisticProbe(
         url=url,
         spec=dict(
             feature_table=featuretable,
@@ -221,7 +221,7 @@ def test_affine_logistic_probe_refuses_a_missing_signal_column(tmp_path):
         tag="feature_table_bad",
     ).build()
 
-    probe = DatafeatureAffineLogisticProbe(
+    probe = FeatureAffineLogisticProbe(
         url=url,
         spec=dict(
             feature_table=featuretable,
@@ -262,7 +262,7 @@ def test_datafeature_stats_probe(tmp_path):
         tag="feature_table_stats",
     ).build()
 
-    stats_probe = DatafeatureStatsProbe(
+    stats_probe = FeatureStatsProbe(
         url=url,
         spec=dict(
             feature_table=featuretable,
@@ -326,7 +326,7 @@ def test_stats_probe_describes_every_declared_pair(tmp_path):
         tag="feature_table_all",
     ).build()
 
-    probe = DatafeatureStatsProbe(
+    probe = FeatureStatsProbe(
         url=url,
         spec=dict(
             feature_table=featuretable,
@@ -369,7 +369,7 @@ def test_datafeature_stats_probe_parallel(tmp_path):
         tag="feature_table_stats_par",
     ).build()
 
-    stats_probe = DatafeatureStatsProbe(
+    stats_probe = FeatureStatsProbe(
         url=url,
         spec=dict(
             feature_table=featuretable,
@@ -414,7 +414,7 @@ def test_datafeature_affine_logistic_probe_parallel(tmp_path):
         tag="feature_table_log_par",
     ).build()
 
-    probe = DatafeatureAffineLogisticProbe(
+    probe = FeatureAffineLogisticProbe(
         url=url,
         spec=dict(
             feature_table=featuretable,

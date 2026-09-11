@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **`dbx.datastills`: `Datastill`, `Datalightning`, `Dataweights`.** One training run
+- **`dbx.stills`: `Still`, `LightningBuilder`, `Weights`.** One training run
   as a config-addressed Datablock — topics `ckpts`/`logs`, the `_COMPLETE` marker,
   the checkpoint save/upload/free/resume dance, the TensorBoard log symlink, the
   atexit sync, the `UNSAFE_*` helpers, the `Trainer` assembly and a generic
@@ -14,13 +14,13 @@ All notable changes to this project will be documented in this file.
   key, signature, `quote()` and `cite()` byte-identical (its `VAR` is inherited
   whole, so the field *order* a `LEGACY_NORM` block hashes can only be the base's).
 
-  Two ways to say what to train. **Explicit mode** puts a `Datalightning` in
+  Two ways to say what to train. **Explicit mode** puts a `LightningBuilder` in
   `VAR.lightning`, which is what you want when the module's construction has
   upstream artifacts of its own. **cfg mode** names two ordinary classes — `Model`
   and `Lightning`, importing nothing from dbx — and mirrors their `cfg_`-prefixed
   keyword arguments into the still's own `VAR`; a name declared on both is one VAR
   field passed to both, which is the right reading for a knob like `crop_size` that
-  two objects must agree about. `Datastill.export()` then writes a standalone module
+  two objects must agree about. `Still.export()` then writes a standalone module
   carrying that configuration as literals, with no dbx in it.
 
   The mirrored `VAR` is checked-in source, generated once by `scaffold_still()`,
@@ -28,7 +28,7 @@ All notable changes to this project will be documented in this file.
   the hash, so a `cfg_` knob added in a file that does not mention dbx would
   silently re-key every run of that model. As source, that movement is a diff.
   `__check_cfg__` raises on construction if the two have drifted apart, and refuses
-  a `cfg_` name that collides with one of `Datastill`'s own fields (`cfg_ckpt` is
+  a `cfg_` name that collides with one of `Still`'s own fields (`cfg_ckpt` is
   initial weights; `VAR.ckpt` is the run to resume from — one field cannot be both).
 
   `VAR.ckpt` holding another *block* is a **warm start**: its latest checkpoint is
@@ -54,10 +54,38 @@ All notable changes to this project will be documented in this file.
   split at all. `val_loader_workers` caps a validation loader that reads
   `val_max_batches` batches so it stops prefetching (and discarding) an order of
   magnitude more shards than it reads, evicting the training working set every time
-  it validates. In `datastreams` rather than `datastills` so that torch-only code
+  it validates. In `datastreams` rather than `stills` so that torch-only code
   can use them without pulling in lightning.
 
 ### Breaking Changes
+- **The `Data` prefix comes off three modules and their classes.**
+  `dbx/databackbones.py` → **`dbx/backbones.py`**, `dbx/dataprobes.py` →
+  **`dbx/probes.py`**, `dbx/datastills.py` → **`dbx/stills.py`**; and with them
+  `DatamodelEvaluator` → **`ModelEvaluator`**, `DatamodelEvaluatorFactory` →
+  **`ModelEvaluatorBuilder`**, `DataformerEvaluator` → **`TransformerEvaluator`**,
+  `DataformerEvaluatorFactory` → **`TransformerEvaluatorBuilder`**,
+  `DatafeatureAffineLogisticProbe(r)` → **`FeatureAffineLogisticProbe(r)`**,
+  `DatafeatureStatsProbe` → **`FeatureStatsProbe`**, `Datastill` → **`Still`**,
+  `Datalightning` → **`LightningBuilder`**, `Dataweights` → **`Weights`**. Every old
+  name still resolves — the class names as plain aliases, and `dbx.databackbones`,
+  `dbx.datamodels` and `dbx.dataprobes` as the SAME module object under the old
+  path, the way `dbx.datapoints` and `dbx.datafeatures` already are.
+
+  Unlike the `datapoints`/`datafeatures` rename, the class names moved too, so
+  `fqcn` moved with them and no amount of pinning `__module__` could have held
+  it. That is allowed here only because nothing was ever *built as* one of these:
+  every backbone builder, probe and still downstream is a subclass, which reports
+  its own module and its own name, and there is no `dbx.*` anchor directory in any
+  root. Renaming a base costs nothing; renaming the subclass is what would cost.
+  Checked, not assumed — `IJEPAsaurUSStill`'s hash, key and `type()` are
+  byte-identical across the rename.
+
+  `dbx.datastills` gets no module alias at all: it is a week old, was never
+  released, and an alias exists to keep a *recorded* string resolving. There is no
+  such string. `Datalightning` becomes `LightningBuilder` rather than plain
+  `Lightning`: the bare word is already `Still.Lightning`, the `LightningModule`
+  subclass cfg mode dispatches to, and that is the one a still author writes.
+  The suffix also matches `ModelEvaluatorBuilder` beside it.
 - **Renamed `Datablock.CONFIG` → `Datablock.VAR` and `.cfg` / `.config` → `.var`.**
   Both old names are kept as aliases, so existing subclasses keep working unchanged:
   `Datablock.CONFIG` still resolves (it is an alias of `Datablock.VAR`), and a subclass
@@ -375,7 +403,7 @@ All notable changes to this project will be documented in this file.
   collation was over strings. Such a mapping is now collated as the batch it is: one pair
   passes its array through untouched, several are stacked along a new axis 1. New
   `signal_pairs`/`label_pairs` accessors give the normalized `(slice, column)` pairs.
-- **`DatafeatureTab.__post_init__` and `DatafeatureStatsProbe.__build__` raised
+- **`DatafeatureTab.__post_init__` and `FeatureStatsProbe.__build__` raised
   `NameError`** on names left behind by the move to `Datacollator` (`factory`,
   `feat_slice`/`sig_slice`): neither block could be constructed or built. The probe's
   per-tab breakdowns now follow the collator's first signal/label pair, and say so when

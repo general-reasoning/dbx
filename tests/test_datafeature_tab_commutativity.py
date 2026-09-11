@@ -32,7 +32,7 @@ from dbx import (
     SLICETOPIC,
     DatapointTab,
     DatapointTable,
-    DatamodelEvaluatorFactory,
+    ModelEvaluatorBuilder,
     DatafeatureTable,
 )
 from dbx.datafeatures import Datacollator
@@ -106,7 +106,7 @@ class DummyModel(nn.Module):
         return self.fc(x)
 
 
-class DummyModelEvaluatorFactory(DatamodelEvaluatorFactory):
+class DummyModelEvaluatorFactory(ModelEvaluatorBuilder):
     @property
     def model(self):
         return DummyModel()

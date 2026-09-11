@@ -20,7 +20,7 @@ except ImportError:
 
 import dbx
 from dbx.datablocks import Datablock, Datastack, DIRTOPIC
-from dbx.databackbones import DatamodelEvaluatorFactory
+from dbx.backbones import ModelEvaluatorBuilder
 from dbx.datatables import (
     DatapointBase,
     DatapointTab,
@@ -504,7 +504,7 @@ class DatafeatureTab(_UpstreamSlices, DatapointTab):
     @dataclass
     class VAR(Datablock.VAR):
         datapoint_tab: DatapointTab
-        evaluator_factory: DatamodelEvaluatorFactory
+        evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
         feature_namemap: dict[str, str] | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
@@ -686,7 +686,7 @@ class DatafeatureTable(_UpstreamSlices, DatapointTable):
     @dataclass
     class VAR(Datablock.VAR):
         datapoint_table: DatapointTable
-        evaluator_factory: DatamodelEvaluatorFactory
+        evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
         feature_namemap: dict | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes

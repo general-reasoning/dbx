@@ -1,4 +1,4 @@
-"""dbx.databackbones — Base evaluators and factories for model feature extraction."""
+"""dbx.backbones — Base evaluators and builders for model feature extraction."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from dbx.datastreams import (
     ZipStreamingDataset,
     ZipIterableStreamingDatasets,
 )
-class DatamodelEvaluator:
+class ModelEvaluator:
     """Generic hook-based layer activation capture evaluator for any model.
 
     Parameters
@@ -146,7 +146,7 @@ class DatamodelEvaluator:
         self._hooks_registered = True
 
 
-class DatamodelEvaluatorFactory(Datablock):
+class ModelEvaluatorBuilder(Datablock):
     """Abstract Datablock used for spec-based evaluator dependency tracking.
 
     This Datablock does **not** build or persist anything itself.
@@ -155,11 +155,11 @@ class DatamodelEvaluatorFactory(Datablock):
 
     Concrete subclasses may extend ``VAR`` with model-specific fields
     and override `evaluator()` to return a ready-to-use
-    `DatamodelEvaluator`.
+    `ModelEvaluator`.
     """
 
     VERSION = 1
-    Evaluator: type[DatamodelEvaluator] = DatamodelEvaluator
+    Evaluator: type[ModelEvaluator] = ModelEvaluator
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -171,8 +171,8 @@ class DatamodelEvaluatorFactory(Datablock):
     def __init__(self, *args, capture_layers=None, capture_final=True, **kwargs):
         super().__init__(*args, capture_layers=capture_layers, capture_final=capture_final, **kwargs)
 
-    def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DatamodelEvaluator:
-        """Create a live `DatamodelEvaluator`.
+    def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> ModelEvaluator:
+        """Create a live `ModelEvaluator`.
 
         The result is cached per device so that repeated calls with
         the same device return the same instance.
@@ -204,7 +204,7 @@ class DatamodelEvaluatorFactory(Datablock):
 
     @property
     def layer_names(self) -> list[str]:
-        """Return the ordered list of feature layer names configured on this factory.
+        """Return the ordered list of feature layer names configured on this builder.
 
         How `layer_names` corresponds to configuration fields:
 
@@ -226,7 +226,7 @@ class DatamodelEvaluatorFactory(Datablock):
         return names
 
 
-class DataformerEvaluator(DatamodelEvaluator):
+class TransformerEvaluator(ModelEvaluator):
     """Transformer-specific activation-capturing model evaluator.
 
     Parameters
@@ -365,14 +365,14 @@ class DataformerEvaluator(DatamodelEvaluator):
         super()._register_capture_hooks()
 
 
-class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
-    """Datablock factory for Transformer-specific evaluators (Dataformer)."""
+class TransformerEvaluatorBuilder(ModelEvaluatorBuilder):
+    """Datablock builder for Transformer-specific evaluators."""
 
     VERSION = 1
-    Evaluator: type[DataformerEvaluator] = DataformerEvaluator
+    Evaluator: type[TransformerEvaluator] = TransformerEvaluator
 
     @dataclass
-    class VAR(DatamodelEvaluatorFactory.VAR):
+    class VAR(ModelEvaluatorBuilder.VAR):
         capture_blocks: list = field(default_factory=list)  # list[int] — transformer block indices
         cls_token_only: bool = False  # capture only CLS token activations
 
@@ -381,8 +381,8 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
     def __init__(self, *args, capture_blocks=None, capture_layers=None, capture_final=True, cls_token_only=False, **kwargs):
         super().__init__(*args, capture_layers=capture_layers, capture_final=capture_final, capture_blocks=capture_blocks, cls_token_only=cls_token_only, **kwargs)
 
-    def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> DataformerEvaluator:
-        """Create a live `DataformerEvaluator`.
+    def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> TransformerEvaluator:
+        """Create a live `TransformerEvaluator`.
 
         The result is cached per device so that repeated calls with
         the same device return the same instance.
@@ -407,7 +407,7 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
 
     @property
     def layer_names(self) -> list[str]:
-        """Return the ordered list of feature layer names configured on this factory.
+        """Return the ordered list of feature layer names configured on this builder.
 
         How `layer_names` corresponds to configuration fields:
 
@@ -441,3 +441,26 @@ class DataformerEvaluatorFactory(DatamodelEvaluatorFactory):
         if hasattr(self, '_evaluators') and self._evaluators:
             return next(iter(self._evaluators.values())).layer_names
         return self.evaluator(device="cpu").layer_names
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  The names these classes used to have
+# ═══════════════════════════════════════════════════════════════════════
+
+#: This file was ``dbx/databackbones.py`` (and ``dbx/datamodels.py`` before
+#: that), and the classes carried a ``Data`` prefix that said nothing: an
+#: evaluator is not a datablock, and the two Factories are Builders in every
+#: other corner of this codebase. Both old module paths still resolve, as
+#: aliases onto this one module object -- see the note in ``dbx/__init__.py``.
+#:
+#: The class names below are aliases in the other direction, for source that
+#: imports them. Unlike the module aliases they are a courtesy and nothing
+#: more: a rename moves `fqcn`, so it would move the storage path of any block
+#: built AS one of these -- but nothing ever was. Every builder in soundworld
+#: is a subclass, which reports its own module and its own name, and there is
+#: no ``dbx.*`` anchor in any root. Renaming a base costs nothing; what would
+#: cost is renaming the subclass.
+DatamodelEvaluator = ModelEvaluator
+DatamodelEvaluatorFactory = ModelEvaluatorBuilder
+DataformerEvaluator = TransformerEvaluator
+DataformerEvaluatorFactory = TransformerEvaluatorBuilder

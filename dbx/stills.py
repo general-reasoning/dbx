@@ -1612,9 +1612,23 @@ class Still(Datablock):
         the wrong architecture entirely.  That loads nothing at all, silently,
         and the run then trains from random init while its banner says
         otherwise, so it is refused here instead.
+
+        ``map_location='cpu'``, so the checkpoint does not get to choose the
+        device.  A Trainer that fitted on ``cuda:0`` saved CUDA tensors, and
+        ``torch.load`` would otherwise honour that: it raises outright on a
+        CPU-only box ("Attempting to deserialize object on a CUDA device"), and
+        on a machine with fewer GPUs than the one that saved it raises an
+        invalid-device error -- so a warm-start source becomes unusable
+        anywhere but the hardware it was trained on.  Even where it succeeds it
+        allocates a second, GPU-resident copy of the whole state dict, held
+        until this function returns; for a warm start off a large encoder that
+        is gigabytes of accelerator memory competing with the model that is
+        about to train.  ``load_state_dict`` copies into the model's own
+        parameters wherever the source tensors live, so staging on the host
+        costs nothing and is what makes the checkpoint portable.
         """
         self.log.info("Loading weights only (%s) from %s", why, ckpt)
-        checkpoint = torch.load(ckpt, weights_only=False)
+        checkpoint = torch.load(ckpt, map_location='cpu', weights_only=False)
         if "state_dict" not in checkpoint:
             raise KeyError(
                 f"{ckpt} has no 'state_dict' to warm-start from "

@@ -552,8 +552,14 @@ class TestWarmStart:
         before = model.state_dict()[key].clone()
         still._load_weights_only(model, source.find_latest_ckpt(pull=True), why='test')
         after = model.state_dict()[key]
+        # map_location='cpu' in the comparison too: the source ran through a
+        # real Trainer, so on a machine with a GPU its checkpoint holds CUDA
+        # tensors, while `model` has never been fitted and is still on the
+        # host. Without this the assert is a device mismatch rather than a
+        # comparison -- and it passes on CPU-only CI, which is where it hid.
         expected = torch.load(
-            source.find_latest_ckpt(pull=True), weights_only=False,
+            source.find_latest_ckpt(pull=True),
+            map_location='cpu', weights_only=False,
         )['state_dict'][key]
         assert torch.equal(after, expected)
         assert not torch.equal(after, before)
@@ -583,6 +589,43 @@ class TestLoadWeightsOnly:
         path = self._ckpt(tmp_path, {'state_dict': {'nothing.like.it': torch.zeros(3)}})
         with pytest.raises(ValueError, match='nothing loaded'):
             still._load_weights_only(still.lightning_module, path, why='test')
+
+    def test_the_checkpoint_does_not_choose_the_device(self, still, tmp_path,
+                                                       monkeypatch):
+        """Staged on the host, whatever device saved it.
+
+        A Trainer that fitted on ``cuda:0`` saves CUDA tensors. Honouring that
+        makes the checkpoint unloadable anywhere else -- ``torch.load`` raises
+        on a CPU-only box, and raises an invalid-device error on a machine with
+        fewer GPUs -- and where it does work it holds a second, GPU-resident
+        copy of the whole state dict while the model that is about to train
+        competes for the same memory.
+
+        Asserted on the call rather than the outcome because the outcome is
+        invisible on any single machine: on this one a CUDA checkpoint loads
+        either way, and on CPU-only CI there is no CUDA checkpoint to make one.
+        """
+        model = still.lightning_module
+        path = self._ckpt(tmp_path, {'state_dict': dict(model.state_dict())})
+        seen = {}
+        real_load = torch.load
+
+        def spy(f, *args, **kwargs):
+            seen.update(kwargs)
+            return real_load(f, *args, **kwargs)
+
+        monkeypatch.setattr(torch, 'load', spy)
+        still._load_weights_only(model, path, why='test')
+        assert seen.get('map_location') == 'cpu', seen
+
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
+    def test_a_checkpoint_of_cuda_tensors_loads_onto_the_host(self, still, tmp_path):
+        """The behaviour the call above buys, where the hardware can show it."""
+        model = still.lightning_module
+        state = {k: v.cuda() for k, v in model.state_dict().items()}
+        path = self._ckpt(tmp_path, {'state_dict': state})
+        still._load_weights_only(model, path, why='test')
+        assert all(p.device.type == 'cpu' for p in model.parameters())
 
     def test_a_partial_match_is_allowed(self, still, tmp_path):
         """A changed head is the reason this loads with strict=False at all."""

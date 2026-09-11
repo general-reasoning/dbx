@@ -229,6 +229,26 @@ class TestTheStillsModuleGotNoAlias:
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module('dbx.datastills')
 
+    def test_importing_the_module_does_not_install_one(self):
+        """The check above is only as strong as what has already been imported.
+
+        All five aliases that DO exist are installed by ``dbx/__init__.py``, so
+        ``import dbx`` is enough for the rest of this file. Nothing imports
+        ``dbx.stills`` -- it needs lightning, which is why it is not in
+        ``__init__`` -- so an alias registered by ``dbx/stills.py`` itself
+        would not exist yet when the check above runs, and would slip past it.
+
+        Skipped rather than merged into the check above: asserting what
+        importing the module does requires importing it, and there is no
+        lightning-free way to do that. The unconditional half stays
+        unconditional.
+        """
+        import importlib
+        pytest.importorskip('dbx.stills',
+                            reason="lightning is an optional dependency")
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module('dbx.datastills')
+
     def test_the_old_class_names_still_resolve(self):
         """Source compatibility, which is all they are for."""
         stills = pytest.importorskip('dbx.stills',
@@ -277,19 +297,3 @@ class TestTheRenamedModulesResolveUnderTheirOldNames:
         from dbx import backbones, probes
         assert dbx.ModelEvaluatorBuilder is backbones.ModelEvaluatorBuilder
         assert dbx.FeatureStatsProbe is probes.FeatureStatsProbe
-
-    def test_dbx_datastills_deliberately_does_not_resolve(self):
-        """`dbx.stills` gets NO module alias, unlike the two above.
-
-        Not an oversight: it is a week old, was never released, and no
-        artifact anywhere is stored under a ``dbx.datastills.*`` anchor -- so
-        there is no recorded string for an alias to keep resolving. The class
-        names ARE aliased, for source that imports them.
-        """
-        import importlib
-        import dbx.stills
-        with pytest.raises(ModuleNotFoundError):
-            importlib.import_module('dbx.datastills')
-        assert dbx.stills.Datastill is dbx.stills.Still
-        assert dbx.stills.Datalightning is dbx.stills.LightningBuilder
-        assert dbx.stills.Dataweights is dbx.stills.Weights

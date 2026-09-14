@@ -3250,6 +3250,21 @@ class Datablock:
         #: -- in `redirection`, and in the journal entry that records it.
         specialization: Optional['Datablock.Specialization'] = None
 
+    class Validation(dict):
+        """``{topic: bool}`` -- whether each topic's data is where it is read from.
+
+        A dict, so it says WHICH topic is missing; and False as a whole unless
+        every topic is True, so ``if not valid:`` means what it reads as rather
+        than "the report is empty". An empty one is True, as `valid_topics`
+        answers for a block with no topics.
+        """
+        def __bool__(self):
+            return all(self.values())
+
+        def missing(self) -> list:
+            """The topics that are not there."""
+            return [t for t, ok in self.items() if not ok]
+
     @property
     def _redirected_paths_(self):
         """Active redirection paths for this block, loaded from .redirection/paths.yaml or journal."""
@@ -3591,7 +3606,7 @@ class Datablock:
     def UNSAFE_redirect(self, *, redirector: Callable|None = None, journal: Datajournal|None = None, filter: dict|None = None, topic_map: dict|None = None,
                         paths: dict|None = None, topics: list|None = None,
                         specialization: 'Datablock.Specialization | None' = None,
-                        dry_run: bool = False,
+                        dry_run: bool = False, dry_validate: bool = False,
                         validate: bool = False, remote: bool | Remote = False, OVERRIDE: bool = False):
         """Record that this block's topics are read from somewhere else and the location of this somewhere else.
 
@@ -3611,7 +3626,24 @@ class Datablock:
         installing it on this block, writing the hidden ``.redirection`` topic,
         or putting anything in the journal. The return type says which happened:
         a Redirection is a proposal, True is a redirection that is now in place.
+
+        *dry_validate* adds the one question a dry run cannot answer by
+        resolving: is the data actually THERE. A resolution reports the paths
+        the target RECORDED, so a build whose data has since been cleared
+        proposes just as cleanly as one whose data is intact. It installs the
+        proposal in memory only, checks each redirected topic through it, and
+        returns ``(Redirection, Validation)`` instead of the bare Redirection --
+        the pair is how a caller tells a proposal that was checked from one that
+        was not, which a None field could not say. It needs *dry_run*;
+        ``validate=`` is the same question asked after a real redirection is
+        installed.
         """
+        if dry_validate and not dry_run:
+            raise ValueError(
+                "UNSAFE_redirect: dry_validate= reports on a redirection that is NOT being "
+                "installed, so it wants dry_run=True. To check a redirection that is being "
+                "installed, pass validate=True."
+            )
         if not UNSAFE_allowed("UNSAFE_redirect", OVERRIDE=OVERRIDE):
             return False
 
@@ -3738,20 +3770,49 @@ class Datablock:
         remapped_paths = self._mapped_paths(target_paths, topic_map, topics)
 
         if dry_run:
+            validation = None
+            if dry_validate:
+                # Installed in memory ONLY -- no hidden topic, no journal entry
+                # -- so `path()` answers with the redirected paths and the check
+                # runs against what a read would actually open. Restored in a
+                # finally: a dry run that leaves the block redirected is not one.
+                held = '__redirected_paths__' in self.__dict__
+                previous = self.__dict__.get('__redirected_paths__')
+                self.__dict__['__redirected_paths__'] = remapped_paths
+                self.__dict__.pop('redirection', None)
+                try:
+                    # The REDIRECTED topics only. Under a partial redirection the
+                    # rest are this block's own to build, and are absent exactly
+                    # as they should be until it does.
+                    validation = self.Validation(self.valid_topics(list(remapped_paths)))
+                finally:
+                    if held:
+                        self.__dict__['__redirected_paths__'] = previous
+                    else:
+                        self.__dict__.pop('__redirected_paths__', None)
+                    self.__dict__.pop('redirection', None)
             proposal = self.Redirection(
                 paths=remapped_paths, entry=entry, filter=filter, topic_map=topic_map,
                 topics=list(topics) if topics is not None else None,
                 specialization=specialization)
             print(
-                f"UNSAFE_redirect(dry_run=True): {self.anchorkeypath}\n"
-                f"  would record: {redirect_record!r}\n"
-                + (f"  as: {specialization!r}\n" if specialization is not None else "")
-                + (f"  from journal entry: {entry.block.id} (hash {entry.block.hash})\n"
-                   if entry is not None else "")
-                + f"  would read through it: {remapped_paths!r}\n"
-                + f"  would still build: {[t for t in self.topics() if t not in remapped_paths]!r}"
+                f"UNSAFE_redirect(dry_run=True) on {self.anchorkeypath}\n"
+                f"DRY RUN -- nothing below has been done. In an actual run:\n"
+                f"  - I would record {redirect_record!r} as this block's redirection\n"
+                + (f"  - I would record it as the specialization {specialization!r}\n"
+                   if specialization is not None else "")
+                + (f"  - the redirection would come from journal entry {entry.block.id} "
+                   f"(hash {entry.block.hash})\n" if entry is not None else "")
+                + f"  - I would read these topics through the redirection: {remapped_paths!r}\n"
+                + ((f"  - I checked those paths: all {len(validation)} topics are THERE\n"
+                    if validation
+                    else f"  - I checked those paths: {len(validation.missing())} of "
+                         f"{len(validation)} topics are MISSING: {validation.missing()!r}\n")
+                   if isinstance(validation, dict) else "")
+                + f"  - I would still build these topics myself: "
+                  f"{[t for t in self.topics() if t not in remapped_paths]!r}"
             )
-            return proposal
+            return (proposal, validation) if dry_validate else proposal
 
         self._redirected_paths_ = remapped_paths
         self.__dict__.pop('redirection', None)
@@ -5735,7 +5796,7 @@ class Datablock:
         red = self.redirection
         return red.specialization if red is not None else None
 
-    def UNSAFE_specialize(self, *, journal=None, dry_run: bool = False, OVERRIDE: bool = False):
+    def UNSAFE_specialize(self, *, journal=None, dry_run: bool = False, dry_validate: bool = False, OVERRIDE: bool = False):
         """Install the applicable specialization AND record it in the journal.
 
         The explicit form of what construction does on its own: a redirection
@@ -5747,7 +5808,8 @@ class Datablock:
 
         *dry_run* reports what the first applicable specialization WOULD do and
         returns its proposed :class:`Redirection`, writing nothing -- the same
-        handle :meth:`UNSAFE_redirect` has.
+        handle :meth:`UNSAFE_redirect` has, *dry_validate* included, which makes
+        the return a ``(Redirection, Validation)`` pair.
         """
         if not UNSAFE_allowed("UNSAFE_specialize", OVERRIDE=OVERRIDE):
             return None
@@ -5755,7 +5817,8 @@ class Datablock:
             if self._specialization_mismatch(sp) is not None:
                 continue
             res = self.UNSAFE_redirect(specialization=sp, journal=journal,
-                                       dry_run=dry_run, OVERRIDE=True)
+                                       dry_run=dry_run, dry_validate=dry_validate,
+                                       OVERRIDE=True)
             if res:
                 return res if dry_run else sp
         self.log.info(
@@ -6366,6 +6429,16 @@ class Datablock:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         if url is None:
             url = os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
+        # A url may arrive as a specline -- a block's `_url_` is one whenever it
+        # was constructed with env(...) -- and it is resolved here as
+        # __setstate__ resolves a block's own. Without this, fsspec takes
+        # "$dbx.getenv('LAKE')" for a protocol-less relative path and roots the
+        # journal at the CWD: a directory that cannot exist, reported as a
+        # journal that is merely missing.
+        if Datablock.is_specline(url):
+            resolved = eval(url)
+            log.detailed(f"Journal: resolved url specline {url!r} to {resolved!r}")
+            url = resolved
         if storage_options is None:
             storage_options = default_storage_options()
 
@@ -7415,8 +7488,12 @@ class Datastack(Datablock):
 
         Returns
         -------
-        tuple[int, int]
-            (successes, total)
+        list
+            What each block's :meth:`UNSAFE_redirect` returned, in block order:
+            a ``(Redirection, Validation)`` pair under ``dry_run, dry_validate``,
+            a bare :class:`Datablock.Redirection` under ``dry_run`` alone, True
+            when a redirection was installed and False when it was refused, and
+            None where the redirector declined a block entirely.
         """
         allowed = UNSAFE_allowed("UNSAFE_redirect_blocks", OVERRIDE=OVERRIDE)
         if redirector is None:
@@ -7445,19 +7522,35 @@ class Datastack(Datablock):
         executor = callable_executor(par, n_workers=nw, tag=tag)
 
         callables = [functools.partial(_UNSAFE_redirect_block_callable, redirector, blk, self, idx, journal=journal, validate=validate) for idx, blk in enumerate(block_list)]
-        results = executor.exec_callables(callables)
+        results = list(executor.exec_callables(callables) or [])
 
-        successes = sum(1 for r in results if r is True) if results else 0
+        successes = sum(1 for r in results if _redirect_succeeded(r))
 
         self.log.info(f"UNSAFE_redirect_blocks complete: {self.__class__.__name__} ({successes}/{total} succeeded)")
         self.write_journal_entry(event="UNSAFE_redirect_blocks:end", note=f"{successes}/{total}")
-        return successes, total
+        return results
+
+
+def _redirect_succeeded(result) -> bool:
+    """Whether one block's ``UNSAFE_redirect`` result counts as a success.
+
+    True is an installed redirection. A :class:`Datablock.Redirection` is a dry
+    run's proposal, which counts as resolved. A ``(Redirection, Validation)``
+    pair is a proposal whose data was looked for as well, and one that was not
+    found is not something to count.
+    """
+    if result is True:
+        return True
+    if isinstance(result, tuple):
+        proposal, validation = result
+        return getattr(proposal, 'paths', None) is not None and bool(validation)
+    return getattr(result, 'paths', None) is not None
 
 
 def _UNSAFE_redirect_block_callable(redirector, block, stack, idx, *, journal: Datajournal|None = None, validate: bool = False):
     target = redirector(block, stack, idx, journal=journal)
     if not target:
-        return False
+        return None
     kwargs = dict(target)
     if 'validate' not in kwargs:
         kwargs['validate'] = validate
@@ -7469,7 +7562,7 @@ def _UNSAFE_redirect_block_callable(redirector, block, stack, idx, *, journal: D
         validated = stack.validate_block(idx)
         if not validated:
             return False
-    return bool(redirected)
+    return redirected
 
 
 

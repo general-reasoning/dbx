@@ -276,7 +276,9 @@ class TestRecordingIt:
         proposal = block.UNSAFE_specialize(dry_run=True, OVERRIDE=True)
         assert proposal.specialization == V2.SPECIALIZATIONS[0]
         assert proposal.paths == {'spectra': built.path('spectra')}
-        assert 'would record' in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert 'DRY RUN -- nothing below has been done' in out
+        assert 'would record' in out
         assert block.redirected_topics() == []                    # not installed
         assert v2(tmp_path, use_specializations=False).redirected_topics() == []   # not recorded
 

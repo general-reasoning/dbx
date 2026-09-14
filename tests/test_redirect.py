@@ -709,11 +709,11 @@ class TestNewRedirectFeatures:
                 return [Built(url=str(tmp_path), spec={'x': i}) for i in range(3)]
 
         stack = DummyStack(url=str(tmp_path))
-        successes, total = stack.UNSAFE_redirect_blocks(
+        results = stack.UNSAFE_redirect_blocks(
             redirector=lambda blk, stack, idx, journal=None: {'paths': {'output': f"/redirected/{blk.spec['x']}.txt"}},
             OVERRIDE=True
         )
-        assert successes == 3 and total == 3
+        assert results == [True] * 3
 
         for blk in stack.blocks():
             assert blk.path('output').startswith("/redirected/")
@@ -736,13 +736,13 @@ class TestNewRedirectFeatures:
             passed_journals.append(journal)
             return {'filter': {'entry_code': src_code}}
 
-        successes, total = stack.UNSAFE_redirect_blocks(
+        results = stack.UNSAFE_redirect_blocks(
             redirector=redirect_fn,
             filter={'event': 'build:end'},
             n_workers=2,
             OVERRIDE=True
         )
-        assert successes == 2 and total == 2
+        assert results == [True] * 2
         assert len(passed_journals) == 2
         assert passed_journals[0] is not None
         assert all(passed_journals[0]['event'] == 'build:end')
@@ -909,20 +909,20 @@ class TestNewRedirectFeatures:
 
         stack = DummyStack(url=str(tmp_path))
         # Valid redirection with validate=True
-        successes, total = stack.UNSAFE_redirect_blocks(
+        results = stack.UNSAFE_redirect_blocks(
             redirector=lambda blk, stack, idx, journal=None: {'filter': {'entry_code': code}},
             validate=True,
             OVERRIDE=True
         )
-        assert successes == 2 and total == 2
+        assert results == [True] * 2
 
-        # Invalid redirection with validate=True -> 0 successes
-        successes, total = stack.UNSAFE_redirect_blocks(
+        # Invalid redirection with validate=True -> every block reports False
+        results = stack.UNSAFE_redirect_blocks(
             redirector=lambda blk, stack, idx, journal=None: {'paths': {'output': str(tmp_path / f'nonexistent_{idx}.txt')}},
             validate=True,
             OVERRIDE=True
         )
-        assert successes == 0 and total == 2
+        assert results == [False] * 2
 
     def test_unsafe_clear_redirected_block_preserves_source_data(self, source, tmp_path):
         """UNSAFE_clear on a redirected block should only remove redirection, not the source files."""
@@ -978,12 +978,12 @@ class TestNewRedirectFeatures:
         stack = DummyStack(url=str(tmp_path))
 
         # Redirect stack child blocks to corresponding source blocks
-        successes, total = stack.UNSAFE_redirect_blocks(
+        results = stack.UNSAFE_redirect_blocks(
             redirector=lambda blk, stack, idx, journal=None: {'paths': src_blocks[idx].paths()},
             validate=True,
             OVERRIDE=True
         )
-        assert successes == 3 and total == 3
+        assert results == [True] * 3
 
         for i, blk in enumerate(stack.blocks()):
             assert blk.valid()
@@ -1007,3 +1007,120 @@ class TestNewRedirectFeatures:
 
 
 
+
+
+class TestDryValidate:
+    """`dry_run` says what it WOULD record; `dry_validate` says whether the data
+    it would then read is THERE.
+
+    A resolution reports the paths its target RECORDED, so a build whose data
+    has since been cleared resolves exactly as cleanly as one whose data is
+    intact. That is the gap this closes, and the reason it is worth asking for
+    before dropping `dry_run`.
+    """
+
+    def test_a_bare_dry_run_is_still_a_lone_proposal(self, source, broken):
+        src, code = source
+        res = broken.UNSAFE_redirect(filter={'entry_code': code}, dry_run=True, OVERRIDE=True)
+        assert res.paths == {'output': src.path('output')}
+
+    def test_dry_validate_makes_it_a_pair(self, source, broken):
+        src, code = source
+        proposal, valid = broken.UNSAFE_redirect(filter={'entry_code': code},
+                                                 dry_run=True, dry_validate=True, OVERRIDE=True)
+        assert proposal.paths == {'output': src.path('output')}
+        assert valid == {'output': True}
+        assert valid and valid.missing() == []
+
+    def test_it_sees_a_path_that_holds_nothing(self, broken, tmp_path):
+        proposal, valid = broken.UNSAFE_redirect(paths={'output': str(tmp_path / 'absent.txt')},
+                                                 dry_run=True, dry_validate=True, OVERRIDE=True)
+        assert proposal.paths is not None        # it RESOLVED
+        assert not valid                          # and there is nothing there
+        assert valid.missing() == ['output']
+
+    def test_a_validation_is_false_as_a_whole_when_any_topic_is(self, tmp_path, source):
+        src, code = source
+        two = block(tmp_path, x=9, cls=TwoTopics)
+        proposal, valid = two.UNSAFE_redirect(
+            paths={'output': src.path('output'), 'notes': str(tmp_path / 'absent.txt')},
+            dry_run=True, dry_validate=True, OVERRIDE=True)
+        assert valid == {'output': True, 'notes': False}
+        assert not valid
+        assert valid.missing() == ['notes']
+
+    def test_the_in_memory_install_is_undone(self, source, broken):
+        src, code = source
+        broken.UNSAFE_redirect(filter={'entry_code': code},
+                               dry_run=True, dry_validate=True, OVERRIDE=True)
+        assert broken.redirected_topics() == []
+        assert broken._redirected_paths_ is None
+        assert not broken.valid()
+        # The anchor's journal holds the source's own build:end; what a dry run
+        # must not have added to it is an entry of its own.
+        assert len(broken.journal(event='UNSAFE_redirect')) == 0
+
+    def test_it_leaves_an_already_installed_redirection_alone(self, source, broken, tmp_path):
+        """The restore puts back what was there, not 'nothing'."""
+        src, code = source
+        broken.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
+        broken.UNSAFE_redirect(paths={'output': str(tmp_path / 'absent.txt')},
+                               dry_run=True, dry_validate=True, OVERRIDE=True)
+        assert broken.path('output') == src.path('output')
+        assert broken.valid()
+
+    def test_it_wants_a_dry_run_to_be_dry_about(self, source, broken):
+        src, code = source
+        with pytest.raises(ValueError, match='dry_run=True'):
+            broken.UNSAFE_redirect(filter={'entry_code': code}, dry_validate=True, OVERRIDE=True)
+
+    def test_the_printed_report_names_what_is_missing(self, broken, tmp_path, capsys):
+        broken.UNSAFE_redirect(paths={'output': str(tmp_path / 'absent.txt')},
+                               dry_run=True, dry_validate=True, OVERRIDE=True)
+        out = capsys.readouterr().out
+        assert 'are MISSING' in out and "'output'" in out
+
+    def test_the_printed_report_says_so_when_it_is_all_there(self, source, broken, capsys):
+        src, code = source
+        broken.UNSAFE_redirect(filter={'entry_code': code},
+                               dry_run=True, dry_validate=True, OVERRIDE=True)
+        assert 'topics are THERE' in capsys.readouterr().out
+
+
+class TestDryValidateOverBlocks:
+
+    def test_report_pairs_each_block_and_counts_only_what_is_there(self, tmp_path):
+        from dbx.datablocks import Datastack
+
+        src = block(tmp_path, x=100)
+        src.build()
+        there, absent = src.path('output'), str(tmp_path / 'absent.txt')
+
+        class DummyStack(Datastack):
+            def blocks(self):
+                return [block(tmp_path, x=i) for i in range(3)]
+
+        stack = DummyStack(url=str(tmp_path))
+        results = stack.UNSAFE_redirect_blocks(
+            redirector=lambda blk, stack, idx, journal=None: dict(
+                paths={'output': there if idx < 2 else absent},
+                dry_run=True, dry_validate=True),
+            OVERRIDE=True,
+        )
+        # The third resolved as cleanly as the others and has nothing to read.
+        assert [bool(valid) for _, valid in results] == [True, True, False]
+        assert all(proposal.paths is not None for proposal, _ in results)
+        assert results[2][1].missing() == ['output']
+        assert all(blk.redirected_topics() == [] for blk in stack.blocks())
+
+    def test_a_real_run_is_a_list_of_what_each_block_returned(self, tmp_path):
+        from dbx.datablocks import Datastack
+
+        class DummyStack(Datastack):
+            def blocks(self):
+                return [block(tmp_path, x=i) for i in range(2)]
+
+        results = DummyStack(url=str(tmp_path)).UNSAFE_redirect_blocks(
+            redirector=lambda blk, stack, idx, journal=None: {'paths': {'output': '/redirected/x.txt'}},
+            OVERRIDE=True)
+        assert results == [True, True]

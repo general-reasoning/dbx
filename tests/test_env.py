@@ -239,3 +239,29 @@ class TestEnvQuoteRoundtrip:
         assert restored._url_ == "$dbx.getenv('RT_ROOT')"
         assert restored.root == '/tmp/roundtrip'
         assert restored.hash == block.hash
+
+
+class TestEnvInJournalUrl:
+    """`journal(url=...)` takes a url like everything else does: as a specline.
+
+    A block's `_url_` IS one whenever it was constructed with env(...), and
+    fsspec would read "$dbx.getenv('X')" as a protocol-less relative path and
+    root the journal at the CWD -- a directory that cannot exist, reported as a
+    journal that is merely missing.
+    """
+
+    def test_a_specline_url_names_the_same_journal_as_the_resolved_one(self, tmp_path, monkeypatch):
+        import dbx
+        monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path))
+        built = EnvBlock(url=env('JOURNAL_ROOT'), spec=dict(label="'x'"))
+        built.build()
+        anchor = built.anchor
+        assert len(dbx.journal(anchor, url=str(tmp_path))) == len(dbx.journal(anchor, url=env('JOURNAL_ROOT')))
+        assert len(dbx.journal(anchor, url=env('JOURNAL_ROOT'))) > 0
+
+    def test_a_block_finds_its_own_journal_through_either_spelling(self, tmp_path, monkeypatch):
+        import dbx
+        monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path))
+        built = EnvBlock(url=env('JOURNAL_ROOT'), spec=dict(label="'y'"))
+        built.build()
+        assert len(dbx.journal(built.anchor, url=built._url_)) == len(built.journal())

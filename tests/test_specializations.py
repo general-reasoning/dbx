@@ -62,9 +62,30 @@ class V2(V1):
     ]
 
     def __build__(self):
-        for topic in self.buildtopics():
+        for topic in self.ownedtopics():
             with open(self.path(topic, ensure_dirpath=True), 'w') as f:
                 f.write(f"{topic}-{self.var.sr}")
+
+
+class V3(V2):
+    """The same class once more, with VERSION bumped because `phases` changed.
+
+    `spectra` did not, and neither did the computation behind it -- which is a
+    claim only a specialization that names the OLDER version can make. V1
+    declared no VERSION at all, so the value to name is ``None``, which is why
+    the field's "inherit" default has to be a sentinel rather than None.
+    """
+
+    VERSION = 2
+
+    SPECIALIZATIONS = [
+        Datablock.Specialization(
+            spec=dict(window='hann'),
+            topics=['spectra'],
+            version=None,
+            note="the bump was for `phases`; `spectra` is what it always was",
+        ),
+    ]
 
 
 def v1(url, **kw):
@@ -74,6 +95,11 @@ def v1(url, **kw):
 def v2(url, **kw):
     spec = kw.pop('spec', {'sr': 16000})
     return V2(url=str(url), anchor=ANCHOR, spec=spec, **kw)
+
+
+def v3(url, **kw):
+    spec = kw.pop('spec', {'sr': 16000})
+    return V3(url=str(url), anchor=ANCHOR, spec=spec, **kw)
 
 
 @pytest.fixture
@@ -186,7 +212,7 @@ class TestBuildingTheRest:
     def test_the_topics_divide(self, tmp_path, built):
         block = v2(tmp_path)
         assert block.redirected_topics() == ['spectra']
-        assert block.buildtopics() == ['phases']
+        assert block.ownedtopics() == ['phases']
 
     def test_invalid_until_the_rest_is_built(self, tmp_path, built):
         assert v2(tmp_path).valid() is False
@@ -202,12 +228,12 @@ class TestBuildingTheRest:
         block = v2(tmp_path)
         block.UNSAFE_redirect(paths={'spectra': built.path('spectra'),
                                      'phases': built.path('spectra')}, OVERRIDE=True)
-        assert block.buildtopics() == []
+        assert block.ownedtopics() == []
         block.build()   # declines, loudly, and does not raise
         assert block.read('phases') == 'spectra-16000'
 
     def test_writing_to_a_redirected_topic_is_refused(self, tmp_path, built):
-        """A __build__ that ignores buildtopics() must not clobber the source."""
+        """A __build__ that ignores ownedtopics() must not clobber the source."""
         block = v2(tmp_path)
         with pytest.raises(ValueError, match='REDIRECTED'):
             block.path('spectra', ensure_dirpath=True)
@@ -326,7 +352,7 @@ class TestPartialRedirectionOnItsOwn:
                                      'phases': built.path('spectra')},
                               topics=['spectra'], OVERRIDE=True)
         assert block.redirected_topics() == ['spectra']
-        assert block.buildtopics() == ['phases']
+        assert block.ownedtopics() == ['phases']
 
     def test_the_restriction_is_recorded(self, tmp_path, built):
         block = v2(tmp_path, use_specializations=False)
@@ -480,7 +506,7 @@ class TestASpecializedTable:
         table = v2table(tmp_path)
         assert table.specialization == RowTableV2.SPECIALIZATIONS[0]
         assert table.redirected_topics() == ['summary', 'tab_paths', 'done']
-        assert table.buildtopics() == ['report']
+        assert table.ownedtopics() == ['report']
 
     def test_a_marker_valid_does_not_skip_the_build(self, tmp_path, built_table):
         """The failure this exists to stop, and it was SILENT.
@@ -568,3 +594,85 @@ class TestOwedTopics:
         assert block.owedtopics() == ['phases']
         block.build()
         assert block.owedtopics() == []
+
+
+class TestASpecializationAcrossAVersionBump:
+    """`version=` completes the reconstruction.
+
+    `type()` is the spec, the version and the topics and nothing else, and a
+    specialization used to name only two of the three -- the version came from
+    the class, so a bump moved the reconstruction onto an identity nobody had
+    ever built and the only way to keep a specialization working was never to
+    bump. Naming all three describes the narrower block completely.
+    """
+
+    SP = V3.SPECIALIZATIONS[0]
+
+    def test_it_reconstructs_the_older_versions_hash(self, tmp_path):
+        assert v3(tmp_path).get_hash(self.SP) == v1(tmp_path).hash
+
+    def test_the_bump_did_move_this_blocks_own_hash(self, tmp_path):
+        assert v3(tmp_path).hash != v2(tmp_path).hash
+
+    def test_without_the_version_it_would_reconstruct_nothing_built(self, tmp_path):
+        """What the field is for: the same specialization without it names
+        (this spec, version=2, spectra), which no build ever had."""
+        unversioned = Datablock.Specialization(
+            spec=dict(window='hann'), topics=['spectra'])
+        block = v3(tmp_path)
+        assert block.get_hash(unversioned) != block.get_hash(self.SP)
+        assert block.get_hash(unversioned) != v1(tmp_path).hash
+
+    def test_the_version_is_in_the_rendered_type(self, tmp_path):
+        block = v3(tmp_path)
+        assert 'version=2' in block.type()
+        assert 'version=None' in block.type(specialization=self.SP)
+
+    def test_it_resolves_and_builds_only_what_it_did_not_cover(self, tmp_path,
+                                                               built):
+        block = v3(tmp_path)
+        assert block.specialization == self.SP
+        assert block.redirected_topics() == ['spectra']
+        assert block.ownedtopics() == ['phases']
+        block.build()
+        assert block.read('spectra') == 'spectra-16000'     # V1's bytes
+        assert block.read('phases') == 'phases-16000'       # freshly built
+
+    def test_the_version_survives_the_journal_record(self, tmp_path, built):
+        """The record is literal, so `version` has to round-trip through it --
+        a redirection read back must say which specialization installed it, and
+        two alike but for the version are two different claims."""
+        v3(tmp_path).build()
+        later = v3(tmp_path, use_specializations=False)
+        assert later.redirection.specialization == self.SP
+        assert later.redirection.specialization.version is None
+
+    def test_a_version_is_not_matched_against_this_block(self, tmp_path):
+        """It states what the OTHER block was; it is not a condition on this
+        one, so it can never be the reason a specialization does not apply."""
+        assert v3(tmp_path)._specialization_mismatch(self.SP) is None
+
+
+class TestTheOwnedOwedPair:
+    """Two names one letter apart, so what separates them is worth pinning."""
+
+    def test_owned_is_what_this_block_must_produce(self, tmp_path, built):
+        block = v2(tmp_path)
+        assert block.ownedtopics() == ['phases']
+
+    def test_owed_is_the_subset_not_yet_there(self, tmp_path, built):
+        block = v2(tmp_path)
+        assert block.owedtopics() == ['phases']
+        block.build()
+        assert block.ownedtopics() == ['phases']   # ownership does not change
+        assert block.owedtopics() == []            # owing does
+
+    def test_owed_is_always_a_subset_of_owned(self, tmp_path, built):
+        block = v2(tmp_path)
+        assert set(block.owedtopics()) <= set(block.ownedtopics())
+
+    def test_buildtopics_is_the_old_name(self, tmp_path):
+        """Kept so a caller written against it still resolves."""
+        assert Datablock.buildtopics is Datablock.ownedtopics
+        block = v2(tmp_path)
+        assert block.buildtopics() == block.ownedtopics()

@@ -48,7 +48,7 @@ All notable changes to this project will be documented in this file.
   build is found in the journal by its own hash, with no access to the older
   class and no record that it ever existed. An unbuilt block with a matching
   specialization reads through it; `build()` then produces only the topics the
-  specialization does not cover (`buildtopics()`, the complement of
+  specialization does not cover (`ownedtopics()`, the complement of
   `redirected_topics()`).
 
   A pin is matched against the RENDERED spec, not the `spec` dict a caller
@@ -76,7 +76,7 @@ All notable changes to this project will be documented in this file.
   off another build's marker, before the topic it was grown for existed, and
   `build()` (which asked `valid()` and nothing else) skipped. Silently, and
   however many times you rebuilt. `build()` now also asks **`owedtopics()`** --
-  the buildtopics that are not there, empty for any block that is not
+  the ownedtopics that are not there, empty for any block that is not
   partially redirected -- and logs `BUILD OWED` when the two disagree. It is
   deliberately not folded into `valid()`: what validity means belongs to the
   class, and a marker is a real answer; whether a block has produced what a
@@ -88,9 +88,31 @@ All notable changes to this project will be documented in this file.
   topic -- correctly, since it would be creating a directory inside another
   block's data. So the tab machinery *raised* for a specialized table rather
   than merely being unnecessary to it. That call and `_write_tab_path` are
-  guarded by `buildtopics()` now; the sentinels already in the other block's
+  guarded by `ownedtopics()` now; the sentinels already in the other block's
   `tab_paths` name the same tabs, because a redirection that covers
   `tab_paths` is by construction one that did not re-key the TAB.
+
+  **`Specialization(version=...)`** completes the reconstruction. `type()` is
+  built from the spec, the version and the topics and nothing else, and a
+  specialization used to name only two of the three: the version came from the
+  CLASS, so bumping `VERSION` moved the reconstructed hash onto an identity
+  nobody had ever built, and the only way to keep a specialization working was
+  never to bump. Naming all three describes the narrower block completely, and
+  makes two real cases expressible -- a bump that changed some topics and not
+  others, and one that turned out to change none. The field defaults to
+  `ABSENT` rather than `None`, because `None` is what `version` reads as for a
+  class that declares no `VERSION` at all: a real value a specialization has to
+  be able to name, and the one a class names the day it starts versioning. It
+  is in `Specialization.key` (two specializations alike but for the version are
+  two identities, and `get_hash` caches per key) and in the journal record.
+
+  **`buildtopics()` is `ownedtopics()`**, with the old name kept as an alias.
+  "build" said what to do with the topics rather than which ones they were, so
+  a reader had to guess whether it meant "must produce" or "has yet to produce"
+  -- which are now two methods: `ownedtopics()` is what this block is
+  responsible for, `owedtopics()` the subset of those that are not there yet.
+  Ownership does not change when a build runs; owing does. The two are one
+  letter apart, so each docstring names the other.
 
 - **`UNSAFE_redirect(dry_run=True)`**, and `UNSAFE_specialize(dry_run=True)`.
   Resolves the whole redirection and reports what it would record — the record,

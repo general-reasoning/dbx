@@ -1001,7 +1001,7 @@ class DatapointTable(DatapointBase, Datastack):
         # create a directory inside its data, and this call is the first thing
         # a split does: the whole tab machinery was unreachable for a
         # specialized table, rather than merely unnecessary for it.
-        if topic_name and topic_name in self.buildtopics():
+        if topic_name and topic_name in self.ownedtopics():
             self.path(topic_name, ensure_dirpath=True)
         n = self.n_tabs
         self.log.info(
@@ -1135,7 +1135,7 @@ class DatapointTable(DatapointBase, Datastack):
         topic_name = self._tab_paths_topic()
         if not topic_name:
             return
-        if topic_name not in self.buildtopics():
+        if topic_name not in self.ownedtopics():
             # Redirected: the sentinels are the other block's, and they name
             # the same tabs -- a redirection that did not re-key the TAB is the
             # only kind that can cover `tab_paths` at all. Writing ours in

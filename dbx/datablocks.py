@@ -1870,14 +1870,15 @@ class Datablock:
 
     #: Where this block coincides with a NARROWER one that was already built.
     #:
-    #: A class grows: a new VAR field, a new topic. Every block of it re-keys,
-    #: and the topics that did not change are rebuilt for nothing. A
-    #: :class:`Specialization` says that when the new fields hold the values
-    #: given in its ``spec``, the topics it names ARE the topics of the block
-    #: this class used to be -- whose identity is this one's with those fields
-    #: dropped and those topics alone. That block's hash is reconstructible
-    #: from here (see :meth:`get_hash`), so its build can be found in the
-    #: journal and read instead of repeated.
+    #: A class grows: a new VAR field, a new topic, a bumped VERSION. Every
+    #: block of it re-keys, and the topics that did not change are rebuilt for
+    #: nothing. A :class:`Specialization` says that when the new fields hold
+    #: the values given in its ``spec``, the topics it names ARE the topics of
+    #: the block this class used to be -- whose identity is this one's with
+    #: those fields dropped, those topics alone, and its own ``version`` if it
+    #: names one. That block's hash is reconstructible from here (see
+    #: :meth:`get_hash`), so its build can be found in the journal and read
+    #: instead of repeated.
     #:
     #: Declared in preference order; the first one that both matches and
     #: resolves is the one used::
@@ -2529,7 +2530,7 @@ class Datablock:
 
         Empty when it is not redirected; every topic when the redirection is
         total. In between is a PARTIAL redirection, and this is the list a
-        `__build__` must not write to -- :meth:`buildtopics` is its complement,
+        `__build__` must not write to -- :meth:`ownedtopics` is its complement,
         and the one to build.
         """
         paths = self._redirected_paths_
@@ -2537,8 +2538,8 @@ class Datablock:
             return []
         return [t for t in self.topics() if t in paths]
 
-    def buildtopics(self):
-        """The top-level topics this block must produce itself.
+    def ownedtopics(self):
+        """The top-level topics this block is RESPONSIBLE for producing.
 
         All of them unless it is redirected, and under a partial redirection
         the ones the redirection does not cover. A ``__build__`` that can be
@@ -2546,12 +2547,27 @@ class Datablock:
         it, and will simply rebuild what it always did -- into the redirected
         location, which is why :meth:`path` refuses to ensure a directory for a
         redirected topic.
+
+        Not to be confused with :meth:`owedtopics`, one letter away and a
+        subset of this: these are the topics that are MINE, those are the ones
+        of mine that are not there yet. Ownership does not change when a build
+        runs; owing does.
         """
         redirected = set(self.redirected_topics())
         return [t for t in self.topics() if t not in redirected]
 
+    #: The name this went by before the pair with :meth:`owedtopics` made the
+    #: distinction worth spelling: "build" said what to do with the topics and
+    #: not which ones they were, so a reader had to guess whether it meant "must
+    #: produce" or "has yet to produce" -- which are now two methods.
+    buildtopics = ownedtopics
+
     def owedtopics(self):
-        """The topics this block owes and has not produced -- :meth:`build`'s question.
+        """The topics of :meth:`ownedtopics` that are not there -- :meth:`build`'s question.
+
+        OWED, not OWNED: the subset of this block's own topics that it has yet
+        to produce. Everything in :meth:`ownedtopics` is this block's to build;
+        these are the ones it has not built.
 
         Empty unless the block is PARTIALLY redirected, which is the only case
         in which :meth:`valid` can answer True about topics that are not this
@@ -2573,13 +2589,13 @@ class Datablock:
         """
         if self._redirected_paths_ is None:
             return []
-        buildtopics = self.buildtopics()
-        if not buildtopics:
+        owned = self.ownedtopics()
+        if not owned:
             return []
         # A non-empty topic list, so valid_topics answers with the per-topic
         # dict rather than the bare True it gives a block that declares none.
-        validity = self.valid_topics(buildtopics)
-        return [t for t in buildtopics if not validity[t]]
+        validity = self.valid_topics(owned)
+        return [t for t in owned if not validity[t]]
 
     def leaftopics(self):
         """Every leaf topic, as a tuple of names, depth-first in declaration order.
@@ -2765,7 +2781,7 @@ class Datablock:
         # a build_tree() sweeping past would otherwise quietly rebuild the very
         # block someone redirected away from. Costs one journal read per
         # instance, which :attr:`redirection` caches.
-        if self._redirected_paths_ is not None and not self.buildtopics():
+        if self._redirected_paths_ is not None and not self.ownedtopics():
             entry = self.redirection.entry if self.redirection is not None else None
             whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
                        if entry is not None else f"the paths {self._redirected_paths_}")
@@ -2783,7 +2799,7 @@ class Datablock:
             # (reuse what did not change, build what did) unreachable.
             self.log.info(
                 f"BUILD PARTIAL: {self.anchorkeypath} reads {self.redirected_topics()} "
-                f"through a redirection and builds {self.buildtopics()}."
+                f"through a redirection and builds {self.ownedtopics()}."
             )
         if self.capture_output:
             logpath = self._dbxanchorhashpathx('log', ext='log', ensure_dirpath=True)
@@ -3232,16 +3248,34 @@ class Datablock:
         *spec* pins the VAR fields the narrower block never had, to the values
         at which the two computations agree. *topics* names the topics that
         come from it -- MY names, which are also its names -- in the order it
-        declared them, since that order is in its identity. *note* says why the
-        coincidence holds; nothing else records it.
+        declared them, since that order is in its identity. *version* is the
+        :attr:`VERSION` the narrower block carried, left :data:`ABSENT` to
+        inherit this class's. The sentinel rather than ``None``, because
+        ``None`` is what :attr:`version` reads as for a class that declares no
+        VERSION at all -- a real value a specialization has to be able to name,
+        and the one a class names on the day it starts versioning. *note* says
+        why the coincidence holds; nothing else records it.
+
+        Those three are the whole of an identity -- :meth:`type` is built from
+        the spec, the version and the topics and nothing else -- so a
+        specialization that names all three describes the narrower block
+        COMPLETELY, rather than inheriting whatever the class happens to carry
+        now. That is what *version* is for: without it a VERSION bump moved the
+        reconstructed hash onto a block nobody ever built, and the only way to
+        keep a specialization working was never to bump. The two cases it makes
+        expressible are a bump that changed some topics and not others, and a
+        bump that turned out not to change any.
 
         A pin is matched against the RENDERED spec (`_typed_specdict`), not
         against the raw ``spec`` dict a caller passed: a field left at its
         default is absent from that dict, and a field left at its default is
-        exactly the case this exists for.
+        exactly the case this exists for. *version* is not matched against
+        anything -- it is a statement about the OTHER block, not a condition on
+        this one.
         """
         spec: dict
         topics: list
+        version: object = ABSENT
         note: str = ''
 
         def __post_init__(self):
@@ -3252,8 +3286,14 @@ class Datablock:
 
         @property
         def key(self):
-            """A stable identifier for caching and for the journal record."""
-            return (tuple(sorted(self.spec.items(), key=lambda kv: kv[0])), self.topics)
+            """A stable identifier for caching and for the journal record.
+
+            `version` is in it because `get_hash` caches per key: two
+            specializations alike but for the version are two different
+            identities, and one would otherwise be served the other's hash.
+            """
+            return (tuple(sorted(self.spec.items(), key=lambda kv: kv[0])),
+                    self.topics, self.version)
 
         def __hash__(self):
             # frozen=True would hash the field tuple, and one of those fields is
@@ -3263,6 +3303,8 @@ class Datablock:
         def to_dict(self):
             """The record form: literal, so it round-trips through the journal."""
             d = {'spec': dict(self.spec), 'topics': list(self.topics)}
+            if self.version is not ABSENT:
+                d['version'] = self.version
             if self.note:
                 d['note'] = self.note
             return d
@@ -3270,6 +3312,7 @@ class Datablock:
         def __repr__(self):
             return (f"Specialization(spec={dict(self.spec)!r}, "
                     f"topics={list(self.topics)!r}"
+                    + (f", version={self.version!r}" if self.version is not ABSENT else "")
                     + (f", note={self.note!r}" if self.note else "") + ")")
 
     @dataclass
@@ -5542,12 +5585,16 @@ class Datablock:
 
         *specialization* renders the identity of the NARROWER block that one
         describes instead of this one's: its ``spec`` fields dropped, its
-        ``topics`` alone, everything else -- version, the topic filenames, the
-        rendering era -- inherited from this class, because the narrower block
-        was this class before it grew. See :meth:`get_hash`.
+        ``topics`` alone, and its ``version`` when it names one. What is left
+        -- the topic filenames, the rendering era -- is inherited from this
+        class, because the narrower block was this class before it grew. See
+        :meth:`get_hash`.
         """
         omit, topics = ((), None) if specialization is None else (
             tuple(specialization.spec), list(specialization.topics))
+        version = self.version
+        if specialization is not None and specialization.version is not ABSENT:
+            version = specialization.version
         if specialization is not None and pretty:
             # typedict() describes THIS block, and rendering it under a
             # specialization's name would describe neither.
@@ -5572,7 +5619,11 @@ class Datablock:
         # building the logger name out of self.key and caching _hash on the way.
         parts = [self.signature(deslash=deslash, legacy_typing=legacy_typing,
                                 legacy_signature=legacy_signature, omit=omit)]
-        parts.append(f"version={self.version}")
+        # The narrower block's version when the specialization names one, this
+        # class's otherwise. Taking it from the class unconditionally was what
+        # made VERSION unbumpable while a specialization was live: the
+        # reconstruction moved with the bump, onto an identity nothing built.
+        parts.append(f"version={version}")
         parts.extend(self.signature_topics(topics))
         tp = os.path.join(*parts)
         if deslash:
@@ -6002,7 +6053,7 @@ class Datablock:
                         f"{self.__class__.__name__}: topic {'/'.join(topicpath)!r} is "
                         f"REDIRECTED to {self._redirect_path(*topicpath)!r}, which belongs "
                         f"to another block; refusing to prepare it for writing. Build "
-                        f"{self.buildtopics()!r} instead (see buildtopics()), or construct "
+                        f"{self.ownedtopics()!r} instead (see ownedtopics()), or construct "
                         f"with redirect=False to build this block's own data."
                     )
                 if not topicpath:

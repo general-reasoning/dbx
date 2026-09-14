@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`Datablock.SPECIALIZATIONS`: reading a narrower block's data instead of
+  rebuilding it.** A class grows a `VAR` field and a topic; every block of it
+  re-keys, and the topics that did not change are rebuilt for nothing. A
+  `Datablock.Specialization(spec=..., topics=..., note=...)` says that when the
+  new fields hold the values in its `spec`, the topics it names ARE the topics
+  of the block this class used to be — whose identity is this one's with those
+  fields dropped and those topics alone.
+
+  That identity is reconstructible from here, because a signature is built from
+  the spec and the topics and nothing else: `type(specialization=...)` renders
+  it and `get_hash(specialization=...)` hashes it, so the narrower block's
+  build is found in the journal by its own hash, with no access to the older
+  class and no record that it ever existed. An unbuilt block with a matching
+  specialization reads through it; `build()` then produces only the topics the
+  specialization does not cover (`buildtopics()`, the complement of
+  `redirected_topics()`).
+
+  A pin is matched against the RENDERED spec, not the `spec` dict a caller
+  passed: a field left at its default is absent from that dict, and a field
+  left at its default is exactly the case this exists for. Specializations are
+  tried in declaration order and the first that both matches *and resolves*
+  wins, so one whose build has been cleared does not shadow the next. A miss is
+  never silent: `specializations()` reports every declared one with the hash it
+  looked for and why it did not apply.
+
+  Installing one is recorded, through `UNSAFE_redirect`: an installed
+  specialization is a claim about where a block's data came from, and the
+  journal entry is the only record that this block read another's build and
+  which specialization said it could. Recording also costs less than not
+  recording — it writes the hidden `.redirection` topic, which every later
+  construction reads instead of scanning the journal again, so the write
+  happens once per block rather than the scan happening once per construction.
+  Within a construction, the resolution travels with the block through pickle,
+  deepcopy and `set()`. `use_specializations='memory'` installs without
+  recording; `UNSAFE_specialize()` is the explicit form.
+
+- **Partial redirection.** `UNSAFE_redirect(topics=[...])` redirects only the
+  topics it names; every other topic reads as it would unredirected. `build()`
+  no longer declines wholesale when a block is redirected — it declines only
+  when the redirection is total, and otherwise builds the rest.
+
+### Changed
+- **A redirection is no longer part of a block's identity.** `type()` used to
+  append `_redirected_paths_=...` once a redirection was installed, so `hash`
+  depended on *when* it was first called — before the redirection or after —
+  and `anchorkeypath`, the journal directory and the redirection lookup moved
+  with it. Masked, until `keyby` stopped naming the hash, by `__setstate__`
+  building the logger name out of `self.key` and caching `_hash` on the way
+  past. A block does not become a different block by being read from somewhere
+  else.
+
+- **`set()`/`replace()` refuse `spec=`.** `set()` amends a block's non-identity
+  parameters; a new spec is a new block, and handing one back through a method
+  that reads as an amendment of this one also carried this block's resolved
+  state over to an identity it was never resolved for. Construct it instead:
+  `type(b)(**{**b.dfn, 'spec': {...}})`.
+
+- **Writing to a redirected topic is refused.** `path(topic, ensure_dirpath=True)`
+  on a redirected topic raises rather than quietly not creating the directory:
+  it is how this codebase asks for somewhere to write, and not creating the
+  directory does not stop the write when the other block's directory is already
+  there.
 - **`dbx.stills`: `Still`, `LightningBuilder`, `Weights`.** One training run
   as a config-addressed Datablock — topics `ckpts`/`logs`, the `_COMPLETE` marker,
   the checkpoint save/upload/free/resume dance, the TensorBoard log symlink, the

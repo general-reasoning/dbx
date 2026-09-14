@@ -1261,7 +1261,7 @@ class DatapointTable(DatapointBase, Datastack):
     def __stats__(self, slice, **kwargs) -> dict:
         return super().__stats__(slice, **kwargs)
 
-    def signature_topics(self):
+    def signature_topics(self, topics=None):
         """Own TOPICS segments -- plus, in a sentinel declaration, the TAB's slices.
 
         A table's slices are the TAB's declaration and not the table's, and a
@@ -1274,8 +1274,11 @@ class DatapointTable(DatapointBase, Datastack):
         byte-identically (slice topics rendered as ``topic:<name>=SLICETOPIC``),
         so no existing hash moves.
         """
-        # Own (non-slice) topics come first, in declaration order.
-        own = super().signature_topics()
+        # Own (non-slice) topics come first, in declaration order. *topics*
+        # restricts THOSE -- a specialization names this table's topics, not
+        # the TAB's slices, which are the TAB's declaration and accumulate here
+        # whatever subset of its own a table is being rendered under.
+        own = super().signature_topics(topics)
         if self._modern_topics():
             return own
         # Then the TAB's slice topics, in the same format Datastack uses.

@@ -1613,7 +1613,7 @@ class Datablock:
         # only when it clearly denoted something other than text.
         return value if isinstance(parsed, str) else parsed
 
-    def _typed_specdict(self, *, legacy: 'bool | None' = None) -> dict:
+    def _typed_specdict(self, *, legacy: 'bool | None' = None, omit=()) -> dict:
         """The spec as real Python values -- ints as ints, blocks as sub-dicts.
 
         Built from ``self.var``, NOT by parsing the rendered signature. The
@@ -1629,6 +1629,11 @@ class Datablock:
         keys = [f.name for f in fields.values()]
         if not legacy:
             keys = sorted(keys)
+        # *omit* drops fields the class did not used to have, so what is left
+        # renders exactly as the narrower block rendered it. Dropping keys
+        # cannot reorder the rest, which is what makes the reconstruction exact.
+        if omit:
+            keys = [k for k in keys if k not in set(omit)]
 
         out = {}
         for k in keys:
@@ -1861,6 +1866,51 @@ class Datablock:
     # into. Supersedes the retired VALIDATE_CFG_EXEMPTIONS.
     TREE_SKIP_VALIDATION = {}
 
+    #: Where this block coincides with a NARROWER one that was already built.
+    #:
+    #: A class grows: a new VAR field, a new topic. Every block of it re-keys,
+    #: and the topics that did not change are rebuilt for nothing. A
+    #: :class:`Specialization` says that when the new fields hold the values
+    #: given in its ``spec``, the topics it names ARE the topics of the block
+    #: this class used to be -- whose identity is this one's with those fields
+    #: dropped and those topics alone. That block's hash is reconstructible
+    #: from here (see :meth:`get_hash`), so its build can be found in the
+    #: journal and read instead of repeated.
+    #:
+    #: Declared in preference order; the first one that both matches and
+    #: resolves is the one used::
+    #:
+    #:     SPECIALIZATIONS = [
+    #:         Datablock.Specialization(
+    #:             spec=dict(window='hann'),
+    #:             topics=['spectra'],
+    #:             note="hann was the only window before the field existed",
+    #:         ),
+    #:     ]
+    #:
+    #: It is a claim about semantics that no reader can check from the code --
+    #: that the two computations produce the same bytes -- which is what
+    #: ``note`` is for.
+    SPECIALIZATIONS = []
+
+    #: Whether :attr:`SPECIALIZATIONS` are consulted, and whether installing one
+    #: is recorded. ``True`` installs and records it in the journal, through
+    #: :meth:`UNSAFE_redirect`; ``'memory'`` installs it on the instance and
+    #: writes nothing; ``False`` declines to look.
+    #:
+    #: Recording is the default because an installed specialization is a claim
+    #: about where a block's data came from, and a claim that is nowhere written
+    #: down cannot be checked afterwards -- the journal entry is the only record
+    #: that this block read another's build, and which specialization said it
+    #: could. It also costs less, not more: the record includes the hidden
+    #: ``.redirection`` topic, which every later construction reads instead of
+    #: scanning the journal again.
+    #:
+    #: The per-instance ``use_specializations=`` overrides it; this is the
+    #: default, and it lives here because it belongs next to the declaration it
+    #: switches off.
+    USE_SPECIALIZATIONS = True
+
     #: VAR field names exempt from :meth:`VAR.LazyLoader._check_renderable` --
     #: the check that a value can be rendered into the identity deterministically.
     #: An exemption does not take the field out of the identity: it goes on
@@ -1892,6 +1942,11 @@ class Datablock:
         # When a read fails, follow a redirection recorded by UNSAFE_redirect()
         # and read from the entry it names instead. See :meth:`read`.
         redirect: bool = True,
+        # Whether this block may read a narrower, already-built block's data
+        # instead of rebuilding it -- see SPECIALIZATIONS. None defers to the
+        # class's USE_SPECIALIZATIONS: True installs and records, 'memory'
+        # installs without recording, False declines to look.
+        use_specializations: 'bool | str | None' = None,
         validate_vars: bool = True,
         # DEPRECATED alias of validate_vars. Kept as an explicit parameter so a
         # dfn recorded before the rename still reconstructs faithfully. Left to
@@ -1934,6 +1989,7 @@ class Datablock:
             'uuid16': uuid16,
             'session': session,
             'redirect': redirect,
+            'use_specializations': use_specializations,
             'validate_vars': validate_vars if validate_cfg is None else validate_cfg,
             'storage_options': storage_options,
             'local': local,
@@ -2083,6 +2139,14 @@ class Datablock:
             self._session_ = None
         # Redirection config: dict(code=..., filter=..., paths=...) or legacy bool
         self.redirect = state.get('redirect')
+        # The value as given, so __getstate__ reproduces it: None means "ask
+        # the class", and is the value that keeps it out of quote()/cite().
+        self._use_specializations_ = _unquote(state.get('use_specializations'))
+        if self._use_specializations_ == 'None':
+            self._use_specializations_ = None
+        self.use_specializations = (self.USE_SPECIALIZATIONS
+                                    if self._use_specializations_ is None
+                                    else self._use_specializations_)
         self.validate_vars = state.get('validate_vars', True)
         self._paths_ = None
 
@@ -2119,6 +2183,13 @@ class Datablock:
         if isinstance(self.redirect, dict):
             self._process_redirect()
         self.__post_init__()
+        # After __post_init__, because a class may compute its TOPICS there and
+        # a specialization is named in terms of them.
+        carried = state.get('__redirected_paths__')
+        if carried is not None:
+            self.__dict__['__redirected_paths__'] = carried
+        else:
+            self._install_specialization()
         self.log.detailed(f"======--------------> code: {self.code}")
 
     def _process_redirect(self):
@@ -2264,6 +2335,14 @@ class Datablock:
         # Override: serialize the raw specline, not the resolved _url_ and _local_.
         _state['url'] = self.url
         _state['local'] = self.local
+        # An installed redirection travels with the block, so a deepcopy, an
+        # unpickle in a worker, or a .set() of an operational parameter does not
+        # resolve it again -- which for a specialization means a journal scan
+        # per construction. Private, and stripped from _tailkwargs_, so it stays
+        # out of quote()/cite(): it is a resolution, not part of what this block
+        # IS, and a recorded quote carrying absolute paths would not relocate.
+        if self.__dict__.get('__redirected_paths__') is not None:
+            _state['__redirected_paths__'] = self.__dict__['__redirected_paths__']
         
         #TODO: why does 'log' end up in self.parameters?
         for k in self.parameters:
@@ -2280,11 +2359,39 @@ class Datablock:
         ]
     
     def set(self, **kw):
+        """This block again, with *kw* replacing its non-identity parameters.
+
+        ``spec`` is refused. Identity is sha256(:meth:`type`), and type() is
+        built from the spec, so re-specifying here would hand back a DIFFERENT
+        block through a method that reads as an amendment of this one -- and
+        would carry this block's state, resolved against this block's identity,
+        over to one it was never resolved for. Construct the other block
+        instead, which says what it is doing::
+
+            type(b)(**{**b.dfn, 'spec': {...}})
+
+        Everything else is fair game: ``tag``, ``keyby``, ``local``, ``session``,
+        the log levels, the dynamic kwargs -- none of them reach the signature,
+        so :attr:`hash` is the same on both sides of the call.
+        """
+        if 'spec' in kw:
+            raise ValueError(
+                f"{self.__class__.__name__}.set(): spec= is refused -- set() "
+                f"amends a block's non-identity parameters, and a new spec is a "
+                f"new block. Construct it: "
+                f"type(b)(**{{**b.dfn, 'spec': {{...}}}})"
+            )
         _kw = copy.deepcopy(self.__getstate__())
+        # An installed redirection is a set of ABSOLUTE paths resolved against
+        # this block's storage. Moving the block's storage is exactly the case
+        # where they no longer describe anything, so it is resolved again.
+        if {'url', 'local', 'storage_options'} & set(kw):
+            _kw.pop('__redirected_paths__', None)
         _kw.update(kw)     
         return self.__class__(**_kw)
     
     def replace(self, **kw):
+        """Alias of :meth:`set`, and refuses ``spec`` for the same reason."""
         return self.set(**kw)
     
     def __post_init__(self):
@@ -2421,6 +2528,32 @@ class Datablock:
         if isinstance(self.TOPICS, list):
             return list(self.TOPICS)
         return []
+
+    def redirected_topics(self):
+        """The top-level topics this block reads through a redirection.
+
+        Empty when it is not redirected; every topic when the redirection is
+        total. In between is a PARTIAL redirection, and this is the list a
+        `__build__` must not write to -- :meth:`buildtopics` is its complement,
+        and the one to build.
+        """
+        paths = self._redirected_paths_
+        if not paths:
+            return []
+        return [t for t in self.topics() if t in paths]
+
+    def buildtopics(self):
+        """The top-level topics this block must produce itself.
+
+        All of them unless it is redirected, and under a partial redirection
+        the ones the redirection does not cover. A ``__build__`` that can be
+        asked to build part of a block reads this; one that cannot may ignore
+        it, and will simply rebuild what it always did -- into the redirected
+        location, which is why :meth:`path` refuses to ensure a directory for a
+        redirected topic.
+        """
+        redirected = set(self.redirected_topics())
+        return [t for t in self.topics() if t not in redirected]
 
     def leaftopics(self):
         """Every leaf topic, as a tuple of names, depth-first in declaration order.
@@ -2606,7 +2739,7 @@ class Datablock:
         # a build_tree() sweeping past would otherwise quietly rebuild the very
         # block someone redirected away from. Costs one journal read per
         # instance, which :attr:`redirection` caches.
-        if self._redirected_paths_ is not None:
+        if self._redirected_paths_ is not None and not self.buildtopics():
             entry = self.redirection.entry if self.redirection is not None else None
             whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
                        if entry is not None else f"the paths {self._redirected_paths_}")
@@ -2616,6 +2749,16 @@ class Datablock:
                 f"redirection, or construct with redirect=False, to build it anyway."
             )
             return self
+        if self._redirected_paths_ is not None:
+            # A PARTIAL redirection -- a specialization, or an explicit
+            # topics= -- leaves topics with no data and no one else to read
+            # them from, so this build is the thing that produces them.
+            # Declining here is what made the whole point of a specialization
+            # (reuse what did not change, build what did) unreachable.
+            self.log.info(
+                f"BUILD PARTIAL: {self.anchorkeypath} reads {self.redirected_topics()} "
+                f"through a redirection and builds {self.buildtopics()}."
+            )
         if self.capture_output:
             logpath = self._dbxanchorhashpathx('log', ext='log', ensure_dirpath=True)
             self.log.verbose(f"-------------------- Capturing stdout/stderr to {logpath} ------------------")
@@ -3045,6 +3188,53 @@ class Datablock:
         raise NotImplementedError()
 
     #REDIRECT: BEGIN
+    @dataclass(frozen=True)
+    class Specialization:
+        """One coincidence between this block and a narrower, already-built one.
+
+        *spec* pins the VAR fields the narrower block never had, to the values
+        at which the two computations agree. *topics* names the topics that
+        come from it -- MY names, which are also its names -- in the order it
+        declared them, since that order is in its identity. *note* says why the
+        coincidence holds; nothing else records it.
+
+        A pin is matched against the RENDERED spec (`_typed_specdict`), not
+        against the raw ``spec`` dict a caller passed: a field left at its
+        default is absent from that dict, and a field left at its default is
+        exactly the case this exists for.
+        """
+        spec: dict
+        topics: list
+        note: str = ''
+
+        def __post_init__(self):
+            # Frozen, so the dataclass can live on a class and be shared, and
+            # so a hash cached against it cannot go stale underneath.
+            object.__setattr__(self, 'spec', dict(self.spec))
+            object.__setattr__(self, 'topics', tuple(self.topics))
+
+        @property
+        def key(self):
+            """A stable identifier for caching and for the journal record."""
+            return (tuple(sorted(self.spec.items(), key=lambda kv: kv[0])), self.topics)
+
+        def __hash__(self):
+            # frozen=True would hash the field tuple, and one of those fields is
+            # a dict. `key` is the same information, flattened.
+            return hash(self.key)
+
+        def to_dict(self):
+            """The record form: literal, so it round-trips through the journal."""
+            d = {'spec': dict(self.spec), 'topics': list(self.topics)}
+            if self.note:
+                d['note'] = self.note
+            return d
+
+        def __repr__(self):
+            return (f"Specialization(spec={dict(self.spec)!r}, "
+                    f"topics={list(self.topics)!r}"
+                    + (f", note={self.note!r}" if self.note else "") + ")")
+
     @dataclass
     class Redirection:
         """A resolved redirection: where this block's topics are read from instead,
@@ -3056,6 +3246,14 @@ class Datablock:
         entry: Optional['DatajournalEntry'] = None
         filter: dict | None = None
         topic_map: dict | None = None
+        #: The topics this redirection covers, when it covers only some. None
+        #: means "whatever the other side records", which is the older meaning
+        #: and still the common one.
+        topics: list | None = None
+        #: The :class:`Specialization` this redirection came from, when it came
+        #: from one. It is what makes a specialized redirection legible as such
+        #: -- in `redirection`, and in the journal entry that records it.
+        specialization: Optional['Datablock.Specialization'] = None
 
     @property
     def _redirected_paths_(self):
@@ -3131,15 +3329,22 @@ class Datablock:
         filter = recorded.get('filter')
         topic_map = recorded.get('topic_map')
         paths = recorded.get('paths')
+        topics = recorded.get('topics')
+        spec_record = recorded.get('specialization')
+        specialization = (self.Specialization(**spec_record)
+                          if isinstance(spec_record, dict) else None)
 
         if paths is not None:
+            if topics is not None:
+                paths = self._mapped_paths(paths, topic_map, topics)
             self.log.verbose(
                 f"REDIRECTION: {self.anchorkeypath} reads from the given paths instead: {paths}"
             )
             self.__dict__['__redirected_paths__'] = paths
-            return self.Redirection(paths=paths, entry=None, filter=None, topic_map=None)
+            return self.Redirection(paths=paths, entry=None, filter=None, topic_map=None,
+                                    topics=topics, specialization=specialization)
 
-        if filter is None and isinstance(recorded, dict) and not ('filter' in recorded or 'paths' in recorded or 'topic_map' in recorded):
+        if filter is None and isinstance(recorded, dict) and not ('filter' in recorded or 'paths' in recorded or 'topic_map' in recorded or 'topics' in recorded):
             self.log.verbose(
                 f"REDIRECTION: {self.anchorkeypath} reads from the given paths instead: {recorded}"
             )
@@ -3151,7 +3356,7 @@ class Datablock:
             self.log.warning(f"redirection: filter {filter!r} matches no journal entry")
             return None
 
-        resolved_paths = self._mapped_paths(entry.block.paths(), topic_map)
+        resolved_paths = self._mapped_paths(entry.block.paths(), topic_map, topics)
         self.__dict__['__redirected_paths__'] = resolved_paths
 
         self.log.verbose(
@@ -3159,8 +3364,12 @@ class Datablock:
             f"instead (hash {entry.block.hash}, event {entry.get('event')!r}, written "
             f"{entry.get('datetime')}), matched by {filter!r}"
             + (f", topics mapped {topic_map!r}" if topic_map else "")
+            + (f", restricted to topics {topics!r}" if topics else "")
+            + (f", as {specialization!r}" if specialization is not None else "")
         )
-        return self.Redirection(paths=resolved_paths, entry=entry, filter=filter, topic_map=topic_map)
+        return self.Redirection(paths=resolved_paths, entry=entry, filter=filter,
+                                topic_map=topic_map, topics=topics,
+                                specialization=specialization)
 
     def redirected(self) -> bool:
         """True if this block is redirected (checks presence of hidden .redirection topic without reading the journal)."""
@@ -3177,7 +3386,7 @@ class Datablock:
             return False
 
 
-    def _mapped_paths(self, paths, topic_map):
+    def _mapped_paths(self, paths, topic_map, topics=None):
         """*paths*, re-keyed by *topic_map* -- which reads mine -> theirs.
 
         Topics line up by name to begin with, as they would with no map at all;
@@ -3194,6 +3403,21 @@ class Datablock:
         if not paths:
             return {}
         native_topics = self.topics()
+        # *topics* redirects only what it names, leaving every other topic to
+        # read as it would unredirected -- which `path` already does for a
+        # topic with no redirected path. Without it a redirection takes over
+        # every topic the other side happens to record, which is right when the
+        # other side IS this block elsewhere, and wrong when it is a narrower
+        # block this one has grown past.
+        if topics is not None:
+            wanted = set(self._toplevel_topics(topics))
+            native_topics = [t for t in native_topics if t in wanted] or None
+            if native_topics is None:
+                self.log.warning(
+                    f"redirection: topics={list(topics)!r} names none of this block's "
+                    f"topics {self.topics()!r}; nothing is redirected"
+                )
+                return {}
         if not native_topics:
             if not topic_map:
                 return dict(paths)
@@ -3370,10 +3594,36 @@ class Datablock:
             return DatajournalEntry(row.dropna(), storage_options=self.storage_options)
 
     def UNSAFE_redirect(self, *, redirector: Callable|None = None, journal: Datajournal|None = None, filter: dict|None = None, topic_map: dict|None = None,
-                        paths: dict|None = None, validate: bool = False, remote: bool | Remote = False, OVERRIDE: bool = False):
-        """Record that this block's topics are read from somewhere else and the location of this somewhere else."""
+                        paths: dict|None = None, topics: list|None = None,
+                        specialization: 'Datablock.Specialization | None' = None,
+                        validate: bool = False, remote: bool | Remote = False, OVERRIDE: bool = False):
+        """Record that this block's topics are read from somewhere else and the location of this somewhere else.
+
+        *topics* redirects only the topics it names. Every other topic reads as
+        it would unredirected, so a block can take part of its data from
+        elsewhere and build the rest -- which is the whole point of a
+        *specialization*, and is available on its own for any redirection.
+
+        *specialization* is the fourth way of saying where: one of this class's
+        :attr:`SPECIALIZATIONS`, resolved to the narrower block's build through
+        the hash reconstructed from it. It implies its own ``topics``, and is
+        recorded as itself, so the journal says a specialization was installed
+        and which one -- not merely that some paths were.
+        """
         if not UNSAFE_allowed("UNSAFE_redirect", OVERRIDE=OVERRIDE):
             return False
+
+        if specialization is not None:
+            if filter is not None or paths is not None or redirector is not None:
+                raise ValueError(
+                    "UNSAFE_redirect: specialization= says where on its own; it does not "
+                    "combine with redirector=/filter=/paths="
+                )
+            why = self._specialization_mismatch(specialization)
+            if why is not None:
+                self.log.warning(f"UNSAFE_redirect: {specialization!r} does not apply: {why}")
+                return False
+            topics = list(specialization.topics) if topics is None else topics
 
         explicit_journal = journal is not None
         if journal is None:
@@ -3399,10 +3649,40 @@ class Datablock:
                 raise ValueError(f"UNSAFE_redirect: paths must be a non-empty dict, got {paths!r}")
         if topic_map is not None and not isinstance(topic_map, dict):
             raise ValueError(f"UNSAFE_redirect: topic_map must be a dict, got {topic_map!r}")
+        if topics is not None:
+            # Checked before anything is resolved or recorded: a restriction
+            # naming none of this block's topics would redirect nothing, and
+            # recording THAT claims a redirection is in place while every topic
+            # still reads its own absent data -- and declines the build that
+            # would have produced it. A topic_map whose TARGET is missing is a
+            # different thing, documented on `_mapped_paths`, and still allowed.
+            named = set(self._toplevel_topics(topics)) & set(self.topics())
+            if not named:
+                self.log.warning(
+                    f"UNSAFE_redirect: topics={list(topics)!r} names none of this block's "
+                    f"topics {self.topics()!r}; nothing to redirect"
+                )
+                return False
 
         entry = None
         target_paths = None
         redirect_record = None
+
+        if specialization is not None:
+            resolved = self._specialization_paths(specialization, journal=journal)
+            if resolved is None:
+                self.log.warning(
+                    f"UNSAFE_redirect: {specialization!r} applies, but no {'/'.join(self.SPECIALIZATION_EVENTS)} "
+                    f"entry with hash {self.get_hash(specialization)} records data that is still "
+                    f"there -- nothing to redirect to"
+                )
+                return False
+            target_paths, entry = resolved
+            redirect_record = {
+                'filter': {'hash': self.get_hash(specialization)},
+                'topics': list(self._toplevel_topics(specialization.topics)),
+                'specialization': specialization.to_dict(),
+            }
 
         # If the redirector gave us paths directly, use those immediately.
         redirector_paths = paths if (redirector is not None and isinstance(res, dict) and 'paths' in res) else None
@@ -3421,13 +3701,18 @@ class Datablock:
                             target_paths = entry.inst(remote=remote).paths()
                         except Exception as e:
                             self.log.detailed(f"UNSAFE_redirect: entry.inst() failed: {e}")
-                    redirect_record = entry.block.id
+                    redirect_record = (entry.block.id if topics is None else
+                                       {'filter': dict(filter), 'topics': list(topics)})
             except Exception as e:
                 self.log.warning(f"UNSAFE_redirect: filter {filter!r} failed on journal: {e}")
 
         if target_paths is None and paths is not None:
             target_paths = paths
             redirect_record = paths
+            if topics is not None:
+                # A bare paths dict cannot carry the restriction -- it IS the
+                # record -- so the restriction has to be said in the dict form.
+                redirect_record = {'paths': paths, 'topics': list(topics)}
 
         if target_paths is None and filter is None and explicit_journal:
             try:
@@ -3448,7 +3733,7 @@ class Datablock:
             self.log.warning(f"UNSAFE_redirect: no redirection for hash {self.hash}")
             return False
 
-        remapped_paths = self._mapped_paths(target_paths, topic_map)
+        remapped_paths = self._mapped_paths(target_paths, topic_map, topics)
 
         self._redirected_paths_ = remapped_paths
         self.__dict__.pop('redirection', None)
@@ -4103,7 +4388,13 @@ class Datablock:
             for k, v in state.items()
             # 'session' groups a run's journal entries; pinning one into a
             # recorded quote would have inst() rejoin a run that is over.
-            if k not in ['url', 'anchor', 'hash', 'spec', 'session']
+            if k not in ['url', 'anchor', 'hash', 'spec', 'session',
+                         '__redirected_paths__']
+            # None means "ask the class", which is what every block that never
+            # mentioned the feature says -- and saying it out loud in every
+            # quote() would move the recorded text of blocks that have nothing
+            # to do with specializations.
+            and not (k == 'use_specializations' and v is None)
         }
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
@@ -4348,7 +4639,8 @@ class Datablock:
 
     def signature(self, *, deslash: bool = False, legacy: bool | None = None,
                   legacy_typing: bool | None = None,
-                  legacy_signature: bool | None = None, pretty: bool = False):
+                  legacy_signature: bool | None = None, pretty: bool = False,
+                  omit=()):
         """The base identity string that :attr:`type` -- and hence :attr:`hash` and :attr:`code` -- is built from.
 
         Two independent opt-outs, because they were two different things
@@ -4381,6 +4673,8 @@ class Datablock:
             # kwargs and quoting, exactly as before -- so a relocatable block
             # pinned for typing stays relocatable.
             sig_spec = self.__expand_spec__('signature', legacy=norm, legacy_typing=True)
+            if omit:
+                sig_spec = {k: v for k, v in sig_spec.items() if k not in set(omit)}
             kwargs_dict = {**(self._rootkwargs_ if norm else {}), 'spec': sig_spec}
             sig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not norm)
         else:
@@ -4389,7 +4683,7 @@ class Datablock:
             # Root kwargs only on explicit opt-in: signature and hash are
             # relocatable, and nothing about typing changes that.
             root = ''.join(f"{k}={v!r}, " for k, v in self._rootkwargs_.items()) if norm else ''
-            sig = f"({root}spec={self._typed_specdict(legacy=False)!r})"
+            sig = f"({root}spec={self._typed_specdict(legacy=False, omit=omit)!r})"
         if deslash:
             sig = sig.replace('\\', '')
         self.log.detailed(f"signature: ------------> legacy={legacy}")
@@ -5075,7 +5369,7 @@ class Datablock:
         explicit_keys = set(self.__explicit_params__())
         return {k: v for k, v in self.__getstate__().items() if k not in explicit_keys}
     
-    def signature_topics(self):
+    def signature_topics(self, topics=None):
         """The topic segments of :attr:`signature`, in the order it joins them.
 
         The one rendering of a block's topics into its identity: :attr:`signature`
@@ -5091,15 +5385,52 @@ class Datablock:
             # "topic:data/frames=None". A flat TOPICS has one-segment paths and
             # renders byte-identically to before -- the hash does not move.
             modern = self._modern_topics()
+            leaves = self.leaftopics() if topics is None else self._topic_leaves(topics)
             return tuple(f"topic:{'/'.join(tp)}={self._topictext(self._topicnode(*tp), modern)}"
-                         for tp in self.leaftopics())
+                         for tp in leaves)
         if hasattr(self, "TOPICS") and isinstance(self.TOPICS, list):
-            return tuple(f"topic:{topic}" for topic in self.TOPICS)
+            names = self.TOPICS if topics is None else list(topics)
+            return tuple(f"topic:{topic}" for topic in names)
         return ("topics:None",)
+
+    def _topic_leaves(self, topics):
+        """The leaves of *topics*, in the order *topics* gives them.
+
+        The order is the caller's, not this class's: a specialization names the
+        topics in the order the narrower block declared them, and that order is
+        in the identity being reconstructed. A group expands to its own leaves,
+        in ITS declaration order, which is the only order it has.
+
+        A name that is not a topic raises out of :meth:`_topicnode`, naming it.
+        """
+        leaves = []
+        for topic in topics:
+            tp = self._normtopic(topic if isinstance(topic, (tuple, list)) else (topic,))
+            node = self._topicnode(*tp)
+            if isinstance(node, dict):
+                leaves.extend(self._leaves_under(*tp))
+            else:
+                leaves.append(tp)
+        return leaves
 
     def type(self, *, deslash: bool = False, legacy: 'bool | None' = None,
              legacy_typing: 'bool | None' = None,
-             legacy_signature: 'bool | None' = None, pretty: bool = False):
+             legacy_signature: 'bool | None' = None, pretty: bool = False,
+             specialization: 'Datablock.Specialization | None' = None):
+        """The identity string :attr:`hash` is the sha256 of.
+
+        *specialization* renders the identity of the NARROWER block that one
+        describes instead of this one's: its ``spec`` fields dropped, its
+        ``topics`` alone, everything else -- version, the topic filenames, the
+        rendering era -- inherited from this class, because the narrower block
+        was this class before it grew. See :meth:`get_hash`.
+        """
+        omit, topics = ((), None) if specialization is None else (
+            tuple(specialization.spec), list(specialization.topics))
+        if specialization is not None and pretty:
+            # typedict() describes THIS block, and rendering it under a
+            # specialization's name would describe neither.
+            raise ValueError("type(): pretty= and specialization= do not combine")
         if legacy_typing is None:
             legacy_typing = legacy
         if legacy_signature is None:
@@ -5110,28 +5441,301 @@ class Datablock:
             return pprint.pformat(
                 self.typedict(deslash=deslash, legacy_typing=legacy_typing,
                               legacy_signature=legacy_signature), indent=2, width=120)
+        # A redirection is emphatically NOT part of the identity: it says where
+        # this block's data is read from, and a block does not become a
+        # different block by being read from somewhere else. It used to be
+        # appended here, which made hash() depend on WHEN it was first called
+        # -- before a redirection was installed or after -- and moved
+        # anchorkeypath, the journal directory and the redirection lookup along
+        # with it. Masked, until keyby stopped naming the hash, by __setstate__
+        # building the logger name out of self.key and caching _hash on the way.
         parts = [self.signature(deslash=deslash, legacy_typing=legacy_typing,
-                                legacy_signature=legacy_signature)]
-        if self.__dict__.get('__redirected_paths__') is not None:
-            parts.append(f"_redirected_paths_={self.__dict__['__redirected_paths__']}")
+                                legacy_signature=legacy_signature, omit=omit)]
         parts.append(f"version={self.version}")
-        parts.extend(self.signature_topics())
+        parts.extend(self.signature_topics(topics))
         tp = os.path.join(*parts)
         if deslash:
             tp = tp.replace('\\', '')
         return tp
 
     @property
-    def hash(self): 
+    def hash(self):
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hash
         # computed with the older code.
-        if not hasattr(self, '_hash'):
-            sha = hashlib.sha256()
-            tp = self.type()
-            sha.update(tp.encode())
-            self._hash = sha.hexdigest()
-            self.log.detailed(f"hash: ---------===---------> {tp=} ---> hash: {self._hash}")
-        return self._hash
+        return self.get_hash()
+
+    def get_hash(self, specialization: 'Datablock.Specialization | None' = None):
+        """This block's hash, or the hash of one of its :attr:`SPECIALIZATIONS`.
+
+        With *specialization*, the hash of the narrower block it describes --
+        which is a real hash of a real identity, the one that block was built
+        under, and so the one its journal entries are filed by. That is the
+        whole mechanism: the reconstruction is a string operation on
+        :meth:`type`, needing no access to the older class and no record that
+        it ever existed.
+
+        Cached per specialization, and never into ``_hash``: that one is this
+        block's own, and a specialized hash is emphatically not it.
+        """
+        if specialization is None:
+            if not hasattr(self, '_hash'):
+                sha = hashlib.sha256()
+                tp = self.type()
+                sha.update(tp.encode())
+                self._hash = sha.hexdigest()
+                self.log.detailed(f"hash: ---------===---------> {tp=} ---> hash: {self._hash}")
+            return self._hash
+        cache = self.__dict__.setdefault('_specialized_hashes_', {})
+        key = specialization.key
+        if key not in cache:
+            tp = self.type(specialization=specialization)
+            cache[key] = hashlib.sha256(tp.encode()).hexdigest()
+            self.log.detailed(f"get_hash({specialization!r}): {tp=} ---> {cache[key]}")
+        return cache[key]
+
+    def get_type(self, specialization: 'Datablock.Specialization | None' = None, **kwargs):
+        """Alias of ``type(specialization=...)``, to pair with :meth:`get_hash`."""
+        return self.type(specialization=specialization, **kwargs)
+
+    #SPECIALIZE: BEGIN
+    #: The events that count as "this hash has data": a build, or a redirection
+    #: to one. A redirect entry records the paths AFTER redirection (it is
+    #: written once they are installed), so following a chain costs nothing
+    #: beyond reading the entry -- and cannot loop, since nothing is followed.
+    SPECIALIZATION_EVENTS = ('build:end', 'UNSAFE_redirect')
+
+    def _specialization_pin(self, key, value):
+        """A pinned value, rendered as `_typed_specdict` renders that field.
+
+        Compared as rendered rather than as given, because the rendering is
+        what the hash is made of: ``1``, ``'1'`` and ``True`` are three
+        different pins only if they render differently.
+        """
+        if isinstance(value, Datablock):
+            return value._typed_specdict()
+        if self.is_specline(value):
+            try:
+                evaluated = dataparts.eval(value)
+            except Exception:
+                evaluated = None
+            return (evaluated._typed_specdict()
+                    if isinstance(evaluated, Datablock) else value)
+        return self._coerce_to_annotation(value, self.VAR.__dataclass_fields__[key].type)
+
+    def _specialization_mismatch(self, specialization):
+        """Why *specialization* does not describe this block, or None if it does.
+
+        A pin naming a field this class does not have, or a topic it does not
+        declare, RAISES rather than reporting a mismatch: that is a mistake in
+        the declaration, and a declaration that quietly never matches is the
+        one failure this feature cannot afford.
+        """
+        fields = self.VAR.__dataclass_fields__
+        unknown = [k for k in specialization.spec if k not in fields]
+        if unknown:
+            raise ValueError(
+                f"{self.__class__.__name__}.SPECIALIZATIONS: {specialization!r} pins "
+                f"{unknown}, which {self.VAR.__name__} does not declare. A pin names a "
+                f"VAR field this class has and the narrower block did not."
+            )
+        self._topic_leaves(specialization.topics)   # raises on a topic we do not declare
+        typed = self._typed_specdict()
+        for k, v in specialization.spec.items():
+            mine, pinned = typed[k], self._specialization_pin(k, v)
+            if repr(mine) != repr(pinned):
+                return f"{k}={mine!r}, pinned {pinned!r}"
+        if self.get_hash(specialization) == self.hash:
+            return ("it reconstructs this block's own identity -- it drops no field "
+                    "and no topic, so there is no narrower block to read")
+        return None
+
+    def matching_specializations(self):
+        """The declared specializations whose pins this block satisfies, in order."""
+        return [sp for sp in (self.SPECIALIZATIONS or [])
+                if self._specialization_mismatch(sp) is None]
+
+    def _specialization_paths(self, specialization, journal=None):
+        """``{topic: path}`` for *specialization*, from the journal, or None.
+
+        The entry is looked up by the reconstructed hash -- there is no other
+        handle on the narrower block -- and its recorded paths are taken, cut
+        down to the topics the specialization names. None when no entry has
+        that hash, or when the paths it records are not there any more: a
+        specialization that resolves to missing data has not resolved, and the
+        next one should get its turn.
+        """
+        h = self.get_hash(specialization)
+        try:
+            j = self.journal(hash=h) if journal is None else Datajournal(
+                journal, storage_options=self.storage_options, hash=h)
+        except (FileNotFoundError, KeyError, TypeError) as e:
+            self.log.detailed(f"specialization: no journal to resolve {h} in: {e}")
+            return None
+        if len(j) == 0:
+            return None
+        for i in range(len(j)):
+            entry = DatajournalEntry(j.iloc[i].dropna(), storage_options=self.storage_options)
+            if entry.get('event') not in self.SPECIALIZATION_EVENTS:
+                continue
+            recorded = entry.block.paths()
+            if not isinstance(recorded, dict) or not recorded:
+                continue
+            wanted = self._toplevel_topics(specialization.topics)
+            paths = {t: recorded[t] for t in wanted if t in recorded}
+            if len(paths) < len(wanted):
+                self.log.verbose(
+                    f"specialization: entry {entry.block.id} for hash {h} records no path "
+                    f"for {sorted(set(wanted) - set(paths))}; skipping it"
+                )
+                continue
+            if not self.valid_path(list(paths.values())):
+                self.log.verbose(
+                    f"specialization: entry {entry.block.id} for hash {h} records paths that "
+                    f"are not there any more; skipping it"
+                )
+                continue
+            return paths, entry
+        return None
+
+    def _toplevel_topics(self, topics):
+        """*topics* as TOP-LEVEL names, which is how a `paths` mapping is keyed."""
+        return [tp[0] if isinstance(tp, (tuple, list)) else tp for tp in topics]
+
+    def specializations(self, journal=None):
+        """One row per declared specialization, saying what it did.
+
+        The debugging tool for this feature, and the reason a miss is never
+        silent: a specialization that stopped matching -- a default that moved,
+        a topic that was renamed, a build that was cleared -- shows up here as a
+        row with a reason, rather than as a block that quietly rebuilds.
+        """
+        rows = []
+        for sp in (self.SPECIALIZATIONS or []):
+            row = {'specialization': sp, 'hash': None, 'matches': False,
+                   'why': None, 'entry': None, 'paths': None}
+            try:
+                why = self._specialization_mismatch(sp)
+            except (ValueError, KeyError) as e:
+                row['why'] = str(e)
+                rows.append(row)
+                continue
+            row['hash'] = self.get_hash(sp)
+            if why is not None:
+                row['why'] = why
+                rows.append(row)
+                continue
+            row['matches'] = True
+            resolved = self._specialization_paths(sp, journal=journal)
+            if resolved is None:
+                row['why'] = f"no entry with hash {row['hash']} records data that is still there"
+            else:
+                row['paths'], entry = resolved
+                row['entry'] = entry.block.id
+            rows.append(row)
+        return rows
+
+    def _specializing(self):
+        """Whether this block may consult :attr:`SPECIALIZATIONS` at all."""
+        return bool(getattr(self, 'redirect', False)
+                    and getattr(self, 'use_specializations', False)
+                    and self.SPECIALIZATIONS)
+
+    def _unbuilt(self):
+        """True when NONE of this block's own topics are there.
+
+        Its own: resolved through ``__path__``, never ``path()``, which consults
+        the redirection this is deciding whether to install.
+
+        None rather than "not all", because a block with some of its topics
+        built is a block mid-build or half-cleared, and taking the rest from a
+        narrower block would mix two computations' outputs under one hash. A
+        specialization is for a block that has nothing yet.
+        """
+        topics = self.topics()
+        if not topics:
+            return False
+        return not any(self.valid_path(self.__path__(t)) for t in topics)
+
+    def _install_specialization(self, journal=None):
+        """Read a narrower block's data instead of having none, or None.
+
+        Tried in declaration order, and the first one that both applies and
+        resolves wins -- resolves, not merely applies, so a specialization whose
+        build has been cleared does not shadow the next one.
+
+        Installing it is recorded, through :meth:`UNSAFE_redirect`: the journal
+        says this block read another's build and which specialization said it
+        could, and the hidden ``.redirection`` topic it writes is what every
+        later construction reads INSTEAD of scanning the journal again -- so the
+        write happens once per block, not once per construction.
+        ``use_specializations='memory'`` installs the paths on this instance and
+        writes nothing, at the cost of resolving again next time.
+        """
+        if not self._specializing() or self.__dict__.get('__redirected_paths__') is not None:
+            return None
+        if not self._unbuilt():
+            return None
+        for sp in self.SPECIALIZATIONS:
+            why = self._specialization_mismatch(sp)
+            if why is not None:
+                self.log.detailed(f"specialization: {sp!r} does not apply: {why}")
+                continue
+            if self.use_specializations != 'memory':
+                if self.UNSAFE_redirect(specialization=sp, journal=journal, OVERRIDE=True):
+                    return sp
+                continue
+            resolved = self._specialization_paths(sp, journal=journal)
+            if resolved is None:
+                self.log.verbose(
+                    f"SPECIALIZATION: {sp!r} applies to {self.anchorkeypath}, but no "
+                    f"{'/'.join(self.SPECIALIZATION_EVENTS)} entry with hash "
+                    f"{self.get_hash(sp)} records data that is still there"
+                )
+                continue
+            paths, entry = resolved
+            self._redirected_paths_ = self._mapped_paths(paths, None, sp.topics)
+            self.__dict__.pop('redirection', None)
+            self.__dict__['__specialization__'] = sp
+            self.log.verbose(
+                f"SPECIALIZATION: {self.anchorkeypath} reads {list(self._redirected_paths_)} "
+                f"from journal entry {entry.block.id} (hash {self.get_hash(sp)}) instead, "
+                f"as {sp!r}"
+            )
+            return sp
+        return None
+
+    @property
+    def specialization(self):
+        """The :class:`Specialization` this block is reading through, or None."""
+        sp = self.__dict__.get('__specialization__')
+        if sp is not None:
+            return sp
+        red = self.redirection
+        return red.specialization if red is not None else None
+
+    def UNSAFE_specialize(self, *, journal=None, OVERRIDE: bool = False):
+        """Install the applicable specialization AND record it in the journal.
+
+        The explicit form of what construction does on its own: a redirection
+        that outlives this instance, so the next run reads the narrower block's
+        data without scanning the journal for it, and the journal says which
+        specialization was installed and when. Here for a block constructed
+        with ``use_specializations='memory'``, and for installing one after the
+        fact.
+        """
+        if not UNSAFE_allowed("UNSAFE_specialize", OVERRIDE=OVERRIDE):
+            return None
+        for sp in (self.SPECIALIZATIONS or []):
+            if self._specialization_mismatch(sp) is not None:
+                continue
+            if self.UNSAFE_redirect(specialization=sp, journal=journal, OVERRIDE=True):
+                return sp
+        self.log.info(
+            f"UNSAFE_specialize: nothing to install for {self.anchorkeypath}; "
+            f"specializations(): {self.specializations()!r}"
+        )
+        return None
+    #SPECIALIZE: END
 
     @property
     def code(self):
@@ -5254,6 +5858,20 @@ class Datablock:
             red_paths = self._redirected_paths_
             if red_paths is not None:
                 topicpath = self._normtopic(topicpath)
+                if ensure_dirpath and topicpath and self._redirect_path(*topicpath) is not None:
+                    # ensure_dirpath=True is how this codebase asks for a place
+                    # to WRITE, and a redirected topic's place belongs to
+                    # another block. Under a partial redirection a __build__
+                    # runs for the topics that are not redirected, and without
+                    # this it would go on writing all of them -- into the data
+                    # it was supposed to be reusing.
+                    raise ValueError(
+                        f"{self.__class__.__name__}: topic {'/'.join(topicpath)!r} is "
+                        f"REDIRECTED to {self._redirect_path(*topicpath)!r}, which belongs "
+                        f"to another block; refusing to prepare it for writing. Build "
+                        f"{self.buildtopics()!r} instead (see buildtopics()), or construct "
+                        f"with redirect=False to build this block's own data."
+                    )
                 if not topicpath:
                     res = red_paths
                 else:

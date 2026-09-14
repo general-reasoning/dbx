@@ -452,7 +452,8 @@ class TestBuild:
         assert any(r.startswith('run_') for r in runs), runs
 
     def test_from_scratch_ignores_its_own_latest(self, trained):
-        fresh = trained.set(tag='toy').replace(spec={**trained.spec, 'from_scratch': True})
+        fresh = type(trained)(**{**trained.dfn, 'tag': 'toy',
+                                 'spec': {**trained.spec, 'from_scratch': True}})
         assert fresh.var.from_scratch is True
         # _resume_plan consults var.ckpt only; with neither, nothing to resume.
         assert fresh._resume_plan() is None

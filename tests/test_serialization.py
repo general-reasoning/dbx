@@ -247,11 +247,20 @@ class TestDatablockSetPreservation:
         assert clone.hash == block.hash  # spec unchanged, hash same
         assert clone.var.label == "'orig'"
 
-    def test_set_changes_spec(self, url):
+    def test_set_refuses_a_new_spec(self, url):
+        """A new spec is a new block, so set() sends you to construct it."""
         block = SimpleBlock(url=url, spec=dict(label="'a'"))
-        clone = block.set(spec=dict(label="'b'"))
-        assert clone.var.label == "'b'"
-        assert clone.hash != block.hash  # spec changed
+        with pytest.raises(ValueError, match='spec'):
+            block.set(spec=dict(label="'b'"))
+        with pytest.raises(ValueError, match='spec'):
+            block.replace(spec=dict(label="'b'"))
+
+    def test_respecifying_through_dfn_keeps_everything_else(self, url):
+        block = SimpleBlock(url=url, tag="v1", spec=dict(label="'a'"))
+        other = type(block)(**{**block.dfn, 'spec': dict(label="'b'")})
+        assert other.var.label == "'b'"
+        assert other.hash != block.hash
+        assert other.tag == "v1"
 
 
 # ===========================================================================
@@ -333,7 +342,7 @@ class TestDatastackSetPreservation:
         assert clone.executor_cls is MultithreadingCallableExecutor
         assert clone.n_workers == 4
 
-    def test_set_spec_preserves_executor(self, url):
+    def test_respec_through_dfn_preserves_executor(self, url):
         from dbx.dataparts import MultiprocessingCallableExecutor
         stack = SimpleStack(
             url=url,
@@ -341,7 +350,8 @@ class TestDatastackSetPreservation:
             n_workers=2,
             spec=dict(total_items=6, block_size=2),
         )
-        clone = stack.set(spec=dict(total_items=10, block_size=5))
+        clone = type(stack)(**{**stack.dfn,
+                               'spec': dict(total_items=10, block_size=5)})
         assert clone.executor_cls is MultiprocessingCallableExecutor
         assert clone.var.total_items == 10
         assert clone.n_blocks == 2

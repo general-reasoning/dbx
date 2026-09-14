@@ -173,10 +173,17 @@ class TestPathIsWhatRedirects:
         assert broken.path('output', local=True).startswith(broken.localanchorkeypath)
 
     def test_a_redirected_path_is_not_ensured(self, broken, tmp_path):
-        """Creating directories inside another block's data is not this block's business."""
+        """Creating directories inside another block's data is not this block's business.
+
+        Refused rather than quietly skipped: ensure_dirpath=True is how this
+        codebase asks for somewhere to WRITE, and not creating the directory
+        does not stop the write when the other block's directory is already
+        there -- which, it having been built, it is.
+        """
         target = tmp_path / 'elsewhere' / 'thing.txt'
         broken.UNSAFE_redirect(paths={'output': str(target)}, OVERRIDE=True)
-        broken.path('output', ensure_dirpath=True)
+        with pytest.raises(ValueError, match='REDIRECTED'):
+            broken.path('output', ensure_dirpath=True)
         assert not target.parent.exists()
 
     def test_dirpath_follows_a_file_topic_to_its_parent(self, source, broken):
@@ -616,8 +623,11 @@ class TestRestructuredRedirect:
         b = Built(url=str(tmp_path), redirect={'paths': p})
         assert b._paths_ == p
         assert b.path('output') == '/custom/output.txt'
-        assert '_paths_' in b.type()
+        # Neither: a redirection says where this block's data is READ from, and
+        # a block does not become a different block by being read elsewhere.
+        assert '_paths_' not in b.type()
         assert '_paths_' not in b.signature()
+        assert b.hash == Built(url=str(tmp_path)).hash
 
     def test_redirect_to_code(self, tmp_path, source):
         src_block, code = source
@@ -678,7 +688,7 @@ class TestNewRedirectFeatures:
         assert b.path('output') == '/custom/path.txt'
         assert b._paths_ == {'output': '/custom/path.txt'}
         assert '_paths_' not in b.signature()
-        assert '_paths_' in b.type()
+        assert '_paths_' not in b.type()
 
     def test_hidden_topic_redirection_and_clear(self, tmp_path):
         b = Built(url=str(tmp_path))

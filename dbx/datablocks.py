@@ -413,8 +413,8 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
             anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
         elif hasattr(cls_anchor_or_df, 'anchor'):
             anchor = cls_anchor_or_df.anchor
-            if url is None and hasattr(cls_anchor_or_df, '_url_'):
-                url = cls_anchor_or_df._url_
+            if url is None and hasattr(cls_anchor_or_df, 'url'):
+                url = cls_anchor_or_df.url
             if storage_options is None and hasattr(cls_anchor_or_df, 'storage_options'):
                 storage_options = cls_anchor_or_df.storage_options
             if log is None and hasattr(cls_anchor_or_df, 'log'):
@@ -1531,9 +1531,11 @@ class Datablock:
 
     Attributes::
 
-        self.url  = original URL string
-        self.fs   = fsspec filesystem object
-        self.root = protocol-free path (via fsspec.url_to_fs)
+        self._url_ = URL as supplied to the dunders (a specline, or None);
+                     the underscores are theirs, worn by what was supplied
+        self.url   = that resolved to a real URL string
+        self.fs    = fsspec filesystem object
+        self.root  = protocol-free path (via fsspec.url_to_fs)
     """
     # Log var formation at .verbose instead of .detailed.
     # VERBOSE_CONFIG is the deprecated spelling and is still honored.
@@ -2046,17 +2048,17 @@ class Datablock:
             return v
 
         # Explicit parameters
-        self.url = _unquote(state.get('url'))
+        self._url_ = _unquote(state.get('url'))
         # Resolve specline URLs (e.g. "$dbx.getenv('KEY')") to real paths.
-        self._url_ = eval(self.url) if self.url is not None else None
-        if self._url_ is None:
-            self._url_ = os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
-        if self._url_ is None:
+        self.url = eval(self._url_) if self._url_ is not None else None
+        if self.url is None:
+            self.url = os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
+        if self.url is None:
             raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT or its alias DBX_URL")
 
-        self.local = _unquote(state.get('local'))
-        if self.local == 'None':
-            self.local = None
+        self._local_ = _unquote(state.get('local'))
+        if self._local_ == 'None':
+            self._local_ = None
         self.local_must_exist = bool(_unquote(state.get('local_must_exist', False)))
 
         self.storage_options = _unquote(state.get('storage_options'))
@@ -2068,29 +2070,29 @@ class Datablock:
         if self.storage_options is None or not isinstance(self.storage_options, dict):
             self.storage_options = default_storage_options()
 
-        self.fs, self.root = fsspec.url_to_fs(self._url_, **self.storage_options)
+        self.fs, self.root = fsspec.url_to_fs(self.url, **self.storage_options)
         _url_protocol = self.fs.protocol if isinstance(self.fs.protocol, str) else self.fs.protocol[0]
         if _url_protocol in ('file', 'local', ''):
             # url/root is already local storage: local=True and local=False
             # must be identical, so DBX_LOCAL/local= are never consulted.
-            self._local_ = self._url_
+            self.local = self.url
             self.localfs, self.localroot = self.fs, self.root
         else:
             # Resolve specline LOCALs (e.g. "$dbx.getenv('KEY')") to real paths.
-            self._local_ = eval(self.local) if self.local is not None else None
-            if self._local_ is None:
-                self._local_ = os.environ.get('DBX_LOCAL') or '/tmp/dbx'
-            if self._local_ is None:
+            self.local = eval(self._local_) if self._local_ is not None else None
+            if self.local is None:
+                self.local = os.environ.get('DBX_LOCAL') or '/tmp/dbx'
+            if self.local is None:
                 raise ValueError(f"No local for {self.__class__.__name__}: pass local= or set DBX_LOCAL")
-            if self.local_must_exist and not os.path.isdir(self._local_):
+            if self.local_must_exist and not os.path.isdir(self.local):
                 raise FileNotFoundError(
-                    f"local={self._local_!r} for {self.__class__.__name__} does not "
+                    f"local={self.local!r} for {self.__class__.__name__} does not "
                     f"exist (local_must_exist=True) -- provision/mount it before "
                     f"running (e.g. a dedicated scratch disk that must actually be "
                     f"attached), or construct with local_must_exist=False to let it "
                     f"be auto-created on demand instead."
                 )
-            self.localfs, self.localroot = fsspec.url_to_fs(self._local_, **self.storage_options)
+            self.localfs, self.localroot = fsspec.url_to_fs(self.local, **self.storage_options)
         self._spec_ = _unquote(state.get('spec'))
         if isinstance(self._spec_, str):
             try:
@@ -2251,7 +2253,7 @@ class Datablock:
             pass
 
         try:
-            fs, root = fsspec.url_to_fs(self._url_, **(self.storage_options or {}))
+            fs, root = fsspec.url_to_fs(self.url, **(self.storage_options or {}))
             pattern = os.path.join(fs_full_path(fs, root), "**/journal/**/*.parquet")
             parquet_files = fs.glob(pattern)
             for file in parquet_files:
@@ -2307,34 +2309,27 @@ class Datablock:
 
 
     def __getstate__(self):
-        # Serialization convention for explicit params (url, spec, anchor, …):
+        # Serialization convention for explicit params (url, spec, anchor, …).
+        # The underscores are the dunders' own -- __init__ and __setstate__ --
+        # worn by the value that was supplied to them:
         #
         #   _{k}_ = the *original* value the user passed in (or None).
         #           This is what gets serialized so that the block can be
         #           faithfully reconstructed by __setstate__.
         #   {k}   = the *resolved* / post-processed value used at runtime.
         #           For most params the resolution is simple (e.g. eval of
-        #           a default expression), but for ``url`` it involves
-        #           evaluating speclines like ``$dbx.getenv('KEY')``.
+        #           a default expression), but for ``url`` and ``local`` it
+        #           involves evaluating speclines like ``$dbx.getenv('KEY')``.
         #
-        # The loop below prefers _{k}_ over {k} to capture the original.
-        #
-        # Exception — ``url``:
-        #   After the url/._url_ swap, the naming is inverted:
-        #     self.url  = raw specline (what the user passed)
-        #     self._url_ = resolved filesystem path
-        #   The _{k}_ pattern would pick up the resolved path, losing the
-        #   specline and breaking env() relocatability.  We override it
-        #   explicitly below.
+        # The loop below prefers _{k}_ over {k} to capture the original, which
+        # for url/local is what keeps env() relocatable: serializing the
+        # resolved path would pin a reconstruction to the machine that wrote it.
         _state = {}
         for k in self.__explicit_params__():
             if hasattr(self, f"_{k}_"):
                 _state[k] = getattr(self, f"_{k}_")
             elif hasattr(self, k):
                 _state[k] = getattr(self, k)
-        # Override: serialize the raw specline, not the resolved _url_ and _local_.
-        _state['url'] = self.url
-        _state['local'] = self.local
         # An installed redirection travels with the block, so a deepcopy, an
         # unpickle in a worker, or a .set() of an operational parameter does not
         # resolve it again -- which for a specialization means a journal scan
@@ -3525,7 +3520,7 @@ class Datablock:
         try:
             dirpath = self._journal_hashdirpath()
             legacy_dirpath = os.path.join(
-                Datablock._dbxanchorpathx(self._url_, self.anchor, 'journal',
+                Datablock._dbxanchorpathx(self.url, self.anchor, 'journal',
                                           fqcn=self.fqcn, storage_options=self.storage_options),
                 self.hash,
             )
@@ -4397,8 +4392,8 @@ class Datablock:
     @functools.cached_property
     def _rootkwargs_(self):
         rootkwargs = {}
-        if self.url is not None:
-            rootkwargs['url'] = self.url
+        if self._url_ is not None:
+            rootkwargs['url'] = self._url_
         if self._anchor_ is not None:
             rootkwargs['anchor'] = self._anchor_
         return rootkwargs
@@ -6326,7 +6321,7 @@ class Datablock:
                                          'version': self.version,
                                          'dbx_version': self.dbx_version,
                                          'revision': self.revision, 
-                                         'url': self._url_,
+                                         'url': self.url,
                                          'anchor': self.anchor,
                                          'hash': self.hash,
                                          'keyby': self.keyby,
@@ -6496,7 +6491,7 @@ class Datablock:
             self.anchor,
             loc=loc,
             iloc=iloc,
-            url=self._url_ if url is None else url,
+            url=self.url if url is None else url,
             storage_options=self.storage_options if storage_options is None else storage_options,
             log=getattr(self, 'log', None) if log is None else log,
             n_workers=n_workers,
@@ -6648,7 +6643,7 @@ class Datastack(Datablock):
             def blocks(self):
                 n = self._total_items()
                 return [
-                    MyBlock(url=self.url, spec=dict(path=self.var.path, idx=i))
+                    MyBlock(url=self._url_, spec=dict(path=self.var.path, idx=i))
                     for i in range(math.ceil(n / self.var.block_size))
                 ]
 

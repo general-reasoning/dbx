@@ -972,7 +972,7 @@ class DatapointTable(DatapointBase, Datastack):
             # by tab. Without it a tab fell back to DBX_ROOT, and a table built
             # anywhere else (a test's tmp_path, a second lake) wrote its tabs to
             # an unrelated root, where they were then looked for in vain.
-            url=self.url,
+            url=self._url_,
             storage_options=self.storage_options,
             capture_output=self.capture_output,
             cache=getattr(self, 'cache', None),
@@ -1465,7 +1465,7 @@ class DatapointPartition(Datablock):
             # As a table gives its tabs its url: a fold of a partition belongs
             # where the partition does, not wherever DBX_ROOT happens to point
             # in the process that asks for it.
-            url=self.url,
+            url=self._url_,
             storage_options=self.storage_options,
             spec=dict(
                 partition=self,

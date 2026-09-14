@@ -1,10 +1,11 @@
 """
-Tests for the getenv EnvironmentError and the url/._url_ attribute swap.
+Tests for the getenv EnvironmentError and the url/._url_ attribute pair.
 
 Covers:
 1. getenv() raises EnvironmentError (not KeyError) with a descriptive message.
-2. After the swap: self.url = raw specline, self._url_ = resolved path.
-3. Serialization roundtrips preserve self.url (specline), not self._url_.
+2. The general convention: self._url_ = the value as SUPPLIED (the specline),
+   self.url = what it resolved to. Same for local/_local_.
+3. Serialization roundtrips preserve self._url_ (specline), not self.url.
 4. The EnvironmentError propagates clearly through dbx.eval().
 """
 import copy
@@ -92,22 +93,22 @@ class TestGetenvErrorPropagation:
 
 
 # ---------------------------------------------------------------------------
-# 3. url / _url_ swap semantics
+# 3. url / _url_ supplied-vs-resolved semantics
 # ---------------------------------------------------------------------------
 
-class TestUrlSwapSemantics:
+class TestUrlSuppliedVsResolved:
 
-    def test_url_holds_raw_specline(self, monkeypatch):
-        """self.url should be the raw specline string."""
+    def test_url_underscore_holds_raw_specline(self, monkeypatch):
+        """self._url_ should be the raw specline string, as supplied."""
         monkeypatch.setenv('SWAP_ROOT', '/tmp/swap')
         block = MinBlock(url=env('SWAP_ROOT'))
-        assert block.url == "$dbx.getenv('SWAP_ROOT')"
+        assert block._url_ == "$dbx.getenv('SWAP_ROOT')"
 
-    def test_url_underscore_holds_resolved_path(self, monkeypatch):
-        """self._url_ should be the resolved filesystem path."""
+    def test_url_holds_resolved_path(self, monkeypatch):
+        """self.url should be the resolved filesystem path."""
         monkeypatch.setenv('SWAP_ROOT', '/tmp/swap')
         block = MinBlock(url=env('SWAP_ROOT'))
-        assert block._url_ == '/tmp/swap'
+        assert block.url == '/tmp/swap'
 
     def test_root_is_resolved(self, monkeypatch):
         """self.root should match the resolved path."""
@@ -115,15 +116,15 @@ class TestUrlSwapSemantics:
         block = MinBlock(url=env('SWAP_ROOT'))
         assert block.root == '/tmp/swap'
 
-    def test_literal_url_stored_in_url(self):
-        """When url is a plain string (not a specline), self.url = literal."""
-        block = MinBlock(url='/tmp/literal')
-        assert block.url == '/tmp/literal'
-
-    def test_literal_url_resolved_same(self):
-        """For a literal url, self._url_ should equal self.url."""
+    def test_literal_url_stored_as_supplied(self):
+        """When url is a plain string (not a specline), self._url_ = literal."""
         block = MinBlock(url='/tmp/literal')
         assert block._url_ == '/tmp/literal'
+
+    def test_literal_url_resolved_same(self):
+        """For a literal url, resolving is the identity: self.url == self._url_."""
+        block = MinBlock(url='/tmp/literal')
+        assert block.url == '/tmp/literal'
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +146,8 @@ class TestUrlSerializationRoundtrip:
         monkeypatch.setenv('SER_ROOT', '/tmp/ser_b')
         block = MinBlock(url=env('SER_ROOT'))
         restored = pickle.loads(pickle.dumps(block))
-        assert restored.url == "$dbx.getenv('SER_ROOT')"
-        assert restored._url_ == '/tmp/ser_b'
+        assert restored._url_ == "$dbx.getenv('SER_ROOT')"
+        assert restored.url == '/tmp/ser_b'
         assert restored.hash == block.hash
 
     def test_deepcopy_preserves_specline(self, monkeypatch):
@@ -154,8 +155,8 @@ class TestUrlSerializationRoundtrip:
         monkeypatch.setenv('SER_ROOT', '/tmp/ser_c')
         block = MinBlock(url=env('SER_ROOT'))
         restored = copy.deepcopy(block)
-        assert restored.url == "$dbx.getenv('SER_ROOT')"
-        assert restored._url_ == '/tmp/ser_c'
+        assert restored._url_ == "$dbx.getenv('SER_ROOT')"
+        assert restored.url == '/tmp/ser_c'
         assert restored.hash == block.hash
 
     def test_setstate_roundtrip_preserves_specline(self, monkeypatch):
@@ -165,8 +166,8 @@ class TestUrlSerializationRoundtrip:
         state = block.__getstate__()
         restored = MinBlock.__new__(MinBlock)
         restored.__setstate__(state)
-        assert restored.url == "$dbx.getenv('SER_ROOT')"
-        assert restored._url_ == '/tmp/ser_d'
+        assert restored._url_ == "$dbx.getenv('SER_ROOT')"
+        assert restored.url == '/tmp/ser_d'
         assert restored.hash == block.hash
 
     def test_hash_stable_after_roundtrip(self, monkeypatch):
@@ -187,7 +188,7 @@ class TestUrlSerializationRoundtrip:
         state = block.__getstate__()
         assert state['url'] == '/tmp/literal_rt'
         restored = pickle.loads(pickle.dumps(block))
-        assert restored.url == '/tmp/literal_rt'
+        assert restored._url_ == '/tmp/literal_rt'
         assert restored.hash == block.hash
 
 

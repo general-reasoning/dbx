@@ -4,7 +4,8 @@ Tests for the env() specline factory and getenv() function.
 Verifies:
 1. env() basics: returns a specline string, idempotent.
 2. getenv() resolves environment variables.
-3. Datablock with url=env('X'): norm/signature contain specline.
+3. Datablock with url=env('X'): norm/signature contain the specline, which
+   is what _url_ holds; url holds what it resolved to.
 4. Relocatability: changing the env var does not change the hash.
 5. Spec fields with env(): specline kept in norm, resolved in var.
 6. Quote round-trip via eval.
@@ -108,9 +109,9 @@ class TestEnvInRoot:
         block = EnvBlock(url=env('TEST_ROOT'))
         assert block.root == '/tmp/test_root_value'
 
-    def test_root_underscore_is_specline(self):
+    def test_url_underscore_is_specline(self):
         block = EnvBlock(url=env('TEST_ROOT'))
-        assert block.url == "$dbx.getenv('TEST_ROOT')"
+        assert block._url_ == "$dbx.getenv('TEST_ROOT')"
 
     def test_handle_contains_specline(self):
         block = EnvBlock(url=env('TEST_ROOT'))
@@ -235,6 +236,6 @@ class TestEnvQuoteRoundtrip:
         assert quote.startswith('$')
         restored = dbx_eval(quote)
         assert isinstance(restored, EnvBlock)
-        assert restored.url == "$dbx.getenv('RT_ROOT')"
+        assert restored._url_ == "$dbx.getenv('RT_ROOT')"
         assert restored.root == '/tmp/roundtrip'
         assert restored.hash == block.hash

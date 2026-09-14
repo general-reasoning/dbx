@@ -747,7 +747,7 @@ class DatafeatureTable(_UpstreamSlices, DatapointTable):
             shard_size_limit_bytes=self.spec.get('shard_size_limit_bytes', 1 << 26),
         )
         return self.TAB(
-            url=self.url,
+            url=self._url_,
             storage_options=self.storage_options,
             capture_output=self.capture_output,
             cache=getattr(self, 'cache', None),
@@ -881,7 +881,7 @@ class BipolarDatafeatureTable(_UpstreamSlices, DatapointTable):
     def __tab__(self, idx: int, tag=None, **kwargs) -> BipolarDatafeatureTab:
         featuretab = self.var.featuretable.tab(idx)
         return self.TAB(
-            url=self.url,
+            url=self._url_,
             storage_options=self.storage_options,
             capture_output=self.capture_output,
             cache=getattr(self, 'cache', None),

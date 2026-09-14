@@ -134,8 +134,10 @@ class TestQuoteRoundTrip:
         """Documented trade-off, pinned so it cannot become the quote default."""
         back = dbx_eval(nested.quote(tailkwargs=False))
         assert back.hash == nested.hash
-        assert back.key == nested.key           # tag is kept
-        assert back.local != nested.local       # operational kwargs are not
+        assert back.key == nested.key            # tag is kept
+        # The SUPPLIED local is what a dropped kwarg loses. Not the resolved
+        # one: these blocks have a local url, and a local url IS its own local.
+        assert back._local_ != nested._local_    # operational kwargs are not
 
     def test_quote_defaults_to_faithful(self, nested):
         """quote() is for evaluation, so fidelity is the default."""

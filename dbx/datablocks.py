@@ -2550,6 +2550,37 @@ class Datablock:
         redirected = set(self.redirected_topics())
         return [t for t in self.topics() if t not in redirected]
 
+    def owedtopics(self):
+        """The topics this block owes and has not produced -- :meth:`build`'s question.
+
+        Empty unless the block is PARTIALLY redirected, which is the only case
+        in which :meth:`valid` can answer True about topics that are not this
+        block's to answer for. Under a specialization the redirected topics are
+        another build's and are there by definition, so a `valid()` that reads
+        only those -- a marker topic like :class:`~dbx.datatables.DatapointTable`'s
+        ``done``, which is a perfectly good definition of validity for a table
+        that built itself -- pronounces the block built before the topics it
+        still owes exist. `build()` would then never call `__build__`, and the
+        whole point of a specialization (reuse what did not change, build what
+        did) would be unreachable for exactly the classes that most need it.
+
+        Deliberately NOT folded into `valid()`. What validity means belongs to
+        the class -- a marker is a real answer, and a block may know things
+        about its data that the presence of a file does not say. Whether this
+        block has produced what the redirection left to it is a different
+        question, it is one this class can answer generically, and it is the
+        only one `build()` has any business asking.
+        """
+        if self._redirected_paths_ is None:
+            return []
+        buildtopics = self.buildtopics()
+        if not buildtopics:
+            return []
+        # A non-empty topic list, so valid_topics answers with the per-topic
+        # dict rather than the bare True it gives a block that declares none.
+        validity = self.valid_topics(buildtopics)
+        return [t for t in buildtopics if not validity[t]]
+
     def leaftopics(self):
         """Every leaf topic, as a tuple of names, depth-first in declaration order.
 
@@ -2765,7 +2796,18 @@ class Datablock:
             _output_tee = OutputTee(_local_log)
         _log_uploaded = False
         try:
-            if not self.valid():
+            # `owedtopics()` as well as `valid()`: a PARTIALLY redirected block
+            # can be valid() by its own definition and still owe topics that
+            # only this build will produce -- see owedtopics(). Empty for every
+            # block that is not partially redirected, so nothing else moves.
+            owed = self.owedtopics()
+            if not self.valid() or owed:
+                if owed and self.valid():
+                    self.log.info(
+                        f"BUILD OWED: {self.anchorkeypath} reports valid(), but "
+                        f"{owed} are its own to build and are not there -- building "
+                        f"rather than skipping."
+                    )
                 self.__pre_build__(*args, **kwargs)
                 self.__build__(*args, **kwargs)
                 self._build_end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')

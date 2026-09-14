@@ -995,7 +995,13 @@ class DatapointTable(DatapointBase, Datastack):
 
     def __split__(self, *args, **kwargs):
         topic_name = self._tab_paths_topic()
-        if topic_name:
+        # Only when the sentinels are THIS table's to write. Under a partial
+        # redirection covering `tab_paths` -- what a specialization installs --
+        # they are another block's, `path(ensure_dirpath=True)` refuses to
+        # create a directory inside its data, and this call is the first thing
+        # a split does: the whole tab machinery was unreachable for a
+        # specialized table, rather than merely unnecessary for it.
+        if topic_name and topic_name in self.buildtopics():
             self.path(topic_name, ensure_dirpath=True)
         n = self.n_tabs
         self.log.info(
@@ -1128,6 +1134,16 @@ class DatapointTable(DatapointBase, Datastack):
     def _write_tab_path(self, i: int):
         topic_name = self._tab_paths_topic()
         if not topic_name:
+            return
+        if topic_name not in self.buildtopics():
+            # Redirected: the sentinels are the other block's, and they name
+            # the same tabs -- a redirection that did not re-key the TAB is the
+            # only kind that can cover `tab_paths` at all. Writing ours in
+            # there would be writing into its data, which `path()` refuses.
+            self.log.detailed(
+                "%s: %r is redirected; not writing a sentinel for tab %d",
+                self.__class__.__name__, topic_name, i,
+            )
             return
         tab_dir = self.path(topic_name, ensure_dirpath=True)
         sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")

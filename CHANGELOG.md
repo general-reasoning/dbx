@@ -70,6 +70,28 @@ All notable changes to this project will be documented in this file.
   deepcopy and `set()`. `use_specializations='memory'` installs without
   recording; `UNSAFE_specialize()` is the explicit form.
 
+  It covers a `DatapointTable`, which took two things a plain `Datablock` had
+  not needed. A table's `valid()` is the `done` MARKER, and `done` is one of
+  the topics a specialization redirects -- so the table reported itself built,
+  off another build's marker, before the topic it was grown for existed, and
+  `build()` (which asked `valid()` and nothing else) skipped. Silently, and
+  however many times you rebuilt. `build()` now also asks **`owedtopics()`** --
+  the buildtopics that are not there, empty for any block that is not
+  partially redirected -- and logs `BUILD OWED` when the two disagree. It is
+  deliberately not folded into `valid()`: what validity means belongs to the
+  class, and a marker is a real answer; whether a block has produced what a
+  redirection left to it is a different question, and the only one `build()`
+  has business asking.
+
+  And `DatapointTable.__split__` ensured the `tab_paths` directory before
+  anything else, which `path(ensure_dirpath=True)` refuses for a redirected
+  topic -- correctly, since it would be creating a directory inside another
+  block's data. So the tab machinery *raised* for a specialized table rather
+  than merely being unnecessary to it. That call and `_write_tab_path` are
+  guarded by `buildtopics()` now; the sentinels already in the other block's
+  `tab_paths` name the same tabs, because a redirection that covers
+  `tab_paths` is by construction one that did not re-key the TAB.
+
 - **`UNSAFE_redirect(dry_run=True)`**, and `UNSAFE_specialize(dry_run=True)`.
   Resolves the whole redirection and reports what it would record — the record,
   the specialization, the source journal entry, the resulting paths, and the

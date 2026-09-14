@@ -18,6 +18,7 @@ import pytest
 from dataclasses import dataclass
 
 from dbx.datablocks import Datablock
+from dbx.datapoints import DIRTOPIC, DatapointTab, DatapointTable
 
 ANCHOR = 'Spectra'
 
@@ -356,3 +357,214 @@ class TestTheIdentityIsNotTheRedirection:
         cold = v2(tmp_path, keyby='tag', tag='t')       # resolves on construction
         warm = v2(tmp_path, keyby='tag', tag='t', use_specializations=False)
         assert cold.hash == warm.hash
+
+
+# ---------------------------------------------------------------------------
+# A TABLE, which is where the two assumptions above stop holding
+# ---------------------------------------------------------------------------
+#
+# Everything above is a plain Datablock, whose `valid()` is `valid_topics()`
+# and which writes nowhere but its own topics. A DatapointTable is neither:
+# its `valid()` is the `done` MARKER, and its split ensures the `tab_paths`
+# directory before it does anything else. Both are reasonable on their own and
+# both break under a partial redirection, so this is the shape a specialization
+# has to survive to be usable by the classes that most want one -- a table
+# whose tabs hold terabytes and whose own topics are a few kilobytes derived
+# from them.
+
+TABLE_ANCHOR = 'Rows'
+
+
+class RowTab(DatapointTab):
+    """One tab, one file. No slices: this is about the TABLE's topics."""
+
+    VERSION = 1
+    TOPICS = {'rows': 'rows.txt'}
+
+    @dataclass
+    class VAR(DatapointTab.VAR):
+        tab_idx: int = 0
+
+    def __build__(self):
+        with open(self.path('rows', ensure_dirpath=True), 'w') as f:
+            f.write(f"rows-{self.var.tab_idx}\n")
+
+    def __read__(self, *topicpath):
+        with open(self.path('rows')) as f:
+            return f.read()
+
+
+class RowTableV1(DatapointTable):
+    """The table before it grew a topic."""
+
+    VERSION = 1
+    TAB = RowTab
+    TOPICS = {'summary': 'summary.txt', 'tab_paths': DIRTOPIC, 'done': 'done'}
+
+    @dataclass
+    class VAR(DatapointTable.VAR):
+        n: int = 2
+
+    @property
+    def n_tabs(self):
+        return self.var.n
+
+    def __tab__(self, idx, **spec):
+        return super().__tab__(idx, tab_idx=idx, **spec)
+
+    def __stack__(self, results=None):
+        if not self.valid_topic('summary'):
+            with open(self.path('summary', ensure_dirpath=True), 'w') as f:
+                f.write(''.join(self.tab(i).read('rows')
+                                for i in range(self.n_tabs)))
+        return super().__stack__(results)       # writes `done`
+
+    def __read__(self, *topicpath):
+        topicpath = self._normtopic(topicpath)
+        if topicpath and topicpath[0] in ('summary', 'report'):
+            with open(self.path(*topicpath)) as f:
+                return f.read()
+        return super().__read__(*topicpath)
+
+
+class RowTableV2(RowTableV1):
+    """The same table, grown a `report` topic derived from what the tabs hold.
+
+    No VAR field was added and the TAB did not move, so the specialization pins
+    nothing and names the three topics the older table declared.
+    """
+
+    TOPICS = {'summary': 'summary.txt', 'report': 'report.txt',
+              'tab_paths': DIRTOPIC, 'done': 'done'}
+
+    SPECIALIZATIONS = [
+        Datablock.Specialization(
+            spec={},
+            topics=['summary', 'tab_paths', 'done'],
+            note="`report` is derived from the tabs, which did not re-key",
+        ),
+    ]
+
+    def __stack__(self, results=None):
+        if not self.valid_topic('report'):
+            with open(self.path('report', ensure_dirpath=True), 'w') as f:
+                f.write(f"report over {self.n_tabs} tabs\n")
+        return super().__stack__(results)       # summary, then `done`
+
+
+def v1table(url, **kw):
+    return RowTableV1(url=str(url), anchor=TABLE_ANCHOR, spec={'n': 2}, **kw)
+
+
+def v2table(url, **kw):
+    return RowTableV2(url=str(url), anchor=TABLE_ANCHOR, spec={'n': 2}, **kw)
+
+
+@pytest.fixture
+def built_table(tmp_path):
+    """The narrower TABLE, built: two tabs, a summary, a done marker."""
+    t = v1table(tmp_path)
+    t.build()
+    assert t.valid()
+    return t
+
+
+class TestASpecializedTable:
+    """A table reads its older self's topics and builds only the new one."""
+
+    def test_the_reconstruction_is_the_older_tables_hash(self, tmp_path):
+        assert v2table(tmp_path).get_hash(RowTableV2.SPECIALIZATIONS[0]) == \
+            v1table(tmp_path).hash
+
+    def test_it_resolves_to_the_older_build(self, tmp_path, built_table):
+        table = v2table(tmp_path)
+        assert table.specialization == RowTableV2.SPECIALIZATIONS[0]
+        assert table.redirected_topics() == ['summary', 'tab_paths', 'done']
+        assert table.buildtopics() == ['report']
+
+    def test_a_marker_valid_does_not_skip_the_build(self, tmp_path, built_table):
+        """The failure this exists to stop, and it was SILENT.
+
+        `DatapointTable.valid()` is `valid_topic('done')`, and `done` is one of
+        the topics the specialization redirects -- so the table reports itself
+        built, off another build's marker, before `report` exists. `build()`
+        used to ask `valid()` and nothing else, skip, and return a table that
+        raises the first time anything reads the topic it was grown for. No
+        error, no warning, and a topic that never gets made however many times
+        you rebuild.
+        """
+        table = v2table(tmp_path)
+        assert table.valid()                       # `done`, through the redirection
+        assert not table.valid_topic('report')     # ... and yet
+        assert table.owedtopics() == ['report']    # which is what build() asks
+        table.build()
+        assert table.valid_topic('report')
+        assert table.read('report') == "report over 2 tabs\n"
+
+    def test_the_split_does_not_ensure_a_redirected_directory(self, tmp_path,
+                                                              built_table):
+        """The second failure, which was loud but total.
+
+        `path(ensure_dirpath=True)` on a redirected topic raises -- correctly,
+        since it would be creating a directory inside another block's data --
+        and `DatapointTable.__split__` called exactly that on `tab_paths`
+        before doing anything else. The tab machinery was therefore not merely
+        unnecessary for a specialized table, it was unreachable.
+        """
+        table = v2table(tmp_path)
+        with pytest.raises(Exception):
+            table.path('tab_paths', ensure_dirpath=True)
+        table.build()                              # the split no longer calls it
+        assert table.valid_topic('report')
+
+    def test_no_sentinel_is_written_into_the_other_blocks_tab_paths(
+            self, tmp_path, built_table):
+        """A redirection covering `tab_paths` can only be one that left the TAB
+        alone, so the sentinels already there name the same tabs. Ours would be
+        a write into its data."""
+        sentinels = sorted(os.listdir(built_table.path('tab_paths')))
+        v2table(tmp_path).build()
+        assert sorted(os.listdir(built_table.path('tab_paths'))) == sentinels
+
+    def test_the_older_topics_are_not_rebuilt(self, tmp_path, built_table):
+        table = v2table(tmp_path)
+        table.build()
+        assert table.path('summary') == built_table.path('summary')
+        assert table.path('report').startswith(table.anchorkeypath)
+        assert table.read('summary') == built_table.read('summary')
+
+    def test_a_second_build_owes_nothing(self, tmp_path, built_table):
+        v2table(tmp_path).build()
+        again = v2table(tmp_path)
+        assert again.owedtopics() == []
+        again.build()
+        assert again.valid_topic('report')
+
+    def test_an_unspecialized_table_still_builds_whole(self, tmp_path):
+        """Nothing above may change what an ordinary table does."""
+        table = v2table(tmp_path, use_specializations=False)
+        assert table.owedtopics() == []            # not redirected: owes nothing
+        table.build()
+        assert table.valid()
+        for topic in ('summary', 'report', 'done'):
+            assert table.valid_topic(topic)
+
+
+class TestOwedTopics:
+    """`owedtopics()` is empty for anything that is not partially redirected."""
+
+    def test_an_ordinary_unbuilt_block_owes_nothing(self, tmp_path):
+        assert v2(tmp_path).owedtopics() == []
+
+    def test_an_ordinary_built_block_owes_nothing(self, tmp_path):
+        block = v2(tmp_path, use_specializations=False)
+        block.build()
+        assert block.owedtopics() == []
+
+    def test_a_specialized_block_owes_what_it_did_not_redirect(self, tmp_path,
+                                                               built):
+        block = v2(tmp_path)
+        assert block.redirected_topics() == ['spectra']
+        assert block.owedtopics() == ['phases']
+        block.build()
+        assert block.owedtopics() == []

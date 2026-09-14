@@ -240,6 +240,22 @@ dbx.pprint 'module.function(arg1, arg2)'   # evaluate and pretty-print
 dbx.slurm.exec 'module.function()'         # execute on a Slurm Ray cluster
 ```
 
+The expression may be a sequence of statements separated by `;` (or newlines),
+optionally ending in a `#` comment:
+
+```bash
+dbx.pprint "b = module.Block(spec={'x': 1}); b.build(); b.read()  # nightly refresh"
+```
+
+The statements share one namespace and the value of the last one is what is
+printed. The comment is ignored when the command runs and recorded in the exec
+journal's `comment` column, beside the string as it was typed:
+
+```python
+dbx.journal()[['exec', 'comment']]     # every dbx.exec/dbx.pprint invocation
+dbx.journal(comment='nightly')         # ... filtered by what it was for
+```
+
 ## Running Tests
 
 ```bash

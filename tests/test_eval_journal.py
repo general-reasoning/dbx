@@ -147,3 +147,121 @@ class TestEvalJournal:
         assert len(j_multi) == 2
 
 
+
+
+class TestExecStatements:
+
+    def test_statements_share_a_namespace_and_the_last_is_the_value(self, tmp_path, monkeypatch):
+        """`a; b; c` runs in order, in one namespace, and `c` is what comes back."""
+        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+
+        assert dbx.exec("x = 2; y = x * 3; y + 1") == 7
+        assert dbx.exec("a = 1\nb = 2\na + b") == 3
+
+    def test_last_statement_binding_returns_none(self, tmp_path, monkeypatch):
+        """Nothing is evaluated last, so there is no value to return."""
+        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+
+        assert dbx.exec("x = 5; y = x + 1") is None
+
+    def test_later_statement_sees_earlier_binding_inside_a_comprehension(self, tmp_path, monkeypatch):
+        """The namespace is one dict, not globals-plus-locals.
+
+        Split, the comprehension's own scope could not reach `n` -- the rule
+        that makes a class body unable to see its own names -- and the idiom
+        sequencing exists for would break.
+        """
+        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+
+        assert dbx.exec("n = 3; ns = [1, 2]; [i * n for i in ns]") == [3, 6]
+
+    def test_dotted_names_are_imported_for_every_statement(self, tmp_path, monkeypatch):
+        """Not just the one before the first `(`: any statement may name a module."""
+        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+
+        assert dbx.exec("e = xml.etree.ElementTree.Element('a'); e.tag") == 'a'
+
+    def test_trailing_comment_is_ignored(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+
+        assert dbx.exec("1 + 1  # a note about why") == 2
+        assert dbx.exec("x = 2; x * 3; # trailing semicolon then comment") == 6
+
+    def test_nothing_to_execute_raises(self, tmp_path, monkeypatch):
+        """A string that is all comment ran nothing; saying so beats returning None."""
+        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+
+        with pytest.raises(ValueError, match="No statement to execute"):
+            dbx.exec("# just a comment")
+
+    def test_comment_is_journaled_in_its_own_column(self, tmp_path, monkeypatch):
+        dbx_url = str(tmp_path / 'dbx_root')
+        monkeypatch.setenv('DBX_URL', dbx_url)
+
+        dbx.exec("1 + 1  # why this ran")
+
+        j = dbx.journal()
+        assert j.iloc[0]['comment'] == 'why this ran'
+
+    def test_no_comment_journals_as_null(self, tmp_path, monkeypatch):
+        dbx_url = str(tmp_path / 'dbx_root')
+        monkeypatch.setenv('DBX_URL', dbx_url)
+
+        dbx.exec("1 + 1")
+
+        j = dbx.journal()
+        assert 'comment' in j.columns
+        assert pd.isna(j.iloc[0]['comment'])
+
+    def test_comment_is_filterable(self, tmp_path, monkeypatch):
+        dbx_url = str(tmp_path / 'dbx_root')
+        monkeypatch.setenv('DBX_URL', dbx_url)
+
+        write_exec_journal("expr1  # nightly refresh", url=dbx_url)
+        write_exec_journal("expr2  # one-off", url=dbx_url)
+
+        j = dbx.journal(comment='nightly')
+        assert len(j) == 1
+        assert j.iloc[0]['exec'] == 'expr1  # nightly refresh'
+
+    def test_exec_comment_reads_the_trailing_comment(self):
+        from dbx.dataparts import exec_comment
+
+        assert exec_comment("a = 1  # note") == 'note'
+        assert exec_comment("a = 1") is None
+        assert exec_comment("x = '''unterminated") is None
+
+
+@pytest.mark.pinned
+class TestExecJournalRecordsWhatWasTyped:
+    """The exec journal holds the string as it was typed.
+
+    It is the only record of what was run, and it is read to find out what
+    produced a build -- long after the person who typed it could be asked.
+    A row that held a normalised, re-joined or comment-stripped rendering
+    would still look like a command and no longer be the one that ran.
+    """
+
+    def test_original_string_is_recorded_verbatim(self, tmp_path, monkeypatch):
+        dbx_url = str(tmp_path / 'dbx_root')
+        monkeypatch.setenv('DBX_URL', dbx_url)
+
+        expr = "x = 2;  y = x * 3;   y + 1;  # comment to be ignored"
+        dbx.exec(expr)
+
+        assert dbx.journal().iloc[0]['exec'] == expr
+
+    def test_hash_inside_a_string_literal_is_not_a_comment(self, tmp_path, monkeypatch):
+        """Cutting at the first `#` would silently change what runs.
+
+        A URL fragment, a colour, a `#` in a format: the expression means what
+        Python says it means, and only a comment token is a comment.
+        """
+        dbx_url = str(tmp_path / 'dbx_root')
+        monkeypatch.setenv('DBX_URL', dbx_url)
+
+        assert dbx.exec("'https://host/p#frag'") == 'https://host/p#frag'
+
+        entry = dbx.journal().iloc[0]
+        assert entry['exec'] == "'https://host/p#frag'"
+        assert pd.isna(entry['comment'])

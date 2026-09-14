@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`dbx.exec` takes a sequence of statements, and a comment.** The CLI
+  argument was a single expression, evaluated with `eval` -- so anything that
+  needed a name to be bound first needed a script, and a one-liner could not
+  build a block and then read it. It is parsed with `ast.parse` now and runs
+  every statement the string holds, separated by `;` or by newlines, in one
+  namespace, returning the value of the last:
+
+  ```bash
+  dbx.pprint "b = my.Block(spec={'x': 1}); b.build(); b.read()  # nightly"
+  ```
+
+  One dict serves as both globals and locals, so the statements run the way
+  module-level code does: split, a comprehension in a later statement could
+  not see a name an earlier one bound -- the rule that keeps a class body from
+  seeing its own names -- which would break exactly the idiom sequencing
+  exists for. The dotted names are collected from every statement's AST rather
+  than from the text before the first `(`, so any statement may name a module
+  that nothing has imported yet -- and a name an earlier statement bound, which
+  is no module path at all, resolves to nothing rather than failing.
+
+  A trailing `#` comment is ignored when the command runs -- Python's parser
+  drops it -- and recorded in the exec journal's new `comment` column. The
+  `exec` column still holds the string VERBATIM, comment and all, because a
+  journal row is the only record of what was run and has to stay re-runnable;
+  the separate column is there because the expression says what a command did
+  and only its comment says what it was for, and the journal is read long
+  after the person who typed it could be asked. The comment is tokenized, not
+  split on `#`, so a `#` inside a string literal stays part of the expression.
+
 - **`Datablock.SPECIALIZATIONS`: reading a narrower block's data instead of
   rebuilding it.** A class grows a `VAR` field and a topic; every block of it
   re-keys, and the topics that did not change are rebuilt for nothing. A

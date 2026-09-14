@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import datetime
 import gc
 import importlib
+import io
 import json
 import os
 import pickle
@@ -23,8 +24,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time as time_module
+import tokenize
 import traceback as tb
 import types
 from typing import Union, Optional, Sequence, Callable
@@ -54,6 +57,7 @@ import yaml
 tqdm.tqdm.monitor_interval = 0
 
 __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'eval')
+__exec__ = __builtins__['exec'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'exec')
 
 
 DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
@@ -659,8 +663,17 @@ def eval(name):
     return term
 
 
-def write_exec_journal(s: str, url: str | None = None, storage_options: dict | None = None):
-    """Record an exec expression string in the $DBX_URL/.journal/exec/ journal."""
+def write_exec_journal(s: str, url: str | None = None, storage_options: dict | None = None, *,
+                       comment: str | None = None):
+    """Record an exec expression string in the $DBX_URL/.journal/exec/ journal.
+
+    ``exec`` holds *s* VERBATIM -- the string as it was typed, comment and all,
+    so that a journal row can be re-run as it stands. ``comment`` holds the
+    trailing ``#`` comment on its own, because that is the half that says what
+    the command was *for*, and reading it out of the expression again at every
+    query is work the journal can do once. Pass *comment* to override what
+    :func:`exec_comment` reads off *s*.
+    """
     dbx_url = url or os.environ.get('DBX_URL') or os.environ.get('DBX_ROOT') or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
     fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
@@ -672,6 +685,7 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
     dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
     entry_data = {
         'exec': str(s),
+        'comment': comment if comment is not None else exec_comment(s),
         'datetime': dt,
         'id': str(uuid.uuid4()),
     }
@@ -818,7 +832,7 @@ def read_exec_journal(
         files = []
 
     if not files:
-        df = pd.DataFrame(columns=['exec', 'datetime', 'id'])
+        df = pd.DataFrame(columns=['exec', 'comment', 'datetime', 'id'])
     else:
         def read_file(file):
             with fs.open(file, 'rb') as f:
@@ -835,7 +849,7 @@ def read_exec_journal(
                         log.warning(f"Skipping unreadable exec journal file: {e}")
                     continue
         if not dfs:
-            df = pd.DataFrame(columns=['exec', 'datetime', 'id'])
+            df = pd.DataFrame(columns=['exec', 'comment', 'datetime', 'id'])
         else:
             df = pd.concat(dfs, ignore_index=True)
             if 'datetime' in df.columns:
@@ -859,11 +873,93 @@ def read_exec_journal(
     return df
 
 
+def exec_comment(s: str) -> str | None:
+    """The trailing ``#`` comment of an exec string, without the ``#``.
+
+    Tokenized rather than split on ``#``: a ``#`` inside a string literal --
+    a URL fragment, a colour, a format -- is part of the expression, not a
+    comment, and cutting the string there would silently change what runs.
+    Returns ``None`` when there is no comment, including when *s* does not
+    tokenize at all: this is called on the way INTO the journal, before the
+    expression has been parsed, so a malformed one still gets recorded.
+    """
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(s).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return None
+    for tok in reversed(toks):
+        if tok.type == tokenize.COMMENT:
+            return tok.string.lstrip('#').strip()
+    return None
+
+
+def get_dotted_names(node: ast.AST) -> list[str]:
+    """Every maximal dotted name in *node*: ``['a.b.C']`` for ``a.b.C(x=1)``.
+
+    Maximal so that ``a.b.C`` is reported once rather than also as its own
+    prefix ``a.b`` -- :func:`get_named_const_and_cxt` walks the prefix down
+    from the root itself, so the shorter forms add nothing.
+    """
+    inner = {id(n.value) for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+    names = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Attribute) or id(sub) in inner:
+            continue
+        bits, cur = [], sub
+        while isinstance(cur, ast.Attribute):
+            bits.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            bits.append(cur.id)
+            names.append('.'.join(reversed(bits)))
+    return names
+
+
+def get_dotted_cxt(node: ast.AST) -> dict:
+    """Import the modules the dotted names in *node* are rooted in.
+
+    An exec string names its blocks by fully qualified path and nothing has
+    imported them yet, so ``autopath.pipeline.Run(...)`` has to import
+    ``autopath.pipeline`` before it can be evaluated. Every dotted name is
+    offered, and the ones that are not module paths -- ``b.build()`` where
+    ``b`` is a name an earlier statement bound -- simply resolve to nothing.
+    That is why a failure here is skipped rather than raised: it is the normal
+    outcome for most names, and a name that genuinely cannot be resolved
+    fails where it is used, with the error that says so.
+    """
+    cxt = {}
+    for name in get_dotted_names(node):
+        try:
+            _, c = get_named_const_and_cxt(name)
+        except Exception:
+            continue
+        cxt.update(c)
+    return cxt
+
+
 def exec(s=None, **kwargs):
     """Parse and execute a dbx expression from *s* or ``sys.argv``.
 
     When *s* is ``None``, the expression and keyword arguments are
     read from the command line (``sys.argv[1:]``).
+
+    *s* may be a whole sequence of statements rather than a single expression
+    -- separated by ``;``, by newlines, or both -- and may end in a ``#``
+    comment::
+
+        dbx.pprint "b = my.Block(spec={'x': 1}); b.build(); b.read()  # nightly"
+
+    The statements share one namespace, so a name one binds is available to
+    the next, and the value of the LAST statement is what is returned --
+    ``None`` when it binds rather than evaluates, since there is no value to
+    return. This is why it is `ast.parse` and not `eval`: the single
+    expression the old form allowed is just the one-statement case of it.
+
+    The comment is ignored on the way to the interpreter -- Python's own
+    parser drops it -- but not on the way to the journal, where it is recorded
+    in a column of its own. A command's expression says what it did and only
+    its comment says what it was for, and the journal is read long after the
+    person who typed it could be asked.
     """
     if s is None:
         # Command line only: may re-exec this process pinned to a revision and
@@ -882,12 +978,25 @@ def exec(s=None, **kwargs):
                     kwargs[k] = v
     
     write_exec_journal(s)
-    lb = s.find("(")
-    lb = lb if lb != -1 else len(s)
-    _, cxt = get_named_const_and_cxt(s[:lb])
+    tree = ast.parse(textwrap.dedent(s).strip(), filename='<dbx.exec>')
+    if not tree.body:
+        raise ValueError(f"No statement to execute in {s!r}")
+
+    # One dict for both globals and locals, so the statements run as module-level
+    # code does. Split, a comprehension in a later statement could not see a name
+    # an earlier one bound -- the class-body scoping rule -- and the sequence
+    # would break on exactly the idiom sequencing exists for.
+    cxt = dict(globals())
+    cxt.update(get_dotted_cxt(tree))
     cxt.update(kwargs)
-    r = __eval__(s, globals(), cxt)
-    return r
+
+    *head, last = tree.body
+    if head:
+        __exec__(compile(ast.Module(body=head, type_ignores=[]), '<dbx.exec>', 'exec'), cxt)
+    if not isinstance(last, ast.Expr):
+        __exec__(compile(ast.Module(body=[last], type_ignores=[]), '<dbx.exec>', 'exec'), cxt)
+        return None
+    return __eval__(compile(ast.Expression(body=last.value), '<dbx.exec>', 'eval'), cxt)
 
 
 def pprint(argstr=None, **kwargs):

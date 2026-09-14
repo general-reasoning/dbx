@@ -271,6 +271,21 @@ class TestRecordingIt:
         later = v2(tmp_path, use_specializations=False)
         assert later.redirection.topics == ['spectra']
 
+    def test_dry_run_reports_without_writing(self, tmp_path, built, capsys):
+        block = v2(tmp_path, use_specializations=False)
+        proposal = block.UNSAFE_specialize(dry_run=True, OVERRIDE=True)
+        assert proposal.specialization == V2.SPECIALIZATIONS[0]
+        assert proposal.paths == {'spectra': built.path('spectra')}
+        assert 'would record' in capsys.readouterr().out
+        assert block.redirected_topics() == []                    # not installed
+        assert v2(tmp_path, use_specializations=False).redirected_topics() == []   # not recorded
+
+    def test_a_dry_run_redirection_is_a_proposal_not_a_True(self, tmp_path, built):
+        block = v2(tmp_path, use_specializations=False)
+        assert block.UNSAFE_redirect(paths={'spectra': built.path('spectra')},
+                                     dry_run=True, OVERRIDE=True).paths is not None
+        assert block.redirected_topics() == []
+
     def test_unsafe_specialize_reports_when_there_is_nothing(self, tmp_path):
         assert v2(tmp_path).UNSAFE_specialize(OVERRIDE=True) is None
 

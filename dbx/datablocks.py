@@ -3596,6 +3596,7 @@ class Datablock:
     def UNSAFE_redirect(self, *, redirector: Callable|None = None, journal: Datajournal|None = None, filter: dict|None = None, topic_map: dict|None = None,
                         paths: dict|None = None, topics: list|None = None,
                         specialization: 'Datablock.Specialization | None' = None,
+                        dry_run: bool = False,
                         validate: bool = False, remote: bool | Remote = False, OVERRIDE: bool = False):
         """Record that this block's topics are read from somewhere else and the location of this somewhere else.
 
@@ -3609,6 +3610,12 @@ class Datablock:
         the hash reconstructed from it. It implies its own ``topics``, and is
         recorded as itself, so the journal says a specialization was installed
         and which one -- not merely that some paths were.
+
+        *dry_run* resolves the whole thing and reports what it WOULD record --
+        to stdout, and as the :class:`Redirection` it returns -- without
+        installing it on this block, writing the hidden ``.redirection`` topic,
+        or putting anything in the journal. The return type says which happened:
+        a Redirection is a proposal, True is a redirection that is now in place.
         """
         if not UNSAFE_allowed("UNSAFE_redirect", OVERRIDE=OVERRIDE):
             return False
@@ -3734,6 +3741,22 @@ class Datablock:
             return False
 
         remapped_paths = self._mapped_paths(target_paths, topic_map, topics)
+
+        if dry_run:
+            proposal = self.Redirection(
+                paths=remapped_paths, entry=entry, filter=filter, topic_map=topic_map,
+                topics=list(topics) if topics is not None else None,
+                specialization=specialization)
+            print(
+                f"UNSAFE_redirect(dry_run=True): {self.anchorkeypath}\n"
+                f"  would record: {redirect_record!r}\n"
+                + (f"  as: {specialization!r}\n" if specialization is not None else "")
+                + (f"  from journal entry: {entry.block.id} (hash {entry.block.hash})\n"
+                   if entry is not None else "")
+                + f"  would read through it: {remapped_paths!r}\n"
+                + f"  would still build: {[t for t in self.topics() if t not in remapped_paths]!r}"
+            )
+            return proposal
 
         self._redirected_paths_ = remapped_paths
         self.__dict__.pop('redirection', None)
@@ -5694,6 +5717,10 @@ class Datablock:
                 continue
             paths, entry = resolved
             self._redirected_paths_ = self._mapped_paths(paths, None, sp.topics)
+            self.log.info(
+                f"SPECIALIZATION (memory only, nothing recorded): {self.anchorkeypath} "
+                f"reads through {sp!r}"
+            )
             self.__dict__.pop('redirection', None)
             self.__dict__['__specialization__'] = sp
             self.log.verbose(
@@ -5713,7 +5740,7 @@ class Datablock:
         red = self.redirection
         return red.specialization if red is not None else None
 
-    def UNSAFE_specialize(self, *, journal=None, OVERRIDE: bool = False):
+    def UNSAFE_specialize(self, *, journal=None, dry_run: bool = False, OVERRIDE: bool = False):
         """Install the applicable specialization AND record it in the journal.
 
         The explicit form of what construction does on its own: a redirection
@@ -5722,14 +5749,20 @@ class Datablock:
         specialization was installed and when. Here for a block constructed
         with ``use_specializations='memory'``, and for installing one after the
         fact.
+
+        *dry_run* reports what the first applicable specialization WOULD do and
+        returns its proposed :class:`Redirection`, writing nothing -- the same
+        handle :meth:`UNSAFE_redirect` has.
         """
         if not UNSAFE_allowed("UNSAFE_specialize", OVERRIDE=OVERRIDE):
             return None
         for sp in (self.SPECIALIZATIONS or []):
             if self._specialization_mismatch(sp) is not None:
                 continue
-            if self.UNSAFE_redirect(specialization=sp, journal=journal, OVERRIDE=True):
-                return sp
+            res = self.UNSAFE_redirect(specialization=sp, journal=journal,
+                                       dry_run=dry_run, OVERRIDE=True)
+            if res:
+                return res if dry_run else sp
         self.log.info(
             f"UNSAFE_specialize: nothing to install for {self.anchorkeypath}; "
             f"specializations(): {self.specializations()!r}"

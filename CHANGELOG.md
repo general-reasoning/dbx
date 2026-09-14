@@ -70,6 +70,15 @@ All notable changes to this project will be documented in this file.
   deepcopy and `set()`. `use_specializations='memory'` installs without
   recording; `UNSAFE_specialize()` is the explicit form.
 
+- **`UNSAFE_redirect(dry_run=True)`**, and `UNSAFE_specialize(dry_run=True)`.
+  Resolves the whole redirection and reports what it would record — the record,
+  the specialization, the source journal entry, the resulting paths, and the
+  topics that would still be built — installing nothing and writing nothing.
+  The return type says which happened: a `Redirection` is a proposal, `True` is
+  a redirection that is now in place. To inspect without writing but with the
+  paths actually in use, construct with `use_specializations='memory'` and read
+  `.specialization` / `.redirection`; `UNSAFE_specialize()` then promotes it.
+
 - **Partial redirection.** `UNSAFE_redirect(topics=[...])` redirects only the
   topics it names; every other topic reads as it would unredirected. `build()`
   no longer declines wholesale when a block is redirected — it declines only

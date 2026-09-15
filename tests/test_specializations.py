@@ -158,7 +158,9 @@ class TestMatching:
     def test_another_value_does_not(self, tmp_path):
         block = v2(tmp_path, spec={'sr': 16000, 'window': 'hamming'})
         assert block.matching_specializations() == []
-        assert "pinned 'hann'" in block.specializations()[0]['why']
+        why = block.specializations()[0]['why']
+        assert "window='hann'" in why          # what the specialization is for
+        assert "window='hamming'" in why       # what this block is
 
     def test_a_specialization_that_drops_nothing_is_refused(self, tmp_path):
         """It reconstructs this block's own identity, so there is no other block."""
@@ -793,3 +795,84 @@ class TestOneJournalReadForAWholeTable:
         assert table.child_specialization_journal() is not None
         assert table.child_specialization_journal() is \
             table.child_specialization_journal()          # read once, kept
+
+
+class TestTheSpecializationRow:
+    """`specializations()` answers with a type that can explain itself."""
+
+    def test_it_is_still_a_mapping(self, tmp_path, built):
+        """A dict, like Validation, so readers written against the keys keep
+        working -- the type is in addition to the mapping, not instead of it."""
+        row = v2(tmp_path, use_specializations=False).specializations()[0]
+        assert isinstance(row, dict)
+        assert row['matches'] is True
+        assert row['hash'] == v1(tmp_path).hash
+        assert sorted(row) == ['builds', 'entry', 'hash', 'matches', 'paths',
+                               'specialization', 'topics', 'why']
+
+    def test_it_is_truthy_exactly_when_it_resolved(self, tmp_path, built):
+        resolved = v2(tmp_path, use_specializations=False).specializations()[0]
+        assert resolved and resolved.resolved and resolved['paths'] is not None
+
+        missed = v2(tmp_path / 'elsewhere').specializations()[0]
+        assert not missed and not missed.resolved and missed['paths'] is None
+
+    def test_topics_and_builds_are_complements(self, tmp_path):
+        row = v2(tmp_path).specializations()[0]
+        assert row['topics'] == ['spectra']
+        assert row['builds'] == ['phases']
+        block = v2(tmp_path)
+        assert row['topics'] + row['builds'] == block.topics()
+
+    def test_builds_is_this_rows_answer_not_the_installed_one(self, tmp_path):
+        """`ownedtopics()` answers for the redirection a block HAS; a row is
+        about one it may not have, so it computes its own complement."""
+        block = v2(tmp_path, use_specializations=False)
+        assert block.ownedtopics() == block.topics()      # nothing installed
+        assert block.specializations()[0]['builds'] == ['phases']
+
+    @pytest.mark.parametrize('verdict,make', [
+        ('RESOLVED', lambda p: v2(p, use_specializations=False)),
+        ('DOES NOT APPLY', lambda p: v2(p, spec={'sr': 16000, 'window': 'x'})),
+    ])
+    def test_the_report_names_the_outcome(self, tmp_path, built, verdict, make):
+        assert verdict in str(make(tmp_path).specializations()[0])
+
+    def test_the_report_carries_the_note(self, tmp_path):
+        """The note is the only record of WHY the coincidence holds, so the
+        report that says a specialization applied has to show it."""
+        assert 'hann was the only window' in str(
+            v2(tmp_path).specializations()[0])
+
+
+class TestWhyItDidNotResolve:
+    """Four ways to come back with nothing, and four things to do about it."""
+
+    def test_a_pin_that_does_not_fit_names_both_values(self, tmp_path):
+        why = v2(tmp_path, spec={'sr': 16000, 'window': 'hamming'}
+                 ).specializations()[0]['why']
+        assert "window='hann'" in why        # what it is for
+        assert "window='hamming'" in why     # what this block is
+
+    def test_never_built_here_says_so(self, tmp_path, built):
+        """Distinct from "built and then cleared": one means the hash is wrong
+        or the lake is, the other means the data went away."""
+        block = v2(tmp_path, spec={'sr': 22050})
+        assert block.matching_specializations()          # it applies
+        why = block.specializations()[0]['why']
+        assert 'never built here' in why or 'no journal' in why, why
+
+    def test_a_cleared_build_says_the_data_is_gone(self, tmp_path, built):
+        """The case that used to read identically to never having been built,
+        and calls for the opposite response."""
+        os.remove(built.path('spectra'))
+        row = v2(tmp_path).specializations()[0]
+        assert not row
+        assert 'not there any more' in row['why']
+        assert 'cleared' in row['why']
+
+    def test_the_reason_is_one_line(self, tmp_path):
+        """It is joined into `why` and printed in a field-per-line report, and
+        an exception's own message may carry newlines."""
+        why = v2(tmp_path / 'nowhere').specializations()[0]['why']
+        assert '\n' not in why

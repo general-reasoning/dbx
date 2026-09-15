@@ -148,6 +148,27 @@ All notable changes to this project will be documented in this file.
   entry a sibling wrote during the same build. That is right for a
   specialization, which resolves to a build that predates this one.
 
+  **`specializations()` answers with a `SpecializationRow`**, which explains
+  itself. A dict, like `Validation`, so every reader written against the keys
+  goes on working -- and a type, so the answer renders as a report instead of
+  each caller assembling one out of `dict(matches=..., why=..., ...)`. Truthy
+  exactly when it RESOLVED, which is the question being asked, so `if not row:`
+  reads correctly. Two new keys the caller used to compute: `topics` (what the
+  specialization names) and `builds` (this block's topics that it does not --
+  what a build would still have to produce). `builds` is deliberately not
+  `ownedtopics()`: that answers for the redirection a block HAS, and a row is
+  about one it may not have.
+
+  **And `why` says which of four things went wrong**, because they call for
+  four different responses: the narrower block was never built here, it was
+  built and its data has since been cleared, an entry records only some of the
+  topics (a specialization is all of them or none), or a pin does not fit this
+  block. The first two used to read identically -- "no entry with hash ...
+  records data that is still there" -- and they are the pair most worth telling
+  apart. A pin mismatch went from `window='hamming', pinned 'hann'` to naming
+  both sides and saying that it therefore describes a different block, which is
+  what a pin is FOR and not something to fix.
+
 - **`UNSAFE_redirect(dry_run=True)`**, and `UNSAFE_specialize(dry_run=True)`.
   Resolves the whole redirection and reports what it would record — the record,
   the specialization, the source journal entry, the resulting paths, and the

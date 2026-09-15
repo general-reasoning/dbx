@@ -3361,6 +3361,57 @@ class Datablock:
         #: -- in `redirection`, and in the journal entry that records it.
         specialization: Optional['Datablock.Specialization'] = None
 
+    class SpecializationRow(dict):
+        """What one declared :class:`Specialization` did, and why.
+
+        A dict, like :class:`Validation`, so every reader written against the
+        mapping goes on working -- and a type, so the answer can render itself
+        instead of each caller assembling one out of the keys. Truthy exactly
+        when it RESOLVED, which is the question being asked::
+
+            row = block.specializations()[0]
+            if not row:
+                print(row)          # the whole story, in order
+
+        Keys: `specialization`, `hash` (the narrower block's, reconstructed),
+        `matches` (its pins fit this block), `why` (the one reason it did not
+        work, None when nothing went wrong), `entry` (the journal entry it
+        resolved to), `paths` ({topic: path}), `topics` (what it names) and
+        `builds` (this block's topics that it does NOT name -- what a build
+        would still have to produce).
+        """
+
+        @property
+        def resolved(self) -> bool:
+            """Whether it found a build to read, which is the whole question."""
+            return self.get('paths') is not None
+
+        def __bool__(self):
+            return self.resolved
+
+        def __repr__(self):
+            sp = self.get('specialization')
+            note = getattr(sp, 'note', '')
+            if self.resolved:
+                verdict = f"RESOLVED to journal entry {self['entry']}"
+            elif self.get('matches'):
+                verdict = "applies, but DID NOT RESOLVE"
+            else:
+                verdict = "DOES NOT APPLY"
+            lines = [f"{self.__class__.__name__}: {verdict}"]
+            for label, value in (
+                ('why', self.get('why')),
+                ('note', note or None),
+                ('hash', self.get('hash')),
+                ('reads', ', '.join(self.get('topics') or []) or None),
+                ('builds', ', '.join(self.get('builds') or []) or None),
+            ):
+                if value is not None:
+                    lines.append(f"    {label:7} {value}")
+            return '\n'.join(lines)
+
+        __str__ = __repr__
+
     class Validation(dict):
         """``{topic: bool}`` -- whether each topic's data is where it is read from.
 
@@ -5741,10 +5792,12 @@ class Datablock:
         for k, v in specialization.spec.items():
             mine, pinned = typed[k], self._specialization_pin(k, v)
             if repr(mine) != repr(pinned):
-                return f"{k}={mine!r}, pinned {pinned!r}"
+                return (f"it is for {k}={pinned!r} and this block has {k}={mine!r}, "
+                        f"so it describes a different block -- which is what a pin is "
+                        f"for, and not something to fix here")
         if self.get_hash(specialization) == self.hash:
-            return ("it reconstructs this block's own identity -- it drops no field "
-                    "and no topic, so there is no narrower block to read")
+            return ("it reconstructs this block's own identity -- it drops no field, "
+                    "no topic and no version, so there is no narrower block to read")
         return None
 
     def matching_specializations(self):
@@ -5752,7 +5805,7 @@ class Datablock:
         return [sp for sp in (self.SPECIALIZATIONS or [])
                 if self._specialization_mismatch(sp) is None]
 
-    def _specialization_paths(self, specialization, journal=None):
+    def _specialization_paths(self, specialization, journal=None, why=None):
         """``{topic: path}`` for *specialization*, from the journal, or None.
 
         The entry is looked up by the reconstructed hash -- there is no other
@@ -5761,38 +5814,65 @@ class Datablock:
         that hash, or when the paths it records are not there any more: a
         specialization that resolves to missing data has not resolved, and the
         next one should get its turn.
+
+        *why* is a list to append the reason to, when there is no result. There
+        are four different ways to come back with nothing and they call for four
+        different things to be done about it, so "it did not resolve" is not an
+        answer anyone can act on. :meth:`specializations` passes one.
         """
+        def note(reason):
+            # One line per reason: these are joined into a single `why`, and an
+            # exception's own message may carry newlines of its own.
+            if why is not None:
+                why.append(' '.join(str(reason).split()))
+
         h = self.get_hash(specialization)
         try:
             j = self.journal(hash=h) if journal is None else Datajournal(
                 journal, storage_options=self.storage_options, hash=h)
         except (FileNotFoundError, KeyError, TypeError) as e:
             self.log.detailed(f"specialization: no journal to resolve {h} in: {e}")
+            note(f"there is no journal under {self.anchor!r} to look for hash {h} "
+                 f"in ({e})")
             return None
         if len(j) == 0:
+            note(f"the journal under {self.anchor!r} holds no entry at all for hash {h}, "
+                 f"so the narrower block was never built here")
             return None
+        candidates = 0
         for i in range(len(j)):
             entry = DatajournalEntry(j.iloc[i].dropna(), storage_options=self.storage_options)
             if entry.get('event') not in self.SPECIALIZATION_EVENTS:
                 continue
+            candidates += 1
             recorded = entry.block.paths()
             if not isinstance(recorded, dict) or not recorded:
+                note(f"entry {entry.block.id} records no paths at all")
                 continue
             wanted = self._toplevel_topics(specialization.topics)
             paths = {t: recorded[t] for t in wanted if t in recorded}
             if len(paths) < len(wanted):
+                missing = sorted(set(wanted) - set(paths))
                 self.log.verbose(
                     f"specialization: entry {entry.block.id} for hash {h} records no path "
-                    f"for {sorted(set(wanted) - set(paths))}; skipping it"
+                    f"for {missing}; skipping it"
                 )
+                note(f"entry {entry.block.id} records no path for {missing} -- a "
+                     f"specialization is all of its topics or none of them")
                 continue
-            if not self.valid_path(list(paths.values())):
+            gone = sorted(t for t, p in paths.items() if not self.valid_path(p))
+            if gone:
                 self.log.verbose(
                     f"specialization: entry {entry.block.id} for hash {h} records paths that "
                     f"are not there any more; skipping it"
                 )
+                note(f"entry {entry.block.id} records {gone} at paths that are not there "
+                     f"any more -- that build has been cleared")
                 continue
             return paths, entry
+        if not candidates:
+            note(f"the {len(j)} journal entries for hash {h} are all of other events; "
+                 f"none is a {' or '.join(self.SPECIALIZATION_EVENTS)}")
         return None
 
     def _toplevel_topics(self, topics):
@@ -5809,8 +5889,16 @@ class Datablock:
         """
         rows = []
         for sp in (self.SPECIALIZATIONS or []):
-            row = {'specialization': sp, 'hash': None, 'matches': False,
-                   'why': None, 'entry': None, 'paths': None}
+            named = self._toplevel_topics(sp.topics)
+            row = self.SpecializationRow(
+                specialization=sp, hash=None, matches=False, why=None,
+                entry=None, paths=None, topics=named,
+                # This specialization's complement, which is what a build would
+                # be left with if it were installed. Not `ownedtopics()`: that
+                # answers for the redirection this block HAS, and this row is
+                # about one it might not.
+                builds=[t for t in self.topics() if t not in named],
+            )
             try:
                 why = self._specialization_mismatch(sp)
             except (ValueError, KeyError) as e:
@@ -5823,9 +5911,11 @@ class Datablock:
                 rows.append(row)
                 continue
             row['matches'] = True
-            resolved = self._specialization_paths(sp, journal=journal)
+            reasons = []
+            resolved = self._specialization_paths(sp, journal=journal, why=reasons)
             if resolved is None:
-                row['why'] = f"no entry with hash {row['hash']} records data that is still there"
+                row['why'] = '; '.join(reasons) or (
+                    f"no entry with hash {row['hash']} records data that is still there")
             else:
                 row['paths'], entry = resolved
                 row['entry'] = entry.block.id

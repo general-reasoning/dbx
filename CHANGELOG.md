@@ -114,6 +114,40 @@ All notable changes to this project will be documented in this file.
   Ownership does not change when a build runs; owing does. The two are one
   letter apart, so each docstring names the other.
 
+  **One journal read for a whole stack, not one per child.** A block resolves
+  its specializations in `__setstate__` -- at CONSTRUCTION, before anything
+  calls `__build__` -- and resolving means reading the journal. A stack
+  constructs every child, so a stack whose children are specialized paid one
+  read PER CHILD: invisible against a local directory, a glob over
+  `**/*.parquet` plus a parquet read per child against the object storage these
+  stacks actually live on. Measured on a 24-tab table: 22 reads, 0.92 per tab.
+
+  `Datablock.__init__` takes `specialization_journal=`, a journal already read
+  for `_install_specialization` to resolve against instead of reading one --
+  the `journal=` argument that `_install_specialization`, `UNSAFE_redirect` and
+  `_specialization_paths` have always accepted and that nothing ever passed.
+  `Datastack.child_specialization_journal()` reads the children's journal once
+  and keeps it; `DatapointTable.__tab__` hands it to every tab, but only when
+  the TAB declares SPECIALIZATIONS, so a table whose tabs have none reads
+  nothing. The same table now: 2 reads. A Tab class opts in by declaring
+  SPECIALIZATIONS and nothing else.
+
+  It could NOT have been a `journal=` kwarg on `__build__`, which is the
+  obvious place to reach for: by then every read has already happened.
+
+  Nothing crosses to a worker. `__getstate__` already carries a resolved
+  `__redirected_paths__` through a pickle, so a child that resolved in the
+  parent arrives with its answer and reads nothing -- better than shipping a
+  journal frame per worker. And `specialization_journal` is in the new
+  `TRANSIENT_PARAMS`, so it is exempt from `__explicit_params__()` and never
+  reaches `parameters`, `dfn`, `quote()`, `cite()` or a pickle: a block
+  reconstructed from any of those must come back the same block, and one
+  carrying a stale journal would not.
+
+  The shared journal is a SNAPSHOT: a child resolving against it cannot see an
+  entry a sibling wrote during the same build. That is right for a
+  specialization, which resolves to a build that predates this one.
+
 - **`UNSAFE_redirect(dry_run=True)`**, and `UNSAFE_specialize(dry_run=True)`.
   Resolves the whole redirection and reports what it would record — the record,
   the specialization, the source journal entry, the resulting paths, and the

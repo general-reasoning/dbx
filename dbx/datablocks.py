@@ -1914,6 +1914,15 @@ class Datablock:
     #: switches off.
     USE_SPECIALIZATIONS = True
 
+    #: Constructor parameters that are NOT part of what a block IS: aids handed
+    #: in to save it work, rather than properties of it. They are in the
+    #: signature, so they are discoverable and typed like any other parameter,
+    #: and out of :meth:`__explicit_params__` -- hence out of `parameters`,
+    #: `dfn`, `quote()`, `cite()` and the journal record -- because a block
+    #: reconstructed from any of those must come back the same block, and one
+    #: that came back carrying a stale journal would not.
+    TRANSIENT_PARAMS = ('specialization_journal',)
+
     #: VAR field names exempt from :meth:`VAR.LazyLoader._check_renderable` --
     #: the check that a value can be rendered into the identity deterministically.
     #: An exemption does not take the field out of the identity: it goes on
@@ -1950,6 +1959,11 @@ class Datablock:
         # class's USE_SPECIALIZATIONS: True installs and records, 'memory'
         # installs without recording, False declines to look.
         use_specializations: 'bool | str | None' = None,
+        # A journal already read, for :meth:`_install_specialization` to resolve
+        # against instead of reading one itself. Operational, and transient: it
+        # travels under a private state key so it never reaches `parameters`,
+        # `quote()` or a pickle -- see __setstate__.
+        specialization_journal=None,
         validate_vars: bool = True,
         # DEPRECATED alias of validate_vars. Kept as an explicit parameter so a
         # dfn recorded before the rename still reconstructs faithfully. Left to
@@ -1994,6 +2008,7 @@ class Datablock:
             'redirect': redirect,
             'use_specializations': use_specializations,
             'validate_vars': validate_vars if validate_cfg is None else validate_cfg,
+            '__specialization_journal__': specialization_journal,
             'storage_options': storage_options,
             'local': local,
             'local_must_exist': local_must_exist,
@@ -2153,6 +2168,15 @@ class Datablock:
         self.validate_vars = state.get('validate_vars', True)
         self._paths_ = None
 
+        # Popped, not read: it must not reach `state_params`, which is what
+        # becomes `self.parameters` and so `quote()`, `cite()` and the journal
+        # record. A journal is a frame of every build this anchor ever had --
+        # not something to render into a specline, and not something to carry
+        # into a pickle. Transient by construction: `__getstate__` never emits
+        # it, so a block that resolved in the parent travels with its RESULT
+        # (`__redirected_paths__`) and needs no journal in the worker.
+        specialization_journal = state.pop('__specialization_journal__', None)
+
         explicit_keys = set(self.__explicit_params__())
         state_params = {k: v for k, v in state.items() if k not in explicit_keys}
 
@@ -2192,7 +2216,7 @@ class Datablock:
         if carried is not None:
             self.__dict__['__redirected_paths__'] = carried
         else:
-            self._install_specialization()
+            self._install_specialization(journal=specialization_journal)
         self.log.detailed(f"======--------------> code: {self.code}")
 
     def _process_redirect(self):
@@ -2351,7 +2375,9 @@ class Datablock:
         sig = inspect.signature(Datablock.__init__)
         return [
             p.name for p in sig.parameters.values()
-            if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD) and p.name != 'self'
+            if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+            and p.name != 'self'
+            and p.name not in Datablock.TRANSIENT_PARAMS
         ]
     
     def set(self, **kw):
@@ -6949,6 +6975,51 @@ class Datastack(Datablock):
         except Exception as e:
             self.log.detailed(f"block_journal: could not load journal for child blocks: {e}")
             return None
+
+    def child_specialization_journal(self):
+        """The children's journal, read ONCE, for them to resolve against.
+
+        A block that declares :attr:`SPECIALIZATIONS` resolves them in
+        ``__setstate__`` -- at CONSTRUCTION, before anything calls
+        ``__build__`` -- and resolving means reading the journal. A stack
+        constructs every child, so a stack whose children are specialized pays
+        one journal read PER CHILD: invisible against a local directory, and a
+        glob over ``**/*.parquet`` plus a parquet read per child against object
+        storage, which is where these stacks live.
+
+        Hand this to each child as ``specialization_journal=`` and the N reads
+        become one. :class:`~dbx.datatables.DatapointTable` does that for its
+        tabs already; a stack with a hand-written ``__block__`` opts in with
+        one line, and a stack whose children declare no specializations should
+        not call this at all -- there is nothing for them to resolve.
+
+        Reading it means constructing child 0, which is itself a child
+        construction, so the reentrant call is answered with None: block 0
+        resolves the old way, once, and pays for everyone.
+
+        A snapshot, deliberately. A child resolving against it cannot see an
+        entry a SIBLING wrote during this same build -- which is right, since a
+        specialization resolves to a build that predates this one, and a child
+        reading a sibling's fresh entry would be resolving to data being
+        written underneath it.
+        """
+        cached = self.__dict__.get('__child_journal__', ABSENT)
+        if cached is not ABSENT:
+            return cached
+        if self.__dict__.get('__reading_child_journal__'):
+            return None
+        self.__dict__['__reading_child_journal__'] = True
+        try:
+            journal = self.block_journal()
+        finally:
+            self.__dict__.pop('__reading_child_journal__', None)
+        n = 'no' if journal is None else len(journal)
+        self.log.verbose(
+            f"{self.__class__.__name__}: read the child journal once "
+            f"({n} entries) for {self.n_blocks} children to resolve against"
+        )
+        self.__dict__['__child_journal__'] = journal
+        return journal
 
     def valid_block(self, idx: int) -> bool:
         """Return whether the block at index *idx* is valid."""

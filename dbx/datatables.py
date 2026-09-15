@@ -966,7 +966,18 @@ class DatapointTable(DatapointBase, Datastack):
             raise NotImplementedError(
                 f"{self.__class__.__name__} must set TAB = <DatapointTab subclass>"
             )
+        # A TAB that declares SPECIALIZATIONS resolves them as it is
+        # constructed, which means reading the journal -- once per tab, for
+        # every tab of the table. Handing down the one this table already read
+        # makes that a single read. Only when the TAB declares any: a table
+        # whose tabs have none must not read a journal it has no use for.
+        # See Datastack.child_specialization_journal.
+        specialization_journal = (
+            self.child_specialization_journal()
+            if getattr(self.TAB, 'SPECIALIZATIONS', None) else None
+        )
         return self.TAB(
+            specialization_journal=specialization_journal,
             # The table's own url, RAW -- the specline it was given, not what
             # that resolved to -- so a relocatable table stays relocatable tab
             # by tab. Without it a tab fell back to DBX_ROOT, and a table built

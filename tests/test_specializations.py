@@ -412,11 +412,12 @@ class RowTab(DatapointTab):
         tab_idx: int = 0
 
     def __build__(self):
-        with open(self.path('rows', ensure_dirpath=True), 'w') as f:
-            f.write(f"rows-{self.var.tab_idx}\n")
+        for topic in self.ownedtopics():
+            with open(self.path(topic, ensure_dirpath=True), 'w') as f:
+                f.write(f"{topic}-{self.var.tab_idx}\n")
 
     def __read__(self, *topicpath):
-        with open(self.path('rows')) as f:
+        with open(self.path(*self._normtopic(topicpath))) as f:
             return f.read()
 
 
@@ -479,7 +480,8 @@ class RowTableV2(RowTableV1):
 
 
 def v1table(url, **kw):
-    return RowTableV1(url=str(url), anchor=TABLE_ANCHOR, spec={'n': 2}, **kw)
+    spec = kw.pop('spec', {'n': 2})
+    return RowTableV1(url=str(url), anchor=TABLE_ANCHOR, spec=spec, **kw)
 
 
 def v2table(url, **kw):
@@ -676,3 +678,118 @@ class TestTheOwnedOwedPair:
         assert Datablock.buildtopics is Datablock.ownedtopics
         block = v2(tmp_path)
         assert block.buildtopics() == block.ownedtopics()
+
+
+class TestOneJournalReadForAWholeTable:
+    """A specialized TAB resolves as it is CONSTRUCTED, not as it is built.
+
+    `_install_specialization` runs in `__setstate__`, and resolving means
+    reading the journal -- so a table that constructs N tabs paid N journal
+    reads, each a glob over `**/*.parquet` plus a parquet read against whatever
+    storage the lake is on. That is what made per-tab specializations
+    impractical rather than merely expensive, and it is why a `journal=` kwarg
+    on `__build__` could not have fixed it: by then every read has happened.
+    """
+
+    N = 12
+
+    @staticmethod
+    def _counting(monkeypatch):
+        """Every Datablock.journal() call, in order."""
+        seen = []
+        original = Datablock.journal
+
+        def counting(self, *args, **kwargs):
+            seen.append(self.anchor)
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(Datablock, 'journal', counting)
+        return seen
+
+    @staticmethod
+    def _grow_the_tab(monkeypatch):
+        """RowTab grows a topic IN PLACE, which is what a real class does.
+
+        Two differently-named classes would not do: a tab's anchor is its
+        fqcn, so the narrower hash would be looked for in a journal directory
+        it was never written to, and nothing would resolve.
+        """
+        monkeypatch.setattr(RowTab, 'TOPICS',
+                            {'rows': 'rows.txt', 'extra': 'extra.txt'})
+        monkeypatch.setattr(RowTab, 'SPECIALIZATIONS', [
+            Datablock.Specialization(spec={}, topics=['rows'],
+                                     note='extra is derived from rows')])
+
+    def test_the_reads_do_not_scale_with_the_tabs(self, tmp_path, monkeypatch):
+        v1table(tmp_path, spec={'n': self.N}).build()
+        self._grow_the_tab(monkeypatch)
+        seen = self._counting(monkeypatch)
+
+        table = v1table(tmp_path, spec={'n': self.N})
+        tabs = [table.tab(i) for i in range(self.N)]
+
+        assert tabs[0].redirected_topics() == ['rows']     # they did resolve
+        assert tabs[-1].redirected_topics() == ['rows']
+        assert tabs[-1].ownedtopics() == ['extra']
+        # One to read the shared journal, one for the tab constructed to get
+        # it -- O(1), against O(N) before.
+        assert len(seen) <= 2, seen
+
+    def test_a_table_whose_tabs_declare_none_reads_no_journal(self, tmp_path,
+                                                              monkeypatch):
+        """The gate: a journal nobody has a use for must not be read."""
+        assert not RowTab.SPECIALIZATIONS
+        seen = self._counting(monkeypatch)
+        table = v1table(tmp_path, spec={'n': self.N})
+        [table.tab(i) for i in range(self.N)]
+        assert seen == []
+
+    def test_the_journal_is_not_part_of_the_block(self, tmp_path, monkeypatch):
+        """It is transient: a frame of every build this anchor ever had has no
+        business in `parameters`, in a specline, or in a pickle."""
+        import pickle
+        v1table(tmp_path, spec={'n': 2}).build()          # narrow, first
+        self._grow_the_tab(monkeypatch)
+
+        tab = v1table(tmp_path, spec={'n': 2}).tab(0)
+        assert tab.redirected_topics() == ['rows']        # it really resolved
+        assert 'specialization_journal' not in tab.parameters
+        assert '__specialization_journal__' not in tab.parameters
+        assert 'specialization_journal' not in tab.quote()
+        assert '__specialization_journal__' not in tab.__getstate__()
+
+        # And what DOES travel is the resolution, so a worker re-reads nothing.
+        revived = pickle.loads(pickle.dumps(tab))
+        assert revived.redirected_topics() == ['rows']
+        seen = self._counting(monkeypatch)
+        pickle.loads(pickle.dumps(tab))
+        assert seen == []
+
+    def test_a_handed_journal_resolves_the_same_specialization(self, tmp_path,
+                                                               monkeypatch):
+        """The shortcut has to reach the same answer as the long way round."""
+        v1table(tmp_path, spec={'n': 2}).build()          # narrow, first
+        self._grow_the_tab(monkeypatch)
+
+        table = v1table(tmp_path, spec={'n': 2})
+        shared = table.child_specialization_journal()
+        assert shared is not None
+
+        alone = RowTab(url=str(tmp_path), spec={'tab_idx': 0})
+        handed = RowTab(url=str(tmp_path), spec={'tab_idx': 0},
+                        specialization_journal=shared)
+        assert alone.specialization is not None           # not vacuous
+        assert handed.specialization == alone.specialization
+        assert handed.redirected_topics() == alone.redirected_topics()
+        assert handed.path('rows') == alone.path('rows')
+
+    def test_the_reentrant_call_is_answered_rather_than_looping(self, tmp_path,
+                                                               monkeypatch):
+        """Reading the child journal constructs child 0, which is itself a
+        child construction. It gets None and resolves the old way, once."""
+        v1table(tmp_path, spec={'n': 2}).build()          # narrow, first
+        self._grow_the_tab(monkeypatch)
+        table = v1table(tmp_path, spec={'n': 2})
+        assert table.child_specialization_journal() is not None
+        assert table.child_specialization_journal() is \
+            table.child_specialization_journal()          # read once, kept

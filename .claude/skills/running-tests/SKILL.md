@@ -10,12 +10,14 @@ optional dependencies, so `python -m pytest` outside this env silently skips
 the modules that matter.
 
 ```bash
-/opt/homebrew/Caskroom/miniconda/base/envs/dbx/bin/python -m pytest -q
+/opt/homebrew/Caskroom/miniconda/base/envs/dbx/bin/python -m pytest -q   # macOS
+/home/dmitry/miniconda3/envs/dbx/bin/python -m pytest -q                 # linux
 ```
 
-Call the interpreter by absolute path. `conda activate dbx` does not survive
-between tool calls — each Bash invocation is a fresh shell — and `conda` on
-its own fails out of the shell snapshot on this machine.
+Call the interpreter by absolute path, and check which of the two exists here
+before using one. `conda activate dbx` does not survive between tool calls —
+each Bash invocation is a fresh shell — and `conda` on its own fails out of
+the shell snapshot on this machine.
 
 A full run takes **7–8 minutes**. A single module is seconds; scope with a
 path (`... -m pytest tests/test_stills.py -q`) while iterating and run the
@@ -46,6 +48,8 @@ declared extra:
 /opt/homebrew/Caskroom/miniconda/base/envs/dbx/bin/python -m pip install -e '.[all]'
 ```
 
-`tensorboard` is needed by `Still`'s `TensorBoardLogger` at run time but is
-pulled in only as a transitive dependency; if `TestWarmStart` errors with
-"Neither `tensorboard` nor `tensorboardX` is available", install it directly.
+`tensorboard` is needed by `Still`'s `TensorBoardLogger` at run time, and
+lightning does not declare it -- it raises "Neither `tensorboard` nor
+`tensorboardX` is available" from the Trainer instead. It is now declared in
+the `lightning` extra, so a reinstall picks it up; an env that predates that
+needs the reinstall above rather than a one-off `pip install tensorboard`.

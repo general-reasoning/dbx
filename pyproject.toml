@@ -64,6 +64,13 @@ lightning = [
     # why dbx/__init__.py does not import it, exactly as for dbx.datastreams.
     "datablocks[torch]",
     "lightning>=2.0",
+    # Still builds a TensorBoardLogger unconditionally, so this is a hard
+    # requirement of a training run and not an extra on top of one. lightning
+    # does not declare it: it raises "Neither `tensorboard` nor `tensorboardX`
+    # is available" at Trainer construction instead, which is late, and which
+    # arrived here as an error in TestWarmStart rather than as a missing
+    # dependency.
+    "tensorboard>=2.12",
 ]
 azure = [
     # The fsspec driver for abfs:// and abfss:// urls. Nothing imports it --

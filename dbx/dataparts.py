@@ -60,6 +60,14 @@ __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(_
 __exec__ = __builtins__['exec'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'exec')
 
 
+#: How dbx writes a timestamp: ``isoformat()`` with ``' '`` and ``':'`` replaced
+#: by ``'-'``, so that a timestamp can also be a path component. pandas cannot
+#: infer it -- dateutil reads the ``-`` between the hour and the minute as a
+#: date separator and raises -- so every parse of a journal ``datetime`` has to
+#: name it. That is what `_journal_datetimes_` is for.
+JOURNAL_DATETIME_FORMAT = '%Y-%m-%dT%H-%M-%S.%f'
+
+
 DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
 if DBX_GIT_REPO is None:
     try:
@@ -740,6 +748,57 @@ def _match_journal_filter(x, spec) -> bool:
         return _match_single_journal_val(x, spec)
 
 
+def _journal_datetimes_(series: pd.Series) -> pd.Series:
+    """Coerce a journal ``datetime`` column to real datetimes.
+
+    A block journal arrives already parsed -- `Datajournal` does it on the way
+    in -- and is handed back untouched. The exec journal does not: it reaches a
+    filter holding the raw `JOURNAL_DATETIME_FORMAT` strings, which pandas
+    cannot parse unaided.
+
+    Anything the exact format misses is parsed again rather than left as NaT,
+    because a filter that quietly drops the rows it could not read is worse
+    than one that reads them: ``isoformat()`` omits ``.%f`` on a whole second,
+    and a frame may carry a timestamp that came from somewhere other than dbx.
+    """
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series
+    parsed = pd.Series(pd.NaT, index=series.index, dtype='datetime64[ns]')
+    todo = series.notna()
+    for fmt in (JOURNAL_DATETIME_FORMAT, JOURNAL_DATETIME_FORMAT.removesuffix('.%f'), None):
+        if not todo.any():
+            break
+        parsed[todo] = pd.to_datetime(series[todo], format=fmt, errors='coerce')
+        todo &= parsed.isna()
+    return parsed
+
+
+def _journal_datetime_value_(v):
+    """Parse one datetime a caller filtered by, dbx's own format first."""
+    if isinstance(v, str):
+        try:
+            return datetime.datetime.strptime(v, JOURNAL_DATETIME_FORMAT)
+        except ValueError:
+            return pd.to_datetime(v)
+    return v
+
+
+def _journal_date_value_(v) -> datetime.date:
+    """Parse one date a caller filtered by. A datetime is truncated to its date."""
+    if isinstance(v, datetime.datetime):
+        return v.date()
+    if isinstance(v, datetime.date):
+        return v
+    return pd.Timestamp(_journal_datetime_value_(v)).date()
+
+
+def _journal_date_mask_(dt_series: pd.Series, v) -> pd.Series:
+    """Rows of *dt_series* falling on date *v*, or on any date in a list of them."""
+    if isinstance(v, (list, tuple)):
+        return dt_series.dt.date.isin([_journal_date_value_(x) for x in v])
+    return dt_series.dt.date == _journal_date_value_(v)
+
+
 def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
     """Filter a journal DataFrame by column matching, substring/pattern matching anywhere in the string, and date/datetime."""
     if df is None or df.empty or not filter_kwargs:
@@ -754,47 +813,19 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
             elif k == 'subsignature' and 'signature' in df.columns:
                 k = 'signature'
             elif k == 'date' and 'datetime' in df.columns:
-                dt_series = pd.to_datetime(df['datetime']) if not pd.api.types.is_datetime64_any_dtype(df['datetime']) else df['datetime']
-                if isinstance(v, str):
-                    target_date = pd.to_datetime(v).date()
-                elif isinstance(v, (list, tuple)):
-                    target_date = [pd.to_datetime(x).date() for x in v]
-                else:
-                    target_date = v
-                if isinstance(target_date, (list, tuple)):
-                    df = df[dt_series.dt.date.isin(target_date)]
-                else:
-                    df = df[dt_series.dt.date == target_date]
+                df = df[_journal_date_mask_(_journal_datetimes_(df['datetime']), v)]
                 continue
             else:
                 return df.iloc[0:0].reset_index(drop=True)
 
         if k == 'date':
-            dt_series = pd.to_datetime(df['datetime']) if not pd.api.types.is_datetime64_any_dtype(df['datetime']) else df['datetime']
-            if isinstance(v, str):
-                target_date = pd.to_datetime(v).date()
-            elif isinstance(v, (list, tuple)):
-                target_date = [pd.to_datetime(x).date() for x in v]
-            else:
-                target_date = v
-            if isinstance(target_date, (list, tuple)):
-                df = df[dt_series.dt.date.isin(target_date)]
-            else:
-                df = df[dt_series.dt.date == target_date]
+            df = df[_journal_date_mask_(_journal_datetimes_(df['datetime']), v)]
         elif k == 'datetime':
-            if isinstance(v, str):
-                try:
-                    v_dt = datetime.datetime.strptime(v, '%Y-%m-%dT%H-%M-%S.%f')
-                except ValueError:
-                    v_dt = pd.to_datetime(v)
-            elif isinstance(v, (list, tuple)):
-                v_dt = [pd.to_datetime(x) for x in v]
+            dt_series = _journal_datetimes_(df[k])
+            if isinstance(v, (list, tuple)):
+                df = df[dt_series.isin([_journal_datetime_value_(x) for x in v])]
             else:
-                v_dt = v
-            if isinstance(v_dt, (list, tuple)):
-                df = df[df[k].isin(v_dt)]
-            else:
-                df = df[df[k] == v_dt]
+                df = df[dt_series == _journal_datetime_value_(v)]
         else:
             df = df[df[k].apply(lambda x: _match_journal_filter(x, v))]
 

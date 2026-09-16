@@ -86,6 +86,7 @@ from dbx.datastreams import (
 
 __all__ = [
     'CheckpointBuilder',
+    'CheckpointPath',
     'DatasetBuilder',
     'LightningBuilder',
     'ModelBuilder',
@@ -418,6 +419,153 @@ class Weights(Datablock):
     CHUNK_BYTES = 64 * 1024 * 1024
 
     _is_intact = staticmethod(is_intact_archive)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CheckpointPath — a checkpoint named by path, not by the run that wrote it
+# ═══════════════════════════════════════════════════════════════════════
+
+class CheckpointPath(CheckpointBuilder):
+    """One checkpoint file, named literally, that another run can start from.
+
+    ``Still`` answers ``find_latest_ckpt()`` by listing its own ``ckpts``
+    topic, so warm-starting from an earlier run ordinarily means holding that
+    run's block -- which means reconstructing its whole ``VAR``, and which
+    stops being possible once the code that produced it has moved on (a
+    ``VERSION`` bump, a field added, a module renamed).  This names the file
+    instead, so a checkpoint can outlive the configuration that wrote it.
+
+    The path is a ``VAR`` field, so it lands in the identity: two runs started
+    from different checkpoints are different artifacts, and ``step=0319000``
+    stays distinguishable from ``step=0318000`` of the same source.  That is
+    the opposite trade from passing the source ``Still`` itself, whose key
+    records *which* run supplied the weights and deliberately does **not**
+    move as that run trains further.  Neither is the right answer in general:
+    pick the one whose identity records what you will want to have recorded.
+    Here it is the file, because a path is all that is left of a run whose
+    still can no longer be built.
+
+    A warm start, not a resume.  This is a ``CheckpointBuilder``, so ``Still``
+    takes the weights only, at step 0, with a fresh optimizer.  Handing the
+    same path to ``VAR.ckpt_builder`` as a bare **string** is the other
+    behaviour -- a full resume, optimizer state and step counter included --
+    which is what you want only when pointing a run at its own checkpoint that
+    has moved.
+    """
+
+    VERSION = 1
+
+    #: Writes nothing, and says so.  `TOPICS = []` renders into the identity as
+    #: () where a class declaring no TOPICS at all renders as ("topics:None",);
+    #: either would do for a new class with no artifacts to re-key, and this is
+    #: the one that states the intent.
+    TOPICS = []
+
+    @dataclass
+    class VAR(CheckpointBuilder.VAR):
+        ckpt_path: str | None = None
+
+    # 1. Datablock protocol ─────────────────────────────────────────
+
+    def valid(self):
+        """True when the checkpoint this block names is actually there.
+
+        Not the base "a block with no topics is always valid": the single
+        claim this block makes is that one file exists, so checking it turns a
+        mistyped path into a failure now rather than a ``FileNotFoundError``
+        however many hours into a run.
+
+        ``Still`` does not consult this on its way to a build -- its
+        ``ckpt_builder`` is in ``TREE_SKIP_VALIDATION`` -- so this answers a
+        direct caller, and is worth calling before launching a run.
+        """
+        if self.var.ckpt_path is None:
+            return False
+        try:
+            return self.fs.exists(str(self.var.ckpt_path))
+        except Exception:
+            return False
+
+    def __build__(self):
+        """Nothing to build: the checkpoint is another run's artifact.
+
+        A no-op rather than a raise, unlike ``LightningBuilder.__build__``:
+        reaching it is not evidence of a bug, since ``build_tree()`` may walk
+        here perfectly legitimately.  This block only ever reads a file it did
+        not write.
+        """
+        return self
+
+    # 2. Declared API ───────────────────────────────────────────────
+
+    def find_latest_ckpt(self, *, pull: bool = False) -> str | None:
+        """The checkpoint this block names, or ``None`` when it names none.
+
+        "Latest" is the name of the protocol method, not a claim being made
+        about this file: there is exactly one here, and pinning it is the
+        whole point.
+
+        *pull* keeps ``Still.find_latest_ckpt``'s meaning.  False answers with
+        the path as given -- possibly remote, not downloaded, not checked.
+        True answers with a local and intact one, fetching it if need be,
+        which is the form ``torch.load`` and Lightning's ``ckpt_path=`` both
+        require.
+        """
+        if self.var.ckpt_path is None:
+            return None
+        src = str(self.var.ckpt_path)
+        if not pull:
+            return src
+
+        if os.path.isfile(src):
+            # Already a local file.  Returned as it stands: copying a multi-GB
+            # checkpoint under our own key would spend the disk to gain
+            # nothing, since we are not the ones who own or clean it up.
+            self._require_intact_(src, src)
+            return src
+
+        if not self.fs.exists(src):
+            raise FileNotFoundError(
+                f"{type(self).__name__}: no checkpoint at {src} -- "
+                f"VAR.ckpt_path names a file that is not there"
+            )
+        dest = self._local_ckpt_path_()
+        if not is_intact_archive(dest):
+            self.localfs.makedirs(os.path.dirname(dest), exist_ok=True)
+            self.log.info("%s: fetching %s -> %s", type(self).__name__, src, dest)
+            self.pull(src, dest, show_progress=True)
+        self._require_intact_(dest, src)
+        return dest
+
+    # 3. Accessors ──────────────────────────────────────────────────
+
+    @property
+    def ckpt_step(self) -> int:
+        """The training step the filename encodes, or -1 -- for a banner or a log."""
+        if self.var.ckpt_path is None:
+            return -1
+        return Still._ckpt_step_(os.path.basename(str(self.var.ckpt_path)))
+
+    # 4. Helpers ────────────────────────────────────────────────────
+
+    def _local_ckpt_path_(self) -> str:
+        """Where a remote checkpoint is staged: under this block's own local key.
+
+        Its own key and not a shared scratch dir, so two `CheckpointPath`
+        blocks naming same-named files from different runs -- which is the
+        norm, since a step number is all that distinguishes them -- cannot
+        land on top of each other.
+        """
+        return os.path.join(self.localanchorkeypath, os.path.basename(str(self.var.ckpt_path)))
+
+    def _require_intact_(self, path, src):
+        """Raise unless *path* is a readable archive, saying where it came from."""
+        if not is_intact_archive(path):
+            raise RuntimeError(
+                f"{type(self).__name__}: {path} is not a readable checkpoint "
+                f"archive (from {src}) -- it is truncated or was not a "
+                f"checkpoint to begin with"
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════

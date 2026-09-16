@@ -58,6 +58,7 @@ __eval__ = __builtins__['eval']
 from . import dataparts
 from .dataparts import (
     InlineCallableExecutor,
+    JOURNAL_DATETIME_FORMAT,
     Logger,
     LogVolume,
     MultiprocessingCallableExecutor,
@@ -1411,7 +1412,7 @@ class Datajournal(pd.DataFrame):
         # Process the dataframe before calling super().__init__()
         if parse_datetimes:
             if 'datetime' in df.columns and not isinstance(df['datetime'].iloc[0], datetime.datetime): # TODO: use dtype?
-                df['datetime'] = pd.to_datetime(df['datetime'], format='%Y-%m-%dT%H-%M-%S.%f')
+                df['datetime'] = pd.to_datetime(df['datetime'], format=JOURNAL_DATETIME_FORMAT)
         df = filter_journal_frame(df, **filter_kwargs)
 
         if index is not None:

@@ -22,6 +22,7 @@ import lightning as L
 from dbx.datablocks import Datablock
 from dbx.stills import (
     CheckpointBuilder,
+    CheckpointPath,
     DatasetBuilder,
     LightningBuilder,
     ModelBuilder,
@@ -747,3 +748,116 @@ class TestWeights:
         bad = Registry(url=str(tmp_path / 's2'), tag='b', spec=dict(ckpt='nope'))
         with pytest.raises(ValueError, match="unknown checkpoint"):
             bad.build()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CheckpointPath — a warm-start source named by path
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestCheckpointPath:
+    """A checkpoint addressed as a file, for when its Still can no longer be built.
+
+    ``ckpt_builder=<Still>`` needs that Still reconstructed, which stops being
+    possible after a ``VERSION`` bump or a module move -- while the checkpoint
+    itself is still sitting there and still holds the weights. This names it.
+    """
+
+    @pytest.fixture(scope='class')
+    def source(self, tmp_path_factory):
+        still = make_still(tmp_path_factory.mktemp('cp_source'))
+        still.build()
+        return still
+
+    @pytest.fixture
+    def ckpt(self, source):
+        return source.find_latest_ckpt(pull=True)
+
+    def make(self, root, path):
+        return CheckpointPath(url=str(root), tag='cp', spec=dict(ckpt_path=path))
+
+    # Identity ──────────────────────────────────────────────────────
+
+    @pytest.mark.pinned
+    def test_the_path_is_in_the_identity(self, tmp_path):
+        """The reason this class exists rather than a bare string.
+
+        A run warm-started from step 319000 has to be a different artifact
+        from the same run warm-started from step 318000 -- they hold
+        different weights. If these two ever hash alike, the second run
+        silently lands on the first one's key and reads back its checkpoints.
+        """
+        a = self.make(tmp_path, '/ckpts/epoch=029-step=0319000.ckpt')
+        b = self.make(tmp_path, '/ckpts/epoch=029-step=0318000.ckpt')
+        assert a.hash != b.hash
+
+    def test_the_same_path_is_the_same_block(self, tmp_path):
+        p = '/ckpts/epoch=029-step=0319000.ckpt'
+        assert self.make(tmp_path, p).hash == self.make(tmp_path, p).hash
+
+    # find_latest_ckpt ──────────────────────────────────────────────
+
+    def test_it_answers_with_the_path_it_was_given(self, tmp_path, ckpt):
+        assert self.make(tmp_path, ckpt).find_latest_ckpt() == ckpt
+
+    def test_no_path_is_no_checkpoint(self, tmp_path):
+        assert self.make(tmp_path, None).find_latest_ckpt() is None
+        assert self.make(tmp_path, None).valid() is False
+
+    def test_pull_of_a_local_file_hands_it_back_as_it_stands(self, tmp_path, ckpt):
+        """No copy: we neither own the file nor would clean the duplicate up."""
+        assert self.make(tmp_path, ckpt).find_latest_ckpt(pull=True) == ckpt
+
+    def test_pull_of_a_missing_file_raises(self, tmp_path):
+        block = self.make(tmp_path, str(tmp_path / 'nope.ckpt'))
+        with pytest.raises(FileNotFoundError, match='no checkpoint at'):
+            block.find_latest_ckpt(pull=True)
+
+    def test_pull_of_something_that_is_not_a_checkpoint_raises(self, tmp_path):
+        """A truncated download must not reach torch.load as if it were fine."""
+        junk = tmp_path / 'junk.ckpt'
+        junk.write_text('not a zip archive')
+        with pytest.raises(RuntimeError, match='not a readable checkpoint'):
+            self.make(tmp_path, str(junk)).find_latest_ckpt(pull=True)
+
+    # valid ─────────────────────────────────────────────────────────
+
+    def test_valid_is_whether_the_file_is_there(self, tmp_path, ckpt):
+        assert self.make(tmp_path, ckpt).valid() is True
+        assert self.make(tmp_path, str(tmp_path / 'gone.ckpt')).valid() is False
+
+    def test_the_step_is_read_off_the_filename(self, tmp_path):
+        assert self.make(tmp_path, '/c/epoch=029-step=0319000.ckpt').ckpt_step == 319000
+        assert self.make(tmp_path, '/c/handwritten.ckpt').ckpt_step == -1
+
+    # What a Still does with one ────────────────────────────────────
+
+    @pytest.mark.pinned
+    def test_a_still_treats_it_as_a_warm_start(self, tmp_path, ckpt):
+        """It is a CheckpointBuilder, so weights only, at step 0.
+
+        The same path passed as a bare string is a full resume instead --
+        which restores the source's epoch counter, and so can leave a run
+        that has trained nothing sitting at a key claiming it finished.
+        """
+        still = make_still(tmp_path, ckpt_builder=self.make(tmp_path, ckpt))
+        got, own_it, warm_start = still._resolve_resume_ckpt_()
+        assert warm_start is True
+        assert own_it is False
+        assert got == ckpt
+
+    def test_the_string_form_is_still_a_full_resume(self, tmp_path, ckpt):
+        """The distinction the block exists to make -- it has to keep holding."""
+        still = make_still(tmp_path, ckpt_builder=ckpt)
+        _, _, warm_start = still._resolve_resume_ckpt_()
+        assert warm_start is False
+
+    def test_the_banner_says_weights_only(self, tmp_path, ckpt):
+        block = self.make(tmp_path, ckpt)
+        plan = make_still(tmp_path, ckpt_builder=block)._resume_plan_()
+        assert 'warm start, weights only' in plan
+        assert block.key in plan
+
+    def test_the_still_hash_moves_with_the_checkpoint(self, tmp_path, ckpt):
+        a = make_still(tmp_path, ckpt_builder=self.make(tmp_path, ckpt))
+        b = make_still(tmp_path, ckpt_builder=self.make(tmp_path, ckpt + '.other'))
+        assert a.hash != b.hash

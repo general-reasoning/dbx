@@ -1054,7 +1054,7 @@ class TestDoneTopic:
     def test_valid_reads_it(self, tmp_path):
         still = _toy(tmp_path)
         assert still.valid() is False
-        still.UNSAFE_complete(OVERRIDE=True)
+        still.UNSAFE_done(OVERRIDE=True)
         assert still.valid() is True
 
     def test_a_finished_run_writes_it(self, tmp_path):

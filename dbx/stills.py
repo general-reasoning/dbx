@@ -618,14 +618,14 @@ class Still(CheckpointBuilder):
     #: every still re-keys; the bump is what puts that in the path rather than
     #: letting artifacts move silently. There is no read-compatibility with
     #: the old marker: a version=2 artifact is reached by redirecting its
-    #: ``ckpts``/``logs`` and then calling ``UNSAFE_complete()``, which writes
+    #: ``ckpts``/``logs`` and then calling ``UNSAFE_done()``, which writes
     #: the new topic.
     VERSION = 3
     #: ``done`` is a topic and not a marker file inside ``ckpts`` because
     #: completion is a thing this block produces, and dbx already knows how to
     #: write, validate, clear, copy and redirect one of those.  As a file it
     #: needed five hand-rolled special cases -- a local-then-remote existence
-    #: check in ``valid``, a two-location write in ``UNSAFE_complete``, a name
+    #: check in ``valid``, a two-location write in ``UNSAFE_done``, a name
     #: excluded from every checkpoint listing, and a line in the class
     #: docstring explaining that ``ckpts`` holds something that is not a
     #: checkpoint.  Matches ``DatapointTable``, which has always done it this
@@ -920,7 +920,7 @@ class Still(CheckpointBuilder):
                     self.check_run if self.check_run is not True else 1,
                 )
             else:
-                self.UNSAFE_complete(OVERRIDE=True)
+                self.UNSAFE_done(OVERRIDE=True)
             self._sync_to_remote_(reason='post-fit')
         finally:
             # Unregistered first: the sync below does the same work, and an
@@ -965,7 +965,7 @@ class Still(CheckpointBuilder):
 
     # ── UNSAFE_ helpers ────────────────────────────────────────────
 
-    def UNSAFE_complete(self, *, OVERRIDE: bool = False):
+    def UNSAFE_done(self, *, OVERRIDE: bool = False):
         """Write the ``done`` topic locally and remotely, forcing ``valid``.
 
         ``__build__`` calls this once ``trainer.fit()`` returns.  It is
@@ -985,7 +985,7 @@ class Still(CheckpointBuilder):
         storage consistent with each other, matching what a real run leaves
         behind.
         """
-        if not UNSAFE_allowed("UNSAFE_complete", OVERRIDE=OVERRIDE):
+        if not UNSAFE_allowed("UNSAFE_done", OVERRIDE=OVERRIDE):
             return self
         timestamp = datetime.now().isoformat() + "\n"
         local_done = self.path('done', local=True, ensure_dirpath=True)
@@ -995,7 +995,7 @@ class Still(CheckpointBuilder):
             with self.fs.open(self.path('done', ensure_dirpath=True), "w") as f:
                 f.write(timestamp)
         self.log.info(
-            "UNSAFE_complete: wrote the done topic (%s)",
+            "UNSAFE_done: wrote the done topic (%s)",
             "local" if self.is_local_fs else "local + remote",
         )
         return self
@@ -1075,7 +1075,7 @@ class Still(CheckpointBuilder):
             with everything else, which is what keeps post-copy ``valid`` (and
             the default ``validate=True``) passing.  A source that has none --
             an unfinished run -- copies without one, and
-            ``UNSAFE_complete()`` is how you declare the result complete.
+            ``UNSAFE_done()`` is how you declare the result complete.
         **kwargs
             Forwarded to the base (``OVERRIDE``, ``overwrite``, ``topicpaths``,
             ``validate``, ``always_copy_whole_dirpath``, ``show_progress``).
@@ -1396,7 +1396,7 @@ class Still(CheckpointBuilder):
             # Lightning's own name for it. True is one batch and an int is
             # that many, of train AND val. It silences the loggers and any
             # ModelCheckpoint -- but NOT this still's own upload callbacks,
-            # and not __build__'s UNSAFE_complete, which is why __build__
+            # and not __build__'s UNSAFE_done, which is why __build__
             # skips `done` itself rather than trusting this flag to.
             kwargs['fast_dev_run'] = self.check_run
         return kwargs

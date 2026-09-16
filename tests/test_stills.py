@@ -3,7 +3,7 @@
 The training-loop tests really do train: a 72-parameter linear model over a
 synthetic dataset for two epochs, which is fast and is the only way to pin what
 ``__build__`` actually leaves behind (checkpoints at both cadences, the
-``_COMPLETE`` marker, a resumable latest).
+``done`` topic, a resumable latest).
 """
 import inspect
 import os
@@ -225,9 +225,19 @@ class TestIdentity:
         ]
 
     @pytest.mark.pinned
-    def test_still_version_records_the_builder_change(self):
-        """VERSION 2 is what distinguishes a builder still from a cfg_ one."""
-        assert Still.VERSION == 2
+    def test_the_version_is_a_ledger_of_key_moving_changes(self):
+        """Every change that moves every still's key bumps VERSION, so the path
+        records it instead of artifacts drifting silently.
+
+            2 -- the builder VAR replaced the cfg_ surface
+            3 -- `done` became a topic of its own, changing TOPICS and so the
+                 signature, where completion had been a `_COMPLETE` file
+                 inside `ckpts`
+
+        Do not edit this to agree with a bump you made. Add the line saying
+        what moved -- that is the point of the pin.
+        """
+        assert Still.VERSION == 3
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -373,7 +383,7 @@ class TestBuild:
 
     def test_valid_only_after_the_complete_marker(self, trained):
         assert trained.valid() is True
-        assert os.path.exists(os.path.join(trained._local_ckpts_dir_, '_COMPLETE'))
+        assert os.path.exists(trained.path('done', local=True))
 
     def test_checkpoints_at_both_cadences(self, trained):
         names = [n for n in os.listdir(trained.dirpath('ckpts')) if n.endswith('.ckpt')]
@@ -417,7 +427,7 @@ class TestWarmStart:
     The failure this prevents is quiet. A full Lightning resume restores the
     epoch counter too, so a source that already reached its own ``max_epochs``
     leaves the new run with nothing to do: ``fit()`` returns at once, the
-    ``_COMPLETE`` marker is written, and an untrained model sits at a key that
+    ``done`` topic is written, and an untrained model sits at a key that
     claims to be trained.
     """
 
@@ -512,11 +522,17 @@ class TestWarmStart:
 
 
 class TestLoadWeightsOnly:
-    """The load itself -- what ``strict=False`` will and will not catch."""
+    """The load itself -- what ``strict=False`` will and will not catch.
+
+    Every still here asks for the lenient load explicitly: ``strict_loading``
+    defaults to True now, and under it a mismatch raises long before reaching
+    the checks these tests are about.
+    """
 
     @pytest.fixture
     def still(self, tmp_path):
-        return make_still(tmp_path)
+        return ToyStill(url=str(tmp_path), tag='toy', spec=toy_builders(tmp_path),
+                        num_workers=0, strict_loading=False)
 
     def _ckpt_(self, tmp_path, payload):
         path = tmp_path / 'hand.ckpt'
@@ -574,7 +590,7 @@ class TestLoadWeightsOnly:
         assert all(p.device.type == 'cpu' for p in model.parameters())
 
     def test_a_partial_match_is_allowed(self, still, tmp_path):
-        """A changed head is the reason this loads with strict=False at all."""
+        """A changed head is the reason strict_loading=False exists at all."""
         model = still.lightning_module
         state = dict(model.state_dict())
         state['some.extra.head'] = torch.zeros(3)
@@ -861,3 +877,218 @@ class TestCheckpointPath:
         a = make_still(tmp_path, ckpt_builder=self.make(tmp_path, ckpt))
         b = make_still(tmp_path, ckpt_builder=self.make(tmp_path, ckpt + '.other'))
         assert a.hash != b.hash
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  Devices, strategy, check_run, strict loading
+# ═══════════════════════════════════════════════════════════════════════
+
+def _toy(root, **kw):
+    return ToyStill(url=str(root), tag='toy', spec=toy_builders(root), num_workers=0, **kw)
+
+
+def _trainer_kwargs(root, **kw):
+    return _toy(root, **kw).trainer_kwargs(ckpts_dir='/tmp/x', callbacks=[], tb_logger=None)
+
+
+class TestDevices:
+    """``devices`` names the devices; ``n_devices`` only ever counted them."""
+
+    @pytest.mark.parametrize('spec, accelerator, devices', [
+        (['cuda'],            'cuda', 1),
+        (['cuda', 'cuda'],    'cuda', 2),
+        (['cuda:1', 'cuda:2'], 'cuda', [1, 2]),
+        (['cuda:2', 'cuda:1'], 'cuda', [2, 1]),
+        (['cpu'],             'cpu',  1),
+        (['cpu', 'cpu'],      'cpu',  2),
+        (['gpu'],             'gpu',  1),
+        ('cpu',               'cpu',  1),
+    ])
+    def test_it_resolves(self, tmp_path, spec, accelerator, devices):
+        k = _trainer_kwargs(tmp_path, devices=spec)
+        assert (k['accelerator'], k['devices']) == (accelerator, devices)
+
+    @pytest.mark.parametrize('spec', [1, 4, -1, 'auto'])
+    def test_lightnings_own_vocabulary_passes_through(self, tmp_path, spec):
+        """Anything Trainer(devices=) already took keeps working, accelerator
+        left to Lightning's 'auto' as before."""
+        k = _trainer_kwargs(tmp_path, devices=spec)
+        assert k['devices'] == spec
+        assert 'accelerator' not in k
+
+    def test_n_devices_still_works(self, tmp_path):
+        """The old surface is in recorded dfns; it cannot stop working."""
+        k = _trainer_kwargs(tmp_path, n_devices=4)
+        assert k['devices'] == 4 and 'accelerator' not in k
+
+    def test_the_default_is_one_device_and_no_accelerator(self, tmp_path):
+        k = _trainer_kwargs(tmp_path)
+        assert k['devices'] == 1
+        assert 'accelerator' not in k and 'strategy' not in k
+
+    @pytest.mark.parametrize('spec, why', [
+        (['cpu', 'cuda'],    'one Trainer runs on one accelerator'),
+        (['cuda:0', 'cuda'], 'all indexed or all bare'),
+        (['cpu:0', 'cpu:1'], 'cpu has no index'),
+        (['cuda:0', 'cuda:0'], 'named twice'),
+        (['cuda:x'],         'index is not an integer'),
+        ([],                 'empty'),
+        ([0, 1],             'not strings'),
+    ])
+    def test_it_refuses(self, tmp_path, spec, why):
+        with pytest.raises(ValueError):
+            _trainer_kwargs(tmp_path, devices=spec)
+
+    def test_the_two_surfaces_cannot_both_be_given(self, tmp_path):
+        with pytest.raises(ValueError, match='not both'):
+            _toy(tmp_path, devices=['cpu'], n_devices=2)
+
+    def test_a_strategy_is_passed_when_asked_for(self, tmp_path):
+        k = _trainer_kwargs(tmp_path, devices=['cpu', 'cpu'], strategy='ddp_spawn')
+        assert k['strategy'] == 'ddp_spawn'
+
+    @pytest.mark.pinned
+    def test_none_of_it_reaches_the_identity(self, tmp_path):
+        """Where a run executes is operational. If any of this moved the hash,
+        the same run on one GPU and on four would be two artifacts."""
+        base = _toy(tmp_path).hash
+        for kw in (dict(n_devices=8), dict(devices=['cpu', 'cpu']),
+                   dict(devices=['cuda:3']), dict(strategy='ddp_spawn'),
+                   dict(check_run=True)):
+            assert _toy(tmp_path, **kw).hash == base, kw
+
+
+class TestCheckRun:
+    """One batch through, to find the bug before the 30 epochs."""
+
+    def test_it_reaches_the_trainer(self, tmp_path):
+        """Ours is check_run; Lightning's own name for it is fast_dev_run."""
+        assert _trainer_kwargs(tmp_path, check_run=True)['fast_dev_run'] is True
+        assert _trainer_kwargs(tmp_path, check_run=3)['fast_dev_run'] == 3
+
+    def test_it_is_absent_by_default(self, tmp_path):
+        assert 'fast_dev_run' not in _trainer_kwargs(tmp_path)
+
+    @pytest.mark.pinned
+    def test_it_does_not_mark_the_block_complete(self, tmp_path):
+        """The whole hazard of a smoke test that goes through __build__.
+
+        fit() returning is what __build__ takes as "trained", so without this
+        one batch would write `done`, valid() would agree, and the real
+        build afterwards would skip the block entirely -- leaving an untrained
+        model at a key that claims otherwise.
+        """
+        still = _toy(tmp_path, check_run=True)
+        still.build()
+        assert still.valid() is False
+        assert not os.path.exists(still.path('done', local=True))
+
+    def test_without_it_the_block_is_built(self, tmp_path):
+        """The other half: the guard must not be suppressing ordinary runs."""
+        still = _toy(tmp_path)
+        still.build()
+        assert still.valid() is True
+
+
+class TestStrictLoading:
+    """``strict_loading`` on a weights-only load: does this checkpoint fit?"""
+
+    @pytest.fixture(scope='class')
+    def ckpt(self, tmp_path_factory):
+        source = make_still(tmp_path_factory.mktemp('strict_src'))
+        source.build()
+        return source.find_latest_ckpt(pull=True)
+
+    def _load(self, root, ckpt, *, strict, mutate=None):
+        still = _toy(root, strict_loading=strict)
+        model = still.var.lightning_builder.lightning_module
+        if mutate:
+            mutate(model)
+        return still._load_weights_only_(model, ckpt, why='test')
+
+    @pytest.mark.parametrize('strict', [False, True])
+    def test_matching_weights_load_either_way(self, tmp_path, ckpt, strict):
+        """strict=True must not reject a checkpoint that does fit -- otherwise
+        it is useless as the check it exists to be."""
+        self._load(tmp_path, ckpt, strict=strict)
+
+    def test_strict_catches_an_architecture_that_does_not_fit(self, tmp_path, ckpt):
+        with pytest.raises(RuntimeError, match='state_dict'):
+            self._load(tmp_path, ckpt, strict=True, mutate=_add_a_head_)
+
+    def test_lenient_partial_loads_and_is_no_longer_the_default(self, tmp_path, ckpt):
+        """A warm start into a changed head has missing keys by construction,
+        which is what strict_loading=False is for -- now that it has to be
+        asked for, since the assertion a warm start makes should have to hold
+        unless you say otherwise."""
+        assert _toy(tmp_path).strict_loading is True
+        self._load(tmp_path, ckpt, strict=False, mutate=_add_a_head_)
+
+    def test_a_wholly_unrelated_checkpoint_is_refused_even_when_lenient(self, tmp_path, ckpt):
+        """strict=False still will not accept a checkpoint that shares no
+        parameter name at all -- that is random init wearing a banner."""
+        still = _toy(tmp_path, strict_loading=False)
+        model = still.var.lightning_builder.lightning_module
+        with pytest.raises(ValueError, match='nothing loaded'):
+            still._load_weights_only_(model, _unrelated_ckpt_(tmp_path), why='test')
+
+
+def _add_a_head_(model):
+    """A parameter this model has and the checkpoint does not."""
+    model.extra_head = torch.nn.Linear(4, 4)
+
+
+def _unrelated_ckpt_(tmp_path):
+    path = os.path.join(str(tmp_path), 'unrelated.ckpt')
+    torch.save({'state_dict': {'nothing.to.do.with.it': torch.zeros(2)}}, path)
+    return path
+
+
+class TestDoneTopic:
+    """Completion is a topic, not a file dbx knows nothing about."""
+
+    def test_it_is_a_topic(self, tmp_path):
+        assert Still.TOPICS['done'] == 'done'
+        assert 'done' in _toy(tmp_path).topics()
+
+    def test_valid_reads_it(self, tmp_path):
+        still = _toy(tmp_path)
+        assert still.valid() is False
+        still.UNSAFE_complete(OVERRIDE=True)
+        assert still.valid() is True
+
+    def test_a_finished_run_writes_it(self, tmp_path):
+        still = _toy(tmp_path)
+        still.build()
+        assert os.path.exists(still.path('done', local=True))
+        assert still.valid() is True
+
+    @pytest.mark.pinned
+    def test_clearing_ckpts_clears_done(self, tmp_path):
+        """The one coupling the topic split costs.
+
+        `done` asserts that the checkpoints beside it are a finished run. Drop
+        those and leave it, and `valid` reports a trained model with no weights
+        behind it -- and `build_tree` skips the block that would rebuild them.
+        """
+        still = _toy(tmp_path)
+        still.build()
+        assert still.valid() is True
+        still.UNSAFE_clear('ckpts', OVERRIDE=True)
+        assert still.valid() is False
+
+    def test_clearing_done_alone_leaves_the_checkpoints(self, tmp_path):
+        """Not the reverse coupling: this is how a run marked complete too
+        early is reopened without throwing its weights away."""
+        still = _toy(tmp_path)
+        still.build()
+        ckpt = still.find_latest_ckpt(pull=True)
+        still.UNSAFE_clear('done', OVERRIDE=True)
+        assert still.valid() is False
+        assert still.find_latest_ckpt(pull=True) == ckpt
+
+    def test_clearing_everything_clears_done(self, tmp_path):
+        still = _toy(tmp_path)
+        still.build()
+        still.UNSAFE_clear(OVERRIDE=True)
+        assert still.valid() is False

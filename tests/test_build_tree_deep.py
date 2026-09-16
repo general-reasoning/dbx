@@ -93,7 +93,7 @@ class Root(Datablock):
 
 class RootWithExemptions(Root):
     """Same as Root but exempts 'child' from build_tree traversal."""
-    BUILD_TREE_EXEMPTIONS = ('child',)
+    TREE_SKIP_BUILDING = ('child',)
     TREE_SKIP_VALIDATION = ('child',)
 
 
@@ -251,7 +251,7 @@ class TestBuildTreeDeep:
         assert _build_counts.get("'L'", 0) == 0, "Leaf should be skipped (valid)"
 
     def test_exemptions_respected_with_deep(self, url):
-        """BUILD_TREE_EXEMPTIONS skip subtrees even when deep=True."""
+        """TREE_SKIP_BUILDING skip subtrees even when deep=True."""
         root, mid, leaf = _make_tree_with_exemptions(url)
         _reset_counts()
 
@@ -277,3 +277,54 @@ class TestBuildTreeDeep:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  The two skip declarations
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestTreeSkipDeclarations:
+    """``TREE_SKIP_BUILDING`` and ``TREE_SKIP_VALIDATION`` -- one idea, two walks.
+
+    Both are tuples, on the base and in every subclass. Only membership is
+    ever asked of them, so a set would work; declaring them alike is what
+    stops a reader wondering what the difference was meant to mean.
+    """
+
+    def test_the_base_declares_both_as_empty_tuples(self):
+        assert Datablock.TREE_SKIP_BUILDING == ()
+        assert Datablock.TREE_SKIP_VALIDATION == ()
+
+    @pytest.mark.pinned
+    def test_the_retired_name_is_refused_not_ignored(self, url):
+        """A class still declaring BUILD_TREE_EXEMPTIONS must fail loudly.
+
+        Ignored, it would go on having its subtree built on its behalf -- and
+        for the warm-start source this exists to exempt, that is a full
+        training run nobody asked for. Silence is the one unacceptable
+        outcome of a rename.
+        """
+        class Retired(Root):
+            VERSION = 1
+            BUILD_TREE_EXEMPTIONS = ('child',)
+
+        root, _, _ = _make_tree_with_exemptions(url)
+        retired = Retired(url=url, spec=dict(root.spec))
+        with pytest.raises(AttributeError, match='TREE_SKIP_BUILDING'):
+            retired.build_tree(exclude_self=True)
+
+    @pytest.mark.pinned
+    def test_a_bare_string_is_refused(self, url):
+        """The tuple written without its trailing comma.
+
+        Left alone, membership tests SUBSTRINGS: 'chi' would be exempt and
+        'children' would not, and nothing would say so.
+        """
+        class Stringy(Root):
+            VERSION = 1
+            TREE_SKIP_BUILDING = 'child'
+
+        root, _, _ = _make_tree_with_exemptions(url)
+        stringy = Stringy(url=url, spec=dict(root.spec))
+        with pytest.raises(TypeError, match='trailing comma'):
+            stringy.build_tree(exclude_self=True)

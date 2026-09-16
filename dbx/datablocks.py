@@ -1865,9 +1865,21 @@ class Datablock:
     # subclass-declared CONFIG onto self.VAR (see _resolve_legacy_CONFIG).
     CONFIG = VAR
 
-    # Spec keys whose upstream subtree valid_var()/valid_tree() must not descend
-    # into. Supersedes the retired VALIDATE_CFG_EXEMPTIONS.
-    TREE_SKIP_VALIDATION = {}
+    #: Spec keys whose upstream subtree the tree walks must not descend into:
+    #: ``TREE_SKIP_VALIDATION`` for ``valid_var()``/``valid_tree()``,
+    #: ``TREE_SKIP_BUILDING`` for ``build_tree()``.  A pair, named alike,
+    #: because they are the same idea applied to the two walks -- and a field
+    #: is routinely in both, as a warm-start source is: do not train it on my
+    #: behalf, and do not hold its unfinished state against me.
+    #:
+    #: Tuples, both, and tuples in subclasses too.  Only membership is ever
+    #: asked of them, so a set would do; declaring them alike is what stops a
+    #: reader wondering what the difference is meant to mean.
+    #:
+    #: ``TREE_SKIP_VALIDATION`` supersedes the retired VALIDATE_CFG_EXEMPTIONS;
+    #: ``TREE_SKIP_BUILDING`` supersedes BUILD_TREE_EXEMPTIONS.
+    TREE_SKIP_VALIDATION = ()
+    TREE_SKIP_BUILDING = ()
 
     #: Where this block coincides with a NARROWER one that was already built.
     #:
@@ -3197,7 +3209,7 @@ class Datablock:
 
     def _iter_var_blocks(self, exemptions_attr=None, skip_callback=None):
         """Yield (key, Datablock) pairs from self.var that are not in the given exemptions list."""
-        exemptions = set(getattr(self, exemptions_attr, ())) if exemptions_attr else set()
+        exemptions = self._tree_skips_(exemptions_attr) if exemptions_attr else set()
         for s in self.spec.keys():
             if s in exemptions:
                 if skip_callback:
@@ -3207,12 +3219,47 @@ class Datablock:
             if isinstance(c, Datablock):
                 yield s, c
 
+    def _tree_skips_(self, attr):
+        """The spec keys *attr* exempts, as a set, refusing what cannot be one.
+
+        A bare string is the error worth catching: ``TREE_SKIP_BUILDING =
+        'ckpt_builder'`` -- the tuple written without its trailing comma --
+        leaves membership testing SUBSTRINGS, so ``'ckpt'`` would be exempt and
+        ``'ckpt_builderish'`` would not, and nothing would say so.
+
+        The retired ``BUILD_TREE_EXEMPTIONS`` is refused here rather than
+        ignored for the same reason: a class still declaring it would go on
+        having its subtree built on its behalf, which for a warm-start source
+        is a full training run nobody asked for.
+        """
+        retired = type(self).__dict__.get('BUILD_TREE_EXEMPTIONS')
+        if retired is None:
+            for klass in type(self).__mro__:
+                if 'BUILD_TREE_EXEMPTIONS' in klass.__dict__:
+                    retired = klass.__dict__['BUILD_TREE_EXEMPTIONS']
+                    break
+        if retired is not None:
+            raise AttributeError(
+                f"{type(self).__name__} declares BUILD_TREE_EXEMPTIONS, which is "
+                f"retired -- rename it to TREE_SKIP_BUILDING. Left as it is, "
+                f"build_tree() would descend into {tuple(retired)!r} and build "
+                f"what the declaration meant to exempt."
+            )
+        value = getattr(self, attr, ())
+        if isinstance(value, str):
+            raise TypeError(
+                f"{type(self).__name__}.{attr} is the string {value!r}, not a "
+                f"tuple of spec keys -- a one-element tuple needs its trailing "
+                f"comma: ({value!r},). As it stands, membership tests substrings."
+            )
+        return set(value)
+
     def build_tree(self, *args, exclude_self: bool = False, deep: bool = False, **kwargs):
         self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
         def skip_cb(s):
-            self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (BUILD_TREE_EXEMPTIONS) --------")
+            self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (TREE_SKIP_BUILDING) --------")
         
-        for s, c in self._iter_var_blocks('BUILD_TREE_EXEMPTIONS', skip_callback=skip_cb):
+        for s, c in self._iter_var_blocks('TREE_SKIP_BUILDING', skip_callback=skip_cb):
             if not deep and c.valid():
                 self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s}: already valid --------")
                 continue

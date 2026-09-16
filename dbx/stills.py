@@ -3,7 +3,7 @@
 A *still* is one training run, addressed by its configuration: its weights and
 its TensorBoard logs live under a key derived from the hash of everything that
 produced them.  Every such run in this codebase had grown its own copy of the
-same ~700 lines -- the ``_COMPLETE`` marker, the checkpoint
+same ~700 lines -- the ``done`` topic, the checkpoint
 save/upload/free/resume dance, the log symlink, the atexit sync, the
 ``UNSAFE_*`` helpers and the Lightning ``Trainer`` assembly.  This module holds
 one of each.
@@ -73,7 +73,7 @@ import lightning as L
 import lightning.pytorch.callbacks
 import lightning.pytorch.loggers
 
-from dbx.datablocks import Datablock
+from dbx.datablocks import DIR, Datablock
 from dbx.dataparts import UNSAFE_allowed
 from dbx.datastreams import (
     BlockShuffleSampler,
@@ -575,10 +575,11 @@ class CheckpointPath(CheckpointBuilder):
 class Still(CheckpointBuilder):
     """One Lightning training run, addressed by its configuration.
 
-    Two topics: ``ckpts`` (the checkpoints, plus a ``_COMPLETE`` marker) and
-    ``logs`` (the TensorBoard run directories).  Both are staged locally and
-    synced to the block's storage as the run proceeds, so a run whose machine
-    dies leaves its checkpoints behind, and a resumed run finds them.
+    Three topics: ``ckpts`` (the checkpoints) and ``logs`` (the TensorBoard run
+    directories), both staged locally and synced to the block's storage as the
+    run proceeds -- so a run whose machine dies leaves its checkpoints behind,
+    and a resumed run finds them -- and ``done``, written once ``fit()``
+    returns, which is the whole of what ``valid`` reads.
 
     What a subclass has to supply
     -----------------------------
@@ -612,20 +613,38 @@ class Still(CheckpointBuilder):
     #: 2 since builders replaced the cfg_ surface: that re-keyed every
     #: still, and the bump says so in the key rather than leaving it
     #: implied by a changed signature.
-    VERSION = 2
-    TOPICS = ['ckpts', 'logs']
+    #: 3: ``done`` became a topic of its own, where completion used to be a
+    #: ``_COMPLETE`` file inside ``ckpts``. TOPICS is in the signature, so
+    #: every still re-keys; the bump is what puts that in the path rather than
+    #: letting artifacts move silently. There is no read-compatibility with
+    #: the old marker: a version=2 artifact is reached by redirecting its
+    #: ``ckpts``/``logs`` and then calling ``UNSAFE_complete()``, which writes
+    #: the new topic.
+    VERSION = 3
+    #: ``done`` is a topic and not a marker file inside ``ckpts`` because
+    #: completion is a thing this block produces, and dbx already knows how to
+    #: write, validate, clear, copy and redirect one of those.  As a file it
+    #: needed five hand-rolled special cases -- a local-then-remote existence
+    #: check in ``valid``, a two-location write in ``UNSAFE_complete``, a name
+    #: excluded from every checkpoint listing, and a line in the class
+    #: docstring explaining that ``ckpts`` holds something that is not a
+    #: checkpoint.  Matches ``DatapointTable``, which has always done it this
+    #: way.
+    #:
+    #: The dict form, because the three are not alike: ``ckpts`` and ``logs``
+    #: are directories (:class:`DIR`) and ``done`` is one file.
+    TOPICS = {'ckpts': DIR, 'logs': DIR, 'done': 'done'}
 
     # A warm-start source in `ckpt_builder` needs *a* checkpoint, not a finished run:
     # branching off a still that is still training, or that stopped before
-    # writing its _COMPLETE marker, is a legitimate and common thing to do.
-    # BUILD_TREE_EXEMPTIONS keeps build_tree() from training the source on your
+    # writing its done topic, is a legitimate and common thing to do.
+    # TREE_SKIP_BUILDING keeps build_tree() from training the source on your
     # behalf; TREE_SKIP_VALIDATION keeps __pre_build__'s validate_vars pass from
     # rejecting the whole build with a generic "not all upstream Datablocks in
     # var are valid" -- where __build__ would otherwise say precisely which
     # still has no checkpoints.
-    BUILD_TREE_EXEMPTIONS = ('ckpt_builder',)
-    TREE_SKIP_VALIDATION = {'ckpt_builder'}
-
+    TREE_SKIP_BUILDING = ('ckpt_builder',)
+    TREE_SKIP_VALIDATION = ('ckpt_builder',)
     #: Sampler and loader for ``dataloaders``.  Both default to the
     #: shard-locality-aware pair in ``dbx.datastreams``; a subclass whose
     #: data is not shard-backed can drop to ``torch.utils.data`` equivalents.
@@ -714,14 +733,16 @@ class Still(CheckpointBuilder):
         self,
         *,
         n_devices=1,
+        devices=None,
+        strategy=None,
+        check_run=False,
         tensorlogs_root=None,
-        # Accepted and currently wired to nothing. Every still in this
-        # codebase has taken it since before the weights-only resume path
-        # existed, and that path deliberately loads with strict=False. Kept as
-        # an explicit parameter rather than dropped: it is recorded in the
-        # blocks' journalled dfn, so removing it would stop a recorded block
-        # from reconstructing.
-        strict_loading=False,
+        # Whether a weights-only load must match the model exactly. True by
+        # default: "these weights fit this architecture" is the claim a warm
+        # start makes, and it should have to hold. Pass False for the case
+        # where it deliberately does not -- a warm start into a changed head,
+        # which has missing keys by construction. See _load_weights_only_.
+        strict_loading=True,
         save_remote_logs=True,
         debug_share_train_val=False,
         num_workers=4,
@@ -737,8 +758,16 @@ class Still(CheckpointBuilder):
         # serializes, so .set(tag=...) preserves them. Plain `self.x = ...`
         # would silently vanish on rebuild -- and every pipeline entrypoint
         # calls .set(tag=...).
+        if devices is not None and n_devices != 1:
+            raise ValueError(
+                f"pass devices or n_devices, not both -- they name the same "
+                f"thing (got devices={devices!r}, n_devices={n_devices!r})"
+            )
         super().__init__(
             n_devices=n_devices,
+            devices=devices,
+            strategy=strategy,
+            check_run=check_run,
             tensorlogs_root=tensorlogs_root,
             strict_loading=strict_loading,
             save_remote_logs=save_remote_logs,
@@ -879,7 +908,19 @@ class Still(CheckpointBuilder):
                 **fit_kwargs,
             )
 
-            self.UNSAFE_complete(OVERRIDE=True)
+            if self.check_run:
+                # A check is not a trained model. It fits a batch or two and
+                # returns, and marking the block complete here would leave a
+                # key that claims a finished run and a `valid()` that agrees --
+                # so the next real build would skip it entirely.
+                self.log.warning(
+                    "check_run=%r: ran %s batch(es), NOT writing the done "
+                    "topic. This block is still unbuilt.",
+                    self.check_run,
+                    self.check_run if self.check_run is not True else 1,
+                )
+            else:
+                self.UNSAFE_complete(OVERRIDE=True)
             self._sync_to_remote_(reason='post-fit')
         finally:
             # Unregistered first: the sync below does the same work, and an
@@ -893,18 +934,22 @@ class Still(CheckpointBuilder):
     def valid(self):
         """True only when training has run to completion.
 
-        The ``_COMPLETE`` marker, not "are there checkpoints": a run that
-        stopped at epoch 3 of 30 has checkpoints and is not done, and treating
-        it as valid would make ``build_tree()`` hand a half-trained encoder to
-        everything downstream.  Local marker first, then remote, so a run that
-        finished on this machine answers without a network round trip.
+        The ``done`` topic, not "are there checkpoints": a run that stopped at
+        epoch 3 of 30 has checkpoints and is not done, and treating it as valid
+        would make ``build_tree()`` hand a half-trained encoder to everything
+        downstream.
+
+        Local staging first, then the topic proper, so a run that finished on
+        this machine answers without a network round trip.  Both are the
+        topic's own paths -- ``path('done', local=True)`` and
+        ``valid_topic('done')`` -- rather than a filename this method knows and
+        nothing else does.
         """
-        local_marker = os.path.join(self._local_ckpts_dir_, "_COMPLETE")
-        if os.path.exists(local_marker):
+        local_done = self.path('done', local=True)
+        if local_done is not None and os.path.exists(local_done):
             return True
         try:
-            remote_ckpts = self.dirpath("ckpts")
-            return self.fs.exists(os.path.join(remote_ckpts, "_COMPLETE"))
+            return self.valid_topic('done')
         except Exception:
             return False
 
@@ -921,45 +966,61 @@ class Still(CheckpointBuilder):
     # ── UNSAFE_ helpers ────────────────────────────────────────────
 
     def UNSAFE_complete(self, *, OVERRIDE: bool = False):
-        """Write the ``_COMPLETE`` marker locally and remotely, forcing ``valid``.
+        """Write the ``done`` topic locally and remotely, forcing ``valid``.
 
         ``__build__`` calls this once ``trainer.fit()`` returns.  It is
-        also directly callable to hand-declare a run complete -- e.g. after
-        assembling checkpoints with ``UNSAFE_copy_from`` from a source
-        whose ``ckpts`` carried no marker of its own.
+        also directly callable to hand-declare a run complete -- which is how
+        a version=2 still is migrated: redirect its ``ckpts`` and ``logs`` to
+        where they already are, then call this to write the topic that
+        replaced its ``_COMPLETE`` marker.  Also after assembling checkpoints
+        with ``UNSAFE_copy_from`` from a source that carried no ``done`` of
+        its own.
 
-        Each location is written directly rather than by syncing the whole
-        ``ckpts`` topic, because this has to be safe to call when local
-        staging holds no checkpoints at all (right after a copy that went
-        straight to remote), where a local-to-remote directory push would
-        overwrite real remote checkpoints with an empty local directory.
-        ``valid`` checks local then remote, so either alone would do;
-        writing both keeps staging and storage consistent with each other,
-        matching what a real run leaves behind.
+        Each location is written directly rather than by pushing the topic,
+        because this has to be safe to call when local staging holds no
+        checkpoints at all (right after a copy that went straight to remote),
+        where a local-to-remote directory push would overwrite real remote
+        checkpoints with an empty local directory.  ``valid`` checks local
+        then remote, so either alone would do; writing both keeps staging and
+        storage consistent with each other, matching what a real run leaves
+        behind.
         """
         if not UNSAFE_allowed("UNSAFE_complete", OVERRIDE=OVERRIDE):
             return self
         timestamp = datetime.now().isoformat() + "\n"
-        os.makedirs(self._local_ckpts_dir_, exist_ok=True)
-        with open(os.path.join(self._local_ckpts_dir_, "_COMPLETE"), "w") as f:
+        local_done = self.path('done', local=True, ensure_dirpath=True)
+        with open(local_done, "w") as f:
             f.write(timestamp)
         if not self.is_local_fs:
-            remote_marker = os.path.join(self.dirpath('ckpts', ensure=True), "_COMPLETE")
-            with self.fs.open(remote_marker, "w") as f:
+            with self.fs.open(self.path('done', ensure_dirpath=True), "w") as f:
                 f.write(timestamp)
         self.log.info(
-            "UNSAFE_complete: wrote _COMPLETE marker (%s)",
+            "UNSAFE_complete: wrote the done topic (%s)",
             "local" if self.is_local_fs else "local + remote",
         )
         return self
 
     def UNSAFE_clear(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
-        """As the base, plus the local staging dirs and the TensorBoard symlink.
+        """As the base, plus ``done``, the local staging dirs and the TB symlink.
 
-        Without this, clearing ``ckpts`` removes the remote checkpoints and
-        leaves the local ones -- so ``valid`` still finds the local
-        ``_COMPLETE`` marker and the block reports itself built.
+        **Clearing ``ckpts`` clears ``done``.**  They are separate topics but
+        not independent ones: ``done`` asserts that the checkpoints it was
+        written beside are a finished run, so throwing those away and leaving
+        it behind would leave ``valid`` reporting a trained model with no
+        weights to show for it -- and ``build_tree`` skipping the block that
+        would rebuild them.  This is the one coupling the topic split costs,
+        and it buys the five special cases the ``_COMPLETE`` file needed.
+
+        Not the reverse: clearing ``done`` alone is how you say "these
+        checkpoints are real but the run is not finished", which is what
+        reopening a run that was marked complete too early requires.
+
+        Without the rest of this, clearing a topic removes its remote copy and
+        leaves local staging behind -- so the next ``valid`` answers from a
+        stale local file and the block reports itself built.
         """
+        if topics and 'ckpts' in topics and 'done' not in topics:
+            topics = (*topics, 'done')
         result = super().UNSAFE_clear(*topics, OVERRIDE=OVERRIDE, clear_dirpath=clear_dirpath)
         if len(topics) == 0 or 'logs' in topics:
             local_logs = self._local_logs_dir_
@@ -1008,10 +1069,13 @@ class Still(CheckpointBuilder):
         ckpts : int, default 0
             0 copies every file under the source ``ckpts`` topic, as the base
             does.  A positive N copies only the earliest N by training step; a
-            negative N only the most recent N.  The ``_COMPLETE`` marker, when
-            present, is always copied alongside whatever was selected, so
-            post-copy ``valid`` (and the default ``validate=True``) still
-            pass.
+            negative N only the most recent N.
+
+            ``done`` is a topic of its own and so is copied by the base along
+            with everything else, which is what keeps post-copy ``valid`` (and
+            the default ``validate=True``) passing.  A source that has none --
+            an unfinished run -- copies without one, and
+            ``UNSAFE_complete()`` is how you declare the result complete.
         **kwargs
             Forwarded to the base (``OVERRIDE``, ``overwrite``, ``topicpaths``,
             ``validate``, ``always_copy_whole_dirpath``, ``show_progress``).
@@ -1302,7 +1366,6 @@ class Still(CheckpointBuilder):
             val_check_interval=val_check_interval,
             check_val_every_n_epoch=None,
             callbacks=callbacks,
-            devices=self.n_devices,
             logger=tb_logger,
             enable_model_summary=False,
             num_sanity_val_steps=0,
@@ -1322,6 +1385,20 @@ class Still(CheckpointBuilder):
             kwargs['precision'] = var.precision
         if var.accumulate_grad_batches > 1:
             kwargs['accumulate_grad_batches'] = var.accumulate_grad_batches
+
+        accelerator, devices = self._resolve_devices_()
+        kwargs['devices'] = devices
+        if accelerator is not None:
+            kwargs['accelerator'] = accelerator
+        if self.strategy is not None:
+            kwargs['strategy'] = self.strategy
+        if self.check_run:
+            # Lightning's own name for it. True is one batch and an int is
+            # that many, of train AND val. It silences the loggers and any
+            # ModelCheckpoint -- but NOT this still's own upload callbacks,
+            # and not __build__'s UNSAFE_complete, which is why __build__
+            # skips `done` itself rather than trusting this flag to.
+            kwargs['fast_dev_run'] = self.check_run
         return kwargs
 
     def callbacks(self, *, ckpts_dir):
@@ -1492,6 +1569,7 @@ class Still(CheckpointBuilder):
         if not src_fs.exists(src_path):
             return
         entries = [os.path.basename(p.rstrip('/')) for p in src_fs.ls(src_path, detail=False)]
+        # Only .ckpt files: `done` is a sibling topic now, copied by the base.
         ckpt_names = sorted((n for n in entries if n.endswith('.ckpt')), key=self._ckpt_step_)
         selected = ckpt_names[:count] if count > 0 else ckpt_names[count:]
         self.log.verbose(
@@ -1499,7 +1577,7 @@ class Still(CheckpointBuilder):
             f"checkpoint(s): {selected}"
         )
         dst_dir = self.dirpath('ckpts', ensure=True)
-        for name in selected + (['_COMPLETE'] if '_COMPLETE' in entries else []):
+        for name in selected:
             # _UNSAFE_copy_file prefers a direct server-side blob copy when src
             # and dst are on the same remote filesystem (the common case here:
             # two stills' ckpts/ under one storage account) -- which matters
@@ -1755,7 +1833,7 @@ class Still(CheckpointBuilder):
         moments and step counter say nothing about this one, and carrying them
         over is worse than useless -- a source that already reached its own
         ``max_epochs`` leaves this run with nothing left to do, so it "trains"
-        instantly and writes a ``_COMPLETE`` marker over an untrained model.
+        instantly and marks ``done`` over an untrained model.
 
         A bare *path* in ``var.ckpt_builder`` keeps the full-resume behaviour: it is
         how you point a run at its own checkpoint that has moved, where the
@@ -1782,6 +1860,86 @@ class Still(CheckpointBuilder):
                 ckpt = str(self.var.ckpt_builder)
         return ckpt, own_it, warm_start
 
+    def _resolve_devices_(self):
+        """``(accelerator, devices)`` for the Trainer, from ``devices`` or ``n_devices``.
+
+        ``n_devices`` is the old surface and still works: it names a *count*
+        and leaves the accelerator to Lightning's ``"auto"``.  It cannot say
+        *which* device, and cannot ask for CPU at all on a box that has a GPU.
+
+        ``devices`` names them::
+
+            ['cuda']                  -> accelerator='cuda', devices=1
+            ['cuda:1', 'cuda:2']      -> accelerator='cuda', devices=[1, 2]
+            ['cuda', 'cuda']          -> accelerator='cuda', devices=2
+            ['cpu']                   -> accelerator='cpu',  devices=1
+            ['cpu', 'cpu']            -> accelerator='cpu',  devices=2
+
+        The last is the one worth having: two CPU processes is a real DDP
+        world, so the distributed paths -- the sampler splitting, the rank-0
+        guards, the collective in the loss -- can be exercised on a laptop and
+        in CI, without a GPU and without taking one away from a training run
+        to do it.  Lightning picks DDP off ``devices > 1`` by itself; pass
+        ``strategy=`` for a specific one.
+
+        A bare int, ``-1`` or ``'auto'`` is handed through untouched, so
+        anything Lightning's own ``devices`` accepts still works.
+        """
+        spec = self.devices
+        if spec is None:
+            return None, self.n_devices
+        if isinstance(spec, int) or spec in ('auto', -1):
+            return None, spec
+        if isinstance(spec, str):
+            spec = [spec]
+        if not isinstance(spec, (list, tuple)) or not spec:
+            raise ValueError(
+                f"devices must be a non-empty list of device strings, an int, "
+                f"-1 or 'auto' -- got {self.devices!r}"
+            )
+
+        kinds, indices = [], []
+        for entry in spec:
+            if not isinstance(entry, str):
+                raise ValueError(
+                    f"devices entries are strings like 'cuda', 'cuda:1' or "
+                    f"'cpu' -- got {entry!r} in {self.devices!r}"
+                )
+            kind, _, index = entry.partition(':')
+            kinds.append(kind.strip())
+            indices.append(index.strip() or None)
+
+        if len(set(kinds)) > 1:
+            raise ValueError(
+                f"devices must all name one accelerator -- got {sorted(set(kinds))} "
+                f"in {self.devices!r}. One Trainer runs on one accelerator."
+            )
+        kind = kinds[0]
+        named = [i for i in indices if i is not None]
+        if named and len(named) != len(indices):
+            raise ValueError(
+                f"devices must be all indexed or all bare -- got {self.devices!r}. "
+                f"Indexed picks those devices; bare repeats name a count."
+            )
+        if not named:
+            return kind, len(spec)
+
+        if kind == 'cpu':
+            # CPUAccelerator counts processes; there is no cpu:1 to select.
+            raise ValueError(
+                f"cpu devices have no index -- got {self.devices!r}. "
+                f"Repeat 'cpu' to ask for that many processes: ['cpu', 'cpu']."
+            )
+        try:
+            wanted = [int(i) for i in named]
+        except ValueError:
+            raise ValueError(
+                f"device indices must be integers -- got {self.devices!r}"
+            ) from None
+        if len(set(wanted)) != len(wanted):
+            raise ValueError(f"devices names a device twice: {self.devices!r}")
+        return kind, wanted
+
     def _load_weights_only_(self, model, ckpt, *, why):
         """Load *ckpt*'s weights into *model*, leaving the run at step 0.
 
@@ -1789,17 +1947,24 @@ class Still(CheckpointBuilder):
         weights and a fresh training schedule.  *why* names the reason in the
         log line, since the two callers are quite different situations.
 
-        ``strict=False``, not ``self.strict_loading``: a weights-only load is
-        exactly the case where the two state dicts are expected not to line up
-        exactly (a warm start into a changed head), and every existing still
-        relies on that.  ``strict_loading`` is accepted by the constructor and
-        wired to nothing -- see its note there.
+        ``strict_loading`` decides how much of a mismatch is tolerable, and
+        the default is ``True``: "these weights fit this architecture" is what
+        a warm start asserts, and the assertion should have to hold.  A
+        renamed parameter, a changed width or a head that grew is then an
+        error here, rather than a quietly randomly-initialised tensor that
+        surfaces much later as a loss curve starting too high.  It is also the
+        cheapest way to ask whether a checkpoint fits at all, before spending
+        an epoch finding out.
 
-        What ``strict=False`` will not catch is a checkpoint whose parameter
-        *names* have nothing to do with this model -- a warm start pointed at
-        the wrong architecture entirely.  That loads nothing at all, silently,
-        and the run then trains from random init while its banner says
-        otherwise, so it is refused here instead.
+        Pass ``strict_loading=False`` for the case where the mismatch is the
+        point -- a warm start into a changed head, which has missing keys by
+        construction.  Then the load is partial and the counts below say how
+        partial.
+
+        Either way, a checkpoint whose parameter *names* have nothing to do
+        with this model is refused: under ``False`` that would load nothing at
+        all, silently, and the run would train from random init while its
+        banner said otherwise.
 
         ``map_location='cpu'``, so the checkpoint does not get to choose the
         device.  A Trainer that fitted on ``cuda:0`` saved CUDA tensors, and
@@ -1823,7 +1988,13 @@ class Still(CheckpointBuilder):
                 f"(top-level keys: {sorted(checkpoint)})"
             )
         state_dict = checkpoint["state_dict"]
-        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if self.strict_loading:
+            # load_state_dict(strict=True) raises with both lists in the
+            # message, which is the report wanted here: what this model has
+            # that the checkpoint does not, and the reverse.
+            missing, unexpected = model.load_state_dict(state_dict, strict=True)
+        else:
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
         loaded = len(state_dict) - len(unexpected)
         if loaded == 0:
             raise ValueError(

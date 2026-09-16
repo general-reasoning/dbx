@@ -4122,7 +4122,7 @@ class Datablock:
         (get+put, possibly via a local temporary directory), which is the
         only option when a real cross-filesystem or local-disk hop is
         required. Mirrors the ``use_server_side`` branch already used by
-        :meth:`_UNSAFE_copy_topic_dir` for whole-directory copies, exposed
+        :meth:`_UNSAFE_copy_topic_dir_` for whole-directory copies, exposed
         here for single-file copies (e.g. a subclass copying a subset of a
         topic's files instead of the whole directory).
         """
@@ -4155,7 +4155,7 @@ class Datablock:
             node = node[name]
         return node
 
-    def _UNSAFE_copy_topic_file(self, topic, anchorkeypath, *, topicpaths=None):
+    def _UNSAFE_copy_topic_file_(self, topic, anchorkeypath, *, topicpaths=None):
         """Copy the individual .path(topic) file."""
         topic = self._normtopic((topic,))
         dst_path = self.path(*topic)
@@ -4173,7 +4173,7 @@ class Datablock:
             self.log.detailed(f"Copying file {src_path} to {dst_path}")
             self._UNSAFE_copy_fs(src_path=src_path, dst_path=dst_path, recursive=False)
 
-    def _UNSAFE_copy_topic_dir(self, topic, anchorkeypath, *, topicpaths=None):
+    def _UNSAFE_copy_topic_dir_(self, topic, anchorkeypath, *, topicpaths=None):
         """Copy the entire .dirpath(topic) directory."""
         topic = self._normtopic((topic,))
         if topicpaths is not None:
@@ -4234,17 +4234,17 @@ class Datablock:
         else:
             self._UNSAFE_copy_fs(src_path=src_path, dst_path=dst_path, recursive=True)
 
-    def _UNSAFE_copy_topic(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False, **kwargs):
+    def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False, **kwargs):
         """Copy one topic's data from anchorkeypath into this Datablock.
 
-        Dispatches to :meth:`_UNSAFE_copy_topic_dir` or
-        :meth:`_UNSAFE_copy_topic_file` depending on TOPICS shape. Overriding
+        Dispatches to :meth:`_UNSAFE_copy_topic_dir_` or
+        :meth:`_UNSAFE_copy_topic_file_` depending on TOPICS shape. Overriding
         this in a subclass is the extension point for customizing how a
         *specific* topic gets copied (e.g. copying only a subset of files
         instead of the whole directory) while leaving the rest of
         :meth:`UNSAFE_copy_from` (overwrite check, journal entries,
         post-copy validation) untouched -- see
-        ``IJEPAsaurUSStill._UNSAFE_copy_topic`` in soundworld for an example
+        ``IJEPAsaurUSStill._UNSAFE_copy_topic_`` in soundworld for an example
         that restricts the ``ckpts`` topic to a subset of checkpoints.
         ``**kwargs`` is accepted (and ignored here) so subclasses can declare
         extra keyword-only parameters on their override without changing
@@ -4254,9 +4254,9 @@ class Datablock:
         topic = self._normtopic((topic,))
         if self.is_topicgroup(*topic):
             for leaf in self._leaves_under(*topic):
-                self._UNSAFE_copy_topic(leaf, anchorkeypath, topicpaths=topicpaths,
-                                        always_copy_whole_dirpath=always_copy_whole_dirpath,
-                                        **kwargs)
+                self._UNSAFE_copy_topic_(leaf, anchorkeypath, topicpaths=topicpaths,
+                                         always_copy_whole_dirpath=always_copy_whole_dirpath,
+                                         **kwargs)
             return
         if self._is_syntopic(*topic):
             # No location on either side -- there is nothing to copy.
@@ -4273,11 +4273,11 @@ class Datablock:
         )
         if use_dir:
             self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
-            self._UNSAFE_copy_topic_dir(topic, anchorkeypath, topicpaths=topicpaths)
+            self._UNSAFE_copy_topic_dir_(topic, anchorkeypath, topicpaths=topicpaths)
             self.log.verbose(f"Using copy_topic_dir for topic {topic}: END")
         else:
             self.log.verbose(f"Using copy_topic_file for topic {topic}: BEGIN")
-            self._UNSAFE_copy_topic_file(topic, anchorkeypath, topicpaths=topicpaths)
+            self._UNSAFE_copy_topic_file_(topic, anchorkeypath, topicpaths=topicpaths)
             self.log.verbose(f"Using copy_topic_file for topic {topic}: END")
 
     def UNSAFE_copy_from(self, anchorkeypath, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
@@ -4315,9 +4315,9 @@ class Datablock:
             each block's own (typically 1-topic, so always instantly
             "100%") bar doesn't flood the output.
         **kwargs
-            Forwarded to :meth:`_UNSAFE_copy_topic` for every topic; ignored
+            Forwarded to :meth:`_UNSAFE_copy_topic_` for every topic; ignored
             by the base implementation but available to subclasses that
-            override :meth:`_UNSAFE_copy_topic` to accept additional
+            override :meth:`_UNSAFE_copy_topic_` to accept additional
             per-topic options.
         """
         if not UNSAFE_allowed("UNSAFE_copy_from", OVERRIDE=OVERRIDE):
@@ -4336,7 +4336,7 @@ class Datablock:
                 )
             topics_iter = tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic") if show_progress else topics
             for topic in topics_iter:
-                self._UNSAFE_copy_topic(
+                self._UNSAFE_copy_topic_(
                     topic, anchorkeypath, topicpaths=topicpaths,
                     always_copy_whole_dirpath=always_copy_whole_dirpath, **kwargs,
                 )

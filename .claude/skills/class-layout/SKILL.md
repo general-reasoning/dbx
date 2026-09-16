@@ -1,43 +1,92 @@
 ---
 name: class-layout
-description: The order members are declared in within a class in this repo - declared API first (including __init__), then accessors/properties, then private helpers last. Load when writing a new class, adding a member to an existing one, or reviewing a class whose members look scattered.
+description: The order members are declared in within a class in this repo - the Datablock/Datastack protocol and hooks first, then the rest of the declared API, then accessors/properties, then private helpers last - and the _like_this_() naming every private helper uses. Load when writing a new class, adding a member to an existing one, naming a private helper, or reviewing a class whose members look scattered.
 ---
 
 # Class member layout
 
-Members go in three sections, in this order, in **every** class:
+Members go in four sections, in this order, in **every** class:
 
-1. **Declared API** — what callers invoke, `__init__` and other dunders included.
-2. **Accessors / properties** — what callers read.
-3. **Private methods and helpers** — what neither of the above is, including
+1. **Protocol and hooks** — the Datablock/Datastack surface the framework
+   itself calls: `__init__`, `__build__`, `__read__`, `__valid_topic__`,
+   `__post_init__`, `valid`, and the rest of the dunder hooks.
+2. **The rest of the declared API** — what callers invoke.
+3. **Accessors / properties** — what callers read.
+4. **Private methods and helpers** — what neither of the above is, including
    `@staticmethod` helpers.
 
 Mark the sections with a comment so the boundary survives later edits:
 
 ```python
-class Block:
+class Block(Datablock):
     """..."""
 
-    # 1. Declared API ---------------------------------------------------
+    # 1. Datablock protocol ---------------------------------------------
 
     def __init__(self, entry):
         self._entry = entry
 
+    def __build__(self):
+        ...
+
+    def valid(self):
+        ...
+
+    # 2. Declared API ---------------------------------------------------
+
     def signature(self, *, deslash: bool = False):
         ...
 
-    # 2. Accessors ------------------------------------------------------
+    # 3. Accessors ------------------------------------------------------
 
     @property
     def hash(self):
         return self._entry.get('hash')
 
-    # 3. Helpers --------------------------------------------------------
+    # 4. Helpers --------------------------------------------------------
 
     @staticmethod
-    def _key_from(keyby, hash, tag, version):
+    def _key_from_(keyby, hash, tag, version):
         ...
 ```
+
+## Why the protocol comes first
+
+A Datablock subclass is read to answer *what does this block build, and is it
+valid* before anything else. Those methods are the contract with dbx; every
+other member exists to serve them. Burying `__build__` at the bottom — where
+the training loop that implements it happened to be written last — makes a
+reader scroll past the machinery to find the point.
+
+## Private helpers are named `_like_this_`
+
+Leading **and** trailing underscore on every private `def`: methods,
+`@staticmethod`/`@classmethod` helpers, private `@property` accessors, and
+private module-level functions. `_resume_plan_`, `_ckpt_step_`,
+`_local_workdir_`, `_default_source_`. The trailing underscore is what
+distinguishes a helper this code owns from the single-underscore names that
+arrive from elsewhere.
+
+Three things it does **not** apply to:
+
+- **Data attributes.** `self._entry`, `self._lightning_module` keep the plain
+  leading underscore. A private property is still a `def` and does take the
+  trailing one, even though it is read as an attribute.
+- **Nested closures.** A function defined inside a method is a local, not a
+  member — it shares no namespace with anything, so there is nothing for the
+  trailing underscore to disambiguate. `_atexit_sync` inside `__build__` stays
+  as it is.
+- **A name declared by a base class you do not control.** An override must
+  spell the name exactly as the base does or it silently stops overriding: the
+  framework goes on calling the base method, the subclass's version is never
+  reached, and nothing errors. So check for a `super()` call or a base-class
+  definition before renaming anything private.
+
+  Within dbx both sides are ours, so the fix is to rename *both* — that is how
+  `Datablock._UNSAFE_copy_topic_` and its `Still` override were converted
+  together. Only a base class in another package forces the old spelling to
+  stay. Renaming a base method is still a breaking change for any subclass
+  outside this repo, which has to be renamed in the same breath.
 
 ## Why this order
 

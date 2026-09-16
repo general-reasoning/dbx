@@ -33,7 +33,8 @@ datastreams
     mosaicml-streaming for the MDS parts.
 stills
     One training run as a Datablock: :class:`Still`,
-    :class:`LightningBuilder`, :class:`Weights`, ``scaffold_still``. Needs
+    :class:`LightningBuilder`, :class:`ModelBuilder`, :class:`DatasetBuilder`,
+    :class:`CheckpointBuilder`, :class:`Weights`. Needs
     lightning.
 """
 

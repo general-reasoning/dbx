@@ -1,0 +1,51 @@
+---
+name: running-tests
+description: How to run this repo's test suite - the conda env that has torch, lightning and tensorboard, and why importorskip must not be used to paper over a missing one. Load before running pytest here, or when a test module reports as skipped rather than passed.
+---
+
+# Running the tests
+
+The suite needs the **`dbx` conda env**. The system python has none of the
+optional dependencies, so `python -m pytest` outside this env silently skips
+the modules that matter.
+
+```bash
+/opt/homebrew/Caskroom/miniconda/base/envs/dbx/bin/python -m pytest -q
+```
+
+Call the interpreter by absolute path. `conda activate dbx` does not survive
+between tool calls — each Bash invocation is a fresh shell — and `conda` on
+its own fails out of the shell snapshot on this machine.
+
+A full run takes **7–8 minutes**. A single module is seconds; scope with a
+path (`... -m pytest tests/test_stills.py -q`) while iterating and run the
+whole suite once at the end.
+
+`-p no:randomly` makes a failure reproducible while you work on it.
+
+## Skipped is not passed
+
+`pytest.importorskip` is right for a genuinely optional dependency —
+`mosaicml-streaming`, `ray` — and wrong for one this package declares. The
+whole of `test_stills.py` went unrun for a long time behind
+`importorskip('lightning')` against an env that predated the `lightning`
+extra: the suite reported green, and 15 real failures were waiting underneath.
+
+So: when a test module reports as **skipped**, find out why before believing
+the run. If the missing package is in `pyproject.toml`, the env is stale, not
+the test — install it rather than skipping around it.
+
+## Keeping the env current
+
+`dbx.yml` deliberately declares no packages of its own. It installs
+`-e .[all]`, so `pyproject.toml` is the single source of truth and the comment
+in `dbx.yml` says why adding anything there is a mistake. To pick up a newly
+declared extra:
+
+```bash
+/opt/homebrew/Caskroom/miniconda/base/envs/dbx/bin/python -m pip install -e '.[all]'
+```
+
+`tensorboard` is needed by `Still`'s `TensorBoardLogger` at run time but is
+pulled in only as a transitive dependency; if `TestWarmStart` errors with
+"Neither `tensorboard` nor `tensorboardX` is available", install it directly.

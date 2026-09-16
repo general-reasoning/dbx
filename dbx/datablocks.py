@@ -189,10 +189,11 @@ class _TopicMarkerMeta(type):
 
     def __init__(cls, name, bases, namespace, **kwargs):
         super().__init__(name, bases, namespace, **kwargs)
-        # A parameterised marker -- DATASLICE(idx='int') -- is a subclass carrying
-        # `columns`, and is not a name anything may be declared under: it
-        # renders as the call that made it and reads back through that call.
-        if not namespace.get('columns'):
+        # A parameterised marker -- DATASLICE(idx='int'), DATADICT('m.json', a='str')
+        # -- is a subclass carrying `columns` or `filename`, and is not a name
+        # anything may be declared under: it renders as the call that made it
+        # and reads back through that call.
+        if not (namespace.get('columns') or namespace.get('filename')):
             _TopicMarkerMeta.REGISTRY.setdefault(name, cls)
 
     def __repr__(cls):
@@ -246,6 +247,116 @@ class DIR(TOPICMARKER):
     """
 
 
+class _DataDictMeta(_TopicMarkerMeta):
+    """Makes ``DATADICT('meta.json', run=dict(id='str'))`` a marker carrying that schema.
+
+    A call returns a SUBCLASS rather than an instance, exactly as
+    ``DATASLICE``'s does, so everything a TOPICS declaration holds is a class
+    and one test -- :func:`_is_topicmarker` -- recognises the lot of them.
+    """
+
+    # 1. Declared API ---------------------------------------------------
+
+    def __call__(cls, filename, *mapping, **typed):
+        if mapping and (typed or len(mapping) > 1 or not isinstance(mapping[0], dict)):
+            raise TypeError(
+                f"{cls.__name__} takes a filename and then its keys as keywords -- "
+                f"{cls.__name__}('meta.json', id='str') -- or as a single mapping "
+                f"when a key is not an identifier"
+            )
+        cls._check_filename(filename)
+        schema = dict(mapping[0]) if mapping else dict(typed)
+        cls._check_schema(schema)
+        return _DataDictMeta(cls.__name__, (cls,),
+                             {'filename': filename, 'schema': schema})
+
+    def __repr__(cls):
+        filename = cls.__dict__.get('filename')
+        if not filename:
+            return cls.__name__
+        schema = cls.__dict__.get('schema') or {}
+        rendered = _render_schema(schema)
+        return f"{cls.__name__}({filename!r}{', ' + rendered if rendered else ''})"
+
+    __str__ = __repr__
+
+
+class DATADICT(TOPICMARKER, metaclass=_DataDictMeta):
+    """A topic stored as ONE FILE holding a dict, declared with its schema::
+
+        TOPICS = {'meta': DATADICT('meta.json', rows='int',
+                                   run=dict(id='str', started='str'))}
+
+    A file topic, not a directory: the filename is the marker's first argument
+    and is where the data lands, so ``DATADICT('meta.json')`` and the plain
+    string ``'meta.json'`` name the same file.  What the marker adds is the
+    SHAPE of what is in it -- which a bare filename says nothing about, leaving
+    every reader to open the file to find out, and leaving a schema free to
+    change under artifacts that go on claiming to be the same block.
+
+    A value is a dtype name as a string, or a nested ``dict(...)`` for a nested
+    key.  Both render into the type string --
+    ``topic:meta=DATADICT('meta.json', rows='int', run=dict(id='str'))`` -- so
+    adding, dropping, retyping or REORDERING a key re-keys the block, the same
+    way ``DATASLICE``'s columns do.
+
+    Documentation, not enforcement: nothing yet checks that what is written
+    matches what is declared.  The declaration is still worth having before the
+    check exists, because it is what the check will be written against, and
+    because it is in the hash either way.
+    """
+
+    #: Unset on the bare marker, and set by the call that parameterises it.
+    #: A bare DATADICT names no file and cannot locate a topic -- see
+    #: :func:`_topic_filename`.
+    filename = None
+
+    #: ``{key: dtype | {key: ...}}``.  Empty when the file's shape is declared
+    #: nowhere, which is the bare filename's behaviour under this spelling.
+    schema = {}
+
+    # 3. Helpers --------------------------------------------------------
+
+    @staticmethod
+    def _check_filename(filename):
+        """Refuse a filename that is not one, or that would render ambiguously."""
+        if not isinstance(filename, str) or not filename:
+            raise TypeError(
+                f"DATADICT filename must be a non-empty string, got {filename!r}"
+            )
+        if '/' in filename:
+            raise ValueError(
+                f"DATADICT filename {filename!r} may not contain '/': the marker is "
+                f"rendered into the type string, whose segments are '/'-joined, so a "
+                f"'/' would let two declarations render alike and collide onto one hash"
+            )
+
+    @classmethod
+    def _check_schema(cls, schema, _path=()):
+        """Refuse a key or dtype that would render into an ambiguous type string."""
+        for key, dtype in schema.items():
+            where = '.'.join((*_path, str(key)))
+            if not isinstance(key, str):
+                raise TypeError(f"DATADICT key {where} must be a string, got {key!r}")
+            if '/' in key:
+                raise ValueError(
+                    f"DATADICT key {where!r} may not contain '/': see the filename rule"
+                )
+            if isinstance(dtype, dict):
+                cls._check_schema(dtype, (*_path, key))
+                continue
+            if not isinstance(dtype, str):
+                raise TypeError(
+                    f"DATADICT dtype for {where!r} must be a string or a nested "
+                    f"dict(...), got {dtype!r}"
+                )
+            if '/' in dtype:
+                raise ValueError(
+                    f"DATADICT dtype {dtype!r} for {where!r} may not contain '/': "
+                    f"see the filename rule"
+                )
+
+
 def _is_topicmarker(node, kind=TOPICMARKER):
     """True when *node* is the marker *kind*, or a parameterisation of it.
 
@@ -265,6 +376,43 @@ def _render_columns(columns):
     if all(isinstance(name, str) and name.isidentifier() for name in columns):
         return ', '.join(f"{name}={coltype!r}" for name, coltype in columns.items())
     return repr(dict(columns))
+
+
+def _render_schema(schema):
+    """A ``DATADICT`` schema as the call arguments that reconstruct it.
+
+    Keyword form when every key is an identifier, and the mapping form when one
+    is not -- the same rule :func:`_render_columns` follows, and for the same
+    reason: either rendering reads back as the same marker.  A nested key
+    renders as ``dict(...)`` under the keyword form and as a plain dict literal
+    under the mapping form, and :func:`_topic_literal` reads both.
+    """
+    if not schema:
+        return ''
+    if not all(isinstance(key, str) and key.isidentifier() for key in schema):
+        return repr(dict(schema))
+    return ', '.join(
+        f"{key}=dict({_render_schema(dtype)})" if isinstance(dtype, dict)
+        else f"{key}={dtype!r}"
+        for key, dtype in schema.items()
+    )
+
+
+def _topic_filename(node):
+    """The filename a topic leaf stores its data under.
+
+    A plain string IS the filename; a :class:`DATADICT` carries one.  Every
+    other leaf -- a directory, a synthetic topic -- has no filename and never
+    reaches here, since the callers test for those first.
+    """
+    if _is_topicmarker(node, DATADICT):
+        if not node.filename:
+            raise ValueError(
+                "a bare DATADICT names no file and so locates no topic; declare it "
+                "with one -- DATADICT('meta.json', ...) -- or use the filename alone"
+            )
+        return node.filename
+    return node
 
 
 def literal_topics(text):
@@ -295,6 +443,11 @@ def _topic_literal(node):
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name):
             raise ValueError(f"recorded TOPICS: {ast.dump(node.func)} is not a marker")
+        if node.func.id == 'dict' and not node.args:
+            # A DATADICT nested key renders as dict(...). Read as the mapping it
+            # spells, not through the registry: `dict` is not a marker, and this
+            # stays a parse -- the keywords are themselves literals or dict()s.
+            return {kw.arg: _topic_literal(kw.value) for kw in node.keywords}
         marker = _marker_named(node.func.id)
         args = [_topic_literal(arg) for arg in node.args]
         return marker(*args, **{kw.arg: _topic_literal(kw.value) for kw in node.keywords})
@@ -4215,7 +4368,7 @@ class Datablock:
                     f"Cannot copy topic file for {'/'.join(topic)!r}: TOPICS is not a dict "
                     f"(no filename mapping). Use always_copy_whole_dirpath=True for list-mode topics."
                 )
-            _src_path = os.path.join(*topic, self._topicnode(*topic))
+            _src_path = os.path.join(*topic, _topic_filename(self._topicnode(*topic)))
         if dst_path is not None:
             src_path = os.path.join(anchorkeypath, _src_path)
             self.log.detailed(f"Copying file {src_path} to {dst_path}")
@@ -6187,7 +6340,7 @@ class Datablock:
 
         if self._node_is_dirtopic(node):
             return dirpath
-        path = os.path.join(dirpath, node)
+        path = os.path.join(dirpath, _topic_filename(node))
         self.log.detailed(f"{self.anchor}: path: {path}")
         if bare and path:
             fs = self.localfs if local else self.fs

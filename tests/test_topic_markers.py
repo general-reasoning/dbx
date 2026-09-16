@@ -19,13 +19,22 @@ The other half: a ``DatapointTable`` spelled with the markers stops carrying its
 TAB's slice topics in its own signature.  Another block's topics were never its
 identity to hold, and the TAB is already part of the table.
 """
+import json
 import os
 from dataclasses import dataclass
 
 import pytest
 
 import dbx
-from dbx.datablocks import DIR, DIRTOPIC, SYNTHETIC, SYNTOPIC, Datablock, literal_topics
+from dbx.datablocks import (
+    DATADICT,
+    DIR,
+    DIRTOPIC,
+    SYNTHETIC,
+    SYNTOPIC,
+    Datablock,
+    literal_topics,
+)
 
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
@@ -509,3 +518,153 @@ class TestTheJournalRecordsMarkers:
             'masks': ('DIR', 'None'),
             'cache': ('SYNTHETIC', '()'),
         }
+
+
+# ---------------------------------------------------------------------------
+# DATADICT says what is IN the file
+# ---------------------------------------------------------------------------
+
+class Dicted(Datablock):
+    """A file topic whose shape is declared, beside one whose is not."""
+
+    VERSION = 1
+    TOPICS = {'meta': DATADICT('meta.json', rows='int', run=dict(id='str', started='str')),
+              'note': 'note.txt'}
+
+    def __build__(self):
+        with open(self.path('meta', ensure_dirpath=True), 'w') as f:
+            json.dump({'rows': 3, 'run': {'id': 'abc', 'started': 'today'}}, f)
+        with open(self.path('note', ensure_dirpath=True), 'w') as f:
+            f.write('note')
+
+
+class TestADatadictIsAFileTopic:
+    """The filename is the marker's first argument, and is where the data goes."""
+
+    def test_the_path_is_the_declared_filename(self, tmp_path):
+        assert os.path.basename(block(Dicted, tmp_path).path('meta')) == 'meta.json'
+
+    def test_it_is_not_a_directory_topic(self, tmp_path):
+        b = block(Dicted, tmp_path)
+        assert b._is_dir_topic('meta') is False
+        assert b._is_dir_topic('note') is False
+
+    def test_it_locates_the_same_file_a_bare_filename_would(self, tmp_path):
+        class Bare(Datablock):
+            VERSION = 1
+            TOPICS = {'meta': 'meta.json'}
+
+        marked, bare = block(Dicted, tmp_path), block(Bare, tmp_path)
+        assert os.path.basename(marked.path('meta')) == os.path.basename(bare.path('meta'))
+
+    def test_it_builds_and_reads_back(self, tmp_path):
+        b = block(Dicted, tmp_path, tag='d')
+        b.build()
+        assert b.valid() is True
+        with open(b.path('meta')) as f:
+            assert json.load(f) == {'rows': 3, 'run': {'id': 'abc', 'started': 'today'}}
+
+    def test_a_bare_datadict_locates_nothing_and_says_so(self, tmp_path):
+        class Bare(Datablock):
+            VERSION = 1
+            TOPICS = {'meta': DATADICT}
+
+        with pytest.raises(ValueError, match="names no file"):
+            block(Bare, tmp_path).path('meta')
+
+
+class TestADatadictSchemaIsItsIdentity:
+    """The whole point: the shape is in the hash, as DATASLICE's columns are."""
+
+    def _hash(self, tmp_path, topic):
+        class Block(Datablock):
+            VERSION = 1
+            TOPICS = {'meta': topic}
+        return block(Block, tmp_path, tag='h').hash
+
+    def test_the_schema_renders_into_the_type_string(self, tmp_path):
+        assert ("topic:meta=DATADICT('meta.json', rows='int', "
+                "run=dict(id='str', started='str'))") in block(Dicted, tmp_path).type()
+
+    def test_adding_a_key_re_keys(self, tmp_path):
+        assert (self._hash(tmp_path, DATADICT('m.json', a='int'))
+                != self._hash(tmp_path, DATADICT('m.json', a='int', b='int')))
+
+    def test_retyping_a_key_re_keys(self, tmp_path):
+        assert (self._hash(tmp_path, DATADICT('m.json', a='int'))
+                != self._hash(tmp_path, DATADICT('m.json', a='str')))
+
+    def test_retyping_a_NESTED_key_re_keys(self, tmp_path):
+        assert (self._hash(tmp_path, DATADICT('m.json', n=dict(x='int')))
+                != self._hash(tmp_path, DATADICT('m.json', n=dict(x='str'))))
+
+    def test_reordering_keys_re_keys(self, tmp_path):
+        assert (self._hash(tmp_path, DATADICT('m.json', a='int', b='int'))
+                != self._hash(tmp_path, DATADICT('m.json', b='int', a='int')))
+
+    def test_a_declared_schema_differs_from_the_bare_filename(self, tmp_path):
+        assert (self._hash(tmp_path, DATADICT('m.json', a='int'))
+                != self._hash(tmp_path, 'm.json'))
+
+
+class TestADatadictRoundTrips:
+    """A recorded str(TOPICS) reads back as the very marker that wrote it."""
+
+    def test_the_nested_form_reads_back(self):
+        marker = DATADICT('m.json', rows='int', run=dict(id='str'))
+        read = literal_topics(str({'meta': marker}))['meta']
+        assert read.filename == 'm.json'
+        assert read.schema == {'rows': 'int', 'run': {'id': 'str'}}
+        assert str(read) == str(marker)
+
+    def test_a_key_that_is_not_an_identifier_uses_the_mapping_form(self):
+        marker = DATADICT('m.json', {'my key': 'int', 'n': {'x': 'str'}})
+        assert str(marker) == "DATADICT('m.json', {'my key': 'int', 'n': {'x': 'str'}})"
+        assert literal_topics(str({'m': marker}))['m'].schema == marker.schema
+
+    def test_an_empty_schema_renders_as_the_filename_alone(self):
+        assert str(DATADICT('m.json')) == "DATADICT('m.json')"
+        assert literal_topics(str({'m': DATADICT('m.json')}))['m'].filename == 'm.json'
+
+    def test_the_bare_marker_is_still_a_name(self):
+        assert str(DATADICT) == 'DATADICT'
+        assert literal_topics(str({'m': DATADICT}))['m'] is DATADICT
+
+    def test_it_is_exported_from_the_package(self):
+        assert dbx.DATADICT is DATADICT
+
+
+class TestDatadictArgumentsAreChecked:
+
+    def test_a_filename_is_required(self):
+        with pytest.raises(TypeError):
+            DATADICT()
+
+    def test_a_filename_with_a_slash_is_refused(self):
+        with pytest.raises(ValueError, match="may not contain"):
+            DATADICT('a/b.json')
+
+    def test_a_filename_must_be_a_non_empty_string(self):
+        for bad in ('', None, 3):
+            with pytest.raises(TypeError, match="non-empty string"):
+                DATADICT(bad)
+
+    def test_a_key_with_a_slash_is_refused(self):
+        with pytest.raises(ValueError, match="may not contain"):
+            DATADICT('m.json', **{'a/b': 'int'})
+
+    def test_a_dtype_with_a_slash_is_refused(self):
+        with pytest.raises(ValueError, match="may not contain"):
+            DATADICT('m.json', idx='ndarray/int8')
+
+    def test_a_dtype_must_be_a_string_or_a_nested_dict(self):
+        with pytest.raises(TypeError, match="must be a string or a nested"):
+            DATADICT('m.json', idx=int)
+
+    def test_a_nested_dtype_is_checked_too(self):
+        with pytest.raises(TypeError, match="must be a string or a nested"):
+            DATADICT('m.json', n=dict(x=int))
+
+    def test_a_mapping_and_keywords_together_are_refused(self):
+        with pytest.raises(TypeError, match="as keywords"):
+            DATADICT('m.json', {'a': 'int'}, b='int')

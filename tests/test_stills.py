@@ -1569,3 +1569,122 @@ class TestACheckRunHasNoLogger:
             logger = pickle.loads(pickle.dumps(DummyLogger()))
             global_step = 0
         cb.on_train_start(_T(), None)     # must not raise
+
+
+class TestTheBuildSyncsOnce:
+    """One build, one sync of each topic.
+
+    There were two calls: one straight after `UNSAFE_done` on the success
+    path, and one in `finally` which runs on every path -- so a run that
+    WORKED pushed both topics twice. Nothing is written between the two
+    points, so the first only ever repeated what the second does.
+
+    The cost was mostly legibility. Right after moving the whole class to one
+    process, the log still showed `Syncing ckpts to remote` twice with no
+    reason attached, which reads exactly like the two-rank duplication we had
+    just finished removing.
+    """
+
+    def _synced(self, still, monkeypatch):
+        calls = []
+        monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
+        monkeypatch.setattr(still, 'pushtopic', lambda t, *a, **k: calls.append(t))
+        still.__build__()
+        return calls
+
+    @pytest.mark.pinned
+    def test_a_successful_build_pushes_each_topic_once(self, tmp_path, monkeypatch):
+        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+                         spec=dict(toy_builders(tmp_path), max_epochs=1))
+        calls = self._synced(still, monkeypatch)
+        assert calls.count('ckpts') == 1, calls
+        assert calls.count('logs') == 1, calls
+
+    def test_a_failed_build_still_syncs(self, tmp_path, monkeypatch):
+        """`finally` and not after the fit, because this is also the path for
+        an exception or a preempted node -- where the checkpoints on local
+        disk are worth more than the traceback."""
+        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+                         spec=dict(toy_builders(tmp_path), max_epochs=1))
+        calls = []
+        monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
+        monkeypatch.setattr(still, 'pushtopic', lambda t, *a, **k: calls.append(t))
+        monkeypatch.setattr(type(still), 'lightning_module',
+                            property(lambda s: (_ for _ in ()).throw(RuntimeError('boom'))))
+        with pytest.raises(RuntimeError, match='boom'):
+            still.__build__()
+        assert calls.count('ckpts') == 1, calls
+
+    def test_the_sync_lines_say_which_pass_they_are(self, tmp_path, monkeypatch):
+        """`Syncing ckpts to remote` with no reason is unattributable, which
+        is how two of them looked like two processes rather than two calls."""
+        still = _toy(tmp_path)
+        said = []
+        monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
+        monkeypatch.setattr(still, 'pushtopic', lambda t, *a, **k: None)
+        monkeypatch.setattr(still.log, 'info', lambda m, *a: said.append(m % a))
+        still._sync_to_remote_(reason='finally')
+        assert any(l.startswith('finally: syncing ckpts') for l in said), said
+
+
+class TestOneCheckpointPerStep:
+    """Two callbacks can land on one (epoch, step). Only one file gets written.
+
+    `ckpt_every_n_steps=2` with an epoch that ends at step 2 fires
+    `_StepCheckpoint` and then `_EpochCheckpoint`, both naming
+    `epoch=000-step=0000002.ckpt`. Observed on a real run: two dumps and two
+    ~10GB uploads of a checkpoint that had trained nothing in between, about
+    5 of a 20-minute run spent re-sending it.
+
+    Distinct from `_StepCheckpoint._last_ckpt_step`, which is about several
+    MICRO-batches sharing one global_step under accumulation.
+    """
+
+    class _Trainer:
+        def __init__(self, rank=0):
+            self.global_rank = rank
+            self.current_epoch, self.global_step = 0, 2
+            self.saved = []
+
+        def save_checkpoint(self, path):
+            self.saved.append(os.path.basename(path))
+
+    def _still(self, tmp_path, monkeypatch):
+        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+                         spec=dict(toy_builders(tmp_path), ckpt_every_n_epochs=1,
+                                   ckpt_every_n_steps=2))
+        monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
+        monkeypatch.setattr(still, 'push', lambda *a, **k: None)
+        monkeypatch.setattr(still, 'write_journal_entry', lambda **k: None)
+        return still
+
+    @pytest.mark.pinned
+    def test_the_second_callback_does_not_rewrite_it(self, tmp_path, monkeypatch):
+        still = self._still(tmp_path, monkeypatch)
+        cbs = still.callbacks(ckpts_dir=str(tmp_path))
+        step_cb = next(c for c in cbs if 'Step' in type(c).__name__)
+        epoch_cb = next(c for c in cbs if 'Epoch' in type(c).__name__)
+        trainer = self._Trainer()
+        step_cb.on_train_batch_end(trainer, None, None, None, 0)
+        epoch_cb.on_train_epoch_end(trainer, None)
+        assert trainer.saved == ['epoch=000-step=0000002.ckpt']
+
+    def test_a_later_step_is_written(self, tmp_path, monkeypatch):
+        """The dedup is per (epoch, step), not a one-checkpoint-ever latch."""
+        still = self._still(tmp_path, monkeypatch)
+        trainer = self._Trainer()
+        still._save_checkpoint_(trainer, 0, 2, ckpts_dir=str(tmp_path))
+        still._save_checkpoint_(trainer, 0, 4, ckpts_dir=str(tmp_path))
+        assert trainer.saved == ['epoch=000-step=0000002.ckpt',
+                                 'epoch=000-step=0000004.ckpt']
+
+    @pytest.mark.pinned
+    def test_the_skip_is_rank_uniform(self, tmp_path, monkeypatch):
+        """`save_checkpoint` is collective and ends in a barrier, so a dedup
+        that fired on some ranks and not others would hang the others. The
+        filename is computed from (epoch, step) alone -- no rank in it."""
+        still = self._still(tmp_path, monkeypatch)
+        rank1 = self._Trainer(rank=1)
+        still._save_checkpoint_(rank1, 0, 2, ckpts_dir=str(tmp_path))
+        still._save_checkpoint_(rank1, 0, 2, ckpts_dir=str(tmp_path))
+        assert rank1.saved == ['epoch=000-step=0000002.ckpt']

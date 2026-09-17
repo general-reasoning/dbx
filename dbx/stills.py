@@ -1089,10 +1089,20 @@ class Still(CheckpointBuilder):
                 )
             else:
                 self.UNSAFE_done(OVERRIDE=True)
-            self._sync_to_remote_(reason='post-fit')
         finally:
-            # Unregistered first: the sync below does the same work, and an
-            # atexit handler that runs afterwards would repeat a multi-GB push.
+            # ONE sync, here. There was a second immediately after
+            # `UNSAFE_done`, on the success path, and `finally` ran anyway --
+            # so a run that worked pushed both topics twice. Nothing is
+            # written between the two points, so the earlier one only ever
+            # repeated what this does, and having two made a single-process
+            # build read in the log exactly like the two-rank one we had just
+            # stopped doing.
+            #
+            # `finally` rather than after the fit, because this is also the
+            # path for an exception, a KeyboardInterrupt or a preempted node,
+            # where checkpoints on local disk are worth more than the
+            # traceback. Unregistered first: an atexit handler running
+            # afterwards would repeat a multi-GB push.
             atexit.unregister(_atexit_sync)
             self._sync_to_remote_(reason='finally')
             torch.set_float32_matmul_precision(original_matmul_precision)
@@ -1671,8 +1681,37 @@ class Still(CheckpointBuilder):
         anywhere, and it is asked here because this runs INSIDE ``fit``, on
         every worker, where the trainer knows. Nothing outside ``fit`` asks:
         see :meth:`trainer_kwargs` for why there is only one process there.
+
+        The dedup is for two CALLBACKS landing on one ``(epoch, step)``, which
+        is a different collision from the one ``_StepCheckpoint`` already
+        guards (several micro-batches sharing one ``global_step`` under
+        ``accumulate_grad_batches > 1``). An epoch that ends on a multiple of
+        ``ckpt_every_n_steps`` fires both, and they name the same file: the
+        second save re-dumps and re-uploads a checkpoint that is already
+        there, having trained nothing in between. Seen costing 5 minutes of a
+        20-minute trial run, and it scales with the model.
+
+        Safe to skip collectively because both callbacks fire on EVERY rank
+        and compute the same filename, so the skip is rank-uniform. One that
+        fired on some ranks and not others would leave the rest waiting on
+        ``save_checkpoint``'s barrier forever.
+
+        The mark lives on the TRAINER, not on this block. "Already written"
+        is a fact about one run, and a run is what a trainer is: the two
+        callbacks share one, so they dedup against each other, while separate
+        ranks have separate trainers and each still makes its collective call.
+        On the block it would have been a fact about the BLOCK, and a second
+        rank reading the first one's mark would have skipped the collective
+        and hung the rest.
         """
         filename = f"epoch={epoch:03d}-step={step:07d}.ckpt"
+        if filename == getattr(trainer, '_dbx_last_saved_ckpt_', None):
+            self.log.info(
+                "Checkpoint %s was just written by another callback at this "
+                "same step -- not writing it twice", filename,
+            )
+            return
+        trainer._dbx_last_saved_ckpt_ = filename
         local_path = os.path.join(ckpts_dir, filename)
         trainer.save_checkpoint(local_path)
         if trainer.global_rank != 0:
@@ -1847,16 +1886,16 @@ class Still(CheckpointBuilder):
     # guards below only skip the (otherwise misleading) "syncing to remote" log
     # line when there is no separate remote to sync to.
 
-    def _sync_ckpts_to_remote_(self):
+    def _sync_ckpts_to_remote_(self, reason='?'):
         if self.is_local_fs:
             return
-        self.log.info("Syncing ckpts to remote")
+        self.log.info("%s: syncing ckpts to remote", reason)
         self.pushtopic('ckpts')
 
-    def _sync_logs_to_remote_(self):
+    def _sync_logs_to_remote_(self, reason='?'):
         if self.is_local_fs:
             return
-        self.log.info("Syncing logs to remote")
+        self.log.info("%s: syncing logs to remote", reason)
         self.pushtopic('logs')
 
     def _sync_to_remote_(self, *, reason):
@@ -1879,12 +1918,12 @@ class Still(CheckpointBuilder):
             )
             return
         try:
-            self._sync_ckpts_to_remote_()
+            self._sync_ckpts_to_remote_(reason)
         except Exception as e:
             self.log.warning("%s: ckpt sync failed: %s", reason, e)
         if self.save_remote_logs:
             try:
-                self._sync_logs_to_remote_()
+                self._sync_logs_to_remote_(reason)
             except Exception as e:
                 self.log.warning("%s: log sync failed: %s", reason, e)
 

@@ -657,6 +657,11 @@ class _LogCiteOnStart(L.pytorch.Callback):
     def on_train_start(self, trainer, pl_module):
         if trainer.global_rank != 0 or trainer.logger is None:
             return
+        # Not every logger has a usable experiment. A DummyLogger that has
+        # crossed a process boundary hands back a plain function here, and
+        # `hasattr` is the only honest way to ask.
+        if not hasattr(getattr(trainer.logger, 'experiment', None), 'add_text'):
+            return
         try:
             trainer.logger.experiment.add_text(
                 "cite", f"```\n{self.still.cite()}\n```",
@@ -1586,6 +1591,21 @@ class Still(CheckpointBuilder):
             # and not __build__'s UNSAFE_done, which is why __build__
             # skips `done` itself rather than trusting this flag to.
             kwargs['fast_dev_run'] = self.check_run
+            # And no logger at all, rather than the DummyLogger `fast_dev_run`
+            # would substitute for ours. That substitution is fine in one
+            # process and broken across a spawn boundary: DummyLogger's
+            # `_experiment` does not survive pickling (its _DummyExperiment
+            # answers __getstate__ with a no-op that returns None), so the
+            # `experiment` property raises AttributeError in the worker,
+            # DummyLogger.__getattr__ catches it and hands back a FUNCTION, and
+            # the first `logger.experiment.add_scalar(...)` dies on
+            # 'function' object has no attribute 'add_scalar'.
+            #
+            # `logger=False` makes `trainer.logger` None instead, which is the
+            # thing every `if self.logger is not None` guard in a
+            # LightningModule is already written against. A check logs
+            # nothing either way.
+            kwargs['logger'] = False
         return kwargs
 
     def callbacks(self, *, ckpts_dir):
@@ -1854,7 +1874,7 @@ class Still(CheckpointBuilder):
         if self.check_run:
             self.log.info(
                 "%s: check_run=%r, nothing to sync -- a check writes no "
-                "checkpoints and its logger is Lightning's DummyLogger",
+                "checkpoints and runs with logger=False",
                 reason, self.check_run,
             )
             return

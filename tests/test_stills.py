@@ -1511,3 +1511,61 @@ class TestTheUnreducedScalarWarning:
         """A diagnostic may not be the thing that stops a training run."""
         still = _toy(tmp_path, devices=['cpu', 'cpu'])
         still._warn_unreduced_scalars_(None)
+
+
+class TestACheckRunHasNoLogger:
+    """`fast_dev_run` substitutes a DummyLogger, and it does not survive spawn.
+
+    `DummyLogger._experiment` is a `_DummyExperiment` whose `__getattr__`
+    answers everything with a no-op -- including `__getstate__`, which pickle
+    therefore calls and gets None from. So it unpickles with an empty dict,
+    the `experiment` property raises AttributeError, `DummyLogger.__getattr__`
+    catches that and hands back a FUNCTION, and the worker dies on
+
+        AttributeError: 'function' object has no attribute 'add_scalar'
+
+    several minutes in, inside training_step, on a module whose
+    `if self.logger is not None` guard did exactly what it was supposed to.
+
+    `logger=False` gives `trainer.logger is None` instead, which is the thing
+    every such guard is written against. A check logs nothing either way.
+    """
+
+    def test_a_check_run_asks_for_no_logger(self, tmp_path):
+        assert _trainer_kwargs(tmp_path, check_run=True)['logger'] is False
+
+    def test_an_ordinary_run_keeps_its_logger(self, tmp_path):
+        still = _toy(tmp_path)
+        sentinel = object()
+        kwargs = still.trainer_kwargs(ckpts_dir='/tmp/x', callbacks=[], tb_logger=sentinel)
+        assert kwargs['logger'] is sentinel
+
+    @pytest.mark.pinned
+    def test_the_dummy_logger_really_does_break(self):
+        """Pinned as a fact about Lightning, not about us: if a release ever
+        fixes it, this fails and the workaround above can go."""
+        from lightning.pytorch.loggers.logger import DummyLogger
+        assert hasattr(DummyLogger().experiment, 'add_scalar')
+        revived = pickle.loads(pickle.dumps(DummyLogger()))
+        assert not hasattr(revived.experiment, 'add_scalar')
+
+    def test_a_real_tensorboard_logger_survives_spawn(self, tmp_path):
+        """The other half: an ordinary run's logger is fine across the
+        boundary, so this is a check_run workaround and nothing wider."""
+        import lightning as L
+        tb = L.pytorch.loggers.TensorBoardLogger(save_dir=str(tmp_path), name='', version='v0')
+        _ = tb.experiment
+        assert hasattr(pickle.loads(pickle.dumps(tb)).experiment, 'add_text')
+
+    def test_the_cite_callback_declines_a_broken_logger(self, tmp_path):
+        """Belt and braces for any other path that hands one over."""
+        from lightning.pytorch.loggers.logger import DummyLogger
+        still = _toy(tmp_path)
+        cb = next(c for c in still.callbacks(ckpts_dir=str(tmp_path))
+                  if 'Cite' in type(c).__name__)
+
+        class _T:
+            global_rank = 0
+            logger = pickle.loads(pickle.dumps(DummyLogger()))
+            global_step = 0
+        cb.on_train_start(_T(), None)     # must not raise

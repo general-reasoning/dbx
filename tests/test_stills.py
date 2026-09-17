@@ -21,6 +21,8 @@ import lightning as L
 
 from dbx.datablocks import Datablock
 from dbx.stills import (
+    ChunkShuffleSampler,
+    ResumableDataLoader,
     CheckpointBuilder,
     CheckpointPath,
     DatasetBuilder,
@@ -1095,3 +1097,128 @@ class TestDoneTopic:
         still.build()
         still.UNSAFE_clear(OVERRIDE=True)
         assert still.valid() is False
+
+
+class TestResumableDataLoaderUnderDDP:
+    """The loader must find its sampler's state through Lightning's wrapper.
+
+    Under DDP, Lightning replaces the sampler with a DistributedSamplerWrapper
+    so each rank draws a disjoint subset. That wrapper has no `state_dict`, so
+    a loader that asked `self.sampler` directly raised at the first checkpoint
+    -- after training had started, which is the expensive place to find out.
+    """
+
+    def _loader(self, sampler=None):
+        ds = torch.utils.data.TensorDataset(torch.arange(64))
+        kw = {'sampler': sampler} if sampler is not None else {}
+        return ResumableDataLoader(ds, batch_size=4, **kw)
+
+    def test_a_plain_sampler_is_unchanged(self):
+        sampler = ChunkShuffleSampler(64, 8, seed=1)
+        assert self._loader(sampler).state_dict() == sampler.state_dict()
+
+    @pytest.mark.pinned
+    def test_a_ddp_wrapped_sampler_is_reached_through_the_wrapper(self):
+        """The bug this exists for: the state is the inner sampler's."""
+        from lightning.fabric.utilities.distributed import DistributedSamplerWrapper
+
+        inner = ChunkShuffleSampler(64, 8, seed=1)
+        inner.set_epoch(3)
+        wrapped = DistributedSamplerWrapper(inner, num_replicas=2, rank=0)
+        assert self._loader(wrapped).state_dict() == {'epoch': 3, 'consumed': 0}
+
+    def test_a_loader_with_no_stateful_sampler_says_so(self):
+        """Empty, not an exception -- a loader may legitimately have none."""
+        assert self._loader().state_dict() == {}
+        self._loader().load_state_dict({})          # does not raise
+
+    def test_a_round_trip_through_the_wrapper(self):
+        from lightning.fabric.utilities.distributed import DistributedSamplerWrapper
+
+        inner = ChunkShuffleSampler(64, 8, seed=1)
+        loader = self._loader(DistributedSamplerWrapper(inner, num_replicas=2, rank=0))
+        loader.load_state_dict({'epoch': 7, 'consumed': 0})
+        assert inner.epoch == 7
+        assert loader.state_dict() == {'epoch': 7, 'consumed': 0}
+
+
+class TestCheckRunWritesNothing:
+    """A check run leaves no artifact behind -- not `done`, not a checkpoint."""
+
+    def _callbacks(self, root, **kw):
+        still = _toy(root, **kw)
+        return [type(c).__name__ for c in still.callbacks(ckpts_dir=str(root))]
+
+    def test_an_ordinary_run_installs_the_checkpointers(self, tmp_path):
+        names = self._callbacks(tmp_path)
+        assert '_StepCheckpoint' in names or '_EpochCheckpoint' in names
+
+    @pytest.mark.pinned
+    def test_a_check_run_installs_none_of_them(self, tmp_path):
+        """fast_dev_run stops after one batch -- which is also an epoch END, so
+        ckpt_every_n_epochs=1 fires and a check run saved and uploaded a
+        multi-GB checkpoint to prove a batch flows.
+        """
+        names = self._callbacks(tmp_path, check_run=True)
+        assert not any('Checkpoint' in n for n in names)
+
+    def test_the_cite_callback_survives(self, tmp_path):
+        """Suppressing checkpoints must not suppress the identity record."""
+        assert '_LogCiteOnStart' in self._callbacks(tmp_path, check_run=True)
+
+    def test_a_check_run_writes_no_checkpoint_end_to_end(self, tmp_path):
+        still = _toy(tmp_path, check_run=True)
+        still.build()
+        ckpts = still.dirpath('ckpts', local=True)
+        assert not [f for f in os.listdir(ckpts) if f.endswith('.ckpt')]
+        assert still.valid() is False
+
+
+class TestCheckpointIsWrittenOnceUnderDDP:
+    """Only rank 0 uploads, frees and journals a checkpoint.
+
+    trainer.save_checkpoint is collective and every rank must call it, but it
+    writes the file on rank 0 alone. Without the guard after it, every rank
+    pushed the same multi-GB blob to the same remote path while `free_src=True`
+    deleted the local copy from under the others -- an upload that stalled at
+    0% and never returned.
+    """
+
+    class _FakeTrainer:
+        def __init__(self, rank):
+            self.global_rank = rank
+            self.saved = []
+
+        def save_checkpoint(self, path):
+            self.saved.append(path)
+
+    def _save_fn(self, still, tmp_path, monkeypatch):
+        """The `_save` closure out of callbacks(), with its effects recorded."""
+        effects = {'uploaded': [], 'journalled': []}
+        monkeypatch.setattr(still, 'push',
+                            lambda *a, **k: effects['uploaded'].append(a[0]))
+        monkeypatch.setattr(still, 'write_journal_entry',
+                            lambda **k: effects['journalled'].append(k.get('event')))
+        monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
+        cbs = still.callbacks(ckpts_dir=str(tmp_path))
+        epoch_cb = next(c for c in cbs if 'Epoch' in type(c).__name__)
+        return epoch_cb, effects
+
+    @pytest.mark.pinned
+    def test_only_rank_zero_uploads_and_journals(self, tmp_path, monkeypatch):
+        # ckpt_every_n_epochs is a VAR field, so it goes in the spec -- as a
+        # constructor kwarg it lands in `parameters` and the default (5) still
+        # applies, and on_train_epoch_end returns before saving anything.
+        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+                         spec=dict(toy_builders(tmp_path), ckpt_every_n_epochs=1))
+        cb, effects = self._save_fn(still, tmp_path, monkeypatch)
+
+        for rank in (0, 1, 2, 3):
+            trainer = self._FakeTrainer(rank)
+            trainer.current_epoch, trainer.global_step = 0, 1
+            cb.on_train_epoch_end(trainer, None)
+            # Every rank participates in the collective save.
+            assert trainer.saved, f"rank {rank} skipped the collective save"
+
+        assert len(effects['uploaded']) == 1, effects['uploaded']
+        assert len(effects['journalled']) == 1, effects['journalled']

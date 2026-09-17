@@ -628,10 +628,48 @@ class ResumableDataLoader(DataLoader):
     """
 
     def state_dict(self):
-        return self.sampler.state_dict()
+        sampler = self._stateful_sampler_()
+        return {} if sampler is None else sampler.state_dict()
 
     def load_state_dict(self, state_dict):
-        self.sampler.load_state_dict(state_dict)
+        sampler = self._stateful_sampler_()
+        if sampler is not None and state_dict:
+            sampler.load_state_dict(state_dict)
+
+    def _stateful_sampler_(self):
+        """The sampler carrying resume state, through whatever wraps it.
+
+        Not ``self.sampler`` directly: under DDP, Lightning replaces the
+        sampler with a ``DistributedSamplerWrapper`` so each rank draws a
+        disjoint subset -- correct, since :class:`ChunkShuffleSampler` knows
+        nothing about ranks -- and that wrapper has no ``state_dict`` of its
+        own.  Asking it for one raised, which is how a run reaches
+        ``on_save_checkpoint`` and dies at the first checkpoint rather than at
+        the first batch::
+
+            AttributeError: 'DistributedSamplerWrapper' object has no
+            attribute 'state_dict'
+
+        The wrapper keeps the original at ``.dataset._sampler``, so the walk
+        below finds it.  ``None`` when nothing in the chain is stateful, which
+        is the honest answer for a plain sampler: an empty state dict rather
+        than an exception.
+
+        What this gives back under DDP is ``consumed=0``: the wrapper
+        materialises the whole order once per epoch (``reset()`` calls
+        ``list(sampler)``), which runs the inner sampler to exhaustion and
+        leaves its counter at zero.  So a resume restarts the epoch instead of
+        landing mid-way through it -- which is what the state says, not a
+        position that would be wrong.
+        """
+        sampler = self.sampler
+        seen = set()
+        while sampler is not None and id(sampler) not in seen:
+            seen.add(id(sampler))
+            if hasattr(sampler, 'state_dict'):
+                return sampler
+            sampler = getattr(getattr(sampler, 'dataset', None), '_sampler', None)
+        return None
 
 
 # ═══════════════════════════════════════════════════════════════════════

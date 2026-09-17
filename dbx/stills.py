@@ -91,6 +91,7 @@ __all__ = [
     'LightningBuilder',
     'ModelBuilder',
     'Still',
+    'StillDataModule',
     'Weights',
     # Re-exported from dbx.datastreams, which is torch-only: importing this
     # module pulls in lightning, and the split/sizing helpers are useful to
@@ -569,6 +570,62 @@ class CheckpointPath(CheckpointBuilder):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# StillDataModule — dataloaders built inside fit(), not before it
+# ═══════════════════════════════════════════════════════════════════════
+
+class StillDataModule(L.pytorch.LightningDataModule):
+    """Defers ``Still.dataloaders()`` until Lightning has set up the run.
+
+    Built eagerly and handed to ``fit(train_dataloaders=...)``, a dataset is
+    constructed in the window where the launcher has already exported
+    ``WORLD_SIZE`` but no process group exists yet -- Lightning creates one
+    inside ``fit``, in ``strategy.setup_environment()``.  A shard-backed
+    dataset that looks at the distributed environment sees that window and
+    draws the wrong conclusion from it.
+
+    ``mosaicml-streaming`` is the case in hand.  ``StreamingDataset.__init__``
+    calls ``maybe_init_dist()``, which on seeing ``WORLD_SIZE > 1`` and no
+    process group **initialises one itself** -- and then destroys it again at
+    the end of ``__init__``.  Under Lightning's subprocess launcher, which
+    exports ``LOCAL_RANK`` but not ``RANK``, every process reads rank 0, so
+    every process tries to *bind* the rendezvous port rather than one binding
+    and the rest connecting:
+
+        DistNetworkError: The server socket has failed to listen on any local
+        network address. port: 58109 ... EADDRINUSE
+
+    Lightning calls ``setup`` per rank from inside ``fit``, after
+    ``setup_environment``.  By then ``dist.is_initialized()`` is true,
+    ``maybe_init_dist()`` returns False, and nothing is created or destroyed
+    behind Lightning's back.
+
+    None of this makes the loaders lazy to a caller: ``Still.dataloaders()``
+    stays exactly as it was, and is still the way to inspect what a run would
+    train on without running it.
+    """
+
+    def __init__(self, still, model):
+        super().__init__()
+        self._still = still
+        self._model = model
+        self._loaders = None
+
+    def setup(self, stage=None):
+        """Build both loaders once, on whichever rank Lightning calls this on."""
+        if self._loaders is not None:
+            return
+        self._still.log.info("Building dataloaders (stage=%s)...", stage)
+        self._loaders = self._still.dataloaders(model=self._model)
+        self._still.log.info("DataLoaders ready")
+
+    def train_dataloader(self):
+        return self._loaders[0]
+
+    def val_dataloader(self):
+        return self._loaders[1]
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Still — one training run
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -653,6 +710,7 @@ class Still(CheckpointBuilder):
     #: Sampler and loader for ``dataloaders``.  Both default to the
     #: shard-locality-aware pair in ``dbx.datastreams``; a subclass whose
     #: data is not shard-backed can drop to ``torch.utils.data`` equivalents.
+    DataModule: type = StillDataModule
     Sampler: type = ChunkShuffleSampler
     Loader: type = ResumableDataLoader
 
@@ -902,14 +960,14 @@ class Still(CheckpointBuilder):
                     "(weight initialisation is unaffected; see the banner)"
                 )
 
-            self.log.info("Building dataloaders...")
-            training_dataloader, val_dataloader = self.dataloaders(model=model)
-            self.log.info("DataLoaders ready - starting trainer.fit()")
-
+            # A datamodule, NOT built loaders: Lightning calls its `setup`
+            # from inside fit(), after the process group exists. See
+            # StillDataModule for what goes wrong when a shard-backed dataset
+            # is constructed before that.
+            self.log.info("Starting trainer.fit()")
             trainer.fit(
                 model=model,
-                train_dataloaders=training_dataloader,
-                val_dataloaders=val_dataloader,
+                datamodule=self.DataModule(self, model),
                 **fit_kwargs,
             )
 
@@ -1449,14 +1507,46 @@ class Still(CheckpointBuilder):
                 _still.log.warning("Ckpt journal entry failed: %s", e)
 
         def _save(trainer, epoch, step):
+            """Save on every rank, but upload, free and journal on rank 0 only.
+
+            ``trainer.save_checkpoint`` is COLLECTIVE -- under DDP it gathers
+            state across ranks, so a rank that skipped it would hang the ranks
+            that did not.  It writes the file on rank 0 alone.
+
+            Everything after it is rank 0's work, and the guard is what was
+            missing: every rank used to push the same multi-GB file to the same
+            remote path, with ``free_src=True`` deleting the local copy while
+            another rank was still reading it, and every rank wrote its own
+            ``ckpt=`` journal entry.  The symptom was an upload that stalled at
+            0% and never returned.
+            """
             filename = f"epoch={epoch:03d}-step={step:07d}.ckpt"
             local_path = os.path.join(_ckpts_dir, filename)
             trainer.save_checkpoint(local_path)
+            if trainer.global_rank != 0:
+                return
             _still.log.info("Saved checkpoint: %s", filename)
             _upload_and_free(local_path, filename)
             _journal_ckpt(filename)
 
         callbacks.append(_LogCiteOnStart())
+
+        if self.check_run:
+            # A check writes no checkpoints. `done` is already withheld (see
+            # __build__), and a checkpoint is the other artifact a run leaves
+            # behind -- so without this, proving that one batch flows costs a
+            # multi-GB save and upload, and leaves a checkpoint standing at a
+            # key whose run never happened.
+            #
+            # Not left to ckpt_every_n_steps to prevent: `fast_dev_run` stops
+            # after one batch, which is also an epoch END, so
+            # ckpt_every_n_epochs=1 fires even when the step interval is
+            # nowhere near. That is what a check run did before this.
+            self.log.info(
+                "check_run=%r: checkpoint callbacks disabled -- a check saves "
+                "nothing", self.check_run,
+            )
+            return callbacks
 
         if self.var.ckpt_every_n_steps is not None:
             _every_n_steps = self.var.ckpt_every_n_steps

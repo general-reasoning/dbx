@@ -29,7 +29,7 @@ instead -- ``from dbx.datastreams import ...``, ``from dbx.stills import
 datastreams
     Shard-backed dataset/loader plumbing: :class:`ZipStreamingDataset`,
     :class:`ChunkShuffleSampler`, :class:`ResumableDataLoader`,
-    ``block_split_indices``, ``val_loader_workers``. Needs torch, and
+    ``chunk_split_indices``, ``val_loader_workers``. Needs torch, and
     mosaicml-streaming for the MDS parts.
 stills
     One training run as a Datablock: :class:`Still`,

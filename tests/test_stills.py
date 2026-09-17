@@ -151,7 +151,7 @@ def make_still(root, **spec):
     knobs = {k: spec.pop(k) for k in (*MODEL_KNOBS, *LIGHTNING_KNOBS) if k in spec}
     base = dict(
         **toy_builders(root, **knobs),
-        max_epochs=2, batch_size=16, block_shuffle_size=32,
+        max_epochs=2, batch_size=16, chunk_shuffle_size=32,
         accumulate_grad_batches=1, precision=None, matmul_precision=None,
         val_every_n_steps=8, val_max_batches=2,
         ckpt_every_n_steps=8, ckpt_every_n_epochs=1,
@@ -215,7 +215,7 @@ class TestIdentity:
         assert list(Still.VAR.__dataclass_fields__) == [
             'model_builder', 'lightning_builder', 'training_dataset_builder',
             'validation_dataset_builder', 'ckpt_builder',
-            'train_val_split', 'dataset_seed', 'block_shuffle_size',
+            'train_val_split', 'dataset_seed', 'chunk_shuffle_size',
             'from_scratch', 'reset_optimizer_state', 'max_epochs',
             'max_training_steps', 'train_log_every_n_steps', 'val_every_n_steps',
             'val_max_batches', 'val_shuffle', 'val_seed', 'gradient_clip_val',
@@ -233,11 +233,14 @@ class TestIdentity:
             3 -- `done` became a topic of its own, changing TOPICS and so the
                  signature, where completion had been a `_COMPLETE` file
                  inside `ckpts`
+            4 -- VAR.block_shuffle_size became chunk_shuffle_size, after the
+                 ChunkShuffleSampler it configures -- a VAR field name is in
+                 the signature
 
         Do not edit this to agree with a bump you made. Add the line saying
         what moved -- that is the point of the pin.
         """
-        assert Still.VERSION == 3
+        assert Still.VERSION == 4
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -252,7 +255,7 @@ class TestDataloaders:
 
     def test_the_split_is_block_granular(self, tmp_path):
         """Every group is a union of contiguous runs, or shard locality is lost."""
-        train, _ = make_still(tmp_path, block_shuffle_size=32).dataloaders()
+        train, _ = make_still(tmp_path, chunk_shuffle_size=32).dataloaders()
         idx = sorted(train.dataset.indices)
         runs, start = [], idx[0]
         for a, b in zip(idx, idx[1:]):

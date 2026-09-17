@@ -779,73 +779,73 @@ class TestExtraTopics:
 # Block-shuffled sampling
 # ---------------------------------------------------------------------------
 
-class TestBlockShuffleSampler:
+class TestChunkShuffleSampler:
 
     def test_covers_every_index_exactly_once(self):
-        from dbx.datastreams import BlockShuffleSampler
-        s = BlockShuffleSampler(n=100, block_size=8, seed=1)
+        from dbx.datastreams import ChunkShuffleSampler
+        s = ChunkShuffleSampler(n=100, chunk_size=8, seed=1)
         assert sorted(s) == list(range(100))
         assert len(s) == 100
 
-    def test_working_set_stays_within_a_block(self):
+    def test_working_set_stays_within_a_chunk(self):
         """The whole point: consecutive draws stay near each other, so a
         shard cache can help.  A global shuffle would not."""
-        from dbx.datastreams import BlockShuffleSampler
-        block = 16
-        order = list(BlockShuffleSampler(n=320, block_size=block, seed=7))
-        for start in range(0, len(order), block):
-            chunk = order[start:start + block]
-            assert max(chunk) - min(chunk) < block, chunk
+        from dbx.datastreams import ChunkShuffleSampler
+        chunk_size = 16
+        order = list(ChunkShuffleSampler(n=320, chunk_size=chunk_size, seed=7))
+        for start in range(0, len(order), chunk_size):
+            chunk = order[start:start + chunk_size]
+            assert max(chunk) - min(chunk) < chunk_size, chunk
 
     def test_order_is_not_the_identity(self):
-        from dbx.datastreams import BlockShuffleSampler
-        order = list(BlockShuffleSampler(n=256, block_size=8, seed=3))
+        from dbx.datastreams import ChunkShuffleSampler
+        order = list(ChunkShuffleSampler(n=256, chunk_size=8, seed=3))
         assert order != list(range(256))
 
     def test_reproducible_for_a_seed(self):
-        from dbx.datastreams import BlockShuffleSampler
-        a = list(BlockShuffleSampler(n=64, block_size=8, seed=5))
-        b = list(BlockShuffleSampler(n=64, block_size=8, seed=5))
-        c = list(BlockShuffleSampler(n=64, block_size=8, seed=6))
+        from dbx.datastreams import ChunkShuffleSampler
+        a = list(ChunkShuffleSampler(n=64, chunk_size=8, seed=5))
+        b = list(ChunkShuffleSampler(n=64, chunk_size=8, seed=5))
+        c = list(ChunkShuffleSampler(n=64, chunk_size=8, seed=6))
         assert a == b and a != c
 
     def test_set_epoch_reshuffles(self):
-        from dbx.datastreams import BlockShuffleSampler
-        s = BlockShuffleSampler(n=64, block_size=8, seed=5)
+        from dbx.datastreams import ChunkShuffleSampler
+        s = ChunkShuffleSampler(n=64, chunk_size=8, seed=5)
         first = list(s)
         s.set_epoch(1)
         assert list(s) != first
 
     def test_fixed_epoch_ignores_set_epoch(self):
         """A validation sampler must score the same subset every epoch."""
-        from dbx.datastreams import BlockShuffleSampler
-        s = BlockShuffleSampler(n=64, block_size=8, seed=5, fixed_epoch=True)
+        from dbx.datastreams import ChunkShuffleSampler
+        s = ChunkShuffleSampler(n=64, chunk_size=8, seed=5, fixed_epoch=True)
         first = list(s)
         s.set_epoch(3)
         assert list(s) == first
 
-    def test_ragged_tail_block(self):
-        from dbx.datastreams import BlockShuffleSampler
-        assert sorted(BlockShuffleSampler(n=10, block_size=4, seed=0)) == list(range(10))
+    def test_ragged_tail_chunk(self):
+        from dbx.datastreams import ChunkShuffleSampler
+        assert sorted(ChunkShuffleSampler(n=10, chunk_size=4, seed=0)) == list(range(10))
 
     def test_resume_state_skips_what_was_consumed(self):
-        from dbx.datastreams import BlockShuffleSampler
-        s = BlockShuffleSampler(n=64, block_size=8, seed=2)
+        from dbx.datastreams import ChunkShuffleSampler
+        s = ChunkShuffleSampler(n=64, chunk_size=8, seed=2)
         it = iter(s)
         consumed = [next(it) for _ in range(20)]
         state = s.state_dict()
         assert state['consumed'] == 20
 
-        resumed = BlockShuffleSampler(n=64, block_size=8, seed=2)
+        resumed = ChunkShuffleSampler(n=64, chunk_size=8, seed=2)
         resumed.load_state_dict(state)
         rest = list(resumed)
         assert len(rest) == 44
-        assert consumed + rest == list(BlockShuffleSampler(n=64, block_size=8, seed=2))
+        assert consumed + rest == list(ChunkShuffleSampler(n=64, chunk_size=8, seed=2))
 
-    def test_rejects_bad_block_size(self):
-        from dbx.datastreams import BlockShuffleSampler
-        with pytest.raises(ValueError, match='block_size'):
-            BlockShuffleSampler(n=10, block_size=0)
+    def test_rejects_bad_chunk_size(self):
+        from dbx.datastreams import ChunkShuffleSampler
+        with pytest.raises(ValueError, match='chunk_size'):
+            ChunkShuffleSampler(n=10, chunk_size=0)
 
 
 class TestTableSampler:
@@ -873,7 +873,6 @@ class TestTableSampler:
 
     def test_sampler_honours_an_explicit_chunk_size(self, built_table):
         assert built_table.chunk_shuffle_sampler('numbers', chunk_size=2).chunk_size == 2
-        assert built_table.block_shuffle_sampler('numbers', block_size=2).block_size == 2
 
     def test_sampler_drives_a_dataloader_over_the_zip(self, built_table):
         from torch.utils.data import DataLoader

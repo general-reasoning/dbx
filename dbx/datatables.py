@@ -538,24 +538,6 @@ class DatapointBase(Datablock):
             fixed_epoch=fixed_epoch,
         )
 
-    def block_shuffle_sampler(
-        self,
-        slice: str,
-        *,
-        block_size: int | None = None,
-        chunk_size: int | None = None,
-        seed: int = 0,
-        fixed_epoch: bool = False,
-    ) -> ChunkShuffleSampler:
-        """Alias for `chunk_shuffle_sampler` with `block_size` support."""
-        size = chunk_size if chunk_size is not None else block_size
-        return self.chunk_shuffle_sampler(
-            slice,
-            chunk_size=size,
-            seed=seed,
-            fixed_epoch=fixed_epoch,
-        )
-
     def verify_slice_row_counts_match(self) -> dict[str, int]:
         """Check that the total number of dataset rows is identical across all declared slices.
 

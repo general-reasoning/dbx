@@ -76,11 +76,11 @@ import lightning.pytorch.loggers
 from dbx.datablocks import DIR, Datablock
 from dbx.dataparts import UNSAFE_allowed
 from dbx.datastreams import (
-    BlockShuffleSampler,
+    ChunkShuffleSampler,
     ResumableDataLoader,
-    block_split_indices,
-    block_split_ranges,
-    shuffled_block_order,
+    chunk_split_indices,
+    chunk_split_ranges,
+    shuffled_chunk_order,
     val_loader_workers,
 )
 
@@ -95,9 +95,9 @@ __all__ = [
     # Re-exported from dbx.datastreams, which is torch-only: importing this
     # module pulls in lightning, and the split/sizing helpers are useful to
     # code that has no business doing that.
-    'block_split_indices',
-    'block_split_ranges',
-    'shuffled_block_order',
+    'chunk_split_indices',
+    'chunk_split_ranges',
+    'shuffled_chunk_order',
     'val_loader_workers',
 ]
 
@@ -613,6 +613,11 @@ class Still(CheckpointBuilder):
     #: 2 since builders replaced the cfg_ surface: that re-keyed every
     #: still, and the bump says so in the key rather than leaving it
     #: implied by a changed signature.
+    #: 4: ``VAR.block_shuffle_size`` became ``chunk_shuffle_size``, after the
+    #: ChunkShuffleSampler it configures. "Block" meant a contiguous run of
+    #: sample indices, which in a package whose central noun is ``Datablock``
+    #: read as something it never was.
+    #:
     #: 3: ``done`` became a topic of its own, where completion used to be a
     #: ``_COMPLETE`` file inside ``ckpts``. TOPICS is in the signature, so
     #: every still re-keys; the bump is what puts that in the path rather than
@@ -620,7 +625,7 @@ class Still(CheckpointBuilder):
     #: the old marker: a version=2 artifact is reached by redirecting its
     #: ``ckpts``/``logs`` and then calling ``UNSAFE_done()``, which writes
     #: the new topic.
-    VERSION = 3
+    VERSION = 4
     #: ``done`` is a topic and not a marker file inside ``ckpts`` because
     #: completion is a thing this block produces, and dbx already knows how to
     #: write, validate, clear, copy and redirect one of those.  As a file it
@@ -648,12 +653,12 @@ class Still(CheckpointBuilder):
     #: Sampler and loader for ``dataloaders``.  Both default to the
     #: shard-locality-aware pair in ``dbx.datastreams``; a subclass whose
     #: data is not shard-backed can drop to ``torch.utils.data`` equivalents.
-    Sampler: type = BlockShuffleSampler
+    Sampler: type = ChunkShuffleSampler
     Loader: type = ResumableDataLoader
 
     #: ``(n, block_size, fractions, seed=) -> [indices, ...]``, used to draw the
     #: validation split when there is no separate validation builder.
-    split_indices = staticmethod(block_split_indices)
+    split_indices = staticmethod(chunk_split_indices)
 
     BANNER_TITLE = " TRAINING START "
     #: Double-width glyphs in BANNER_TITLE, to compensate its centering: an
@@ -697,7 +702,7 @@ class Still(CheckpointBuilder):
         # --- How to split and shuffle ---
         train_val_split: float = 0.8
         dataset_seed: int = 42
-        block_shuffle_size: int = 2048   # samples per shuffle block; see Sampler
+        chunk_shuffle_size: int = 2048   # samples per shuffle chunk; see Sampler
         # Misnomer kept for identity stability: it means "ignore any resume
         # checkpoint of MY OWN and restart the run at step 0", NOT "randomly
         # initialise the weights". Weight init is the model's business.
@@ -1229,7 +1234,7 @@ class Still(CheckpointBuilder):
         val_transform = self._module_hook_(model, 'val_transform')
         train_kwargs = self._module_hook_(model, 'train_dataset_kwargs', {}) or {}
         val_kwargs = self._module_hook_(model, 'val_dataset_kwargs', {}) or {}
-        block_size = var.block_shuffle_size
+        chunk_size = var.chunk_shuffle_size
 
         # Same block for both fields means "hold validation out of the training
         # data" -- one dataset, two disjoint index subsets. Two different blocks
@@ -1274,7 +1279,7 @@ class Still(CheckpointBuilder):
                 # leave a block or two assigned to neither split.
                 n = len(full_dataset)
                 train_idx, val_idx = self.split_indices(
-                    n, block_size, [var.train_val_split, None], seed=var.dataset_seed,
+                    n, chunk_size, [var.train_val_split, None], seed=var.dataset_seed,
                 )
                 train_dataset = torch.utils.data.Subset(full_dataset, train_idx)
                 val_dataset = torch.utils.data.Subset(full_dataset, val_idx)
@@ -1306,7 +1311,7 @@ class Still(CheckpointBuilder):
         # whole table. Re-shuffled per epoch via set_epoch(), which the Trainer
         # calls automatically.
         train_sampler = self.Sampler(
-            len(train_dataset), block_size, seed=var.dataset_seed,
+            len(train_dataset), chunk_size, seed=var.dataset_seed,
         )
         val_sampler = None
         if var.val_shuffle:
@@ -1315,7 +1320,7 @@ class Still(CheckpointBuilder):
             # subset. Deliberately unlike the train sampler above, which
             # *should* reshuffle every epoch.
             val_sampler = self.Sampler(
-                len(val_dataset), block_size, seed=var.val_seed, fixed_epoch=True,
+                len(val_dataset), chunk_size, seed=var.val_seed, fixed_epoch=True,
             )
 
         training_dataloader = self._dataloader_(

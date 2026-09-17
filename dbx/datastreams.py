@@ -376,7 +376,7 @@ class ZipStreamingDataset(ZipBase, Dataset):
     * Access order is the caller's, so cache locality is the caller's
       problem.  ``DataLoader(shuffle=True)`` is a full permutation and will
       thrash a bounded ``cache_limit``; use ``DatapointTable.sampler()``,
-      which shuffles in shard-sized blocks instead.
+      which shuffles in shard-sized chunks instead.
 
     What it buys in exchange is genuine random access: an index means the
     same sample every time, so inspection, subsetting, a ``Subset``, or any
@@ -541,11 +541,6 @@ def shuffled_chunk_order(num_chunks: int, seed: int) -> list:
     return torch.randperm(num_chunks, generator=generator).tolist()
 
 
-def shuffled_block_order(num_blocks: int, seed: int) -> list:
-    """Deprecated alias for shuffled_chunk_order."""
-    return shuffled_chunk_order(num_blocks, seed)
-
-
 class ChunkShuffleSampler(Sampler):
     """Shuffles contiguous chunks of an index space, and within each chunk --
     instead of shuffling the whole range at once.
@@ -573,23 +568,17 @@ class ChunkShuffleSampler(Sampler):
     """
 
     def __init__(self, n: int, chunk_size: int = None, seed: int = 0,
-                 fixed_epoch: bool = False, *, block_size: int = None):
-        size = chunk_size if chunk_size is not None else block_size
+                 fixed_epoch: bool = False):
         if n < 0:
             raise ValueError(f"n must be non-negative, got {n}")
-        if size is None or size <= 0:
-            raise ValueError(f"chunk_size / block_size must be positive, got {size}")
+        if chunk_size is None or chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
         self.n = n
-        self.chunk_size = size
+        self.chunk_size = chunk_size
         self.seed = seed
         self.epoch = 0
         self._fixed_epoch = fixed_epoch
         self._consumed = 0
-
-    @property
-    def block_size(self) -> int:
-        """Alias for chunk_size."""
-        return self.chunk_size
 
     def set_epoch(self, epoch: int):
         if not self._fixed_epoch and epoch != self.epoch:
@@ -628,15 +617,12 @@ class ChunkShuffleSampler(Sampler):
         self._consumed = state_dict['consumed']
 
 
-BlockShuffleSampler = ChunkShuffleSampler
-
-
 class ResumableDataLoader(DataLoader):
     """A ``DataLoader`` that forwards ``state_dict``/``load_state_dict`` to its
     sampler.
 
     Trainers that support mid-epoch resume check the *loader* for those
-    methods, not the sampler, so a :class:`BlockShuffleSampler`'s resume
+    methods, not the sampler, so a :class:`ChunkShuffleSampler`'s resume
     state is inert unless the loader surfaces it.  Only meaningful with a
     sampler that implements them.
     """
@@ -656,17 +642,17 @@ class ResumableDataLoader(DataLoader):
 # the same reason: consecutive sample indices in a shard-backed table live in
 # the same shard, so a per-sample-random train/val split scatters both halves
 # across the whole table and defeats the local shard cache just as thoroughly
-# as no split at all. Splitting whole contiguous blocks leaves each half a
+# as no split at all. Splitting whole contiguous chunks leaves each half a
 # union of contiguous runs.
 
-def block_split_ranges(n: int, block_size: int, fractions, seed: int = 0) -> list:
-    """Partition ``range(n)`` into groups at block granularity, as ranges.
+def chunk_split_ranges(n: int, chunk_size: int, fractions, seed: int = 0) -> list:
+    """Partition ``range(n)`` into groups at chunk granularity, as ranges.
 
     Each group comes back as ascending, maximally-merged ``(start, end)``
-    pairs: adjacent selected blocks coalesce, so three consecutive 2048-blocks
+    pairs: adjacent selected chunks coalesce, so three consecutive 2048-chunks
     are one ``(s, s + 6144)`` range rather than three.
 
-    See :func:`block_split_indices` for the ``fractions`` semantics.
+    See :func:`chunk_split_indices` for the ``fractions`` semantics.
     """
     fractions = list(fractions)
     if any(f is None for f in fractions[:-1]):
@@ -675,22 +661,22 @@ def block_split_ranges(n: int, block_size: int, fractions, seed: int = 0) -> lis
     if total > 1.0:
         raise ValueError(f"fractions sum to {total}, which exceeds 1.0: {fractions}")
 
-    num_blocks = (n + block_size - 1) // block_size
-    block_order = shuffled_block_order(num_blocks, seed)
+    num_chunks = (n + chunk_size - 1) // chunk_size
+    chunk_order = shuffled_chunk_order(num_chunks, seed)
 
     groups = []
     start_pos = 0
     for frac in fractions:
         if frac is None:
-            blocks = sorted(block_order[start_pos:])
-            start_pos = num_blocks
+            chunks = sorted(chunk_order[start_pos:])
+            start_pos = num_chunks
         else:
-            count = int(frac * num_blocks)
-            blocks = sorted(block_order[start_pos:start_pos + count])
+            count = int(frac * num_chunks)
+            chunks = sorted(chunk_order[start_pos:start_pos + count])
             start_pos += count
         ranges = []
-        for b in blocks:
-            s, e = b * block_size, min(b * block_size + block_size, n)
+        for c in chunks:
+            s, e = c * chunk_size, min(c * chunk_size + chunk_size, n)
             if ranges and ranges[-1][1] == s:
                 ranges[-1] = (ranges[-1][0], e)
             else:
@@ -699,10 +685,10 @@ def block_split_ranges(n: int, block_size: int, fractions, seed: int = 0) -> lis
     return groups
 
 
-def block_split_indices(n: int, block_size: int, fractions, seed: int = 0) -> list:
-    """Partition ``range(n)`` into ``len(fractions)`` groups at block granularity.
+def chunk_split_indices(n: int, chunk_size: int, fractions, seed: int = 0) -> list:
+    """Partition ``range(n)`` into ``len(fractions)`` groups at chunk granularity.
 
-    Whole blocks, not individual samples, are assigned to each group, so a
+    Whole chunks, not individual samples, are assigned to each group, so a
     group stays a union of contiguous index ranges.  Each group's indices come
     back ascending -- pair with
     :class:`~dbx.datastreams.ChunkShuffleSampler` for a shuffled iteration
@@ -712,21 +698,21 @@ def block_split_indices(n: int, block_size: int, fractions, seed: int = 0) -> li
     ----------
     n : int
         Length of the index space to split (e.g. ``len(dataset)``).
-    block_size : int
-        Consecutive indices per block.
+    chunk_size : int
+        Consecutive indices per chunk.
     fractions : Sequence[float | None]
-        Fraction of the *blocks* per group, in order.  At most the **last**
-        entry may be ``None``, meaning "every remaining block" -- which is
+        Fraction of the *chunks* per group, in order.  At most the **last**
+        entry may be ``None``, meaning "every remaining chunk" -- which is
         what a plain train/val split wants (``[0.8, None]``), since two
-        independently-rounded fractions summing to 1.0 can leave a block or
+        independently-rounded fractions summing to 1.0 can leave a chunk or
         two assigned to neither.  Give every entry a float when the leftover
         should be deliberately unused (``[0.05, 0.02]`` -- a 7% smoke test).
     seed : int
-        Seed for the block-order shuffle.
+        Seed for the chunk-order shuffle.
     """
     return [
         [i for s, e in ranges for i in range(s, e)]
-        for ranges in block_split_ranges(n, block_size, fractions, seed=seed)
+        for ranges in chunk_split_ranges(n, chunk_size, fractions, seed=seed)
     ]
 
 

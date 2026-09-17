@@ -626,6 +626,109 @@ class StillDataModule(L.pytorch.LightningDataModule):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# The training callbacks
+# ═══════════════════════════════════════════════════════════════════════
+
+#: Module level, and every one of them HOLDS its still rather than closing
+#: over it. They used to be local classes inside the methods that built them,
+#: which reads well and cannot be pickled: `ddp_spawn` sends the Trainer --
+#: and therefore its callbacks -- to each worker, and a class defined inside a
+#: function has no importable qualified name to send. The failure is
+#: `AttributeError: Can't get local object 'Still.callbacks.<locals>....'`,
+#: raised in the parent before a single worker starts.
+#:
+#: A `Still` pickles (`Datablock.__getstate__`), so holding one is the
+#: straightforward way to keep what the closures used to reach.
+
+
+class _LogCiteOnStart(L.pytorch.Callback):
+    """Record the block's reconstructible identity in TensorBoard.
+
+    So that a run directory answers "what produced this curve?" on its own --
+    `cite()` is the text that rebuilds this exact block. Wrapped in a
+    try/except because a logging nicety must never be the thing that kills a
+    training run.
+    """
+
+    def __init__(self, still):
+        super().__init__()
+        self.still = still
+
+    def on_train_start(self, trainer, pl_module):
+        if trainer.global_rank != 0 or trainer.logger is None:
+            return
+        try:
+            trainer.logger.experiment.add_text(
+                "cite", f"```\n{self.still.cite()}\n```",
+                global_step=trainer.global_step,
+            )
+        except Exception as e:
+            self.still.log.warning("could not log cite() to TensorBoard: %s", e)
+
+
+class _StepCheckpoint(L.pytorch.callbacks.Callback):
+    """Save every *every_n_steps* optimizer steps.
+
+    `on_train_batch_end` fires once per MICRO-batch, but `trainer.global_step`
+    only advances once per real optimizer step -- under
+    accumulate_grad_batches > 1 several micro-batches share one global_step.
+    Without the dedup guard, every micro-batch in that window would re-save
+    and re-push the SAME checkpoint, each a blocking remote upload sitting
+    directly in the training loop.
+    """
+
+    def __init__(self, still, ckpts_dir, every_n_steps):
+        super().__init__()
+        self.still = still
+        self.ckpts_dir = ckpts_dir
+        self.every_n_steps = every_n_steps
+        self._last_ckpt_step = -1
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        step = trainer.global_step
+        if step == 0 or step % self.every_n_steps != 0 or step == self._last_ckpt_step:
+            return
+        self._last_ckpt_step = step
+        self.still._save_checkpoint_(trainer, trainer.current_epoch, step,
+                                     ckpts_dir=self.ckpts_dir)
+
+
+class _EpochCheckpoint(L.pytorch.callbacks.Callback):
+    """Save every *every_n_epochs* epochs."""
+
+    def __init__(self, still, ckpts_dir, every_n_epochs):
+        super().__init__()
+        self.still = still
+        self.ckpts_dir = ckpts_dir
+        self.every_n_epochs = every_n_epochs
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        epoch = trainer.current_epoch
+        if (epoch + 1) % self.every_n_epochs != 0:
+            return
+        self.still._save_checkpoint_(trainer, epoch, trainer.global_step,
+                                     ckpts_dir=self.ckpts_dir)
+
+
+class _FreeResumeCkpt(L.pytorch.Callback):
+    """Delete the downloaded resume checkpoint once every rank has read it.
+
+    Fired from `on_train_start`, which Lightning reaches only after
+    `_run_stage`'s ``barrier("run-stage")``, and the restore happens before
+    that barrier -- so no rank can delete the file while another is still
+    restoring from it.
+    """
+
+    def __init__(self, still, path):
+        super().__init__()
+        self.still = still
+        self.path = path
+
+    def on_train_start(self, trainer, pl_module):
+        self.still._free_local_ckpt_(self.path)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Still — one training run
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -797,6 +900,9 @@ class Still(CheckpointBuilder):
         *,
         n_devices=1,
         devices=None,
+        # Accepts None -- resolved from the device count -- or 'ddp_spawn'.
+        # Anything else raises rather than quietly running a strategy that
+        # builds this block once per device. See _resolve_strategy_.
         strategy=None,
         check_run=False,
         tensorlogs_root=None,
@@ -940,14 +1046,7 @@ class Still(CheckpointBuilder):
                         # cannot be freed here -- it is not loaded yet. Freed
                         # from on_train_start instead, which Lightning fires
                         # only once checkpoint restore is fully complete.
-                        _resume_ckpt_path = ckpt
-                        _still = self
-
-                        class _FreeResumeCkpt(L.pytorch.Callback):
-                            def on_train_start(self, trainer, pl_module):
-                                _still._free_local_ckpt_(_resume_ckpt_path)
-
-                        trainer.callbacks.append(_FreeResumeCkpt())
+                        trainer.callbacks.append(_FreeResumeCkpt(self, ckpt))
             else:
                 # This branch is about RUN CONTINUITY -- whether there is
                 # optimizer/step state to resume -- NOT about weight init.
@@ -964,6 +1063,7 @@ class Still(CheckpointBuilder):
             # from inside fit(), after the process group exists. See
             # StillDataModule for what goes wrong when a shard-backed dataset
             # is constructed before that.
+            self._warn_unreduced_scalars_(model)
             self.log.info("Starting trainer.fit()")
             trainer.fit(
                 model=model,
@@ -1062,6 +1162,29 @@ class Still(CheckpointBuilder):
             "local" if self.is_local_fs else "local + remote",
         )
         return self
+
+    def __post_build__(self, *args, event="build:end", **kwargs):
+        """The journal entry for a build: once, from rank 0, and never a
+        ``build:end`` from a check.
+
+        Once, because a build happens once: :meth:`trainer_kwargs` runs the
+        workers inside ``fit`` and this is reached only by the process that
+        called it. Under a re-executing strategy it was one entry per rank,
+        each with its OWN session id -- worse than a duplicate, since nothing
+        marked the two as one run and a reader could not tell a two-rank build
+        from two builds. The journal is what ``find_latest_ckpt``, every
+        redirect and every specialization resolve against.
+
+        A check run records ``build:check``. It is not in
+        :attr:`SPECIALIZATION_EVENTS`, which is the point: ``__build__``
+        withholds ``done`` and says the block is still unbuilt, and a
+        ``build:end`` beside that would advertise, to the one mechanism that
+        reads for it, a build that produced no data. The event is still
+        written, because that a check ran here is worth knowing.
+        """
+        if self.check_run and event == "build:end":
+            event = "build:check"
+        return super().__post_build__(*args, event=event, **kwargs)
 
     def UNSAFE_clear(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
         """As the base, plus ``done``, the local staging dirs and the TB symlink.
@@ -1453,8 +1576,9 @@ class Still(CheckpointBuilder):
         kwargs['devices'] = devices
         if accelerator is not None:
             kwargs['accelerator'] = accelerator
-        if self.strategy is not None:
-            kwargs['strategy'] = self.strategy
+        strategy = self._resolve_strategy_(devices)
+        if strategy is not None:
+            kwargs['strategy'] = strategy
         if self.check_run:
             # Lightning's own name for it. True is one batch and an int is
             # that many, of train AND val. It silences the loggers and any
@@ -1466,70 +1590,7 @@ class Still(CheckpointBuilder):
 
     def callbacks(self, *, ckpts_dir):
         """The callbacks for this run: identity logging and the checkpointers."""
-        _still = self
-        _ckpts_dir = ckpts_dir
-        callbacks = []
-
-        class _LogCiteOnStart(L.pytorch.Callback):
-            """Record the block's reconstructible identity in TensorBoard.
-
-            So that a run directory answers "what produced this curve?" on its
-            own -- `cite()` is the text that rebuilds this exact block. Wrapped
-            in a try/except because a logging nicety must never be the thing
-            that kills a training run.
-            """
-
-            def on_train_start(self, trainer, pl_module):
-                if trainer.global_rank != 0 or trainer.logger is None:
-                    return
-                try:
-                    trainer.logger.experiment.add_text(
-                        "cite", f"```\n{_still.cite()}\n```",
-                        global_step=trainer.global_step,
-                    )
-                except Exception as e:
-                    _still.log.warning("could not log cite() to TensorBoard: %s", e)
-
-        def _upload_and_free(local_path, filename):
-            if _still.is_local_fs:
-                return
-            try:
-                remote_path = os.path.join(_still.dirpath("ckpts", ensure=True), filename)
-                _still.push(local_path, remote_path, free_src=True, show_progress=True)
-                _still.log.info("Uploaded %s and freed local copy", filename)
-            except Exception as e:
-                _still.log.warning("Ckpt upload failed: %s", e)
-
-        def _journal_ckpt(ckpt_tag):
-            try:
-                _still.write_journal_entry(event=f"ckpt={ckpt_tag}")
-            except Exception as e:
-                _still.log.warning("Ckpt journal entry failed: %s", e)
-
-        def _save(trainer, epoch, step):
-            """Save on every rank, but upload, free and journal on rank 0 only.
-
-            ``trainer.save_checkpoint`` is COLLECTIVE -- under DDP it gathers
-            state across ranks, so a rank that skipped it would hang the ranks
-            that did not.  It writes the file on rank 0 alone.
-
-            Everything after it is rank 0's work, and the guard is what was
-            missing: every rank used to push the same multi-GB file to the same
-            remote path, with ``free_src=True`` deleting the local copy while
-            another rank was still reading it, and every rank wrote its own
-            ``ckpt=`` journal entry.  The symptom was an upload that stalled at
-            0% and never returned.
-            """
-            filename = f"epoch={epoch:03d}-step={step:07d}.ckpt"
-            local_path = os.path.join(_ckpts_dir, filename)
-            trainer.save_checkpoint(local_path)
-            if trainer.global_rank != 0:
-                return
-            _still.log.info("Saved checkpoint: %s", filename)
-            _upload_and_free(local_path, filename)
-            _journal_ckpt(filename)
-
-        callbacks.append(_LogCiteOnStart())
+        callbacks = [_LogCiteOnStart(self)]
 
         if self.check_run:
             # A check writes no checkpoints. `done` is already withheld (see
@@ -1549,40 +1610,56 @@ class Still(CheckpointBuilder):
             return callbacks
 
         if self.var.ckpt_every_n_steps is not None:
-            _every_n_steps = self.var.ckpt_every_n_steps
-
-            class _StepCheckpoint(L.pytorch.callbacks.Callback):
-                # `on_train_batch_end` fires once per MICRO-batch, but
-                # `trainer.global_step` only advances once per real optimizer
-                # step -- under accumulate_grad_batches > 1 several
-                # micro-batches share one global_step. Without the dedup guard,
-                # every micro-batch in that window would re-save and re-push
-                # the SAME checkpoint, each a blocking remote upload sitting
-                # directly in the training loop.
-                _last_ckpt_step = -1
-
-                def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-                    step = trainer.global_step
-                    if step == 0 or step % _every_n_steps != 0 or step == self._last_ckpt_step:
-                        return
-                    self._last_ckpt_step = step
-                    _save(trainer, trainer.current_epoch, step)
-
-            callbacks.append(_StepCheckpoint())
-
+            callbacks.append(_StepCheckpoint(self, ckpts_dir, self.var.ckpt_every_n_steps))
         if self.var.ckpt_every_n_epochs is not None:
-            _every_n_epochs = self.var.ckpt_every_n_epochs
-
-            class _EpochCheckpoint(L.pytorch.callbacks.Callback):
-                def on_train_epoch_end(self, trainer, pl_module):
-                    epoch = trainer.current_epoch
-                    if (epoch + 1) % _every_n_epochs != 0:
-                        return
-                    _save(trainer, epoch, trainer.global_step)
-
-            callbacks.append(_EpochCheckpoint())
-
+            callbacks.append(_EpochCheckpoint(self, ckpts_dir, self.var.ckpt_every_n_epochs))
         return callbacks
+
+    def _upload_and_free_(self, local_path, filename):
+        """Push one checkpoint to remote and drop the local copy."""
+        if self.is_local_fs:
+            return
+        try:
+            remote_path = os.path.join(self.dirpath("ckpts", ensure=True), filename)
+            self.push(local_path, remote_path, free_src=True)
+            self.log.info("Uploaded %s and freed local copy", filename)
+        except Exception as e:
+            self.log.warning("Ckpt upload failed: %s", e)
+
+    def _journal_ckpt_(self, ckpt_tag):
+        """Record that a checkpoint exists, never raising into the loop."""
+        try:
+            self.write_journal_entry(event=f"ckpt={ckpt_tag}")
+        except Exception as e:
+            self.log.warning("Ckpt journal entry failed: %s", e)
+
+    def _save_checkpoint_(self, trainer, epoch, step, *, ckpts_dir):
+        """Save on every rank, but upload, free and journal on rank 0 only.
+
+        ``trainer.save_checkpoint`` is COLLECTIVE -- under DDP it gathers
+        state across ranks, so a rank that skipped it would hang the ranks
+        that did not.  It writes the file on rank 0 alone.
+
+        Everything after it is rank 0's work, and the guard is what was
+        missing: every rank used to push the same multi-GB file to the same
+        remote path, with ``free_src=True`` deleting the local copy while
+        another rank was still reading it, and every rank wrote its own
+        ``ckpt=`` journal entry.  The symptom was an upload that stalled at
+        0% and never returned.
+
+        ``trainer.global_rank`` is the only rank this class asks about
+        anywhere, and it is asked here because this runs INSIDE ``fit``, on
+        every worker, where the trainer knows. Nothing outside ``fit`` asks:
+        see :meth:`trainer_kwargs` for why there is only one process there.
+        """
+        filename = f"epoch={epoch:03d}-step={step:07d}.ckpt"
+        local_path = os.path.join(ckpts_dir, filename)
+        trainer.save_checkpoint(local_path)
+        if trainer.global_rank != 0:
+            return
+        self.log.info("Saved checkpoint: %s", filename)
+        self._upload_and_free_(local_path, filename)
+        self._journal_ckpt_(filename)
 
     # 3. Accessors and properties ───────────────────────────────────
 
@@ -1762,50 +1839,24 @@ class Still(CheckpointBuilder):
         self.log.info("Syncing logs to remote")
         self.pushtopic('logs')
 
-    @staticmethod
-    def _sync_rank_():
-        """This process's rank, for guards that outlive the process group.
-
-        Read from the environment, not from ``torch.distributed``: the guards
-        that need it run in ``finally`` and at ``atexit``, by which time the
-        group may already be gone. Lightning's subprocess launcher exports
-        ``LOCAL_RANK`` to every child and leaves it unset in the parent, which
-        IS rank 0 -- so an absent variable is the right answer rather than a
-        missing one.
-
-        Single-node. On several nodes ``LOCAL_RANK`` is per-node, so one
-        process per node would sync; that is duplicated work rather than a
-        wrong answer, and there is no multi-node run to fix it against yet.
-        """
-        for var in ('RANK', 'LOCAL_RANK', 'SLURM_PROCID'):
-            value = os.environ.get(var)
-            if value is not None:
-                try:
-                    return int(value)
-                except ValueError:
-                    pass
-        return 0
-
     def _sync_to_remote_(self, *, reason):
         """Push both topics, never raising -- called from ``atexit`` and ``finally``.
 
-        Two guards, and neither is an optimisation. A check writes no
-        checkpoints, so syncing one can only push whatever a PREVIOUS run left
-        in the staging dir -- which is how a one-batch check came to upload
-        10GB it had not produced. And every rank stages to the same local dir,
-        so an unguarded sync pushes the same bytes once per rank: the rank
-        guard on the save callback does not cover this, because this runs
-        after ``fit`` returns, on every rank.
+        One guard, and it is not an optimisation: a check writes no
+        checkpoints, so syncing can only push whatever a PREVIOUS run left in
+        the staging dir -- which is how a one-batch check came to upload 10GB
+        it had not produced.
+
+        No rank guard, and none is possible to need: this runs after ``fit``
+        returns, in the one process that called it. See :meth:`trainer_kwargs`
+        for why that is a guarantee rather than a hope.
         """
         if self.check_run:
             self.log.info(
-                "%s: check_run=%r, nothing to sync -- a check writes no checkpoints "
-                "and its logger is Lightning's DummyLogger", reason, self.check_run,
+                "%s: check_run=%r, nothing to sync -- a check writes no "
+                "checkpoints and its logger is Lightning's DummyLogger",
+                reason, self.check_run,
             )
-            return
-        rank = self._sync_rank_()
-        if rank != 0:
-            self.log.info("%s: rank %s leaves the sync to rank 0", reason, rank)
             return
         try:
             self._sync_ckpts_to_remote_()
@@ -1954,6 +2005,44 @@ class Still(CheckpointBuilder):
         initial = self.var.ckpt_builder
         return initial if isinstance(initial, CheckpointBuilder) else None
 
+    def _warn_unreduced_scalars_(self, model):
+        """Say, loudly, which scalars a multi-process run will get wrong.
+
+        ``self.log(..., sync_dist=True)`` is reduced across the world by
+        Lightning. A direct ``logger.experiment.add_*`` is not, and cannot be:
+        it never enters the logging machinery, and on every rank but 0
+        ``logger.experiment`` is a ``_DummyExperiment`` whose methods do
+        nothing. So those curves are rank 0's SAMPLE of a quantity the run
+        computed on N devices, and no flag changes that -- only an explicit
+        all-reduce at the call site does.
+
+        Silent on one device, where rank 0 is the world and the distinction
+        does not exist. Counted from the module's own source rather than
+        asserted in the abstract, so a module with none of them says nothing
+        and one with some says how many. Never raises: a diagnostic may not be
+        the thing that stops a training run.
+        """
+        if (self._device_count_(self._resolve_devices_()[1]) or 2) < 2:
+            return
+        try:
+            import inspect
+            source = inspect.getsource(type(model))
+            sites = source.count('experiment.add_')
+        except Exception:
+            sites = None
+        if sites == 0:
+            return
+        how_many = "some" if sites is None else str(sites)
+        self.log.warning(
+            "UNREDUCED SCALARS: %s direct `logger.experiment.add_*` call(s) in %s. "
+            "Those bypass self.log() and write RANK 0's VALUE ONLY -- on other ranks "
+            "`logger.experiment` is Lightning's _DummyExperiment and the call does "
+            "nothing. sync_dist= cannot reach them; reducing one means an explicit "
+            "all_gather/all_reduce before the write. Every curve they produce is a "
+            "sample of this run, not a measurement of it.",
+            how_many, type(model).__name__,
+        )
+
     def _resuming_own_ckpts_(self):
         """Whether this run CONTINUES from this block's own latest checkpoint.
 
@@ -2026,6 +2115,53 @@ class Still(CheckpointBuilder):
                 ckpt = str(self.var.ckpt_builder)
         return ckpt, own_it, warm_start
 
+    @staticmethod
+    def _device_count_(devices):
+        """How many processes *devices* asks for, or None when only Lightning knows."""
+        if isinstance(devices, (list, tuple)):
+            return len(devices)
+        if isinstance(devices, int) and devices >= 0:
+            return devices
+        return None                      # 'auto' or -1: resolved at setup
+
+    def _resolve_strategy_(self, devices):
+        """``'ddp_spawn'`` above one device, and nothing else, ever.
+
+        Not a default. The single-build semantics of this whole class rest on
+        it, so it is a constant rather than an attribute a subclass can move.
+
+        A re-executing strategy -- `ddp` and its variants, deepspeed, fsdp --
+        runs the whole command once per device: Lightning's launcher calls
+        `subprocess.Popen(_basic_subprocess_cmd())`, and the child's only way
+        to reach `fit` is to re-run your command down to it. So the STILL is
+        constructed N times: N journal reads, N banners, N `build()` calls, N
+        `build:end` entries under N DIFFERENT session ids, N writes of `done`.
+        Only the TRAINING is meant to be distributed; the block is one build.
+
+        `ddp_spawn` starts its workers from inside `fit()` and hands them
+        `trainer._fit_impl` alone, so everything above `fit` happens once, in
+        the one process that then writes `done` and journals it. That is what
+        lets every method outside `fit` be written as straight-line code with
+        no idea that ranks exist -- and why `trainer.global_rank` in
+        :meth:`_save_checkpoint_` is the only rank check in this class.
+
+        None for a world of exactly one, where Lightning's `single_device`
+        needs no naming and a spawn would buy nothing. Everything else is
+        named explicitly, INCLUDING the counts this cannot resolve -- `'auto'`
+        and `-1` -- because leaving those unnamed on a multi-GPU box is
+        precisely how a run silently gets `ddp`.
+        """
+        if self.strategy is not None and self.strategy != 'ddp_spawn':
+            raise ValueError(
+                f"strategy={self.strategy!r} is not supported: a Still runs "
+                f"'ddp_spawn', which is the only strategy that distributes the "
+                f"TRAINING without also duplicating the BLOCK. Every re-executing "
+                f"strategy ('ddp', 'ddp_find_unused_parameters_true', deepspeed, "
+                f"fsdp) constructs this still once per device, and this class is "
+                f"written on the guarantee that it is constructed once."
+            )
+        return None if self._device_count_(devices) == 1 else 'ddp_spawn'
+
     def _resolve_devices_(self):
         """``(accelerator, devices)`` for the Trainer, from ``devices`` or ``n_devices``.
 
@@ -2045,8 +2181,9 @@ class Still(CheckpointBuilder):
         world, so the distributed paths -- the sampler splitting, the rank-0
         guards, the collective in the loss -- can be exercised on a laptop and
         in CI, without a GPU and without taking one away from a training run
-        to do it.  Lightning picks DDP off ``devices > 1`` by itself; pass
-        ``strategy=`` for a specific one.
+        to do it.  Anything above one device gets ``ddp_spawn`` -- see
+        :meth:`_resolve_strategy_`; Lightning is never left to pick, because
+        what it picks is ``ddp``.
 
         A bare int, ``-1`` or ``'auto'`` is handed through untouched, so
         anything Lightning's own ``devices`` accepts still works.

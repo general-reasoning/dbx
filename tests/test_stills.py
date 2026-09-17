@@ -7,6 +7,7 @@ synthetic dataset for two epochs, which is fast and is the only way to pin what
 """
 import inspect
 import os
+import pickle
 from dataclasses import dataclass
 
 import pytest
@@ -21,6 +22,7 @@ import lightning as L
 
 from dbx.datablocks import Datablock
 from dbx.stills import (
+    _FreeResumeCkpt,
     ChunkShuffleSampler,
     ResumableDataLoader,
     CheckpointBuilder,
@@ -1287,47 +1289,225 @@ class TestACheckRunDoesNotContinueAnything:
         assert own is False
 
 
-class TestTheEndOfRunSyncIsGuarded:
-    """Two guards on `_sync_to_remote_`, neither an optimisation."""
+class TestTheBuildIsRecordedOnce:
+    """One build, one journal entry -- and a check is not a build.
 
-    def _synced(self, still, monkeypatch, **env):
+    The launcher re-executes the whole command per device, so every rank runs
+    `build()` and the base journalled once per rank, each under its own
+    session id. Two entries milliseconds apart that nothing marks as one run.
+    """
+
+    def _journalled(self, still, monkeypatch, rank=None):
+        events = []
+        for k in ('RANK', 'LOCAL_RANK', 'SLURM_PROCID'):
+            monkeypatch.delenv(k, raising=False)
+        if rank is not None:
+            monkeypatch.setenv('LOCAL_RANK', str(rank))
+        monkeypatch.setattr(still, 'write_journal_entry',
+                            lambda **kw: events.append(kw.get('event')))
+        still.__post_build__()
+        return events
+
+    def test_rank_zero_records_the_build(self, tmp_path, monkeypatch):
+        assert self._journalled(_toy(tmp_path), monkeypatch, rank=0) == ['build:end']
+
+    @pytest.mark.pinned
+    def test_a_check_run_does_not_record_a_build_end(self, tmp_path, monkeypatch):
+        """`build:end` is what a specialization resolves against, and a check
+        withholds `done` and declares the block unbuilt in the same breath."""
+        events = self._journalled(_toy(tmp_path, check_run=True), monkeypatch, rank=0)
+        assert events == ['build:check']
+        assert 'build:check' not in Still.SPECIALIZATION_EVENTS
+
+    def test_but_it_does_record_something(self, tmp_path, monkeypatch):
+        """That a check ran here is worth knowing; only the claim is wrong."""
+        assert self._journalled(_toy(tmp_path, check_run=True), monkeypatch, rank=0)
+
+    def test_an_explicit_event_is_not_rewritten(self, tmp_path, monkeypatch):
+        still = _toy(tmp_path, check_run=True)
+        events = []
+        monkeypatch.setenv('LOCAL_RANK', '0')
+        monkeypatch.setattr(still, 'write_journal_entry',
+                            lambda **kw: events.append(kw.get('event')))
+        still.__post_build__(event='something:else')
+        assert events == ['something:else']
+
+
+class TestOneStrategy:
+    """`ddp_spawn`, because it distributes the training and not the block.
+
+    Every re-executing strategy runs the whole command once per device, so
+    the STILL is constructed N times: N journal reads, N banners, N builds,
+    N `build:end` entries under N session ids. `ddp_spawn` starts its workers
+    inside `fit()` and hands them `fit` alone.
+    """
+
+    def _strategy(self, root, **kw):
+        return _trainer_kwargs(root, **kw).get('strategy')
+
+    def test_one_device_names_no_strategy(self, tmp_path):
+        """`single_device` needs no naming and a spawn would buy nothing."""
+        assert self._strategy(tmp_path, devices=['cpu']) is None
+
+    @pytest.mark.pinned
+    def test_two_devices_spawn(self, tmp_path):
+        assert self._strategy(tmp_path, devices=['cpu', 'cpu']) == 'ddp_spawn'
+
+    def test_named_devices_spawn(self, tmp_path):
+        assert self._strategy(tmp_path, devices=['cuda:1', 'cuda:2']) == 'ddp_spawn'
+
+    @pytest.mark.pinned
+    @pytest.mark.parametrize('devices', ['auto', -1])
+    def test_a_count_this_cannot_resolve_is_still_named(self, tmp_path, devices):
+        """The trap. `auto` on a multi-GPU box is how a run silently gets
+        `ddp` -- and N copies of the block -- by saying nothing."""
+        assert self._strategy(tmp_path, devices=devices) == 'ddp_spawn'
+
+    def test_the_value_itself_is_accepted(self, tmp_path):
+        assert self._strategy(tmp_path, devices=['cpu', 'cpu'],
+                              strategy='ddp_spawn') == 'ddp_spawn'
+
+    @pytest.mark.pinned
+    def test_a_re_executing_strategy_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match='ddp_spawn'):
+            self._strategy(tmp_path, devices=['cpu', 'cpu'], strategy='ddp')
+
+    def test_the_refusal_says_what_is_wrong_with_it(self, tmp_path):
+        with pytest.raises(ValueError, match='once per device'):
+            self._strategy(tmp_path, devices=['cpu', 'cpu'], strategy='deepspeed_stage_2')
+
+    @pytest.mark.pinned
+    def test_there_is_no_attribute_to_override(self, tmp_path):
+        """A constant, not a knob. Everything outside `fit` in this class is
+        written on the guarantee that it runs once, so a subclass that could
+        swap in a re-executing strategy would silently invalidate all of it."""
+        assert not hasattr(Still, 'MULTIPROCESS_STRATEGY')
+
+
+class TestTheStillDoesNotAskWhatRankItIs:
+    """Outside `fit` there is one process, so there is nothing to guard.
+
+    `ddp_spawn` starts its workers inside `fit()` and hands them `fit` alone.
+    Everything above and after it -- the banner, the paths, `done`, the
+    journal entry, the sync -- runs in the one process that called `build()`.
+
+    These assert the ABSENCE of a guard, which is worth pinning precisely
+    because the guards were there and worked: a rank check that can never
+    fire is not harmless, it tells a reader that `UNSAFE_done` runs on several
+    ranks, and the next person maintains it as though that were true.
+    """
+
+    def _as_rank(self, monkeypatch, rank):
+        for k in ('RANK', 'LOCAL_RANK', 'SLURM_PROCID'):
+            monkeypatch.delenv(k, raising=False)
+        if rank is not None:
+            monkeypatch.setenv('LOCAL_RANK', str(rank))
+
+    @pytest.mark.pinned
+    def test_done_is_written_whatever_local_rank_says(self, tmp_path, monkeypatch):
+        still = _toy(tmp_path)
+        self._as_rank(monkeypatch, 1)
+        still.UNSAFE_done(OVERRIDE=True)
+        assert os.path.exists(still.path('done', local=True))
+
+    @pytest.mark.pinned
+    def test_the_build_is_journalled_whatever_local_rank_says(self, tmp_path, monkeypatch):
+        still = _toy(tmp_path)
+        self._as_rank(monkeypatch, 3)
+        events = []
+        monkeypatch.setattr(still, 'write_journal_entry',
+                            lambda **kw: events.append(kw.get('event')))
+        still.__post_build__()
+        assert events == ['build:end']
+
+    @pytest.mark.pinned
+    def test_the_sync_runs_whatever_local_rank_says(self, tmp_path, monkeypatch):
+        still = _toy(tmp_path)
+        self._as_rank(monkeypatch, 2)
         pushed = []
         monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
         monkeypatch.setattr(still, 'pushtopic', lambda t, *a, **k: pushed.append(t))
-        for k in ('RANK', 'LOCAL_RANK', 'SLURM_PROCID'):
-            monkeypatch.delenv(k, raising=False)
-        for k, v in env.items():
-            monkeypatch.setenv(k, v)
-        still._sync_to_remote_(reason='test')
-        return pushed
+        still._sync_to_remote_(reason='finally')
+        assert 'ckpts' in pushed
 
-    def test_an_ordinary_run_on_rank_zero_pushes(self, tmp_path, monkeypatch):
-        assert 'ckpts' in self._synced(_toy(tmp_path), monkeypatch)
+    def test_a_check_run_still_syncs_nothing(self, tmp_path, monkeypatch):
+        """The one guard that remains, and it is not about ranks."""
+        still = _toy(tmp_path, check_run=True)
+        self._as_rank(monkeypatch, 0)
+        pushed = []
+        monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
+        monkeypatch.setattr(still, 'pushtopic', lambda t, *a, **k: pushed.append(t))
+        still._sync_to_remote_(reason='finally')
+        assert pushed == []
 
-    def test_no_rank_variable_at_all_is_rank_zero(self, tmp_path, monkeypatch):
-        """The parent process of Lightning's launcher IS rank 0, and the
-        launcher leaves LOCAL_RANK unset there. Absent is an answer."""
-        assert 'ckpts' in self._synced(_toy(tmp_path), monkeypatch)
-
-    @pytest.mark.pinned
-    def test_a_check_run_pushes_nothing(self, tmp_path, monkeypatch):
-        """It writes no checkpoint, so a sync can only push what a PREVIOUS
-        run left staged -- which is how a one-batch check uploaded 10GB it
-        had not produced, four times over."""
-        assert self._synced(_toy(tmp_path, check_run=True), monkeypatch) == []
+    def test_the_banner_prints_whatever_local_rank_says(self, tmp_path, monkeypatch, capsys):
+        still = _toy(tmp_path)
+        self._as_rank(monkeypatch, 1)
+        still._print_training_banner_(still.lightning_module, None, str(tmp_path))
+        assert 'TRAINING START' in capsys.readouterr().out
 
     @pytest.mark.pinned
-    def test_a_non_zero_rank_pushes_nothing(self, tmp_path, monkeypatch):
-        """Every rank stages to the same local dir and this runs after `fit`
-        returns on all of them, so the rank guard on the save callback does
-        not cover it."""
-        assert self._synced(_toy(tmp_path), monkeypatch, LOCAL_RANK='1') == []
+    def test_the_only_rank_check_left_is_in_the_save_path(self):
+        """`_save_checkpoint_` runs INSIDE fit, on every worker, and needs the
+        split mid-function: save collectively, then upload once."""
+        source = inspect.getsource(Still)
+        asking = [l.strip() for l in source.splitlines()
+                  if 'global_rank' in l and l.strip().startswith('if ')]
+        assert asking == ['if trainer.global_rank != 0:']
 
-    def test_rank_wins_over_local_rank(self, tmp_path, monkeypatch):
-        assert 'ckpts' in self._synced(_toy(tmp_path), monkeypatch,
-                                       RANK='0', LOCAL_RANK='3')
 
-    def test_an_unparseable_rank_falls_through_rather_than_raising(self, tmp_path, monkeypatch):
-        """This runs in `finally` and at `atexit`; raising there would mask
-        whatever the run was already reporting."""
-        assert 'ckpts' in self._synced(_toy(tmp_path), monkeypatch, RANK='')
+class TestTheUnreducedScalarWarning:
+    """`sync_dist=` cannot reach a direct `logger.experiment.add_*`.
+
+    Those never enter the logging machinery, and on every rank but 0
+    `logger.experiment` is Lightning's `_DummyExperiment`, whose methods do
+    nothing. So the curve is rank 0's SAMPLE of a quantity computed on N
+    devices -- and nothing in the code says so at the call site.
+    """
+
+    class _Raw:
+        def training_step(self, batch, i):
+            self.logger.experiment.add_scalar('train/loss', 1.0, i)
+            self.logger.experiment.add_histogram('w', None, i)
+
+    class _Clean:
+        def training_step(self, batch, i):
+            self.log('train/loss', 1.0, sync_dist=True)
+
+    def _warned(self, still, model, monkeypatch):
+        said = []
+        monkeypatch.setattr(still.log, 'warning', lambda m, *a: said.append(m % a))
+        still._warn_unreduced_scalars_(model)
+        return ' '.join(said)
+
+    @pytest.mark.pinned
+    def test_it_counts_them_and_says_rank_zero_only(self, tmp_path, monkeypatch):
+        still = _toy(tmp_path, devices=['cpu', 'cpu'])
+        said = self._warned(still, self._Raw(), monkeypatch)
+        assert 'UNREDUCED SCALARS' in said
+        assert '2 direct' in said
+        assert "RANK 0's VALUE ONLY" in said
+
+    def test_a_module_with_none_says_nothing(self, tmp_path, monkeypatch):
+        """Or it is a nag rather than a finding, and gets read past."""
+        still = _toy(tmp_path, devices=['cpu', 'cpu'])
+        assert self._warned(still, self._Clean(), monkeypatch) == ''
+
+    def test_one_device_says_nothing(self, tmp_path, monkeypatch):
+        """Rank 0 is the world there; the distinction does not exist."""
+        still = _toy(tmp_path, devices=['cpu'])
+        assert self._warned(still, self._Raw(), monkeypatch) == ''
+
+    def test_an_unreadable_module_still_warns(self, tmp_path, monkeypatch):
+        """A class `inspect` cannot source is the case where the count is
+        unknown -- which is a reason to say so, not to fall silent."""
+        still = _toy(tmp_path, devices=['cpu', 'cpu'])
+        monkeypatch.setattr(inspect, 'getsource',
+                            lambda o: (_ for _ in ()).throw(OSError('no source')))
+        said = self._warned(still, self._Raw(), monkeypatch)
+        assert 'UNREDUCED SCALARS' in said and 'some direct' in said
+
+    def test_it_never_raises(self, tmp_path):
+        """A diagnostic may not be the thing that stops a training run."""
+        still = _toy(tmp_path, devices=['cpu', 'cpu'])
+        still._warn_unreduced_scalars_(None)

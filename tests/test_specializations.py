@@ -13,6 +13,7 @@ by keeping its name, which is the same thing.
 """
 import os
 import pickle
+import shutil
 
 import pytest
 from dataclasses import dataclass
@@ -876,3 +877,118 @@ class TestWhyItDidNotResolve:
         an exception's own message may carry newlines."""
         why = v2(tmp_path / 'nowhere').specializations()[0]['why']
         assert '\n' not in why
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  What a specialization is gated on
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestTheGateIsPerSpecialization:
+    """A partial specialization has to survive losing its memo.
+
+    `spectra` comes from the narrower block and `phases` is this block's own.
+    Once it builds `phases`, the block no longer "has nothing" -- and asking
+    that question over ALL its topics is what makes the next construction
+    decline the specialization it had been living on, go invalid for want of
+    `spectra`, and rebuild what it had been reading.
+
+    Normally the `.redirection` topic hides this: it is written when the
+    specialization resolves, and read in place of resolving again. But that is
+    a CACHE. Delete it, or write it somewhere else -- which is what happens
+    when a pipeline resolves on an untagged instance and then tags it -- and
+    the gate is the only thing left, and it gives the wrong answer.
+
+    The question it has to ask is narrower: none of the topics THIS
+    specialization covers. Whatever else is there is this block's own build of
+    its own topics, which is what it is supposed to have.
+    """
+
+    def _partially_built(self, tmp_path, forget_the_memo=True):
+        """A V2 living on the specialization, with its own topic built."""
+        v1(tmp_path).build()
+        first = v2(tmp_path)
+        assert first.ownedtopics() == ['phases'], first.ownedtopics()
+        first.build()
+        own = sorted(x for x in os.listdir(first.anchorkeypath) if x != '.journal')
+        assert own == ['.redirection', 'phases'], own
+        if forget_the_memo:
+            shutil.rmtree(os.path.join(first.anchorkeypath, '.redirection'))
+        return first
+
+    def test_the_memo_intact_keeps_it(self, tmp_path):
+        """The easy half, and the reason this went unnoticed."""
+        self._partially_built(tmp_path, forget_the_memo=False)
+        assert v2(tmp_path).redirected_topics() == ['spectra']
+
+    def test_the_memo_is_a_cache_and_not_the_answer(self, tmp_path):
+        """Resolving again has to reach the same conclusion as reading it."""
+        self._partially_built(tmp_path)
+        again = v2(tmp_path)
+        assert again.redirected_topics() == ['spectra']
+        assert again.ownedtopics() == ['phases']
+        assert again.valid()
+
+    def test_without_it_the_block_would_rebuild_what_it_reads(self, tmp_path):
+        """What going invalid here costs: the whole narrower build, again."""
+        self._partially_built(tmp_path)
+        assert v2(tmp_path).read('spectra') == 'spectra-16000'
+
+    def test_half_of_a_specializations_topics_present_declines_it(self, tmp_path):
+        """The mixing case the all-or-nothing rule was written for.
+
+        `spectra` present at this block's OWN path means a build wrote it
+        here. Reading the specialization's copy for the rest would put two
+        computations' output under one hash, so the specialization is off.
+        """
+        v1(tmp_path).build()
+        block = v2(tmp_path, use_specializations=False)
+        block.build()                               # writes both topics itself
+        assert 'spectra' in os.listdir(block.anchorkeypath)
+        fresh = v2(tmp_path)
+        assert fresh._redirected_paths_ is None
+        assert fresh.ownedtopics() == ['spectra', 'phases']
+
+
+class TestAFailedSpecializationIsNotRemembered:
+    """Deliberately not memoized: the target may yet be built.
+
+    A resolution that succeeds writes `.redirection` and is never resolved
+    again. A failure writes nothing, because the only thing that would make it
+    permanent is a promise nobody can make -- that no later build will put the
+    narrower block in the journal.
+    """
+
+    def test_the_block_is_invalid_and_build_builds_it(self, tmp_path):
+        """Claim one: nothing to specialize onto means an ordinary build."""
+        block = v2(tmp_path)                       # V1 was never built
+        assert block.matching_specializations()    # it applied
+        assert block._redirected_paths_ is None    # and did not resolve
+        assert not block.valid()
+        block.build()
+        assert block.valid()
+        assert block.read('spectra') == 'spectra-16000'   # its own, not V1's
+
+    def test_a_later_construction_picks_up_a_target_built_since(self, tmp_path):
+        """Claim two, and the reason a failure must not be memoized."""
+        missed = v2(tmp_path)
+        assert missed._redirected_paths_ is None
+        v1(tmp_path).build()                       # the target arrives late
+        assert v2(tmp_path).redirected_topics() == ['spectra']
+
+    def test_the_instance_that_missed_does_not_pick_it_up(self, tmp_path):
+        """The limit of that: resolution happens at construction, not at build.
+
+        An instance that already missed goes on to build for itself. Nothing
+        is wrong with the data it writes -- it is the same computation -- it
+        is simply not the reuse the specialization was for.
+        """
+        missed = v2(tmp_path)
+        v1(tmp_path).build()
+        assert missed._redirected_paths_ is None
+        assert missed.ownedtopics() == ['spectra', 'phases']
+
+    def test_nothing_is_written_when_it_fails(self, tmp_path):
+        """No `.redirection`, so the next construction asks again."""
+        block = v2(tmp_path)
+        assert block._redirected_paths_ is None
+        assert not os.path.exists(os.path.join(block.anchorkeypath, '.redirection'))

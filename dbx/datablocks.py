@@ -6129,18 +6129,37 @@ class Datablock:
                     and getattr(self, 'use_specializations', False)
                     and self.SPECIALIZATIONS)
 
-    def _unbuilt(self):
-        """True when NONE of this block's own topics are there.
+    def _unbuilt(self, topics=None):
+        """True when NONE of the named topics are there, default all of them.
 
         Its own: resolved through ``__path__``, never ``path()``, which consults
         the redirection this is deciding whether to install.
 
-        None rather than "not all", because a block with some of its topics
-        built is a block mid-build or half-cleared, and taking the rest from a
-        narrower block would mix two computations' outputs under one hash. A
-        specialization is for a block that has nothing yet.
+        None rather than "not all", because a block with SOME of the named
+        topics built is a block mid-build or half-cleared, and taking the rest
+        from a narrower block would mix two computations' outputs under one
+        hash.
+
+        *topics* is what makes that question answerable for a PARTIAL
+        specialization -- one that covers some topics and leaves the rest to
+        this block. Asked over all of them, such a block stops being "unbuilt"
+        the moment it builds the ones it owns, which is the first thing it does
+        after installing the specialization: the topics the specialization
+        covers are still absent from here, exactly as intended, and the answer
+        flips anyway. Asked over the topics ONE specialization covers, it is
+        the question that was always meant -- is there anything of MINE where
+        this would have me read someone else's -- and it keeps the same answer
+        for the life of the block.
+
+        In the usual case the difference is invisible, because a resolved
+        specialization writes ``.redirection`` and later constructions read
+        that instead of asking again. It shows up when the memo is not there:
+        cleared, never written because the resolving instance was configured
+        ``use_specializations='memory'``, or written at another path because
+        the instance that resolved was retagged afterwards. A cache that is
+        load-bearing is not a cache.
         """
-        topics = self.topics()
+        topics = self.topics() if topics is None else self._toplevel_topics(topics)
         if not topics:
             return False
         return not any(self.valid_path(self.__path__(t)) for t in topics)
@@ -6162,12 +6181,19 @@ class Datablock:
         """
         if not self._specializing() or self.__dict__.get('__redirected_paths__') is not None:
             return None
-        if not self._unbuilt():
-            return None
         for sp in self.SPECIALIZATIONS:
             why = self._specialization_mismatch(sp)
             if why is not None:
                 self.log.detailed(f"specialization: {sp!r} does not apply: {why}")
+                continue
+            # Per specialization, over the topics IT covers -- see `_unbuilt`.
+            if not self._unbuilt(sp.topics):
+                self.log.detailed(
+                    f"specialization: {sp!r} does not apply: this block has data of "
+                    f"its own under {self._toplevel_topics(sp.topics)!r}, which a "
+                    f"build wrote here; reading the rest from elsewhere would mix two "
+                    f"computations under one hash"
+                )
                 continue
             if self.use_specializations != 'memory':
                 if self.UNSAFE_redirect(specialization=sp, journal=journal, OVERRIDE=True):

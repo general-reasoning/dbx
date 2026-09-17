@@ -992,3 +992,68 @@ class TestAFailedSpecializationIsNotRemembered:
         block = v2(tmp_path)
         assert block._redirected_paths_ is None
         assert not os.path.exists(os.path.join(block.anchorkeypath, '.redirection'))
+
+
+class TestSetIsAnOrdinaryConstruction:
+    """`.set()` carries a resolved redirection -- except where it must not.
+
+    Carrying is what keeps a `.set()` of an operational parameter, a deepcopy
+    or an unpickle in a worker from costing a journal scan each. But the
+    decision to redirect at all is made by asking what is at THIS block's own
+    path, so a `.set()` that MOVES the block has to ask again. Carrying there
+    is how a reel came to live on paths resolved for a path nothing was ever
+    built at, with its `.redirection` memo written where no later construction
+    would look.
+    """
+
+    def _redirected(self, tmp_path):
+        v1(tmp_path).build()
+        b = v2(tmp_path)
+        assert b.redirected_topics() == ['spectra']
+        return b
+
+    def test_an_operational_parameter_carries_it(self, tmp_path):
+        """The case the carry exists for: same block, same path, no rescan."""
+        carried = self._redirected(tmp_path).set(verbose=True)
+        assert carried.__dict__.get('__redirected_paths__') is not None
+
+    def test_a_deepcopy_carries_it(self, tmp_path):
+        import copy as _copy
+        assert _copy.deepcopy(self._redirected(tmp_path)
+                              ).__dict__.get('__redirected_paths__') is not None
+
+    @pytest.mark.pinned
+    def test_a_move_onto_built_data_is_not_redirected_over(self, tmp_path):
+        """The teeth. The block is redirected at its own path; the path it
+        moves TO already holds the topics the specialization covers, built
+        there. Carrying the old decision would have it read another block's
+        `spectra` while its own sat beside it -- a decision made about a path
+        where that topic was absent, applied to one where it is not.
+        """
+        v1(tmp_path).build()
+        moving = self._redirected(tmp_path)
+        elsewhere = v2(tmp_path, tag='mine', use_specializations=False)
+        elsewhere.build()                      # builds both topics for itself
+        assert 'spectra' in os.listdir(elsewhere.anchorkeypath)
+
+        moved = moving.set(tag='mine')
+        assert moved.anchorkeypath == elsewhere.anchorkeypath
+        assert moved._redirected_paths_ is None
+        assert moved.ownedtopics() == ['spectra', 'phases']
+        assert moved.read('spectra') == 'spectra-16000'   # its own copy
+
+    def test_a_move_to_empty_storage_comes_back_with_nothing(self, tmp_path):
+        """No journal there, so nothing to resolve against -- rather than the
+        old block's absolute paths, which describe another lake entirely."""
+        moved = self._redirected(tmp_path).set(url=str(tmp_path / 'elsewhere'))
+        assert moved._redirected_paths_ is None
+
+    def test_a_move_that_still_qualifies_resolves_for_itself(self, tmp_path):
+        """Asking again is the point, not getting a different answer.
+
+        The narrower block's hash is reconstructed from the SPEC, so a block
+        that moved but still has nothing of its own at the new path resolves
+        to the same build -- by its own reasoning, not by inheritance.
+        """
+        moved = self._redirected(tmp_path).set(tag='nowhere-near')
+        assert moved.redirected_topics() == ['spectra']

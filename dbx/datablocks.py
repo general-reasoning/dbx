@@ -2570,10 +2570,25 @@ class Datablock:
                 f"type(b)(**{{**b.dfn, 'spec': {{...}}}})"
             )
         _kw = copy.deepcopy(self.__getstate__())
-        # An installed redirection is a set of ABSOLUTE paths resolved against
-        # this block's storage. Moving the block's storage is exactly the case
-        # where they no longer describe anything, so it is resolved again.
-        if {'url', 'local', 'storage_options'} & set(kw):
+        # An installed redirection travels with the block so that a .set() of
+        # an operational parameter does not resolve it again -- see
+        # __getstate__. Two kinds of change make carrying it wrong, and then
+        # this call has to be what it reads as: an ordinary construction, which
+        # resolves for itself.
+        #
+        # STORAGE. The redirection is a set of ABSOLUTE paths resolved against
+        # this block's storage, and moving the storage is exactly the case
+        # where they no longer describe anything.
+        #
+        # PATH. `_install_specialization` decides whether to redirect AT ALL by
+        # asking what is at this block's own path, so a block at a different
+        # path is owed a different answer -- carried paths resolved for the old
+        # one would install a redirection over data the new one already has, or
+        # skip writing the `.redirection` memo where the new one will look for
+        # it. The list is closed: anchorkeypath is url + anchor + key, and key
+        # is f(keyby, hash, tag, version) of which `set()` can change only
+        # keyby and tag, since `spec` is refused and VERSION is the class's.
+        if {'url', 'local', 'storage_options', 'anchor', 'tag', 'keyby'} & set(kw):
             _kw.pop('__redirected_paths__', None)
         _kw.update(kw)     
         return self.__class__(**_kw)

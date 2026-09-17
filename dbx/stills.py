@@ -1237,6 +1237,19 @@ class Still(CheckpointBuilder):
             local_ckpts = self._local_ckpts_dir_
             if os.path.isdir(local_ckpts):
                 shutil.rmtree(local_ckpts, ignore_errors=True)
+        if len(topics) == 0 or 'done' in topics:
+            # The one that matters most, and the one that was missing.
+            # `valid()` reads the LOCAL `done` BEFORE the remote one, so a
+            # clear that took the remote copy and left this behind returned a
+            # block that reported itself built with nothing behind it -- and
+            # `build()` skips a valid block, so the rebuild you cleared for
+            # never ran. `UNSAFE_clear().valid()` came back True.
+            #
+            # After the ckpts coupling above, so a clear of 'ckpts' alone
+            # reaches here through the 'done' it was given.
+            local_done = self.path('done', local=True)
+            if local_done is not None and os.path.exists(local_done):
+                os.remove(local_done)
         return result
 
     def UNSAFE_clear_cache(self, *, OVERRIDE: bool = False):

@@ -1688,3 +1688,68 @@ class TestOneCheckpointPerStep:
         still._save_checkpoint_(rank1, 0, 2, ckpts_dir=str(tmp_path))
         still._save_checkpoint_(rank1, 0, 2, ckpts_dir=str(tmp_path))
         assert rank1.saved == ['epoch=000-step=0000002.ckpt']
+
+
+class TestClearingLeavesNothingBehind:
+    """`UNSAFE_clear().valid()` must be False.
+
+    `valid()` reads the LOCAL `done` before the remote one, so a clear that
+    took the remote copy and left local staging behind returned a block that
+    reported itself built with nothing behind it. And `build()` skips a valid
+    block -- so the rebuild you cleared for never ran, silently.
+
+    The class docstring for UNSAFE_clear already stated the principle:
+    "clearing a topic removes its remote copy and leaves local staging behind
+    -- so the next `valid` answers from a stale local file and the block
+    reports itself built." It was applied to `ckpts` and `logs`, and not to
+    the one topic `valid()` actually reads.
+    """
+
+    def _built(self, tmp_path):
+        """A still whose staging is a DIFFERENT directory from its storage.
+
+        `Datablock.__init__` sets `self.local = self.url` whenever storage is
+        already local, so staging IS storage there and the base clear takes
+        both -- which is why a toy built the obvious way reported everything
+        fine, and why this one needs a non-local protocol to be a test of
+        anything.
+        """
+        still = ToyStill(url='memory://lake', tag='toy', num_workers=0,
+                         local=str(tmp_path / 'staging'),
+                         spec=dict(toy_builders(tmp_path), max_epochs=1))
+        still.UNSAFE_done(OVERRIDE=True)
+        assert still.path('done', local=True) != still.path('done')
+        assert still.valid()
+        return still
+
+    @pytest.mark.pinned
+    def test_clearing_everything_makes_it_invalid(self, tmp_path):
+        still = self._built(tmp_path)
+        still.UNSAFE_clear(OVERRIDE=True)
+        assert not still.valid()
+
+    @pytest.mark.pinned
+    def test_clearing_ckpts_makes_it_invalid_through_the_coupling(self, tmp_path):
+        """`ckpts` drags `done` with it, and that has to reach local too."""
+        still = self._built(tmp_path)
+        still.UNSAFE_clear('ckpts', OVERRIDE=True)
+        assert not still.valid()
+
+    def test_clearing_done_alone_makes_it_invalid(self, tmp_path):
+        still = self._built(tmp_path)
+        still.UNSAFE_clear('done', OVERRIDE=True)
+        assert not still.valid()
+
+    def test_the_local_file_is_actually_gone(self, tmp_path):
+        """Not merely invisible to valid() -- gone, so nothing later finds it."""
+        still = self._built(tmp_path)
+        local_done = still.path('done', local=True)
+        assert os.path.exists(local_done)
+        still.UNSAFE_clear(OVERRIDE=True)
+        assert not os.path.exists(local_done)
+
+    def test_clearing_logs_alone_leaves_done_alone(self, tmp_path):
+        """The coupling is one-directional: only `ckpts` drags `done`."""
+        still = self._built(tmp_path)
+        still.UNSAFE_clear('logs', OVERRIDE=True)
+        assert still.valid()

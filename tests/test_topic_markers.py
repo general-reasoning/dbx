@@ -28,6 +28,8 @@ import pytest
 import dbx
 from dbx.datablocks import (
     DATADICT,
+    DATADIR,
+    DATAFILE,
     DIR,
     DIRTOPIC,
     SYNTHETIC,
@@ -668,3 +670,173 @@ class TestDatadictArgumentsAreChecked:
     def test_a_mapping_and_keywords_together_are_refused(self):
         with pytest.raises(TypeError, match="as keywords"):
             DATADICT('m.json', {'a': 'int'}, b='int')
+
+
+# ---------------------------------------------------------------------------
+# DATAFILE and DATADIR -- a third spelling that costs the old ones nothing
+# ---------------------------------------------------------------------------
+
+class TestAdoptingASpellingIsWhatMovesAHash:
+    """The invariant the whole design rests on.
+
+    A marker that is not parameterised renders as its bare NAME, so adding an
+    optional note to SYNTHETIC, or a DATADIR beside DIR, cannot move a hash
+    that exists. Only a declaration that writes the new spelling re-keys, and
+    only itself.
+    """
+
+    @pytest.mark.pinned
+    def test_every_bare_marker_renders_as_its_own_name(self):
+        """`SYNTHETIC()` would be a new rendering of an old declaration."""
+        for marker in (DIR, DATADIR, SYNTHETIC, DATAFILE, DATADICT, DATASLICE):
+            assert str(marker) == marker.__name__
+
+    @pytest.mark.pinned
+    def test_the_marker_spelling_renders_exactly_as_it_did(self, tmp_path):
+        assert [t for t in block(Marked, tmp_path).type().split('/') if 'topic:' in t] == [
+            "topic:data='data.txt'", 'topic:masks=DIR', 'topic:cache=SYNTHETIC',
+        ]
+
+    @pytest.mark.pinned
+    def test_the_sentinel_spelling_renders_exactly_as_it_did(self, tmp_path):
+        assert [t for t in block(Sentinels, tmp_path).type().split('/') if 'topic:' in t] == [
+            'topic:data=data.txt', 'topic:masks=None', 'topic:cache=()',
+        ]
+
+    def test_a_note_free_call_is_the_bare_marker_itself(self):
+        assert DATADIR() is DATADIR
+        assert SYNTHETIC() is SYNTHETIC
+
+    def test_datadir_is_not_an_alias_of_dir(self):
+        """Aliasing them would re-key every block that ever declared DIR."""
+        assert DATADIR is not DIR
+        assert str(DIR) == 'DIR' and str(DATADIR) == 'DATADIR'
+
+
+class TestADatadirIsADirectory:
+
+    def test_it_is_a_dir_so_every_directory_test_answers_for_it(self, tmp_path):
+        class B(Datablock):
+            VERSION = 1
+            TOPICS = {'masks': DATADIR('per-frame masks')}
+
+        assert issubclass(DATADIR, DIR)
+        assert block(B, tmp_path)._is_dir_topic('masks') is True
+
+    def test_the_note_renders(self):
+        assert str(DATADIR('per-frame masks')) == "DATADIR('per-frame masks')"
+
+    def test_the_note_is_in_the_identity(self, tmp_path):
+        def h(topic):
+            class B(Datablock):
+                VERSION = 1
+                TOPICS = {'masks': topic}
+            return block(B, tmp_path, tag='h').hash
+
+        assert h(DATADIR) != h(DATADIR('masks')) != h(DATADIR('other'))
+        assert h(DATADIR) != h(DIR)
+
+
+class TestADatafileIsAFileTopic:
+
+    def test_it_names_the_same_file_a_bare_string_does(self, tmp_path):
+        class Marker(Datablock):
+            VERSION = 1
+            TOPICS = {'rows': DATAFILE('rows.csv')}
+
+        class Bare(Datablock):
+            VERSION = 1
+            TOPICS = {'rows': 'rows.csv'}
+
+        assert (os.path.basename(block(Marker, tmp_path).path('rows'))
+                == os.path.basename(block(Bare, tmp_path).path('rows')))
+
+    def test_it_is_not_a_directory_topic(self, tmp_path):
+        class B(Datablock):
+            VERSION = 1
+            TOPICS = {'rows': DATAFILE('rows.csv')}
+
+        assert block(B, tmp_path)._is_dir_topic('rows') is False
+
+    def test_the_note_is_optional_in_the_rendering(self):
+        assert str(DATAFILE('rows.csv')) == "DATAFILE('rows.csv')"
+        assert (str(DATAFILE('rows.csv', 'one row per frame'))
+                == "DATAFILE('rows.csv', 'one row per frame')")
+
+    def test_adopting_it_re_keys_and_the_note_re_keys_again(self, tmp_path):
+        def h(topic):
+            class B(Datablock):
+                VERSION = 1
+                TOPICS = {'rows': topic}
+            return block(B, tmp_path, tag='h').hash
+
+        assert h('rows.csv') != h(DATAFILE('rows.csv')) != h(DATAFILE('rows.csv', 'note'))
+
+    def test_a_bare_datafile_locates_nothing_and_says_so(self, tmp_path):
+        class B(Datablock):
+            VERSION = 1
+            TOPICS = {'rows': DATAFILE}
+
+        with pytest.raises(ValueError, match="names no file"):
+            block(B, tmp_path).path('rows')
+
+    def test_a_datadict_is_a_datafile(self):
+        """So one test recognises every marker that carries a filename."""
+        assert issubclass(DATADICT, DATAFILE)
+
+    def test_a_datadicts_rendering_is_unchanged_by_that(self):
+        assert str(DATADICT('m.json', a='int')) == "DATADICT('m.json', a='int')"
+
+
+class TestASyntheticMayCarryANote:
+
+    def test_the_note_renders_and_the_bare_form_does_not(self):
+        assert str(SYNTHETIC) == 'SYNTHETIC'
+        assert str(SYNTHETIC('derived on read')) == "SYNTHETIC('derived on read')"
+
+    def test_it_is_still_synthetic(self, tmp_path):
+        class B(Datablock):
+            VERSION = 1
+            TOPICS = {'cache': SYNTHETIC('derived on read')}
+
+        b = block(B, tmp_path)
+        assert b.path('cache') is None
+        assert b.dirpath('cache') is None
+
+
+class TestTheNewSpellingsRoundTrip:
+
+    @pytest.mark.parametrize('marker', [
+        DATAFILE('rows.csv'),
+        DATAFILE('rows.csv', 'one row per frame'),
+        DATADIR('per-frame masks'),
+        SYNTHETIC('derived on read'),
+    ])
+    def test_a_recorded_declaration_reads_back_as_the_same_marker(self, marker):
+        read = literal_topics(str({'x': marker}))['x']
+        assert str(read) == str(marker)
+
+    def test_they_are_exported_from_the_package(self):
+        assert (dbx.DATAFILE, dbx.DATADIR) == (DATAFILE, DATADIR)
+
+
+class TestTheNewMarkersArgumentsAreChecked:
+
+    def test_a_datafile_needs_a_filename(self):
+        with pytest.raises(TypeError):
+            DATAFILE()
+
+    def test_a_filename_with_a_slash_is_refused(self):
+        with pytest.raises(ValueError, match="may not contain"):
+            DATAFILE('a/b.csv')
+
+    def test_a_note_with_a_slash_is_refused(self):
+        for make in (lambda n: DATAFILE('r.csv', n), DATADIR, SYNTHETIC):
+            with pytest.raises(ValueError, match="may not contain"):
+                make('a/b')
+
+    def test_a_note_must_be_a_non_empty_string(self):
+        for make in (lambda n: DATAFILE('r.csv', n), DATADIR, SYNTHETIC):
+            for bad in ('', 3):
+                with pytest.raises(TypeError, match="non-empty string"):
+                    make(bad)

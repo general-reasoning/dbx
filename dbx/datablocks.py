@@ -189,11 +189,11 @@ class _TopicMarkerMeta(type):
 
     def __init__(cls, name, bases, namespace, **kwargs):
         super().__init__(name, bases, namespace, **kwargs)
-        # A parameterised marker -- DATASLICE(idx='int'), DATADICT('m.json', a='str')
-        # -- is a subclass carrying `columns` or `filename`, and is not a name
-        # anything may be declared under: it renders as the call that made it
-        # and reads back through that call.
-        if not (namespace.get('columns') or namespace.get('filename')):
+        # A parameterised marker -- DATASLICE(idx='int'), DATAFILE('m.json'),
+        # DATADIR('a note') -- is a subclass carrying `columns`, `filename` or
+        # `note`, and is not a name anything may be declared under: it renders
+        # as the call that made it and reads back through that call.
+        if not any(namespace.get(k) for k in ('columns', 'filename', 'note')):
             _TopicMarkerMeta.REGISTRY.setdefault(name, cls)
 
     def __repr__(cls):
@@ -231,12 +231,58 @@ class TOPICMARKER(metaclass=_TopicMarkerMeta):
     """
 
 
-class SYNTHETIC(TOPICMARKER):
+def _check_note(kind, note):
+    """Refuse a note that would render into an ambiguous type string."""
+    if not isinstance(note, str) or not note:
+        raise TypeError(f"{kind} note must be a non-empty string, got {note!r}")
+    if '/' in note:
+        raise ValueError(
+            f"{kind} note {note!r} may not contain '/': the marker is rendered into "
+            f"the type string, whose segments are '/'-joined, so a '/' would let two "
+            f"declarations render alike and collide onto one hash"
+        )
+
+
+class _NotedMarkerMeta(_TopicMarkerMeta):
+    """Makes ``DATADIR('per-frame masks')`` a marker carrying that note.
+
+    The note is documentation that reaches the identity: it renders into the
+    type string, so writing one re-keys the block that writes it.  That is the
+    price of it being recorded at all, and it is paid only by a declaration
+    that asks for it -- ``DATADIR`` bare renders exactly as ``DIR`` always has.
+
+    A call with no note returns the class ITSELF rather than an empty subclass,
+    so ``DATADIR() is DATADIR`` and the two spell the same thing.
+    """
+
+    # 1. Declared API ---------------------------------------------------
+
+    def __call__(cls, note=None):
+        if note is None:
+            return cls
+        _check_note(cls.__name__, note)
+        return _NotedMarkerMeta(cls.__name__, (cls,), {'note': note})
+
+    def __repr__(cls):
+        note = cls.__dict__.get('note')
+        return cls.__name__ if note is None else f"{cls.__name__}({note!r})"
+
+    __str__ = __repr__
+
+
+class SYNTHETIC(TOPICMARKER, metaclass=_NotedMarkerMeta):
     """A synthetic topic: presented, never stored.  :data:`SYNTOPIC` as a marker.
 
     ``path()`` and ``dirpath()`` are both ``None``, nothing is created, listed,
     copied or cleared for it, and it is vacuously valid.
+
+    Takes an optional note -- ``SYNTHETIC('derived on read')`` -- which renders
+    and so re-keys.  Bare ``SYNTHETIC`` renders as itself, exactly as before,
+    so no existing declaration moves.
     """
+
+    #: Unset on the bare marker, and set by the call that parameterises it.
+    note = None
 
 
 class DIR(TOPICMARKER):
@@ -247,7 +293,91 @@ class DIR(TOPICMARKER):
     """
 
 
-class _DataDictMeta(_TopicMarkerMeta):
+class DATADIR(DIR, metaclass=_NotedMarkerMeta):
+    """A directory topic that may say what is in it::
+
+        TOPICS = {'masks': DATADIR('one PNG per frame')}
+
+    A :class:`DIR`, so every test that asks whether a topic is a directory
+    answers for it without knowing what a note is -- the same way
+    ``DATASLICE`` is one.
+
+    A DISTINCT class from ``DIR`` rather than a rename of it, because the two
+    render as their own names and the rendering is the identity: aliasing them
+    would re-key every block that ever declared ``DIR``.  ``DIR`` stays exactly
+    as it is and goes on rendering ``DIR``; a block adopting ``DATADIR``
+    re-keys itself, which is what adopting a spelling means here.
+    """
+
+    #: Unset on the bare marker, and set by the call that parameterises it.
+    note = None
+
+
+class _DataFileMeta(_TopicMarkerMeta):
+    """Makes ``DATAFILE('rows.csv', 'one row per frame')`` a marker carrying both."""
+
+    # 1. Declared API ---------------------------------------------------
+
+    def __call__(cls, filename, note=None):
+        cls._check_filename(filename)
+        if note is not None:
+            _check_note(cls.__name__, note)
+        return _DataFileMeta(cls.__name__, (cls,),
+                             {'filename': filename, 'note': note})
+
+    def __repr__(cls):
+        filename = cls.__dict__.get('filename')
+        if not filename:
+            return cls.__name__
+        note = cls.__dict__.get('note')
+        rendered = repr(filename) if note is None else f"{filename!r}, {note!r}"
+        return f"{cls.__name__}({rendered})"
+
+    __str__ = __repr__
+
+
+class DATAFILE(TOPICMARKER, metaclass=_DataFileMeta):
+    """A topic stored as one file, named and optionally described::
+
+        TOPICS = {'rows': DATAFILE('rows.csv', 'one row per frame')}
+
+    The marker spelling of a bare filename.  ``DATAFILE('rows.csv')`` and
+    ``'rows.csv'`` name the same file, and differ only in what they render as
+    -- which is why adopting the marker re-keys the block, and why the bare
+    string goes on working untouched for every block that has not.
+
+    The note is documentation that reaches the identity.  A topic's filename
+    says where the data is and nothing about what it holds; the note is the
+    sentence a reader would otherwise have to go and find, recorded where the
+    journal shows it.  It renders, so it is in the hash: changing the wording
+    re-keys the block, the same as changing anything else that renders.
+    """
+
+    #: Unset on the bare marker, and set by the call that parameterises it.
+    #: A bare DATAFILE names no file -- see :func:`_topic_filename`.
+    filename = None
+
+    #: Unset unless the declaration gave one.
+    note = None
+
+    # 3. Helpers --------------------------------------------------------
+
+    @staticmethod
+    def _check_filename(filename):
+        """Refuse a filename that is not one, or that would render ambiguously."""
+        if not isinstance(filename, str) or not filename:
+            raise TypeError(
+                f"DATAFILE filename must be a non-empty string, got {filename!r}"
+            )
+        if '/' in filename:
+            raise ValueError(
+                f"DATAFILE filename {filename!r} may not contain '/': the marker is "
+                f"rendered into the type string, whose segments are '/'-joined, so a "
+                f"'/' would let two declarations render alike and collide onto one hash"
+            )
+
+
+class _DataDictMeta(_DataFileMeta):
     """Makes ``DATADICT('meta.json', run=dict(id='str'))`` a marker carrying that schema.
 
     A call returns a SUBCLASS rather than an instance, exactly as
@@ -281,7 +411,7 @@ class _DataDictMeta(_TopicMarkerMeta):
     __str__ = __repr__
 
 
-class DATADICT(TOPICMARKER, metaclass=_DataDictMeta):
+class DATADICT(DATAFILE, metaclass=_DataDictMeta):
     """A topic stored as ONE FILE holding a dict, declared with its schema::
 
         TOPICS = {'meta': DATADICT('meta.json', rows='int',
@@ -316,20 +446,6 @@ class DATADICT(TOPICMARKER, metaclass=_DataDictMeta):
     schema = {}
 
     # 3. Helpers --------------------------------------------------------
-
-    @staticmethod
-    def _check_filename(filename):
-        """Refuse a filename that is not one, or that would render ambiguously."""
-        if not isinstance(filename, str) or not filename:
-            raise TypeError(
-                f"DATADICT filename must be a non-empty string, got {filename!r}"
-            )
-        if '/' in filename:
-            raise ValueError(
-                f"DATADICT filename {filename!r} may not contain '/': the marker is "
-                f"rendered into the type string, whose segments are '/'-joined, so a "
-                f"'/' would let two declarations render alike and collide onto one hash"
-            )
 
     @classmethod
     def _check_schema(cls, schema, _path=()):
@@ -401,15 +517,17 @@ def _render_schema(schema):
 def _topic_filename(node):
     """The filename a topic leaf stores its data under.
 
-    A plain string IS the filename; a :class:`DATADICT` carries one.  Every
+    A plain string IS the filename; a :class:`DATAFILE` carries one, and so
+    does every marker that is one -- :class:`DATADICT` included.  Every
     other leaf -- a directory, a synthetic topic -- has no filename and never
     reaches here, since the callers test for those first.
     """
-    if _is_topicmarker(node, DATADICT):
+    if _is_topicmarker(node, DATAFILE):
         if not node.filename:
             raise ValueError(
-                "a bare DATADICT names no file and so locates no topic; declare it "
-                "with one -- DATADICT('meta.json', ...) -- or use the filename alone"
+                f"a bare {node.__name__} names no file and so locates no topic; "
+                f"declare it with one -- {node.__name__}('meta.json') -- or use the "
+                f"filename alone"
             )
         return node.filename
     return node

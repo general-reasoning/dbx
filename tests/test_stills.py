@@ -1222,3 +1222,112 @@ class TestCheckpointIsWrittenOnceUnderDDP:
 
         assert len(effects['uploaded']) == 1, effects['uploaded']
         assert len(effects['journalled']) == 1, effects['journalled']
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  What a check run must not do
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestACheckRunDoesNotContinueAnything:
+    """`check_run` spends its budget in ABSOLUTE steps.
+
+    Lightning's `fast_dev_run=N` sets `max_steps = N`, not `resumed_step + N`.
+    Resume from this block's own checkpoint at step >= N and the fit loop is
+    done before it starts: no training step, no `on_train_start` -- so nothing
+    hooked to it runs either -- and `max_steps=N reached` printed exactly as a
+    real check prints it. A check that verifies nothing and says it passed is
+    worse than no check.
+    """
+
+    def test_an_ordinary_run_resumes_its_own_checkpoints(self, tmp_path):
+        assert _toy(tmp_path)._resuming_own_ckpts_()
+
+    @pytest.mark.pinned
+    def test_a_check_run_does_not(self, tmp_path):
+        assert not _toy(tmp_path, check_run=True)._resuming_own_ckpts_()
+
+    def test_neither_does_from_scratch(self, tmp_path):
+        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+                         spec=dict(toy_builders(tmp_path), from_scratch=True))
+        assert not still._resuming_own_ckpts_()
+
+    @pytest.mark.pinned
+    def test_it_resolves_no_resume_checkpoint_even_when_one_is_there(
+            self, tmp_path, monkeypatch):
+        """The end the predicate exists for: `find_latest_ckpt` is not asked.
+
+        Not asking is the point. Asking downloads the checkpoint -- multiple
+        GB -- before discovering there is nothing to do with it.
+        """
+        still = _toy(tmp_path, check_run=True)
+        asked = []
+        monkeypatch.setattr(type(still), 'find_latest_ckpt',
+                            lambda self, **kw: asked.append(kw) or '/nope.ckpt')
+        ckpt, own, warm = still._resolve_resume_ckpt_()
+        assert asked == []
+        assert (ckpt, own, warm) == (None, False, False)
+
+    def test_the_banner_does_not_announce_a_resume_either(self, tmp_path, monkeypatch):
+        """Or it would promise a continuation that _resolve_ then declines,
+        and `_report_resume_divergence_` would warn about the discrepancy."""
+        still = _toy(tmp_path, check_run=True)
+        monkeypatch.setattr(type(still), '_find_latest_ckpt_remote_',
+                            lambda self: ('/some.ckpt', 7))
+        assert still._resume_plan_() is None
+
+    def test_a_warm_start_still_applies(self, tmp_path, monkeypatch):
+        """It loads weights at step 0 -- initialisation, not continuation --
+        so a check still exercises the weight load, which is most of its job."""
+        still = _toy(tmp_path, check_run=True)
+        monkeypatch.setattr(type(still), '_warm_start_block_', lambda self: None)
+        monkeypatch.setattr(type(still).VAR, 'ckpt_builder', '/warm.ckpt', raising=False)
+        object.__setattr__(still.var, 'ckpt_builder', '/warm.ckpt')
+        ckpt, own, warm = still._resolve_resume_ckpt_()
+        assert ckpt == '/warm.ckpt'
+        assert own is False
+
+
+class TestTheEndOfRunSyncIsGuarded:
+    """Two guards on `_sync_to_remote_`, neither an optimisation."""
+
+    def _synced(self, still, monkeypatch, **env):
+        pushed = []
+        monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
+        monkeypatch.setattr(still, 'pushtopic', lambda t, *a, **k: pushed.append(t))
+        for k in ('RANK', 'LOCAL_RANK', 'SLURM_PROCID'):
+            monkeypatch.delenv(k, raising=False)
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        still._sync_to_remote_(reason='test')
+        return pushed
+
+    def test_an_ordinary_run_on_rank_zero_pushes(self, tmp_path, monkeypatch):
+        assert 'ckpts' in self._synced(_toy(tmp_path), monkeypatch)
+
+    def test_no_rank_variable_at_all_is_rank_zero(self, tmp_path, monkeypatch):
+        """The parent process of Lightning's launcher IS rank 0, and the
+        launcher leaves LOCAL_RANK unset there. Absent is an answer."""
+        assert 'ckpts' in self._synced(_toy(tmp_path), monkeypatch)
+
+    @pytest.mark.pinned
+    def test_a_check_run_pushes_nothing(self, tmp_path, monkeypatch):
+        """It writes no checkpoint, so a sync can only push what a PREVIOUS
+        run left staged -- which is how a one-batch check uploaded 10GB it
+        had not produced, four times over."""
+        assert self._synced(_toy(tmp_path, check_run=True), monkeypatch) == []
+
+    @pytest.mark.pinned
+    def test_a_non_zero_rank_pushes_nothing(self, tmp_path, monkeypatch):
+        """Every rank stages to the same local dir and this runs after `fit`
+        returns on all of them, so the rank guard on the save callback does
+        not cover it."""
+        assert self._synced(_toy(tmp_path), monkeypatch, LOCAL_RANK='1') == []
+
+    def test_rank_wins_over_local_rank(self, tmp_path, monkeypatch):
+        assert 'ckpts' in self._synced(_toy(tmp_path), monkeypatch,
+                                       RANK='0', LOCAL_RANK='3')
+
+    def test_an_unparseable_rank_falls_through_rather_than_raising(self, tmp_path, monkeypatch):
+        """This runs in `finally` and at `atexit`; raising there would mask
+        whatever the run was already reporting."""
+        assert 'ckpts' in self._synced(_toy(tmp_path), monkeypatch, RANK='')

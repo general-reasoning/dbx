@@ -1762,8 +1762,51 @@ class Still(CheckpointBuilder):
         self.log.info("Syncing logs to remote")
         self.pushtopic('logs')
 
+    @staticmethod
+    def _sync_rank_():
+        """This process's rank, for guards that outlive the process group.
+
+        Read from the environment, not from ``torch.distributed``: the guards
+        that need it run in ``finally`` and at ``atexit``, by which time the
+        group may already be gone. Lightning's subprocess launcher exports
+        ``LOCAL_RANK`` to every child and leaves it unset in the parent, which
+        IS rank 0 -- so an absent variable is the right answer rather than a
+        missing one.
+
+        Single-node. On several nodes ``LOCAL_RANK`` is per-node, so one
+        process per node would sync; that is duplicated work rather than a
+        wrong answer, and there is no multi-node run to fix it against yet.
+        """
+        for var in ('RANK', 'LOCAL_RANK', 'SLURM_PROCID'):
+            value = os.environ.get(var)
+            if value is not None:
+                try:
+                    return int(value)
+                except ValueError:
+                    pass
+        return 0
+
     def _sync_to_remote_(self, *, reason):
-        """Push both topics, never raising -- called from ``atexit`` and ``finally``."""
+        """Push both topics, never raising -- called from ``atexit`` and ``finally``.
+
+        Two guards, and neither is an optimisation. A check writes no
+        checkpoints, so syncing one can only push whatever a PREVIOUS run left
+        in the staging dir -- which is how a one-batch check came to upload
+        10GB it had not produced. And every rank stages to the same local dir,
+        so an unguarded sync pushes the same bytes once per rank: the rank
+        guard on the save callback does not cover this, because this runs
+        after ``fit`` returns, on every rank.
+        """
+        if self.check_run:
+            self.log.info(
+                "%s: check_run=%r, nothing to sync -- a check writes no checkpoints "
+                "and its logger is Lightning's DummyLogger", reason, self.check_run,
+            )
+            return
+        rank = self._sync_rank_()
+        if rank != 0:
+            self.log.info("%s: rank %s leaves the sync to rank 0", reason, rank)
+            return
         try:
             self._sync_ckpts_to_remote_()
         except Exception as e:
@@ -1889,7 +1932,7 @@ class Still(CheckpointBuilder):
         explicitly afterwards, so the banner cannot quietly lie.
         """
         plan = None
-        if not self.var.from_scratch:
+        if self._resuming_own_ckpts_():
             plan = self._find_latest_ckpt_remote_()
         if plan is None and self.var.ckpt_builder is not None:
             plan = (self.var.ckpt_builder.key if hasattr(self.var.ckpt_builder, 'key')
@@ -1910,6 +1953,28 @@ class Still(CheckpointBuilder):
         """
         initial = self.var.ckpt_builder
         return initial if isinstance(initial, CheckpointBuilder) else None
+
+    def _resuming_own_ckpts_(self):
+        """Whether this run CONTINUES from this block's own latest checkpoint.
+
+        False for ``from_scratch``, and false for a check run.
+
+        A check must not continue anything. ``check_run`` spends its budget in
+        ABSOLUTE steps -- Lightning's ``fast_dev_run=N`` sets ``max_steps = N``,
+        not ``resumed_step + N`` -- so a block whose latest checkpoint is
+        already at or past N has a fit loop that is done before it starts. It
+        runs no training step, fires no ``on_train_start`` (so nothing hooked
+        to it happens either), prints ``max_steps=N reached`` exactly as a real
+        check does, and reports success having verified nothing. That is the
+        one outcome a check may not have.
+
+        A warm start is NOT this. It loads another block's weights at step 0,
+        which is initialisation rather than continuation, carries no step
+        counter, and is decided separately in :meth:`_resolve_resume_ckpt_` --
+        so a check still exercises the weight load, which is most of what it is
+        for.
+        """
+        return not self.var.from_scratch and not self.check_run
 
     def _resolve_resume_ckpt_(self):
         """``(local_ckpt_or_None, own_it, warm_start)`` -- what to start from.
@@ -1937,9 +2002,15 @@ class Still(CheckpointBuilder):
         block.
         """
         ckpt, own_it, warm_start = None, False, False
-        if not self.var.from_scratch:
+        if self._resuming_own_ckpts_():
             ckpt = self.find_latest_ckpt(pull=True)
             own_it = ckpt is not None
+        elif self.check_run and not self.var.from_scratch:
+            self.log.warning(
+                "check_run=%r: NOT resuming this block's own checkpoints -- a check "
+                "that resumes past its own step budget runs zero batches and reports "
+                "success. Any warm start still applies.", self.check_run,
+            )
         # Our own run always wins: once this still has checkpoints of its own,
         # a resume continues it and the warm-start source is history.
         if ckpt is None and self.var.ckpt_builder is not None:

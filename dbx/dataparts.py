@@ -904,6 +904,30 @@ def read_exec_journal(
     return df
 
 
+def anchors(url: str | None = None, *, storage_options: dict | None = None) -> list[str]:
+    """Return every anchor used in the datalake at *url*, sorted.
+
+    A block lives at ``{root}/{anchor}/{key}/...``, so an anchor is a top-level
+    directory of the root. Dot-directories (``.journal`` and the like) are the
+    lake's own bookkeeping, not anchors, and are left out, as are plain files.
+
+    *url* defaults to ``DBX_ROOT`` or its alias ``DBX_URL`` -- read in that
+    order, as a block reads them -- and may be a specline.
+    """
+    url = url or os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
+    if url is None:
+        raise ValueError("No url for anchors(): pass url= or set DBX_ROOT or its alias DBX_URL")
+    url = eval(url)
+    if storage_options is None:
+        storage_options = default_storage_options()
+    fs, root = fsspec.url_to_fs(url, **storage_options)
+    if not fs.exists(root):
+        return []
+    names = (os.path.basename(e['name'].rstrip('/'))
+             for e in fs.ls(root, detail=True) if e['type'] == 'directory')
+    return sorted(n for n in names if not n.startswith('.'))
+
+
 def exec_comment(s: str) -> str | None:
     """The trailing ``#`` comment of an exec string, without the ``#``.
 

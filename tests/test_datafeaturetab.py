@@ -335,6 +335,32 @@ def test_datacollator():
     assert len(c_nolabel(batch_datapoints)) == 1
 
 
+def test_datacollator_without_labels():
+    """``labels`` defaults to None: a collator of signals alone reads no label slice."""
+    from dbx.datafeatures import Datacollator
+
+    rows = [{"samples": {"samples": np.ones((5, 4), dtype=np.float32) * i}} for i in range(2)]
+    for c in (Datacollator(spec=dict(signals=[("samples", "samples")])),
+              Datacollator(spec=dict(signals=[("samples", "samples")], labels=None))):
+        assert c.var.labels is None and c.label_pairs == ()
+        assert c.slices() == ["samples"]
+        out = c(rows)
+        assert isinstance(out, tuple) and len(out) == 1 and out[0].shape == (2, 5, 1, 4)
+        assert c(rows, signal_only=True).shape == (2, 5, 1, 4)
+        batch = {"samples": {"samples": np.stack([r["samples"]["samples"] for r in rows])}}
+        assert c(batch)[0].shape == (2, 5, 4)
+
+
+def test_a_labelless_collator_is_refused_by_a_classifier():
+    """A probe that fits labels says so, rather than fitting nothing."""
+    from dbx.datafeatures import Datacollator
+    from dbx.probes import label_vector
+
+    c = Datacollator(spec=dict(signals=[("samples", "samples")]))
+    with pytest.raises(ValueError, match="one label column"):
+        label_vector(c, {"samples": {"samples": np.zeros((2, 4))}})
+
+
 def test_datacollator_slices_are_deterministic():
     """`slices` is splatted into dataset()/data(), where position decides the
     zip order, so it must not come from a set: str hashing is seeded per

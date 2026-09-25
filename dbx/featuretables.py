@@ -124,6 +124,10 @@ class Datacollator(Datablock):
     `(slice, column)` pairs from each datapoint dict in `datapoints`, concatenating/stacking
     signal tensors along a new dimension 1 for each datapoint, and concatenating datapoints
     along dimension 0 (batch dimension).
+
+    ``labels`` defaults to None: a collator for signals alone -- a feature build,
+    an unsupervised pass -- names no label slice, reads none, and returns
+    ``(signals,)``.
     """
 
     TOPICS = {}
@@ -131,7 +135,7 @@ class Datacollator(Datablock):
     @dataclass
     class VAR(Datablock.VAR):
         signals: list[tuple[str, str]]
-        labels: list[tuple[str, str]]
+        labels: list[tuple[str, str]] | None = None
         length: int | None = None
 
     def __call__(self, datapoints, *, signal_only: bool = False):
@@ -204,8 +208,8 @@ class Datacollator(Datablock):
 
     @property
     def label_pairs(self) -> tuple[tuple[str, str], ...]:
-        """The label ``(slice, column)`` pairs, as :attr:`signal_pairs`."""
-        return tuple(self._norm_pair(p) for p in self.var.labels)
+        """The label ``(slice, column)`` pairs, as :attr:`signal_pairs`; empty when there are none."""
+        return tuple(self._norm_pair(p) for p in (self.var.labels or ()))
 
     @staticmethod
     def _norm_pair(pair: Any) -> tuple[str, str]:

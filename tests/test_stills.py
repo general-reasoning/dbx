@@ -1294,7 +1294,7 @@ class TestTheBuildIsRecordedOnce:
 
     The launcher re-executes the whole command per device, so every rank runs
     `build()` and the base journalled once per rank, each under its own
-    session id. Two entries milliseconds apart that nothing marks as one run.
+    tree id. Two entries milliseconds apart that nothing marks as one run.
     """
 
     def _journalled(self, still, monkeypatch, rank=None):
@@ -1338,7 +1338,7 @@ class TestOneStrategy:
 
     Every re-executing strategy runs the whole command once per device, so
     the STILL is constructed N times: N journal reads, N banners, N builds,
-    N `build:end` entries under N session ids. `ddp_spawn` starts its workers
+    N `build:end` entries under N tree ids. `ddp_spawn` starts its workers
     inside `fit()` and hands them `fit` alone.
     """
 

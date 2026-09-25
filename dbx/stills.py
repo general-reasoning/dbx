@@ -1185,7 +1185,7 @@ class Still(CheckpointBuilder):
         Once, because a build happens once: :meth:`trainer_kwargs` runs the
         workers inside ``fit`` and this is reached only by the process that
         called it. Under a re-executing strategy it was one entry per rank,
-        each with its OWN session id -- worse than a duplicate, since nothing
+        each with its OWN tree id -- worse than a duplicate, since nothing
         marked the two as one run and a reader could not tell a two-rank build
         from two builds. The journal is what ``find_latest_ckpt``, every
         redirect and every specialization resolve against.
@@ -2207,7 +2207,7 @@ class Still(CheckpointBuilder):
         `subprocess.Popen(_basic_subprocess_cmd())`, and the child's only way
         to reach `fit` is to re-run your command down to it. So the STILL is
         constructed N times: N journal reads, N banners, N `build()` calls, N
-        `build:end` entries under N DIFFERENT session ids, N writes of `done`.
+        `build:end` entries under N DIFFERENT tree ids, N writes of `done`.
         Only the TRAINING is meant to be distributed; the block is one build.
 
         `ddp_spawn` starts its workers from inside `fit()` and hands them

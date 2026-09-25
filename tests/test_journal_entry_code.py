@@ -93,15 +93,15 @@ class TestTheCodeIsRecorded:
         assert len(set(codes)) == 3
 
 
-class TestDistinctFromTheSession:
-    """``session`` identifies the run, ``id`` the entry."""
+class TestDistinctFromTheTree:
+    """``tree`` identifies the build tree, ``id`` the entry."""
 
     def test_they_are_not_the_same_value(self, tmp_path):
         b = block(tmp_path)
         code = b.write_journal_entry(event='note')
-        assert code != b.session
+        assert code != b.tree
 
-    def test_one_instance_two_entries_share_a_session_but_not_a_code(self, tmp_path):
+    def test_one_instance_two_entries_share_a_tree_but_not_a_code(self, tmp_path):
         """Distinct journal_prefix values, so both entries survive -- an
         instance otherwise overwrites its own file."""
         b = block(tmp_path)
@@ -110,21 +110,21 @@ class TestDistinctFromTheSession:
         journal = block(tmp_path).journal()
         assert len(journal) == 2
         assert set(journal['id']) == {first, second}
-        assert journal['session'].nunique() == 1
+        assert journal['tree'].nunique() == 1
 
-    def test_session_accessor_reads_the_column(self, tmp_path):
+    def test_tree_accessor_reads_the_column(self, tmp_path):
         b = block(tmp_path)
         b.write_journal_entry(event='note')
-        assert block(tmp_path).journal(loc=0).block.session == b.session
+        assert block(tmp_path).journal(loc=0).block.tree == b.tree
 
-    def test_a_session_can_be_given(self, tmp_path):
-        b = block(tmp_path, session='RUN-7')
+    def test_a_tree_can_be_given(self, tmp_path):
+        b = block(tmp_path, tree='RUN-7')
         b.write_journal_entry(event='note')
-        assert block(tmp_path).journal(loc=0).block.session == 'RUN-7'
+        assert block(tmp_path).journal(loc=0).block.tree == 'RUN-7'
 
-    def test_a_session_does_not_change_identity(self, tmp_path):
+    def test_a_tree_does_not_change_identity(self, tmp_path):
         """Which run built a block cannot change what the block IS."""
-        assert block(tmp_path, session='A').hash == block(tmp_path, session='B').hash
+        assert block(tmp_path, tree='A').hash == block(tmp_path, tree='B').hash
 
 
 class TestOverwriteWithinOneInstance:
@@ -157,6 +157,16 @@ class TestLegacyJournals:
         entry = b.journal(loc=0)
         assert DatajournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).block.id is None
 
+    @pytest.mark.parametrize('legacy', ['session', 'uuid'])
+    def test_a_tree_recorded_under_an_older_name_still_reads(self, tmp_path, legacy):
+        """``tree`` was ``session``, and before that ``uuid``."""
+        b = block(tmp_path, tree='RUN-7')
+        b.write_journal_entry(event='note')
+        entry = b.journal(loc=0)
+        old = DatajournalEntry(entry.drop(['tree']).rename({'tree': legacy}).copy())
+        old[legacy] = 'RUN-7'
+        assert old.block.tree == 'RUN-7'
+
 
 class TestUuid16:
 
@@ -166,7 +176,7 @@ class TestUuid16:
         b = block(tmp_path, uuid16=True)
         code = b.write_journal_entry(event='note')
         assert len(code) == 16
-        assert len(b.session) == 16
+        assert len(b.tree) == 16
 
     def test_long_form_by_default(self, tmp_path):
         assert len(block(tmp_path).write_journal_entry(event='note')) == 36

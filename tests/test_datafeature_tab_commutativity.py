@@ -178,16 +178,16 @@ class TestIdentityCommutes:
 
 
 @pytest.mark.pinned
-class TestSessionIsNotIdentity:
+class TestTreeIsNotIdentity:
 
-    def test_session_may_differ_without_disturbing_identity(self, featuretable):
-        """Which run reached a block is not part of what the block IS.
+    def test_tree_may_differ_without_disturbing_identity(self, featuretable):
+        """Which build tree reached a block is not part of what the block IS.
 
         The two routes form their tabs independently, so they carry different
-        sessions -- and must still be the same block.
+        trees -- and must still be the same block.
         """
         via_table, via_tab = _both_ways(featuretable)
-        assert via_table.session != via_tab.session
+        assert via_table.tree != via_tab.tree
         assert via_table.hash == via_tab.hash
 
 

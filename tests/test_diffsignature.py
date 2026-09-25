@@ -54,18 +54,18 @@ class TestRawOtherNorm:
 
     def test_diffs_against_string(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        diff = b.diffsubsig(a.subsignature())
+        diff = b.diffsubsig(a.subsignaturestr())
         assert diff == {'spec': {'x': (2, 1)}}
         # Leaves are typed: the subsignature text says `2`, not `'2'`, because NormBlock
         # is not LEGACY_NORM. raw=True gives the source text back.
-        assert b.diffsubsig(a.subsignature(), raw=True) == {'spec': {'x': ('2', '1')}}
+        assert b.diffsubsig(a.subsignaturestr(), raw=True) == {'spec': {'x': ('2', '1')}}
         # recursive=False restores the flat, whole-subtree-per-key comparison
-        assert b.diffsubsig(a.subsignature(), recursive=False) == {
+        assert b.diffsubsig(a.subsignaturestr(), recursive=False) == {
             'spec': ({'x': 2}, {'x': 1})}
 
     def test_identical_norm_no_diff(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        assert a.diffsubsig(a.subsignature()) == {}
+        assert a.diffsubsig(a.subsignaturestr()) == {}
 
 
 class TestJournalSelectors:

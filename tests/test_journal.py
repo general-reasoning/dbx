@@ -596,10 +596,10 @@ class TestDatablockJournalArgThreading:
         assert block.anchor == b.anchor
 
         # The SHAPE is mirrored, not merely the names: these are calls on both.
-        assert block.signature() == b.signature()
-        assert block.sig() == b.sig()
-        assert block.type() == b.type()
-        assert block.tp() == b.tp()
+        assert block.signaturestr() == b.signaturestr()
+        assert block.sigstr() == b.sigstr()
+        assert block.typestr() == b.typestr()
+        assert block.tpstr() == b.tpstr()
         assert block.paths() == b.paths()
         assert block.topics() == b.topics()
 
@@ -624,7 +624,7 @@ class TestDatablockJournalArgThreading:
         block = b.journal(iloc=0).block
         for kw in ({'legacy': True}, {'legacy_typing': True}, {'legacy_signature': True}):
             with pytest.raises(TypeError, match='already rendered'):
-                block.signature(**kw)
+                block.signaturestr(**kw)
 
     def test_block_carries_no_storage_or_build_api(self, tmp_path, monkeypatch):
         """It mimics what the ROW determines -- not the entry, not a build.

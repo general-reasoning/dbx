@@ -86,23 +86,23 @@ class TestLegacyNormIsByteStable:
         )
 
     def test_url_is_not_quoted(self):
-        norm = _pin(LegacyBlock).norm()
+        norm = _pin(LegacyBlock).normstr()
         assert f"url={PIN_URL}" in norm
         assert f"url={PIN_URL!r}" not in norm
 
     def test_non_string_spec_value_is_repr_d_twice(self):
         """int 3 renders "'3'" -- the collision the legacy form is stuck with."""
-        assert "'size': '3'" in _pin(LegacyBlock).norm()
+        assert "'size': '3'" in _pin(LegacyBlock).normstr()
 
 
 class TestModernNormQuotesStrings:
 
     def test_url_is_omitted(self):
-        norm = _pin(ModernBlock).norm()
+        norm = _pin(ModernBlock).normstr()
         assert "url=" not in norm
 
     def test_non_string_spec_value_is_repr_d_once(self):
-        assert "'size': 3" in _pin(ModernBlock).norm()
+        assert "'size': 3" in _pin(ModernBlock).normstr()
 
     def test_identity_differs_from_legacy(self):
         """Same url, spec, version and topics -- only the flag differs.
@@ -119,12 +119,12 @@ class TestOptionalRootkwargs:
     def test_legacy_norm_includes_rootkwargs(self):
         """When LEGACY_NORM is True, _rootkwargs_ (url, etc.) is included in norm/subsignature."""
         blk = _pin(LegacyBlock)
-        assert "url=" in blk.norm()
+        assert "url=" in blk.normstr()
 
     def test_modern_norm_omits_rootkwargs(self):
         """When LEGACY_NORM is False (default), _rootkwargs_ is omitted from norm/subsignature."""
         blk = _pin(ModernBlock)
-        assert "url=" not in blk.norm()
+        assert "url=" not in blk.normstr()
 
     def test_legacy_override_controls_rootkwargs(self):
         """Passing legacy=True / legacy=False dynamically includes or omits _rootkwargs_."""
@@ -132,10 +132,10 @@ class TestOptionalRootkwargs:
         legacy = _pin(LegacyBlock)
 
         # Forcing legacy=True on modern block includes url=
-        assert "url=" in modern.norm(legacy=True)
+        assert "url=" in modern.normstr(legacy=True)
 
         # Forcing legacy=False on legacy block omits url=
-        assert "url=" not in legacy.norm(legacy=False)
+        assert "url=" not in legacy.normstr(legacy=False)
 
 
 class TestSpecValueCollision:
@@ -156,7 +156,7 @@ class TestSpecValueCollision:
             VAR = TestSpecValueCollision._C
             def __build__(self): pass
         a, b = self._pair(L)
-        assert a.norm() == b.norm()
+        assert a.normstr() == b.normstr()
         assert a.hash == b.hash
 
     def test_modern_distinguishes(self):
@@ -165,10 +165,10 @@ class TestSpecValueCollision:
             VAR = TestSpecValueCollision._C
             def __build__(self): pass
         a, b = self._pair(M)
-        assert a.norm() != b.norm()
+        assert a.normstr() != b.normstr()
         assert a.hash != b.hash
-        assert "'v': 5" in a.norm()
-        assert "'v': '5'" in b.norm()
+        assert "'v': 5" in a.normstr()
+        assert "'v': '5'" in b.normstr()
 
 
 class TestReprAlwaysQuotes:
@@ -211,23 +211,23 @@ class TestLegacyOverride:
     def test_none_is_byte_identical_to_no_argument(self):
         for cls in (LegacyBlock, ModernBlock):
             block = _pin(cls)
-            assert block.norm(legacy=None) == block.norm()
+            assert block.normstr(legacy=None) == block.normstr()
 
     def test_forcing_the_blocks_own_setting_is_a_no_op(self):
-        assert _pin(LegacyBlock).norm(legacy=True) == _pin(LegacyBlock).norm()
-        assert _pin(ModernBlock).norm(legacy=False) == _pin(ModernBlock).norm()
+        assert _pin(LegacyBlock).normstr(legacy=True) == _pin(LegacyBlock).normstr()
+        assert _pin(ModernBlock).normstr(legacy=False) == _pin(ModernBlock).normstr()
 
     def test_legacy_false_on_a_legacy_block_matches_a_modern_block(self):
-        assert _pin(LegacyBlock).norm(legacy=False) == _pin(ModernBlock).norm()
+        assert _pin(LegacyBlock).normstr(legacy=False) == _pin(ModernBlock).normstr()
 
     def test_legacy_true_on_a_modern_block_matches_a_legacy_block(self):
-        assert _pin(ModernBlock).norm(legacy=True) == _pin(LegacyBlock).norm()
+        assert _pin(ModernBlock).normstr(legacy=True) == _pin(LegacyBlock).normstr()
 
     def test_override_does_not_change_hash(self):
         """The load-bearing guard: identity must ignore the override."""
         block = _pin(LegacyBlock)
         before, subbefore = block.hash, block.subhash
-        block.norm(legacy=False)
+        block.normstr(legacy=False)
         assert block.hash == before
         assert block.subhash == subbefore
         # ... and a freshly built instance still pins the pre-quoting hash.
@@ -237,8 +237,8 @@ class TestLegacyOverride:
 
     def test_signature_never_passes_an_override(self):
         block = _pin(LegacyBlock)
-        assert block.norm() in block.signature()
-        assert block.norm(legacy=False) not in block.signature()
+        assert block.normstr() in block.signaturestr()
+        assert block.normstr(legacy=False) not in block.signaturestr()
 
 
 class TestLegacyOverridePropagates:
@@ -268,17 +268,17 @@ class TestLegacyOverridePropagates:
         return Parent(url=PIN_URL, spec=dict(child=child, ori_extent=15.0))
 
     def test_child_is_rendered_modern_too(self):
-        norm = self._tree().norm(legacy=False)
+        norm = self._tree().normstr(legacy=False)
         assert "'n': 7" in norm, norm
         assert "'n': '7'" not in norm
 
     def test_child_keeps_its_own_setting_by_default(self):
-        assert "'n': '7'" in self._tree().norm()
+        assert "'n': '7'" in self._tree().normstr()
 
     def test_the_parents_hash_is_untouched(self):
         parent = self._tree()
         before = parent.hash
-        parent.norm(legacy=False)
+        parent.normstr(legacy=False)
         assert parent.hash == before
 
 
@@ -301,10 +301,10 @@ class TestDiffnormLegacyOverride:
         L = self._cls()
         a = L(url=PIN_URL, spec=dict(ori_extent=20.0))
         b = L(url=PIN_URL, spec=dict(ori_extent=15.0))
-        assert a.diffnorm(b.norm(legacy=False), legacy=False) == {
+        assert a.diffnorm(b.normstr(legacy=False), legacy=False) == {
             'spec': {'ori_extent': (20.0, 15.0)}}
         # Without the override both sides are legacy, so both are strings.
-        assert a.diffnorm(b.norm()) == {
+        assert a.diffnorm(b.normstr()) == {
             'spec': {'ori_extent': ('20.0', '15.0')}}
 
     def test_override_against_a_legacy_other_side_flags_every_scalar(self):
@@ -312,7 +312,7 @@ class TestDiffnormLegacyOverride:
         L = self._cls()
         a = L(url=PIN_URL, spec=dict(ori_extent=15.0))
         b = L(url=PIN_URL, spec=dict(ori_extent=15.0))
-        assert a.diffnorm(b.norm()) == {}, "same era, same value -> no diff"
-        mismatched = a.diffnorm(b.norm(), legacy=False)
+        assert a.diffnorm(b.normstr()) == {}, "same era, same value -> no diff"
+        mismatched = a.diffnorm(b.normstr(), legacy=False)
         assert 'ori_extent' in mismatched['spec']
         assert mismatched['spec']['ori_extent'] == (15.0, '15.0')

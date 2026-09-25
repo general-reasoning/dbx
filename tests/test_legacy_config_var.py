@@ -203,7 +203,7 @@ def test_validate_vars_is_not_part_of_identity(url):
     """
     checked = ModernBlock(url=url)
     unchecked = ModernBlock(url=url, validate_vars=False)
-    assert checked.norm() == unchecked.norm()
+    assert checked.normstr() == unchecked.normstr()
     assert checked.hash == unchecked.hash
     assert checked.key == unchecked.key
 

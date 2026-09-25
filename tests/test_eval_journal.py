@@ -31,28 +31,28 @@ class TestDatajournalEntryMethods:
         entry = DatajournalEntry(series)
 
         # The ENTRY: properties over the row's own columns.
-        assert entry.block.signature() == 'test.Anchor(spec={})'
-        assert entry.block.type() == 'test.Anchor(spec={})/version=1.0'
-        assert entry.block.signature() == 'test.Anchor(spec={})'
-        assert entry.block.sig() == "{'spec': {}}"
-        assert entry.block.type() == 'test.Anchor(spec={})/version=1.0'
-        assert entry.block.tp() == "{'paths': None, 'signature': {'spec': {}}, 'topics': (), 'version': '1.0'}"
+        assert entry.block.signaturestr() == 'test.Anchor(spec={})'
+        assert entry.block.typestr() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.block.signaturestr() == 'test.Anchor(spec={})'
+        assert entry.block.sigstr() == "{'spec': {}}"
+        assert entry.block.typestr() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.block.tpstr() == "{'paths': None, 'signature': {'spec': {}}, 'topics': (), 'version': '1.0'}"
 
         # The BLOCK: Datablock-shaped, so these are calls, not properties.
-        assert entry.block.signature() == 'test.Anchor(spec={})'
-        assert entry.block.type() == 'test.Anchor(spec={})/version=1.0'
-        assert entry.block.sig() == "{'spec': {}}"
+        assert entry.block.signaturestr() == 'test.Anchor(spec={})'
+        assert entry.block.typestr() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.block.sigstr() == "{'spec': {}}"
 
     def test_datajournal_entry_methods_none(self):
         series = pd.Series({'hash': '12345', 'anchor': 'test.Anchor'})
         entry = DatajournalEntry(series)
 
-        assert entry.block.signature() is None
-        assert entry.block.sig() is None
-        assert entry.block.type() is None
-        assert entry.block.tp() is None
-        assert entry.block.signature() is None
-        assert entry.block.type() is None
+        assert entry.block.signaturestr() is None
+        assert entry.block.sigstr() is None
+        assert entry.block.typestr() is None
+        assert entry.block.tpstr() is None
+        assert entry.block.signaturestr() is None
+        assert entry.block.typestr() is None
 
 
 class TestEvalJournal:

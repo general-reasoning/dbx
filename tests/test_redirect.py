@@ -625,8 +625,8 @@ class TestRestructuredRedirect:
         assert b.path('output') == '/custom/output.txt'
         # Neither: a redirection says where this block's data is READ from, and
         # a block does not become a different block by being read elsewhere.
-        assert '_paths_' not in b.type()
-        assert '_paths_' not in b.signature()
+        assert '_paths_' not in b.typestr()
+        assert '_paths_' not in b.signaturestr()
         assert b.hash == Built(url=str(tmp_path)).hash
 
     def test_redirect_to_code(self, tmp_path, source):
@@ -644,7 +644,7 @@ class TestRestructuredRedirect:
         assert j_target.read('message') == j_source.block.id
 
         # Check subsignature does NOT include _paths_ when redirecting to code
-        assert '_paths_' not in b.subsignature()
+        assert '_paths_' not in b.subsignaturestr()
 
     def test_redirect_to_filter(self, tmp_path, source):
         src_block, code = source
@@ -687,8 +687,8 @@ class TestNewRedirectFeatures:
         b.UNSAFE_redirect(paths={'output': '/custom/path.txt'}, OVERRIDE=True)
         assert b.path('output') == '/custom/path.txt'
         assert b._paths_ == {'output': '/custom/path.txt'}
-        assert '_paths_' not in b.signature()
-        assert '_paths_' not in b.type()
+        assert '_paths_' not in b.signaturestr()
+        assert '_paths_' not in b.typestr()
 
     def test_hidden_topic_redirection_and_clear(self, tmp_path):
         b = Built(url=str(tmp_path))

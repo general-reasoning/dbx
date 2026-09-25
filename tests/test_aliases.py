@@ -95,7 +95,7 @@ class TestDeclaringFromTheAliasChangesNothing:
     def test_the_type_string_is_the_same(self, tmp_path):
         a = self._cell(DatapointTab)(url=str(tmp_path), spec=dict(n=3))
         b = self._cell(Datatab)(url=str(tmp_path), spec=dict(n=3))
-        assert a.type() == b.type()
+        assert a.typestr() == b.typestr()
 
     def test_the_storage_path_is_the_same(self, tmp_path):
         a = self._cell(DatapointTab)(url=str(tmp_path), spec=dict(n=3))
@@ -105,7 +105,7 @@ class TestDeclaringFromTheAliasChangesNothing:
     def test_no_base_class_name_reaches_the_type_string(self, tmp_path):
         """Why the above holds rather than happening to: the identity renders
         spec, version and topics, and none of them names a class."""
-        text = self._cell(DatapointTab)(url=str(tmp_path), spec=dict(n=3)).type()
+        text = self._cell(DatapointTab)(url=str(tmp_path), spec=dict(n=3)).typestr()
         assert 'DatapointTab' not in text and 'Datatab' not in text
 
     def test_a_renamed_subclass_does_move_the_path(self, tmp_path):

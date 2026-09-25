@@ -1615,7 +1615,7 @@ class DatapointFold(DatapointTable):
 #: second MRO and no way for the two spellings to drift.
 #:
 #: Nothing about identity moves, in this repo or downstream. A block's hash is
-#: sha256 of its ``type()``, which is signature + version + topics and names no
+#: sha256 of its ``typestr()``, which is signature + version + topics and names no
 #: class at all; the one place a class name IS recorded -- :attr:`fqcn`, in the
 #: storage path -- is the name of the subclass being built, not of the base it
 #: was declared from. So a downstream class that switches

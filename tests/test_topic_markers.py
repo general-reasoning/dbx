@@ -144,7 +144,7 @@ class TestTheDeclarationDecidesTheEra:
                 pass
 
         with pytest.raises(ValueError, match="mixes the topic markers"):
-            block(Mixed, tmp_path).type()
+            block(Mixed, tmp_path).typestr()
 
     def test_the_error_names_both_sides(self, tmp_path):
         class Mixed(Datablock):
@@ -154,7 +154,7 @@ class TestTheDeclarationDecidesTheEra:
                 pass
 
         with pytest.raises(ValueError, match=r"\['masks'\].*\['old'\]"):
-            block(Mixed, tmp_path).type()
+            block(Mixed, tmp_path).typestr()
 
     def test_a_nested_mixture_is_refused(self, tmp_path):
         class Mixed(Datablock):
@@ -174,7 +174,7 @@ class TestTheDeclarationDecidesTheEra:
                 pass
 
         with pytest.raises(ValueError, match="mixes the topic markers"):
-            block(Mixed, tmp_path).type()
+            block(Mixed, tmp_path).typestr()
 
     def test_an_inherited_sentinel_is_a_mixture(self, tmp_path):
         """A subclass adding a marker to a base's sentinels has to respell them,
@@ -186,13 +186,13 @@ class TestTheDeclarationDecidesTheEra:
                 pass
 
         with pytest.raises(ValueError, match="mixes the topic markers"):
-            block(Extended, tmp_path).type()
+            block(Extended, tmp_path).typestr()
 
 
 class TestMarkersRenderAsThemselves:
 
     def test_a_slice_renders_with_its_columns(self, tmp_path):
-        assert "topic:numbers=DATASLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).type()
+        assert "topic:numbers=DATASLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).typestr()
 
     def test_a_bare_slice_renders_as_the_bare_marker(self, tmp_path):
         class Bare(DatapointTab):
@@ -201,10 +201,10 @@ class TestMarkersRenderAsThemselves:
             def __build__(self):
                 pass
 
-        assert 'topic:numbers=DATASLICE' in block(Bare, tmp_path).type()
+        assert 'topic:numbers=DATASLICE' in block(Bare, tmp_path).typestr()
 
     def test_a_markers_own_arguments_keep_their_quotes(self, tmp_path):
-        assert "DATASLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).type()
+        assert "DATASLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).typestr()
 
     def test_the_markers_are_exported_from_the_package(self):
         assert (dbx.DIR, dbx.SYNTHETIC, dbx.DATASLICE) == (DIR, SYNTHETIC, DATASLICE)
@@ -586,7 +586,7 @@ class TestADatadictSchemaIsItsIdentity:
 
     def test_the_schema_renders_into_the_type_string(self, tmp_path):
         assert ("topic:meta=DATADICT('meta.json', rows='int', "
-                "run=dict(id='str', started='str'))") in block(Dicted, tmp_path).type()
+                "run=dict(id='str', started='str'))") in block(Dicted, tmp_path).typestr()
 
     def test_adding_a_key_re_keys(self, tmp_path):
         assert (self._hash(tmp_path, DATADICT('m.json', a='int'))
@@ -693,13 +693,13 @@ class TestAdoptingASpellingIsWhatMovesAHash:
 
     @pytest.mark.pinned
     def test_the_marker_spelling_renders_exactly_as_it_did(self, tmp_path):
-        assert [t for t in block(Marked, tmp_path).type().split('/') if 'topic:' in t] == [
+        assert [t for t in block(Marked, tmp_path).typestr().split('/') if 'topic:' in t] == [
             "topic:data='data.txt'", 'topic:masks=DIR', 'topic:cache=SYNTHETIC',
         ]
 
     @pytest.mark.pinned
     def test_the_sentinel_spelling_renders_exactly_as_it_did(self, tmp_path):
-        assert [t for t in block(Sentinels, tmp_path).type().split('/') if 'topic:' in t] == [
+        assert [t for t in block(Sentinels, tmp_path).typestr().split('/') if 'topic:' in t] == [
             'topic:data=data.txt', 'topic:masks=None', 'topic:cache=()',
         ]
 

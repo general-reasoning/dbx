@@ -773,8 +773,8 @@ class DatafeatureTable(_UpstreamSlices, DatapointTable):
 
     def validate_tab(self, i: int, **kwargs) -> bool:
         """Return whether the tab at index *i* validates."""
-        signature1 = self.tab(i).var.datapoint_tab.signature()
-        signature2 = self.var.datapoint_table.tab(i).signature()
+        signature1 = self.tab(i).var.datapoint_tab.signaturestr()
+        signature2 = self.var.datapoint_table.tab(i).signaturestr()
         coherent_signatures = (signature1 == signature2)
         if not coherent_signatures:
             raise ValueError(f"tab({i}).var.datapoint_tab.signature: {signature1} " 

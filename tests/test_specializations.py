@@ -122,10 +122,10 @@ class TestTheReconstructedIdentity:
         assert block.get_hash(V2.SPECIALIZATIONS[0]) != block.hash
 
     def test_the_type_drops_the_field_and_the_topic(self, tmp_path):
-        t = v2(tmp_path).type(specialization=V2.SPECIALIZATIONS[0])
+        t = v2(tmp_path).typestr(specialization=V2.SPECIALIZATIONS[0])
         assert 'window' not in t
         assert 'phases' not in t
-        assert t == v1(tmp_path).type()
+        assert t == v1(tmp_path).typestr()
 
     def test_hash_is_cached_apart_from_the_blocks_own(self, tmp_path):
         block = v2(tmp_path)
@@ -630,8 +630,8 @@ class TestASpecializationAcrossAVersionBump:
 
     def test_the_version_is_in_the_rendered_type(self, tmp_path):
         block = v3(tmp_path)
-        assert 'version=2' in block.type()
-        assert 'version=None' in block.type(specialization=self.SP)
+        assert 'version=2' in block.typestr()
+        assert 'version=None' in block.typestr(specialization=self.SP)
 
     def test_it_resolves_and_builds_only_what_it_did_not_cover(self, tmp_path,
                                                                built):

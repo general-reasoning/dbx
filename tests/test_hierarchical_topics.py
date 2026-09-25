@@ -155,7 +155,7 @@ class TestBadPaths:
             TOPICS = {'data/frames': DIRTOPIC}
             def __build__(self): pass
         with pytest.raises(ValueError, match="may not contain"):
-            Slashed(url=str(tmp_path)).signature()
+            Slashed(url=str(tmp_path)).signaturestr()
 
 
 class TestValidity:
@@ -243,9 +243,9 @@ class TestClearAndBreadcrumbs:
 class TestSignature:
 
     def test_a_nested_leaf_is_named_by_its_full_path(self, block):
-        assert 'topic:data/frames=None' in block.type()
-        assert 'topic:data/index=index.csv' in block.type()
-        assert 'topic:model=model.pt' in block.type()
+        assert 'topic:data/frames=None' in block.typestr()
+        assert 'topic:data/index=index.csv' in block.typestr()
+        assert 'topic:model=model.pt' in block.typestr()
 
     def test_nesting_changes_identity(self, tmp_path):
         """{'a': {'b': X}} and {'a': X} are different declarations."""
@@ -259,12 +259,12 @@ class TestSignature:
 
         a = Grouped(url=str(tmp_path), anchor='s')
         b = Flat(url=str(tmp_path), anchor='s')
-        assert a.type() != b.type()
+        assert a.typestr() != b.typestr()
         assert a.hash != b.hash
 
     def test_hash_is_the_sha256_of_the_type(self, block):
-        assert block.hash == hashlib.sha256(block.type().encode()).hexdigest()
-        assert block.code == hashlib.sha256(block.signature().encode()).hexdigest()
+        assert block.hash == hashlib.sha256(block.typestr().encode()).hexdigest()
+        assert block.code == hashlib.sha256(block.signaturestr().encode()).hexdigest()
 
 
 class TestJournal:

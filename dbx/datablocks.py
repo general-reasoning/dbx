@@ -840,7 +840,7 @@ class CallableSignature(CallableStr):
     ``legacy=`` selects which rendering to PRODUCE, so it has nothing to act
     on here -- the rendering happened before this string was stored. Passing
     it raises rather than being quietly ignored; ask the block itself
-    (``block.signature(legacy=...)``) for the other rendering.
+    (``block.signaturestr(legacy=...)``) for the other rendering.
     """
 
     def __call__(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = False, **kwargs):
@@ -848,7 +848,7 @@ class CallableSignature(CallableStr):
             raise TypeError(
                 f"{type(self).__name__}: legacy= chooses how a signature is "
                 f"rendered, but this one is already rendered and stored. Call "
-                f"signature(legacy={legacy!r}) on the block instead."
+                f"signaturestr(legacy={legacy!r}) on the block instead."
             )
         s = str(self)
         # Before parsing, not after: stripping backslashes from the formatted
@@ -869,7 +869,7 @@ class CallableSig(CallableStr):
     ``legacy=`` selects which rendering to PRODUCE, so it has nothing to act
     on here -- the rendering happened before this string was stored. Passing
     it raises rather than being quietly ignored; ask the block itself
-    (``block.signature(legacy=...)``) for the other rendering.
+    (``block.signaturestr(legacy=...)``) for the other rendering.
     """
 
     def __call__(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True, **kwargs):
@@ -877,7 +877,7 @@ class CallableSig(CallableStr):
             raise TypeError(
                 f"{type(self).__name__}: legacy= chooses how a signature is "
                 f"rendered, but this one is already rendered and stored. Call "
-                f"signature(legacy={legacy!r}) on the block instead."
+                f"signaturestr(legacy={legacy!r}) on the block instead."
             )
         s = str(self)
         # Before parsing, not after: stripping backslashes from the formatted
@@ -907,7 +907,7 @@ class CallableType(CallableStr):
                 topics = []
                 paths = None
                 version = self._block.version if self._block is not None else None
-                sig_part = str(self._block.signature()) if self._block is not None else ''
+                sig_part = str(self._block.signaturestr()) if self._block is not None else ''
                 for p in parts:
                     if p.startswith('topic:'):
                         topics.append(p)
@@ -949,7 +949,7 @@ class CallableTp(CallableStr):
                 topics = []
                 paths = None
                 version = self._block.version if self._block is not None else None
-                sig_part = str(self._block.signature()) if self._block is not None else ''
+                sig_part = str(self._block.signaturestr()) if self._block is not None else ''
                 for p in parts:
                     if p.startswith('topic:'):
                         topics.append(p)
@@ -993,9 +993,9 @@ class Block:
 
     The API shape is mirrored, not merely the names: what is a property on
     `Datablock` is a property here, what is a method there is a method here.
-    So ``paths()``, ``signature()``, ``type()`` are calls and ``hash``,
-    ``anchor``, ``key`` are not, and code written against a live block reads
-    one of these unchanged. Accessors with no `Datablock` counterpart
+    So ``paths()``, ``signature()``, ``type()`` and their ``*str()`` renderings
+    are calls and ``hash``, ``anchor``, ``key`` are not, and code written
+    against a live block reads one of these unchanged. Accessors with no `Datablock` counterpart
     (``gitrepo``, ``url``, ``id``, ``keyby``) are here too, because they
     describe the block rather than the journal.
     """
@@ -1008,45 +1008,45 @@ class Block:
     def __repr__(self):
         return f"Block({self.anchor}/{self.hash})"
 
-    def signature(self, *, deslash: bool = False, **kwargs):
+    def signaturestr(self, *, deslash: bool = False, **kwargs):
         """The recorded signature TEXT.
 
         A method, as on `Datablock` -- but with nothing left to render: the row
         holds one rendering, chosen when it was written. ``legacy=`` and its
         kin therefore raise rather than being ignored.
         """
-        self._reject_rendering_choice('signature', kwargs)
+        self._reject_rendering_choice('signaturestr', kwargs)
         val = self._signature_text(self._entry)
         return val.replace('\\', '') if (deslash and val) else val
 
-    def sig(self, *, deslash: bool = False, pretty: bool = True, **kwargs):
+    def sigstr(self, *, deslash: bool = False, pretty: bool = True, **kwargs):
         val = self._signature_text(self._entry)
         return CallableSig(val)(deslash=deslash, pretty=pretty) if val else None
 
-    def type(self, *, deslash: bool = False, **kwargs):
+    def typestr(self, *, deslash: bool = False, **kwargs):
         """The recorded type TEXT."""
-        self._reject_rendering_choice('type', kwargs)
+        self._reject_rendering_choice('typestr', kwargs)
         val = self._type_text(self._entry)
         return val.replace('\\', '') if (deslash and val) else val
 
-    def tp(self, *, deslash: bool = False, pretty: bool = True, **kwargs):
+    def tpstr(self, *, deslash: bool = False, pretty: bool = True, **kwargs):
         val = self._type_text(self._entry)
         return CallableTp(val, block=self)(deslash=deslash, pretty=pretty) if val else None
 
-    def signaturedict(self, *, deslash: bool = False, **kwargs) -> dict:
-        """As `Datablock.signaturedict`, over the signature this row records."""
-        self._reject_rendering_choice('signaturedict', kwargs)
+    def signature(self, *, deslash: bool = False, **kwargs) -> dict:
+        """As `Datablock.signature`, over the signature this row records."""
+        self._reject_rendering_choice('signature', kwargs)
         text = self._signature_text(self._entry) or ''
         if deslash:
             text = text.replace('\\', '')
         parsed = Datablock._parse_signature(text)
         return {k: Datablock._structure_from_signature_text(v) for k, v in parsed.items()}
 
-    def sigdict(self, *, deslash: bool = False, **kwargs) -> dict:
-        return self.signaturedict(deslash=deslash, **kwargs)
+    def sig(self, *, deslash: bool = False, **kwargs) -> dict:
+        return self.signature(deslash=deslash, **kwargs)
 
-    def typedict(self, *, deslash: bool = False, **kwargs) -> dict:
-        self._reject_rendering_choice('typedict', kwargs)
+    def type(self, *, deslash: bool = False, **kwargs) -> dict:
+        self._reject_rendering_choice('type', kwargs)
         version, paths, topics = self.version, None, []
         for part in self._type_parts(self._type_text(self._entry) or ''):
             if part.startswith('topic:'):
@@ -1057,13 +1057,13 @@ class Block:
                 version = self._as_version(part[len('version='):])
         return {
             'paths': paths,
-            'signature': self.signaturedict(deslash=deslash),
+            'signature': self.signature(deslash=deslash),
             'topics': tuple(topics),
             'version': version,
         }
 
-    def tpdict(self, *, deslash: bool = False, **kwargs) -> dict:
-        return self.typedict(deslash=deslash, **kwargs)
+    def tp(self, *, deslash: bool = False, **kwargs) -> dict:
+        return self.type(deslash=deslash, **kwargs)
 
     def paths(self) -> dict:
         """Recorded ``{topic: path}`` mapping.
@@ -1132,8 +1132,10 @@ class Block:
         d = {name: getattr(self, name) for name in (
             'hash', 'code', 'version', 'revision', 'gitrepo', 'url',
             'anchor', 'tag', 'key', 'keyby', 'session', 'id')}
-        d.update({name: getattr(self, name)() for name in
-                  ('signature', 'type', 'cite', 'note')})
+        d.update({name: getattr(self, name)() for name in ('cite', 'note')})
+        # The TEXT, as the columns of the same names hold it.
+        d['signature'] = self.signaturestr()
+        d['type'] = self.typestr()
         d['paths'] = self.paths()
         d['topics'] = self.topics()
         if deslash:
@@ -1232,7 +1234,7 @@ class Block:
         if recorded is not None:
             return recorded
         return self._key_from(self.keyby, self.hash, self.tag, self.version,
-                              signature=lambda: self.signature())
+                              signature=lambda: self.signaturestr())
 
     @property
     def anchorkey(self):
@@ -1560,7 +1562,7 @@ class DatajournalEntry(pd.Series):
 
             i = entry.inst(remote=True)
             i.hash        # == entry.hash, unlike the local inst()
-            i.subsignature()      # forwarded to the worker, result returned here
+            i.subsignaturestr()      # forwarded to the worker, result returned here
 
         *handle* reuses an existing :func:`remote` worker instead of starting one
         per call; it is the caller's job to ensure it was pinned compatibly.
@@ -1892,7 +1894,7 @@ class Datablock:
 
         Built from ``self.var``, NOT by parsing the rendered signature. The
         rendering is text, and reading it back gives text: that is why
-        ``sigdict()`` used to report ``'256'`` for a field holding ``256``,
+        ``sigdict()`` (now ``sig()``) used to report ``'256'`` for a field holding ``256``,
         with no coercion bug anywhere in sight.
 
         Speclines stay strings, since a specline IS a string; every other leaf
@@ -2667,7 +2669,7 @@ class Datablock:
     def set(self, **kw):
         """This block again, with *kw* replacing its non-identity parameters.
 
-        ``spec`` is refused. Identity is sha256(:meth:`type`), and type() is
+        ``spec`` is refused. Identity is sha256(:meth:`typestr`), and typestr() is
         built from the spec, so re-specifying here would hand back a DIFFERENT
         block through a method that reads as an amendment of this one -- and
         would carry this block's state, resolved against this block's identity,
@@ -3616,7 +3618,7 @@ class Datablock:
         and the one a class names on the day it starts versioning. *note* says
         why the coincidence holds; nothing else records it.
 
-        Those three are the whole of an identity -- :meth:`type` is built from
+        Those three are the whole of an identity -- :meth:`typestr` is built from
         the spec, the version and the topics and nothing else -- so a
         specialization that names all three describes the narrower block
         COMPLETELY, rather than inheriting whatever the class happens to carry
@@ -4853,7 +4855,7 @@ class Datablock:
                     |obj:    repr(obj)
             'signature':
                 . DATABLOCK reduction
-                    |datablock: datablock.signature()
+                    |datablock: datablock.signaturestr()
                     |specline:      repr(specline)
                     |obj:       repr(obj)
             'quote':
@@ -4895,14 +4897,14 @@ class Datablock:
                     try:
                         eval_v = dataparts.eval(raw_v)
                         if isinstance(eval_v, Datablock):
-                            _spec_[k] = eval_v.signature(
+                            _spec_[k] = eval_v.signaturestr(
                                 legacy_typing=legacy_typing, legacy_signature=legacy)
                         else:
                             _spec_[k] = raw_v
                     except Exception:
                         _spec_[k] = raw_v
                 elif isinstance(value, Datablock):
-                    _spec_[k] = value.signature(
+                    _spec_[k] = value.signaturestr(
                         legacy_typing=legacy_typing, legacy_signature=legacy)
                 elif isinstance(value, str):
                     _spec_[k] = value
@@ -5212,11 +5214,11 @@ class Datablock:
         self.log.detailed(f"cite: ------------> {cite=}")
         return cite
 
-    def signature(self, *, deslash: bool = False, legacy: bool | None = None,
+    def signaturestr(self, *, deslash: bool = False, legacy: bool | None = None,
                   legacy_typing: bool | None = None,
                   legacy_signature: bool | None = None, pretty: bool = False,
                   omit=()):
-        """The base identity string that :attr:`type` -- and hence :attr:`hash` and :attr:`code` -- is built from.
+        """The base identity string that :meth:`typestr` -- and hence :attr:`hash` and :attr:`code` -- is built from.
 
         Two independent opt-outs, because they were two different things
         sharing one name:
@@ -5240,7 +5242,7 @@ class Datablock:
         if pretty:
             import pprint
             return pprint.pformat(
-                self.signaturedict(legacy_typing=legacy_typing, legacy_signature=norm,
+                self.signature(legacy_typing=legacy_typing, legacy_signature=norm,
                                    deslash=deslash), indent=2, width=120)
         if legacy_typing:
             #CAUTION! This branch is what already-built blocks hashed with, and
@@ -5265,13 +5267,13 @@ class Datablock:
         self.log.detailed(f"signature: ------------>{sig=}")
         return sig
 
-    def subsignature(self, *args, **kwargs):
-        """Alias for :meth:`signature` for backwards compatibility."""
-        return self.signature(*args, **kwargs)
+    def subsignaturestr(self, *args, **kwargs):
+        """Alias for :meth:`signaturestr` for backwards compatibility."""
+        return self.signaturestr(*args, **kwargs)
 
-    def norm(self, *args, **kwargs):
-        """Alias for :meth:`signature` for backwards compatibility."""
-        return self.signature(*args, **kwargs)
+    def normstr(self, *args, **kwargs):
+        """Alias for :meth:`signaturestr` for backwards compatibility."""
+        return self.signaturestr(*args, **kwargs)
 
 
     @staticmethod
@@ -5489,7 +5491,7 @@ class Datablock:
     ) -> 'dict | str':
         """Diff this datablock's signature against another signature, key by key."""
         if isinstance(other_signature, Datablock):
-            other_signature = other_signature.signature(legacy=legacy)
+            other_signature = other_signature.signaturestr(legacy=legacy)
         elif isinstance(other_signature, DatajournalEntry):
             other_signature = other_signature.read('signature') or other_signature.read('subsignature') or other_signature.read('norm') or ''
         elif (other_signature is None or other_signature is ABSENT) and journal is not None:
@@ -5527,7 +5529,7 @@ class Datablock:
                         diff[key] = (one, two)
             return diff
 
-        parsed_self  = Datablock._parse_signature(self.signature(legacy=legacy))
+        parsed_self  = Datablock._parse_signature(self.signaturestr(legacy=legacy))
         parsed_other = Datablock._parse_signature(other_signature or '')
 
         def _normalize_subsig_dict(d):
@@ -5571,7 +5573,7 @@ class Datablock:
     def diffnorm(self, *args, **kwargs):
         return self.diffsignature(*args, **kwargs)
 
-    def signaturedict(self, *, legacy: 'bool | None' = None,
+    def signature(self, *, legacy: 'bool | None' = None,
                       legacy_typing: 'bool | None' = None,
                       legacy_signature: 'bool | None' = None,
                       deslash: bool = False) -> dict:
@@ -5590,36 +5592,36 @@ class Datablock:
         if legacy_signature is None:
             legacy_signature = legacy
         if self._legacy_typing(legacy_typing):
-            parsed = Datablock._parse_signature(self.signature(
+            parsed = Datablock._parse_signature(self.signaturestr(
                 legacy_typing=True, legacy_signature=legacy_signature, deslash=deslash))
             return {k: self._structure_from_signature_text(v) for k, v in parsed.items()}
         return {'spec': self._typed_specdict(legacy=False)}
 
-    def sigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.signaturedict(legacy=legacy, deslash=deslash)
+    def sig(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signature(legacy=legacy, deslash=deslash)
 
-    def subsignaturedict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.signaturedict(legacy=legacy, deslash=deslash)
+    def subsignature(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signature(legacy=legacy, deslash=deslash)
 
-    def subsigdict(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
-        return self.signaturedict(legacy=legacy, deslash=deslash)
+    def subsig(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
+        return self.signature(legacy=legacy, deslash=deslash)
 
-    def normdict(self, *args, **kwargs):
-        return self.signaturedict(*args, **kwargs)
+    def norm(self, *args, **kwargs):
+        return self.signature(*args, **kwargs)
 
-    def sig(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
-        """Alias for :meth:`signature` (defaults to pretty=True)."""
-        return self.signature(deslash=deslash, legacy=legacy, pretty=pretty)
+    def sigstr(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
+        """Alias for :meth:`signaturestr` (defaults to pretty=True)."""
+        return self.signaturestr(deslash=deslash, legacy=legacy, pretty=pretty)
 
-    def subsig(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
-        return self.signature(deslash=deslash, legacy=legacy, pretty=pretty)
+    def subsigstr(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
+        return self.signaturestr(deslash=deslash, legacy=legacy, pretty=pretty)
 
-    def typedict(self, *, deslash: bool = False, legacy: 'bool | None' = None,
+    def type(self, *, deslash: bool = False, legacy: 'bool | None' = None,
                  legacy_typing: 'bool | None' = None,
                  legacy_signature: 'bool | None' = None) -> dict:
         """Return the full type structured as a dictionary."""
         return {
-            'signature': self.signaturedict(
+            'signature': self.signature(
                 legacy=legacy, legacy_typing=legacy_typing,
                 legacy_signature=legacy_signature, deslash=deslash),
             'version': self.version,
@@ -5627,21 +5629,21 @@ class Datablock:
             'topics': self.signature_topics(),
         }
 
-    def tpdict(self, *, deslash: bool = False, legacy: 'bool | None' = None) -> dict:
-        return self.typedict(deslash=deslash, legacy=legacy)
+    def tp(self, *, deslash: bool = False, legacy: 'bool | None' = None) -> dict:
+        return self.type(deslash=deslash, legacy=legacy)
 
-    def tp(self, *, deslash: bool = False, legacy: 'bool | None' = None, pretty: bool = True):
-        """Alias for :meth:`type` (defaults to pretty=True)."""
-        return self.type(deslash=deslash, legacy=legacy, pretty=pretty)
+    def tpstr(self, *, deslash: bool = False, legacy: 'bool | None' = None, pretty: bool = True):
+        """Alias for :meth:`typestr` (defaults to pretty=True)."""
+        return self.typestr(deslash=deslash, legacy=legacy, pretty=pretty)
 
-    def type(self, *, deslash: bool = False, legacy: 'bool | None' = None, pretty: bool = False):
+    def typestr(self, *, deslash: bool = False, legacy: 'bool | None' = None, pretty: bool = False):
         """Return the full type representation (signature + paths + version + topics)."""
         legacy = self._legacy_typing(legacy)
         if pretty:
             import pprint
             return pprint.pformat(
-                self.typedict(deslash=deslash, legacy=legacy), indent=2, width=120)
-        parts = [self.signature(deslash=deslash, legacy=legacy)]
+                self.type(deslash=deslash, legacy=legacy), indent=2, width=120)
+        parts = [self.signaturestr(deslash=deslash, legacy=legacy)]
         if getattr(self, '_paths_', None) is not None:
             parts.append(f"_paths_={getattr(self, '_paths_', None)}")
         parts.append(f"version={self.version}")
@@ -5988,7 +5990,7 @@ class Datablock:
                 leaves.append(tp)
         return leaves
 
-    def type(self, *, deslash: bool = False, legacy: 'bool | None' = None,
+    def typestr(self, *, deslash: bool = False, legacy: 'bool | None' = None,
              legacy_typing: 'bool | None' = None,
              legacy_signature: 'bool | None' = None, pretty: bool = False,
              specialization: 'Datablock.Specialization | None' = None):
@@ -6007,9 +6009,9 @@ class Datablock:
         if specialization is not None and specialization.version is not ABSENT:
             version = specialization.version
         if specialization is not None and pretty:
-            # typedict() describes THIS block, and rendering it under a
+            # type() describes THIS block, and rendering it under a
             # specialization's name would describe neither.
-            raise ValueError("type(): pretty= and specialization= do not combine")
+            raise ValueError("typestr(): pretty= and specialization= do not combine")
         if legacy_typing is None:
             legacy_typing = legacy
         if legacy_signature is None:
@@ -6018,7 +6020,7 @@ class Datablock:
         if pretty:
             import pprint
             return pprint.pformat(
-                self.typedict(deslash=deslash, legacy_typing=legacy_typing,
+                self.type(deslash=deslash, legacy_typing=legacy_typing,
                               legacy_signature=legacy_signature), indent=2, width=120)
         # A redirection is emphatically NOT part of the identity: it says where
         # this block's data is read from, and a block does not become a
@@ -6028,7 +6030,7 @@ class Datablock:
         # anchorkeypath, the journal directory and the redirection lookup along
         # with it. Masked, until keyby stopped naming the hash, by __setstate__
         # building the logger name out of self.key and caching _hash on the way.
-        parts = [self.signature(deslash=deslash, legacy_typing=legacy_typing,
+        parts = [self.signaturestr(deslash=deslash, legacy_typing=legacy_typing,
                                 legacy_signature=legacy_signature, omit=omit)]
         # The narrower block's version when the specialization names one, this
         # class's otherwise. Taking it from the class unconditionally was what
@@ -6054,7 +6056,7 @@ class Datablock:
         which is a real hash of a real identity, the one that block was built
         under, and so the one its journal entries are filed by. That is the
         whole mechanism: the reconstruction is a string operation on
-        :meth:`type`, needing no access to the older class and no record that
+        :meth:`typestr`, needing no access to the older class and no record that
         it ever existed.
 
         Cached per specialization, and never into ``_hash``: that one is this
@@ -6063,7 +6065,7 @@ class Datablock:
         if specialization is None:
             if not hasattr(self, '_hash'):
                 sha = hashlib.sha256()
-                tp = self.type()
+                tp = self.typestr()
                 sha.update(tp.encode())
                 self._hash = sha.hexdigest()
                 self.log.detailed(f"hash: ---------===---------> {tp=} ---> hash: {self._hash}")
@@ -6071,14 +6073,14 @@ class Datablock:
         cache = self.__dict__.setdefault('_specialized_hashes_', {})
         key = specialization.key
         if key not in cache:
-            tp = self.type(specialization=specialization)
+            tp = self.typestr(specialization=specialization)
             cache[key] = hashlib.sha256(tp.encode()).hexdigest()
             self.log.detailed(f"get_hash({specialization!r}): {tp=} ---> {cache[key]}")
         return cache[key]
 
     def get_type(self, specialization: 'Datablock.Specialization | None' = None, **kwargs):
         """Alias of ``type(specialization=...)``, to pair with :meth:`get_hash`."""
-        return self.type(specialization=specialization, **kwargs)
+        return self.typestr(specialization=specialization, **kwargs)
 
     #SPECIALIZE: BEGIN
     #: The events that count as "this hash has data": a build, or a redirection
@@ -6406,7 +6408,7 @@ class Datablock:
                 self._code = self._subhash_
             else:
                 sha = hashlib.sha256()
-                sig = self.signature()
+                sig = self.signaturestr()
                 sha.update(sig.encode())
                 self._code = sha.hexdigest()
                 self.log.detailed(f"code: ---------===---------> {sig=} ---> code: {self._code}")
@@ -6437,7 +6439,7 @@ class Datablock:
         elif self.keyby in ('code', 'subhash', 'superhash'):
             key = self.code
         elif self.keyby in ('signature', 'norm', 'subsignature'):
-            key = self.signature()
+            key = self.signaturestr()
 
         elif self.keyby == 'tag':
             key = self.tag
@@ -6915,8 +6917,8 @@ class Datablock:
         self._write_str('quote', self.quote())
         self._write_str('cite', self.cite())
         self._write_str('repr', self.__repr__())
-        self._write_str('signature', self.signature())
-        self._write_str('type', self.type())
+        self._write_str('signature', self.signaturestr())
+        self._write_str('type', self.typestr())
         if note is not None and not inline_note:
             self._write_str('note', note)
 
@@ -7231,7 +7233,7 @@ class DatablockSignatureMatcher:
     def __call__(self, stack):
         blk = stack.block(self.idx)
         if self.signature_clauses:
-            sig = f"{getattr(blk, 'fqcn', blk.__class__.__name__)}{blk.signature()}"
+            sig = f"{getattr(blk, 'fqcn', blk.__class__.__name__)}{blk.signaturestr()}"
             if not stack._matches_sig_clauses(sig, self.signature_clauses):
                 return False
         if self.tag_clauses:

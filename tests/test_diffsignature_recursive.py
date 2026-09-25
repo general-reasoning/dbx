@@ -72,32 +72,32 @@ class TestRecursiveDescent:
     def test_leaf_change_three_levels_down_is_a_short_path(self, tmp_path):
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED')
-        diff = b.diffsubsig(a.subsignature())
+        diff = b.diffsubsig(a.subsignaturestr())
         assert diff == {'spec': {'mid': {'leaf': {'label': ('CHANGED', 'leaf')}}}}
 
     def test_only_the_differing_leaf_appears(self, tmp_path):
         """Sparse: siblings that match must not be carried along."""
-        diff = _tree(tmp_path, seed=7).diffsubsig(_tree(tmp_path).subsignature())
+        diff = _tree(tmp_path, seed=7).diffsubsig(_tree(tmp_path).subsignaturestr())
         assert diff == {'spec': {'mid': {'seed': (7, 42)}}}
         assert 'leaf' not in diff['spec']['mid']
 
     def test_two_changes_at_different_depths(self, tmp_path):
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED', epochs=99)
-        diff = b.diffsubsig(a.subsignature())
+        diff = b.diffsubsig(a.subsignaturestr())
         assert diff['spec']['epochs'] == (99, 10)
         assert diff['spec']['mid']['leaf']['label'] == ('CHANGED', 'leaf')
 
     def test_flat_mode_keeps_the_whole_subtree(self, tmp_path):
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED')
-        flat = b.diffsubsig(a.subsignature(), recursive=False)
+        flat = b.diffsubsig(a.subsignaturestr(), recursive=False)
         assert set(flat) == {'spec'}
         self_side, other_side = flat['spec']
         assert not isinstance(self_side, tuple), "flat mode descended anyway"
         assert 'leaf' in repr(self_side), "the whole subtree should be one value"
         # raw=True is the un-deserialised form: one long string, as rendered.
-        raw_self = b.diffsubsig(a.subsignature(), recursive=False, raw=True)['spec'][0]
+        raw_self = b.diffsubsig(a.subsignaturestr(), recursive=False, raw=True)['spec'][0]
         # One value covering the whole subtree, not a per-leaf descent. It is
         # shorter than it used to be because the nested block is now an inline
         # dict rather than an escaped string of an escaped string.
@@ -106,14 +106,14 @@ class TestRecursiveDescent:
 
     def test_no_difference_is_empty(self, tmp_path):
         a = _tree(tmp_path)
-        assert a.diffsubsig(a.subsignature()) == {}
+        assert a.diffsubsig(a.subsignaturestr()) == {}
 
     def test_url_difference_stays_at_the_top(self, tmp_path):
         class LegacyTop(Top):
             LEGACY_NORM = True
         a = LegacyTop(url=str(tmp_path))
         b = LegacyTop(url=str(tmp_path / 'elsewhere'))
-        diff = b.diffsubsig(a.subsignature())
+        diff = b.diffsubsig(a.subsignaturestr())
         assert 'url' in diff
 
 
@@ -123,7 +123,7 @@ class TestTupleValuesStayLeaves:
     def test_tuple_change_is_reported(self, tmp_path):
         a = _tree(tmp_path, ratio=(0.75, 1.5))
         b = _tree(tmp_path, ratio=(0.5, 2.0))
-        diff = b.diffsubsig(a.subsignature())
+        diff = b.diffsubsig(a.subsignaturestr())
         leafdiff = diff['spec']['mid']['leaf']
         assert 'ratio' in leafdiff
         # Evaluated back into real tuples, not left as text.
@@ -162,9 +162,9 @@ class TestDeslash:
         b = _tree(tmp_path, label='CHANGED')
         la = LegacyTree(url=str(tmp_path), spec=dict(mid=a.var.mid, epochs=10))
         lb = LegacyTree(url=str(tmp_path), spec=dict(mid=b.var.mid, epochs=10))
-        raw = lb.diffsubsig(la.subsignature(), recursive=False, raw=True)['spec'][0]
+        raw = lb.diffsubsig(la.subsignaturestr(), recursive=False, raw=True)['spec'][0]
         assert '\\' in raw, "expected the flat form to carry escapes"
-        clean = lb.diffsubsig(la.subsignature(), recursive=False, raw=True,
+        clean = lb.diffsubsig(la.subsignaturestr(), recursive=False, raw=True,
                               deslash=True)['spec'][0]
         assert '\\' not in clean
 
@@ -177,8 +177,8 @@ class TestDeslash:
         """
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED')
-        assert (b.diffsubsig(a.subsignature(), deslash=True) ==
-                b.diffsubsig(a.subsignature(), deslash=False))
+        assert (b.diffsubsig(a.subsignaturestr(), deslash=True) ==
+                b.diffsubsig(a.subsignaturestr(), deslash=False))
 
 
 class TestReport:
@@ -186,27 +186,27 @@ class TestReport:
     def test_report_is_one_path_per_difference(self, tmp_path):
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED', epochs=99)
-        text = b.diffsubsig(a.subsignature(), report=True)
+        text = b.diffsubsig(a.subsignaturestr(), report=True)
         assert 'spec.epochs' in text
         assert 'spec.mid.leaf.label' in text
         assert text.count('self :') == 2
 
     def test_report_says_so_when_identical(self, tmp_path):
         a = _tree(tmp_path)
-        assert a.diffsubsig(a.subsignature(), report=True) == 'no differences'
+        assert a.diffsubsig(a.subsignaturestr(), report=True) == 'no differences'
 
     def test_report_truncates_long_values_but_the_dict_does_not(self, tmp_path):
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='x' * 400)
-        text = b.diffsubsig(a.subsignature(), report=True, maxlen=40)
+        text = b.diffsubsig(a.subsignaturestr(), report=True, maxlen=40)
         assert '(+' in text and 'chars)' in text
-        full = b.diffsubsig(a.subsignature())['spec']['mid']['leaf']['label'][0]
+        full = b.diffsubsig(a.subsignaturestr())['spec']['mid']['leaf']['label'][0]
         assert full == 'x' * 400
 
     def test_maxlen_none_disables_truncation(self, tmp_path):
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='x' * 400)
-        text = b.diffsubsig(a.subsignature(), report=True, maxlen=None)
+        text = b.diffsubsig(a.subsignaturestr(), report=True, maxlen=None)
         assert 'chars)' not in text
 
 
@@ -314,7 +314,7 @@ class TestTypedLeaves:
 
     def test_types_survive_into_the_diff(self):
         modern, legacy = self._blocks()
-        diff = modern.diffsubsig(legacy.subsignature())['spec']
+        diff = modern.diffsubsig(legacy.subsignaturestr())['spec']
         assert diff['n'] == (128, '128')
         assert diff['ori_extent'] == (15.0, '15.0')
         assert diff['nothing'] == (None, 'None')
@@ -322,7 +322,7 @@ class TestTypedLeaves:
 
     def test_self_side_types_are_the_real_python_types(self):
         modern, legacy = self._blocks()
-        diff = modern.diffsubsig(legacy.subsignature())['spec']
+        diff = modern.diffsubsig(legacy.subsignaturestr())['spec']
         assert isinstance(diff['n'][0], int)
         assert isinstance(diff['ori_extent'][0], float)
         assert diff['nothing'][0] is None
@@ -333,7 +333,7 @@ class TestTypedLeaves:
 
     def test_raw_gives_the_source_text_back(self):
         modern, legacy = self._blocks()
-        diff = modern.diffsubsig(legacy.subsignature(), raw=True)['spec']
+        diff = modern.diffsubsig(legacy.subsignaturestr(), raw=True)['spec']
         assert diff['n'] == ('128', "'128'")
         assert diff['ori_extent'] == ('15.0', "'15.0'")
 
@@ -372,7 +372,7 @@ class TestTypingNeverHidesADifference:
         """``1 == 1.0`` in Python, so evaluating first would drop this entirely."""
         M = self._cls()
         diff = M(url='/tmp/dbx-typed', spec=dict(n=1)).diffsubsig(
-            M(url='/tmp/dbx-typed', spec=dict(n=1.0)).subsignature())
+            M(url='/tmp/dbx-typed', spec=dict(n=1.0)).subsignaturestr())
         assert diff == {'spec': {'n': ('1', '1.0')}}
 
     def test_quoted_versus_bare_is_still_visible(self):
@@ -405,7 +405,7 @@ class TestAbsentIsNotNone:
         class B(A):
             VAR = CB
 
-        diff = B(url=str(tmp_path)).diffsubsig(A(url=str(tmp_path)).subsignature())
+        diff = B(url=str(tmp_path)).diffsubsig(A(url=str(tmp_path)).subsignaturestr())
         self_val, other_val = diff['spec']['added']
         assert self_val is None, "a real None value"
         assert other_val is ABSENT, "the key did not exist on the other side"
@@ -427,7 +427,7 @@ class TestAbsentIsNotNone:
         class B(A):
             VAR = CB
 
-        diff = B(url=str(tmp_path)).diffsubsig(A(url=str(tmp_path)).subsignature(), raw=True)
+        diff = B(url=str(tmp_path)).diffsubsig(A(url=str(tmp_path)).subsignaturestr(), raw=True)
         assert diff['spec']['added'] == ('2', ABSENT)
 
 
@@ -446,6 +446,6 @@ class TestReportShowsTypes:
             LEGACY_NORM = True
 
         text = M(url='/tmp/dbx-typed').diffsubsig(
-            L(url='/tmp/dbx-typed').subsignature(), report=True)
+            L(url='/tmp/dbx-typed').subsignaturestr(), report=True)
         assert 'self : 15.0' in text
         assert "other: '15.0'" in text

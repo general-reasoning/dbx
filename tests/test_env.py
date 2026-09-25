@@ -115,14 +115,14 @@ class TestEnvInRoot:
 
     def test_handle_contains_specline(self):
         block = EnvBlock(url=env('TEST_ROOT'))
-        handle = block.norm()
+        handle = block.normstr()
         assert "$dbx.getenv('TEST_ROOT')" in handle
         assert '/tmp/test_root_value' not in handle
 
     def test_signature_contains_specline(self):
         block = EnvBlock(url=env('TEST_ROOT'))
-        assert "$dbx.getenv('TEST_ROOT')" in block.signature()
-        assert '/tmp/test_root_value' not in block.signature()
+        assert "$dbx.getenv('TEST_ROOT')" in block.signaturestr()
+        assert '/tmp/test_root_value' not in block.signaturestr()
 
     def test_anchorkeypath_uses_resolved_path(self):
         block = EnvBlock(url=env('TEST_ROOT'))
@@ -188,7 +188,7 @@ class TestEnvInSpec:
         monkeypatch.setenv('SPEC_PATH', '/data/resolved')
         block = EnvSpecBlock(url='/tmp/dbx_test_env',
                              spec=dict(data_path=env('SPEC_PATH')))
-        handle = block.norm()
+        handle = block.normstr()
         assert "$dbx.getenv('SPEC_PATH')" in handle
         assert '/data/resolved' not in handle
 
@@ -219,8 +219,8 @@ class TestEnvInSpec:
                              spec=dict(data_path=env('MY_DATA')))
         assert block.root == '/tmp/combined'
         assert block.var.data_path == '/data/combined'
-        assert "$dbx.getenv('MY_ROOT')" in block.norm()
-        assert "$dbx.getenv('MY_DATA')" in block.norm()
+        assert "$dbx.getenv('MY_ROOT')" in block.normstr()
+        assert "$dbx.getenv('MY_DATA')" in block.normstr()
 
 
 # ---------------------------------------------------------------------------

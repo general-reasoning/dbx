@@ -53,18 +53,18 @@ def built(tmp_path):
 class TestSignatureMethod:
 
     def test_type_is_what_hash_hashes(self, block):
-        assert block.hash == hashlib.sha256(block.type().encode()).hexdigest()
+        assert block.hash == hashlib.sha256(block.typestr().encode()).hexdigest()
 
     def test_signature_is_what_code_hashes(self, block):
-        assert block.code == hashlib.sha256(block.signature().encode()).hexdigest()
+        assert block.code == hashlib.sha256(block.signaturestr().encode()).hexdigest()
 
     def test_type_is_built_from_signature(self, block):
-        assert block.signature() in block.type()
-        assert f"version={block.version}" in block.type()
+        assert block.signaturestr() in block.typestr()
+        assert f"version={block.version}" in block.typestr()
 
     def test_deslash_parameter(self, block):
-        assert '\\' not in block.type(deslash=True)
-        assert '\\' not in block.signature(deslash=True)
+        assert '\\' not in block.typestr(deslash=True)
+        assert '\\' not in block.signaturestr(deslash=True)
 
     def test_the_old_names_are_gone(self, block):
         assert not hasattr(block, 'hashstr')
@@ -83,17 +83,17 @@ class TestSignatureInJournal:
 
     def test_build_writes_type_txt(self, built):
         entry = built.journal(iloc=-1)
-        # The COLUMN is a path to the type file; Block.type() resolves it to
-        # the type TEXT, as Datablock.type() does.
+        # The COLUMN is a path to the type file; Block.typestr() resolves it to
+        # the type TEXT, as Datablock.typestr() does.
         assert entry.get('type') is not None, "journal has no type column"
         assert '-type-' in entry.get('type')
         assert entry.get('type').endswith('.txt')
-        assert entry.read('type') == built.type()
+        assert entry.read('type') == built.typestr()
 
     def test_build_writes_signature_txt(self, built):
         entry = built.journal(iloc=-1)
-        assert entry.block.signature() is not None
-        assert entry.read('signature') == built.signature()
+        assert entry.block.signaturestr() is not None
+        assert entry.read('signature') == built.signaturestr()
 
 
 # ---------------------------------------------------------------------------
@@ -108,27 +108,27 @@ class TestPreRenameJournals:
     def test_legacy_hashstr_column_is_read_as_type(self):
         entry = self._entry(hashstr='/j/x-hashstr-1.txt',
                             norm='/j/x-norm-1.txt')
-        assert entry.block.type() == '/j/x-hashstr-1.txt'
-        assert entry.block.signature() == '/j/x-norm-1.txt'
+        assert entry.block.typestr() == '/j/x-hashstr-1.txt'
+        assert entry.block.signaturestr() == '/j/x-norm-1.txt'
 
     def test_new_column_wins_when_both_are_present(self):
         entry = self._entry(type='/j/new.txt', signature='/j/old.txt')
-        assert entry.block.type() == '/j/new.txt'
+        assert entry.block.typestr() == '/j/new.txt'
 
     def test_nan_in_the_new_column_still_falls_back(self):
         entry = self._entry(type=float('nan'), signature='/j/old.txt')
-        assert entry.block.type() == '/j/old.txt'
+        assert entry.block.typestr() == '/j/old.txt'
 
     def test_absent_in_both_degrades_to_none(self):
         entry = self._entry()
-        assert entry.block.type() is None
-        assert entry.block.signature() is None
+        assert entry.block.typestr() is None
+        assert entry.block.signaturestr() is None
         assert entry.read('type') is None
         assert entry.read('signature') is None
 
     def test_nan_in_both_degrades_to_none(self):
         entry = self._entry(type=float('nan'), signature=float('nan'))
-        assert entry.block.type() is None
+        assert entry.block.typestr() is None
 
     def test_a_real_mixed_era_journal_reads_both_rows(self, built):
         """End to end: an old row and a new row concatenated into one frame."""
@@ -144,3 +144,26 @@ class TestPreRenameJournals:
         assert DatajournalEntry.column(DatajournalEntry(frame.iloc[0]), 'signature') == '/j/legacy-norm.txt'
         assert DatajournalEntry.column(DatajournalEntry(frame.iloc[1]), 'type') == new_row.type
         assert DatajournalEntry.column(DatajournalEntry(frame.iloc[1]), 'signature') == new_row.signature
+
+
+# ---------------------------------------------------------------------------
+# signature/type are the structured forms, *str the renderings
+# ---------------------------------------------------------------------------
+
+class TestStrAndStructuredForms:
+    """``signature()``/``type()`` answer with dicts, ``signaturestr()``/``typestr()``
+    with the text -- on a live block and on the `Block` a journal entry holds."""
+
+    def test_live_block(self, block):
+        assert isinstance(block.signaturestr(), str) and isinstance(block.typestr(), str)
+        assert block.signature() == {'spec': {'label': 'solo'}}
+        assert block.type()['signature'] == block.signature()
+        assert block.sig() == block.signature() and block.tp() == block.type()
+
+    def test_journal_block_matches_the_live_one(self, built):
+        recorded = built.journal(event='build:end', loc=0).block
+        assert recorded.signaturestr() == built.signaturestr()
+        assert recorded.typestr() == built.typestr()
+        assert recorded.signature() == built.signature()
+        assert recorded.type()['signature'] == built.type()['signature']
+        assert recorded.to_dict()['type'] == built.typestr()

@@ -105,7 +105,7 @@ class TestSignatureTopics:
     def test_it_is_what_the_signature_joins(self, tmp_path):
         b = block(Block, tmp_path)
         for segment in b.signature_topics():
-            assert segment in b.type()
+            assert segment in b.typestr()
 
     def test_a_leaf_is_named_by_its_full_path(self, tmp_path):
         assert block(Block, tmp_path).signature_topics() == (
@@ -124,7 +124,7 @@ class TestSignatureTopics:
     def test_the_signature_uses_the_same_segments(self, tmp_path):
         b = block(Block, tmp_path)
         for segment in b.signature_topics():
-            assert segment in b.type()
+            assert segment in b.typestr()
 
 
 class TestDifftopicsAgreesWithSignature:
@@ -296,7 +296,7 @@ class TestDiff:
     def test_the_parts_are_what_the_three_methods_return(self, tmp_path):
         a, b = block(Block, tmp_path, spec=dict(x=2)), block(Versioned, tmp_path)
         d = a.diff(b)
-        assert d.subsig == a.diffsubsignature(b.subsignature())
+        assert d.subsig == a.diffsubsignature(b.subsignaturestr())
         assert d.topics == a.difftopics(b)
         assert d.version == a.diffversion(b)
 
@@ -342,7 +342,7 @@ class TestDiff:
     def test_diffsubsignature_options_are_forwarded(self, tmp_path):
         a = block(Block, tmp_path, spec=dict(x=1))
         b = block(Block, tmp_path, spec=dict(x=2))
-        assert a.diff(b, recursive=False).subsig == a.diffsubsignature(b.subsignature(), recursive=False)
+        assert a.diff(b, recursive=False).subsig == a.diffsubsignature(b.subsignaturestr(), recursive=False)
 
     def test_an_other_side_is_required(self, tmp_path):
         with pytest.raises(ValueError):

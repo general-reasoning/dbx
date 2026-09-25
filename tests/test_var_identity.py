@@ -146,7 +146,7 @@ class TestWhatPasses:
         monkeypatch.setattr(dataparts, 'eval', lambda term: Plain())
         b = block(Held, tmp_path, thing='$something.opaque')
         assert isinstance(b.var.thing, Plain)
-        assert "'$something.opaque'" in b.signature()
+        assert "'$something.opaque'" in b.signaturestr()
 
 
 class TestTheExemption:

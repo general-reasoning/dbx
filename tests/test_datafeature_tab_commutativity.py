@@ -146,13 +146,13 @@ class TestIdentityCommutes:
 
     def test_signature_agrees(self, featuretable):
         via_table, via_tab = _both_ways(featuretable)
-        assert via_table.signature() == via_tab.signature()
+        assert via_table.signaturestr() == via_tab.signaturestr()
 
     def test_type_agrees(self, featuretable):
-        """The stronger of the two: type() carries the version and topics that
-        signature() does not, and it is what hash is computed from."""
+        """The stronger of the two: typestr() carries the version and topics that
+        signaturestr() does not, and it is what hash is computed from."""
         via_table, via_tab = _both_ways(featuretable)
-        assert via_table.type() == via_tab.type()
+        assert via_table.typestr() == via_tab.typestr()
 
     def test_hash_agrees(self, featuretable):
         via_table, via_tab = _both_ways(featuretable)
@@ -167,7 +167,7 @@ class TestIdentityCommutes:
     def test_every_tab_not_only_the_first(self, featuretable):
         for idx in range(featuretable.var.datapoint_table.n_tabs):
             via_table, via_tab = _both_ways(featuretable, idx)
-            assert via_table.type() == via_tab.type(), f"tab {idx}"
+            assert via_table.typestr() == via_tab.typestr(), f"tab {idx}"
 
     def test_distinct_tabs_stay_distinct(self, featuretable):
         """Parity must not come from every tab collapsing onto one identity."""
@@ -209,8 +209,8 @@ class TestSpeclinesCommute:
 
     def test_identity_commutes_across_the_specline(self, featuretable):
         via_table, via_tab = _both_ways(featuretable)
-        assert via_table.signature() == via_tab.signature()
-        assert via_table.type() == via_tab.type()
+        assert via_table.signaturestr() == via_tab.signaturestr()
+        assert via_table.typestr() == via_tab.typestr()
         assert via_table.hash == via_tab.hash
 
     def test_the_specline_is_what_lands_in_the_identity(self, featuretable):
@@ -222,8 +222,8 @@ class TestSpeclinesCommute:
         the environment happened to say at build time.
         """
         for tab in _both_ways(featuretable):
-            assert "dbx.getenv('COMMUTATIVITY_LAKE')" in tab.signature()
-            assert '/lake/tab0.tfrecords' not in tab.signature()
+            assert "dbx.getenv('COMMUTATIVITY_LAKE')" in tab.signaturestr()
+            assert '/lake/tab0.tfrecords' not in tab.signaturestr()
 
     def test_resolving_it_would_change_the_block(self, featuretable, tmp_path):
         """The guard that gives the tests above their teeth.

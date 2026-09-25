@@ -26,14 +26,14 @@ class SampleBlock(Datablock):
 
 def test_signature_and_norm_alias(tmp_path):
     block = SampleBlock(url=str(tmp_path))
-    assert block.signature() == block.norm()
-    assert "(spec={'param': 'value'})" in block.signature()
+    assert block.signaturestr() == block.normstr()
+    assert "(spec={'param': 'value'})" in block.signaturestr()
 
 
 def test_signature_and_hashes(tmp_path):
     block = SampleBlock(url=str(tmp_path))
-    sig = block.signature()
-    tp = block.type()
+    sig = block.signaturestr()
+    tp = block.typestr()
 
     assert sig in tp
     assert f"version={block.version}" in tp

@@ -163,9 +163,11 @@ class TestLegacyJournals:
         b = block(tmp_path, tree='RUN-7')
         b.write_journal_entry(event='note')
         entry = b.journal(loc=0)
-        old = DatajournalEntry(entry.drop(['tree']).rename({'tree': legacy}).copy())
+        # A row as it was written then: no `tree`, and no Datajournal session.
+        old = DatajournalEntry(entry.drop(['tree', 'session']).copy())
         old[legacy] = 'RUN-7'
         assert old.block.tree == 'RUN-7'
+        assert old.block.session is None
 
 
 class TestUuid16:

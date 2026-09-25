@@ -20,7 +20,7 @@ import pytest
 import pandas as pd
 import fsspec
 
-from dbx.datablocks import Datablock, DatajournalEntry, Datajournal, journal
+from dbx.datablocks import Datablock, DatajournalEntry, DatajournalFrame, journal
 from dbx.dataparts import fs_full_path
 
 
@@ -214,7 +214,7 @@ class TestJournalOnMemory:
         block = MemSingleTopic(url=mem_url)
         block.build()
         j = block.journal()
-        assert isinstance(j, Datajournal)
+        assert isinstance(j, DatajournalFrame)
         assert len(j) >= 1
 
     def test_journal_entry_has_correct_url(self, mem_url):
@@ -235,7 +235,7 @@ class TestJournalOnMemory:
         block = MemSingleTopic(url=mem_url)
         block.build()
         j = Datablock.Journal(block.anchor, url=mem_url)
-        assert isinstance(j, Datajournal)
+        assert isinstance(j, DatajournalFrame)
         assert len(j) >= 1
 
 

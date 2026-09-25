@@ -224,10 +224,36 @@ results = executor.execute(list_of_callables)
 Every `build()` writes journal entries (Parquet) recording the timestamp, git revision, config, and hash. Query them later:
 
 ```python
-j = block.journal()            # Datajournal (DataFrame subclass)
+j = block.journal()            # DatajournalFrame (DataFrame subclass)
 entry = j.get(0)               # DatajournalEntry (Series subclass)
 print(entry.hash, entry.anchor, entry.revision)
 ```
+
+A block writes and reads its journal through a `Datajournal` — a handle,
+not the records. Pass one to a block (it is handed down the build tree) to
+keep track of what a run wrote:
+
+```python
+dj = Datajournal()             # reads nothing; dj.session is fixed for its lifetime
+block = MyBlock(spec=..., datajournal=dj)
+block.build()
+dj.written_entries()           # every entry path dj wrote, each tagged with dj.session
+dj.read('my.module.MyBlock', event='build:end')   # read any anchor's journal
+```
+
+Or open one as a scope: every block that writes while it is open, however deep
+in whatever it calls, and from any thread, writes through it (the next scope
+out, or the default, once it has closed):
+
+```python
+with Datajournal() as dj:
+    run_pipeline()
+```
+
+Without either, a block uses `DEFAULT_DATAJOURNAL`, one per process. Each
+`dbx.exec` command runs inside such a scope, so all of its blocks share one
+session. Its exec-journal row records that `session` and the
+`written_entries` the command produced.
 
 ## CLI
 

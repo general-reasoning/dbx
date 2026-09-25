@@ -282,9 +282,11 @@ class TestCiteInJournal:
 
     def test_build_writes_cite_txt(self, built):
         entry = built.journal(iloc=-1)
-        assert entry.block.cite() is not None, "journal has no cite column"
-        assert '-cite-' in entry.block.cite() and entry.block.cite().endswith('.txt')
+        assert entry.get('cite') is not None, "journal has no cite column"
+        assert '-cite-' in entry['cite'] and entry['cite'].endswith('.txt')
         assert entry.read('cite') == built.cite()
+        assert entry.block.cite() == built.cite()
+        assert entry.block.quote() == built.quote()
 
     def test_cite_is_absent_not_fatal_on_an_older_journal(self):
         """Journals written before `cite` existed have no such column.

@@ -1,10 +1,10 @@
-"""A filtered Datajournal must be renumbered 0..N-1, not keep its old labels.
+"""A filtered DatajournalFrame must be renumbered 0..N-1, not keep its old labels.
 
 ``Datablock.Journal`` sorts the concatenated journal newest-first and resets the
-index, so a label is also a position. But ``Datajournal.__init__`` applied its
+index, so a label is also a position. But ``DatajournalFrame.__init__`` applied its
 ``filter_kwargs`` *after* that reset without renumbering, so a filtered journal
 kept the labels its rows had in the full journal -- while ``loc=`` and
-:meth:`Datajournal.get` still index by label.
+:meth:`DatajournalFrame.get` still index by label.
 
 The result: ``lastbuilt()`` (``journal(event='build:end').get(0)``) raised
 ``KeyError: 0`` for any block whose newest journal entry was some *other* event.
@@ -17,7 +17,7 @@ returned silently) but it made ``lastbuilt()`` unusable exactly when it matters.
 import pytest
 from dataclasses import dataclass
 
-from dbx.datablocks import Datablock, Datajournal, DatajournalEntry
+from dbx.datablocks import Datablock, DatajournalFrame, DatajournalEntry
 
 
 @pytest.fixture(autouse=True)
@@ -135,4 +135,4 @@ class TestUserSlicingKeepsPandasSemantics:
             self, newest_is_another_event):
         j = newest_is_another_event.journal()
         raw = j[j['event'] == 'build:end']
-        assert list(Datajournal(raw).index) == [1]
+        assert list(DatajournalFrame(raw).index) == [1]

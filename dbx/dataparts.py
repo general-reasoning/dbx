@@ -672,7 +672,9 @@ def eval(name):
 
 
 def write_exec_journal(s: str, url: str | None = None, storage_options: dict | None = None, *,
-                       comment: str | None = None):
+                       comment: str | None = None, session: str | None = None,
+                       written_entries=None, dt: str | None = None,
+                       end_dt: str | None = None) -> dict:
     """Record an exec expression string in the $DBX_ROOT/.journal/exec/ journal.
 
     ``exec`` holds *s* VERBATIM -- the string as it was typed, comment and all,
@@ -681,6 +683,13 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
     the command was *for*, and reading it out of the expression again at every
     query is work the journal can do once. Pass *comment* to override what
     :func:`exec_comment` reads off *s*.
+
+    ``session`` is the `Datajournal` session the command ran under, and
+    ``written_entries`` the block journal entries it wrote -- the keys from
+    this row to what the command did. *dt* is when the command started --
+    ``datetime`` and ``exec:start:datetime`` -- and *end_dt* when it finished,
+    ``exec:end:datetime``: `exec` records the row once it is over. Returns the
+    row as written.
     """
     dbx_url = url or os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL') or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
@@ -689,17 +698,23 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
         fs.makedirs(exec_dir, exist_ok=True)
     except Exception:
         pass
-    file_path = os.path.join(exec_dir, f"exec_{uuid.uuid4().hex}.parquet")
-    dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+    id = str(uuid.uuid4())
+    file_path = os.path.join(exec_dir, f"exec_{id}.parquet")
+    dt = dt or datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
     entry_data = {
         'exec': str(s),
         'comment': comment if comment is not None else exec_comment(s),
         'datetime': dt,
-        'id': str(uuid.uuid4()),
+        'exec:start:datetime': dt,
+        'exec:end:datetime': end_dt,
+        'id': id,
+        'session': session,
+        'written_entries': list(written_entries or []),
     }
     df = pd.DataFrame([entry_data])
     with fs.open(file_path, 'wb') as f:
         df.to_parquet(f)
+    return entry_data
 
 
 def _match_single_journal_val(x, p) -> bool:
@@ -751,7 +766,7 @@ def _match_journal_filter(x, spec) -> bool:
 def _journal_datetimes_(series: pd.Series) -> pd.Series:
     """Coerce a journal ``datetime`` column to real datetimes.
 
-    A block journal arrives already parsed -- `Datajournal` does it on the way
+    A block journal arrives already parsed -- `DatajournalFrame` does it on the way
     in -- and is handed back untouched. The exec journal does not: it reaches a
     filter holding the raw `JOURNAL_DATETIME_FORMAT` strings, which pandas
     cannot parse unaided.
@@ -833,6 +848,86 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
     return df
 
 
+class ExecjournalEntry(pd.Series):
+    """One `dbx.exec` command, as the exec journal recorded it.
+
+    The counterpart of `DatajournalEntry` for the exec journal: ``exec``,
+    ``comment``, ``datetime``, ``id``, ``session`` and ``written_entries`` are
+    its columns, and :meth:`entries` follows the last of them to the block
+    journal entries the command wrote.
+    """
+    #: Carried by pandas across operations that rebuild the object -- see
+    #: `DatajournalEntry._metadata`.
+    _metadata = ['storage_options']
+
+    def __init__(self, series: pd.Series, *, storage_options: dict | None = None):
+        super().__init__(series)
+        self.storage_options = storage_options or {}
+
+    # 2. Declared API ---------------------------------------------------
+
+    def entries(self, *, n_workers: int | None = None) -> list:
+        """The `DatajournalEntry` of every block journal entry this command wrote, in the order written."""
+        from .datablocks import Datajournal
+        return Datajournal(storage_options=self.storage_options or None).read_entries(
+            ExecjournalEntry._written_paths_(self), n_workers=n_workers)
+
+    def rerun(self, **kwargs):
+        """Execute this command's ``exec`` string again, through `dbx.exec`, and return its value.
+
+        A new command, recorded as one: its own exec-journal row, session and
+        ``written_entries``. It runs against the code as it is NOW -- nothing
+        here checks out the revision the original ran under. *kwargs* bind
+        names for the statements, as `dbx.exec`'s own do.
+        """
+        return exec(self['exec'], **kwargs)
+
+    # 4. Helpers --------------------------------------------------------
+
+    @staticmethod
+    def _written_paths_(row) -> list:
+        """The ``written_entries`` of *row* as a list of paths; empty for a row from before the column."""
+        paths = row.get('written_entries')
+        if paths is None or (isinstance(paths, float) and pd.isna(paths)):
+            return []
+        return [str(p) for p in paths]
+
+
+class ExecjournalFrame(pd.DataFrame):
+    """The exec journal: one `dbx.exec` command per row, newest first.
+
+    The counterpart of `DatajournalFrame`. :meth:`get` answers with an
+    `ExecjournalEntry`, and :meth:`entries` with the block journal entries
+    of every command in the frame -- so a filter narrows to the commands and
+    ``.entries()`` goes on to what they wrote::
+
+        dbx.journal(comment='nightly').entries()
+    """
+    _metadata = ['storage_options']
+
+    def __init__(self, df: pd.DataFrame | None = None, *, storage_options: dict | None = None):
+        super().__init__(pd.DataFrame() if df is None else df)
+        self.storage_options = storage_options or {}
+
+    def __call__(self, entry):
+        return self.get(entry, dropna=True)
+
+    # 2. Declared API ---------------------------------------------------
+
+    def get(self, entry, *, dropna: bool = False) -> ExecjournalEntry:
+        """The command at LABEL *entry* (``.loc``). As `DatajournalFrame.get`."""
+        row = self.loc[entry]
+        if dropna:
+            row = row.dropna()
+        return ExecjournalEntry(row, storage_options=self.storage_options)
+
+    def entries(self, *, n_workers: int | None = None) -> list:
+        """The block journal entries every command here wrote: row by row, each in the order written."""
+        from .datablocks import Datajournal
+        paths = [p for _, row in self.iterrows() for p in ExecjournalEntry._written_paths_(row)]
+        return Datajournal(storage_options=self.storage_options or None).read_entries(paths, n_workers=n_workers)
+
+
 def read_exec_journal(
     url: str | None = None,
     loc: int | None = None,
@@ -845,7 +940,10 @@ def read_exec_journal(
     index: str | None = None,
     **filter_kwargs,
 ):
-    """Read recorded dbx.exec() entries from the $DBX_ROOT/.journal/exec/ journal."""
+    """Read recorded dbx.exec() entries from the $DBX_ROOT/.journal/exec/ journal.
+
+    Returns an `ExecjournalFrame`, or the one `ExecjournalEntry` at *loc* or *iloc*.
+    """
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if n_workers is None:
@@ -863,7 +961,7 @@ def read_exec_journal(
         files = []
 
     if not files:
-        df = pd.DataFrame(columns=['exec', 'comment', 'datetime', 'id'])
+        df = pd.DataFrame(columns=['exec', 'comment', 'datetime', 'exec:start:datetime', 'exec:end:datetime', 'id', 'session', 'written_entries'])
     else:
         def read_file(file):
             with fs.open(file, 'rb') as f:
@@ -880,7 +978,7 @@ def read_exec_journal(
                         log.warning(f"Skipping unreadable exec journal file: {e}")
                     continue
         if not dfs:
-            df = pd.DataFrame(columns=['exec', 'comment', 'datetime', 'id'])
+            df = pd.DataFrame(columns=['exec', 'comment', 'datetime', 'exec:start:datetime', 'exec:end:datetime', 'id', 'session', 'written_entries'])
         else:
             df = pd.concat(dfs, ignore_index=True)
             if 'datetime' in df.columns:
@@ -891,17 +989,21 @@ def read_exec_journal(
 
     df = filter_journal_frame(df, **all_filters)
 
+    if index is ...:
+        # dbx.journal()'s default: by id, where there is one to index by.
+        index = 'id' if 'id' in df.columns else None
     if index is not None:
         if index in df.columns:
-            df = df.set_index(index)
+            df = df.set_index(index, drop=False)
         else:
             raise KeyError(f"Column {index!r} not found in journal DataFrame")
 
+    frame = ExecjournalFrame(df, storage_options=storage_options)
     if loc is not None:
-        return df.loc[loc].dropna()
+        return frame.get(loc, dropna=True)
     elif iloc is not None:
-        return df.iloc[iloc].dropna()
-    return df
+        return ExecjournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options)
+    return frame
 
 
 def anchors(url: str | None = None, *, storage_options: dict | None = None) -> list[str]:
@@ -1032,7 +1134,27 @@ def exec(s=None, **kwargs):
                 except (NameError, SyntaxError):
                     kwargs[k] = v
     
-    write_exec_journal(s)
+    # Every block the command constructs -- however deep in whatever it calls
+    # -- writes through one Datajournal, under one session. An exec inside an
+    # exec joins the journal already open rather than starting a session.
+    from .datablocks import Datajournal
+    dj = Datajournal.current() or Datajournal()
+    # ONE row, written when the command is over -- in `finally`, so a command
+    # that raises is recorded too, with what it wrote before it did. Stamped
+    # with the time it started, which is when it ran.
+    dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+    with dj:
+        written_before = len(dj.written_entries())
+        try:
+            return _exec_statements_(s, kwargs)
+        finally:
+            end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+            write_exec_journal(s, session=dj.session, dt=dt, end_dt=end_dt,
+                               written_entries=dj.written_entries()[written_before:])
+
+
+def _exec_statements_(s, kwargs):
+    """Run the statements of *s*, returning the value of the last one -- see :func:`exec`."""
     tree = ast.parse(textwrap.dedent(s).strip(), filename='<dbx.exec>')
     if not tree.body:
         raise ValueError(f"No statement to execute in {s!r}")

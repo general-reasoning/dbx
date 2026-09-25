@@ -6,7 +6,7 @@ dbx writes a timestamp as ``isoformat()`` with ``' '`` and ``':'`` replaced by
 pandas cannot parse that unaided: dateutil reads the ``-`` between the hour and
 the minute as a date separator and raises.
 
-A block journal is parsed on the way into `Datajournal`, so it reached the
+A block journal is parsed on the way into `DatajournalFrame`, so it reached the
 filter already holding datetimes and these filters worked. The exec journal is
 not, so it reached the same filter holding the raw strings, where ``date=``
 raised ``DateParseError`` and ``datetime=`` compared a string column against a

@@ -30,6 +30,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 from typing import Callable, Optional, Union
 import uuid
 
@@ -630,7 +631,7 @@ def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, **filter_kwargs):
+def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_options=None, log=None, n_workers=8, index: 'str | None' = ..., unnormalized: bool = False, **filter_kwargs):
     """Retrieve or wrap a Datablock journal.
 
     Parameters
@@ -650,18 +651,24 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
         Logger instance.
     n_workers : int, default 8
         Number of workers for reading journal files.
-    index : str, optional
-        Column name to set as DataFrame index on the returned Datajournal.
+    index : str or None, default: ``'id'`` where the journal has one
+        Column to index the returned frame by -- so, by default, ``loc=`` is an
+        entry's ``id`` and ``iloc=`` its position, newest first. A journal
+        with no ``id`` column (written before ids existed) is left numbered,
+        rather than refused. ``index=None`` always leaves it numbered 0..N-1,
+        and then ``loc=`` is a position too. An explicit column must exist.
+        The index column stays a column: an entry keeps its own ``id``.
     unnormalized : bool, default False
         Leave the era-dependent ``type``/``signature`` columns exactly as
         recorded. By default they are resolved per row, so the frame means
         what it says -- see `normalize_journal_frame`.
     **filter_kwargs
-        Forwarded to :class:`Datajournal` for filtering.
+        Forwarded to :class:`DatajournalFrame` for filtering.
 
     Returns
     -------
-    Datajournal, DatajournalEntry, or pd.DataFrame
+    DatajournalFrame or DatajournalEntry; with no first argument, the exec
+    journal's ExecjournalFrame or ExecjournalEntry
     """
     if cls_anchor_or_df is None:
         return read_exec_journal(
@@ -677,7 +684,7 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):
-        return Datajournal(cls_anchor_or_df, storage_options=storage_options, index=index, **filter_kwargs)
+        return DatajournalFrame(cls_anchor_or_df, storage_options=storage_options, index=index, unnormalized=unnormalized, **filter_kwargs)
     else:
         if isinstance(cls_anchor_or_df, str):
             anchor = cls_anchor_or_df
@@ -693,7 +700,7 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
                 log = cls_anchor_or_df.log
         else:
             anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
-        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, **filter_kwargs)
+        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
 
 
 def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs):
@@ -1083,9 +1090,25 @@ class Block:
         """
         return list(self._dict_column(self._entry, 'topics', parse=literal_topics))
 
-    def cite(self, **kwargs):
-        """Path to this entry's ``cite.txt``, or None."""
-        return self._entry.get('cite')
+    def quote(self, *, deslash: bool = False):
+        """The recorded `Datablock.quote` TEXT -- the evaluable specline -- or None.
+
+        The TEXT, as on `Datablock`; the row's ``quote`` column holds the path
+        to the file it was written to.
+        """
+        return self._recorded_text_('quote', deslash)
+
+    def cite(self, *, deslash: bool = False):
+        """The recorded `Datablock.cite` TEXT, or None. The path is the row's ``cite`` column."""
+        return self._recorded_text_('cite', deslash)
+
+    def repr(self, *, deslash: bool = False):
+        """The recorded `Datablock.repr` TEXT -- every kwarg the block had -- or None.
+
+        Rows written before ``repr()`` existed recorded ``__repr__()`` in this
+        column instead, and that is what they answer with.
+        """
+        return self._recorded_text_('repr', deslash)
 
     def note(self):
         """Path to or content of this entry's note, or None."""
@@ -1131,11 +1154,14 @@ class Block:
     def to_dict(self, *, deslash: bool = False) -> dict:
         d = {name: getattr(self, name) for name in (
             'hash', 'code', 'version', 'revision', 'gitrepo', 'url',
-            'anchor', 'tag', 'key', 'keyby', 'tree', 'id')}
-        d.update({name: getattr(self, name)() for name in ('cite', 'note')})
-        # The TEXT, as the columns of the same names hold it.
+            'anchor', 'tag', 'key', 'keyby', 'tree', 'session', 'id')}
+        d['note'] = self.note()
+        # The TEXT of each rendering, not the path of the file it was written to.
         d['signature'] = self.signaturestr()
         d['type'] = self.typestr()
+        d['quote'] = self.quote()
+        d['cite'] = self.cite()
+        d['repr'] = self.repr()
         d['paths'] = self.paths()
         d['topics'] = self.topics()
         if deslash:
@@ -1187,6 +1213,17 @@ class Block:
         which is unique per row, and ``hash``, which is per block.
         """
         return DatajournalEntry.column(self._entry, 'tree')
+
+    @property
+    def session(self):
+        """The `Datajournal` session that wrote this entry, or None.
+
+        A row from before sessions has none -- and on such a row a ``session``
+        column, if present, is its TREE under that column's old name.
+        """
+        if self._entry.get('tree') is None or pd.isna(self._entry.get('tree')):
+            return None
+        return DatajournalEntry.column(self._entry, 'session')
 
     @property
     def id(self):
@@ -1408,6 +1445,11 @@ class Block:
             return '/'.join(parts)
         return hash  # fallback
 
+    def _recorded_text_(self, column, deslash):
+        """The text of the side file *column* names, or None when the row has none."""
+        val = self._entry.read(column, safe=True)
+        return val.replace('\\', '') if (deslash and val) else val
+
     @staticmethod
     def _reject_rendering_choice(what, kwargs):
         """Refuse ``legacy*=`` on a rendering that was already produced.
@@ -1437,7 +1479,7 @@ class DatajournalEntry(pd.Series):
     #: rebuild the object -- pickling among them. Without this, an entry that
     #: crosses a process boundary (a Ray proxy, a multiprocessing executor)
     #: arrives with its data intact but no `logger`, and the next method to log
-    #: dies with AttributeError. Mirrors :attr:`Datajournal._metadata`.
+    #: dies with AttributeError. Mirrors :attr:`DatajournalFrame._metadata`.
     _metadata = ['storage_options', 'logger']
 
     def __init__(self, series: pd.Series, *, storage_options: dict = None,
@@ -1667,7 +1709,7 @@ class DatajournalEntry(pd.Series):
         return None if absent(value) else value
 
 
-class Datajournal(pd.DataFrame):
+class DatajournalFrame(pd.DataFrame):
     _metadata = ['storage_options', 'logger']
 
     def __init__(self, df: pd.DataFrame|None, *, storage_options: dict = None,
@@ -1689,9 +1731,11 @@ class Datajournal(pd.DataFrame):
                 df['datetime'] = pd.to_datetime(df['datetime'], format=JOURNAL_DATETIME_FORMAT)
         df = filter_journal_frame(df, **filter_kwargs)
 
+        if index is ...:
+            index = 'id' if 'id' in df.columns else None
         if index is not None:
             if index in df.columns:
-                df = df.set_index(index)
+                df = df.set_index(index, drop=False)
             else:
                 raise KeyError(f"Column {index!r} not found in journal DataFrame")
 
@@ -1706,7 +1750,7 @@ class Datajournal(pd.DataFrame):
     def get(self, entry:int, *, dropna: bool = False):
         """Return the entry at LABEL *entry* (``.loc``, not ``.iloc``).
 
-        A Datajournal is numbered 0..N-1 newest-first, including one built with
+        A DatajournalFrame is numbered 0..N-1 newest-first, including one built with
         filter kwargs, so a label is also a position -- but only for a journal
         this class constructed. Index a frame you sliced yourself with ``.iloc``.
         """
@@ -1738,7 +1782,7 @@ class Datajournal(pd.DataFrame):
                 th = entry.read(thing, raw=raw, safe=safe)
                 entries.append(th)
             except Exception as exc: 
-                self.logger.silent(f"Datajournal: EXCEPTION when reading {thing}: {row=}, {entry=}, {th=}:\nEXCEPTION: {exc}")
+                self.logger.silent(f"DatajournalFrame: EXCEPTION when reading {thing}: {row=}, {entry=}, {th=}:\nEXCEPTION: {exc}")
                 entries.append(pd.Series())
             datetimes.append(row.datetime if 'datetime' in row.index else None)
             hashes.append(hash)
@@ -1758,6 +1802,556 @@ class Datajournal(pd.DataFrame):
         return thingsframe
 
     
+#: The Datajournals whose ``with`` blocks are open, innermost last. Process-wide
+#: rather than a ContextVar, on purpose: a thread does not inherit context
+#: variables, and a pipeline that constructs blocks inside a thread pool would
+#: then write them under a different session -- silently.
+_ACTIVE_DATAJOURNALS = []
+_ACTIVE_DATAJOURNALS_LOCK = threading.Lock()
+
+
+class Datajournal:
+    """Where a block's journal lives: how entries are written to it and read back.
+
+    A handle, not the records -- constructing one touches no storage. The
+    records are what :meth:`read` returns (a `DatajournalFrame`, or one
+    `DatajournalEntry`), and :meth:`write` is how a block adds one.
+
+    Both halves keep to ONE on-disk layout, which is why they live together:
+    an entry of block B is ::
+
+        {B.anchorkeypath}/.journal/{fqcn}/journal/{hash}/{fqcn}-journal-{hash}-{dt}.parquet
+
+    with its side files (spec, dfn, kwargs, quote, cite, repr, signature, type,
+    note) beside it under ``.journal/{fqcn}/{x}/{hash}/`` -- see :meth:`path` --
+    and :meth:`read` globs for exactly that under ``{url}/{anchor}``.
+
+    A block writes every entry through one, and hands one it was given down
+    its build tree as it hands down ``tree``. Which one, decided at each read
+    and write: the ``datajournal=`` it was given or inherited; else the
+    innermost ``with Datajournal()`` open at that moment -- the next one out
+    once an inner one has closed; else the process-wide DEFAULT_DATAJOURNAL.
+    So ::
+
+        with Datajournal() as dj:
+            run_pipeline()          # every block it constructs, however deep
+        dj.written_entries()        # ... wrote here, under dj.session
+
+    which is how ``dbx.exec`` puts one command's blocks under one session.
+    The scope is the process, threads included. Another process has none of
+    its own: a block pickled into one writes to that process's default unless
+    it was given a journal explicitly. It is operational, like ``tree``: not part
+    of the signature, and never rendered into ``quote()`` or ``cite()``.
+
+    *url*, *storage_options*, *log* and *n_workers* are the defaults
+    :meth:`read` uses when not given its own. A block always passes its own url
+    and storage options, so for a block they only matter when read directly::
+
+        Datajournal('abfss://lake@acct.dfs.core.windows.net').read('my.Block', event='build:end')
+    """
+
+    # 1. Protocol -------------------------------------------------------
+
+    def __init__(self, url: str | None = None, *, storage_options: dict | None = None,
+                 log: 'Logger | None' = None, n_workers: int | None = 8):
+        self.url = url
+        self.storage_options = storage_options
+        self.log = log
+        self.n_workers = n_workers
+        self._session = str(uuid.uuid4())
+        self._written = {}      # entry path -> None: a set that keeps write order
+        self._written_lock = threading.Lock()
+
+    def __repr__(self):
+        args = [f"{k}={v!r}" for k, v, default in (
+            ('url', self.url, None),
+            ('storage_options', self.storage_options, None),
+            ('n_workers', self.n_workers, 8)) if v != default]
+        # Qualified, so that a repr() carrying it is evaluable as a specline.
+        return f"dbx.Datajournal({', '.join(args)})"
+
+    def __getstate__(self):
+        # The configuration and the session, not the logger: a handle crosses
+        # process boundaries (a pickled block, a .set() deepcopy) and lands in
+        # dfn.yaml. The session goes with it, because a copy made on the way
+        # to a worker or a child block is the same journal session, not a new
+        # one -- otherwise one build tree would be written under many.
+        return {'url': self.url, 'storage_options': self.storage_options,
+                'n_workers': self.n_workers, 'session': self._session}
+
+    def __enter__(self):
+        with _ACTIVE_DATAJOURNALS_LOCK:
+            _ACTIVE_DATAJOURNALS.append(self)
+        return self
+
+    def __exit__(self, *exc):
+        with _ACTIVE_DATAJOURNALS_LOCK:
+            # The innermost entry of THIS handle: nesting one handle in itself
+            # is legal, and exits out of order must not pop someone else's.
+            for i in range(len(_ACTIVE_DATAJOURNALS) - 1, -1, -1):
+                if _ACTIVE_DATAJOURNALS[i] is self:
+                    del _ACTIVE_DATAJOURNALS[i]
+                    break
+        return False
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        # One handle per journal session, shared rather than copied: .set()
+        # deep-copies a block's state, and _adopt() hands the handle to every
+        # child that way. A copy would split the session's written_entries()
+        # across objects nobody holds.
+        return self
+
+    def __setstate__(self, state):
+        state = dict(state)
+        session = state.pop('session', None)
+        self.__init__(**state)
+        if session is not None:
+            self._session = session
+
+    # 2. Declared API ---------------------------------------------------
+
+    @staticmethod
+    def current() -> 'Datajournal | None':
+        """The innermost ``with Datajournal()`` open in this process, or None."""
+        with _ACTIVE_DATAJOURNALS_LOCK:
+            return _ACTIVE_DATAJOURNALS[-1] if _ACTIVE_DATAJOURNALS else None
+
+    def read(self, anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None,
+             log=None, n_workers=None, index=None, unnormalized: bool = False, **filter_kwargs):
+        """Read *anchor*'s journal under *url*: every entry, newest first, then filtered.
+
+        Returns a `DatajournalFrame`, or the one `DatajournalEntry` at *loc*
+        (a label) or *iloc* (a position). *url*, *storage_options*, *log* and
+        *n_workers* default to this handle's, and *url* then to ``DBX_ROOT`` or
+        its alias ``DBX_URL``.
+        """
+        log = log or self.log or Logger()
+        n_workers = n_workers or self.n_workers or 8
+        if url is None:
+            url = self.url
+        if storage_options is None:
+            storage_options = self.storage_options
+        if loc is not None and iloc is not None:
+            raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
+        if url is None:
+            url = os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
+        # A url may arrive as a specline -- a block's `_url_` is one whenever it
+        # was constructed with env(...) -- and it is resolved here as
+        # __setstate__ resolves a block's own. Without this, fsspec takes
+        # "$dbx.getenv('LAKE')" for a protocol-less relative path and roots the
+        # journal at the CWD: a directory that cannot exist, reported as a
+        # journal that is merely missing.
+        if Datablock.is_specline(url):
+            resolved = eval(url)
+            log.detailed(f"Journal: resolved url specline {url!r} to {resolved!r}")
+            url = resolved
+        if storage_options is None:
+            storage_options = default_storage_options()
+
+        fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
+
+        anchordirpath = fs_full_path(fs, os.path.join(root, anchor))
+
+        glob_patterns = [
+            os.path.join(anchordirpath, ".dbx", "*/journal/**/*.parquet"),
+            os.path.join(anchordirpath, "**/.journal", "*/journal/**/*.parquet"),
+        ]
+
+        log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} BEGIN")
+        parquet_files = []
+        with ThreadPoolExecutor(max_workers=min(n_workers, len(glob_patterns))) as glob_ex:
+            glob_futures = [glob_ex.submit(fs.glob, p) for p in glob_patterns]
+            for gf in as_completed(glob_futures):
+                try:
+                    parquet_files.extend(gf.result())
+                except Exception as e:
+                    log.warning(f"Error globbing journal files: {e}")
+
+        # Deduplicate found files while preserving order
+        seen = set()
+        unique_parquet_files = []
+        for pf in parquet_files:
+            if pf not in seen:
+                seen.add(pf)
+                unique_parquet_files.append(pf)
+        parquet_files = unique_parquet_files
+
+        if len(parquet_files) == 0 and not fs.exists(anchordirpath):
+            raise FileNotFoundError(
+                f"Journal directory not found for {anchor!r}: {anchordirpath}\n"
+                f"Check that the class name / anchor and url are correct."
+            )
+
+        log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
+        log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} END")
+
+        log.detailed(f"READING JOURNAL: from {anchordirpath=}, files: {parquet_files}")
+        df = None
+        if len(parquet_files) > 0:
+            dfs = [d for d in Datajournal._read_files_(fs, parquet_files, n_workers=n_workers, log=log)
+                   if d is not None]
+            if dfs:
+                df = pd.concat(dfs, ignore_index=True)
+                df = Datajournal._normalize_columns_(df)
+            else:
+                df = None
+        frame = DatajournalFrame(df, storage_options=storage_options, index=index,
+                              unnormalized=unnormalized, **filter_kwargs)
+        if loc is not None:
+            result = DatajournalEntry(frame.loc[loc].dropna(), storage_options=storage_options)
+        elif iloc is not None:
+            result = DatajournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options)
+        else:
+            result = frame
+        return result
+
+    def read_entries(self, paths, *, storage_options=None, log=None, n_workers=None) -> 'list[DatajournalEntry]':
+        """The entries at *paths* -- journal entry files, as :meth:`written_entries` lists them.
+
+        In the order given, and read exactly as :meth:`read` reads a journal:
+        the same legacy columns resolved, the same ``entry_path`` recorded. A
+        path that cannot be read -- cleared since, say -- is skipped with a
+        warning, as :meth:`read` skips one.
+        """
+        paths = [str(p) for p in paths]
+        if not paths:
+            return []
+        log = log or self.log or Logger()
+        n_workers = n_workers or self.n_workers or 8
+        if storage_options is None:
+            storage_options = self.storage_options
+        if storage_options is None:
+            storage_options = default_storage_options()
+        fs, _ = fsspec.url_to_fs(paths[0], **storage_options)
+        dfs = []
+        for order, (path, d) in enumerate(zip(paths, Datajournal._read_files_(
+                fs, paths, n_workers=n_workers, log=log))):
+            if d is not None:
+                d['entry_path'] = path
+                d['__order__'] = order
+                dfs.append(d)
+        if not dfs:
+            return []
+        df = Datajournal._normalize_columns_(pd.concat(dfs, ignore_index=True))
+        df = df.sort_values('__order__').drop(columns=['__order__']).reset_index(drop=True)
+        frame = DatajournalFrame(df, storage_options=storage_options)
+        return [frame.get(i, dropna=True) for i in range(len(frame))]
+
+    def write(self, block, event: str, *, note: str = None, inline_note: bool = False,
+              message: str = None, inline_message: bool = False, journal_prefix: str = '',
+              redirection: 'str | dict | None' = None):
+        """Write one journal entry for *event*, and return its ``entry_code``.
+
+        ``entry_code`` is a fresh uuid per call, and it is the only field that
+        identifies a *row*.  Everything else on an entry describes the block
+        or the moment: ``hash`` and ``key`` are shared by every entry of that
+        block, ``tree`` by every entry of one build tree, and ``datetime``
+        is only as unique as its resolution -- two entries written inside the
+        same microsecond, or by two processes at once, collide.  So a caller
+        holding an ``entry_code`` can address exactly the row it wrote:
+
+            code = block.write_journal_entry(event='note')
+            entry = block.journal(entry_code=code, loc=0)
+
+        With one caveat that is a property of where entries live rather than
+        of the code.  A journal *file* is per live instance -- its path is
+        built from ``block.dt``, which does not move -- so a second call from
+        the same instance **overwrites** the first.  The new code is written;
+        the old one is gone from storage, though the call that made it still
+        returned it.  A code therefore resolves only until that instance
+        writes again, which is why ``build()`` leaves a ``build:end`` and no
+        ``build:start``: same instance, same file.  To keep both entries,
+        write them from separate instances, or pass distinct
+        *journal_prefix* values.
+
+        Journals written before this field have no such column; the
+        ``entry_code`` accessor on ``DatajournalEntry`` returns None for them.
+
+        *redirection* -- an ``entry_code`` or a journal filter, normally passed
+        by :meth:`UNSAFE_redirect` rather than directly -- is recorded IN the
+        entry, in the ``redirection`` column, not written out to a file the way
+        *note* and ``quote``/``subsignature`/``spec`` are. A redirection is what
+        :meth:`read` falls back to when the data it wanted is gone, so it must
+        not itself depend on a second file still being there.
+        """
+        if note is None and message is not None:
+            note = message
+        if not inline_note and inline_message:
+            inline_note = inline_message
+
+        if redirection is not None and not isinstance(redirection, (str, dict)):
+            raise TypeError(
+                f"redirection must be an entry_code str or a journal filter dict, "
+                f"got {type(redirection).__name__}: {redirection!r}"
+            )
+        # A dict goes in as str(dict), the way 'paths' and 'topics' do -- one
+        # parquet column cannot hold both a string and a mapping.
+        redirection_value = redirection if (redirection is None or isinstance(redirection, str)) else str(redirection)
+        entry_id = uuid.uuid4().hex[:16] if getattr(block, '_uuid16_', False) else str(uuid.uuid4())
+        dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+        code_seed = f"{block.hash}:{block.tree}:{dt}:{event}:{entry_id}"
+        code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
+
+        self._write_dict_(block, 'spec', block.spec)
+        dfn = block.dfn
+        if dfn.get('datajournal') is not None:
+            # Its repr, not the object: a python/object tag is not something
+            # read_yaml(safe=True) can load, and the session is in its own column.
+            dfn = {**dfn, 'datajournal': repr(dfn['datajournal'])}
+        self._write_dict_(block, 'dfn', dfn)
+        self._write_dict_(block, 'kwargs', block.kwargs)
+        self._write_text_(block, 'quote', block.quote())
+        self._write_text_(block, 'cite', block.cite())
+        self._write_text_(block, 'repr', block.repr())
+        self._write_text_(block, 'signature', block.signaturestr())
+        self._write_text_(block, 'type', block.typestr())
+        if note is not None and not inline_note:
+            self._write_text_(block, 'note', note)
+
+        spec_path = self.path(block, 'spec', 'yaml')
+        dfn_path = self.path(block, 'dfn', 'yaml')
+        kwargs_path = self.path(block, 'kwargs', 'yaml')
+        quote_path = self.path(block, 'quote', 'txt')
+        cite_path = self.path(block, 'cite', 'txt')
+        signature_path = self.path(block, 'signature', 'txt')
+        repr_path = self.path(block, 'repr', 'txt')
+        type_path = self.path(block, 'type', 'txt')
+        if note is not None and not inline_note:
+            note_path = self.path(block, 'note', 'txt')
+            note_val = note_path
+        else:
+            note_val = note
+        #
+        logpath = self.path(block, 'log', ensure_dirpath=True)
+        if logpath is not None:
+            has_log = block.fs.exists(logpath)
+        else:
+            has_log = False
+        #
+        _TOPICS = getattr(block, 'TOPICS', None)
+        topics_dict = ({name: copy.deepcopy(node) for name, node in _TOPICS.items()}
+                       if isinstance(_TOPICS, dict)
+                       else {topic: DIRTOPIC for topic in block.topics()})
+        paths_dict = block.paths()
+        #
+        journal_path = self.path(block, 'journal', 'parquet', ensure_dirpath=True, filename_prefix=journal_prefix)
+        df = pd.DataFrame.from_records([{'datetime': dt,
+                                         'build:start:datetime': block._build_start_dt,
+                                         'build:end:datetime': block._build_end_dt,
+                                         'version': block.version,
+                                         'dbx_version': block.dbx_version,
+                                         'revision': block.revision, 
+                                         'url': block.url,
+                                         'anchor': block.anchor,
+                                         'hash': block.hash,
+                                         'keyby': block.keyby,
+                                         'key': block.key,
+                                         'anchorkeypath': block.anchorkeypath,
+                                         'code': block.code,
+                                         'tree': block.tree,
+                                         'session': self.session,
+                                         'id': entry_id,
+                                         'tag': block.tag,
+                                         'topics': str(topics_dict),
+                                         'paths': str(paths_dict),
+                                         'log': logpath if has_log else None,
+                                         'event': event,
+                                         'redirection': redirection_value,
+                                         'spec': spec_path,
+                                         'dfn': dfn_path,
+                                         'kwargs': kwargs_path,
+                                         'quote': quote_path,
+                                         'cite': cite_path,
+                                         'signature': signature_path,
+                                         'type': type_path,
+                                         'repr': repr_path,
+                                         'note': note_val,
+                                         'gitrepo': dataparts.DBX_GIT_REPO,
+                                         'wrkrepo': dataparts.DBX_USE_WORK_REPO,
+        }])
+        with block.fs.open(journal_path, 'wb') as f:
+            df.to_parquet(f)
+        with self._written_lock:
+            self._written[journal_path] = None
+        
+        tagstr = f"with tag {repr(block.tag)} " if block.tag is not None else ""
+        block.log.debug(f"WROTE JOURNAL entry {entry_id} for event {repr(event)} {tagstr}"
+                         f"to journal_path {journal_path}")
+        return entry_id
+
+    def written_entries(self):
+        """Every journal entry path this handle has written, in the order first written.
+
+        A path appears once however often it was written: an instance
+        rewrites its one entry file (see :meth:`write`), so the file holds the
+        latest entry and the path is listed where it first appeared. Only this
+        object's writes -- a block pickled into another process writes through
+        a copy, which keeps the session but collects its own list.
+        """
+        with self._written_lock:
+            return list(self._written)
+
+    def path(self, block, x, ext=None, *, ensure_dirpath: bool = True, filename_prefix: str = ''):
+        """The file *block*'s artefact *x* is written to: ``.journal/{fqcn}/{x}/{hash}/``, per instance.
+
+        Named by ``block.dt``, which is fixed per live instance -- so every
+        write of *x* from one instance lands on the same file.
+        """
+        xdir = self.dirpath(block, x)
+        if ensure_dirpath:
+            block.fs.makedirs(xdir, exist_ok=True)
+        if ext is None:
+            ext = x
+        return os.path.join(xdir, f'{filename_prefix}{block.fqcn}-{x}-{block.hash}-{block.dt}.{ext}')
+
+    def dirpath(self, block, x='journal'):
+        """The directory holding *block*'s artefact *x* -- for ``'journal'``, this block's entries and no others."""
+        return os.path.join(block.anchorkeypath, ".journal", block.fqcn, x, block.hash)
+
+    # 3. Accessors ------------------------------------------------------
+
+    @property
+    def session(self):
+        """This handle's session: generated when it is constructed, and fixed for its lifetime.
+
+        Written to every entry this handle writes, so a journal can be cut by
+        the process -- or by whoever built their own handle -- that wrote it,
+        across build trees. Survives pickling and copying with the handle.
+        """
+        return self._session
+
+    # 4. Helpers --------------------------------------------------------
+
+    def _write_dict_(self, block, name, data, *, add_credentials: bool = False):
+        if add_credentials:
+            data = copy.deepcopy(data)
+            data['hash'] = block.hash
+            data['datetime'] = block.dt
+        #
+        ypath = self.path(block, name, 'yaml')
+        write_yaml(data, ypath, storage_options=block.storage_options)
+        assert block.fs.exists(ypath), f"path {ypath} does not exist after writing"
+        block.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
+        #
+        pqpath = self.path(block, name, 'parquet')
+        df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
+        with block.fs.open(pqpath, 'wb') as f:
+            df.to_parquet(f)
+        assert block.fs.exists(pqpath), f"pqpath {pqpath} does not exist after writing"
+        block.log.detailed(f"WROTE: {name.upper()}: parquet: {pqpath}")
+
+    def _write_text_(self, block, name, text):
+        #
+        path = self.path(block, name, 'txt')
+        write_str(text, path, storage_options=block.storage_options)
+        assert block.fs.exists(path), f"scopepath {path} does not exist after writing"
+        block.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
+
+    @staticmethod
+    def _read_files_(fs, files, *, n_workers, log):
+        """One frame per entry file, aligned with *files*; None where one could not be read."""
+        def read_entry_file(file):
+            # Through `fs`, not by path: a glob returns paths as that
+            # filesystem names them -- protocol-stripped -- so handing one to
+            # pandas reads it off the LOCAL disk, where a memory:// or remote
+            # journal file is not. Every entry then "skipped as unreadable" and
+            # the journal came back empty rather than failing.
+            with fs.open(file, 'rb') as f:
+                return pd.read_parquet(f, engine='pyarrow')
+
+        results = [None] * len(files)
+        with ThreadPoolExecutor(max_workers=max(1, min(n_workers, len(files)))) as ex:
+            futures = {ex.submit(read_entry_file, file): i for i, file in enumerate(files)}
+            for future in tqdm.tqdm(as_completed(futures), desc='Reading journal files', total=len(files)):
+                i = futures[future]
+                try:
+                    _df = future.result()
+                    _df['entry_path'] = fs_full_path(fs, files[i])
+                except Exception as e:
+                    log.warning(f"Skipping unreadable journal file {files[i]}: {e}")
+                    continue
+                results[i] = _df
+        return results
+
+    @staticmethod
+    def _normalize_columns_(df):
+        """Legacy column names and the canonical column order, on a frame just read."""
+        if 'revision' not in df.columns:
+            df = df.rename(columns={'version': 'revision',})
+        # Backward compat: rename legacy 'context' column to 'note' and alias 'message'
+        if 'context' in df.columns and 'note' not in df.columns:
+            df = df.rename(columns={'context': 'note'})
+        if 'message' in df.columns:
+            # Replaced by 'note'. Old rows are read under the new name;
+            # the old one is not carried forward.
+            if 'note' not in df.columns:
+                df = df.rename(columns={'message': 'note'})
+            else:
+                df = df.drop(columns=['message'])
+        # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
+        if 'build_datetime' in df.columns and 'build:end:datetime' not in df.columns:
+            df = df.rename(columns={'build_datetime': 'build:end:datetime'})
+        if 'build_datetime' in df.columns:
+            if 'build:end:datetime' not in df.columns:
+                df['build:end:datetime'] = df['build_datetime']
+            if 'datetime' not in df.columns:
+                df['datetime'] = df['build_datetime']
+            df = df.drop(columns=['build_datetime'])
+        # Renamed columns, each applied only when the new name is
+        # absent -- a journal spanning the rename has both, and the
+        # new one is the one that was written deliberately.
+        for legacy, current in (('entry_code', 'id'),
+                                ('subhash', 'code')):
+            if legacy in df.columns and current not in df.columns:
+                df = df.rename(columns={legacy: current})
+            elif legacy in df.columns:
+                df = df.drop(columns=[legacy])
+        df = Datajournal._legacy_tree_(df)
+        columns = [c for c in Datablock.JOURNAL_COLUMNS
+                   if c in df.columns and c != 'event']
+        # Anything unlisted keeps its place at the back, ahead of
+        # 'event', so a column added later still shows up.
+        columns += [c for c in df.columns if c not in set(columns + ['event'])]
+        if 'event' in df.columns:
+            columns.append('event')
+        df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)
+        df = df.rename(columns={'build_log': 'log'})
+        return df
+
+    @staticmethod
+    def _legacy_tree_(df):
+        """The build-tree id, recorded as ``uuid``, then ``session``, now ``tree``.
+
+        Decided per ROW, not per frame, because ``session`` is a column again:
+        the Datajournal session, written beside ``tree``. So a row with no
+        ``tree`` is from before the rename and its ``session`` IS its tree --
+        moved across, leaving no session, which that row never had -- while a
+        row with a ``tree`` keeps its ``session`` as written.
+        """
+        if 'tree' not in df.columns:
+            df['tree'] = None
+        for legacy in ('session', 'uuid'):
+            if legacy not in df.columns:
+                continue
+            old = df['tree'].isna() & df[legacy].notna()
+            df.loc[old, 'tree'] = df.loc[old, legacy]
+            if legacy == 'session':
+                df.loc[old, 'session'] = None
+            else:
+                df = df.drop(columns=[legacy])
+        if df['tree'].isna().all():
+            df = df.drop(columns=['tree'])
+        return df
+
+
+#: The journal a block uses when it is given none: one per process, so its
+#: `session` is the process's and `written_entries()` everything it wrote.
+DEFAULT_DATAJOURNAL = Datajournal()
+
+
 gitwrkreposetup(reason="datablocks import")
 
 
@@ -1837,7 +2431,7 @@ class Datablock:
     #: was recorded, and the event last. Columns not listed here are kept, in
     #: their own order, just ahead of 'event'.
     JOURNAL_COLUMNS = [
-        'hash', 'code', 'tree', 'id',
+        'hash', 'code', 'tree', 'session', 'id',
         'datetime', 'build:start:datetime', 'build:end:datetime',
         'version', 'dbx_version', 'revision',
         'url', 'anchor', 'keyby', 'key', 'anchorkeypath', 'tag',
@@ -2238,6 +2832,10 @@ class Datablock:
         # block's own identity does not depend on it, so it stays out of the
         # signature; it is how the journal groups the entries of a tree.
         tree: str | None = None,
+        # The Datajournal every entry of this block is written through, handed
+        # down the build tree with `tree`. None means DEFAULT_DATAJOURNAL. Like
+        # `tree`, operational: never in the signature or in quote().
+        datajournal: 'Datajournal | None' = None,
         # When a read fails, follow a redirection recorded by UNSAFE_redirect()
         # and read from the entry it names instead. See :meth:`read`.
         redirect: bool = True,
@@ -2292,6 +2890,7 @@ class Datablock:
             'keyby': keyby,
             'uuid16': uuid16,
             'tree': tree,
+            'datajournal': datajournal,
             'redirect': redirect,
             'use_specializations': use_specializations,
             'validate_vars': validate_vars if validate_cfg is None else validate_cfg,
@@ -2442,6 +3041,13 @@ class Datablock:
         self._tree_ = _unquote(state.get('tree'))
         if self._tree_ == 'None':
             self._tree_ = None
+        datajournal = state.get('datajournal')
+        if isinstance(datajournal, str):
+            # As repr() renders one -- `dbx.Datajournal(...)` -- which a block
+            # constructor receives from dbx.eval as TEXT, or as a specline.
+            # Resolved here, as a specline url is.
+            datajournal = eval(datajournal if self.is_specline(datajournal) else f'${datajournal}')
+        self._datajournal_ = datajournal
         # Redirection config: dict(code=..., filter=..., paths=...) or legacy bool
         self.redirect = state.get('redirect')
         # The value as given, so __getstate__ reproduces it: None means "ask
@@ -4003,7 +4609,7 @@ class Datablock:
 
     def _journal_hashdirpath(self):
         """The directory holding THIS block's journal entries, and no others."""
-        return os.path.join(self.anchorkeypath, ".journal", self.fqcn, "journal", self.hash)
+        return self.datajournal.dirpath(self, 'journal')
 
     def _recorded_redirection(self, journal=None):
         """The latest redirection recorded for this block's hash, or None.
@@ -4102,7 +4708,7 @@ class Datablock:
             row = j.iloc[0]
             return DatajournalEntry(row.dropna(), storage_options=self.storage_options)
 
-    def UNSAFE_redirect(self, *, redirector: Callable|None = None, journal: Datajournal|None = None, filter: dict|None = None, topic_map: dict|None = None,
+    def UNSAFE_redirect(self, *, redirector: Callable|None = None, journal: DatajournalFrame|None = None, filter: dict|None = None, topic_map: dict|None = None,
                         paths: dict|None = None, topics: list|None = None,
                         specialization: 'Datablock.Specialization | None' = None,
                         dry_run: bool = False, dry_validate: bool = False,
@@ -4225,7 +4831,7 @@ class Datablock:
 
         if target_paths is None and filter is not None and journal is not None:
             try:
-                j = Datajournal(journal, storage_options=getattr(journal, 'storage_options', self.storage_options), **dict(filter))
+                j = DatajournalFrame(journal, storage_options=getattr(journal, 'storage_options', self.storage_options), **dict(filter))
                 if len(j) > 0:
                     entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else DatajournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
                     target_paths = entry.block.paths()
@@ -4249,7 +4855,7 @@ class Datablock:
 
         if target_paths is None and filter is None and explicit_journal:
             try:
-                j = journal if isinstance(journal, Datajournal) else Datajournal(journal, storage_options=self.storage_options)
+                j = journal if isinstance(journal, DatajournalFrame) else DatajournalFrame(journal, storage_options=self.storage_options)
                 if len(j) > 0:
                     entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else DatajournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
                     target_paths = entry.block.paths()
@@ -4809,6 +5415,18 @@ class Datablock:
                            if getattr(self, '_uuid16_', False) else str(uuid.uuid4()))
         return self._tree_
 
+    @property
+    def datajournal(self) -> 'Datajournal':
+        """The `Datajournal` this block writes its entries through and reads its journal with.
+
+        The one it was given or inherited from its parent; else the innermost
+        ``with Datajournal()`` open NOW -- asked on every read and write, so a
+        block built after a ``with`` closes writes to the next one out -- else
+        the process-wide DEFAULT_DATAJOURNAL. See `Datajournal`.
+        """
+        given = getattr(self, '_datajournal_', None)
+        return given if given is not None else (Datajournal.current() or DEFAULT_DATAJOURNAL)
+
     def _adopt(self, child, *, keyby: bool = False):
         """Hand *child* what it should inherit from this block.
 
@@ -4816,6 +5434,8 @@ class Datablock:
         that only overrides ``__block__`` never has to think about it.
         """
         kw = {'tree': self.tree}
+        if self._datajournal_ is not None:
+            kw['datajournal'] = self._datajournal_
         if keyby:
             keyby_val = getattr(self, 'keyby', None)
             if keyby_val is not None:
@@ -4847,7 +5467,7 @@ class Datablock:
                 modern form, and PROPAGATES to nested blocks, so the whole
                 subtree is rendered the same way.
 
-            . expansion: 'repr'|'quote'|'signature'
+            . expansion: 'repr'|'quote'|'cite'|'repr_all'|'signature'
                 . specline:      str starting with '@', '$' or '#'
                 . datablock: Datablock object
                 . obj:       object
@@ -4864,6 +5484,9 @@ class Datablock:
                     |specline:      repr(specline)
                     |datablock: datablock.quote()
                     |obj:       repr(obj)  
+            'repr_all':
+                . as 'quote', but
+                    |datablock: datablock.repr()
         """
         legacy = self._legacy_norm() if legacy is None else legacy
         # The TYPING choice a nested child must inherit. Separate from *legacy*
@@ -4915,7 +5538,7 @@ class Datablock:
                     # Stored as the value itself, so the embedding repr's it
                     # exactly once: 5 -> "5", '5' -> "'5'". No collision.
                     _spec_[k] = value
-        elif expansion == 'quote' or expansion == 'cite':
+        elif expansion in ('quote', 'cite', 'repr_all'):
             for k, v in spec.items():
                 value = getattr(self.var, k)
                 raw_v = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else v
@@ -4938,6 +5561,8 @@ class Datablock:
                     # are presentation options for the OUTERMOST call only.
                     if expansion == 'quote':
                         _spec_[k] = value.quote(pretty=False, deslash=0)
+                    elif expansion == 'repr_all':
+                        _spec_[k] = value.repr(pretty=False, deslash=0)
                     else:
                         _spec_[k] = value.cite(pretty=False, deslash=0)
                 else:
@@ -4966,7 +5591,8 @@ class Datablock:
             for k, v in state.items()
             # 'tree' groups a build tree's journal entries; pinning one into a
             # recorded quote would have inst() rejoin a tree that is over.
-            if k not in ['url', 'anchor', 'hash', 'spec', 'tree',
+            # 'datajournal' says where entries are written, not what a block is.
+            if k not in ['url', 'anchor', 'hash', 'spec', 'tree', 'datajournal',
                          '__redirected_paths__']
             # None means "ask the class", which is what every block that never
             # mentioned the feature says -- and saying it out loud in every
@@ -5107,8 +5733,6 @@ class Datablock:
         """
         mode = 'quote' if not cite else 'cite'
         quoted_spec = self.__expand_spec__(mode)
-        def quotestr(x):
-            return repr(x) if isinstance(x, str) else x
         kwargs = {**self._rootkwargs_, **{'spec': quoted_spec},}
         if tailkwargs:
             kwargs.update(**self._tailkwargs_)
@@ -5117,6 +5741,37 @@ class Datablock:
                 k: v for k, v in self._tailkwargs_.items()
                 if k in self.CITE_KEEP_TAILKWARGS
             })
+        quote = self._render_call_(kwargs, pretty=pretty, deslash=deslash, dollar=not cite)
+        self.log.detailed(f"quote: ------------> {quoted_spec=}")
+        self.log.detailed(f"quote: ------------> {quote=}")
+        return quote
+
+    def repr(self, *, deslash: int = 0, pretty: bool = False) -> str:
+        """An evaluable ``$fqcn(...)`` specline carrying EVERY constructor kwarg.
+
+        :meth:`quote` renders what reconstructs a working block, and leaves out
+        what belongs to one run (``tree``, ``datajournal``); :meth:`cite`
+        renders for reading. This renders the whole of :attr:`dfn`: spec and
+        every other parameter, operational ones included -- what the block WAS,
+        down to the run it was part of. ``url`` and ``anchor`` are rendered as
+        :meth:`quote` renders them, only when given, so a block rooted by
+        ``DBX_ROOT`` stays relocatable. Private state
+        (``__redirected_paths__``) is not a kwarg and is not rendered. A nested
+        block renders as its own ``repr()``. *pretty* and *deslash* are as for
+        :meth:`quote`.
+        """
+        self.tree   # generated on first access; render the one this block has
+        kwargs = {**self._rootkwargs_, 'spec': self.__expand_spec__('repr_all')}
+        kwargs.update({k: v for k, v in self.__getstate__().items()
+                       if k not in ('url', 'anchor', 'spec') and not k.startswith('__')})
+        r = self._render_call_(kwargs, pretty=pretty, deslash=deslash, dollar=True)
+        self.log.detailed(f"repr: ------------> {r=}")
+        return r
+
+    def _render_call_(self, kwargs, *, pretty: bool, deslash: int, dollar: bool) -> str:
+        """``fqcn(k=v, ...)`` for *kwargs*: the rendering :meth:`quote` and :meth:`repr` share."""
+        def quotestr(x):
+            return repr(x) if isinstance(x, str) else x
         kwargstrs = [f"{k}={quotestr(v)}" for k, v in kwargs.items()]
         if pretty:
             # A FIXED 4-space indent, and the spec dict broken one entry per
@@ -5151,10 +5806,8 @@ class Datablock:
         if deslash != 0:
             for i in range(deslash):
                 quote = quote.replace('\\', '')
-        if not cite:
+        if dollar:
             quote = f"${quote}"
-        self.log.detailed(f"quote: ------------> {quoted_spec=}")
-        self.log.detailed(f"quote: ------------> {quote=}")
         return quote
 
     def cite(self, *, deslash: int = 2, pretty: bool = True,
@@ -5482,7 +6135,7 @@ class Datablock:
         self,
         other_signature: 'Datablock | DatajournalEntry | str | None' = ABSENT,
         *,
-        journal: 'Datajournal | DatajournalEntry | dict | str | int | None' = None,
+        journal: 'DatajournalFrame | DatajournalEntry | dict | str | int | None' = None,
         raw: bool = False,
         deslash: bool = False,
         legacy: 'bool | None' = None,
@@ -6165,7 +6818,7 @@ class Datablock:
 
         h = self.get_hash(specialization)
         try:
-            j = self.journal(hash=h) if journal is None else Datajournal(
+            j = self.journal(hash=h) if journal is None else DatajournalFrame(
                 journal, storage_options=self.storage_options, hash=h)
         except (FileNotFoundError, KeyError, TypeError) as e:
             self.log.detailed(f"specialization: no journal to resolve {h} in: {e}")
@@ -6789,13 +7442,7 @@ class Datablock:
         return _dbxanchorpathx
 
     def _dbxanchorhashpathx(self, x, ext=None, *, ensure_dirpath: bool = True, filename_prefix: str = ''):
-        _dbxanchorhashpathx = os.path.join(self.anchorkeypath, ".journal", self.fqcn, x, self.hash)
-        if ensure_dirpath:
-            self.fs.makedirs(_dbxanchorhashpathx, exist_ok=True)
-        if ext is None:
-            ext = x
-        xpath = os.path.join(_dbxanchorhashpathx, f'{filename_prefix}{self.fqcn}-{x}-{self.hash}-{self.dt}.{ext}')
-        return xpath
+        return self.datajournal.path(self, x, ext, ensure_dirpath=ensure_dirpath, filename_prefix=filename_prefix)
 
     def _dbxjournalinstancepath(self, *, ensure_dirpath: bool = False, filename_prefix: str = ''):
         """
@@ -6833,307 +7480,31 @@ class Datablock:
 
     #JOURNAL: BEGIN
     def _write_journal_dict(self, name, data, *, add_credentials: bool = False):
-        if add_credentials:
-            data = copy.deepcopy(data)
-            data['hash'] = self.hash
-            data['datetime'] = self.dt
-        #
-        ypath = self._dbxanchorhashpathx(name, 'yaml')
-        write_yaml(data, ypath, storage_options=self.storage_options)
-        assert self.fs.exists(ypath), f"path {ypath} does not exist after writing"
-        self.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
-        #
-        pqpath = self._dbxanchorhashpathx(name, 'parquet')
-        df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
-        with self.fs.open(pqpath, 'wb') as f:
-            df.to_parquet(f)
-        assert self.fs.exists(pqpath), f"pqpath {pqpath} does not exist after writing"
-        self.log.detailed(f"WROTE: {name.upper()}: parquet: {pqpath}")
+        self.datajournal._write_dict_(self, name, data, add_credentials=add_credentials)
 
     def _write_str(self, name, text):
-        #
-        path = self._dbxanchorhashpathx(name, 'txt')
-        write_str(text, path, storage_options=self.storage_options)
-        assert self.fs.exists(path), f"scopepath {path} does not exist after writing"
-        self.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
+        self.datajournal._write_text_(self, name, text)
 
     def write_journal_entry(self, event: str, *, note: str = None, inline_note: bool = False,
                             message: str = None, inline_message: bool = False, journal_prefix: str = '',
                             redirection: 'str | dict | None' = None):
-        """Write one journal entry for *event*, and return its ``entry_code``.
-
-        ``entry_code`` is a fresh uuid per call, and it is the only field that
-        identifies a *row*.  Everything else on an entry describes the block
-        or the moment: ``hash`` and ``key`` are shared by every entry of that
-        block, ``tree`` by every entry of one build tree, and ``datetime``
-        is only as unique as its resolution -- two entries written inside the
-        same microsecond, or by two processes at once, collide.  So a caller
-        holding an ``entry_code`` can address exactly the row it wrote:
-
-            code = block.write_journal_entry(event='note')
-            entry = block.journal(entry_code=code, loc=0)
-
-        With one caveat that is a property of where entries live rather than
-        of the code.  A journal *file* is per live instance -- its path is
-        built from ``self.dt``, which does not move -- so a second call from
-        the same instance **overwrites** the first.  The new code is written;
-        the old one is gone from storage, though the call that made it still
-        returned it.  A code therefore resolves only until that instance
-        writes again, which is why ``build()`` leaves a ``build:end`` and no
-        ``build:start``: same instance, same file.  To keep both entries,
-        write them from separate instances, or pass distinct
-        *journal_prefix* values.
-
-        Journals written before this field have no such column; the
-        ``entry_code`` accessor on ``DatajournalEntry`` returns None for them.
-
-        *redirection* -- an ``entry_code`` or a journal filter, normally passed
-        by :meth:`UNSAFE_redirect` rather than directly -- is recorded IN the
-        entry, in the ``redirection`` column, not written out to a file the way
-        *note* and ``quote``/``subsignature`/``spec`` are. A redirection is what
-        :meth:`read` falls back to when the data it wanted is gone, so it must
-        not itself depend on a second file still being there.
-        """
-        if note is None and message is not None:
-            note = message
-        if not inline_note and inline_message:
-            inline_note = inline_message
-
-        if redirection is not None and not isinstance(redirection, (str, dict)):
-            raise TypeError(
-                f"redirection must be an entry_code str or a journal filter dict, "
-                f"got {type(redirection).__name__}: {redirection!r}"
-            )
-        # A dict goes in as str(dict), the way 'paths' and 'topics' do -- one
-        # parquet column cannot hold both a string and a mapping.
-        redirection_value = redirection if (redirection is None or isinstance(redirection, str)) else str(redirection)
-        entry_id = uuid.uuid4().hex[:16] if getattr(self, '_uuid16_', False) else str(uuid.uuid4())
-        dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-        code_seed = f"{self.hash}:{self.tree}:{dt}:{event}:{entry_id}"
-        code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
-
-        self._write_journal_dict('spec', self.spec)
-        self._write_journal_dict('dfn', self.dfn)
-        self._write_journal_dict('kwargs', self.kwargs)
-        self._write_str('quote', self.quote())
-        self._write_str('cite', self.cite())
-        self._write_str('repr', self.__repr__())
-        self._write_str('signature', self.signaturestr())
-        self._write_str('type', self.typestr())
-        if note is not None and not inline_note:
-            self._write_str('note', note)
-
-        spec_path = self._dbxanchorhashpathx('spec', 'yaml')
-        dfn_path = self._dbxanchorhashpathx('dfn', 'yaml')
-        kwargs_path = self._dbxanchorhashpathx('kwargs', 'yaml')
-        quote_path = self._dbxanchorhashpathx('quote', 'txt')
-        cite_path = self._dbxanchorhashpathx('cite', 'txt')
-        signature_path = self._dbxanchorhashpathx('signature', 'txt')
-        repr_path = self._dbxanchorhashpathx('repr', 'txt')
-        type_path = self._dbxanchorhashpathx('type', 'txt')
-        if note is not None and not inline_note:
-            note_path = self._dbxanchorhashpathx('note', 'txt')
-            note_val = note_path
-        else:
-            note_val = note
-        #
-        logpath = self._dbxanchorhashpathx('log', ensure_dirpath=True)
-        if logpath is not None:
-            has_log = self.fs.exists(logpath)
-        else:
-            has_log = False
-        #
-        _TOPICS = getattr(self, 'TOPICS', None)
-        topics_dict = ({name: copy.deepcopy(node) for name, node in _TOPICS.items()}
-                       if isinstance(_TOPICS, dict)
-                       else {topic: DIRTOPIC for topic in self.topics()})
-        paths_dict = self.paths()
-        #
-        journal_path = self._dbxjournalinstancepath(ensure_dirpath=True, filename_prefix=journal_prefix)
-        df = pd.DataFrame.from_records([{'datetime': dt,
-                                         'build:start:datetime': self._build_start_dt,
-                                         'build:end:datetime': self._build_end_dt,
-                                         'version': self.version,
-                                         'dbx_version': self.dbx_version,
-                                         'revision': self.revision, 
-                                         'url': self.url,
-                                         'anchor': self.anchor,
-                                         'hash': self.hash,
-                                         'keyby': self.keyby,
-                                         'key': self.key,
-                                         'anchorkeypath': self.anchorkeypath,
-                                         'code': self.code,
-                                         'tree': self.tree,
-                                         'id': entry_id,
-                                         'tag': self.tag,
-                                         'topics': str(topics_dict),
-                                         'paths': str(paths_dict),
-                                         'log': logpath if has_log else None,
-                                         'event': event,
-                                         'redirection': redirection_value,
-                                         'spec': spec_path,
-                                         'dfn': dfn_path,
-                                         'kwargs': kwargs_path,
-                                         'quote': quote_path,
-                                         'cite': cite_path,
-                                         'signature': signature_path,
-                                         'type': type_path,
-                                         'repr': repr_path,
-                                         'note': note_val,
-                                         'gitrepo': dataparts.DBX_GIT_REPO,
-                                         'wrkrepo': dataparts.DBX_USE_WORK_REPO,
-        }])
-        with self.fs.open(journal_path, 'wb') as f:
-            df.to_parquet(f)
-        
-        tagstr = f"with tag {repr(self.tag)} " if self.tag is not None else ""
-        self.log.debug(f"WROTE JOURNAL entry {entry_id} for event {repr(event)} {tagstr}"
-                         f"to journal_path {journal_path}")
-        return entry_id
+        """Write one journal entry for *event* through :attr:`datajournal`. See `Datajournal.write`."""
+        return self.datajournal.write(self, event, note=note, inline_note=inline_note,
+                                      message=message, inline_message=inline_message,
+                                      journal_prefix=journal_prefix, redirection=redirection)
 
     @staticmethod
     def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, **filter_kwargs):
-        if log is None:
-            log = Logger()
-        if n_workers is None:
-            n_workers = 8
+        """*anchor*'s journal, read by a default `Datajournal`. See `Datajournal.read`."""
+        return Datajournal().read(anchor, loc, iloc=iloc, url=url, storage_options=storage_options,
+                                  log=log, n_workers=n_workers, index=index,
+                                  unnormalized=unnormalized, **filter_kwargs)
+
+    def journal(self, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=None, index: str | None = None, unnormalized: bool = False, **filter_kwargs):
+        """This block's anchor's journal, read through :attr:`datajournal`. See `Datajournal.read`."""
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-        if url is None:
-            url = os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
-        # A url may arrive as a specline -- a block's `_url_` is one whenever it
-        # was constructed with env(...) -- and it is resolved here as
-        # __setstate__ resolves a block's own. Without this, fsspec takes
-        # "$dbx.getenv('LAKE')" for a protocol-less relative path and roots the
-        # journal at the CWD: a directory that cannot exist, reported as a
-        # journal that is merely missing.
-        if Datablock.is_specline(url):
-            resolved = eval(url)
-            log.detailed(f"Journal: resolved url specline {url!r} to {resolved!r}")
-            url = resolved
-        if storage_options is None:
-            storage_options = default_storage_options()
-
-        fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
-
-        anchordirpath = fs_full_path(fs, os.path.join(root, anchor))
-
-        glob_patterns = [
-            os.path.join(anchordirpath, ".dbx", "*/journal/**/*.parquet"),
-            os.path.join(anchordirpath, "**/.journal", "*/journal/**/*.parquet"),
-        ]
-
-        log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} BEGIN")
-        parquet_files = []
-        with ThreadPoolExecutor(max_workers=min(n_workers, len(glob_patterns))) as glob_ex:
-            glob_futures = [glob_ex.submit(fs.glob, p) for p in glob_patterns]
-            for gf in as_completed(glob_futures):
-                try:
-                    parquet_files.extend(gf.result())
-                except Exception as e:
-                    log.warning(f"Error globbing journal files: {e}")
-
-        # Deduplicate found files while preserving order
-        seen = set()
-        unique_parquet_files = []
-        for pf in parquet_files:
-            if pf not in seen:
-                seen.add(pf)
-                unique_parquet_files.append(pf)
-        parquet_files = unique_parquet_files
-
-        if len(parquet_files) == 0 and not fs.exists(anchordirpath):
-            raise FileNotFoundError(
-                f"Journal directory not found for {anchor!r}: {anchordirpath}\n"
-                f"Check that the class name / anchor and url are correct."
-            )
-
-        log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
-        log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} END")
-
-        log.detailed(f"READING JOURNAL: from {anchordirpath=}, files: {parquet_files}")
-        def read_entry_file(file):
-            # Through `fs`, not by path: the glob above returns paths as that
-            # filesystem names them -- protocol-stripped -- so handing one to
-            # pandas reads it off the LOCAL disk, where a memory:// or remote
-            # journal file is not. Every entry then "skipped as unreadable" and
-            # the journal came back empty rather than failing.
-            with fs.open(file, 'rb') as f:
-                return pd.read_parquet(f, engine='pyarrow')
-
-        df = None
-        if len(parquet_files) > 0:
-            dfs = []
-            with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                futures = [ex.submit(read_entry_file, file) for file in parquet_files]
-                future_to_file = {f: file for f, file in zip(futures, parquet_files)}
-                for future in tqdm.tqdm(as_completed(futures), desc='Reading journal files', total=len(parquet_files)):
-                    try:
-                        _df = future.result()
-                        _df['entry_path'] = fs_full_path(fs, future_to_file[future])
-                    except Exception as e:
-                        log.warning(f"Skipping unreadable journal file {future_to_file[future]}: {e}")
-                        continue
-                    dfs.append(_df)
-            if dfs:
-                df = pd.concat(dfs, ignore_index=True)
-                if 'revision' not in df.columns:
-                    df = df.rename(columns={'version': 'revision',})
-                # Backward compat: rename legacy 'context' column to 'note' and alias 'message'
-                if 'context' in df.columns and 'note' not in df.columns:
-                    df = df.rename(columns={'context': 'note'})
-                if 'message' in df.columns:
-                    # Replaced by 'note'. Old rows are read under the new name;
-                    # the old one is not carried forward.
-                    if 'note' not in df.columns:
-                        df = df.rename(columns={'message': 'note'})
-                    else:
-                        df = df.drop(columns=['message'])
-                # Backward compat: rename legacy 'build_datetime' to 'build:end:datetime'
-                if 'build_datetime' in df.columns and 'build:end:datetime' not in df.columns:
-                    df = df.rename(columns={'build_datetime': 'build:end:datetime'})
-                if 'build_datetime' in df.columns:
-                    if 'build:end:datetime' not in df.columns:
-                        df['build:end:datetime'] = df['build_datetime']
-                    if 'datetime' not in df.columns:
-                        df['datetime'] = df['build_datetime']
-                    df = df.drop(columns=['build_datetime'])
-                # Renamed columns, each applied only when the new name is
-                # absent -- a journal spanning the rename has both, and the
-                # new one is the one that was written deliberately.
-                for legacy, current in (('entry_code', 'id'),
-                                        ('subhash', 'code'),
-                                        ('uuid', 'session'),
-                                        ('session', 'tree')):
-                    if legacy in df.columns and current not in df.columns:
-                        df = df.rename(columns={legacy: current})
-                    elif legacy in df.columns:
-                        df = df.drop(columns=[legacy])
-                columns = [c for c in Datablock.JOURNAL_COLUMNS
-                           if c in df.columns and c != 'event']
-                # Anything unlisted keeps its place at the back, ahead of
-                # 'event', so a column added later still shows up.
-                columns += [c for c in df.columns if c not in set(columns + ['event'])]
-                if 'event' in df.columns:
-                    columns.append('event')
-                df = df.sort_values('datetime', ascending=False)[columns].reset_index(drop=True)
-                df = df.rename(columns={'build_log': 'log'})
-            else:
-                df = None
-        journal = Datajournal(df, storage_options=storage_options, index=index,
-                              unnormalized=unnormalized, **filter_kwargs)
-        if loc is not None:
-            result = DatajournalEntry(journal.loc[loc].dropna(), storage_options=storage_options)
-        elif iloc is not None:
-            result = DatajournalEntry(journal.iloc[iloc].dropna(), storage_options=storage_options)
-        else:
-            result = journal
-        return result
-
-    def journal(self, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index: str | None = None, unnormalized: bool = False, **filter_kwargs):
-        if loc is not None and iloc is not None:
-            raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-        return self.Journal(
+        return self.datajournal.read(
             self.anchor,
             loc=loc,
             iloc=iloc,
@@ -7420,8 +7791,8 @@ class Datastack(Datablock):
         indices = tqdm.tqdm(range(n), desc=f"Forming {n} blocks") if n > 100 else range(n)
         return [self.block(idx) for idx in indices]
 
-    def block_journal(self, **kwargs) -> Datajournal | None:
-        """Return the Datajournal for child blocks, or None if no blocks exist or journal fails to load."""
+    def block_journal(self, **kwargs) -> DatajournalFrame | None:
+        """Return the DatajournalFrame for child blocks, or None if no blocks exist or journal fails to load."""
         if self.n_blocks == 0:
             return None
         try:
@@ -8165,7 +8536,7 @@ def _redirect_succeeded(result) -> bool:
     return getattr(result, 'paths', None) is not None
 
 
-def _UNSAFE_redirect_block_callable(redirector, block, stack, idx, *, journal: Datajournal|None = None, validate: bool = False):
+def _UNSAFE_redirect_block_callable(redirector, block, stack, idx, *, journal: DatajournalFrame|None = None, validate: bool = False):
     target = redirector(block, stack, idx, journal=journal)
     if not target:
         return None

@@ -2,7 +2,7 @@
 Tests for dbx.journal() / Datablock.Journal():
 
 1. FileNotFoundError is raised when the journal directory does not exist.
-2. A Datajournal is returned when the directory exists but has no parquet files.
+2. A DatajournalFrame is returned when the directory exists but has no parquet files.
 3. loc= and iloc= correctly return a DatajournalEntry.
 4. Regression: root must not be passed positionally (would silently land in
    the 'loc' slot of Datablock.Journal before the fix).
@@ -13,7 +13,7 @@ import pytest
 import pandas as pd
 
 import dbx.datablocks as dbxmod
-from dbx.datablocks import journal, Datablock, Datajournal, DatajournalEntry
+from dbx.datablocks import journal, Datablock, Datajournal, DatajournalFrame, DatajournalEntry
 import dbx.dataparts as dataparts
 
 
@@ -92,13 +92,13 @@ class TestJournalMissingDir:
 
 
 # ---------------------------------------------------------------------------
-# 2. Empty journal dir → Datajournal(None)
+# 2. Empty journal dir → DatajournalFrame(None)
 # ---------------------------------------------------------------------------
 
 class TestJournalEmptyDir:
 
     def test_returns_journalframe_when_no_parquets(self, tmp_path, monkeypatch):
-        """An existing but empty journal dir should return a Datajournal wrapping None."""
+        """An existing but empty journal dir should return a DatajournalFrame wrapping None."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         # Create the journal directory with no parquet files
@@ -108,7 +108,7 @@ class TestJournalEmptyDir:
         fs.makedirs(jdir, exist_ok=True)
 
         result = journal(FakeBlock, url=root)
-        assert isinstance(result, Datajournal)
+        assert isinstance(result, DatajournalFrame)
 
 
 # ---------------------------------------------------------------------------
@@ -128,14 +128,14 @@ class TestJournalLocIlocParam:
         assert isinstance(result, DatajournalEntry)
 
     def test_loc_none_returns_journalframe(self, tmp_path, monkeypatch):
-        """journal(cls, url=...) with no loc/iloc should return the full Datajournal."""
+        """journal(cls, url=...) with no loc/iloc should return the full DatajournalFrame."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="cafebabe", event="build")
 
         result = journal(FakeBlock, url=root)
-        assert isinstance(result, Datajournal)
+        assert isinstance(result, DatajournalFrame)
         assert len(result) == 1
 
     def test_loc_value_matches_row(self, tmp_path, monkeypatch):
@@ -239,7 +239,7 @@ class TestJournalFqcnSubdirectories:
         _write_journal_in_hash_dir(other_jdir, other_anchor, hash_val="bbb")
 
         result = Datablock.Journal(fake_anchor, url=root)
-        assert isinstance(result, Datajournal)
+        assert isinstance(result, DatajournalFrame)
         assert len(result) == 2
 
     def test_single_fqcn_found(self, tmp_path, monkeypatch):
@@ -277,7 +277,7 @@ class TestJournalAnchorForms:
         block = BuildableBlock(url=root)
         block.build()
         result = block.journal()
-        assert isinstance(result, Datajournal)
+        assert isinstance(result, DatajournalFrame)
         assert len(result) >= 1
 
     def test_custom_anchor_journal(self, tmp_path, monkeypatch):
@@ -287,7 +287,7 @@ class TestJournalAnchorForms:
         block = BuildableBlock(url=root, anchor='my.custom.anchor')
         block.build()
         result = block.journal()
-        assert isinstance(result, Datajournal)
+        assert isinstance(result, DatajournalFrame)
         assert len(result) >= 1
 
     def test_static_journal_default_anchor(self, tmp_path, monkeypatch):
@@ -298,7 +298,7 @@ class TestJournalAnchorForms:
         block.build()
         anchor = block.anchor
         result = Datablock.Journal(anchor, url=root)
-        assert isinstance(result, Datajournal)
+        assert isinstance(result, DatajournalFrame)
         assert len(result) >= 1
 
     def test_static_journal_custom_anchor(self, tmp_path, monkeypatch):
@@ -308,7 +308,7 @@ class TestJournalAnchorForms:
         block = BuildableBlock(url=root, anchor='custom.anchor')
         block.build()
         result = Datablock.Journal('custom.anchor', url=root)
-        assert isinstance(result, Datajournal)
+        assert isinstance(result, DatajournalFrame)
         assert len(result) >= 1
 
     def test_multiple_builds_all_found(self, tmp_path, monkeypatch):
@@ -481,25 +481,25 @@ class TestJournalBuildDatetimes:
 class TestDatablockJournalArgThreading:
 
     def test_n_workers_threaded_to_journal(self, tmp_path, monkeypatch):
-        """Datablock.journal() threads n_workers to Datablock.Journal."""
+        """Datablock.journal() threads n_workers to the Datajournal that reads it."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         b = BuildableBlock(url=root)
         b.build()
 
-        # Capture calls to Datablock.Journal
-        original_journal = Datablock.Journal
+        # Capture calls to Datajournal.read
+        original_read = Datajournal.read
         captured_kwargs = {}
 
-        def spy_journal(*args, **kwargs):
+        def spy_read(self, *args, **kwargs):
             captured_kwargs.update(kwargs)
-            return original_journal(*args, **kwargs)
+            return original_read(self, *args, **kwargs)
 
-        monkeypatch.setattr(Datablock, 'Journal', staticmethod(spy_journal))
+        monkeypatch.setattr(Datajournal, 'read', spy_read)
 
         res = b.journal(n_workers=3)
         assert captured_kwargs.get('n_workers') == 3
-        assert isinstance(res, Datajournal)
+        assert isinstance(res, DatajournalFrame)
         assert len(res) >= 1
 
     def test_url_and_storage_options_threaded(self, tmp_path, monkeypatch):
@@ -516,7 +516,7 @@ class TestDatablockJournalArgThreading:
 
         # Reading root2 from b1 by explicitly passing url
         j = b1.journal(url=root2, n_workers=2)
-        assert isinstance(j, Datajournal)
+        assert isinstance(j, DatajournalFrame)
         assert len(j) >= 1
 
     def test_custom_logger_threaded_and_used(self, tmp_path, monkeypatch):
@@ -560,7 +560,7 @@ class TestDatablockJournalArgThreading:
 
         # index & filter kwargs
         j_indexed = b.journal(event='build:end', index='event', n_workers=2)
-        assert isinstance(j_indexed, Datajournal)
+        assert isinstance(j_indexed, DatajournalFrame)
         assert 'build:end' in j_indexed.index
 
     def test_top_level_journal_threads_n_workers(self, tmp_path, monkeypatch):
@@ -571,11 +571,11 @@ class TestDatablockJournalArgThreading:
         b.build()
 
         j_class = journal(BuildableBlock, url=root, n_workers=4)
-        assert isinstance(j_class, Datajournal)
+        assert isinstance(j_class, DatajournalFrame)
         assert len(j_class) >= 1
 
         j_inst = journal(b, n_workers=4)
-        assert isinstance(j_inst, Datajournal)
+        assert isinstance(j_inst, DatajournalFrame)
         assert len(j_inst) >= 1
 
     def test_journal_entry_block(self, tmp_path, monkeypatch):

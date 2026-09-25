@@ -19,7 +19,7 @@ from sklearn.metrics import classification_report
 
 import dbx
 from dbx.datablocks import Datablock
-from dbx.featuretables import DatafeatureTable, DatafeatureTab, Datacollator
+from dbx.featuretables import Featuretable, Featuretab, Datacollator
 from dbx.dataparts import (
     Logger,
     callable_executor,
@@ -322,7 +322,7 @@ class FeatureAffineLogisticProbe(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
-        feature_table: DatafeatureTable | DatafeatureTab
+        feature_table: Featuretable | Featuretab
         collator: Datacollator
         fit_intercept: bool = True
         training_fraction: float = 0.8
@@ -533,7 +533,7 @@ class TabColumnStatsCallable:
 
 
 class FeatureStatsProbe(Datablock):
-    """Per-column statistics for a DatafeatureTable or DatafeatureTab.
+    """Per-column statistics for a Featuretable or Featuretab.
 
     One topic per statistic -- ``mean``, ``std``, ``median``, ``min``,
     ``max``, ``norm`` -- with the feature columns underneath it, keyed
@@ -566,7 +566,7 @@ class FeatureStatsProbe(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
-        feature_table: DatafeatureTable | DatafeatureTab
+        feature_table: Featuretable | Featuretab
         collator: Datacollator
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
 

@@ -1,4 +1,4 @@
-"""datapoints — DatapointTab / DatapointTable blocks over MDS slices."""
+"""datapoints — Datatab / Datatable blocks over MDS slices."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ class DATASLICE(DIR, metaclass=_DataSliceMeta):
     rows are read back in the order they were written, and a projection that
     permuted an axis rather than failing is the bug this forecloses.
 
-    The declaration is what `DatapointTab.slice_writers` writes, so it takes no
+    The declaration is what `Datatab.slice_writers` writes, so it takes no
     argument when every slice declares its columns.  A bare ``DATASLICE`` declares
     none, and is the sentinel's behaviour under the marker's spelling: the
     columns are then the writer's to supply.
@@ -127,8 +127,8 @@ class DATASLICE(DIR, metaclass=_DataSliceMeta):
                 )
 
 
-class DatapointBase(Datablock):
-    """Base class for sliced datapoint blocks (DatapointTab and DatapointTable).
+class DatatableBase(Datablock):
+    """Base class for sliced datapoint blocks (Datatab and Datatable).
 
     A **slice** is one independently-readable MDS stream directory inside a block.
     Slices are declared via topics marked with `SLICETOPIC`.
@@ -136,7 +136,7 @@ class DatapointBase(Datablock):
     A subclass declaring TOPICS constructs its TOPICS dictionary explicitly if extending
     its base class's topics::
 
-        class BaseTab(DatapointTab):
+        class BaseTab(Datatab):
             TOPICS = {'samples': SLICETOPIC, 'meta': 'meta.json'}
 
         class SubTab(BaseTab):
@@ -197,10 +197,10 @@ class DatapointBase(Datablock):
 
         Derived on each call rather than frozen at class creation, so a TOPICS
         assigned or amended after the class body still reports its slices, and
-        an instance overriding TOPICS -- as :class:`DatapointFold` does -- is
+        an instance overriding TOPICS -- as :class:`DatatablePart` does -- is
         read through.
         """
-        return DatapointBase._find_slice_topics(getattr(self, 'TOPICS', None))
+        return DatatableBase._find_slice_topics(getattr(self, 'TOPICS', None))
 
     def declared_columns(self, slice) -> 'dict | None':
         """The columns *slice* declares, as ``{column: mds_type}``, or None.
@@ -496,10 +496,16 @@ class DatapointBase(Datablock):
 
     @property
     def cacheroot(self) -> str:
-        """Local scratch root for everything streaming: read caches, staged writes."""
-        return getattr(self, 'cache', None) or os.path.join(
-            self.localroot, 'streaming',
-        )
+        """Local scratch root for everything streaming: read caches, staged writes.
+
+        The block's ``cache=``; else ``$DBX_CACHE``; else ``cache/`` under
+        :attr:`localroot` -- which is ``DBX_LOCAL`` (or ``local=``) for a block
+        on remote storage, and the storage root itself for one already local.
+        Resolved on every access, never stored, so no machine's path reaches a
+        handle or a journal.
+        """
+        return (getattr(self, 'cache', None) or os.environ.get('DBX_CACHE')
+                or os.path.join(self.localroot, 'cache'))
 
     # 3. Utility and Private Methods ────────────────────────────────
 
@@ -694,12 +700,12 @@ class DatapointBase(Datablock):
             if _is_topicmarker(val, DATASLICE) or val == SLICETOPIC:
                 slice_topics.append('/'.join(current) if len(current) > 1 else key)
             elif isinstance(val, dict):
-                slice_topics.extend(DatapointBase._find_slice_topics(val, current))
+                slice_topics.extend(DatatableBase._find_slice_topics(val, current))
         return tuple(slice_topics)
 
 
-class DatapointTab(DatapointBase):
-    """One tab of a `DatapointTable`: a Datablock writing MDS slices."""
+class Datatab(DatatableBase):
+    """One tab of a `Datatable`: a Datablock writing MDS slices."""
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -725,7 +731,7 @@ class DatapointTab(DatapointBase):
         copy or redirection, or whose upload stopped half way -- and `TabMaker`
         calls it after every build and refuses the tab if it says no.
 
-        On the tab and not on `DatapointBase`: a table's `shard_sizes()` opens
+        On the tab and not on `DatatableBase`: a table's `shard_sizes()` opens
         the index of every tab, so the same override on the table would turn one
         validate() into a read per tab per slice. It needs no such thing -- a
         table is valid only when every tab of it validated.
@@ -882,7 +888,7 @@ def DatapointTableTab(table, idx, tag=None, **spec):
     return table(idx, tag=tag, **spec)
 
 
-class DatapointTable(DatapointBase, Datastack):
+class Datatable(DatatableBase, Datastack):
     """A table of DatapointTabs, sliced the same way as its tabs.
 
     A table's TOPICS only contains what the table itself owns: the structural
@@ -905,7 +911,7 @@ class DatapointTable(DatapointBase, Datastack):
     #: The topics the table machinery itself writes and reads: the sentinels
     #: recording which tabs are built, and the marker that says the stack
     #: completed. Subclasses extending TOPICS explicitly include
-    #: DatapointTable.TOPICS if desired.
+    #: Datatable.TOPICS if desired.
     #:
     #: A ``tabs`` directory was declared here too, and nothing ever wrote into
     #: it: a tab is config-addressed on the table's own url and lands beside the
@@ -924,13 +930,13 @@ class DatapointTable(DatapointBase, Datastack):
         `valid_slice()`) working.
 
         Falls back to its own TOPICS when TAB is unset or is not a
-        `DatapointBase` -- as for :class:`DatapointFold`, which overrides
+        `DatatableBase` -- as for :class:`DatatablePart`, which overrides
         TOPICS per instance and computes its TAB dynamically.
         """
         tab = getattr(self, 'TAB', None)
-        if isinstance(tab, type) and issubclass(tab, DatapointBase):
-            return DatapointBase._find_slice_topics(getattr(tab, 'TOPICS', None))
-        return DatapointBase._find_slice_topics(getattr(self, 'TOPICS', None))
+        if isinstance(tab, type) and issubclass(tab, DatatableBase):
+            return DatatableBase._find_slice_topics(getattr(tab, 'TOPICS', None))
+        return DatatableBase._find_slice_topics(getattr(self, 'TOPICS', None))
 
     Tab = staticmethod(DatapointTableTab)
 
@@ -943,10 +949,10 @@ class DatapointTable(DatapointBase, Datastack):
     def __init__(self, *args, cache=None, cache_limit=None, filter_built_tabs: bool = False, **kwargs):
         super().__init__(*args, cache=cache, cache_limit=cache_limit, filter_built_tabs=filter_built_tabs, **kwargs)
 
-    def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
+    def __tab__(self, idx: int, *, tag=None, **spec) -> Datatab:
         if self.TAB is None:
             raise NotImplementedError(
-                f"{self.__class__.__name__} must set TAB = <DatapointTab subclass>"
+                f"{self.__class__.__name__} must set TAB = <Datatab subclass>"
             )
         # A TAB that declares SPECIALIZATIONS resolves them as it is
         # constructed, which means reading the journal -- once per tab, for
@@ -975,7 +981,7 @@ class DatapointTable(DatapointBase, Datastack):
             tag=tag if tag is not None else f"tab_{idx:06d}",
         )
 
-    def __block__(self, idx: int) -> DatapointTab:
+    def __block__(self, idx: int) -> Datatab:
         return self.__tab__(idx)
 
     def _tab_paths_topic(self) -> str | None:
@@ -1292,13 +1298,13 @@ class DatapointTable(DatapointBase, Datastack):
             return own
         # Then the TAB's slice topics, in the same format Datastack uses.
         tab = self.TAB
-        if isinstance(tab, type) and issubclass(tab, DatapointBase):
+        if isinstance(tab, type) and issubclass(tab, DatatableBase):
             # TAB is a class here, and slices() is an instance method as
             # topics() is, so the shared helper does the work rather than an
             # unbound call.
             slice_segments = tuple(
                 f"topic:{name}=SLICETOPIC"
-                for name in DatapointBase._find_slice_topics(getattr(tab, 'TOPICS', None))
+                for name in DatatableBase._find_slice_topics(getattr(tab, 'TOPICS', None))
             )
         else:
             slice_segments = ()
@@ -1317,7 +1323,7 @@ class DatapointTable(DatapointBase, Datastack):
     def n_blocks(self) -> int:
         return self.n_tabs
 
-    def tab(self, idx: int) -> DatapointTab:
+    def tab(self, idx: int) -> Datatab:
         return self.block(idx)
 
     def tabs(self) -> list:
@@ -1394,8 +1400,8 @@ class DatapointTable(DatapointBase, Datastack):
             return result
 
 
-class DatapointPartition(Datablock):
-    """Partitions a `DatapointTable`'s tabs into folds according to target fractions.
+class DatatablePartition(Datablock):
+    """Partitions a `Datatable`'s tabs into folds according to target fractions.
 
     Uses the Longest Processing Time First (LPT) / Worst-Fit Decreasing (WFD)
     greedy heuristic for multiway number partitioning (an NP-complete problem).
@@ -1407,7 +1413,7 @@ class DatapointPartition(Datablock):
 
     @dataclass
     class VAR(Datablock.VAR):
-        datapoint_table: DatapointTable
+        datapoint_table: Datatable
         fractions: list[float]
         partition_slice: int | str
 
@@ -1460,17 +1466,17 @@ class DatapointPartition(Datablock):
         data = json.loads(self.fs.cat(self.path('tabs')))
         return data[int(fold)]
 
-    def tabs(self, fold: int | str) -> list[DatapointTab]:
+    def tabs(self, fold: int | str) -> list[Datatab]:
         indices = self.tabs_indices(fold)
         table = self.var.datapoint_table
         return [table.tab(i) for i in indices]
 
     @property
-    def datapoint_table(self) -> DatapointTable:
+    def datapoint_table(self) -> Datatable:
         return self.var.datapoint_table
 
-    def fold(self, fold: int | str) -> DatapointFold:
-        return DatapointFold(
+    def fold(self, fold: int | str) -> DatatablePart:
+        return DatatablePart(
             # As a table gives its tabs its url: a fold of a partition belongs
             # where the partition does, not wherever DBX_ROOT happens to point
             # in the process that asks for it.
@@ -1489,12 +1495,12 @@ class DatapointPartition(Datablock):
         return super().__read__(*topicpath)
 
 
-class DatapointFold(DatapointTable):
-    """A subset of a `DatapointTable` defined by tab_indices for a fold."""
+class DatatablePart(Datatable):
+    """A subset of a `Datatable` defined by tab_indices for a fold."""
 
     @dataclass
     class VAR(Datablock.VAR):
-        partition: DatapointPartition
+        partition: DatatablePartition
         fold: int
 
     @functools.cached_property
@@ -1502,7 +1508,7 @@ class DatapointFold(DatapointTable):
         return self.var.partition.tabs_indices(self.var.fold)
 
     @property
-    def datapoint_table(self) -> DatapointTable:
+    def datapoint_table(self) -> Datatable:
         return self.var.partition.datapoint_table
 
     @property
@@ -1524,7 +1530,7 @@ class DatapointFold(DatapointTable):
     def n_tabs(self) -> int:
         return len(self.tab_indices)
 
-    def tab(self, idx: int) -> DatapointTab:
+    def tab(self, idx: int) -> Datatab:
         real_idx = self.tab_indices[idx]
         return self.var.partition.datapoint_table.tab(real_idx)
 
@@ -1564,10 +1570,10 @@ class DatapointFold(DatapointTable):
     _write_block_path = _write_tab_path
     _remove_block_path = _remove_tab_path
 
-    def __tab__(self, idx: int, *, tag=None, **spec) -> DatapointTab:
+    def __tab__(self, idx: int, *, tag=None, **spec) -> Datatab:
         return self.tab(idx)
 
-    def __block__(self, idx: int) -> DatapointTab:
+    def __block__(self, idx: int) -> Datatab:
         return self.tab(idx)
 
     def _read_slice(self, slice, *, tabs=None, **kwargs):
@@ -1607,22 +1613,27 @@ class DatapointFold(DatapointTable):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Shorter names
+#  The names these classes used to have
 # ═══════════════════════════════════════════════════════════════════════
 
-#: Aliases, and deliberately assignments rather than subclasses: the alias IS
-#: the class, so ``Datatab is DatapointTab``, and there is no second VAR, no
-#: second MRO and no way for the two spellings to drift.
+#: Aliases, kept so code written against the old names goes on working -- and
+#: deliberately assignments rather than subclasses: the alias IS the class, so
+#: ``DatapointTab is Datatab``, and there is no second VAR, no second MRO and
+#: no way for the two spellings to drift.
 #:
-#: Nothing about identity moves, in this repo or downstream. A block's hash is
-#: sha256 of its ``typestr()``, which is signature + version + topics and names no
-#: class at all; the one place a class name IS recorded -- :attr:`fqcn`, in the
-#: storage path -- is the name of the subclass being built, not of the base it
-#: was declared from. So a downstream class that switches
-#: ``class Cell(DatapointTab)`` to ``class Cell(Datatab)`` keeps the hash and
-#: the path it had. What WOULD move it is renaming ``Cell``.
-Datatab = DatapointTab
-Datatable = DatapointTable
+#: The hash does not move: it is sha256 of ``typestr()``, which is signature +
+#: version + topics and names no class at all. What DOES move is `fqcn`, the
+#: one place a class name is recorded -- the storage path and the journal
+#: directory of a block of that very class. A subclass records its own name,
+#: so ``class Cell(Datatab)`` and ``class Cell(DatapointTab)`` are the same
+#: block at the same path; but a DatatablePartition, or the DatatablePart it
+#: builds, is now stored under its new name, and what was built under the old
+#: one is reached through a specialization, not found in place.
+DatapointBase = DatatableBase
+DatapointTab = Datatab
+DatapointTable = Datatable
+DatapointPartition = DatatablePartition
+DatapointFold = DatatablePart
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1645,11 +1656,11 @@ Datatable = DatapointTable
 #: class the module it was defined in, so a subclass elsewhere is unaffected.
 _LEGACY_MODULE = 'dbx.datapoints'
 for _obj in (
-    DatapointBase,
-    DatapointTab,
-    DatapointTable,
-    DatapointPartition,
-    DatapointFold,
+    DatatableBase,
+    Datatab,
+    Datatable,
+    DatatablePartition,
+    DatatablePart,
     DatapointTableTab,
 ):
     _obj.__module__ = _LEGACY_MODULE

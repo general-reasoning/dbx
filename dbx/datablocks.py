@@ -2583,7 +2583,7 @@ class Datablock:
         holding a marker is a modern one, and there is nothing else it could
         mean.  Derived on each call, so a TOPICS assigned or amended after the
         class body -- or computed per instance, as
-        :class:`~dbx.datatables.DatapointFold`'s is -- is answered as it stands.
+        :class:`~dbx.datatables.DatatablePart`'s is -- is answered as it stands.
 
         A declaration holding both spellings has no era, and raises rather than
         rendering half of itself each way.
@@ -3507,7 +3507,7 @@ class Datablock:
         in which :meth:`valid` can answer True about topics that are not this
         block's to answer for. Under a specialization the redirected topics are
         another build's and are there by definition, so a `valid()` that reads
-        only those -- a marker topic like :class:`~dbx.datatables.DatapointTable`'s
+        only those -- a marker topic like :class:`~dbx.datatables.Datatable`'s
         ``done``, which is a perfectly good definition of validity for a table
         that built itself -- pronounces the block built before the topics it
         still owes exist. `build()` would then never call `__build__`, and the
@@ -7813,7 +7813,7 @@ class Datastack(Datablock):
         storage, which is where these stacks live.
 
         Hand this to each child as ``specialization_journal=`` and the N reads
-        become one. :class:`~dbx.datatables.DatapointTable` does that for its
+        become one. :class:`~dbx.datatables.Datatable` does that for its
         tabs already; a stack with a hand-written ``__block__`` opts in with
         one line, and a stack whose children declare no specializations should
         not call this at all -- there is nothing for them to resolve.

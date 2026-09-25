@@ -22,9 +22,9 @@ import dbx
 from dbx.datablocks import Datablock, Datastack, DIRTOPIC
 from dbx.backbones import ModelEvaluatorBuilder
 from dbx.datatables import (
-    DatapointBase,
-    DatapointTab,
-    DatapointTable,
+    DatatableBase,
+    Datatab,
+    Datatable,
     DatapointTableTab,
     DIRTOPIC,
     SLICETOPIC,
@@ -314,9 +314,9 @@ class Datacollator(Datablock):
 class _UpstreamSlices:
     """Slice routing for a block that reads its own slices and an upstream block's.
 
-    `DatafeatureTab` owns ``features`` and borrows the sample slices of the
-    `DatapointTab` it was built from; `DatafeatureTable` does the same over a
-    `DatapointTable`. Both answer `dataset()` and `data()` for either, so both
+    `Featuretab` owns ``features`` and borrows the sample slices of the
+    `Datatab` it was built from; `Featuretable` does the same over a
+    `Datatable`. Both answer `dataset()` and `data()` for either, so both
     need the same three things: work out which block owns a requested slice,
     keep the caller's order, and refuse a name that two blocks both claim.
     """
@@ -326,7 +326,7 @@ class _UpstreamSlices:
 
     def __post_init__(self):
         super().__post_init__()
-        # As DatapointBase does for shared_slice_columns, and for the same
+        # As DatatableBase does for shared_slice_columns, and for the same
         # reason: a bare str is iterable, so 'idx' left unnormalised would be
         # read as four one-letter columns.
         self.shared_upstream_column = self._norm_shared_columns(
@@ -334,7 +334,7 @@ class _UpstreamSlices:
         )
 
     def _shared_defaults(self, shared, validate_shared):
-        """As `DatapointBase._shared_defaults`, from `shared_upstream_column` first.
+        """As `DatatableBase._shared_defaults`, from `shared_upstream_column` first.
 
         This block's alignment question spans two blocks -- is feature row *i*
         the features OF sample row *i*? -- so the column that answers it is one
@@ -435,7 +435,7 @@ class _UpstreamSlices:
                 skip_none=True, zip_validator=None, **kwargs):
         """The requested slices -- this block's and the upstream block's -- zipped.
 
-        Keyed exactly as `DatapointBase.dataset()`, so a row is
+        Keyed exactly as `DatatableBase.dataset()`, so a row is
         ``{'features': {layer: value}, sample_slice: {column: value}, ...}``.
 
         *shared* defaults to this block's ``shared_upstream_column``, and
@@ -473,7 +473,7 @@ class _UpstreamSlices:
              concat=True, **kwargs):
         """The requested slices read whole, keyed as `dataset()` keys one row.
 
-        A table reads its own slice through `DatapointTable._read_slice`,
+        A table reads its own slice through `Datatable._read_slice`,
         which already runs over every tab, so nothing here concatenates tabs
         by hand.
         """
@@ -481,7 +481,7 @@ class _UpstreamSlices:
         out = {}
         for owner, s_name, cols in routed:
             spec = (s_name, cols) if cols else s_name
-            out[s_name] = DatapointBase.data(owner, spec, concat=concat, **kwargs)[s_name]
+            out[s_name] = DatatableBase.data(owner, spec, concat=concat, **kwargs)[s_name]
         if nested:
             return out
         return {(s_name, c): vals
@@ -489,7 +489,7 @@ class _UpstreamSlices:
                 for c, vals in cols.items()}
 
 
-class DatafeatureTab(_UpstreamSlices, DatapointTab):
+class Featuretab(_UpstreamSlices, Datatab):
     """A tab storing multi-layer feature activations captured by an evaluator.
 
     Inherits access to the slices of the upstream `sampletab`. Calling `dataset()`
@@ -503,7 +503,7 @@ class DatafeatureTab(_UpstreamSlices, DatapointTab):
 
     @dataclass
     class VAR(Datablock.VAR):
-        datapoint_tab: DatapointTab
+        datapoint_tab: Datatab
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
         feature_namemap: dict[str, str] | None = None
@@ -676,16 +676,16 @@ class DatafeatureTab(_UpstreamSlices, DatapointTab):
         return len(self.var.datapoint_tab)
 
 
-class DatafeatureTable(_UpstreamSlices, DatapointTable):
-    """A table of `DatafeatureTab` blocks built across a `DatapointTable`."""
+class Featuretable(_UpstreamSlices, Datatable):
+    """A table of `Featuretab` blocks built across a `Datatable`."""
 
-    TAB = DatafeatureTab
+    TAB = Featuretab
     UPSTREAM_VAR = ('datapoint_table',)
     VERSION = 1
 
     @dataclass
     class VAR(Datablock.VAR):
-        datapoint_table: DatapointTable
+        datapoint_table: Datatable
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
         feature_namemap: dict | None = None
@@ -737,7 +737,7 @@ class DatafeatureTable(_UpstreamSlices, DatapointTable):
         else:
             self._feature_map = {name: name for name in layer_names}
 
-    def __tab__(self, idx: int, device: str | None = None, tag=None) -> DatafeatureTab:
+    def __tab__(self, idx: int, device: str | None = None, tag=None) -> Featuretab:
         datapoint_tab = self.var.datapoint_table.tab(idx)
         spec = dict(
             datapoint_tab=datapoint_tab.quote(),
@@ -762,7 +762,7 @@ class DatafeatureTable(_UpstreamSlices, DatapointTable):
             tag=tag if tag is not None else datapoint_tab.tag,
         )
 
-    def __block__(self, idx: int, **kwargs) -> DatafeatureTab:
+    def __block__(self, idx: int, **kwargs) -> Featuretab:
         return self.__tab__(idx, **kwargs)
 
     # 2. Properties and Accessors ───────────────────────────────────
@@ -789,8 +789,8 @@ class DatafeatureTable(_UpstreamSlices, DatapointTable):
         return coherent_signatures and coherent_datasets and self.tab(i).validate(**kwargs)
 
 
-class BipolarDatafeatureTab(_UpstreamSlices, DatapointTab):
-    """Bipolar (median-thresholded) encoding of a `DatafeatureTab`.
+class BipolarFeaturetab(_UpstreamSlices, Datatab):
+    """Bipolar (median-thresholded) encoding of a `Featuretab`.
 
     Maps continuous features to ``{-1, +1}^d`` via ``sign(features - median)``,
     and computes a tab-level bipolar signature ``{-1, 0, +1}^d`` by thresholding the mean.
@@ -805,7 +805,7 @@ class BipolarDatafeatureTab(_UpstreamSlices, DatapointTab):
 
     @dataclass
     class VAR(Datablock.VAR):
-        featuretab: DatafeatureTab
+        featuretab: Featuretab
         layer: str = 'final'
         threshold: float = 0.5
         ternarize: bool = False
@@ -850,7 +850,7 @@ class BipolarDatafeatureTab(_UpstreamSlices, DatapointTab):
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
-    def featuretab(self) -> DatafeatureTab:
+    def featuretab(self) -> Featuretab:
         return self.var.featuretab
 
     def available_slices(self) -> tuple[str, ...]:
@@ -862,23 +862,23 @@ class BipolarDatafeatureTab(_UpstreamSlices, DatapointTab):
         return len(self.featuretab)
 
 
-class BipolarDatafeatureTable(_UpstreamSlices, DatapointTable):
-    """A table of `BipolarDatafeatureTab` blocks built over a `DatafeatureTable`."""
+class BipolarFeaturetable(_UpstreamSlices, Datatable):
+    """A table of `BipolarFeaturetab` blocks built over a `Featuretable`."""
 
-    TAB = BipolarDatafeatureTab
+    TAB = BipolarFeaturetab
     UPSTREAM_VAR = ('featuretable',)
     VERSION = 1
 
     @dataclass
-    class VAR(DatapointTable.VAR):
-        featuretable: DatafeatureTable = None
+    class VAR(Datatable.VAR):
+        featuretable: Featuretable = None
         layer: str = 'final'
         threshold: float = 0.5
         ternarize: bool = False
 
     # 1. Datablock / Datastack Protocol Methods ─────────────────────
 
-    def __tab__(self, idx: int, tag=None, **kwargs) -> BipolarDatafeatureTab:
+    def __tab__(self, idx: int, tag=None, **kwargs) -> BipolarFeaturetab:
         featuretab = self.var.featuretable.tab(idx)
         return self.TAB(
             url=self._url_,
@@ -897,13 +897,13 @@ class BipolarDatafeatureTable(_UpstreamSlices, DatapointTable):
             tag=tag if tag is not None else featuretab.tag,
         )
 
-    def __block__(self, idx: int, **kwargs) -> BipolarDatafeatureTab:
+    def __block__(self, idx: int, **kwargs) -> BipolarFeaturetab:
         return self.__tab__(idx, **kwargs)
 
     # 2. Properties and Accessors ───────────────────────────────────
 
     @property
-    def featuretable(self) -> DatafeatureTable:
+    def featuretable(self) -> Featuretable:
         return self.var.featuretable
 
     @property
@@ -917,14 +917,17 @@ class BipolarDatafeatureTable(_UpstreamSlices, DatapointTable):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  Shorter names
+#  The names these classes used to have
 # ═══════════════════════════════════════════════════════════════════════
 
-#: Aliases, as ``Datatab``/``Datatable`` are in :mod:`dbx.datatables` -- plain
-#: assignments, so the alias is the class itself and no identity moves. See the
-#: note there.
-FeatureTab = DatafeatureTab
-FeatureTable = DatafeatureTable
+#: The names these classes used to have, as aliases -- plain assignments, so
+#: the alias is the class itself. See the note at the foot of
+#: :mod:`dbx.datatables`: the hash does not move, but a block of one of these
+#: classes is now stored under its new name.
+DatafeatureTab = FeatureTab = Featuretab
+DatafeatureTable = FeatureTable = Featuretable
+BipolarDatafeatureTab = BipolarFeaturetab
+BipolarDatafeatureTable = BipolarFeaturetable
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -939,10 +942,10 @@ FeatureTable = DatafeatureTable
 _LEGACY_MODULE = 'dbx.datafeatures'
 for _obj in (
     Datacollator,
-    DatafeatureTab,
-    DatafeatureTable,
-    BipolarDatafeatureTab,
-    BipolarDatafeatureTable,
+    Featuretab,
+    Featuretable,
+    BipolarFeaturetab,
+    BipolarFeaturetable,
 ):
     _obj.__module__ = _LEGACY_MODULE
 del _obj

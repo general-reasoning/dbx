@@ -28,6 +28,7 @@ _TESTROOT = tempfile.mkdtemp(prefix='dbx-tests-')
 os.environ['DBX_ROOT'] = _TESTROOT
 os.environ.pop('DBX_URL', None)          # the alias DBX_ROOT is read ahead of
 os.environ['DBX_LOCAL'] = os.path.join(_TESTROOT, 'local')
+os.environ.pop('DBX_CACHE', None)        # else streaming caches land in the developer's
 os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
 

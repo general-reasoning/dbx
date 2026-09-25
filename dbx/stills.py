@@ -798,7 +798,7 @@ class Still(CheckpointBuilder):
     #: check in ``valid``, a two-location write in ``UNSAFE_done``, a name
     #: excluded from every checkpoint listing, and a line in the class
     #: docstring explaining that ``ckpts`` holds something that is not a
-    #: checkpoint.  Matches ``DatapointTable``, which has always done it this
+    #: checkpoint.  Matches ``Datatable``, which has always done it this
     #: way.
     #:
     #: The dict form, because the three are not alike: ``ckpts`` and ``logs``

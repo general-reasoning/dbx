@@ -605,8 +605,20 @@ class TestScaffoldingErrors:
 
 class TestCache:
 
-    def test_cacheroot_defaults_under_local(self, table):
-        assert table.cacheroot == os.path.join(table.localroot, 'streaming')
+    def test_cacheroot_defaults_under_local(self, table, monkeypatch):
+        monkeypatch.delenv('DBX_CACHE', raising=False)
+        assert table.cacheroot == os.path.join(table.localroot, 'cache')
+
+    def test_cacheroot_is_dbx_cache_when_set(self, table, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_CACHE', str(tmp_path / 'dbxcache'))
+        assert table.cacheroot == str(tmp_path / 'dbxcache')
+        assert table.tab(0).cacheroot == str(tmp_path / 'dbxcache')
+
+    def test_an_explicit_cache_beats_dbx_cache(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_CACHE', str(tmp_path / 'dbxcache'))
+        explicit = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1),
+                               cache=str(tmp_path / 'scratch'))
+        assert explicit.cacheroot == str(tmp_path / 'scratch')
 
     def test_cacheroot_honours_an_explicit_cache(self, tmp_path):
         explicit = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1),
@@ -622,7 +634,7 @@ class TestCache:
         """cacheroot resolves lazily, so no machine's absolute path is baked
         into the block's handle or journal."""
         assert getattr(table, 'cache', None) is None
-        assert 'streaming' not in table.quote()
+        assert table.cacheroot not in table.quote()
 
 
 # ---------------------------------------------------------------------------

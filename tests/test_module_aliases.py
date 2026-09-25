@@ -46,17 +46,24 @@ from dbx import backbones, datatables, featuretables, probes
 
 #: The fqcn every artifact of these classes is stored under. Hard-coded, because
 #: the whole point is that they are not free to move.
+#:
+#: The class NAMES moved once, deliberately: DatapointTab -> Datatab,
+#: DatapointPartition -> DatatablePartition, DatapointFold -> DatatablePart,
+#: DatafeatureTable -> Featuretable, and so on, the old names kept as aliases.
+#: A block of one of these classes built before that is stored under the old
+#: name and is recovered through a specialization, not found in place. The
+#: MODULE did not move, and these are the names recorded from then on.
 LEGACY_FQCNS = [
-    (datatables.DatapointBase, 'dbx.datapoints.DatapointBase'),
-    (datatables.DatapointTab, 'dbx.datapoints.DatapointTab'),
-    (datatables.DatapointTable, 'dbx.datapoints.DatapointTable'),
-    (datatables.DatapointPartition, 'dbx.datapoints.DatapointPartition'),
-    (datatables.DatapointFold, 'dbx.datapoints.DatapointFold'),
+    (datatables.DatatableBase, 'dbx.datapoints.DatatableBase'),
+    (datatables.Datatab, 'dbx.datapoints.Datatab'),
+    (datatables.Datatable, 'dbx.datapoints.Datatable'),
+    (datatables.DatatablePartition, 'dbx.datapoints.DatatablePartition'),
+    (datatables.DatatablePart, 'dbx.datapoints.DatatablePart'),
     (featuretables.Datacollator, 'dbx.datafeatures.Datacollator'),
-    (featuretables.DatafeatureTab, 'dbx.datafeatures.DatafeatureTab'),
-    (featuretables.DatafeatureTable, 'dbx.datafeatures.DatafeatureTable'),
-    (featuretables.BipolarDatafeatureTab, 'dbx.datafeatures.BipolarDatafeatureTab'),
-    (featuretables.BipolarDatafeatureTable, 'dbx.datafeatures.BipolarDatafeatureTable'),
+    (featuretables.Featuretab, 'dbx.datafeatures.Featuretab'),
+    (featuretables.Featuretable, 'dbx.datafeatures.Featuretable'),
+    (featuretables.BipolarFeaturetab, 'dbx.datafeatures.BipolarFeaturetab'),
+    (featuretables.BipolarFeaturetable, 'dbx.datafeatures.BipolarFeaturetable'),
 ]
 
 
@@ -74,6 +81,10 @@ class TestAClassKeepsTheFqcnItsArtifactsAreStoredUnder:
     A class that reported a new one would look in a directory nothing was ever
     written to, find nothing, and rebuild: the data is not lost, it is
     duplicated and orphaned, and nothing raises.
+
+    The names in the table moved once, on purpose, with the old data recovered
+    through specializations -- see LEGACY_FQCNS. That is a decision to make
+    again explicitly, not a failure to clear.
     """
 
     @pytest.mark.parametrize('cls,fqcn', LEGACY_FQCNS,

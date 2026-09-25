@@ -673,7 +673,7 @@ def eval(name):
 
 def write_exec_journal(s: str, url: str | None = None, storage_options: dict | None = None, *,
                        comment: str | None = None):
-    """Record an exec expression string in the $DBX_URL/.journal/exec/ journal.
+    """Record an exec expression string in the $DBX_ROOT/.journal/exec/ journal.
 
     ``exec`` holds *s* VERBATIM -- the string as it was typed, comment and all,
     so that a journal row can be re-run as it stands. ``comment`` holds the
@@ -682,7 +682,7 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
     query is work the journal can do once. Pass *comment* to override what
     :func:`exec_comment` reads off *s*.
     """
-    dbx_url = url or os.environ.get('DBX_URL') or os.environ.get('DBX_ROOT') or './dbx'
+    dbx_url = url or os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL') or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
     fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
     try:
@@ -845,13 +845,13 @@ def read_exec_journal(
     index: str | None = None,
     **filter_kwargs,
 ):
-    """Read recorded dbx.exec() entries from the $DBX_URL/.journal/exec/ journal."""
+    """Read recorded dbx.exec() entries from the $DBX_ROOT/.journal/exec/ journal."""
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if n_workers is None:
         n_workers = 8
 
-    dbx_url = url or os.environ.get('DBX_URL') or os.environ.get('DBX_ROOT') or './dbx'
+    dbx_url = url or os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL') or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
     fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
     try:

@@ -59,7 +59,7 @@ class TestEvalJournal:
 
     def test_exec_records_to_eval_journal(self, tmp_path, monkeypatch):
         dbx_url = str(tmp_path / 'dbx_root')
-        monkeypatch.setenv('DBX_URL', dbx_url)
+        monkeypatch.setenv('DBX_ROOT', dbx_url)
 
         block = Built(url=dbx_url, spec={'x': 1})
         block.build()
@@ -87,7 +87,7 @@ class TestEvalJournal:
     def test_write_exec_journal_before_eval_failure(self, tmp_path, monkeypatch):
         """write_exec_journal is called before __eval__ so failing expressions are recorded."""
         dbx_url = str(tmp_path / 'dbx_root')
-        monkeypatch.setenv('DBX_URL', dbx_url)
+        monkeypatch.setenv('DBX_ROOT', dbx_url)
 
         bad_expr = "1 / 0"
         with pytest.raises(ZeroDivisionError):
@@ -99,7 +99,7 @@ class TestEvalJournal:
     def test_read_exec_journal_options(self, tmp_path, monkeypatch):
         """read_exec_journal and dbx.journal support loc, iloc, filter, index, n_workers, and log."""
         dbx_url = str(tmp_path / 'dbx_root')
-        monkeypatch.setenv('DBX_URL', dbx_url)
+        monkeypatch.setenv('DBX_ROOT', dbx_url)
 
         write_exec_journal("expr1", url=dbx_url)
         write_exec_journal("expr2", url=dbx_url)
@@ -131,7 +131,7 @@ class TestEvalJournal:
     def test_read_exec_journal_prefix_matching(self, tmp_path, monkeypatch):
         """Prefix matching on exec (e.g. exec='autopath.') should match starting strings."""
         dbx_url = str(tmp_path / 'dbx_root')
-        monkeypatch.setenv('DBX_URL', dbx_url)
+        monkeypatch.setenv('DBX_ROOT', dbx_url)
 
         write_exec_journal("autopath.pipeline.Run(a=1)", url=dbx_url)
         write_exec_journal("autopath.model.Train(b=2)", url=dbx_url)
@@ -153,14 +153,14 @@ class TestExecStatements:
 
     def test_statements_share_a_namespace_and_the_last_is_the_value(self, tmp_path, monkeypatch):
         """`a; b; c` runs in order, in one namespace, and `c` is what comes back."""
-        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'dbx_root'))
 
         assert dbx.exec("x = 2; y = x * 3; y + 1") == 7
         assert dbx.exec("a = 1\nb = 2\na + b") == 3
 
     def test_last_statement_binding_returns_none(self, tmp_path, monkeypatch):
         """Nothing is evaluated last, so there is no value to return."""
-        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'dbx_root'))
 
         assert dbx.exec("x = 5; y = x + 1") is None
 
@@ -171,32 +171,32 @@ class TestExecStatements:
         that makes a class body unable to see its own names -- and the idiom
         sequencing exists for would break.
         """
-        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'dbx_root'))
 
         assert dbx.exec("n = 3; ns = [1, 2]; [i * n for i in ns]") == [3, 6]
 
     def test_dotted_names_are_imported_for_every_statement(self, tmp_path, monkeypatch):
         """Not just the one before the first `(`: any statement may name a module."""
-        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'dbx_root'))
 
         assert dbx.exec("e = xml.etree.ElementTree.Element('a'); e.tag") == 'a'
 
     def test_trailing_comment_is_ignored(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'dbx_root'))
 
         assert dbx.exec("1 + 1  # a note about why") == 2
         assert dbx.exec("x = 2; x * 3; # trailing semicolon then comment") == 6
 
     def test_nothing_to_execute_raises(self, tmp_path, monkeypatch):
         """A string that is all comment ran nothing; saying so beats returning None."""
-        monkeypatch.setenv('DBX_URL', str(tmp_path / 'dbx_root'))
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'dbx_root'))
 
         with pytest.raises(ValueError, match="No statement to execute"):
             dbx.exec("# just a comment")
 
     def test_comment_is_journaled_in_its_own_column(self, tmp_path, monkeypatch):
         dbx_url = str(tmp_path / 'dbx_root')
-        monkeypatch.setenv('DBX_URL', dbx_url)
+        monkeypatch.setenv('DBX_ROOT', dbx_url)
 
         dbx.exec("1 + 1  # why this ran")
 
@@ -205,7 +205,7 @@ class TestExecStatements:
 
     def test_no_comment_journals_as_null(self, tmp_path, monkeypatch):
         dbx_url = str(tmp_path / 'dbx_root')
-        monkeypatch.setenv('DBX_URL', dbx_url)
+        monkeypatch.setenv('DBX_ROOT', dbx_url)
 
         dbx.exec("1 + 1")
 
@@ -215,7 +215,7 @@ class TestExecStatements:
 
     def test_comment_is_filterable(self, tmp_path, monkeypatch):
         dbx_url = str(tmp_path / 'dbx_root')
-        monkeypatch.setenv('DBX_URL', dbx_url)
+        monkeypatch.setenv('DBX_ROOT', dbx_url)
 
         write_exec_journal("expr1  # nightly refresh", url=dbx_url)
         write_exec_journal("expr2  # one-off", url=dbx_url)

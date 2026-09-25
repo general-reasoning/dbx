@@ -35,9 +35,9 @@ class ExecSampleBlock(Datablock):
 
 
 def test_exec_writes_journal_entry_for_datablock(tmp_path, monkeypatch):
-    """dbx.exec(s) records to $DBX_URL eval journal and NOT to the Datablock journal."""
+    """dbx.exec(s) records to $DBX_ROOT eval journal and NOT to the Datablock journal."""
     dbx_url = str(tmp_path / "exec_root")
-    monkeypatch.setenv('DBX_URL', dbx_url)
+    monkeypatch.setenv('DBX_ROOT', dbx_url)
 
     url = str(tmp_path / "exec_block")
     expr = f"ExecSampleBlock(url='{url}')"
@@ -50,7 +50,7 @@ def test_exec_writes_journal_entry_for_datablock(tmp_path, monkeypatch):
     if not j_block.empty and 'event' in j_block.columns:
         assert 'dbx:exec' not in j_block['event'].values
 
-    # $DBX_URL eval journal MUST contain the expression
+    # $DBX_ROOT eval journal MUST contain the expression
     df_eval = dbx.journal()
     assert isinstance(df_eval, pd.DataFrame)
     assert not df_eval.empty
@@ -67,7 +67,7 @@ def test_exec_returns_non_datablock_without_journal_error():
 def test_exec_with_kwargs_and_datablock(tmp_path, monkeypatch):
     """dbx.exec(s, **kwargs) passes kwargs into context and records in eval journal."""
     dbx_url = str(tmp_path / "exec_root_kw")
-    monkeypatch.setenv('DBX_URL', dbx_url)
+    monkeypatch.setenv('DBX_ROOT', dbx_url)
 
     url = str(tmp_path / "exec_kw_block")
     expr = f"ExecSampleBlock(url='{url}', spec=dict(val=val_param))"

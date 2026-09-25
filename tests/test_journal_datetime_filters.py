@@ -118,10 +118,24 @@ def test_an_unreadable_timestamp_matches_no_date_rather_than_raising():
 
 def test_exec_journal_is_filterable_by_date(tmp_path, monkeypatch):
     """What dbx.journal(date=...) does on a real exec journal."""
-    monkeypatch.setenv('DBX_URL', str(tmp_path / 'root'))
+    monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'root'))
     write_exec_journal("1 + 1  # a comment naming this row")
 
     today = datetime.date.today().isoformat()
     assert len(dbx.journal(date=today)) == 1
     assert len(dbx.journal(date='2000-01-01')) == 0
     assert dbx.journal(date=today).iloc[0]['comment'] == 'a comment naming this row'
+
+
+def test_exec_journal_reads_dbx_root_ahead_of_dbx_url(tmp_path, monkeypatch):
+    """The exec journal resolves its lake as a block does: DBX_ROOT, then DBX_URL."""
+    from dbx.dataparts import read_exec_journal
+    monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'root'))
+    monkeypatch.setenv('DBX_URL', str(tmp_path / 'alias'))
+    write_exec_journal("1 + 1")
+    assert len(read_exec_journal(url=str(tmp_path / 'root'))) == 1
+    assert len(read_exec_journal(url=str(tmp_path / 'alias'))) == 0
+
+    monkeypatch.delenv('DBX_ROOT')
+    write_exec_journal("2 + 2")
+    assert len(read_exec_journal(url=str(tmp_path / 'alias'))) == 1

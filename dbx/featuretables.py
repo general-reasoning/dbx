@@ -32,7 +32,10 @@ from dbx.datatables import (
 from dbx.datastreams import (
     ZipStreamingDataset,
     ZipIterableStreamingDatasets,
+    column_spec,
     concat_data,
+    merge_column_specs,
+    project_column,
 )
 
 
@@ -128,6 +131,12 @@ class Datacollator(Datablock):
     ``labels`` defaults to None: a collator for signals alone -- a feature build,
     an unsupervised pass -- names no label slice, reads none, and returns
     ``(signals,)``.
+
+    A pair may be a triple, ``(slice, column, key)``, for one entry of a column
+    that holds a dict -- ``('annotations', 'annotations', 'label')`` -- and
+    ``(slice, column, [key, ...])`` is one triple per key. The entry is taken
+    where the value is picked, so it works on a row and on a stacked batch
+    alike.
     """
 
     TOPICS = {}
@@ -191,12 +200,12 @@ class Datacollator(Datablock):
         config-addressed build can afford, and not something it would report.
         """
         seen = {}
-        for s_name, _ in self.signal_pairs + self.label_pairs:
-            seen[s_name] = None
+        for pair in self.signal_pairs + self.label_pairs:
+            seen[pair[0]] = None
         return list(seen)
 
     @property
-    def signal_pairs(self) -> tuple[tuple[str, str], ...]:
+    def signal_pairs(self) -> tuple[tuple[str, ...], ...]:
         """The signal ``(slice, column)`` pairs, each in full two-part form.
 
         A pair may be declared as a bare name or a one-element sequence, both
@@ -204,12 +213,24 @@ class Datacollator(Datablock):
         has to address the data itself -- a per-tab breakdown, a log line --
         reads, rather than normalizing ``var.signals`` again at each site.
         """
-        return tuple(self._norm_pair(p) for p in self.var.signals)
+        return self._norm_pairs(self.var.signals)
 
     @property
     def label_pairs(self) -> tuple[tuple[str, str], ...]:
         """The label ``(slice, column)`` pairs, as :attr:`signal_pairs`; empty when there are none."""
-        return tuple(self._norm_pair(p) for p in (self.var.labels or ()))
+        return self._norm_pairs(self.var.labels or ())
+
+    @classmethod
+    def _norm_pairs(cls, pairs) -> tuple[tuple[str, ...], ...]:
+        """Every pair normalized, a triple naming several keys expanded to one per key."""
+        out = []
+        for pair in pairs:
+            if isinstance(pair, (list, tuple)) and len(pair) == 3:
+                keys = pair[2] if isinstance(pair[2], (list, tuple)) else (pair[2],)
+                out.extend((str(pair[0]), str(pair[1]), str(k)) for k in keys)
+            else:
+                out.append(cls._norm_pair(pair))
+        return tuple(out)
 
     @staticmethod
     def _norm_pair(pair: Any) -> tuple[str, str]:
@@ -229,8 +250,13 @@ class Datacollator(Datablock):
             arr = np.copy(arr)
         return arr
 
+    @classmethod
+    def _pick_pair(cls, row, pair, what):
+        """The value a normalized pair -- or triple -- names in *row*."""
+        return cls._pick(row, pair[0], pair[1], what, key=pair[2] if len(pair) > 2 else None)
+
     @staticmethod
-    def _pick(row, s_name, c_name, what):
+    def _pick(row, s_name, c_name, what, key=None):
         """The value at ``(s_name, c_name)`` in one nested row, or a clear error.
 
         Exact, with no fallbacks. The previous version walked the row with
@@ -247,12 +273,13 @@ class Datacollator(Datablock):
                 f"{sorted(row) if isinstance(row, dict) else type(row).__name__}"
             ) from None
         try:
-            return slice_row[c_name]
+            value = slice_row[c_name]
         except (KeyError, TypeError):
             raise KeyError(
                 f"{what}: slice {s_name!r} has no column {c_name!r}; it provides "
                 f"{sorted(slice_row) if isinstance(slice_row, dict) else type(slice_row).__name__}"
             ) from None
+        return project_column(value, key, where=f"{what}: slice {s_name!r} column {c_name!r}")
 
     def _collate_batch(self, batch: dict, norm_pairs) -> np.ndarray:
         """Collate a ``{slice: {column: values}}`` mapping already stacked over rows.
@@ -266,8 +293,7 @@ class Datacollator(Datablock):
         mirroring the signals axis of the per-sample form.
         """
         what = f"{self.__class__.__name__}._collate_batch"
-        arrays = [self._as_array(self._pick(batch, s_name, c_name, what))
-                  for s_name, c_name in norm_pairs]
+        arrays = [self._as_array(self._pick_pair(batch, pair, what)) for pair in norm_pairs]
         if len(arrays) == 1:
             return arrays[0]
         return np.stack(arrays, axis=1)
@@ -276,7 +302,7 @@ class Datacollator(Datablock):
         if not pairs:
             return np.array([])
 
-        norm_pairs = [self._norm_pair(p) for p in pairs]
+        norm_pairs = self._norm_pairs(pairs)
 
         if isinstance(datapoints, dict):
             return self._collate_batch(datapoints, norm_pairs)
@@ -285,8 +311,7 @@ class Datacollator(Datablock):
         batch_items = []
 
         for dp in datapoints:
-            dp_signals = [self._as_array(self._pick(dp, s_name, c_name, what))
-                          for s_name, c_name in norm_pairs]
+            dp_signals = [self._as_array(self._pick_pair(dp, pair, what)) for pair in norm_pairs]
 
             norm_signals = []
             for sig in dp_signals:
@@ -369,15 +394,20 @@ class _UpstreamSlices:
         items = list(slice_columns)
         if len(items) == 1 and isinstance(items[0], (list, tuple)):
             first = items[0]
-            paired = (len(first) == 2 and isinstance(first[0], str)
+            paired = (len(first) in (2, 3) and isinstance(first[0], str)
                       and isinstance(first[1], (str, list, tuple)))
             if not paired:
                 items = list(first)
         out = []
         for item in items:
-            if isinstance(item, (tuple, list)) and len(item) == 2:
+            if isinstance(item, (tuple, list)) and len(item) == 3:
+                # (slice, column, key | [keys]): part of a dict column, as
+                # DatatableBase.dataset() takes it.
+                s_name = str(item[0])
+                cols = [column_spec((item[1], item[2]))]
+            elif isinstance(item, (tuple, list)) and len(item) == 2:
                 s_name, spec = str(item[0]), item[1]
-                cols = ([str(c) for c in spec] if isinstance(spec, (list, tuple))
+                cols = ([column_spec(c) for c in spec] if isinstance(spec, (list, tuple))
                         else [str(spec)])
             else:
                 s_name, cols = str(item), None
@@ -427,11 +457,11 @@ class _UpstreamSlices:
                 pos = seen[s_name]
                 _, _, prev = routed[pos]
                 merged = None if (prev is None or cols is None) else \
-                    prev + [c for c in cols if c not in prev]
+                    merge_column_specs(prev + cols)
                 routed[pos] = (owner, s_name, merged)
             else:
                 seen[s_name] = len(routed)
-                routed.append((owner, s_name, cols))
+                routed.append((owner, s_name, None if cols is None else merge_column_specs(cols)))
         return routed
 
     def dataset(self, *slices, upstream: list | None = None, mode='map',

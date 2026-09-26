@@ -488,10 +488,15 @@ def _render_columns(columns):
 
     Keyword form when every name is an identifier, which is what a declaration
     almost always looks like, and the mapping form when one is not -- ``DATASLICE``
-    accepts both, so either rendering reads back as the same marker.
+    accepts both, so either rendering reads back as the same marker.  A column
+    declared by the structure of the dict it holds renders as ``dict(...)``, as a
+    ``DATADICT`` nested key does; a column declared by its MDS type renders as it
+    always has.
     """
     if all(isinstance(name, str) and name.isidentifier() for name in columns):
-        return ', '.join(f"{name}={coltype!r}" for name, coltype in columns.items())
+        return ', '.join(f"{name}=dict({_render_schema(coltype)})" if isinstance(coltype, dict)
+                         else f"{name}={coltype!r}"
+                         for name, coltype in columns.items())
     return repr(dict(columns))
 
 

@@ -116,6 +116,75 @@ SharedMemoryManager.enable_pid_prefixes()
 SharedMemoryManager.enable_pid_prefixes()
 
 
+# ---------------------------------------------------------------------------
+#  Column specs: a column, or a column and the keys of it to take
+# ---------------------------------------------------------------------------
+
+def column_spec(spec) -> tuple:
+    """A column spec as ``(column, keys)``: *keys* None, one key, or a tuple of keys.
+
+    A column holding a dict can be asked for whole -- ``'annotations'`` -- or
+    for part of it: ``('annotations', 'label')`` is that one entry, and
+    ``('annotations', ['label', 'site'])`` a dict of just those. This is the
+    ``(slice, column, key)`` triple of a ``dataset()``/``data()`` request,
+    with the slice already taken off.
+    """
+    if isinstance(spec, (list, tuple)):
+        if len(spec) != 2:
+            raise ValueError(f"a column spec is a column or (column, key | [keys]), got {spec!r}")
+        column, keys = str(spec[0]), spec[1]
+        if isinstance(keys, (list, tuple)):
+            return column, tuple(str(k) for k in keys)
+        return column, (None if keys is None else str(keys))
+    return str(spec), None
+
+
+def column_name(spec) -> str:
+    """The column a spec reads: rows are keyed by it whatever part of it is taken."""
+    return column_spec(spec)[0]
+
+
+def merge_column_specs(specs) -> list:
+    """*specs* with one entry per column, in first-asked order.
+
+    The same column asked for twice cannot appear twice in a row, which is
+    keyed by column. So a whole column absorbs any part of it, and two parts
+    are their keys together -- one key and another become a dict of both.
+    """
+    order, merged = [], {}
+    for spec in specs:
+        column, keys = column_spec(spec)
+        if column not in merged:
+            order.append(column)
+            merged[column] = keys
+            continue
+        prev = merged[column]
+        if prev is None or keys is None:
+            merged[column] = None
+        elif prev != keys:
+            # Two different asks of one column: every key either named, as a dict.
+            have = prev if isinstance(prev, tuple) else (prev,)
+            new = keys if isinstance(keys, tuple) else (keys,)
+            merged[column] = have + tuple(k for k in new if k not in have)
+    return [c if merged[c] is None else (c, merged[c]) for c in order]
+
+
+def project_column(value, keys, *, where: str = ''):
+    """The part of one column's *value* a spec asks for: all of it, one key, or a dict of several."""
+    if keys is None:
+        return value
+    if not isinstance(value, dict):
+        raise TypeError(f"{where}: asked for key(s) {keys!r} of a {type(value).__name__}, "
+                        f"which is not a dict")
+    wanted = keys if isinstance(keys, tuple) else (keys,)
+    missing = [k for k in wanted if k not in value]
+    if missing:
+        raise KeyError(f"{where}: no key(s) {missing}; it has {sorted(value)}")
+    if isinstance(keys, tuple):
+        return {k: value[k] for k in keys}
+    return value[keys]
+
+
 class ZipBase:
     """Merge configuration and merge logic, shared by the two zip datasets.
 
@@ -163,7 +232,9 @@ class ZipBase:
     columns : sequence | None
         Per-dataset column projection, positionally parallel to *datasets*.
         Entry *i* is either ``None`` ("every column of dataset *i*") or an
-        iterable of keys to keep.  ``None`` means no projection at all.
+        iterable of column specs to keep -- a column name, or ``(column, key)``
+        / ``(column, [keys])`` for part of a dict column (see `column_spec`).
+        ``None`` means no projection at all.
 
         Deliberately a separate argument rather than ``(dataset, columns)``
         pairs: a dataset may itself be a tuple or a list subclass, so there
@@ -256,13 +327,19 @@ class ZipBase:
         if cols is None:
             items = list(sample.items())
         else:
-            missing = [c for c in cols if c not in sample]
+            specs = [column_spec(c) for c in cols]
+            missing = [c for c, _ in specs if c not in sample]
             if missing:
                 raise KeyError(
                     f"{self.__class__.__name__} source {pos} has no column(s) "
                     f"{missing} at index {idx}; it provides {sorted(sample)}"
                 )
-            items = [(c, sample[c]) for c in cols]
+            # A spec naming key(s) of a dict column takes just those, here,
+            # as the row is assembled: only that part of the value reaches
+            # the caller -- or a DataLoader's collate.
+            items = [(c, project_column(sample[c], keys,
+                                        where=f"{self.__class__.__name__} source {pos} column {c!r}"))
+                     for c, keys in specs]
         if self.skip_none:
             items = [(k, v) for k, v in items if v is not None]
         return items

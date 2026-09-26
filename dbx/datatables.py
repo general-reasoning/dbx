@@ -33,6 +33,7 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 from .datablocks import (
+    DATADICT,
     DIR,
     DIRTOPIC,
     Datablock,
@@ -48,8 +49,11 @@ from .datastreams import (
     ZipStreamingDataset,
     _ShardSync,
     abfs_to_mds_azure,
+    column_spec,
     concat_data,
+    merge_column_specs,
     open_datastream,
+    project_column,
     read_mds_shard,
     reader_from_json,
 )
@@ -105,16 +109,40 @@ class DATASLICE(DIR, metaclass=_DataSliceMeta):
     argument when every slice declares its columns.  A bare ``DATASLICE`` declares
     none, and is the sentinel's behaviour under the marker's spelling: the
     columns are then the writer's to supply.
+
+    A column that holds a dict may be declared by the dict's structure instead
+    of by an MDS type, as a ``DATADICT`` declares its keys::
+
+        DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')
+
+    It is written as MDS ``'json'`` -- what a dict column is -- and the
+    structure is what renders, so it is in the hash, and what a
+    ``(slice, column, key)`` read names the keys of. `declared_columns` gives
+    the writer's view, `declared_schema` the declaration.
     """
 
     #: Empty on the bare marker, and set by the call that parameterises it.
     columns = {}
 
+    #: The MDS type a column declared by its dict structure is written as.
+    DICT_COLUMN_TYPE = 'json'
+
     # 3. Helpers --------------------------------------------------------
+
+    @classmethod
+    def writer_columns(cls, columns) -> dict:
+        """*columns* as an MDS writer takes them: a dict-structured column as ``'json'``."""
+        return {name: cls.DICT_COLUMN_TYPE if isinstance(coltype, dict) else coltype
+                for name, coltype in columns.items()}
 
     @staticmethod
     def _check_column(name, coltype):
         """Refuse a column that would render into an ambiguous type string."""
+        if isinstance(coltype, dict):
+            DATASLICE._check_column(name, 'dict')
+            # The same rules a DATADICT schema follows, since it renders the same way.
+            DATADICT._check_schema(coltype, (name,))
+            return
         for text, what in ((name, 'column name'), (coltype, 'column type')):
             if not isinstance(text, str):
                 raise TypeError(f"DATASLICE {what} must be a string, got {text!r}")
@@ -208,7 +236,14 @@ class DatatableBase(Datablock):
         None when nothing was declared -- the :data:`SLICETOPIC` sentinel, or a
         bare :class:`DATASLICE` -- so the columns are still the writer's to supply.
         A declaration, unlike what a writer is handed, is in the block's hash.
+        A column declared by its dict structure is its MDS type here, ``'json'``;
+        :meth:`declared_schema` has the structure.
         """
+        schema = self.declared_schema(slice)
+        return DATASLICE.writer_columns(schema) if schema else None
+
+    def declared_schema(self, slice) -> 'dict | None':
+        """The columns *slice* declares, as declared: an MDS type, or a dict column's structure."""
         node = self._topicnode(*slice.split('/'))
         columns = getattr(node, 'columns', None) if _is_topicmarker(node, DATASLICE) else None
         return dict(columns) if columns else None
@@ -254,17 +289,20 @@ class DatatableBase(Datablock):
             rows = self._read_slice(name, **kwargs)
             cols = per_slice_columns[pos] if per_slice_columns else None
             if cols is None:
-                cols = list(rows[0]) if rows else []
+                specs = [(c, None) for c in (rows[0] if rows else [])]
             else:
-                missing = [c for c in cols if rows and c not in rows[0]]
+                specs = [column_spec(c) for c in cols]
+                missing = [c for c, _ in specs if rows and c not in rows[0]]
                 if missing:
                     raise KeyError(
                         f"{self.__class__.__name__}.data: slice {name!r} has no "
                         f"column(s) {missing}; it provides {sorted(rows[0])}"
                     )
-            out[name] = {c: concat_data([r[c] for r in rows]) if concat
-                         else [r[c] for r in rows]
-                         for c in cols}
+            out[name] = {}
+            for c, keys in specs:
+                where = f"{self.__class__.__name__}.data: slice {name!r} column {c!r}"
+                vals = [project_column(r[c], keys, where=where) for r in rows]
+                out[name][c] = concat_data(vals) if concat else vals
 
         if nested:
             return out
@@ -285,9 +323,10 @@ class DatatableBase(Datablock):
         """Normalize a ``*slice_columns`` spec into ``(names, per_slice_columns)``.
 
         Shared by `dataset()` and `data()` so the two accept exactly the same
-        spec: a bare slice name, a ``(slice, column)`` pair, or a
-        ``(slice, [columns])`` pair, in any mixture. The two differ in what
-        they do with a slice, never in how a caller names one.
+        spec: a bare slice name, a ``(slice, column)`` pair, a
+        ``(slice, [columns])`` pair, or a ``(slice, column, key | [keys])``
+        triple for part of a dict column, in any mixture. The two differ in
+        what they do with a slice, never in how a caller names one.
 
         *names* is in the order the slices were asked for -- position decides
         which source is zipped where, so it is derived from the caller's
@@ -296,7 +335,7 @@ class DatatableBase(Datablock):
         items = list(slice_columns)
         if len(items) == 1 and isinstance(items[0], (list, tuple)):
             first = items[0]
-            if isinstance(first, list) or not (len(first) == 2 and isinstance(first[0], str) and first[0] in self.slices()):
+            if isinstance(first, list) or not (len(first) in (2, 3) and isinstance(first[0], str) and first[0] in self.slices()):
                 items = list(first)
 
         if columns is not None:
@@ -321,18 +360,27 @@ class DatatableBase(Datablock):
             for item in items:
                 if isinstance(item, str):
                     s_name, cols = item, None
+                elif isinstance(item, (tuple, list)) and len(item) == 3:
+                    s_name, column, keys = str(item[0]), item[1], item[2]
+                    if isinstance(column, (list, tuple)):
+                        raise ValueError(
+                            f"{self.__class__.__name__}.dataset: a key applies to one column, "
+                            f"got ({s_name!r}, {column!r}, {keys!r})"
+                        )
+                    cols = [column_spec((column, keys))]
+                    has_column_filter = True
                 elif isinstance(item, (tuple, list)) and len(item) == 2:
                     s_name = str(item[0])
                     c_val = item[1]
                     if isinstance(c_val, (list, tuple)):
-                        cols = [str(c) for c in c_val]
+                        cols = [column_spec(c) for c in c_val]
                     else:
                         cols = [str(c_val)]
                     has_column_filter = True
                 else:
                     raise ValueError(
-                        f"{self.__class__.__name__}.dataset: each slice_column entry must be a slice name (str) "
-                        f"or a (slice, column) pair, got {item!r}"
+                        f"{self.__class__.__name__}.dataset: each slice_column entry must be a slice name (str), "
+                        f"a (slice, column) pair or a (slice, column, key) triple, got {item!r}"
                     )
 
                 if s_name not in slice_cols_map:
@@ -350,7 +398,9 @@ class DatatableBase(Datablock):
             names = self.slice_names(slice_order)
 
             if has_column_filter:
-                per_slice_columns = [slice_cols_map[name] for name in names]
+                per_slice_columns = [None if slice_cols_map[name] is None
+                                     else merge_column_specs(slice_cols_map[name])
+                                     for name in names]
                 if all(c is None for c in per_slice_columns):
                     per_slice_columns = None
             else:
@@ -380,7 +430,12 @@ class DatatableBase(Datablock):
             - `str`: slice name for all columns (e.g. `"features"`)
             - `(slice, column)` tuple: slice name and specific column (e.g. `("features", "col1")`)
             - `(slice, [col1, col2])` tuple: slice name and list of columns.
-            Passing multiple `(slice, col)` tuples for the same slice accumulates their columns.
+            - `(slice, column, key)` triple: one entry of a column holding a dict --
+              ``row[slice][column]`` is then ``value[key]`` -- and
+              `(slice, column, [key1, key2])` a dict of just those entries. Taken
+              as each row is assembled, so nothing else of the dict is passed on.
+            Passing multiple `(slice, col)` tuples for the same slice accumulates their columns;
+            the same column asked for whole and in part is read whole.
             If no positional arguments are passed, defaults to all slices with all columns.
         mode : {'map', 'iter'}
             How the slices are read.

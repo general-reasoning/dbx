@@ -161,7 +161,7 @@ def _pair_key(pair: tuple[str, str]) -> str:
     same name, and keying by the column alone would silently drop one of them
     -- the same collision `dataset()` keys its rows to avoid.
     """
-    return f"{pair[0]}.{pair[1]}"
+    return '.'.join(str(p) for p in pair)
 
 
 def _pair_array(collator: Datacollator, data: dict, pair: tuple[str, str]) -> np.ndarray:
@@ -171,7 +171,7 @@ def _pair_array(collator: Datacollator, data: dict, pair: tuple[str, str]) -> np
     column that is not there raises instead of resolving to whatever the
     mapping happened to hold first.
     """
-    value = Datacollator._pick(data, pair[0], pair[1], f"probes: pair {pair!r}")
+    value = Datacollator._pick_pair(data, pair, f"probes: pair {pair!r}")
     return Datacollator._as_array(value)
 
 
@@ -215,7 +215,9 @@ def signal_matrix(collator: Datacollator, data: dict, *,
             arr = aggregate_features_np(arr, aggregation)
         flat = arr.reshape(len(arr), -1)
         blocks.append(flat)
-        layout.append((pair[0], pair[1], int(flat.shape[1])))
+        # A triple's column is named with its key, so the layout still says
+        # which entry a coefficient came from.
+        layout.append((pair[0], '.'.join(str(p) for p in pair[1:]), int(flat.shape[1])))
 
     rows = {b.shape[0] for b in blocks}
     if len(rows) != 1:

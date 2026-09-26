@@ -191,3 +191,81 @@ class TestADictColumnDeclaredByItsStructure:
             DATASLICE(annotations=dict(**{'a/b': 'str'}))
         with pytest.raises(TypeError):
             DATASLICE(annotations=dict(cohort=3))
+
+
+class BadRowTab(Datatab):
+    TOPICS = {'annotations': DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')}
+
+    @dataclass
+    class VAR(Datatab.VAR):
+        row: dict = None
+
+    def __build__(self):
+        with self.slice_writers() as writers:
+            writers['annotations'].write({'annotations': self.var.row, 'idx': 0})
+
+
+class NestedTab(Datatab):
+    TOPICS = {'a': DATASLICE(rec=dict(site=dict(name='str', code='int')))}
+
+    @dataclass
+    class VAR(Datatab.VAR):
+        row: dict = None
+
+    def __build__(self):
+        with self.slice_writers() as writers:
+            writers['a'].write({'rec': self.var.row})
+
+
+class TestTheDeclaredStructureIsChecked:
+
+    @pytest.mark.parametrize('row, error, match', [
+        ({'cohort': 'c'}, ValueError, r"missing \['recurrence'\]"),
+        ({'cohort': 'c', 'recurrence': 1, 'extra': 2}, ValueError, r"not declared \['extra'\]"),
+        ('not a dict', TypeError, "declared a dict"),
+    ])
+    def test_a_row_is_refused_when_written(self, tmp_path, row, error, match):
+        with pytest.raises(error, match=match):
+            BadRowTab(url=str(tmp_path), spec=dict(row=row)).build()
+
+    def test_a_row_that_matches_is_written(self, tmp_path):
+        t = BadRowTab(url=str(tmp_path), spec=dict(row={'cohort': 'c', 'recurrence': 1})).build()
+        assert t.data(('annotations', 'annotations', 'cohort')) == {'annotations': {'annotations': ['c']}}
+
+    def test_nested_structure_too(self, tmp_path):
+        with pytest.raises(ValueError, match=r"\['site'\].*missing \['code'\]"):
+            NestedTab(url=str(tmp_path), spec=dict(row={'site': {'name': 'x'}})).build()
+        NestedTab(url=str(tmp_path / 'ok'), spec=dict(row={'site': {'name': 'x', 'code': 1}})).build()
+
+    def test_a_key_the_slice_does_not_declare_is_refused_before_reading(self, tmp_path):
+        t = DeclaredTab(url=str(tmp_path))            # not built: nothing is read
+        with pytest.raises(KeyError, match=r"declares keys \['cohort', 'recurrence'\], not \['stage'\]"):
+            t.dataset(('annotations', 'annotations', 'stage'))
+        with pytest.raises(KeyError, match="not"):
+            t.data(('annotations', 'annotations', ['cohort', 'stage']))
+
+    def test_a_key_of_a_column_declared_scalar_is_refused(self, tmp_path):
+        with pytest.raises(TypeError, match="declares column 'idx' as 'int'"):
+            DeclaredTab(url=str(tmp_path)).dataset(('annotations', 'idx', 'k'))
+
+    def test_an_undeclared_slice_is_not_checked(self, tab):
+        """AnnotatedTab passes its columns to the writer: there is no declaration to hold it to."""
+        assert tab.dataset(('annotations', 'annotations', 'site'))[0] == {'annotations': {'annotations': 's0'}}
+
+
+def test_a_table_holds_a_key_to_its_tabs_declaration(tmp_path):
+    """A table's slices are declared by its tabs, not in its own TOPICS."""
+    from dbx.datatables import Datatable
+
+    class DeclaredTable(Datatable):
+        TAB = DeclaredTab
+
+        @property
+        def n_tabs(self):
+            return 2
+
+    table = DeclaredTable(url=str(tmp_path))
+    with pytest.raises(KeyError, match=r"not \['stage'\]"):
+        table.dataset(('annotations', 'annotations', 'stage'))
+    table.build()
+    assert table.data(('annotations', 'annotations', 'recurrence'))['annotations']['annotations'] == [0, 1, 2] * 2

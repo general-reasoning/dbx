@@ -462,6 +462,8 @@ class _UpstreamSlices:
             else:
                 seen[s_name] = len(routed)
                 routed.append((owner, s_name, None if cols is None else merge_column_specs(cols)))
+        for owner, s_name, cols in routed:
+            owner._check_column_keys(s_name, cols)
         return routed
 
     def dataset(self, *slices, upstream: list | None = None, mode='map',

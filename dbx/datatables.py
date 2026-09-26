@@ -242,6 +242,55 @@ class DatatableBase(Datablock):
         schema = self.declared_schema(slice)
         return DATASLICE.writer_columns(schema) if schema else None
 
+    def _check_column_keys(self, slice, cols):
+        """Refuse a ``(slice, column, key)`` the slice's declaration says cannot be read.
+
+        Only where the slice declares the column's structure: an undeclared
+        slice, or a column declared plain ``'json'``, has nothing to check
+        against, and its keys are found or not when the data is.
+        """
+        keyed = [column_spec(spec) for spec in cols or ()]
+        keyed = [(column, keys) for column, keys in keyed if keys is not None]
+        if not keyed:
+            return
+        schema = self._slice_declaration(slice)
+        for column, keys in keyed:
+            if column not in schema:
+                continue
+            declared = schema[column]
+            if not isinstance(declared, dict):
+                if declared == DATASLICE.DICT_COLUMN_TYPE:
+                    continue
+                raise TypeError(
+                    f"{self.__class__.__name__}: slice {slice!r} declares column {column!r} "
+                    f"as {declared!r}, which has no keys to take {keys!r} of"
+                )
+            asked = keys if isinstance(keys, tuple) else (keys,)
+            undeclared = [k for k in asked if k not in declared]
+            if undeclared:
+                raise KeyError(
+                    f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
+                    f"keys {list(declared)}, not {undeclared}"
+                )
+
+    def _slice_declaration(self, slice) -> dict:
+        """*slice*'s declared schema wherever it is declared -- here, or on a table's tabs -- else ``{}``.
+
+        A table's slices are its tabs' topics, not its own, and every tab of
+        one table is one TAB class, so the first tab speaks for them all.
+        """
+        try:
+            return self.declared_schema(slice) or {}
+        except KeyError:
+            pass
+        n_tabs = getattr(self, 'n_tabs', 0) or 0
+        if n_tabs and hasattr(self, 'tab'):
+            try:
+                return self.tab(0).declared_schema(slice) or {}
+            except KeyError:
+                pass
+        return {}
+
     def declared_schema(self, slice) -> 'dict | None':
         """The columns *slice* declares, as declared: an MDS type, or a dict column's structure."""
         node = self._topicnode(*slice.split('/'))
@@ -401,6 +450,8 @@ class DatatableBase(Datablock):
                 per_slice_columns = [None if slice_cols_map[name] is None
                                      else merge_column_specs(slice_cols_map[name])
                                      for name in names]
+                for name, cols in zip(names, per_slice_columns):
+                    self._check_column_keys(name, cols)
                 if all(c is None for c in per_slice_columns):
                     per_slice_columns = None
             else:
@@ -871,7 +922,11 @@ class Datatab(DatatableBase):
                 writer = MDSWriter(
                     out=outdirs[name], columns=slices[name], **writer_kwargs,
                 )
-                writers[name] = sync.track(name, writer)
+                # A column declared by its dict structure is checked row by
+                # row against it, here, where the row that is wrong is known.
+                structures = {c: t for c, t in (self.declared_schema(name) or {}).items()
+                              if isinstance(t, dict)}
+                writers[name] = sync.track(name, writer, structures)
             yield writers
             sync.check_lockstep(self.__class__.__name__)
             for writer in writers.values():

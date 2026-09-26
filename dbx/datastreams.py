@@ -185,6 +185,30 @@ def project_column(value, keys, *, where: str = ''):
     return value[keys]
 
 
+def check_structure(value, schema: dict, *, where: str = ''):
+    """Refuse a dict that does not have exactly the keys *schema* declares, at every level.
+
+    The keys, not their types: a declared ``'int'`` is written by json, and a
+    numpy integer and a Python one are the same value to it. What matters is
+    the shape -- a missing key is a ``(slice, column, key)`` read that fails
+    later, far from the row that caused it, and an undeclared one is data the
+    hash says is not there.
+    """
+    if not isinstance(value, dict):
+        raise TypeError(f"{where}: declared a dict of {sorted(schema)}, got a {type(value).__name__}")
+    missing = [k for k in schema if k not in value]
+    extra = [k for k in value if k not in schema]
+    if missing or extra:
+        raise ValueError(
+            f"{where}: declared keys {list(schema)}"
+            + (f"; missing {missing}" if missing else '')
+            + (f"; not declared {extra}" if extra else '')
+        )
+    for key, sub in schema.items():
+        if isinstance(sub, dict):
+            check_structure(value[key], sub, where=f"{where}[{key!r}]")
+
+
 class ZipBase:
     """Merge configuration and merge logic, shared by the two zip datasets.
 
@@ -866,13 +890,20 @@ class _CountingWriter:
     a tab is handed behave exactly as before.
     """
 
-    def __init__(self, name, writer, sync):
+    def __init__(self, name, writer, sync, structures=None):
         self.name = name
         self.n_written = 0
         self._writer = writer
         self._sync = sync
+        #: ``{column: schema}`` for the columns this slice declares by the
+        #: structure of the dict they hold -- ``DATASLICE(a=dict(k='int'))``.
+        self._structures = dict(structures or {})
 
     def write(self, sample):
+        for column, schema in self._structures.items():
+            if column in sample:
+                check_structure(sample[column], schema,
+                                where=f"slice {self.name!r} row {self.n_written} column {column!r}")
         # MDSWriter.write() starts a new shard by itself when the byte budget
         # (size_limit) would be exceeded.  That boundary is at a sample count
         # nothing else shares, so it defeats the whole point of flush_every --
@@ -954,8 +985,8 @@ class _ShardSync:
         self.every = every
         self.writers = []
 
-    def track(self, name, writer) -> _CountingWriter:
-        counting = _CountingWriter(name, writer, self)
+    def track(self, name, writer, structures=None) -> _CountingWriter:
+        counting = _CountingWriter(name, writer, self, structures)
         self.writers.append(counting)
         return counting
 

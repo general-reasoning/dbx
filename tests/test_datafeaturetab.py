@@ -509,3 +509,41 @@ if __name__ == "__main__":
     import sys
     dbx.dataparts.gitwrkreposetup = lambda *a, **k: None
     sys.exit(pytest.main([__file__]))
+
+
+def test_a_collator_quotes_as_a_block_not_as_a_function():
+    """`dbx.quote(collator)` asked callable() first, and a Datacollator is callable.
+
+    It then tried to render the INSTANCE as a function, by a __qualname__ it
+    does not have -- which is how a pipeline passing ``collator=dbx.quote(c)``
+    died before building anything.
+    """
+    import dbx
+    from dbx.datafeatures import Datacollator
+
+    c = Datacollator(spec=dict(signals=[("features", "feature_final")]))
+    assert callable(c)
+    assert dbx.quote(c) == c.quote()
+    assert dbx.eval(dbx.quote(c)).hash == c.hash
+    # ... and as an argument to a quoted call, which goes through quote() too.
+    assert c.quote() in dbx.quotefn("some.pipeline", collator=c).replace('\\"', '"')
+    # A CLASS still renders as the call it names.
+    assert dbx.quote(Datacollator, spec={}).startswith("$dbx.datafeatures.Datacollator(")
+
+
+def test_a_callable_instance_that_cannot_quote_itself_is_refused_by_name():
+    """No __qualname__ and no .quote(): nothing could rebuild it, and the error says so."""
+    import dbx
+
+    class Evaluator:
+        def __call__(self, x):
+            return x
+
+    for attempt in (lambda: dbx.quote(Evaluator()),
+                    lambda: dbx.quotefn(Evaluator()),
+                    lambda: dbx.quotefn("some.fn", Evaluator())):
+        with pytest.raises(TypeError, match="cannot quote a Evaluator instance"):
+            attempt()
+    # A function and a class still render as the calls they name.
+    assert dbx.quote(len, 3) == "$builtins.len(3)"
+    assert dbx.quote(Evaluator).endswith("Evaluator()")

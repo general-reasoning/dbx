@@ -2775,10 +2775,29 @@ def size(entries):
     """Sum the ``size`` of every file detail dict in *entries*."""
     return sum((entry.get('size') or 0) for entry in entries)
 
+def _qualified_name_(fn) -> str:
+    """``module.qualname`` of a function or class, as a specline names it.
+
+    A callable INSTANCE has neither, and there is no specline that rebuilds an
+    arbitrary object -- so it is refused, by name, rather than failing on the
+    missing attribute. A self-quoting one (a Datablock with a ``__call__``)
+    never gets here: `quote` renders it with its own ``quote()``.
+    """
+    qualname = getattr(fn, '__qualname__', None)
+    module = getattr(fn, '__module__', None)
+    if qualname is None or module is None:
+        raise TypeError(
+            f"cannot quote a {type(fn).__name__} instance: it is callable, but it "
+            f"is neither a function or class (no __qualname__) nor self-quoting "
+            f"(no .quote()), so there is no specline that rebuilds it"
+        )
+    return f"{module}.{qualname}"
+
+
 def quotefn(fn, *args, tag="$", **kwargs):
     log = Logger()
     if callable(fn):
-        fn = f"{fn.__module__}.{fn.__qualname__}"
+        fn = _qualified_name_(fn)
     def quote_arg(arg):
         q = quote(arg)
         if isinstance(q, str) and (q.startswith("$") or q.startswith("@") or q.startswith("#")):
@@ -2794,21 +2813,26 @@ def quotefn(fn, *args, tag="$", **kwargs):
 
 def quote(obj, *args, tag="$", **kwargs):
     log = Logger()
-    if not callable(obj):
+    if not isinstance(obj, type) and hasattr(obj, 'quote') and callable(obj.quote):
+        # An INSTANCE that quotes itself renders itself -- asked before
+        # callable(), because being callable does not make it a function: a
+        # Datacollator is a block with a __call__, and has no __qualname__ to
+        # render. A class is excluded: `quote(MyBlock, spec=...)` is a call to
+        # render, and a Datablock class has a `quote` attribute too.
+        assert len(args) == 0, f"Nonempty args for a self-quoting obj: {args}"
+        assert len(kwargs) == 0, f"Nonempty kwargs for a self-quoting obj: {kwargs}"
+        _quote = obj.quote()
+        log.detailed(f"===============> Quoted {obj=} to {repr(_quote)}")
+    elif not callable(obj):
         assert len(args) == 0, f"Nonempty args for a noncallable obj: {args}"
         assert len(kwargs) == 0, f"Nonempty kwargs for a noncallable obj: {kwargs}"
-        if hasattr(obj, 'quote') and callable(obj.quote):
-            # Anything that knows how to quote itself renders itself.
-            _quote = obj.quote()
-        elif isinstance(obj, str):
+        if isinstance(obj, str):
             _quote = repr(obj)
         else:
             _quote = obj
         log.detailed(f"===============> Quoted {obj=} to {repr(_quote)}")
     else:
-        func = obj
-        fn = f"{func.__module__}.{func.__qualname__}"
-        _quote = quotefn(fn, *args, tag=tag, **kwargs)
+        _quote = quotefn(_qualified_name_(obj), *args, tag=tag, **kwargs)
     return _quote
 
 def dbx_repos(repopath=None):

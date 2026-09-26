@@ -18,6 +18,7 @@ import os
 import pickle
 import pprint as _pprint_
 import queue
+import fnmatch
 import re
 import shutil
 import socket
@@ -673,7 +674,7 @@ def eval(name):
 
 def write_exec_journal(s: str, url: str | None = None, storage_options: dict | None = None, *,
                        comment: str | None = None, session: str | None = None,
-                       written_entries=None, dt: str | None = None,
+                       datajournal_entries=None, dt: str | None = None,
                        end_dt: str | None = None) -> dict:
     """Record an exec expression string in the $DBX_ROOT/.journal/exec/ journal.
 
@@ -685,7 +686,7 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
     :func:`exec_comment` reads off *s*.
 
     ``session`` is the `Datajournal` session the command ran under, and
-    ``written_entries`` the block journal entries it wrote -- the keys from
+    ``datajournal_entries`` the block journal entries it wrote -- the keys from
     this row to what the command did. *dt* is when the command started --
     ``datetime`` and ``exec:start:datetime`` -- and *end_dt* when it finished,
     ``exec:end:datetime``: `exec` records the row once it is over. Returns the
@@ -703,13 +704,13 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
     dt = dt or datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
     entry_data = {
         'exec': str(s),
-        'comment': comment if comment is not None else exec_comment(s),
         'datetime': dt,
         'exec:start:datetime': dt,
         'exec:end:datetime': end_dt,
         'id': id,
         'session': session,
-        'written_entries': list(written_entries or []),
+        'datajournal_entries': list(datajournal_entries or []),
+        'comment': comment if comment is not None else exec_comment(s),
     }
     df = pd.DataFrame([entry_data])
     with fs.open(file_path, 'wb') as f:
@@ -717,9 +718,23 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
     return entry_data
 
 
+def _is_glob_(p: str) -> bool:
+    """A filter value is a shell-style glob when it has a wildcard and nothing only a regex would use.
+
+    ``'*a6*'`` (a6 anywhere) and ``'a6*'`` (a6 at the start) are globs;
+    ``'^a6'`` and ``'a6.*'`` are regexes. Deciding it is what keeps ``'a6*'``
+    meaning what it looks like: read as a regex as well, it would also match
+    any 'a' at all.
+    """
+    return any(ch in p for ch in '*?') and not any(ch in p for ch in '^$\\.+()|{}')
+
+
 def _match_single_journal_val(x, p) -> bool:
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return False
+    if isinstance(p, str) and _is_glob_(p):
+        # Anchored, as a glob is: the whole value, not a part of it.
+        return fnmatch.fnmatchcase(str(x), p)
     if isinstance(p, str):
         x_str = str(x)
         if p in x_str:
@@ -848,13 +863,21 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
     return df
 
 
+def _shell_double_quoted_(text: str) -> str:
+    """*text* escaped for the inside of a bash double-quoted string: \\, ", $ and `."""
+    for ch in ('\\', '"', '$', '`'):
+        text = text.replace(ch, '\\' + ch)
+    return text
+
+
 class ExecjournalEntry(pd.Series):
     """One `dbx.exec` command, as the exec journal recorded it.
 
     The counterpart of `DatajournalEntry` for the exec journal: ``exec``,
-    ``comment``, ``datetime``, ``id``, ``session`` and ``written_entries`` are
-    its columns, and :meth:`entries` follows the last of them to the block
-    journal entries the command wrote.
+    ``exec``, ``datetime``, ``id``, ``session``, ``datajournal_entries`` and
+    ``comment`` are its columns; :meth:`entries` and :meth:`datajournal`
+    follow ``datajournal_entries`` to the block journal entries the command
+    wrote.
     """
     #: Carried by pandas across operations that rebuild the object -- see
     #: `DatajournalEntry._metadata`.
@@ -872,6 +895,17 @@ class ExecjournalEntry(pd.Series):
         return Datajournal(storage_options=self.storage_options or None).read_entries(
             ExecjournalEntry._written_paths_(self), n_workers=n_workers)
 
+    def datajournal(self, *, n_workers: int | None = None):
+        """The block journal entries this command wrote, as one `DatajournalFrame`.
+
+        Its ``datajournal_entries``, read as a block journal is -- the same
+        legacy columns resolved, filterable the same way -- one row per entry,
+        in the order written.
+        """
+        from .datablocks import Datajournal
+        return Datajournal(storage_options=self.storage_options or None).read_frame(
+            ExecjournalEntry._written_paths_(self), n_workers=n_workers)
+
     def rerun(self, **kwargs):
         """Execute this command's ``exec`` string again, through `dbx.exec`, and return its value.
 
@@ -879,15 +913,20 @@ class ExecjournalEntry(pd.Series):
         ``written_entries``. It runs against the code as it is NOW -- nothing
         here checks out the revision the original ran under. *kwargs* bind
         names for the statements, as `dbx.exec`'s own do.
+
+        Prints the command first, as the shell line that would run it --
+        ``dbx.pprint "..."`` -- so what is being re-run is on screen, and can be
+        pasted.
         """
+        print(f'dbx.pprint "{_shell_double_quoted_(self["exec"])}"', flush=True)
         return exec(self['exec'], **kwargs)
 
     # 4. Helpers --------------------------------------------------------
 
     @staticmethod
     def _written_paths_(row) -> list:
-        """The ``written_entries`` of *row* as a list of paths; empty for a row from before the column."""
-        paths = row.get('written_entries')
+        """The ``datajournal_entries`` of *row* as a list of paths; empty for a row from before the column."""
+        paths = row.get('datajournal_entries')
         if paths is None or (isinstance(paths, float) and pd.isna(paths)):
             return []
         return [str(p) for p in paths]
@@ -924,8 +963,38 @@ class ExecjournalFrame(pd.DataFrame):
     def entries(self, *, n_workers: int | None = None) -> list:
         """The block journal entries every command here wrote: row by row, each in the order written."""
         from .datablocks import Datajournal
-        paths = [p for _, row in self.iterrows() for p in ExecjournalEntry._written_paths_(row)]
-        return Datajournal(storage_options=self.storage_options or None).read_entries(paths, n_workers=n_workers)
+        return Datajournal(storage_options=self.storage_options or None).read_entries(
+            self._written_paths_(), n_workers=n_workers)
+
+    def datajournal(self, *, n_workers: int | None = None):
+        """What :meth:`entries` reads, as one `DatajournalFrame`."""
+        from .datablocks import Datajournal
+        return Datajournal(storage_options=self.storage_options or None).read_frame(
+            self._written_paths_(), n_workers=n_workers)
+
+    def _written_paths_(self) -> list:
+        return [p for _, row in self.iterrows() for p in ExecjournalEntry._written_paths_(row)]
+
+
+#: The exec journal's columns in the order a frame shows them: the command first
+#: and what it was FOR last, with what it did between.
+EXEC_JOURNAL_COLUMNS = ['exec', 'datetime', 'exec:start:datetime', 'exec:end:datetime',
+                        'id', 'session', 'datajournal_entries', 'comment']
+
+
+def _exec_journal_columns_(df: pd.DataFrame) -> pd.DataFrame:
+    """Legacy column names resolved, and ``exec`` first, ``comment`` last."""
+    if 'written_entries' in df.columns:
+        # Its name for a day, before `datajournal_entries`: taken per row, so
+        # a journal holding rows of both kinds loses neither.
+        if 'datajournal_entries' in df.columns:
+            df['datajournal_entries'] = df['datajournal_entries'].combine_first(df['written_entries'])
+        else:
+            df = df.rename(columns={'written_entries': 'datajournal_entries'})
+        df = df.drop(columns=['written_entries'], errors='ignore')
+    middle = [c for c in df.columns if c not in ('exec', 'comment')]
+    return df[[c for c in ('exec',) if c in df.columns] + middle
+              + [c for c in ('comment',) if c in df.columns]]
 
 
 def read_exec_journal(
@@ -961,7 +1030,7 @@ def read_exec_journal(
         files = []
 
     if not files:
-        df = pd.DataFrame(columns=['exec', 'comment', 'datetime', 'exec:start:datetime', 'exec:end:datetime', 'id', 'session', 'written_entries'])
+        df = pd.DataFrame(columns=EXEC_JOURNAL_COLUMNS)
     else:
         def read_file(file):
             with fs.open(file, 'rb') as f:
@@ -978,9 +1047,9 @@ def read_exec_journal(
                         log.warning(f"Skipping unreadable exec journal file: {e}")
                     continue
         if not dfs:
-            df = pd.DataFrame(columns=['exec', 'comment', 'datetime', 'exec:start:datetime', 'exec:end:datetime', 'id', 'session', 'written_entries'])
+            df = pd.DataFrame(columns=EXEC_JOURNAL_COLUMNS)
         else:
-            df = pd.concat(dfs, ignore_index=True)
+            df = _exec_journal_columns_(pd.concat(dfs, ignore_index=True))
             if 'datetime' in df.columns:
                 df = df.sort_values('datetime', ascending=False).reset_index(drop=True)
 
@@ -1150,7 +1219,7 @@ def exec(s=None, **kwargs):
         finally:
             end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
             write_exec_journal(s, session=dj.session, dt=dt, end_dt=end_dt,
-                               written_entries=dj.written_entries()[written_before:])
+                               datajournal_entries=dj.written_entries()[written_before:])
 
 
 def _exec_statements_(s, kwargs):

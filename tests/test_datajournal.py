@@ -290,7 +290,7 @@ class TestExec:
         # The command is over, so its scope is closed and they write elsewhere now.
         assert a.datajournal is b.datajournal is DEFAULT_DATAJOURNAL
         entries = [blk.journal(hash=blk.hash, loc=0) for blk in (a, b)]
-        assert sorted(row['written_entries']) == sorted(e['entry_path'] for e in entries)
+        assert sorted(row['datajournal_entries']) == sorted(e['entry_path'] for e in entries)
         assert {e.block.session for e in entries} == {session}
 
     def test_a_block_constructed_deep_inside_is_covered(self, tmp_path):
@@ -299,12 +299,12 @@ class TestExec:
             blk.build()
             return None
         dbx.exec("pipeline()", pipeline=pipeline)
-        assert len(self._row(tmp_path)['written_entries']) == 1
+        assert len(self._row(tmp_path)['datajournal_entries']) == 1
 
     def test_a_failing_command_still_records_what_it_wrote(self, tmp_path):
         with pytest.raises(ZeroDivisionError):
             dbx.exec("Built(url=root, spec={'x': 1}).build(); 1/0", Built=Built, root=str(tmp_path))
-        assert len(self._row(tmp_path)['written_entries']) == 1
+        assert len(self._row(tmp_path)['datajournal_entries']) == 1
 
     def test_one_row_written_when_the_command_is_over(self, tmp_path):
         from dbx.dataparts import read_exec_journal
@@ -486,3 +486,88 @@ class TestJournalIndex:
     def test_an_explicit_column_must_exist(self):
         with pytest.raises(KeyError):
             dbx.journal(pd.DataFrame({'hash': ['h']}), index='id')
+
+
+class TestExecjournalShape:
+
+    @pytest.fixture(autouse=True)
+    def lake(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+
+    def test_exec_first_comment_last(self, tmp_path):
+        dbx.exec("1 + 1  # why")
+        cols = list(dbx.journal().columns)
+        assert cols[0] == 'exec' and cols[-1] == 'comment'
+        assert 'datajournal_entries' in cols and 'written_entries' not in cols
+
+    def test_a_row_under_the_old_column_name_still_reads(self, tmp_path):
+        import os
+        dbx.exec("Built(url=root, spec={'x': 1}).build()", Built=Built, root=str(tmp_path))
+        exec_dir = os.path.join(str(tmp_path), '.journal', 'exec')
+        [f] = os.listdir(exec_dir)
+        old = pd.read_parquet(os.path.join(exec_dir, f)).rename(
+            columns={'datajournal_entries': 'written_entries'})
+        old.to_parquet(os.path.join(exec_dir, f))
+        dbx.exec("2 + 2")
+        rows = dbx.journal(index=None)
+        assert 'written_entries' not in rows.columns
+        assert [len(v) for v in rows['datajournal_entries']] == [0, 1]
+
+    def test_datajournal_is_a_frame_of_what_it_wrote(self, tmp_path):
+        a, b = dbx.exec("a = Built(url=root, spec={'x': 1}); b = Built(url=root, spec={'x': 2}); "
+                        "a.build(); b.build(); (a, b)", Built=Built, root=str(tmp_path))
+        entry = dbx.journal(iloc=0)
+        frame = entry.datajournal()
+        assert isinstance(frame, DatajournalFrame)
+        assert list(frame['hash']) == [a.hash, b.hash]
+        assert list(frame['entry_path']) == [e['entry_path'] for e in entry.entries()]
+        assert list(dbx.journal().datajournal()['hash']) == [a.hash, b.hash]
+
+    def test_a_command_that_wrote_nothing_has_an_empty_frame(self, tmp_path):
+        dbx.exec("1 + 1")
+        frame = dbx.journal(iloc=0).datajournal()
+        assert isinstance(frame, DatajournalFrame) and len(frame) == 0
+
+    def test_rerun_prints_the_shell_line_first(self, tmp_path, capsys):
+        dbx.exec("x = \"$HOME\"; 1 + 1  # c", )
+        dbx.journal(iloc=0).rerun()
+        out = capsys.readouterr().out
+        assert out.splitlines()[0] == 'dbx.pprint "x = \\"\\$HOME\\"; 1 + 1  # c"'
+
+
+class TestFilterPatterns:
+    """A filter value is a substring, a regex, or a glob -- any one matching is a match."""
+
+    @pytest.fixture(autouse=True)
+    def lake(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+
+    @pytest.fixture
+    def ids(self):
+        return ['a6ff00', 'b0a6c1', 'c1d2e3']
+
+    @pytest.mark.parametrize('pattern, expected', [
+        ('^a6', ['a6ff00']),                  # regex, anchored
+        ('a6', ['a6ff00', 'b0a6c1']),         # substring
+        ('*a6*', ['a6ff00', 'b0a6c1']),       # glob, anywhere
+        ('a6*', ['a6ff00']),                  # glob, at the start
+        ('*e3', ['c1d2e3']),                  # glob, at the end
+        ('^zz', []),
+    ])
+    def test_a_frame(self, ids, pattern, expected):
+        frame = dbx.journal(pd.DataFrame({'id': ids, 'hash': ['h'] * 3}), id=pattern, index=None)
+        assert sorted(frame['id']) == expected
+
+    def test_the_block_journal(self, tmp_path):
+        b = block(tmp_path)
+        b.build()
+        entry_id = b.journal(iloc=0)['id']
+        assert len(b.journal(id=f'^{entry_id[:4]}')) == 1
+        assert len(b.journal(id=f'*{entry_id[2:6]}*')) == 1
+        assert len(b.journal(id='^nomatch')) == 0
+
+    def test_the_exec_journal(self, tmp_path):
+        dbx.exec("1 + 1")
+        row_id = dbx.journal(iloc=0)['id']
+        assert len(dbx.journal(id=f'^{row_id[:4]}')) == 1
+        assert len(dbx.journal(id=f'*{row_id[3:7]}*')) == 1

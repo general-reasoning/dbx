@@ -2008,17 +2008,18 @@ class Datajournal:
             result = frame
         return result
 
-    def read_entries(self, paths, *, storage_options=None, log=None, n_workers=None) -> 'list[DatajournalEntry]':
+    def read_frame(self, paths, *, storage_options=None, log=None, n_workers=None) -> 'DatajournalFrame':
         """The entries at *paths* -- journal entry files, as :meth:`written_entries` lists them.
 
-        In the order given, and read exactly as :meth:`read` reads a journal:
+        One row per path, numbered in the order given, and read exactly as
+        :meth:`read` reads a journal:
         the same legacy columns resolved, the same ``entry_path`` recorded. A
         path that cannot be read -- cleared since, say -- is skipped with a
         warning, as :meth:`read` skips one.
         """
         paths = [str(p) for p in paths]
         if not paths:
-            return []
+            return DatajournalFrame(None)
         log = log or self.log or Logger()
         n_workers = n_workers or self.n_workers or 8
         if storage_options is None:
@@ -2034,10 +2035,14 @@ class Datajournal:
                 d['__order__'] = order
                 dfs.append(d)
         if not dfs:
-            return []
+            return DatajournalFrame(None, storage_options=storage_options)
         df = Datajournal._normalize_columns_(pd.concat(dfs, ignore_index=True))
         df = df.sort_values('__order__').drop(columns=['__order__']).reset_index(drop=True)
-        frame = DatajournalFrame(df, storage_options=storage_options)
+        return DatajournalFrame(df, storage_options=storage_options)
+
+    def read_entries(self, paths, *, storage_options=None, log=None, n_workers=None) -> 'list[DatajournalEntry]':
+        """What :meth:`read_frame` reads, one `DatajournalEntry` per path, in the order given."""
+        frame = self.read_frame(paths, storage_options=storage_options, log=log, n_workers=n_workers)
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
     def write(self, block, event: str, *, note: str = None, inline_note: bool = False,

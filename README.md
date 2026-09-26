@@ -253,7 +253,11 @@ with Datajournal() as dj:
 Without either, a block uses `DEFAULT_DATAJOURNAL`, one per process. Each
 `dbx.exec` command runs inside such a scope, so all of its blocks share one
 session. Its exec-journal row records that `session` and the
-`written_entries` the command produced.
+`datajournal_entries` the command produced; `dbx.journal(iloc=0).datajournal()`
+reads them back as a `DatajournalFrame`, and `.rerun()` runs the command again.
+
+Filter values are patterns: a substring, a regex (`id='^a6'`), or a glob
+(`id='*a6*'`, `id='a6*'`).
 
 ## CLI
 

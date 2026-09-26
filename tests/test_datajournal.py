@@ -571,3 +571,102 @@ class TestFilterPatterns:
         row_id = dbx.journal(iloc=0)['id']
         assert len(dbx.journal(id=f'^{row_id[:4]}')) == 1
         assert len(dbx.journal(id=f'*{row_id[3:7]}*')) == 1
+
+
+class Other(Datablock):
+    TOPICS = {'output': 'output.txt'}
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        fail: bool = False
+
+    def __build__(self):
+        if self.var.fail:
+            raise RuntimeError("boom")
+        with open(self.path('output', ensure_dirpath=True), 'w') as f:
+            f.write('data')
+
+
+class TestConstructed:
+    """What a command CONSTRUCTED: built, redirected, or copied in -- by anchor."""
+
+    @pytest.fixture(autouse=True)
+    def lake(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+
+    def _run(self, tmp_path):
+        return dbx.exec(
+            "a = Built(url=root, spec={'x': 1}); b = Built(url=root, spec={'x': 2}); o = Other(url=root); "
+            "a.build(); b.build(); o.build(); "
+            "n = Built(url=root, spec={'x': 3}); n.write_journal_entry(event='note'); (a, b, o)",
+            Built=Built, Other=Other, root=str(tmp_path))
+
+    def test_by_anchor(self, tmp_path):
+        a, b, o = self._run(tmp_path)
+        entry = dbx.journal(iloc=0)
+        assert entry.anchors() == sorted({a.anchor, o.anchor})
+        got = entry.constructed()
+        assert set(got) == {a.anchor, o.anchor}
+        assert sorted(got[a.anchor]['hash']) == sorted([a.hash, b.hash]), "the note is not a construction"
+        assert list(got[o.anchor]['hash']) == [o.hash]
+        one = entry.constructed(a.anchor)
+        assert isinstance(one, DatajournalFrame) and len(one) == 2
+        assert set(one['event']) == {'build:end'}
+
+    def test_a_failed_build_was_not_constructed(self, tmp_path):
+        with pytest.raises(RuntimeError):
+            dbx.exec("Other(url=root, spec={'fail': True}).build()", Other=Other, root=str(tmp_path))
+        entry = dbx.journal(iloc=0)
+        assert len(entry.datajournal()) == 1 and entry.datajournal().iloc[0]['event'] == 'build:exception'
+        assert entry.constructed() == {}
+
+    def test_other_filters_add_to_the_event_default(self, tmp_path):
+        a, b, o = self._run(tmp_path)
+        entry = dbx.journal(iloc=0)
+        assert list(entry.constructed(a.anchor, hash=f"^{b.hash}")['hash']) == [b.hash]
+        # event=None drops the default: the note is back.
+        assert len(entry.constructed(a.anchor, event=None)) == 3
+
+    def test_the_events_are_matched_exactly(self):
+        from dbx.dataparts import _constructed_
+        frame = DatajournalFrame(pd.DataFrame({
+            'anchor': ['s.S'] * 5,
+            'hash': ['h1', 'h2', 'h3', 'h4', 'h5'],
+            'event': ['UNSAFE_redirect', 'UNSAFE_redirect_blocks:end', 'build:end',
+                      'build_tree:x:end', 'UNSAFE_copy_from:END'],
+        }))
+        assert list(_constructed_(frame, 's.S', {})['hash']) == ['h1', 'h3', 'h5']
+
+    def test_over_a_frame_of_commands(self, tmp_path):
+        a, b, o = self._run(tmp_path)
+        dbx.exec("Built(url=root, spec={'x': 9}).build()", Built=Built, root=str(tmp_path))
+        got = dbx.journal().constructed()
+        assert len(got[a.anchor]) == 3 and len(got[o.anchor]) == 1
+
+
+class TestTwoJournals:
+    """dbx.datajournal() and dbx.execjournal() -- and dbx.journal(), which picks one."""
+
+    @pytest.fixture(autouse=True)
+    def lake(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+
+    def test_each_says_which_it_reads(self, tmp_path):
+        from dbx.dataparts import ExecjournalFrame
+        b = block(tmp_path)
+        dbx.exec("b.build()", b=b)
+        assert isinstance(dbx.datajournal(Built, url=str(tmp_path)), DatajournalFrame)
+        assert isinstance(dbx.datajournal(b), DatajournalFrame)
+        assert isinstance(dbx.execjournal(), ExecjournalFrame)
+        assert dbx.execjournal(iloc=0)['exec'] == 'b.build()'
+        assert dbx.datajournal(b, iloc=0).block.hash == b.hash
+
+    def test_journal_picks_the_same_one(self, tmp_path):
+        b = block(tmp_path)
+        dbx.exec("b.build()", b=b)
+        assert dbx.journal(iloc=0)['id'] == dbx.execjournal(iloc=0)['id']
+        assert dbx.journal(b, iloc=0)['id'] == dbx.datajournal(b, iloc=0)['id']
+
+    def test_datajournal_needs_to_be_told_what(self):
+        with pytest.raises(TypeError, match="execjournal"):
+            dbx.datajournal(None)

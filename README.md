@@ -253,8 +253,13 @@ with Datajournal() as dj:
 Without either, a block uses `DEFAULT_DATAJOURNAL`, one per process. Each
 `dbx.exec` command runs inside such a scope, so all of its blocks share one
 session. Its exec-journal row records that `session` and the
-`datajournal_entries` the command produced; `dbx.journal(iloc=0).datajournal()`
-reads them back as a `DatajournalFrame`, and `.rerun()` runs the command again.
+`datajournal_entries` the command produced; `dbx.execjournal(iloc=0).datajournal()`
+reads them back as a `DatajournalFrame`, `.constructed()` just the blocks it
+built, redirected or copied in (by anchor), and `.rerun()` runs the command again.
+
+`dbx.datajournal(anchor | cls | block)` reads a block journal and
+`dbx.execjournal()` the exec journal; `dbx.journal()` picks one by whether it
+is given an anchor.
 
 Filter values are patterns: a substring, a regex (`id='^a6'`), or a glob
 (`id='*a6*'`, `id='a6*'`).
@@ -282,8 +287,8 @@ printed. The comment is ignored when the command runs and recorded in the exec
 journal's `comment` column, beside the string as it was typed:
 
 ```python
-dbx.journal()[['exec', 'comment']]     # every dbx.exec/dbx.pprint invocation
-dbx.journal(comment='nightly')         # ... filtered by what it was for
+dbx.execjournal()[['exec', 'comment']]     # every dbx.exec/dbx.pprint invocation
+dbx.execjournal(comment='nightly')         # ... filtered by what it was for
 ```
 
 ## Running Tests

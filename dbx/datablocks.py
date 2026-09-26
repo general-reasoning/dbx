@@ -81,6 +81,7 @@ from .dataparts import (
     ls_path,
     read_str,
     read_yaml,
+    execjournal,
     read_exec_journal,
     write_exec_journal,
     filter_journal_frame,
@@ -636,13 +637,14 @@ def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_options=None, log=None, n_workers=8, index: 'str | None' = ..., unnormalized: bool = False, **filter_kwargs):
-    """Retrieve or wrap a Datablock journal.
+def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, log=None, n_workers=8, index: 'str | None' = ..., unnormalized: bool = False, **filter_kwargs):
+    """Read a block journal, or wrap a frame of one.
 
     Parameters
     ----------
-    cls_anchor_or_df : type | str | pd.DataFrame, optional
-        A Datablock class, an anchor string, a raw DataFrame, or None to return the eval journal.
+    cls_anchor_or_df : type | str | Datablock | pd.DataFrame
+        A Datablock class, an anchor string, a block (whose url, storage
+        options and log are then the defaults), or a raw DataFrame to wrap.
     loc : int, optional
         If given, return a single :class:`DatajournalEntry` at this label index.
     iloc : int, optional
@@ -672,20 +674,12 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
 
     Returns
     -------
-    DatajournalFrame or DatajournalEntry; with no first argument, the exec
-    journal's ExecjournalFrame or ExecjournalEntry
+    DatajournalFrame, or the DatajournalEntry at *loc* / *iloc*. The exec
+    journal is :func:`execjournal`.
     """
     if cls_anchor_or_df is None:
-        return read_exec_journal(
-            url=url,
-            loc=loc,
-            iloc=iloc,
-            storage_options=storage_options,
-            log=log,
-            n_workers=n_workers,
-            index=index,
-            **filter_kwargs,
-        )
+        raise TypeError("datajournal() needs an anchor, a Datablock class or block, or a frame; "
+                        "the exec journal is execjournal()")
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):
@@ -706,6 +700,19 @@ def journal(cls_anchor_or_df=None, loc=None, *, iloc=None, url=None, storage_opt
         else:
             anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
         return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
+
+
+
+def journal(cls_anchor_or_df=None, loc=None, **kwargs):
+    """:func:`datajournal` for an anchor, class, block or frame; :func:`execjournal` with none.
+
+    The one entry point both journals used to share, kept so code written
+    against it goes on working. Say which journal you mean instead.
+    """
+    if cls_anchor_or_df is None:
+        kwargs.pop('unnormalized', None)
+        return execjournal(loc, **kwargs)
+    return datajournal(cls_anchor_or_df, loc, **kwargs)
 
 
 def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs):
@@ -796,7 +803,7 @@ def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs)
             j_kwargs['url'] = url
 
         try:
-            j = journal(anchor_key, **j_kwargs)
+            j = datajournal(anchor_key, **j_kwargs)
         except Exception:
             j = None
 
@@ -1732,7 +1739,7 @@ class DatajournalFrame(pd.DataFrame):
 
         # Process the dataframe before calling super().__init__()
         if parse_datetimes:
-            if 'datetime' in df.columns and not isinstance(df['datetime'].iloc[0], datetime.datetime): # TODO: use dtype?
+            if 'datetime' in df.columns and len(df) and not isinstance(df['datetime'].iloc[0], datetime.datetime): # TODO: use dtype?
                 df['datetime'] = pd.to_datetime(df['datetime'], format=JOURNAL_DATETIME_FORMAT)
         df = filter_journal_frame(df, **filter_kwargs)
 

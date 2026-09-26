@@ -863,6 +863,40 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
     return df
 
 
+#: The events a block journal entry holds when the command that wrote it
+#: CONSTRUCTED the block: built it, made it readable by redirection, or copied
+#: its data in. Anchored, because a filter string is a pattern and a bare
+#: 'UNSAFE_redirect' would also match a stack's 'UNSAFE_redirect_blocks:end'.
+#: A block instance rewrites its one entry file, so a build that failed ends
+#: at 'build:exception', and one that never finished at 'build:start': neither
+#: is here.
+CONSTRUCTED_EVENTS = ['^build:end$', '^UNSAFE_redirect$', '^UNSAFE_copy_from:END$']
+
+
+def _constructed_(frame, anchor, filters):
+    """The rows of a DatajournalFrame *filters* select: one anchor's, or ``{anchor: rows}``."""
+    from .datablocks import DatajournalFrame
+    filters = dict(filters)
+    filters.setdefault('event', CONSTRUCTED_EVENTS)
+    if filters['event'] is None:
+        del filters['event']
+    storage_options = getattr(frame, 'storage_options', None)
+    df = filter_journal_frame(pd.DataFrame(frame), **filters) if len(frame) else pd.DataFrame(frame)
+
+    def of(a):
+        rows = df[df['anchor'] == a] if 'anchor' in df.columns else df.iloc[0:0]
+        return DatajournalFrame(rows.reset_index(drop=True), storage_options=storage_options)
+
+    if anchor is not None:
+        return of(anchor)
+    present = df['anchor'].dropna().unique() if 'anchor' in df.columns else []
+    return {a: of(a) for a in sorted(present)}
+
+
+def _anchors_(frame) -> list:
+    return sorted(frame['anchor'].dropna().unique()) if 'anchor' in getattr(frame, 'columns', ()) else []
+
+
 def _shell_double_quoted_(text: str) -> str:
     """*text* escaped for the inside of a bash double-quoted string: \\, ", $ and `."""
     for ch in ('\\', '"', '$', '`'):
@@ -905,6 +939,24 @@ class ExecjournalEntry(pd.Series):
         from .datablocks import Datajournal
         return Datajournal(storage_options=self.storage_options or None).read_frame(
             ExecjournalEntry._written_paths_(self), n_workers=n_workers)
+
+    def anchors(self) -> list:
+        """Every anchor this command wrote a block journal entry for, sorted."""
+        return _anchors_(self.datajournal())
+
+    def constructed(self, anchor: str | None = None, **filters):
+        """The block journal entries of what this command CONSTRUCTED.
+
+        *anchor* given: that anchor's entries, as a `DatajournalFrame`. Not
+        given: ``{anchor: DatajournalFrame}`` for every anchor with any.
+
+        *filters* are `DatajournalFrame` filters. ``event`` defaults to
+        `CONSTRUCTED_EVENTS` -- a block built, redirected, or copied in -- and
+        applies alongside any other filter unless given itself;
+        ``event=None`` drops it. A block the command found already built was
+        not constructed by it, and wrote no entry: it is not here.
+        """
+        return _constructed_(self.datajournal(), anchor, filters)
 
     def rerun(self, **kwargs):
         """Execute this command's ``exec`` string again, through `dbx.exec`, and return its value.
@@ -971,6 +1023,14 @@ class ExecjournalFrame(pd.DataFrame):
         from .datablocks import Datajournal
         return Datajournal(storage_options=self.storage_options or None).read_frame(
             self._written_paths_(), n_workers=n_workers)
+
+    def anchors(self) -> list:
+        """Every anchor the commands here wrote a block journal entry for, sorted."""
+        return _anchors_(self.datajournal())
+
+    def constructed(self, anchor: str | None = None, **filters):
+        """As `ExecjournalEntry.constructed`, over every command here."""
+        return _constructed_(self.datajournal(), anchor, filters)
 
     def _written_paths_(self) -> list:
         return [p for _, row in self.iterrows() for p in ExecjournalEntry._written_paths_(row)]
@@ -1073,6 +1133,19 @@ def read_exec_journal(
     elif iloc is not None:
         return ExecjournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options)
     return frame
+
+
+def execjournal(loc=None, *, iloc=None, url=None, storage_options=None, log=None,
+                n_workers=8, index: 'str | None' = ..., **filter_kwargs):
+    """Read the exec journal: every `dbx.exec` command, newest first, then filtered.
+
+    An `ExecjournalFrame`, or the `ExecjournalEntry` at *loc* / *iloc*. *index*
+    defaults to ``'id'``, so ``loc=`` is a command's id; ``index=None`` numbers
+    the rows. Filters are patterns, as on a block journal -- see
+    :func:`datajournal`. *url* defaults to ``DBX_ROOT``, then ``DBX_URL``.
+    """
+    return read_exec_journal(url=url, loc=loc, iloc=iloc, storage_options=storage_options,
+                             log=log, n_workers=n_workers, index=index, **filter_kwargs)
 
 
 def anchors(url: str | None = None, *, storage_options: dict | None = None) -> list[str]:

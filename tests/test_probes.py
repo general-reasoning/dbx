@@ -438,3 +438,30 @@ if __name__ == "__main__":
     import sys
     dbx.dataparts.gitwrkreposetup = lambda *a, **k: None
     sys.exit(pytest.main([__file__]))
+
+
+@pytest.mark.parametrize('band_bytes', [8, 10**9])
+def test_table_stats_by_band_equal_the_stats_of_the_concatenation(band_bytes, monkeypatch):
+    """Banding is a memory decision, not a numerical one.
+
+    The whole-table statistics used to be `column_stats` of every tab's rows
+    concatenated -- a full copy of the table, and another inside np.median.
+    Taken a band of columns at a time they must come out the same, whether
+    the band is one column (8 bytes forces it) or the whole width.
+    """
+    import dbx.probes as probes
+    monkeypatch.setattr(probes, 'TABLE_STATS_BAND_BYTES', band_bytes)
+    rng = np.random.default_rng(0)
+    tabs = [rng.normal(size=(n, 7)) for n in (5, 0, 11, 3)]
+    results = [{'columns': {'s.c': t}, 'stats': {'s.c': probes.column_stats(t) if len(t) else
+                                                 {'norm': np.zeros(0)}}} for t in tabs]
+
+    class Probe:
+        column_keys = ['s.c']
+        _table_stats_ = probes.FeatureStatsProbe._table_stats_
+
+    got = Probe()._table_stats_(results)['s.c']
+    want = probes.column_stats(np.concatenate(tabs, axis=0))
+    assert set(got) == set(want)
+    for name in want:
+        np.testing.assert_allclose(got[name], want[name], rtol=1e-12, atol=0, err_msg=name)

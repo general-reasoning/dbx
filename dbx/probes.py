@@ -470,6 +470,16 @@ class FeatureAffineLogisticProbe(Datablock):
 COLUMN_STATS = ('mean', 'std', 'median', 'min', 'max', 'norm')
 
 
+#: The reductions over the sample axis -- each column independent of the others,
+#: which is what lets the whole-table ones be taken a band of columns at a time.
+SAMPLE_REDUCTIONS = {
+    'mean': np.mean, 'std': np.std, 'median': np.median, 'min': np.min, 'max': np.max,
+}
+
+#: Bytes of one band of a whole-table column, concatenated across tabs.
+TABLE_STATS_BAND_BYTES = 256 * 2**20
+
+
 def column_stats(arr: np.ndarray) -> dict[str, np.ndarray]:
     """The `COLUMN_STATS` of one column's ``(N, ...)`` stack of values.
 
@@ -528,8 +538,11 @@ class TabColumnStatsCallable:
             raise ValueError(
                 f"{type(self).__name__}: columns disagree on sample count: {sorted(counts)}"
             )
+        # This tab's own statistics, here in the worker rather than in the
+        # build's loop over every tab afterwards: they then run in parallel.
+        stats = {key: column_stats(arr) for key, arr in columns.items()}
         gc.collect()
-        return {'columns': columns, 'n_rows': counts.pop() if counts else 0}
+        return {'columns': columns, 'stats': stats, 'n_rows': counts.pop() if counts else 0}
 
 
 class FeatureStatsProbe(Datablock):
@@ -623,9 +636,10 @@ class FeatureStatsProbe(Datablock):
         indices = list(range(n_tabs)) if n_tabs > 0 else [None]
         results = executor.exec_callables([TabColumnStatsCallable(self, i) for i in indices])
 
+        whole_by_key = self._table_stats_(results)
         for key in self.column_keys:
-            per_tab = [column_stats(res['columns'][key]) for res in results]
-            whole = column_stats(np.concatenate([res['columns'][key] for res in results], axis=0))
+            per_tab = [res['stats'][key] for res in results]
+            whole = whole_by_key[key]
             for name in COLUMN_STATS:
                 write_npz(self.path(name, key, ensure_dirpath=True), stat=whole[name])
                 write_npz(self.path(f'tab_{name}', key, ensure_dirpath=True),
@@ -636,6 +650,42 @@ class FeatureStatsProbe(Datablock):
 
         self.log.verbose(f"FeatureStatsProbe.__build__: END {self.anchorkeypath}")
         return self
+
+    def _table_stats_(self, results) -> dict[str, dict[str, np.ndarray]]:
+        """The whole-table `column_stats` of every column, a band of columns at a time.
+
+        Concatenating a column across all tabs and reducing it is a full copy of
+        the table's features -- and ``np.median`` takes another to partition --
+        which on a large table is tens of GB, and is where the build sat, with
+        no progress bar, after the last tab. Every reduction here runs over the
+        sample axis, independently per column, so reducing one band of columns
+        at a time gives the same values holding only that band. ``norm`` is per
+        sample, so it is the tabs' own, joined.
+        """
+        from tqdm import tqdm
+        plans = []
+        for key in self.column_keys:
+            parts = [res['columns'][key] for res in results]
+            n_rows = sum(len(p) for p in parts)
+            width = parts[0].shape[1]
+            per_col = n_rows * parts[0].dtype.itemsize * int(np.prod(parts[0].shape[2:], dtype=np.int64))
+            band = max(1, TABLE_STATS_BAND_BYTES // max(1, per_col))
+            plans.append((key, parts, width, band))
+        steps = sum(-(-width // band) for _, _, width, band in plans)
+
+        out = {}
+        with tqdm(total=steps, desc=f"COMPUTING TABLE STATS [{self.__class__.__name__}]") as bar:
+            for key, parts, width, band in plans:
+                pieces = {name: [] for name in SAMPLE_REDUCTIONS}
+                for c0 in range(0, width, band):
+                    chunk = np.concatenate([p[:, c0:c0 + band] for p in parts], axis=0)
+                    for name, reduce in SAMPLE_REDUCTIONS.items():
+                        pieces[name].append(reduce(chunk, axis=0))
+                    del chunk
+                    bar.update(1)
+                out[key] = {name: np.concatenate(pieces[name], axis=0) for name in SAMPLE_REDUCTIONS}
+                out[key]['norm'] = np.concatenate([res['stats'][key]['norm'] for res in results])
+        return out
 
     def __read__(self, *topicpath):
         if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):

@@ -117,30 +117,53 @@ class TestCollator:
 
 
 class TestSpecs:
+    """Lists are several side by side; tuples are depth."""
 
-    def test_column_spec(self):
-        assert column_spec('a') == ('a', None)
-        assert column_spec(('a', 'k')) == ('a', 'k')
-        assert column_spec(('a', ['k', 'j'])) == ('a', ('k', 'j'))
+    def test_column_specs(self):
+        from dbx.datastreams import column_specs
+        assert column_specs('a') == [('a', None)]
+        assert column_specs(['a', 'b']) == [('a', None), ('b', None)]
+        assert column_specs(('a', 'k')) == [('a', ('k',))]
+        assert column_specs(('a', 's', 'c')) == [('a', ('s', 'c'))]
+        assert column_specs(('a', ('s', 'c'))) == [('a', ('s', 'c'))]          # nested tuples: more depth
+        assert column_specs(('a', ['k', ('s', 'c')])) == [('a', [('k',), ('s', 'c')])]
+        assert column_specs(('a', 's', ['c', 'n'])) == [('a', [('s', 'c'), ('s', 'n')])]
+        assert column_specs([('a', 's', 'c'), 'b']) == [('a', ('s', 'c')), ('b', None)]
+        with pytest.raises(ValueError, match="must end a path"):
+            column_specs(('a', ['k', 'j'], 'x'))
+
+    def test_slice_spec(self):
+        from dbx.datastreams import slice_spec
+        assert slice_spec('s') == ('s', None)
+        assert slice_spec(('s', 'c')) == ('s', [('c', None)])
+        assert slice_spec(('s', ['c', 'd'])) == ('s', [('c', None), ('d', None)])
+        assert slice_spec(('s', ('c', 'd'))) == ('s', [('c', ('d',))]), "a tuple is depth"
+        assert slice_spec(('s', 'c', 'k1', 'k2')) == ('s', [('c', ('k1', 'k2'))])
 
     def test_merge(self):
-        assert merge_column_specs(['a', ('b', 'k')]) == ['a', ('b', 'k')]
+        assert merge_column_specs(['a', ('b', 'k')]) == ['a', ('b', ('k',))]
         assert merge_column_specs([('a', 'k'), 'a']) == ['a']
-        assert merge_column_specs([('a', 'k'), ('a', 'j')]) == [('a', ('k', 'j'))]
-        assert merge_column_specs([('a', 'k'), ('a', 'k')]) == [('a', 'k')]
+        assert merge_column_specs([('a', 'k'), ('a', 'j')]) == [('a', [('k',), ('j',)])]
+        assert merge_column_specs([('a', 'k'), ('a', 'k')]) == [('a', ('k',))]
+        assert merge_column_specs([('a', 'k'), ('a', ('s', 'c'))]) == [('a', [('k',), ('s', 'c')])]
 
     def test_project(self):
         v = {'k': 1, 'j': 2}
         assert project_column(v, None) is v
         assert project_column(v, 'k') == 1
-        assert project_column(v, ('j',)) == {'j': 2}
-
+        assert project_column(v, ('k',)) == 1
+        assert project_column(v, [('j',)]) == {'j': 2}
+        nested = {'k': 1, 's': {'c': {'d': 7}, 'e': 8}}
+        assert project_column(nested, ('s', 'c', 'd')) == 7
+        assert project_column(nested, [('k',), ('s', 'c', 'd')]) == {'k': 1, 's': {'c': {'d': 7}}}
 
 def test_a_feature_table_parses_the_triple_as_a_table_does():
     from dbx.featuretables import _UpstreamSlices
     items = _UpstreamSlices._norm_items((('annotations', 'annotations', 'label'), 'features'))
-    assert items == [('annotations', [('annotations', 'label')]), ('features', None)]
+    assert items == [('annotations', [('annotations', ('label',))]), ('features', None)]
     assert _UpstreamSlices._norm_items((('annotations', 'annotations', ['a', 'b']),)) == [
+        ('annotations', [('annotations', [('a',), ('b',)])])]
+    assert _UpstreamSlices._norm_items((('annotations', 'annotations', 'a', 'b'),)) == [
         ('annotations', [('annotations', ('a', 'b'))])]
 
 
@@ -269,3 +292,108 @@ def test_a_table_holds_a_key_to_its_tabs_declaration(tmp_path):
         table.dataset(('annotations', 'annotations', 'stage'))
     table.build()
     assert table.data(('annotations', 'annotations', 'recurrence'))['annotations']['annotations'] == [0, 1, 2] * 2
+
+
+
+# ---------------------------------------------------------------------------
+# Nested to any depth, and a key that is a path through it
+# ---------------------------------------------------------------------------
+
+DEEP = dict(label='int', site=dict(code='int', geo=dict(lat='float', lon='float')))
+
+
+class DeepTab(Datatab):
+    TOPICS = {'annotations': DATASLICE(annotations=dict(DEEP), idx='int')}
+
+    def __build__(self):
+        with self.slice_writers() as writers:
+            for i in range(3):
+                writers['annotations'].write({'annotations': {
+                    'label': i % 2,
+                    'site': {'code': 10 + i, 'geo': {'lat': 1.0 * i, 'lon': -1.0 * i}},
+                }, 'idx': i})
+
+
+class TestNested:
+
+    def test_any_depth_renders_and_reads_back(self):
+        from dbx.datablocks import DATADICT, literal_topics
+        m = DATASLICE(annotations=dict(DEEP))
+        assert repr(m) == ("DATASLICE(annotations=dict(label='int', site=dict(code='int', "
+                           "geo=dict(lat='float', lon='float'))))")
+        d = DATADICT('meta.json', run=dict(a=dict(b=dict(c=dict(d='int')))))
+        assert repr(d) == "DATADICT('meta.json', run=dict(a=dict(b=dict(c=dict(d='int')))))"
+        back = literal_topics(str({'m': m, 'd': d}))
+        assert repr(back['m']) == repr(m) and repr(back['d']) == repr(d)
+
+    def test_a_path_reads_a_deep_entry(self, tmp_path):
+        t = DeepTab(url=str(tmp_path)).build()
+        assert t.data(('annotations', 'annotations', ('site', 'geo', 'lat'))) == {
+            'annotations': {'annotations': [0.0, 1.0, 2.0]}}
+        row = t.dataset(('annotations', 'annotations', ['label', ('site', 'code')]))[1]
+        assert row['annotations']['annotations'] == {'label': 1, 'site': {'code': 11}}
+
+    def test_a_path_is_checked_against_the_declaration(self, tmp_path):
+        t = DeepTab(url=str(tmp_path))
+        with pytest.raises(KeyError, match=r"declares keys \['lat', 'lon'\] under 'site.geo', not \['alt'\]"):
+            t.dataset(('annotations', 'annotations', ('site', 'geo', 'alt')))
+        with pytest.raises(TypeError, match="declares 'label' as 'int', which has no key 'x'"):
+            t.dataset(('annotations', 'annotations', ('label', 'x')))
+
+    def test_a_deep_row_is_checked_when_written(self, tmp_path):
+        class Bad(DeepTab):
+            def __build__(self):
+                with self.slice_writers() as writers:
+                    writers['annotations'].write({'annotations': {
+                        'label': 0, 'site': {'code': 1, 'geo': {'lat': 0.0}}}, 'idx': 0})
+        with pytest.raises(ValueError, match=r"\['site'\]\['geo'\].*missing \['lon'\]"):
+            Bad(url=str(tmp_path)).build()
+
+    def test_a_collator_path(self, tmp_path):
+        t = DeepTab(url=str(tmp_path)).build()
+        c = Datacollator(spec=dict(
+            signals=[('annotations', 'annotations', ['label', ('site', 'geo', 'lat')])],
+            labels=[('annotations', 'annotations', ('site', 'code'))]))
+        assert c.signal_pairs == (('annotations', 'annotations', 'label'),
+                                  ('annotations', 'annotations', ('site', 'geo', 'lat')))
+        assert c.label_pairs == (('annotations', 'annotations', ('site', 'code')),)
+        data = t.data(*c.slices(), concat=True)
+        assert label_vector(c, data).tolist() == [10, 11, 12]
+        _, labels = c([t.dataset(*c.slices())[i] for i in range(3)])
+        assert labels.reshape(-1).tolist() == [10, 11, 12]
+
+    def test_a_probe_names_a_path_column(self):
+        from dbx.probes import _pair_key
+        assert _pair_key(('annotations', 'annotations', ('site', 'code'))) == 'annotations.annotations.site.code'
+
+
+
+class TestListsSideBySideTuplesDeeper:
+
+    def test_several_columns_one_of_them_narrowed(self, tmp_path):
+        t = DeepTab(url=str(tmp_path)).build()
+        row = t.dataset(('annotations', [('annotations', 'site', 'code'), 'idx']))[1]
+        assert row['annotations'] == {'annotations': 11, 'idx': 1}
+
+    def test_the_path_may_be_spelled_flat_or_nested(self, tmp_path):
+        t = DeepTab(url=str(tmp_path)).build()
+        flat = t.data(('annotations', 'annotations', 'site', 'geo', 'lat'))
+        nested = t.data(('annotations', 'annotations', ('site', 'geo', 'lat')))
+        also = t.data(('annotations', ('annotations', 'site', 'geo', 'lat')))
+        assert flat == nested == also == {'annotations': {'annotations': [0.0, 1.0, 2.0]}}
+
+    def test_several_keys_under_a_path(self, tmp_path):
+        t = DeepTab(url=str(tmp_path)).build()
+        row = t.dataset(('annotations', 'annotations', 'site', 'geo', ['lat', 'lon']))[2]
+        assert row['annotations']['annotations'] == {'site': {'geo': {'lat': 2.0, 'lon': -2.0}}}
+
+    def test_a_collator_reads_pairs_the_same_way(self, tmp_path):
+        c = Datacollator(spec=dict(signals=[
+            ('annotations', 'annotations', 'site', 'geo', 'lat'),
+            ('annotations', [('annotations', 'label'), 'idx']),
+        ]))
+        assert c.signal_pairs == (
+            ('annotations', 'annotations', ('site', 'geo', 'lat')),
+            ('annotations', 'annotations', 'label'),
+            ('annotations', 'idx'),
+        )

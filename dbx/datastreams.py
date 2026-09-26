@@ -120,23 +120,99 @@ SharedMemoryManager.enable_pid_prefixes()
 #  Column specs: a column, or a column and the keys of it to take
 # ---------------------------------------------------------------------------
 
-def column_spec(spec) -> tuple:
-    """A column spec as ``(column, keys)``: *keys* None, one key, or a tuple of keys.
+def key_path(key) -> tuple:
+    """A key or path as a tuple: ``'a'`` is ``('a',)``; nested tuples are depth, flattened."""
+    if isinstance(key, tuple):
+        out = []
+        for k in key:
+            out.extend(key_path(k) if isinstance(k, tuple) else [str(k)])
+        if not out:
+            raise ValueError("a key path names at least one key")
+        return tuple(out)
+    if isinstance(key, list):
+        raise ValueError(f"a list is several keys, not one path: {key!r}")
+    return (str(key),)
 
-    A column holding a dict can be asked for whole -- ``'annotations'`` -- or
-    for part of it: ``('annotations', 'label')`` is that one entry, and
-    ``('annotations', ['label', 'site'])`` a dict of just those. This is the
-    ``(slice, column, key)`` triple of a ``dataset()``/``data()`` request,
-    with the slice already taken off.
+
+def _path_keys_(parts) -> 'tuple | list | None':
+    """The keys a sequence of path parts selects: depth throughout, and a list -- last -- branches.
+
+    ``('site', 'code')`` is one path; ``('site', ['code', 'name'])`` two, both
+    under 'site'; ``(['label', ('site', 'code')],)`` two from the top.
     """
-    if isinstance(spec, (list, tuple)):
-        if len(spec) != 2:
-            raise ValueError(f"a column spec is a column or (column, key | [keys]), got {spec!r}")
+    prefix = []
+    parts = tuple(p for p in parts if p is not None)     # (column, None): the whole column
+    for i, part in enumerate(parts):
+        if isinstance(part, list):
+            if i != len(parts) - 1:
+                raise ValueError(f"several keys ({part!r}) must end a path; depth after them is ambiguous")
+            return [tuple(prefix) + key_path(p) for p in part]
+        prefix.extend(key_path(part))
+    return tuple(prefix) if prefix else None
+
+
+def column_specs(selection) -> list:
+    """What a slice's column selection names, as ``[(column, keys)]``.
+
+    LISTS are several things side by side, TUPLES are depth:
+
+    * ``'annotations'`` -- the column;
+    * ``['annotations', 'idx']`` -- two columns;
+    * ``('annotations', 'site', 'code')`` -- the column, narrowed to the path
+      ``value['site']['code']``; ``('annotations', ('site', 'code'))`` is the
+      same, nested tuples being more depth;
+    * ``('annotations', ['label', ('site', 'code')])`` -- the column narrowed
+      to several keys or paths at once: the dict pruned to them,
+      ``{'label': ..., 'site': {'code': ...}}``;
+    * ``[('annotations', 'site', 'code'), 'idx']`` -- any of these, side by side.
+
+    *keys* is None (the whole column), one path (a tuple), or a list of paths.
+    """
+    if isinstance(selection, list):
+        return [spec for item in selection for spec in column_specs(item)]
+    if isinstance(selection, tuple):
+        if not selection:
+            raise ValueError("an empty tuple selects nothing")
+        head, rest = selection[0], selection[1:]
+        if isinstance(head, tuple):                   # ((column, key...), key...)
+            return column_specs(key_path(head) + tuple(rest))
+        if isinstance(head, list):
+            raise ValueError(f"a column selection starts with a column, got {selection!r}")
+        return [(str(head), _path_keys_(rest))]
+    return [(str(selection), None)]
+
+
+def slice_spec(item) -> tuple:
+    """One ``dataset()``/``data()`` request item as ``(slice, [(column, keys)] | None)``.
+
+    ``'frames'`` is a whole slice; a tuple goes deeper -- ``(slice, selection)``
+    or ``(slice, column, key, ...)`` -- where the selection is as
+    `column_specs` reads it. A list item is read as a tuple, for callers that
+    built one as a list.
+    """
+    if isinstance(item, str):
+        return item, None
+    if isinstance(item, (tuple, list)) and item and isinstance(item[0], str):
+        s_name, rest = item[0], tuple(item[1:])
+        if not rest:
+            return s_name, None
+        return s_name, column_specs(rest[0] if len(rest) == 1 else rest)
+    raise ValueError(
+        f"a slice request is a slice name, (slice, column | [columns]) or "
+        f"(slice, column, key, ...), got {item!r}"
+    )
+
+
+def column_spec(spec) -> tuple:
+    """ONE column spec as ``(column, keys)`` -- `column_specs` for a selection naming one column."""
+    if isinstance(spec, tuple) and len(spec) == 2 and (spec[1] is None or isinstance(spec[1], list)):
+        # Already normalized, or (column, [keys]).
         column, keys = str(spec[0]), spec[1]
-        if isinstance(keys, (list, tuple)):
-            return column, tuple(str(k) for k in keys)
-        return column, (None if keys is None else str(keys))
-    return str(spec), None
+        return column, (None if keys is None else [key_path(k) for k in keys])
+    specs = column_specs(spec)
+    if len(specs) != 1:
+        raise ValueError(f"{spec!r} names {len(specs)} columns, not one")
+    return specs[0]
 
 
 def column_name(spec) -> str:
@@ -149,7 +225,7 @@ def merge_column_specs(specs) -> list:
 
     The same column asked for twice cannot appear twice in a row, which is
     keyed by column. So a whole column absorbs any part of it, and two parts
-    are their keys together -- one key and another become a dict of both.
+    are their keys together -- one key and another become a list of both.
     """
     order, merged = [], {}
     for spec in specs:
@@ -162,27 +238,40 @@ def merge_column_specs(specs) -> list:
         if prev is None or keys is None:
             merged[column] = None
         elif prev != keys:
-            # Two different asks of one column: every key either named, as a dict.
-            have = prev if isinstance(prev, tuple) else (prev,)
-            new = keys if isinstance(keys, tuple) else (keys,)
-            merged[column] = have + tuple(k for k in new if k not in have)
+            have = prev if isinstance(prev, list) else [prev]
+            new = keys if isinstance(keys, list) else [keys]
+            merged[column] = have + [k for k in new if k not in have]
     return [c if merged[c] is None else (c, merged[c]) for c in order]
 
 
+def _at_path_(value, path, where):
+    for depth, key in enumerate(path):
+        if not isinstance(value, dict):
+            at = '.'.join(path[:depth]) or 'the column'
+            raise TypeError(f"{where}: asked for {'.'.join(path)!r}, but {at} holds a "
+                            f"{type(value).__name__}, which is not a dict")
+        if key not in value:
+            at = '.'.join(path[:depth])
+            raise KeyError(f"{where}: no key(s) [{key!r}]{' under ' + repr(at) if at else ''}; "
+                           f"it has {sorted(value)}")
+        value = value[key]
+    return value
+
+
 def project_column(value, keys, *, where: str = ''):
-    """The part of one column's *value* a spec asks for: all of it, one key, or a dict of several."""
+    """The part of one column's *value* a spec asks for: all of it, one key or path, or a pruned dict."""
     if keys is None:
         return value
-    if not isinstance(value, dict):
-        raise TypeError(f"{where}: asked for key(s) {keys!r} of a {type(value).__name__}, "
-                        f"which is not a dict")
-    wanted = keys if isinstance(keys, tuple) else (keys,)
-    missing = [k for k in wanted if k not in value]
-    if missing:
-        raise KeyError(f"{where}: no key(s) {missing}; it has {sorted(value)}")
-    if isinstance(keys, tuple):
-        return {k: value[k] for k in keys}
-    return value[keys]
+    if not isinstance(keys, list):
+        return _at_path_(value, key_path(keys), where)
+    out = {}
+    for key in keys:
+        path = key_path(key)
+        node = out
+        for k in path[:-1]:
+            node = node.setdefault(k, {})
+        node[path[-1]] = _at_path_(value, path, where)
+    return out
 
 
 def check_structure(value, schema: dict, *, where: str = ''):

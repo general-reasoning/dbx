@@ -51,9 +51,11 @@ from .datastreams import (
     abfs_to_mds_azure,
     column_spec,
     concat_data,
+    key_path,
     merge_column_specs,
     open_datastream,
     project_column,
+    slice_spec,
     read_mds_shard,
     reader_from_json,
 )
@@ -265,13 +267,21 @@ class DatatableBase(Datablock):
                     f"{self.__class__.__name__}: slice {slice!r} declares column {column!r} "
                     f"as {declared!r}, which has no keys to take {keys!r} of"
                 )
-            asked = keys if isinstance(keys, tuple) else (keys,)
-            undeclared = [k for k in asked if k not in declared]
-            if undeclared:
-                raise KeyError(
-                    f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
-                    f"keys {list(declared)}, not {undeclared}"
-                )
+            for key in (keys if isinstance(keys, list) else [keys]):
+                path, node = key_path(key), declared
+                for depth, k in enumerate(path):
+                    if not isinstance(node, dict):
+                        raise TypeError(
+                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
+                            f"{'.'.join(path[:depth])!r} as {node!r}, which has no key {k!r}"
+                        )
+                    if k not in node:
+                        under = '.'.join(path[:depth])
+                        raise KeyError(
+                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
+                            f"keys {list(node)}{' under ' + repr(under) if under else ''}, not [{k!r}]"
+                        )
+                    node = node[k]
 
     def _slice_declaration(self, slice) -> dict:
         """*slice*'s declared schema wherever it is declared -- here, or on a table's tabs -- else ``{}``.
@@ -384,7 +394,7 @@ class DatatableBase(Datablock):
         items = list(slice_columns)
         if len(items) == 1 and isinstance(items[0], (list, tuple)):
             first = items[0]
-            if isinstance(first, list) or not (len(first) in (2, 3) and isinstance(first[0], str) and first[0] in self.slices()):
+            if isinstance(first, list) or not (isinstance(first[0], str) and first[0] in self.slices()):
                 items = list(first)
 
         if columns is not None:
@@ -407,30 +417,8 @@ class DatatableBase(Datablock):
             has_column_filter = False
 
             for item in items:
-                if isinstance(item, str):
-                    s_name, cols = item, None
-                elif isinstance(item, (tuple, list)) and len(item) == 3:
-                    s_name, column, keys = str(item[0]), item[1], item[2]
-                    if isinstance(column, (list, tuple)):
-                        raise ValueError(
-                            f"{self.__class__.__name__}.dataset: a key applies to one column, "
-                            f"got ({s_name!r}, {column!r}, {keys!r})"
-                        )
-                    cols = [column_spec((column, keys))]
-                    has_column_filter = True
-                elif isinstance(item, (tuple, list)) and len(item) == 2:
-                    s_name = str(item[0])
-                    c_val = item[1]
-                    if isinstance(c_val, (list, tuple)):
-                        cols = [column_spec(c) for c in c_val]
-                    else:
-                        cols = [str(c_val)]
-                    has_column_filter = True
-                else:
-                    raise ValueError(
-                        f"{self.__class__.__name__}.dataset: each slice_column entry must be a slice name (str), "
-                        f"a (slice, column) pair or a (slice, column, key) triple, got {item!r}"
-                    )
+                s_name, cols = slice_spec(item)
+                has_column_filter = has_column_filter or cols is not None
 
                 if s_name not in slice_cols_map:
                     slice_order.append(s_name)
@@ -481,10 +469,15 @@ class DatatableBase(Datablock):
             - `str`: slice name for all columns (e.g. `"features"`)
             - `(slice, column)` tuple: slice name and specific column (e.g. `("features", "col1")`)
             - `(slice, [col1, col2])` tuple: slice name and list of columns.
-            - `(slice, column, key)` triple: one entry of a column holding a dict --
-              ``row[slice][column]`` is then ``value[key]`` -- and
-              `(slice, column, [key1, key2])` a dict of just those entries. Taken
-              as each row is assembled, so nothing else of the dict is passed on.
+            - `(slice, column, key, ...)`: part of a column holding a dict --
+              TUPLES go deeper and LISTS are several side by side, at every
+              level: ``(s, 'ann', 'site', 'code')`` (or ``(s, 'ann', ('site',
+              'code'))``) is ``value['site']['code']``; ``(s, 'ann', ['label',
+              ('site', 'code')])`` the dict pruned to those; ``(s, [('ann',
+              'label'), 'idx'])`` two columns, one narrowed. A tuple of columns
+              is therefore a path, not several columns -- several is a list.
+              Taken as each row is assembled, so nothing else of the dict is
+              passed on.
             Passing multiple `(slice, col)` tuples for the same slice accumulates their columns;
             the same column asked for whole and in part is read whole.
             If no positional arguments are passed, defaults to all slices with all columns.

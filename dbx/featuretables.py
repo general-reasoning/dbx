@@ -36,6 +36,7 @@ from dbx.datastreams import (
     concat_data,
     merge_column_specs,
     project_column,
+    slice_spec,
 )
 
 
@@ -132,11 +133,13 @@ class Datacollator(Datablock):
     an unsupervised pass -- names no label slice, reads none, and returns
     ``(signals,)``.
 
-    A pair may be a triple, ``(slice, column, key)``, for one entry of a column
-    that holds a dict -- ``('annotations', 'annotations', 'label')`` -- and
-    ``(slice, column, [key, ...])`` is one triple per key. The entry is taken
-    where the value is picked, so it works on a row and on a stacked batch
-    alike.
+    A pair may go deeper, into a column that holds a dict, read as `dataset()`
+    reads a request -- TUPLES are depth, LISTS are several side by side:
+    ``('annotations', 'annotations', 'label')`` is ``value['label']``,
+    ``('annotations', 'annotations', 'site', 'code')`` -- or
+    ``(..., ('site', 'code'))`` -- is ``value['site']['code']``, and a list of
+    keys, paths or columns is one pair per item. The entry is taken where the
+    value is picked, so it works on a row and on a stacked batch alike.
     """
 
     TOPICS = {}
@@ -225,11 +228,19 @@ class Datacollator(Datablock):
         """Every pair normalized, a triple naming several keys expanded to one per key."""
         out = []
         for pair in pairs:
-            if isinstance(pair, (list, tuple)) and len(pair) == 3:
-                keys = pair[2] if isinstance(pair[2], (list, tuple)) else (pair[2],)
-                out.extend((str(pair[0]), str(pair[1]), str(k)) for k in keys)
-            else:
+            deeper = isinstance(pair, (list, tuple)) and (
+                len(pair) > 2 or (len(pair) == 2 and isinstance(pair[1], (list, tuple))))
+            if not deeper:
                 out.append(cls._norm_pair(pair))
+                continue
+            # Lists side by side, tuples deeper -- as dataset() reads a request.
+            s_name, specs = slice_spec(tuple(pair))
+            for column, keys in specs:
+                if keys is None:
+                    out.append((s_name, column))
+                    continue
+                for path in (keys if isinstance(keys, list) else [keys]):
+                    out.append((s_name, column, path[0] if len(path) == 1 else path))
         return tuple(out)
 
     @staticmethod
@@ -390,29 +401,14 @@ class _UpstreamSlices:
 
     @staticmethod
     def _norm_items(slice_columns):
-        """``*slice_columns`` as an ordered ``[(slice, columns | None)]`` list."""
+        """``*slice_columns`` as an ordered ``[(slice, columns | None)]`` list, as `slice_spec` reads each."""
         items = list(slice_columns)
         if len(items) == 1 and isinstance(items[0], (list, tuple)):
             first = items[0]
-            paired = (len(first) in (2, 3) and isinstance(first[0], str)
-                      and isinstance(first[1], (str, list, tuple)))
-            if not paired:
+            # One tuple is one request -- (slice, ...) -- and one list several.
+            if isinstance(first, list) or not (len(first) >= 2 and isinstance(first[0], str)):
                 items = list(first)
-        out = []
-        for item in items:
-            if isinstance(item, (tuple, list)) and len(item) == 3:
-                # (slice, column, key | [keys]): part of a dict column, as
-                # DatatableBase.dataset() takes it.
-                s_name = str(item[0])
-                cols = [column_spec((item[1], item[2]))]
-            elif isinstance(item, (tuple, list)) and len(item) == 2:
-                s_name, spec = str(item[0]), item[1]
-                cols = ([column_spec(c) for c in spec] if isinstance(spec, (list, tuple))
-                        else [str(spec)])
-            else:
-                s_name, cols = str(item), None
-            out.append((s_name, cols))
-        return out
+        return [slice_spec(item) for item in items]
 
     def _route(self, slice_columns, upstream=None):
         """Resolve a request into an ordered ``[(block, slice, columns)]`` list.

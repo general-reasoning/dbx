@@ -161,7 +161,15 @@ def _pair_key(pair: tuple[str, str]) -> str:
     same name, and keying by the column alone would silently drop one of them
     -- the same collision `dataset()` keys its rows to avoid.
     """
-    return '.'.join(str(p) for p in pair)
+    return '.'.join(_flat_parts_(pair))
+
+
+def _flat_parts_(parts) -> list:
+    """A pair or triple as its names in order, a key path spelled out: ``('s', 'c', ('a', 'b'))`` -> s, c, a, b."""
+    out = []
+    for p in parts:
+        out.extend(_flat_parts_(p) if isinstance(p, tuple) else [str(p)])
+    return out
 
 
 def _pair_array(collator: Datacollator, data: dict, pair: tuple[str, str]) -> np.ndarray:
@@ -217,7 +225,7 @@ def signal_matrix(collator: Datacollator, data: dict, *,
         blocks.append(flat)
         # A triple's column is named with its key, so the layout still says
         # which entry a coefficient came from.
-        layout.append((pair[0], '.'.join(str(p) for p in pair[1:]), int(flat.shape[1])))
+        layout.append((pair[0], '.'.join(_flat_parts_(pair[1:])), int(flat.shape[1])))
 
     rows = {b.shape[0] for b in blocks}
     if len(rows) != 1:

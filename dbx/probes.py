@@ -634,19 +634,26 @@ class FeatureStatsProbe(Datablock):
             executor_kwargs['work_stealing'] = self.work_stealing
         executor = callable_executor(self.parallelization, **executor_kwargs)
         indices = list(range(n_tabs)) if n_tabs > 0 else [None]
+        self.log.info(f"{type(self).__name__}: computing per-tab stats of "
+                      f"{len(self.column_keys)} column(s) over {len(indices)} tab(s)")
         results = executor.exec_callables([TabColumnStatsCallable(self, i) for i in indices])
 
+        n_rows = sum(res['n_rows'] for res in results)
+        held = sum(arr.nbytes for res in results for arr in res['columns'].values())
+        self.log.info(f"{type(self).__name__}: {len(results)} tab(s), {n_rows} row(s) in hand "
+                      f"({held / 2**30:.2f} GiB); computing whole-table stats")
         whole_by_key = self._table_stats_(results)
-        for key in self.column_keys:
-            per_tab = [res['stats'][key] for res in results]
-            whole = whole_by_key[key]
-            for name in COLUMN_STATS:
-                write_npz(self.path(name, key, ensure_dirpath=True), stat=whole[name])
-                write_npz(self.path(f'tab_{name}', key, ensure_dirpath=True),
-                          stat=np.stack([tab[name] for tab in per_tab]))
 
-        write_npz(self.path('count', ensure_dirpath=True),
-                  count=np.array(sum(res['n_rows'] for res in results)))
+        from tqdm import tqdm
+        writes = [(key, name) for key in self.column_keys for name in COLUMN_STATS]
+        self.log.info(f"{type(self).__name__}: writing {2 * len(writes) + 1} statistic file(s)")
+        for key, name in tqdm(writes, desc=f"WRITING STATS [{type(self).__name__}]"):
+            write_npz(self.path(name, key, ensure_dirpath=True), stat=whole_by_key[key][name])
+            write_npz(self.path(f'tab_{name}', key, ensure_dirpath=True),
+                      stat=np.stack([res['stats'][key][name] for res in results]))
+
+        write_npz(self.path('count', ensure_dirpath=True), count=np.array(n_rows))
+        self.log.info(f"{type(self).__name__}: stats written")
 
         self.log.verbose(f"FeatureStatsProbe.__build__: END {self.anchorkeypath}")
         return self

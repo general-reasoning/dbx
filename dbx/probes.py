@@ -650,7 +650,7 @@ class FeatureStatsProbe(Datablock):
         for key, name in tqdm(writes, desc=f"WRITING STATS [{type(self).__name__}]"):
             write_npz(self.path(name, key, ensure_dirpath=True), stat=whole_by_key[key][name])
             write_npz(self.path(f'tab_{name}', key, ensure_dirpath=True),
-                      stat=np.stack([res['stats'][key][name] for res in results]))
+                      **self._per_tab_arrays_([res['stats'][key][name] for res in results]))
 
         write_npz(self.path('count', ensure_dirpath=True), count=np.array(n_rows))
         self.log.info(f"{type(self).__name__}: stats written")
@@ -714,7 +714,32 @@ class FeatureStatsProbe(Datablock):
                 f"{self.__class__.__name__}.read({topic!r}, {key!r}): no such column; "
                 f"this probe describes {self.column_keys}"
             )
-        return read_npz(self.path(topic, key), 'stat')['stat']
+        return self._read_stat_(self.path(topic, key))
+
+    @staticmethod
+    def _per_tab_arrays_(per_tab: list) -> dict:
+        """What a ``tab_<name>`` file holds: the tabs' values, stacked when they can be.
+
+        Every statistic but ``norm`` reduces over a tab's rows, so each tab
+        gives one shape and they stack to ``(n_tabs, ...)``. ``norm`` is one
+        value per ROW, so tabs of different sizes -- real slides -- do not
+        stack; they are stored concatenated in tab order, with ``tab_counts``
+        to split them again. Same file, same topic: the layout, and so the
+        hash, does not depend on the data.
+        """
+        if len({np.shape(v) for v in per_tab}) <= 1:
+            return {'stat': np.stack(per_tab)}
+        return {'stat': np.concatenate([np.asarray(v).reshape(-1) for v in per_tab]),
+                'tab_counts': np.array([np.size(v) for v in per_tab])}
+
+    @staticmethod
+    def _read_stat_(path):
+        """One statistic file: an array, or -- for tabs that did not stack -- one array per tab."""
+        try:
+            data = read_npz(path, 'stat', 'tab_counts')
+        except KeyError:
+            return read_npz(path, 'stat')['stat']
+        return np.split(data['stat'], np.cumsum(data['tab_counts'])[:-1])
 
     @functools.cached_property
     def columns(self) -> list[str]:

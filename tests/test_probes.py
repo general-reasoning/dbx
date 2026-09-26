@@ -465,3 +465,64 @@ def test_table_stats_by_band_equal_the_stats_of_the_concatenation(band_bytes, mo
     assert set(got) == set(want)
     for name in want:
         np.testing.assert_allclose(got[name], want[name], rtol=1e-12, atol=0, err_msg=name)
+
+
+class UnevenSampleTable(DummySampleTable):
+    """Tabs of 3 and 7 samples: real slides do not have one size."""
+
+    def __tab__(self, idx: int, tag=None) -> DummySampleTab:
+        return self.TAB(
+            url=self.path('tabs'),
+            spec=dict(samples_per_tab=3 + 4 * idx),
+            tag=tag or f"tab_{idx}",
+        )
+
+
+def test_datafeature_stats_probe_over_tabs_of_different_sizes(tmp_path):
+    """``tab_norm`` is one value per ROW, so uneven tabs do not stack.
+
+    The build died on exactly that -- ``np.stack`` over per-tab norms of 3 and
+    7 -- after every tab's stats and the whole-table ones had been computed. A
+    table whose tabs all have one size, as the fixtures above do, never
+    reaches it.
+    """
+    url = str(tmp_path)
+    sampletable = UnevenSampleTable(url=url, tag="uneven_samples").build()
+    featuretable = DatafeatureTable(
+        url=url,
+        spec=dict(
+            datapoint_table=sampletable,
+            evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+            collator=Datacollator(spec=dict(signals=[("samples", "samples")],
+                                            labels=[("labels", "labels")])),
+        ),
+        devices=["cpu"],
+        tag="uneven_features",
+    ).build()
+    probe = FeatureStatsProbe(
+        url=url,
+        spec=dict(feature_table=featuretable,
+                  collator=Datacollator(spec=dict(signals=[("features", "final")]))),
+        tag="uneven_stats",
+    ).build()
+
+    assert probe.count == 10
+    norms = probe.read('tab_norm', 'features.final')
+    assert [len(n) for n in norms] == [3, 7]
+    np.testing.assert_allclose(np.concatenate(norms), probe.read('norm', 'features.final'))
+    # The reductions still stack: one row per tab.
+    assert probe.read('tab_mean', 'features.final').shape == (2, 8)
+
+
+def test_per_tab_arrays_round_trip(tmp_path):
+    from dbx.dataparts import write_npz
+    even = [np.arange(3.0), np.arange(3.0) + 1]
+    uneven = [np.arange(3.0), np.arange(5.0), np.zeros(0)]
+    for per_tab in (even, uneven):
+        path = str(tmp_path / f"stat{len(per_tab)}.npz")
+        write_npz(path, **FeatureStatsProbe._per_tab_arrays_(per_tab))
+        got = FeatureStatsProbe._read_stat_(path)
+        if per_tab is even:
+            assert isinstance(got, np.ndarray) and got.shape == (2, 3)
+        else:
+            assert [a.tolist() for a in got] == [a.tolist() for a in per_tab]

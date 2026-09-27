@@ -1487,6 +1487,10 @@ class Datablock:
         # class's USE_SPECIALIZATIONS: True installs and records, 'memory'
         # installs without recording, False declines to look.
         use_specializations: 'bool | str | None' = None,
+        # This instance's SPECIALIZATIONS, in place of the class's; None keeps
+        # the class's and [] declares none. Where to look for an older build,
+        # never what this block is: not in the hash.
+        SPECIALIZATIONS: 'list[Datablock.Specialization | dict] | None' = None,
         # A journal already read, for :meth:`_install_specialization_` to resolve
         # against instead of reading one itself. Operational, and transient: it
         # travels under a private state key so it never reaches `parameters`,
@@ -1536,6 +1540,7 @@ class Datablock:
             'datajournal': datajournal,
             'redirect': redirect,
             'use_specializations': use_specializations,
+            'SPECIALIZATIONS': SPECIALIZATIONS,
             'validate_vars': validate_vars if validate_cfg is None else validate_cfg,
             '__specialization_journal__': specialization_journal,
             'storage_options': storage_options,
@@ -1706,6 +1711,9 @@ class Datablock:
         self.use_specializations = (self._use_specializations_ if self._use_specializations_ is not None
                                     else forming if forming is not None
                                     else self.USE_SPECIALIZATIONS)
+        # As records -- literals -- so that __getstate__, and so quote() and the
+        # journal, carry them in a form that evaluates back.
+        self._SPECIALIZATIONS_ = self._specialization_records_(state.get('SPECIALIZATIONS'))
         self.validate_vars = state.get('validate_vars', True)
         self._paths_ = None
 
@@ -1753,6 +1761,10 @@ class Datablock:
             for cached in ('_hash', '_specialized_hashes_'):
                 self.__dict__.pop(cached, None)
             self.log.name = self._log_name_()
+        if self._SPECIALIZATIONS_ is not None:
+            # After __post_init__, so the instance's own win over any a class
+            # computes there, as they win over the class's.
+            self.SPECIALIZATIONS = [self.Specialization(**r) for r in self._SPECIALIZATIONS_]
         # After __post_init__, because a class may compute its TOPICS there and
         # a specialization is named in terms of them.
         if specialization_journal is None:
@@ -4749,6 +4761,24 @@ class Datablock:
     def _url_(self, value):
         self._datalake_ = value
 
+    @classmethod
+    def _specialization_records_(cls, given):
+        """*given* SPECIALIZATIONS as `Specialization.to_dict` records, or None for "the class's"."""
+        if given is None:
+            return None
+        if isinstance(given, str):
+            given = ast.literal_eval(given)     # as a quote() renders them, read back as text
+        if not isinstance(given, (list, tuple)):
+            raise TypeError(f"SPECIALIZATIONS= is a list of Specializations or None, got {given!r}")
+        records = []
+        for sp in given:
+            if isinstance(sp, dict):
+                sp = cls.Specialization(**sp)
+            if not isinstance(sp, cls.Specialization):
+                raise TypeError(f"SPECIALIZATIONS= holds {sp!r}, which is not a Specialization")
+            records.append(sp.to_dict())
+        return records
+
     def _log_name_(self):
         """The logger's name: anchor and key -- so the hash -- and the tag when there is one."""
         log_name = f"{self.anchor}/{self.key}"
@@ -5594,7 +5624,7 @@ class Datablock:
             # mentioned the feature says -- and saying it out loud in every
             # quote() would move the recorded text of blocks that have nothing
             # to do with specializations.
-            and not (k == 'use_specializations' and v is None)
+            and not (k in ('use_specializations', 'SPECIALIZATIONS') and v is None)
         }
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs

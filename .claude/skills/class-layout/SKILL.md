@@ -1,6 +1,6 @@
 ---
 name: class-layout
-description: The order members are declared in within a class in this repo - the Datablock/Datastack protocol and hooks first, then the rest of the declared API, then accessors/properties, then private helpers last - and the _like_this_() naming every private helper uses. Load when writing a new class, adding a member to an existing one, naming a private helper, or reviewing a class whose members look scattered.
+description: The order members are declared in within a class in this repo - the Datablock/Datastack protocol and hooks first, then the rest of the declared API, then accessors/properties, then private helpers last - and the _like_this_() naming every private helper and _LikeThis_ naming every private class uses. Load when writing a new class, adding a member to an existing one, naming a private helper, or reviewing a class whose members look scattered.
 ---
 
 # Class member layout
@@ -84,7 +84,11 @@ old name an error on definition, not a silent no-op.
 Leading **and** trailing underscore on every private `def`: methods,
 `@staticmethod`/`@classmethod` helpers, private `@property` accessors, and
 private module-level functions. `_resume_plan_`, `_ckpt_step_`,
-`_local_workdir_`, `_default_source_`. The trailing underscore is what
+`_local_workdir_`, `_default_source_`.
+
+The same for every private **class**, module-level or nested:
+`_ClassOrInstance_`, `_TopicMarkerMeta_`, `_CallableExecutorBase_`. A class is
+a member of its module's namespace exactly as a method is of its class's. The trailing underscore is what
 distinguishes a helper this code owns from the single-underscore names that
 arrive from elsewhere.
 

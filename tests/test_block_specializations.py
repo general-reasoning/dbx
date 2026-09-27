@@ -8,7 +8,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from test_specializations import RowTab, TestOneJournalReadForAWholeTable, v1table  # noqa: E402
+from test_specializations import RowTab, TestOneJournalReadForAWholeTable, adopted, v1table  # noqa: E402
 
 from dbx.datablocks import Datablock  # noqa: E402
 
@@ -54,11 +54,12 @@ class TestFindSpecialization:
         assert table.find_block_specializations(found_only=True).index.tolist() == [0, 1, 2]
         assert _redirected(table) == [False, False, False]
 
-    def test_forming_normally_installs_what_was_found(self, grown):
+    def test_forming_installs_nothing_and_adopting_installs_what_was_found(self, grown):
         table = v1table(grown, spec={'n': 3})
         found = table.find_tab_specializations(parallelization='inline')
         assert _redirected(table) == [False, False, False]      # finding is a query
-        assert [table.tab(i).specialization for i in range(3)] == list(found)
+        assert [table.tab(i).specialization for i in range(3)] == [None] * 3   # forming, too
+        assert [adopted(table.tab(i)).specialization for i in range(3)] == list(found)
         assert _redirected(table) == [True, True, True]
 
 
@@ -92,7 +93,7 @@ class TestClearRedirection:
 
     def test_a_block_reads_its_own_again(self, grown):
         table = v1table(grown, spec={'n': 3})
-        tab = table.tab(0)
+        tab = adopted(table.tab(0))
         assert tab.redirected() and tab.get_redirection() is not None
         assert tab.UNSAFE_clear_redirection(OVERRIDE=True) is True
         assert not tab.redirected() and tab.get_redirection() is None
@@ -109,7 +110,7 @@ class TestClearRedirection:
 
     def test_a_table_clears_its_tabs(self, grown):
         table = v1table(grown, spec={'n': 3})
-        assert [table.tab(i).redirected() for i in range(3)] == [True, True, True]
+        assert [adopted(table.tab(i)).redirected() for i in range(3)] == [True, True, True]
         cleared = table.UNSAFE_clear_tab_redirections(OVERRIDE=True, parallelization='inline')
         assert cleared.tolist() == [True, True, True]
         assert _redirected(v1table(grown, spec={'n': 3}, use_tab_specializations=False)) == [False, False, False]
@@ -117,7 +118,7 @@ class TestClearRedirection:
 
     def test_without_override_it_does_nothing(self, grown, monkeypatch):
         monkeypatch.setattr('builtins.input', lambda *_: 'n')
-        tab = v1table(grown, spec={'n': 3}).tab(0)
+        tab = adopted(v1table(grown, spec={'n': 3}).tab(0))
         assert tab.UNSAFE_clear_redirection() is False
         assert tab.redirected()
 
@@ -127,4 +128,4 @@ def test_a_query_does_not_reach_the_blocks_a_stack_caches(grown):
     table = v1table(grown, spec={'n': 3})
     table.find_tab_specializations(parallelization='inline')
     assert all(table.tab(i).use_specializations == RowTab.USE_SPECIALIZATIONS for i in range(3))
-    assert all(table.tab(i).specialization is not None for i in range(3))
+    assert all(adopted(table.tab(i)).specialization is not None for i in range(3))

@@ -887,9 +887,11 @@ class Block:
 
     def type(self, *, deslash: bool = False, **kwargs) -> dict:
         self._reject_rendering_choice_('type', kwargs)
-        version, paths, topics = self.version, None, []
+        version, paths, topics, entries = self.version, None, [], {}
         for part in self._type_parts_(self._type_text_(self._entry) or ''):
-            if part.startswith('topic:'):
+            if part.startswith('TAB='):
+                entries['TAB'] = part[len('TAB='):]      # see Datatable._type_entries_
+            elif part.startswith('topic:'):
                 topics.append(part)
             elif part.startswith('_paths_='):
                 paths = part[len('_paths_='):]
@@ -898,6 +900,7 @@ class Block:
         return {
             'paths': paths,
             'signature': self.signature(deslash=deslash),
+            **entries,
             'topics': tuple(topics),
             'version': version,
         }

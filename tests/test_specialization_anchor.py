@@ -97,6 +97,8 @@ def test_an_anchor_must_be_one():
 def test_a_renamed_block_reads_what_its_old_name_built(tmp_path):
     Before(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
     after = After(datalake=str(tmp_path), spec={'tab_idx': 2})
+    assert after.redirected_topics() == [], "constructing it installs nothing"
+    after.build()                       # adopts, and builds nothing -- After.__build__ would raise
     assert after.anchor != Before.anchor
     assert after.hash == Before(datalake=str(tmp_path), spec={'tab_idx': 2}).hash
     assert after.redirected_topics() == ['rows']
@@ -113,11 +115,78 @@ def test_under_its_own_anchor_the_same_identity_is_still_refused(tmp_path):
 def test_a_table_reads_each_anchor_once_for_all_its_tabs(tmp_path, monkeypatch):
     BeforeTable(datalake=str(tmp_path), spec={'n': 4}).build()
     reads = _count_reads(monkeypatch)
-    table = AfterTable(datalake=str(tmp_path), spec={'n': 4})
-    tabs = [table.tab(i) for i in range(4)]
+    AfterTable(datalake=str(tmp_path), spec={'n': 4}).build()
+    tabs = [AfterTable(datalake=str(tmp_path), spec={'n': 4}).tab(i) for i in range(4)]
     assert all(t.redirected_topics() == ['rows'] for t in tabs)
     for i, t in enumerate(tabs):
         with open(t.path('rows')) as f:
             assert f.read() == f'rows-{i}'
     old_reads = [a for a in reads if a == Before.anchor]
     assert len(old_reads) <= 1, f"{len(old_reads)} reads of the old anchor's journal for 4 tabs"
+
+
+# ---------------------------------------------------------------------------
+# SPECIALIZATIONS= on the instance, in place of the class's
+# ---------------------------------------------------------------------------
+
+import copy  # noqa: E402
+import pickle  # noqa: E402
+
+
+def _renamed_by_instance(url, **kw):
+    """`Before` built; a class that declares nothing, given the rename per instance."""
+    return Unspecialized(datalake=url, spec={'tab_idx': 2}, SPECIALIZATIONS=[
+        Datablock.Specialization(spec={}, topics={'rows': 'rows.txt'}, anchor=Before.anchor)], **kw)
+
+
+class Unspecialized(Datatab):
+    TOPICS = {'rows': 'rows.txt'}
+
+    @dataclass
+    class VAR(Datatab.VAR):
+        tab_idx: int = 0
+
+
+def test_an_instance_declares_its_own(tmp_path):
+    Before(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
+    assert Unspecialized.SPECIALIZATIONS in (None, [])
+    block = _renamed_by_instance(str(tmp_path)).build()
+    assert block.redirected_topics() == ['rows']
+    assert block.valid()
+
+
+def test_none_keeps_the_class_and_empty_declares_none(tmp_path):
+    Before(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
+    # First: once a build installs the redirection, its .redirection marker
+    # answers every later construction, whatever they declare.
+    off = After(datalake=str(tmp_path), spec={'tab_idx': 2}, SPECIALIZATIONS=[])
+    assert off._install_specialization_() is None
+    assert off.SPECIALIZATIONS == [] and off.redirected_topics() == []
+    on = After(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
+    assert on.redirected_topics() == ['rows']
+
+
+def test_they_are_not_the_identity(tmp_path):
+    plain = Unspecialized(datalake=str(tmp_path), spec={'tab_idx': 2})
+    assert _renamed_by_instance(str(tmp_path)).hash == plain.hash
+
+
+def test_they_travel_with_the_block(tmp_path):
+    block = _renamed_by_instance(str(tmp_path))
+    for twin in (pickle.loads(pickle.dumps(block)), copy.deepcopy(block), block.set(verbose=True)):
+        assert [sp.key for sp in twin.SPECIALIZATIONS] == [sp.key for sp in block.SPECIALIZATIONS]
+
+
+def test_a_quote_carries_them_and_evaluates_back(tmp_path):
+    import dbx
+    block = _renamed_by_instance(str(tmp_path))
+    q = block.quote()
+    assert 'SPECIALIZATIONS=' in q
+    again = dbx.eval(q)
+    assert [sp.key for sp in again.SPECIALIZATIONS] == [sp.key for sp in block.SPECIALIZATIONS]
+    assert 'SPECIALIZATIONS' not in Unspecialized(datalake=str(tmp_path)).quote()
+
+
+def test_anything_but_specializations_is_refused(tmp_path):
+    with pytest.raises(TypeError, match="not a Specialization"):
+        Unspecialized(datalake=str(tmp_path), SPECIALIZATIONS=['rows'])

@@ -45,8 +45,8 @@ class NewTable(Datatable):
     TAB = NewTab
     TOPICS = {'tab_paths': DIR, 'done': DATAFILE('done')}
     SPECIALIZATIONS = [Datablock.Specialization(
-        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'},
-        note="respelled only")]
+        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, BLOCK=None,
+        note="respelled only; built before a table's type named its TAB")]
 
 
 class TestARespelledBlockReconstructsTheOldOne:
@@ -65,8 +65,9 @@ class TestARespelledBlockReconstructsTheOldOne:
         sp = NewTable.SPECIALIZATIONS[0]
         assert 'topic:tiles=SLICETOPIC' in old.typestr()          # the sentinel era accumulated
         assert 'topic:tiles' not in new.typestr()                  # the marker era does not
-        assert new.get_typestr(sp) == old.typestr()
-        assert new.get_hash(sp) == old.hash
+        # Built before a table's type named its TAB: under those rules.
+        assert new.get_typestr(sp) == old.typestr(with_block=False)
+        assert new.get_hash(sp) == old.get_hash(with_block=False)
 
 
 class TestNothingIsInherited:

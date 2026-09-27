@@ -219,7 +219,7 @@ class LightningBuilder(Datablock):
     VERSION = 1
 
     # No TOPICS, deliberately, and NOT `TOPICS = []`: the two render
-    # differently into the identity -- signature_topics() answers
+    # differently into the identity -- _topics_signature_() answers
     # ("topics:None",) for a class with no TOPICS and () for one declaring an
     # empty list -- so declaring the empty list here would move the hash of
     # every subclass that already has artifacts on disk.

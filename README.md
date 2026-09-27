@@ -138,6 +138,8 @@ A `Datastack` manages a collection of child Datablocks (blocks) and builds them 
 
 ```python
 class MyStack(Datastack):
+    BLOCK = MyBlock                  # the class its blocks are (a Datatable's TAB is its BLOCK)
+
     @dataclass
     class VAR(Datablock.VAR):
         n_items: int = 1000

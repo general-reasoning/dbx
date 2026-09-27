@@ -28,6 +28,8 @@ The block knows nothing about parallelism — it just builds one piece of work.
 
 ```python
 class MyStack(Datastack):
+    BLOCK = MyBlock                                     # REQUIRED (a warning, for now)
+
     @dataclass
     class VAR(Datablock.VAR):
         source_path: str = None
@@ -53,6 +55,12 @@ class MyStack(Datastack):
     # def __split__(self):  ...   # pre-build (e.g. partition input data)
     # def __stack__(self):  ...   # post-build (e.g. concatenate block outputs)
 ```
+
+`BLOCK` declares what the stack holds: every `block(i)` is checked to be one
+as it is formed. It does not locate anything -- a block's journal is under
+that block's own url and anchor. A `Datatable`'s `TAB` is its `BLOCK`, so a
+table declares nothing more. A stack with no `BLOCK` warns (`FutureWarning`);
+it will be required.
 
 **Required:** `n_blocks` (property) and `__block__(idx)` (method).
 **Optional:** `__split__()` and `__stack__()`.
@@ -377,6 +385,8 @@ chunk, not per block index, to avoid GPU thrashing.
 
 ```python
 class MyClip(Datastack):
+    BLOCK = MyClipBlock
+
     class BlockMaker(Datastack.BlockMaker):
         def __init__(self, idx, *, device="cuda"):
             super().__init__(idx)

@@ -1043,6 +1043,46 @@ class TestValidTabAndSentinels:
         assert tbl.valid_tabs(false_only=True).empty
         assert tbl.valid_tabs(true_only=True).index.tolist() == [0, 1, 2, 3]
 
+    def test_block_redirections_by_every_name(self, tmp_path):
+        """The stack-wide redirection API, and its tab names on a table."""
+        src_tbl = LetterTable(url=str(tmp_path / "rsrc"), spec=dict(n_tabs_=3)).build()
+        dst_tbl = LetterTable(url=str(tmp_path / "rdst"), spec=dict(n_tabs_=3),
+                              parallelization="multithreading", n_workers=2)
+        dst_tbl.tab(1).UNSAFE_redirect(paths=src_tbl.tab(1).paths(), OVERRIDE=True)
+
+        for series in (dst_tbl.blocks_redirected(), dst_tbl.tabs_redirected(),
+                       dst_tbl.redirected_blocks(), dst_tbl.redirected_tabs()):
+            assert series.tolist() == [False, True, False]
+        assert dst_tbl.tabs_redirected(true_only=True).index.tolist() == [1]
+
+        for got in (dst_tbl.get_block_redirections(), dst_tbl.get_tab_redirections(),
+                    dst_tbl.get_tab_redirections(parallelization="inline")):
+            assert got.index.tolist() == [0, 1, 2]
+            assert got[0] is None and got[2] is None
+            assert got[1].paths == src_tbl.tab(1).paths()
+        only = dst_tbl.get_tab_redirections(redirected_only=True)
+        assert only.index.tolist() == [1]
+        # One journal read for the lot, not one per tab.
+        reads = []
+        original = type(dst_tbl.tab(0)).journal
+        def counting(self, *a, **kw):
+            reads.append(self.anchor)
+            return original(self, *a, **kw)
+        import unittest.mock
+        with unittest.mock.patch.object(type(dst_tbl.tab(0)), 'journal', counting):
+            dst_tbl.get_tab_redirections(parallelization="inline")
+        assert len(reads) == 1
+
+        assert dst_tbl.tab_redirections.index.tolist() == [0, 1, 2]
+        assert dst_tbl.block_redirections is dst_tbl.block_redirections   # resolved once
+        assert dst_tbl.tab_redirections is dst_tbl.block_redirections
+
+    def test_get_redirection_is_the_whole_api(self, tmp_path):
+        """No private twin behind it any more; the property goes through it."""
+        tbl = LetterTable(url=str(tmp_path / "one"), spec=dict(n_tabs_=1))
+        assert not hasattr(tbl.tab(0), '_get_redirection')
+        assert tbl.tab(0).redirection is None and tbl.tab(0).get_redirection() is None
+
     def test_redirected_tabs_and_redirected_blocks(self, tmp_path):
         src_tbl = LetterTable(
             url=str(tmp_path / "red_src"),

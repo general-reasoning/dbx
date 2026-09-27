@@ -129,13 +129,15 @@ class DATASLICE(DIR, metaclass=_DataSliceMeta):
     #: The MDS type a column declared by its dict structure is written as.
     DICT_COLUMN_TYPE = 'json'
 
-    # 3. Helpers --------------------------------------------------------
+    # 2. Declared API ---------------------------------------------------
 
     @classmethod
     def writer_columns(cls, columns) -> dict:
         """*columns* as an MDS writer takes them: a dict-structured column as ``'json'``."""
         return {name: cls.DICT_COLUMN_TYPE if isinstance(coltype, dict) else coltype
                 for name, coltype in columns.items()}
+
+    # 3. Helpers --------------------------------------------------------
 
     @staticmethod
     def _check_column(name, coltype):
@@ -243,63 +245,6 @@ class DatatableBase(Datablock):
         """
         schema = self.declared_schema(slice)
         return DATASLICE.writer_columns(schema) if schema else None
-
-    def _check_column_keys(self, slice, cols):
-        """Refuse a ``(slice, column, key)`` the slice's declaration says cannot be read.
-
-        Only where the slice declares the column's structure: an undeclared
-        slice, or a column declared plain ``'json'``, has nothing to check
-        against, and its keys are found or not when the data is.
-        """
-        keyed = [column_spec(spec) for spec in cols or ()]
-        keyed = [(column, keys) for column, keys in keyed if keys is not None]
-        if not keyed:
-            return
-        schema = self._slice_declaration(slice)
-        for column, keys in keyed:
-            if column not in schema:
-                continue
-            declared = schema[column]
-            if not isinstance(declared, dict):
-                if declared == DATASLICE.DICT_COLUMN_TYPE:
-                    continue
-                raise TypeError(
-                    f"{self.__class__.__name__}: slice {slice!r} declares column {column!r} "
-                    f"as {declared!r}, which has no keys to take {keys!r} of"
-                )
-            for key in (keys if isinstance(keys, list) else [keys]):
-                path, node = key_path(key), declared
-                for depth, k in enumerate(path):
-                    if not isinstance(node, dict):
-                        raise TypeError(
-                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
-                            f"{'.'.join(path[:depth])!r} as {node!r}, which has no key {k!r}"
-                        )
-                    if k not in node:
-                        under = '.'.join(path[:depth])
-                        raise KeyError(
-                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
-                            f"keys {list(node)}{' under ' + repr(under) if under else ''}, not [{k!r}]"
-                        )
-                    node = node[k]
-
-    def _slice_declaration(self, slice) -> dict:
-        """*slice*'s declared schema wherever it is declared -- here, or on a table's tabs -- else ``{}``.
-
-        A table's slices are its tabs' topics, not its own, and every tab of
-        one table is one TAB class, so the first tab speaks for them all.
-        """
-        try:
-            return self.declared_schema(slice) or {}
-        except KeyError:
-            pass
-        n_tabs = getattr(self, 'n_tabs', 0) or 0
-        if n_tabs and hasattr(self, 'tab'):
-            try:
-                return self.tab(0).declared_schema(slice) or {}
-            except KeyError:
-                pass
-        return {}
 
     def declared_schema(self, slice) -> 'dict | None':
         """The columns *slice* declares, as declared: an MDS type, or a dict column's structure."""
@@ -607,6 +552,63 @@ class DatatableBase(Datablock):
                 or os.path.join(self.localroot, 'cache'))
 
     # 3. Utility and Private Methods ────────────────────────────────
+
+    def _check_column_keys(self, slice, cols):
+        """Refuse a ``(slice, column, key)`` the slice's declaration says cannot be read.
+
+        Only where the slice declares the column's structure: an undeclared
+        slice, or a column declared plain ``'json'``, has nothing to check
+        against, and its keys are found or not when the data is.
+        """
+        keyed = [column_spec(spec) for spec in cols or ()]
+        keyed = [(column, keys) for column, keys in keyed if keys is not None]
+        if not keyed:
+            return
+        schema = self._slice_declaration(slice)
+        for column, keys in keyed:
+            if column not in schema:
+                continue
+            declared = schema[column]
+            if not isinstance(declared, dict):
+                if declared == DATASLICE.DICT_COLUMN_TYPE:
+                    continue
+                raise TypeError(
+                    f"{self.__class__.__name__}: slice {slice!r} declares column {column!r} "
+                    f"as {declared!r}, which has no keys to take {keys!r} of"
+                )
+            for key in (keys if isinstance(keys, list) else [keys]):
+                path, node = key_path(key), declared
+                for depth, k in enumerate(path):
+                    if not isinstance(node, dict):
+                        raise TypeError(
+                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
+                            f"{'.'.join(path[:depth])!r} as {node!r}, which has no key {k!r}"
+                        )
+                    if k not in node:
+                        under = '.'.join(path[:depth])
+                        raise KeyError(
+                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
+                            f"keys {list(node)}{' under ' + repr(under) if under else ''}, not [{k!r}]"
+                        )
+                    node = node[k]
+
+    def _slice_declaration(self, slice) -> dict:
+        """*slice*'s declared schema wherever it is declared -- here, or on a table's tabs -- else ``{}``.
+
+        A table's slices are its tabs' topics, not its own, and every tab of
+        one table is one TAB class, so the first tab speaks for them all.
+        """
+        try:
+            return self.declared_schema(slice) or {}
+        except KeyError:
+            pass
+        n_tabs = getattr(self, 'n_tabs', 0) or 0
+        if n_tabs and hasattr(self, 'tab'):
+            try:
+                return self.tab(0).declared_schema(slice) or {}
+            except KeyError:
+                pass
+        return {}
 
     def chunk_shuffle_sampler(
         self,
@@ -1049,7 +1051,36 @@ class Datatable(DatatableBase, Datastack):
 
     # 1. Datastack / Table Protocol Methods ─────────────────────────
 
-    def __init__(self, *args, cache=None, cache_limit=None, filter_built_tabs: bool = False, **kwargs):
+    def __init_subclass__(cls, **kwargs):
+        """A table's TAB is its BLOCK: declaring one declares the other.
+
+        A table may still name a BLOCK of its own, and then its TAB must be one.
+        """
+        super().__init_subclass__(**kwargs)
+        tab = cls.__dict__.get('TAB')
+        if tab is None:
+            return
+        if 'BLOCK' in cls.__dict__ and cls.BLOCK is not None:
+            if not (isinstance(tab, type) and issubclass(tab, cls.BLOCK)):
+                raise TypeError(
+                    f"{cls.__qualname__}.TAB = {getattr(tab, '__name__', tab)!r} is not a "
+                    f"{cls.BLOCK.__name__}, the BLOCK it declares"
+                )
+        else:
+            cls.BLOCK = tab
+
+    def __init__(self, *args, cache=None, cache_limit=None, filter_built_tabs: bool = False,
+                 use_tab_specializations: 'bool | str | None' = None, **kwargs):
+        # A table's blocks are its tabs, so use_tab_specializations IS
+        # use_block_specializations -- either may be given, both if they agree.
+        block = kwargs.get('use_block_specializations')
+        if use_tab_specializations is not None:
+            if block is not None and block != use_tab_specializations:
+                raise ValueError(
+                    f"{type(self).__name__}: use_tab_specializations={use_tab_specializations!r} "
+                    f"and use_block_specializations={block!r} disagree; they are one setting"
+                )
+            kwargs['use_block_specializations'] = use_tab_specializations
         super().__init__(*args, cache=cache, cache_limit=cache_limit, filter_built_tabs=filter_built_tabs, **kwargs)
 
     def __tab__(self, idx: int, *, tag=None, **spec) -> Datatab:
@@ -1334,9 +1365,30 @@ class Datatable(DatatableBase, Datastack):
         """Return a pandas Series of booleans, one per tab, indicating validity (parallelized)."""
         return self.valid_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, **kwargs)
 
-    def redirected_tabs(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
-        """Return a pandas Series of booleans, one per tab, indicating redirection (parallelized)."""
-        return self.redirected_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, **kwargs)
+    def tabs_redirected(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
+        """Whether each tab is redirected: `Datastack.blocks_redirected`, by tab."""
+        return self.blocks_redirected(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, **kwargs)
+
+    #: The name `tabs_redirected` had first.
+    redirected_tabs = tabs_redirected
+
+    def get_tab_redirections(self, parallelization: str | None = None, n_workers: int | None = None,
+                             journal=None, redirected_only: bool = False, **kwargs) -> pd.Series:
+        """Each tab's `Redirection`, or None: `Datastack.get_block_redirections`, by tab."""
+        return self.get_block_redirections(parallelization=parallelization, n_workers=n_workers,
+                                           journal=journal, redirected_only=redirected_only, **kwargs)
+
+    def find_tab_specializations(self, parallelization: str | None = None, n_workers: int | None = None,
+                                 journal=None, found_only: bool = False, **kwargs) -> pd.Series:
+        """`Datastack.find_block_specializations`, by tab."""
+        return self.find_block_specializations(parallelization=parallelization, n_workers=n_workers,
+                                               journal=journal, found_only=found_only, **kwargs)
+
+    def UNSAFE_clear_tab_redirections(self, *, OVERRIDE: bool = False, parallelization: str | None = None,
+                                      n_workers: int | None = None, **kwargs) -> pd.Series:
+        """`Datastack.UNSAFE_clear_block_redirections`, by tab."""
+        return self.UNSAFE_clear_block_redirections(OVERRIDE=OVERRIDE, parallelization=parallelization,
+                                                    n_workers=n_workers, **kwargs)
 
     validate_tab = Datastack.validate_block
     validate_block = Datastack.validate_block
@@ -1379,7 +1431,7 @@ class Datatable(DatatableBase, Datastack):
     def __stats__(self, slice, **kwargs) -> dict:
         return super().__stats__(slice, **kwargs)
 
-    def signature_topics(self, topics=None):
+    def _topics_signature_(self, topics=None, *, declared=None):
         """Own TOPICS segments -- plus, in a sentinel declaration, the TAB's slices.
 
         A table's slices are the TAB's declaration and not the table's, and a
@@ -1396,8 +1448,11 @@ class Datatable(DatatableBase, Datastack):
         # restricts THOSE -- a specialization names this table's topics, not
         # the TAB's slices, which are the TAB's declaration and accumulate here
         # whatever subset of its own a table is being rendered under.
-        own = super().signature_topics(topics)
-        if self._modern_topics():
+        own = super()._topics_signature_(topics, declared=declared)
+        # The era of the declaration being RENDERED: a table reconstructed from a
+        # sentinel-era declaration accumulated its TAB's slices then, whatever
+        # this class is spelled in now.
+        if self._modern_topics(self.TOPICS if declared is None else declared):
             return own
         # Then the TAB's slice topics, in the same format Datastack uses.
         tab = self.TAB
@@ -1415,6 +1470,16 @@ class Datatable(DatatableBase, Datastack):
 
 
     # 2. Properties and Accessors ───────────────────────────────────
+
+    @property
+    def tab_redirections(self) -> pd.Series:
+        """`Datastack.block_redirections`, by tab."""
+        return self.block_redirections
+
+    @property
+    def use_tab_specializations(self):
+        """`use_block_specializations`, by its table name."""
+        return getattr(self, 'use_block_specializations', None)
 
     @property
     def n_tabs(self) -> int:
@@ -1458,6 +1523,9 @@ class Datatable(DatatableBase, Datastack):
             return StreamingDataset(**streaming_kwargs)
 
     # 3. Private and Utility Methods ────────────────────────────────
+
+    def _block_class_(self):
+        return getattr(self, 'BLOCK', None) or getattr(self, 'TAB', None)
 
     def _read_slice(self, slice, *, tabs=None, **kwargs):
         indices = range(self.n_tabs) if tabs is None else tabs
@@ -1713,6 +1781,12 @@ class DatatablePart(Datatable):
             SharedMemoryManager.clean_process_shared_memory()
             streaming_kwargs['streams'] = self._tab_streams(slice, local)
             return StreamingDataset(**streaming_kwargs)
+
+    def _block_class_(self):
+        """A part's tabs are its table's, and so is its BLOCK."""
+        table = getattr(getattr(self, 'var', None), 'partition', None)
+        table = getattr(table, 'datapoint_table', None)
+        return table._block_class_() if table is not None else None
 
 
 # ═══════════════════════════════════════════════════════════════════════

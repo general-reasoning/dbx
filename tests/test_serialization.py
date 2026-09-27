@@ -110,6 +110,7 @@ class StackBlock(Datablock):
 
 class SimpleStack(Datastack):
     """Concrete Datastack for serialization tests."""
+    BLOCK = StackBlock
     TOPICS = {'stack_meta': 'stack_meta.txt'}
 
     @dataclass

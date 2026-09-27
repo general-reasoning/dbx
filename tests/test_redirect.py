@@ -705,6 +705,7 @@ class TestNewRedirectFeatures:
         from dbx.datablocks import Datastack
 
         class DummyStack(Datastack):
+            BLOCK = Built
             def blocks(self):
                 return [Built(url=str(tmp_path), spec={'x': i}) for i in range(3)]
 
@@ -726,6 +727,7 @@ class TestNewRedirectFeatures:
         src_code = src.journal(loc=0).block.id
 
         class DummyStack(Datastack):
+            BLOCK = Built
             def blocks(self):
                 return [Built(url=str(tmp_path), spec={'x': i}) for i in range(2)]
 
@@ -904,6 +906,7 @@ class TestNewRedirectFeatures:
         src, code = source
 
         class DummyStack(Datastack):
+            BLOCK = Built
             def blocks(self):
                 return [Built(url=str(tmp_path), spec={'x': i}) for i in range(2)]
 
@@ -972,6 +975,7 @@ class TestNewRedirectFeatures:
         src_blocks = [Built(url=str(tmp_path), spec={'x': 10 + i}).build() for i in range(3)]
 
         class DummyStack(Datastack):
+            BLOCK = Built
             def blocks(self):
                 return [Built(url=str(tmp_path), spec={'x': i}) for i in range(3)]
 
@@ -1097,6 +1101,7 @@ class TestDryValidateOverBlocks:
         there, absent = src.path('output'), str(tmp_path / 'absent.txt')
 
         class DummyStack(Datastack):
+            BLOCK = Built
             def blocks(self):
                 return [block(tmp_path, x=i) for i in range(3)]
 
@@ -1117,6 +1122,7 @@ class TestDryValidateOverBlocks:
         from dbx.datablocks import Datastack
 
         class DummyStack(Datastack):
+            BLOCK = Built
             def blocks(self):
                 return [block(tmp_path, x=i) for i in range(2)]
 

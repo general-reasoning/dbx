@@ -40,6 +40,7 @@ def block(tmp_path, x=1, **kwargs):
 
 
 class Stack(Datastack):
+    BLOCK = Built
     TOPICS = {'meta': 'meta.txt'}
 
     @dataclass

@@ -5,7 +5,7 @@ string. So ``diffnorm()``, ``diffversion()`` and ``difftopics()`` between them
 account for every way two blocks can hash differently, and ``diff()`` returns
 all three at once.
 
-``difftopics()`` compares ``signature_topics()`` — the very segments the
+``difftopics()`` compares ``_topics_signature_()`` — the very segments the
 signature is built from — so the two cannot drift: a topic difference the
 signature sees is one the diff reports, and vice versa. The tests here assert
 that equivalence directly, over a spread of TOPICS shapes, rather than trusting
@@ -104,26 +104,26 @@ class TestSignatureTopics:
 
     def test_it_is_what_the_signature_joins(self, tmp_path):
         b = block(Block, tmp_path)
-        for segment in b.signature_topics():
+        for segment in b._topics_signature_():
             assert segment in b.typestr()
 
     def test_a_leaf_is_named_by_its_full_path(self, tmp_path):
-        assert block(Block, tmp_path).signature_topics() == (
+        assert block(Block, tmp_path)._topics_signature_() == (
             'topic:out=out.txt', 'topic:data/frames=None',
         )
 
     def test_a_list_declaration_renders_without_a_filename(self, tmp_path):
-        assert block(Listed, tmp_path).signature_topics() == ('topic:out', 'topic:data')
+        assert block(Listed, tmp_path)._topics_signature_() == ('topic:out', 'topic:data')
 
     def test_no_topics_renders_as_such(self, tmp_path):
-        assert block(Untopicked, tmp_path).signature_topics() == ('topics:None',)
+        assert block(Untopicked, tmp_path)._topics_signature_() == ('topics:None',)
 
     def test_empty_topics_renders_as_nothing(self, tmp_path):
-        assert block(Empty, tmp_path).signature_topics() == ()
+        assert block(Empty, tmp_path)._topics_signature_() == ()
 
     def test_the_signature_uses_the_same_segments(self, tmp_path):
         b = block(Block, tmp_path)
-        for segment in b.signature_topics():
+        for segment in b._topics_signature_():
             assert segment in b.typestr()
 
 
@@ -134,7 +134,7 @@ class TestDifftopicsAgreesWithSignature:
     @pytest.mark.parametrize('two', ALL)
     def test_empty_exactly_when_the_segments_agree(self, one, two, tmp_path):
         a, b = block(one, tmp_path), block(two, tmp_path)
-        same_segments = a.signature_topics() == b.signature_topics()
+        same_segments = a._topics_signature_() == b._topics_signature_()
         assert bool(a.difftopics(b)) is not same_segments
 
     @pytest.mark.parametrize('other', ALL)
@@ -150,7 +150,7 @@ class TestDifftopicsAgreesWithSignature:
         a, b = block(Block, tmp_path), block(Reordered, tmp_path)
         assert a.hash != b.hash
         assert a.difftopics(b) == {
-            SIGNATURE_TOPICS: (a.signature_topics(), b.signature_topics())
+            SIGNATURE_TOPICS: (a._topics_signature_(), b._topics_signature_())
         }
 
     def test_empty_topics_against_none_is_a_difference(self, tmp_path):

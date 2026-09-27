@@ -196,7 +196,7 @@ class TestIdentity:
     def test_datalightning_declares_no_topics(self):
         """`TOPICS = []` and no TOPICS render differently into the identity.
 
-        signature_topics() answers ("topics:None",) for a class with no TOPICS
+        _topics_signature_() answers ("topics:None",) for a class with no TOPICS
         and () for one declaring an empty list, so declaring the empty list on
         the base would move the hash of every subclass that already has
         artifacts -- which is exactly what IJEPAsaurUSLightning is.

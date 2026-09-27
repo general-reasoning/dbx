@@ -43,6 +43,7 @@ class ChunkBlock(Datablock):
 
 class SquaresStack(Datastack):
     """Stack that splits a range into chunks and computes squares."""
+    BLOCK = ChunkBlock
 
     TOPICS = {'manifest': 'manifest.parquet'}
 
@@ -60,7 +61,7 @@ class SquaresStack(Datastack):
         end = min(start + self.var.chunk_size, self.var.total)
         return ChunkBlock(url=self.url, spec=dict(start=start, end=end))
 
-    def __stack__(self):
+    def __stack__(self, results=None):
         """Concatenate all block outputs into a manifest."""
         frames = []
         for idx in range(self.n_blocks):

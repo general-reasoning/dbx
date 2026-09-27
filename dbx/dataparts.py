@@ -1032,6 +1032,8 @@ class ExecjournalFrame(pd.DataFrame):
         """As `ExecjournalEntry.constructed`, over every command here."""
         return _constructed_(self.datajournal(), anchor, filters)
 
+    # 4. Helpers --------------------------------------------------------
+
     def _written_paths_(self) -> list:
         return [p for _, row in self.iterrows() for p in ExecjournalEntry._written_paths_(row)]
 

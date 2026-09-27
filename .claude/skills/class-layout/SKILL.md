@@ -58,6 +58,27 @@ other member exists to serve them. Burying `__build__` at the bottom — where
 the training loop that implements it happened to be written last — makes a
 reader scroll past the machinery to find the point.
 
+## A name says who may call it -- and who may override it
+
+Three spellings, three contracts:
+
+- **`__hook__`** -- a hook: the framework calls it and a subclass implements
+  it. `__build__`, `__read__`, `__block__`, `__tab__`, `__stack__`,
+  `__valid_topic__`. The ONLY methods a subclass is meant to override.
+- **`plain_name`** -- declared API: callers call it. A subclass may extend it
+  through `super()`, but should not need to.
+- **`_name_`** -- private: neither callers nor subclasses. Anything that
+  feeds a block's IDENTITY (hash, key, path) belongs here: a public name is an
+  invitation to override, and an override there moves every hash a subclass
+  has built under. `signature_topics()` was public, and an agent reached for
+  overriding it to make a specialization resolve -- it is now
+  `_topics_signature_()`, and `Datablock.__init_subclass__` refuses a class
+  that still defines the old name, since an override of a name nothing calls
+  would be ignored in silence and change the hash.
+
+When renaming a public member that subclasses may have overridden, make the
+old name an error on definition, not a silent no-op.
+
 ## Private helpers are named `_like_this_`
 
 Leading **and** trailing underscore on every private `def`: methods,

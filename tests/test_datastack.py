@@ -53,6 +53,7 @@ class CounterBlock(Datablock):
 # ---------------------------------------------------------------------------
 class SimpleStack(Datastack):
     """A stack that produces N blocks based on total_items / block_size."""
+    BLOCK = CounterBlock
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -88,6 +89,7 @@ class TestDatastackAbstract(unittest.TestCase):
         """Direct Datastack subclass without blocks() should raise."""
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
         class BadStack(Datastack):
+            BLOCK = Datablock
             TOPICS = {'bad': 'bad.txt'}
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -445,6 +447,7 @@ class TestDatastackPreStack(unittest.TestCase):
     def test_pre_stack_called_during_build(self):
         """__split__() should be called when build() runs."""
         class TrackedStack(Datastack):
+            BLOCK = CounterBlock
             pre_stack_called = False
 
             @dataclass
@@ -496,6 +499,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return "x"
 
         class OrderedStack(Datastack):
+            BLOCK = OrderedBlock
             @dataclass
             class VAR(Datablock.VAR):
                 n: int = 2
@@ -673,6 +677,7 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
                 return self.valid() and (self.var.idx >= threshold)
 
         class CustomValidateStack(Datastack):
+            BLOCK = CustomValidateBlock
             @dataclass
             class VAR(Datablock.VAR):
                 total_items: int = 12
@@ -773,3 +778,88 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# BLOCK: the class a stack's blocks are
+# ---------------------------------------------------------------------------
+
+import pytest
+
+
+class TestBLOCK:
+
+    def _stack(self, block_cls, made):
+        class S(Datastack):
+            BLOCK = block_cls
+
+            @property
+            def n_blocks(self):
+                return 1
+
+            def __block__(self, idx):
+                return made(url=self.url, spec=dict(idx=idx))
+        return S
+
+    def test_a_block_of_the_declared_class(self, tmp_path):
+        S = self._stack(CounterBlock, CounterBlock)
+        assert isinstance(S(url=str(tmp_path)).block(0), CounterBlock)
+
+    def test_a_block_of_another_class_is_refused(self, tmp_path):
+        class Other(Datablock):
+            @dataclass
+            class VAR(Datablock.VAR):
+                idx: int = 0
+        S = self._stack(CounterBlock, Other)
+        with pytest.raises(TypeError, match="not the CounterBlock its BLOCK declares"):
+            S(url=str(tmp_path)).block(0)
+
+    def test_no_block_warns_once_per_class(self, tmp_path):
+        S = self._stack(None, CounterBlock)
+        with pytest.warns(FutureWarning, match="declares no BLOCK"):
+            S(url=str(tmp_path))
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            S(url=str(tmp_path))                     # the same class: not again
+
+    def test_a_tables_tab_is_its_block(self):
+        from dbx.datatables import Datatab, Datatable
+
+        class T(Datatab):
+            pass
+
+        class Table(Datatable):
+            TAB = T
+
+        assert Table.BLOCK is T
+
+    def test_a_table_naming_its_own_block_must_tab_one(self):
+        from dbx.datatables import Datatab, Datatable
+
+        class Base(Datatab):
+            pass
+
+        class T(Base):
+            pass
+
+        class Ok(Datatable):
+            BLOCK = Base
+            TAB = T
+
+        assert Ok.BLOCK is Base
+        with pytest.raises(TypeError, match="is not a CounterBlock, the BLOCK it declares"):
+            class Bad(Datatable):
+                BLOCK = CounterBlock
+                TAB = T
+
+    def test_a_part_has_its_tables_block(self, tmp_path):
+        import sys
+        sys.path.insert(0, os.path.dirname(__file__))
+        from test_partition_fold import DummyTable
+        from dbx.datatables import DatatablePartition
+        table = DummyTable(url=str(tmp_path / 'table')).build()
+        part = DatatablePartition(url=str(tmp_path / 'p'), spec=dict(
+            datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0)).build().fold(0)
+        assert part._block_class_() is DummyTable.BLOCK is DummyTable.TAB
+        assert isinstance(part.block(0), DummyTable.TAB)

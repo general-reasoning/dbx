@@ -120,3 +120,20 @@ def test_partition_slice_parameter(table, tmp_path):
     ).build()
     assert p_by_int.valid()
     assert p_by_str.tabs_indices(0) == p_by_int.tabs_indices(0)
+
+
+def test_a_part_resolves_its_tabs_redirections_through_the_table(table, tmp_path):
+    """A part's tab i is the table's tab tab_indices[i]; so is its redirection."""
+    partition = DatapointPartition(
+        url=str(tmp_path / 'partition_r'),
+        spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0),
+    ).build()
+    fold = partition.fold(0)
+    real = fold.tab_indices[0]
+    other = DummyTable(url=str(tmp_path / 'elsewhere')).build()
+    table.tab(real).UNSAFE_redirect(paths=other.tab(real).paths(), OVERRIDE=True)
+
+    got = fold.get_tab_redirections(parallelization='inline')
+    assert got.index.tolist() == list(range(fold.n_tabs))
+    assert got[0].paths == other.tab(real).paths()
+    assert fold.tabs_redirected(parallelization='inline')[0]

@@ -57,7 +57,7 @@ class V2(V1):
     SPECIALIZATIONS = [
         Datablock.Specialization(
             spec=dict(window='hann'),
-            topics=['spectra'],
+            topics={'spectra': 'spectra.npy'},
             note="hann was the only window there was before the field existed",
         ),
     ]
@@ -82,7 +82,7 @@ class V3(V2):
     SPECIALIZATIONS = [
         Datablock.Specialization(
             spec=dict(window='hann'),
-            topics=['spectra'],
+            topics={'spectra': 'spectra.npy'},
             version=None,
             note="the bump was for `phases`; `spectra` is what it always was",
         ),
@@ -137,13 +137,13 @@ class TestTheReconstructedIdentity:
         block = v2(tmp_path)
         with pytest.raises(ValueError, match='does not declare'):
             block._specialization_mismatch(
-                Datablock.Specialization(spec=dict(nosuch=1), topics=['spectra']))
+                Datablock.Specialization(spec=dict(nosuch=1), topics={'spectra': 'spectra.npy'}))
 
     def test_an_unknown_topic_raises(self, tmp_path):
         block = v2(tmp_path)
         with pytest.raises(KeyError):
             block._specialization_mismatch(
-                Datablock.Specialization(spec=dict(window='hann'), topics=['nosuch']))
+                Datablock.Specialization(spec=dict(window='hann'), topics={'nosuch': 'nosuch.npy'}))
 
 
 class TestMatching:
@@ -167,7 +167,7 @@ class TestMatching:
         """It reconstructs this block's own identity, so there is no other block."""
         block = v2(tmp_path)
         why = block._specialization_mismatch(
-            Datablock.Specialization(spec={}, topics=['spectra', 'phases']))
+            Datablock.Specialization(spec={}, topics={'spectra': 'spectra.npy', 'phases': 'phases.npy'}))
         assert 'own identity' in why
 
 
@@ -470,7 +470,7 @@ class RowTableV2(RowTableV1):
     SPECIALIZATIONS = [
         Datablock.Specialization(
             spec={},
-            topics=['summary', 'tab_paths', 'done'],
+            topics={'summary': 'summary.txt', 'tab_paths': DIRTOPIC, 'done': 'done'},
             note="`report` is derived from the tabs, which did not re-key",
         ),
     ]
@@ -623,7 +623,7 @@ class TestASpecializationAcrossAVersionBump:
         """What the field is for: the same specialization without it names
         (this spec, version=2, spectra), which no build ever had."""
         unversioned = Datablock.Specialization(
-            spec=dict(window='hann'), topics=['spectra'])
+            spec=dict(window='hann'), topics={'spectra': 'spectra.npy'})
         block = v3(tmp_path)
         assert block.get_hash(unversioned) != block.get_hash(self.SP)
         assert block.get_hash(unversioned) != v1(tmp_path).hash
@@ -720,7 +720,7 @@ class TestOneJournalReadForAWholeTable:
         monkeypatch.setattr(RowTab, 'TOPICS',
                             {'rows': 'rows.txt', 'extra': 'extra.txt'})
         monkeypatch.setattr(RowTab, 'SPECIALIZATIONS', [
-            Datablock.Specialization(spec={}, topics=['rows'],
+            Datablock.Specialization(spec={}, topics={'rows': 'rows.txt'},
                                      note='extra is derived from rows')])
 
     def test_the_reads_do_not_scale_with_the_tabs(self, tmp_path, monkeypatch):

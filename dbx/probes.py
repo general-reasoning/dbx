@@ -668,6 +668,38 @@ class FeatureStatsProbe(Datablock):
         self.log.verbose(f"FeatureStatsProbe.__build__: END {self.anchorkeypath}")
         return self
 
+    def __read__(self, *topicpath):
+        if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
+            topicpath = tuple(topicpath[0])
+        topic = str(topicpath[0])
+
+        if topic == 'count':
+            return int(read_npz(self.path('count'), 'count')['count'])
+        if topic not in self.TOPICS:
+            raise ValueError(
+                f"Unknown topic: {topic!r}; expected one of {sorted(self.TOPICS)}"
+            )
+        if len(topicpath) == 1:
+            return {key: self.read(topic, key) for key in self.column_keys}
+
+        key = str(topicpath[1])
+        if key not in self.column_keys:
+            raise KeyError(
+                f"{self.__class__.__name__}.read({topic!r}, {key!r}): no such column; "
+                f"this probe describes {self.column_keys}"
+            )
+        return self._read_stat_(self.path(topic, key))
+
+    @functools.cached_property
+    def columns(self) -> list[str]:
+        return self.column_keys
+
+    @functools.cached_property
+    def count(self) -> int:
+        return self.read('count')
+
+    # 4. Helpers --------------------------------------------------------
+
     def _table_stats_(self, results) -> dict[str, dict[str, np.ndarray]]:
         """The whole-table `column_stats` of every column, a band of columns at a time.
 
@@ -704,28 +736,6 @@ class FeatureStatsProbe(Datablock):
                 out[key]['norm'] = np.concatenate([res['stats'][key]['norm'] for res in results])
         return out
 
-    def __read__(self, *topicpath):
-        if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
-            topicpath = tuple(topicpath[0])
-        topic = str(topicpath[0])
-
-        if topic == 'count':
-            return int(read_npz(self.path('count'), 'count')['count'])
-        if topic not in self.TOPICS:
-            raise ValueError(
-                f"Unknown topic: {topic!r}; expected one of {sorted(self.TOPICS)}"
-            )
-        if len(topicpath) == 1:
-            return {key: self.read(topic, key) for key in self.column_keys}
-
-        key = str(topicpath[1])
-        if key not in self.column_keys:
-            raise KeyError(
-                f"{self.__class__.__name__}.read({topic!r}, {key!r}): no such column; "
-                f"this probe describes {self.column_keys}"
-            )
-        return self._read_stat_(self.path(topic, key))
-
     @staticmethod
     def _per_tab_arrays_(per_tab: list) -> dict:
         """What a ``tab_<name>`` file holds: the tabs' values, stacked when they can be.
@@ -750,14 +760,6 @@ class FeatureStatsProbe(Datablock):
         except KeyError:
             return read_npz(path, 'stat')['stat']
         return np.split(data['stat'], np.cumsum(data['tab_counts'])[:-1])
-
-    @functools.cached_property
-    def columns(self) -> list[str]:
-        return self.column_keys
-
-    @functools.cached_property
-    def count(self) -> int:
-        return self.read('count')
 
 
 # ═══════════════════════════════════════════════════════════════════════

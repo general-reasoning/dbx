@@ -114,12 +114,12 @@ class TestTheDeclarationDecidesTheEra:
     """Nothing announces the era: holding a marker is what makes one."""
 
     def test_a_declaration_holding_a_marker_quotes_its_filenames(self, tmp_path):
-        assert block(Marked, tmp_path).signature_topics() == (
+        assert block(Marked, tmp_path)._topics_signature_() == (
             "topic:data='data.txt'", 'topic:masks=DIR', 'topic:cache=SYNTHETIC',
         )
 
     def test_a_declaration_holding_none_renders_as_it_always_has(self, tmp_path):
-        assert block(Sentinels, tmp_path).signature_topics() == (
+        assert block(Sentinels, tmp_path)._topics_signature_() == (
             'topic:data=data.txt', 'topic:masks=None', 'topic:cache=()',
         )
 
@@ -132,7 +132,7 @@ class TestTheDeclarationDecidesTheEra:
             def __build__(self):
                 pass
 
-        assert block(Files, tmp_path).signature_topics() == (
+        assert block(Files, tmp_path)._topics_signature_() == (
             'topic:data=data.txt', 'topic:more=more.txt',
         )
 
@@ -259,7 +259,7 @@ class TestAMarkerIsNotItsName:
             def __build__(self):
                 pass
 
-        assert block(Both, tmp_path).signature_topics() == (
+        assert block(Both, tmp_path)._topics_signature_() == (
             'topic:masks=DIR', "topic:x='DIR'",
         )
 
@@ -270,7 +270,7 @@ class TestAMarkerIsNotItsName:
             def __build__(self):
                 pass
 
-        marker, filename = block(Both, tmp_path).signature_topics()
+        marker, filename = block(Both, tmp_path)._topics_signature_()
         assert marker == "topic:numbers=DATASLICE(idx='int')"
         assert filename != marker.replace('numbers', 'x')
 
@@ -454,7 +454,7 @@ class TestSliceColumnsAreChecked:
 class TestAMarkedTableCarriesOnlyItsOwnTopics:
 
     def test_the_tabs_slices_are_not_in_the_tables_signature(self, tmp_path):
-        segments = block(MarkedTable, tmp_path).signature_topics()
+        segments = block(MarkedTable, tmp_path)._topics_signature_()
         assert not any('numbers' in segment for segment in segments)
 
     def test_a_table_spelled_the_older_way_still_carries_them(self, tmp_path):
@@ -471,7 +471,7 @@ class TestAMarkedTableCarriesOnlyItsOwnTopics:
             def n_tabs(self):
                 return 1
 
-        assert 'topic:numbers=SLICETOPIC' in block(LegacyTable, tmp_path).signature_topics()
+        assert 'topic:numbers=SLICETOPIC' in block(LegacyTable, tmp_path)._topics_signature_()
 
     def test_the_table_still_routes_the_tabs_slices(self, tmp_path):
         """Identity is what stops carrying them; routing never did."""

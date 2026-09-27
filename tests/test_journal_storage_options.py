@@ -97,7 +97,7 @@ class TestDatajournalEntryStorageOptions:
         entry = _make_entry(storage_options=so)
         # Simulate a journal entry with a 'spec' field pointing to a .yaml file
         entry['spec'] = '/tmp/fake_spec.yaml'
-        with patch('dbx.datablocks.read_yaml', return_value={'x': 1}) as mock_read:
+        with patch('dbx.journals.read_yaml', return_value={'x': 1}) as mock_read:
             entry.read('spec')
         mock_read.assert_called_once()
         assert mock_read.call_args.kwargs.get('storage_options') == so

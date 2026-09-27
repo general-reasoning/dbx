@@ -190,10 +190,10 @@ class TestTheLazyLoaderResolvesOnce:
     def test_the_check_runs_once_rather_than_per_read(self, tmp_path):
         checked = []
         loader = Datablock.VAR.LazyLoader(Plain(), name='thing', owner='Held', exempt=True)
-        original = type(loader)._check_renderable
+        original = type(loader)._check_renderable_
         try:
-            type(loader)._check_renderable = lambda self: checked.append(self.name)
+            type(loader)._check_renderable_ = lambda self: checked.append(self.name)
             loader(), loader(), loader()
         finally:
-            type(loader)._check_renderable = original
+            type(loader)._check_renderable_ = original
         assert checked == ['thing']

@@ -158,12 +158,12 @@ class TestSpecs:
         assert project_column(nested, [('k',), ('s', 'c', 'd')]) == {'k': 1, 's': {'c': {'d': 7}}}
 
 def test_a_feature_table_parses_the_triple_as_a_table_does():
-    from dbx.featuretables import _UpstreamSlices
-    items = _UpstreamSlices._norm_items((('annotations', 'annotations', 'label'), 'features'))
+    from dbx.featuretables import UpstreamTabSlices
+    items = UpstreamTabSlices._norm_items_((('annotations', 'annotations', 'label'), 'features'))
     assert items == [('annotations', [('annotations', ('label',))]), ('features', None)]
-    assert _UpstreamSlices._norm_items((('annotations', 'annotations', ['a', 'b']),)) == [
+    assert UpstreamTabSlices._norm_items_((('annotations', 'annotations', ['a', 'b']),)) == [
         ('annotations', [('annotations', [('a',), ('b',)])])]
-    assert _UpstreamSlices._norm_items((('annotations', 'annotations', 'a', 'b'),)) == [
+    assert UpstreamTabSlices._norm_items_((('annotations', 'annotations', 'a', 'b'),)) == [
         ('annotations', [('annotations', ('a', 'b'))])]
 
 
@@ -206,7 +206,7 @@ class TestADictColumnDeclaredByItsStructure:
 
     def test_an_explicit_json_agrees_with_the_declaration(self, tmp_path):
         t = DeclaredTab(datalake=str(tmp_path))
-        assert t._writable_columns({'annotations': {'annotations': 'json', 'idx': 'int'}},
+        assert t._writable_columns_({'annotations': {'annotations': 'json', 'idx': 'int'}},
                                    ['annotations']) == {'annotations': {'annotations': 'json', 'idx': 'int'}}
 
     def test_a_structure_that_would_render_ambiguously_is_refused(self):
@@ -363,8 +363,8 @@ class TestNested:
         assert labels.reshape(-1).tolist() == [10, 11, 12]
 
     def test_a_probe_names_a_path_column(self):
-        from dbx.probes import _pair_key
-        assert _pair_key(('annotations', 'annotations', ('site', 'code'))) == 'annotations.annotations.site.code'
+        from dbx.probes import _pair_key_
+        assert _pair_key_(('annotations', 'annotations', ('site', 'code'))) == 'annotations.annotations.site.code'
 
 
 

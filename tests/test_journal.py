@@ -24,7 +24,7 @@ import dbx.dataparts as dataparts
 def _journal_dir(root, cls) -> str:
     """Return the journal directory path for a given class and root."""
     anchor = cls.__module__ + "." + cls.__name__
-    return Datablock._dbxanchorpathx(root, anchor, 'journal', fqcn=anchor)
+    return Datablock._dbxanchorpathx_(root, anchor, 'journal', fqcn=anchor)
 
 
 def _write_fake_journal_entry(journal_dir: str, hash_val: str = "abc123", event: str = "build"):
@@ -199,7 +199,7 @@ class OtherBlock(Datablock):
 
 
 def _write_journal_in_hash_dir(journal_dir, classname, hash_val="abc", event="build"):
-    """Write a parquet entry inside a hash subdirectory, mirroring _dbxanchorhashpathx layout."""
+    """Write a parquet entry inside a hash subdirectory, mirroring _dbxanchorhashpathx_ layout."""
     hash_dir = os.path.join(journal_dir, hash_val)
     import fsspec
     fs, hdir = fsspec.url_to_fs(hash_dir)
@@ -233,8 +233,8 @@ class TestJournalFqcnSubdirectories:
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
         other_anchor = OtherBlock.__module__ + "." + OtherBlock.__name__
         # Write entries into separate fqcn-qualified journal dirs
-        fake_jdir = Datablock._dbxanchorpathx(root, fake_anchor, 'journal', fqcn=fake_anchor)
-        other_jdir = Datablock._dbxanchorpathx(root, fake_anchor, 'journal', fqcn=other_anchor)
+        fake_jdir = Datablock._dbxanchorpathx_(root, fake_anchor, 'journal', fqcn=fake_anchor)
+        other_jdir = Datablock._dbxanchorpathx_(root, fake_anchor, 'journal', fqcn=other_anchor)
         _write_journal_in_hash_dir(fake_jdir, fake_anchor, hash_val="aaa")
         _write_journal_in_hash_dir(other_jdir, other_anchor, hash_val="bbb")
 
@@ -247,7 +247,7 @@ class TestJournalFqcnSubdirectories:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
-        fake_jdir = Datablock._dbxanchorpathx(root, fake_anchor, 'journal', fqcn=fake_anchor)
+        fake_jdir = Datablock._dbxanchorpathx_(root, fake_anchor, 'journal', fqcn=fake_anchor)
         _write_journal_in_hash_dir(fake_jdir, fake_anchor, hash_val="xyz")
 
         result = Datablock.Journal(fake_anchor, datalake=root)
@@ -418,7 +418,7 @@ class TestJournalBuildDatetimes:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         fake_anchor = FakeBlock.__module__ + "." + FakeBlock.__name__
-        fake_jdir = Datablock._dbxanchorpathx(root, fake_anchor, 'journal', fqcn=fake_anchor)
+        fake_jdir = Datablock._dbxanchorpathx_(root, fake_anchor, 'journal', fqcn=fake_anchor)
         # Write a legacy-style entry with 'build_datetime' column
         hash_dir = os.path.join(fake_jdir, "legacy_hash")
         import fsspec
@@ -457,7 +457,7 @@ class TestJournalBuildDatetimes:
 
         # 2. Write a legacy journal entry under .dbx/
         legacy_anchor = b.anchor
-        legacy_jdir = Datablock._dbxanchorpathx(root, legacy_anchor, 'journal', fqcn=b.fqcn)
+        legacy_jdir = Datablock._dbxanchorpathx_(root, legacy_anchor, 'journal', fqcn=b.fqcn)
         legacy_hash_dir = os.path.join(legacy_jdir, "legacy_hash_123")
         os.makedirs(legacy_hash_dir, exist_ok=True)
         now_str = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')

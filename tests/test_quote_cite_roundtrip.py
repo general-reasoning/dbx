@@ -220,24 +220,24 @@ class TestCiteRendering:
 class TestSplitTopLevel:
 
     def test_splits_at_top_level_only(self):
-        got = Datablock._split_top_level("a=1, b={'x': 2, 'y': 3}, c=4")
+        got = Datablock._split_top_level_("a=1, b={'x': 2, 'y': 3}, c=4")
         assert got == ["a=1, ", "b={'x': 2, 'y': 3}, ", "c=4"]
 
     def test_respects_quotes(self):
-        got = Datablock._split_top_level("a='x, y', b=2")
+        got = Datablock._split_top_level_("a='x, y', b=2")
         assert got == ["a='x, y', ", "b=2"]
 
     def test_respects_backslash_escapes(self):
-        got = Datablock._split_top_level(r"a='x\', y', b=2")
+        got = Datablock._split_top_level_(r"a='x\', y', b=2")
         assert len(got) == 2, got
 
     def test_respects_brackets(self):
-        got = Datablock._split_top_level("a=[1, 2, 3], b=2")
+        got = Datablock._split_top_level_("a=[1, 2, 3], b=2")
         assert got == ["a=[1, 2, 3], ", "b=2"]
 
     def test_rejoins_verbatim(self):
         text = "a=1, b={'x': 2}, c='p, q', d=[3, 4]"
-        assert ''.join(Datablock._split_top_level(text)) == text
+        assert ''.join(Datablock._split_top_level_(text)) == text
 
 
 class TestCiteChunks:
@@ -246,11 +246,11 @@ class TestCiteChunks:
         """Correctness is structural: the chunks are repr'd and concatenated
         verbatim, so a bad break point costs readability, never meaning."""
         specline = nested.var.mid.quote()
-        rendered = nested._cite_chunks(specline, '    ')
+        rendered = nested._cite_chunks_(specline, '    ')
         assert eval(rendered) == specline
 
     def test_chunks_are_indented(self, nested):
-        rendered = nested._cite_chunks(nested.var.mid.quote(), '    ')
+        rendered = nested._cite_chunks_(nested.var.mid.quote(), '    ')
         assert rendered.startswith('(\n')
         assert '\n    ' in rendered
 

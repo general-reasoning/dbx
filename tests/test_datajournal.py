@@ -90,7 +90,7 @@ class TestTheBlockWritesThroughIt:
         assert dj.written_entries() == [b.journal(loc=0)['entry_path']]
 
     def test_it_is_handed_down_not_copied(self, tmp_path):
-        """.set() deep-copies a block's state, which is how _adopt() hands it to a child."""
+        """.set() deep-copies a block's state, which is how _adopt_() hands it to a child."""
         dj = Datajournal()
         b = block(tmp_path, datajournal=dj)
         assert b.set(tag='t').datajournal is dj
@@ -629,7 +629,7 @@ class TestConstructed:
         assert len(entry.constructed(a.anchor, event=None)) == 3
 
     def test_the_events_are_matched_exactly(self):
-        from dbx.dataparts import _constructed_
+        from dbx.journals import _constructed_
         frame = DatajournalFrame(pd.DataFrame({
             'anchor': ['s.S'] * 5,
             'hash': ['h1', 'h2', 'h3', 'h4', 'h5'],

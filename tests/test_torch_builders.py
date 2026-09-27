@@ -2,7 +2,7 @@
 Tests for TorchMultithreadingCallableExecutor and TorchMultiprocessingCallableExecutor.
 
 Verifies:
-1. _maybe_to_device: callables with .to() are moved, without .to() pass through.
+1. _maybe_to_device_: callables with .to() are moved, without .to() pass through.
 2. TorchMultithreadingCallableExecutor: executes callables with device management.
 3. Callables without .to() execute successfully (permissive mode).
 4. n_workers + round-robin device assignment.
@@ -94,42 +94,42 @@ class BlockWithoutTo(Datablock):
 
 
 # ===========================================================================
-# 1. _maybe_to_device (static method on the mixin)
+# 1. _maybe_to_device_ (static method on the mixin)
 # ===========================================================================
 
 class TestMaybeToDevice:
 
     def test_callable_with_to_is_moved(self):
         c = CallableWithTo(42)
-        result = TorchMultithreadingCallableExecutor._maybe_to_device(c, 'cuda')
+        result = TorchMultithreadingCallableExecutor._maybe_to_device_(c, 'cuda')
         assert result is c
         assert c.device == 'cuda'
 
     def test_callable_without_to_passes_through(self):
         """Callables without .to() should pass through unchanged (no error)."""
         c = CallableWithoutTo(42)
-        result = TorchMultithreadingCallableExecutor._maybe_to_device(c, 'cuda')
+        result = TorchMultithreadingCallableExecutor._maybe_to_device_(c, 'cuda')
         assert result is c
 
 
 
 # ===========================================================================
-# 2. _device_for_worker (round-robin assignment)
+# 2. _device_for_worker_ (round-robin assignment)
 # ===========================================================================
 
 class TestDeviceForWorker:
 
     def test_single_device(self):
         executor = TorchMultithreadingCallableExecutor(devices=['cpu'])
-        assert executor._device_for_worker(0) == 'cpu'
-        assert executor._device_for_worker(1) == 'cpu'
-        assert executor._device_for_worker(99) == 'cpu'
+        assert executor._device_for_worker_(0) == 'cpu'
+        assert executor._device_for_worker_(1) == 'cpu'
+        assert executor._device_for_worker_(99) == 'cpu'
 
     def test_multiple_devices_1to1(self):
         executor = TorchMultithreadingCallableExecutor(devices=['cpu', 'cuda:0', 'cuda:1'])
-        assert executor._device_for_worker(0) == 'cpu'
-        assert executor._device_for_worker(1) == 'cuda:0'
-        assert executor._device_for_worker(2) == 'cuda:1'
+        assert executor._device_for_worker_(0) == 'cpu'
+        assert executor._device_for_worker_(1) == 'cuda:0'
+        assert executor._device_for_worker_(2) == 'cuda:1'
 
     def test_round_robin(self):
         """When n_workers > len(devices), devices wrap around."""
@@ -138,7 +138,7 @@ class TestDeviceForWorker:
         )
         expected = ['cuda:0', 'cuda:1', 'cuda:0', 'cuda:1', 'cuda:0', 'cuda:1']
         for i, dev in enumerate(expected):
-            assert executor._device_for_worker(i) == dev
+            assert executor._device_for_worker_(i) == dev
 
 
 # ===========================================================================

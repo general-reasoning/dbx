@@ -17,8 +17,13 @@ dataparts
     ``write_tensor``, …), callable executors for threading / multiprocessing /
     Ray parallelism.
 datablocks
-    :class:`Datablock`, :class:`Datastack`, journaling, git-revision
-    tracking, remote execution via Ray.
+    :class:`Datablock`, :class:`Datastack`, git-revision tracking, remote
+    execution via Ray.
+journals
+    :class:`Datajournal` and the build records it reads and writes
+    (:class:`DatajournalFrame`, :class:`DatajournalEntry`); the exec journal
+    (:func:`execjournal`, :class:`ExecjournalFrame`); the filters both are
+    queried with.
 
 Modules NOT imported here
 -------------------------
@@ -42,6 +47,7 @@ __version__ = "0.0.1"
 
 from .dataparts import *
 from .datablocks import *
+from .journals import *
 from .datatables import *
 from .backbones import *
 from .featuretables import *

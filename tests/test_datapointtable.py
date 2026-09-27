@@ -24,6 +24,8 @@ pytest.importorskip("torch", reason="torch is an optional dependency")
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
 from dbx.datapoints import (
+    DATADIR,
+    DATASLICE,
     DIRTOPIC,
     SLICETOPIC,
     DatapointTab,
@@ -132,8 +134,8 @@ class TestTopicsFromSlices:
         assert 'numbers' not in LetterTable.TOPICS
 
     def test_table_keeps_its_inherited_topics(self):
-        assert LetterTable.TOPICS['tab_paths'] is DIRTOPIC
-        assert LetterTable.TOPICS['done'] == 'done'
+        assert LetterTable.TOPICS['tab_paths'] is DATADIR
+        assert LetterTable.TOPICS['done'].filename == 'done'
         assert 'tabs' not in LetterTable.TOPICS
 
     def test_docstring_example_subclass_extends_topics_and_slices(self, tmp_path):
@@ -163,19 +165,30 @@ class TestTopicsFromSlices:
         assert 'numbers' not in LetterTable.TOPICS
         assert 'letters' not in LetterTable.TOPICS
 
-    def test_slices_are_in_the_signature(self, table):
+    def test_slices_are_in_the_signature_of_a_table_spelled_the_older_way(self, tmp_path):
+        """The sentinel era added the TAB's slices to a table's own identity."""
+        class SentinelLetterTable(LetterTable):
+            TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
+
+        table = SentinelLetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
         assert 'topic:numbers=SLICETOPIC' in table.typestr()
         assert 'topic:letters=SLICETOPIC' in table.typestr()
 
-    def test_renaming_a_slice_rekeys_the_table(self, tmp_path):
+    def test_a_marker_spelled_table_carries_only_its_own_topics(self, table):
+        assert 'topic:numbers' not in table.typestr()
+
+    def test_renaming_a_slice_rekeys_a_table_spelled_the_older_way(self, tmp_path):
         class GlyphTab(LetterTab):
             TOPICS = {'numbers': SLICETOPIC, 'glyphs': SLICETOPIC}
 
-        class GlyphTable(LetterTable):
+        class SentinelLetterTable(LetterTable):
+            TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
+
+        class GlyphTable(SentinelLetterTable):
             TAB = GlyphTab
 
         assert 'glyphs' not in GlyphTable.TOPICS
-        a = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        a = SentinelLetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
         b = GlyphTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
         assert 'glyphs' in b.slices()
         assert a.hash != b.hash
@@ -571,7 +584,7 @@ class TestScaffoldingErrors:
 
     def test_missing_tab_class(self, tmp_path):
         class NoTab(DatapointTable):
-            TOPICS = {'a': SLICETOPIC, **DatapointTable.TOPICS}
+            TOPICS = {'a': DATASLICE, **DatapointTable.TOPICS}
 
             @property
             def n_tabs(self):
@@ -904,12 +917,12 @@ class TestValidTabAndSentinels:
         tbl = LetterTable(datalake=str(tmp_path / "sentinel_test"), spec=dict(n_tabs_=3))
         for i in range(3):
             assert not tbl.valid_tab(i)
-            assert not tbl._check_tab_path(i)
+            assert not tbl._check_tab_path_(i)
         
         tbl.build()
         
         for i in range(3):
-            assert tbl._check_tab_path(i)
+            assert tbl._check_tab_path_(i)
             assert tbl.valid_tab(i)
             sentinel_path = os.path.join(tbl.path('tab_paths'), f"tab_{i}.path")
             assert os.path.exists(sentinel_path)
@@ -979,9 +992,9 @@ class TestValidTabAndSentinels:
         )
         # Manually build tab 0 and tab 2
         tbl.tab(0).build()
-        tbl._write_tab_path(0)
+        tbl._write_tab_path_(0)
         tbl.tab(2).build()
-        tbl._write_tab_path(2)
+        tbl._write_tab_path_(2)
 
         assert tbl.valid_tab(0)
         assert not tbl.valid_tab(1)
@@ -992,7 +1005,7 @@ class TestValidTabAndSentinels:
         tbl.build()
         for i in range(4):
             assert tbl.valid_tab(i)
-            assert tbl._check_tab_path(i)
+            assert tbl._check_tab_path_(i)
 
     def test_filter_built_tabs_option(self, tmp_path):
         tbl_default = LetterTable(datalake=str(tmp_path / "filter_default"), spec=dict(n_tabs_=2))
@@ -1018,9 +1031,9 @@ class TestValidTabAndSentinels:
         assert tbl.valid_tabs(n_workers=1).tolist() == [False, False, False, False]
 
         tbl.tab(0).build()
-        tbl._write_tab_path(0)
+        tbl._write_tab_path_(0)
         tbl.tab(2).build()
-        tbl._write_tab_path(2)
+        tbl._write_tab_path_(2)
 
         assert tbl.valid_tabs().tolist() == [True, False, True, False]
         assert tbl.valid_blocks().tolist() == [True, False, True, False]
@@ -1062,8 +1075,9 @@ class TestValidTabAndSentinels:
             assert got[1].paths == src_tbl.tab(1).paths()
         only = dst_tbl.get_tab_redirections(redirected_only=True)
         assert only.index.tolist() == [1]
-        # One journal read for the lot, not one per tab -- located from the
-        # table's TAB, with no tab formed to find it.
+        # No journal read at all: LetterTab declares no SPECIALIZATIONS, so a tab
+        # not redirected answers from its own hash directory and one redirected
+        # from its record -- the anchor's journal is never needed.
         from dbx.datablocks import Datajournal
         reads = []
         original = Datajournal.read
@@ -1073,7 +1087,7 @@ class TestValidTabAndSentinels:
         import unittest.mock
         with unittest.mock.patch.object(Datajournal, 'read', counting):
             dst_tbl.get_tab_redirections(parallelization="inline")
-        assert reads == [LetterTable.TAB.anchor]
+        assert reads == []
 
         assert dst_tbl.tab_redirections.index.tolist() == [0, 1, 2]
         assert dst_tbl.block_redirections is dst_tbl.block_redirections   # resolved once
@@ -1132,7 +1146,7 @@ class TestValidTabAndSentinels:
             spec=dict(n_tabs_=4),
         )
         dst_tbl.tab(0).build()
-        dst_tbl._write_tab_path(0)
+        dst_tbl._write_tab_path_(0)
         dst_tbl.tab(2).UNSAFE_redirect(paths=src_tbl.tab(2).paths(), OVERRIDE=True)
 
         partition = DatapointPartition(

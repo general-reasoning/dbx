@@ -32,7 +32,7 @@ import sys
 import tempfile
 
 
-def _clone(source, revision, root):
+def _clone_(source, revision, root):
     """Clone *source* at *revision* under *root*; return the clone directory.
 
     Named for the revision so that the many worker processes on one node clone
@@ -88,4 +88,4 @@ def setup():
     for source, rev in zip(srcs, revisions):
         if not source or not rev:
             continue
-        sys.path.insert(0, _clone(source, rev, root))
+        sys.path.insert(0, _clone_(source, rev, root))

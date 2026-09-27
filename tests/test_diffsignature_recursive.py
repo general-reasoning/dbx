@@ -130,21 +130,21 @@ class TestTupleValuesStayLeaves:
         assert leafdiff['ratio'] == ((0.5, 2.0), (0.75, 1.5))
 
     def test_structure_normval_leaves_a_tuple_alone(self):
-        assert Datablock._structure_subsignatureval("'(0.75, 1.5)'") == "'(0.75, 1.5)'"
-        assert Datablock._structure_subsignatureval('(0.75, 1.5)') == '(0.75, 1.5)'
+        assert Datablock._structure_subsignatureval_("'(0.75, 1.5)'") == "'(0.75, 1.5)'"
+        assert Datablock._structure_subsignatureval_('(0.75, 1.5)') == '(0.75, 1.5)'
 
     def test_structure_normval_expands_a_real_norm(self):
-        got = Datablock._structure_subsignatureval("(url=/tmp/x, spec={'a': '1'})")
+        got = Datablock._structure_subsignatureval_("(url=/tmp/x, spec={'a': '1'})")
         assert got == {'url': '/tmp/x', 'spec': {'a': "'1'"}}
 
     def test_structure_normval_unwraps_one_layer_of_quoting(self):
         """A child norm is stored as a string VALUE in the parent's spec."""
-        got = Datablock._structure_subsignatureval('"(url=/tmp/x, spec={})"')
+        got = Datablock._structure_subsignatureval_('"(url=/tmp/x, spec={})"')
         assert got == {'url': '/tmp/x', 'spec': '{}'}
 
     def test_structure_normval_passes_through_plain_scalars(self):
         for text in ("'42'", '42', 'None', "'a, b'"):
-            assert Datablock._structure_subsignatureval(text) == text
+            assert Datablock._structure_subsignatureval_(text) == text
 
 
 class TestDeslash:
@@ -239,8 +239,8 @@ class TestJournalFilters:
         self.Solo(datalake=str(tmp_path), spec={'x': 1}).write_journal_entry(
             event='UNSAFE_copy_from:END')
 
-        filtered = a._journal_entry({'event': 'build:end', 'iloc': 0})
-        unfiltered = a._journal_entry({'iloc': 0})
+        filtered = a._journal_entry_({'event': 'build:end', 'iloc': 0})
+        unfiltered = a._journal_entry_({'iloc': 0})
         assert filtered.get('event') == 'build:end'
         assert unfiltered.get('event') == 'UNSAFE_copy_from:END'
 
@@ -268,18 +268,18 @@ class TestJournalFilters:
 class TestSplitTopLevelItems:
 
     def test_drops_the_separator(self):
-        assert Datablock._split_top_level_items("a, b, c") == ['a', ' b', ' c']
+        assert Datablock._split_top_level_items_("a, b, c") == ['a', ' b', ' c']
 
     def test_respects_nesting_and_quotes(self):
-        got = Datablock._split_top_level_items("a=[1, 2], b='p, q', c={'k': 1}")
+        got = Datablock._split_top_level_items_("a=[1, 2], b='p, q', c={'k': 1}")
         assert got == ["a=[1, 2]", " b='p, q'", " c={'k': 1}"]
 
     def test_parse_dictstr_keys_are_unquoted(self):
-        assert Datablock._parse_dictstr("{'a': 1, 'b': '2'}") == {'a': '1', 'b': "'2'"}
+        assert Datablock._parse_dictstr_("{'a': 1, 'b': '2'}") == {'a': '1', 'b': "'2'"}
 
     def test_parse_dictstr_rejects_a_non_dict(self):
-        assert Datablock._parse_dictstr("(a=1)") == {}
-        assert Datablock._parse_dictstr("{1, 2}") == {}
+        assert Datablock._parse_dictstr_("(a=1)") == {}
+        assert Datablock._parse_dictstr_("{1, 2}") == {}
 
 
 class TestTypedLeaves:
@@ -339,19 +339,19 @@ class TestTypedLeaves:
 
     def test_a_non_literal_leaf_is_left_alone(self):
         """Urls, object reprs and speclines are not Python literals."""
-        assert Datablock._literal('abfss://c@a.net/x') == 'abfss://c@a.net/x'
-        assert Datablock._literal('<Foo object at 0x7f00>') == '<Foo object at 0x7f00>'
-        assert Datablock._literal('$pkg.mod.Cls(a=1)') == '$pkg.mod.Cls(a=1)'
-        assert Datablock._literal('2026-07-19 22:34:17') == '2026-07-19 22:34:17'
+        assert Datablock._literal_('abfss://c@a.net/x') == 'abfss://c@a.net/x'
+        assert Datablock._literal_('<Foo object at 0x7f00>') == '<Foo object at 0x7f00>'
+        assert Datablock._literal_('$pkg.mod.Cls(a=1)') == '$pkg.mod.Cls(a=1)'
+        assert Datablock._literal_('2026-07-19 22:34:17') == '2026-07-19 22:34:17'
 
     def test_literal_round_trips_the_scalars(self):
-        assert Datablock._literal('128') == 128
-        assert Datablock._literal('15.0') == 15.0
-        assert Datablock._literal('None') is None
-        assert Datablock._literal('True') is True
-        assert Datablock._literal("'15.0'") == '15.0'
-        assert Datablock._literal('(0.75, 1.5)') == (0.75, 1.5)
-        assert Datablock._literal("['a', 'b']") == ['a', 'b']
+        assert Datablock._literal_('128') == 128
+        assert Datablock._literal_('15.0') == 15.0
+        assert Datablock._literal_('None') is None
+        assert Datablock._literal_('True') is True
+        assert Datablock._literal_("'15.0'") == '15.0'
+        assert Datablock._literal_('(0.75, 1.5)') == (0.75, 1.5)
+        assert Datablock._literal_("['a', 'b']") == ['a', 'b']
 
 
 class TestTypingNeverHidesADifference:

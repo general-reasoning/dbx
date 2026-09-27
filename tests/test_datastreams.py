@@ -346,7 +346,7 @@ class TestZipIterable:
 # ---------------------------------------------------------------------------
 
 class FakeStream(DictDataset):
-    """Just enough of a StreamingDataset for _check_shard_alignment()."""
+    """Just enough of a StreamingDataset for _check_shard_alignment_()."""
 
     def __init__(self, records, samples_per_shard, shuffle=True,
                  shuffle_algo='py1e'):

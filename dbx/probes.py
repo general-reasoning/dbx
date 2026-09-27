@@ -18,7 +18,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 
 import dbx
-from dbx.datablocks import Datablock
+from dbx.datablocks import DATADICT, DATAFILE, Datablock
 from dbx.featuretables import Featuretable, Featuretab, Datacollator
 from dbx.dataparts import (
     Logger,
@@ -34,7 +34,7 @@ from dbx.dataparts import (
 NORMALIZATION_MODES = {None, "l2", "corner-l1", "corner-l2", "corner-linfty"}
 
 
-def _norm_pair(pair: Any, name: str) -> tuple[str, str]:
+def _norm_pair_(pair: Any, name: str) -> tuple[str, str]:
     if isinstance(pair, (list, tuple)) and len(pair) == 2:
         return str(pair[0]), str(pair[1])
     raise ValueError(f"{name} must be specified as a (slice, column) pair of strings, e.g. ('features', 'final'), got {pair!r}")
@@ -88,8 +88,12 @@ class FeatureAffineLogisticProber:
     and return `classification_report` strings.
     """
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __init__(self, log: Logger | None = None):
         self.log = log or Logger()
+
+    # 2. Declared API ------------------------------------------------------
 
     @staticmethod
     def ndarray(X: Any) -> np.ndarray:
@@ -154,7 +158,7 @@ class FeatureAffineLogisticProber:
         return report1, report2
 
 
-def _pair_key(pair: tuple[str, str]) -> str:
+def _pair_key_(pair: tuple[str, str]) -> str:
     """The stable name a ``(slice, column)`` pair is stored under.
 
     The pair, not the bare column name: two slices may carry a column of the
@@ -172,15 +176,15 @@ def _flat_parts_(parts) -> list:
     return out
 
 
-def _pair_array(collator: Datacollator, data: dict, pair: tuple[str, str]) -> np.ndarray:
+def _pair_array_(collator: Datacollator, data: dict, pair: tuple[str, str]) -> np.ndarray:
     """One ``(slice, column)`` of a ``{slice: {column: values}}`` mapping, as an array.
 
     Addressed exactly, through the collator's own lookup, so a pair naming a
     column that is not there raises instead of resolving to whatever the
     mapping happened to hold first.
     """
-    value = Datacollator._pick_pair(data, pair, f"probes: pair {pair!r}")
-    return Datacollator._as_array(value)
+    value = Datacollator._pick_pair_(data, pair, f"probes: pair {pair!r}")
+    return Datacollator._as_array_(value)
 
 
 def signal_matrix(collator: Datacollator, data: dict, *,
@@ -212,7 +216,7 @@ def signal_matrix(collator: Datacollator, data: dict, *,
 
     blocks, layout = [], []
     for pair in collator.signal_pairs:
-        arr = np.asarray(_pair_array(collator, data, pair), dtype=np.float32)
+        arr = np.asarray(_pair_array_(collator, data, pair), dtype=np.float32)
         if arr.ndim == 0:
             raise ValueError(
                 f"signal_matrix: pair {pair!r} is a scalar, not a per-sample column"
@@ -263,7 +267,7 @@ def label_vector(collator: Datacollator, data: dict) -> np.ndarray:
             f"label_vector: a classifier fits one label column, but the "
             f"collator declares {len(pairs)}: {pairs!r}"
         )
-    y = np.asarray(_pair_array(collator, data, pairs[0]))
+    y = np.asarray(_pair_array_(collator, data, pairs[0]))
     y = y.reshape(len(y), -1)
     if y.shape[1] != 1:
         raise ValueError(
@@ -321,14 +325,25 @@ class FeatureAffineLogisticProbe(Datablock):
     VERSION = 2
 
     TOPICS = {
-        'labels': 'labels.npz',
-        'features': 'features.npy',
-        'columns': 'columns.pkl',
-        'evaluation_report': 'evaluation_report.pkl',
-        'coef': 'coef.npy',
-        'intercept': 'intercept.npy',
-        'classes': 'classes.npz',
+        'labels': DATADICT('labels.npz', labels='ndarray'),
+        'features': DATAFILE('features.npy'),
+        'columns': DATAFILE('columns.pkl', 'the feature layout: which column each feature came from'),
+        'evaluation_report': DATAFILE('evaluation_report.pkl', "the classification report on the held-out split"),
+        'coef': DATAFILE('coef.npy'),
+        'intercept': DATAFILE('intercept.npy'),
+        'classes': DATADICT('classes.npz', classes='ndarray'),
     }
+    SPECIALIZATIONS = [Datablock.Specialization(
+        spec={}, topics={
+            'labels': 'labels.npz',
+            'features': 'features.npy',
+            'columns': 'columns.pkl',
+            'evaluation_report': 'evaluation_report.pkl',
+            'coef': 'coef.npy',
+            'intercept': 'intercept.npy',
+            'classes': 'classes.npz',
+        },
+        note="respelled only: the markers for the bare filenames, the files unchanged")]
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -341,6 +356,8 @@ class FeatureAffineLogisticProbe(Datablock):
         # on averaged away whatever the caller actually asked to probe.
         aggregation: str | None = None
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(
         self,
@@ -369,22 +386,11 @@ class FeatureAffineLogisticProbe(Datablock):
         self.work_stealing = getattr(self, 'work_stealing', getattr(self, 'works_stealing', False))
         self._prober = FeatureAffineLogisticProber(log=self.log)
 
-    def _tab_results(self, tag: str, make_callable):
-        table = self.var.feature_table
-        n_tabs = getattr(table, 'n_tabs', 0) or 0
-        executor_kwargs = dict(n_workers=self.n_workers,
-                               tag=f"{tag} [{self.__class__.__name__}, n_workers={self.n_workers}]")
-        if getattr(self, 'work_stealing', False):
-            executor_kwargs['work_stealing'] = self.work_stealing
-        executor = callable_executor(self.parallelization, **executor_kwargs)
-        indices = list(range(n_tabs)) if n_tabs > 0 else [None]
-        return executor.exec_callables([make_callable(i) for i in indices])
-
     def __build__(self):
         self.log.verbose(f"FeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")
 
-        results = self._tab_results(
-            "COMPUTING LOGISTIC DATA",
+        results = self._tab_results_(
+            "COMPUTING LOGISTIC INPUT DATA",
             lambda i: TabAffineLogisticCallable(self, i),
         )
 
@@ -454,6 +460,8 @@ class FeatureAffineLogisticProbe(Datablock):
             return read_npz(self.path('classes'), 'classes')['classes']
         raise ValueError(f"Unknown topic: {topic!r}")
 
+    # 2. Declared API ------------------------------------------------------
+
     def feature_columns(self) -> list[tuple[str, str, int]]:
         """One ``(slice, column, offset)`` per column of ``coef_``.
 
@@ -473,6 +481,19 @@ class FeatureAffineLogisticProbe(Datablock):
         classes = self.read('classes')
         ratios = intercept.abs() / coef.norm(dim=1)
         return {str(c): float(r) for c, r in zip(classes, ratios)}
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _tab_results_(self, tag: str, make_callable):
+        table = self.var.feature_table
+        n_tabs = getattr(table, 'n_tabs', 0) or 0
+        executor_kwargs = dict(n_workers=self.n_workers,
+                               tag=f"{tag} [{self.__class__.__name__}, n_workers={self.n_workers}]")
+        if getattr(self, 'work_stealing', False):
+            executor_kwargs['work_stealing'] = self.work_stealing
+        executor = callable_executor(self.parallelization, **executor_kwargs)
+        indices = list(range(n_tabs)) if n_tabs > 0 else [None]
+        return executor.exec_callables([make_callable(i) for i in indices])
 
 
 #: Statistics computed per feature column.  Each becomes a topic holding one
@@ -528,10 +549,10 @@ class TabColumnStatsCallable:
 
         columns, counts = {}, set()
         for pair in collator.signal_pairs + collator.label_pairs:
-            arr = np.asarray(_pair_array(collator, data, pair))
+            arr = np.asarray(_pair_array_(collator, data, pair))
             if not np.issubdtype(arr.dtype, np.number):
                 raise TypeError(
-                    f"{type(self).__name__}: column {_pair_key(pair)!r} has dtype "
+                    f"{type(self).__name__}: column {_pair_key_(pair)!r} has dtype "
                     f"{arr.dtype}, which has no mean or median. Drop it from the "
                     f"collator, or describe a numeric encoding of it instead."
                 )
@@ -541,7 +562,7 @@ class TabColumnStatsCallable:
             if arr.ndim == 1:
                 arr = arr.reshape(-1, 1)
             counts.add(len(arr))
-            columns[_pair_key(pair)] = arr
+            columns[_pair_key_(pair)] = arr
         del data
 
         if len(counts) > 1:
@@ -585,13 +606,19 @@ class FeatureStatsProbe(Datablock):
 
     VERSION = 2
 
-    TOPICS = {'count': 'count.npz'}
+    #: The class's own; an instance declares the per-column statistics too, in
+    #: __post_init__. No specialization back to the filename spelling: until the
+    #: per-instance TOPICS reached the hash, a probe's identity named `count`
+    #: alone, and one reconstructing that could redirect `count` and nothing else.
+    TOPICS = {'count': DATADICT('count.npz', count='ndarray')}
 
     @dataclass
     class VAR(Datablock.VAR):
         feature_table: Featuretable | Featuretab
         collator: Datacollator
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(
         self,
@@ -620,18 +647,14 @@ class FeatureStatsProbe(Datablock):
         # The leaf is just a filename: path() renders the topic path itself as
         # directories, so the statistic and the column already name the folder.
         self.TOPICS = {
-            'count': 'count.npz',
-            **{name: {key: 'stat.npz' for key in self.column_keys}
+            'count': DATADICT('count.npz', count='ndarray'),
+            **{name: {key: DATADICT('stat.npz', stat='ndarray') for key in self.column_keys}
                for name in COLUMN_STATS},
-            **{f'tab_{name}': {key: 'stat.npz' for key in self.column_keys}
+            # Per tab: `stat` stacked, or -- when the tabs' shapes differ --
+            # concatenated flat beside the `tab_counts` that split it back.
+            **{f'tab_{name}': {key: DATAFILE('stat.npz') for key in self.column_keys}
                for name in COLUMN_STATS},
         }
-
-    @property
-    def column_keys(self) -> list[str]:
-        """The columns this probe describes, in the collator's declared order."""
-        collator = self.var.collator
-        return [_pair_key(p) for p in collator.signal_pairs + collator.label_pairs]
 
     def __build__(self):
         self.log.verbose(f"FeatureStatsProbe.__build__: BEGIN {self.anchorkeypath}")
@@ -690,6 +713,14 @@ class FeatureStatsProbe(Datablock):
             )
         return self._read_stat_(self.path(topic, key))
 
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def column_keys(self) -> list[str]:
+        """The columns this probe describes, in the collator's declared order."""
+        collator = self.var.collator
+        return [_pair_key_(p) for p in collator.signal_pairs + collator.label_pairs]
+
     @functools.cached_property
     def columns(self) -> list[str]:
         return self.column_keys
@@ -698,7 +729,7 @@ class FeatureStatsProbe(Datablock):
     def count(self) -> int:
         return self.read('count')
 
-    # 4. Helpers --------------------------------------------------------
+    # 4. Helpers -----------------------------------------------------------
 
     def _table_stats_(self, results) -> dict[str, dict[str, np.ndarray]]:
         """The whole-table `column_stats` of every column, a band of columns at a time.

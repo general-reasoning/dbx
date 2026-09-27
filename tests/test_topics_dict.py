@@ -236,7 +236,7 @@ class TestDictTopicsHash:
 
 
 # ---------------------------------------------------------------------------
-# 6. _topics_is_list / _topicfiles helpers
+# 6. _topics_is_list_ / _topicfiles_ helpers
 # ---------------------------------------------------------------------------
 
 class TestTopicsHelpers:
@@ -244,19 +244,19 @@ class TestTopicsHelpers:
     def test_topics_is_list_true_for_list(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = ListTopicsBlock(datalake=str(tmp_path))
-        assert block._topics_is_list is True
+        assert block._topics_is_list_ is True
 
     def test_topics_is_list_false_for_dict(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsFileBlock(datalake=str(tmp_path))
-        assert block._topics_is_list is False
+        assert block._topics_is_list_ is False
 
     def test_topicfiles_returns_dict_topics(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = DictTopicsFileBlock(datalake=str(tmp_path))
-        assert block._topicfiles is block.TOPICS
+        assert block._topicfiles_ is block.TOPICS
 
     def test_topicfiles_returns_none_for_list(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         block = ListTopicsBlock(datalake=str(tmp_path))
-        assert block._topicfiles is None
+        assert block._topicfiles_ is None

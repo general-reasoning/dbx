@@ -97,20 +97,20 @@ def opened(monkeypatch):
 class TestARemoteTabIsToldWhereToCache:
 
     def test_the_stream_gets_a_local_directory(self, table, tmp_path):
-        stream = table._tab_stream(RemoteTab('a' * 32), 'numbers', local=str(tmp_path / 'cache'))
+        stream = table._tab_stream_(RemoteTab('a' * 32), 'numbers', local=str(tmp_path / 'cache'))
         assert stream.local == str(tmp_path / 'cache')
 
     def test_without_one_it_refuses_rather_than_letting_mosaic_guess(self, table):
         with pytest.raises(ValueError, match='local'):
-            table._tab_stream(RemoteTab('a' * 32), 'numbers')
+            table._tab_stream_(RemoteTab('a' * 32), 'numbers')
 
     def test_the_directory_is_created(self, table, tmp_path):
         local = tmp_path / 'cache' / 'deeper'
-        table._tab_stream(RemoteTab('a' * 32), 'numbers', local=str(local))
+        table._tab_stream_(RemoteTab('a' * 32), 'numbers', local=str(local))
         assert local.is_dir()
 
     def test_abfss_is_translated_for_mosaic(self, table, tmp_path):
-        stream = table._tab_stream(RemoteTab('a' * 32), 'numbers', local=str(tmp_path / 'c'))
+        stream = table._tab_stream_(RemoteTab('a' * 32), 'numbers', local=str(tmp_path / 'c'))
         assert stream.remote.startswith('azure-dl://')
 
 
@@ -118,13 +118,13 @@ class TestALocalTabIsItsOwnCache:
 
     def test_no_copy_is_arranged_for_it(self, table):
         tab = table.tab(0)
-        stream = table._tab_stream(tab, 'numbers')
+        stream = table._tab_stream_(tab, 'numbers')
         assert stream.remote is None
         assert stream.local == tab.path('numbers')
 
     def test_a_local_argument_is_ignored(self, table, tmp_path):
         tab = table.tab(0)
-        stream = table._tab_stream(tab, 'numbers', local=str(tmp_path / 'unused'))
+        stream = table._tab_stream_(tab, 'numbers', local=str(tmp_path / 'unused'))
         assert stream.local == tab.path('numbers')
         assert not (tmp_path / 'unused').exists()
 
@@ -161,7 +161,7 @@ class TestDatastreamPassesItsCacheDown:
     def test_slices_do_not_share_a_directory(self, remote_table, opened):
         remote_table.datastream('numbers')
         first = {s.local for s in opened[0]['streams']}
-        remote_table._slicenames = lambda slices: tuple(slices)   # accept a second name
+        remote_table._slicenames_ = lambda slices: tuple(slices)   # accept a second name
         remote_table.datastream('letters')
         second = {s.local for s in opened[1]['streams']}
         assert not (first & second)

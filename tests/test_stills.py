@@ -22,7 +22,7 @@ import lightning as L
 
 from dbx.datablocks import Datablock
 from dbx.stills import (
-    _FreeResumeCkpt,
+    _FreeResumeCkpt_,
     ChunkShuffleSampler,
     ResumableDataLoader,
     CheckpointBuilder,
@@ -1055,7 +1055,7 @@ class TestDoneTopic:
     """Completion is a topic, not a file dbx knows nothing about."""
 
     def test_it_is_a_topic(self, tmp_path):
-        assert Still.TOPICS['done'] == 'done'
+        assert Still.TOPICS['done'].filename == 'done'      # DATAFILE('done')
         assert 'done' in _toy(tmp_path).topics()
 
     def test_valid_reads_it(self, tmp_path):
@@ -1153,7 +1153,7 @@ class TestCheckRunWritesNothing:
 
     def test_an_ordinary_run_installs_the_checkpointers(self, tmp_path):
         names = self._callbacks(tmp_path)
-        assert '_StepCheckpoint' in names or '_EpochCheckpoint' in names
+        assert '_StepCheckpoint_' in names or '_EpochCheckpoint_' in names
 
     @pytest.mark.pinned
     def test_a_check_run_installs_none_of_them(self, tmp_path):
@@ -1166,7 +1166,7 @@ class TestCheckRunWritesNothing:
 
     def test_the_cite_callback_survives(self, tmp_path):
         """Suppressing checkpoints must not suppress the identity record."""
-        assert '_LogCiteOnStart' in self._callbacks(tmp_path, check_run=True)
+        assert '_LogCiteOnStart_' in self._callbacks(tmp_path, check_run=True)
 
     def test_a_check_run_writes_no_checkpoint_end_to_end(self, tmp_path):
         still = _toy(tmp_path, check_run=True)
@@ -1631,12 +1631,12 @@ class TestOneCheckpointPerStep:
     """Two callbacks can land on one (epoch, step). Only one file gets written.
 
     `ckpt_every_n_steps=2` with an epoch that ends at step 2 fires
-    `_StepCheckpoint` and then `_EpochCheckpoint`, both naming
+    `_StepCheckpoint_` and then `_EpochCheckpoint_`, both naming
     `epoch=000-step=0000002.ckpt`. Observed on a real run: two dumps and two
     ~10GB uploads of a checkpoint that had trained nothing in between, about
     5 of a 20-minute run spent re-sending it.
 
-    Distinct from `_StepCheckpoint._last_ckpt_step`, which is about several
+    Distinct from `_StepCheckpoint_._last_ckpt_step`, which is about several
     MICRO-batches sharing one global_step under accumulation.
     """
 

@@ -10,6 +10,7 @@ import os
 import shutil
 import tempfile
 import urllib.parse
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -34,20 +35,24 @@ except ImportError as exc:  # pragma: no cover
 
 from .datablocks import (
     DATADICT,
+    DATADIR,
+    DATAFILE,
     DIR,
     DIRTOPIC,
     Datablock,
     DatajournalFrame,
     Datastack,
-    _TopicMarkerMeta,
-    _is_topicmarker,
+    TopicMarkerMeta,
+    forming_with_journal,
+    is_topicmarker,
 )
 from .datastreams import (
     ChunkShuffleSampler,
     SharedMemoryManager,
+    release_shared_memory_when_collected,
     ZipIterableStreamingDatasets,
     ZipStreamingDataset,
-    _ShardSync,
+    ShardSync,
     abfs_to_mds_azure,
     column_spec,
     concat_data,
@@ -64,15 +69,13 @@ from .datastreams import (
 SLICETOPIC = 'SLICETOPIC'
 
 
-class _DataSliceMeta(_TopicMarkerMeta):
+class _DataSliceMeta_(TopicMarkerMeta):
     """Makes ``DATASLICE(idx='int')`` a marker carrying those columns.
 
     A call returns a SUBCLASS rather than an instance, so everything a TOPICS
-    declaration holds is a class and one test -- :func:`_is_topicmarker` --
+    declaration holds is a class and one test -- :func:`is_topicmarker` --
     recognises the lot of them.
     """
-
-    # 1. Declared API ---------------------------------------------------
 
     def __call__(cls, *mapping, **typed):
         if mapping and (typed or len(mapping) > 1 or not isinstance(mapping[0], dict)):
@@ -83,11 +86,11 @@ class _DataSliceMeta(_TopicMarkerMeta):
             )
         columns = dict(mapping[0]) if mapping else dict(typed)
         for name, coltype in columns.items():
-            cls._check_column(name, coltype)
-        return _DataSliceMeta(cls.__name__, (cls,), {'columns': columns})
+            cls._check_column_(name, coltype)
+        return _DataSliceMeta_(cls.__name__, (cls,), {'columns': columns})
 
 
-class DATASLICE(DIR, metaclass=_DataSliceMeta):
+class DATASLICE(DIR, metaclass=_DataSliceMeta_):
     """One independently-readable MDS stream directory.  ``SLICETOPIC`` as a marker.
 
     A :class:`~dbx.datablocks.DIR`, because a slice IS a directory -- so every
@@ -129,23 +132,19 @@ class DATASLICE(DIR, metaclass=_DataSliceMeta):
     #: The MDS type a column declared by its dict structure is written as.
     DICT_COLUMN_TYPE = 'json'
 
-    # 2. Declared API ---------------------------------------------------
-
     @classmethod
     def writer_columns(cls, columns) -> dict:
         """*columns* as an MDS writer takes them: a dict-structured column as ``'json'``."""
         return {name: cls.DICT_COLUMN_TYPE if isinstance(coltype, dict) else coltype
                 for name, coltype in columns.items()}
 
-    # 3. Helpers --------------------------------------------------------
-
     @staticmethod
-    def _check_column(name, coltype):
+    def _check_column_(name, coltype):
         """Refuse a column that would render into an ambiguous type string."""
         if isinstance(coltype, dict):
-            DATASLICE._check_column(name, 'dict')
+            DATASLICE._check_column_(name, 'dict')
             # The same rules a DATADICT schema follows, since it renders the same way.
-            DATADICT._check_schema(coltype, (name,))
+            DATADICT._check_schema_(coltype, (name,))
             return
         for text, what in ((name, 'column name'), (coltype, 'column type')):
             if not isinstance(text, str):
@@ -159,7 +158,7 @@ class DATASLICE(DIR, metaclass=_DataSliceMeta):
                 )
 
 
-class DatatableBase(Datablock):
+class DatatabBase(Datablock):
     """Base class for sliced datapoint blocks (Datatab and Datatable).
 
     A **slice** is one independently-readable MDS stream directory inside a block.
@@ -177,7 +176,7 @@ class DatatableBase(Datablock):
 
     TOPICS = {}
 
-    # 1. Datablock Protocol Methods ─────────────────────────────────
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, *args, cache_limit=None, shared_slice_columns=None, **kwargs):
         super().__init__(
@@ -193,9 +192,11 @@ class DatatableBase(Datablock):
         # normalised too -- and normalised at once, because a bare str is
         # iterable: left as one, 'pool' would be read as ('p','o','o','l') and
         # four columns nothing has would be compared.
-        self.shared_slice_columns = self._norm_shared_columns(
+        self.shared_slice_columns = self._norm_shared_columns_(
             getattr(self, 'shared_slice_columns', None)
         )
+
+    # 2. Declared API ------------------------------------------------------
 
     def valid_slice(self, slice) -> bool:
         """True when *slice* has an `index.json` on disk."""
@@ -206,7 +207,7 @@ class DatatableBase(Datablock):
 
     def valid_topic(self, *topicpath):
         """As `Datablock.valid_topic()`, but slices go through `valid_slice()`."""
-        topicpath = self._normtopic(topicpath)
+        topicpath = self._normtopic_(topicpath)
         if topicpath:
             topic_str = '/'.join(topicpath)
             if topic_str in self.slices():
@@ -219,8 +220,6 @@ class DatatableBase(Datablock):
             self.verify_slice_row_counts_match()
         return result
 
-    # 2. Properties and Accessors ───────────────────────────────────
-
     def slices(self):
         """The names of this block's slice topics, in declaration order.
 
@@ -232,7 +231,7 @@ class DatatableBase(Datablock):
         an instance overriding TOPICS -- as :class:`DatatablePart` does -- is
         read through.
         """
-        return DatatableBase._find_slice_topics(getattr(self, 'TOPICS', None))
+        return DatatabBase._find_slice_topics_(getattr(self, 'TOPICS', None))
 
     def declared_columns(self, slice) -> 'dict | None':
         """The columns *slice* declares, as ``{column: mds_type}``, or None.
@@ -248,8 +247,8 @@ class DatatableBase(Datablock):
 
     def declared_schema(self, slice) -> 'dict | None':
         """The columns *slice* declares, as declared: an MDS type, or a dict column's structure."""
-        node = self._topicnode(*slice.split('/'))
-        columns = getattr(node, 'columns', None) if _is_topicmarker(node, DATASLICE) else None
+        node = self._topicnode_(*slice.split('/'))
+        columns = getattr(node, 'columns', None) if is_topicmarker(node, DATASLICE) else None
         return dict(columns) if columns else None
 
     def data(self, *slice_columns, nested=True, concat: bool = False,
@@ -284,13 +283,13 @@ class DatatableBase(Datablock):
             Stack each column's values into one array along a new leading
             axis.  Left False, a leaf is the plain list of per-row values.
         **kwargs
-            Passed to `_read_slice()`.
+            Passed to `_read_slice_()`.
         """
-        names, per_slice_columns = self._parse_slice_columns(slice_columns, columns)
+        names, per_slice_columns = self._parse_slice_columns_(slice_columns, columns)
 
         out = {}
         for pos, name in enumerate(names):
-            rows = self._read_slice(name, **kwargs)
+            rows = self._read_slice_(name, **kwargs)
             cols = per_slice_columns[pos] if per_slice_columns else None
             if cols is None:
                 specs = [(c, None) for c in (rows[0] if rows else [])]
@@ -322,75 +321,6 @@ class DatatableBase(Datablock):
         kwargs.setdefault('cache', self.cacheroot)
         kwargs.setdefault('cache_limit', cache_limit)
         return open_datastream(self.path(*slice.split('/')), **kwargs)
-
-    def _parse_slice_columns(self, slice_columns, columns=None):
-        """Normalize a ``*slice_columns`` spec into ``(names, per_slice_columns)``.
-
-        Shared by `dataset()` and `data()` so the two accept exactly the same
-        spec: a bare slice name, a ``(slice, column)`` pair, a
-        ``(slice, [columns])`` pair, or a ``(slice, column, key | [keys])``
-        triple for part of a dict column, in any mixture. The two differ in
-        what they do with a slice, never in how a caller names one.
-
-        *names* is in the order the slices were asked for -- position decides
-        which source is zipped where, so it is derived from the caller's
-        sequence and never from a set.
-        """
-        items = list(slice_columns)
-        if len(items) == 1 and isinstance(items[0], (list, tuple)):
-            first = items[0]
-            if isinstance(first, list) or not (isinstance(first[0], str) and first[0] in self.slices()):
-                items = list(first)
-
-        if columns is not None:
-            if isinstance(columns, dict):
-                for s_name, cols in columns.items():
-                    if isinstance(cols, (list, tuple)):
-                        for c in cols:
-                            items.append((s_name, c))
-                    else:
-                        items.append((s_name, cols))
-            elif isinstance(columns, (list, tuple)):
-                items.extend(columns)
-
-        if not items:
-            names = self.slice_names(())
-            per_slice_columns = None
-        else:
-            slice_order = []
-            slice_cols_map = {}
-            has_column_filter = False
-
-            for item in items:
-                s_name, cols = slice_spec(item)
-                has_column_filter = has_column_filter or cols is not None
-
-                if s_name not in slice_cols_map:
-                    slice_order.append(s_name)
-                    slice_cols_map[s_name] = list(cols) if cols is not None else None
-                else:
-                    if slice_cols_map[s_name] is not None:
-                        if cols is None:
-                            slice_cols_map[s_name] = None
-                        else:
-                            for c in cols:
-                                if c not in slice_cols_map[s_name]:
-                                    slice_cols_map[s_name].append(c)
-
-            names = self.slice_names(slice_order)
-
-            if has_column_filter:
-                per_slice_columns = [None if slice_cols_map[name] is None
-                                     else merge_column_specs(slice_cols_map[name])
-                                     for name in names]
-                for name, cols in zip(names, per_slice_columns):
-                    self._check_column_keys(name, cols)
-                if all(c is None for c in per_slice_columns):
-                    per_slice_columns = None
-            else:
-                per_slice_columns = None
-
-        return names, per_slice_columns
 
     def dataset(
         self,
@@ -465,8 +395,8 @@ class DatatableBase(Datablock):
                 f"iterating partitions each slice over ranks and workers in whole batches."
             )
 
-        names, per_slice_columns = self._parse_slice_columns(slice_columns, columns)
-        shared, validate_shared = self._shared_defaults(shared, validate_shared)
+        names, per_slice_columns = self._parse_slice_columns_(slice_columns, columns)
+        shared, validate_shared = self._shared_defaults_(shared, validate_shared)
 
         if cache_limit is not None:
             kwargs['cache_limit'] = cache_limit
@@ -538,78 +468,6 @@ class DatatableBase(Datablock):
             )
         return max(sizes)
 
-    @property
-    def cacheroot(self) -> str:
-        """Local scratch root for everything streaming: read caches, staged writes.
-
-        The block's ``cache=``; else ``$DBX_CACHE``; else ``cache/`` under
-        :attr:`localroot` -- which is ``DBX_LOCAL`` (or ``local=``) for a block
-        on remote storage, and the storage root itself for one already local.
-        Resolved on every access, never stored, so no machine's path reaches a
-        handle or a journal.
-        """
-        return (getattr(self, 'cache', None) or os.environ.get('DBX_CACHE')
-                or os.path.join(self.localroot, 'cache'))
-
-    # 3. Utility and Private Methods ────────────────────────────────
-
-    def _check_column_keys(self, slice, cols):
-        """Refuse a ``(slice, column, key)`` the slice's declaration says cannot be read.
-
-        Only where the slice declares the column's structure: an undeclared
-        slice, or a column declared plain ``'json'``, has nothing to check
-        against, and its keys are found or not when the data is.
-        """
-        keyed = [column_spec(spec) for spec in cols or ()]
-        keyed = [(column, keys) for column, keys in keyed if keys is not None]
-        if not keyed:
-            return
-        schema = self._slice_declaration(slice)
-        for column, keys in keyed:
-            if column not in schema:
-                continue
-            declared = schema[column]
-            if not isinstance(declared, dict):
-                if declared == DATASLICE.DICT_COLUMN_TYPE:
-                    continue
-                raise TypeError(
-                    f"{self.__class__.__name__}: slice {slice!r} declares column {column!r} "
-                    f"as {declared!r}, which has no keys to take {keys!r} of"
-                )
-            for key in (keys if isinstance(keys, list) else [keys]):
-                path, node = key_path(key), declared
-                for depth, k in enumerate(path):
-                    if not isinstance(node, dict):
-                        raise TypeError(
-                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
-                            f"{'.'.join(path[:depth])!r} as {node!r}, which has no key {k!r}"
-                        )
-                    if k not in node:
-                        under = '.'.join(path[:depth])
-                        raise KeyError(
-                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
-                            f"keys {list(node)}{' under ' + repr(under) if under else ''}, not [{k!r}]"
-                        )
-                    node = node[k]
-
-    def _slice_declaration(self, slice) -> dict:
-        """*slice*'s declared schema wherever it is declared -- here, or on a table's tabs -- else ``{}``.
-
-        A table's slices are its tabs' topics, not its own, and every tab of
-        one table is one TAB class, so the first tab speaks for them all.
-        """
-        try:
-            return self.declared_schema(slice) or {}
-        except KeyError:
-            pass
-        n_tabs = getattr(self, 'n_tabs', 0) or 0
-        if n_tabs and hasattr(self, 'tab'):
-            try:
-                return self.tab(0).declared_schema(slice) or {}
-            except KeyError:
-                pass
-        return {}
-
     def chunk_shuffle_sampler(
         self,
         slice: str,
@@ -667,35 +525,182 @@ class DatatableBase(Datablock):
         """Path of the `index.json` for *slice*'s shards."""
         return os.path.join(self.path(*slice.split('/')), 'index.json')
 
+    def slice_names(self, slices) -> tuple:
+        """Normalize a `*slices` varargs tuple; empty means *all* slices."""
+        return self._slicenames_(slices)
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def cacheroot(self) -> str:
+        """Local scratch root for everything streaming: read caches, staged writes.
+
+        The block's ``cache=``; else ``$DBX_CACHE``; else ``cache/`` under
+        :attr:`localroot` -- which is ``DBX_LOCAL`` (or ``local=``) for a block
+        on remote storage, and the storage root itself for one already local.
+        Resolved on every access, never stored, so no machine's path reaches a
+        handle or a journal.
+        """
+        return (getattr(self, 'cache', None) or os.environ.get('DBX_CACHE')
+                or os.path.join(self.localroot, 'cache'))
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _parse_slice_columns_(self, slice_columns, columns=None):
+        """Normalize a ``*slice_columns`` spec into ``(names, per_slice_columns)``.
+
+        Shared by `dataset()` and `data()` so the two accept exactly the same
+        spec: a bare slice name, a ``(slice, column)`` pair, a
+        ``(slice, [columns])`` pair, or a ``(slice, column, key | [keys])``
+        triple for part of a dict column, in any mixture. The two differ in
+        what they do with a slice, never in how a caller names one.
+
+        *names* is in the order the slices were asked for -- position decides
+        which source is zipped where, so it is derived from the caller's
+        sequence and never from a set.
+        """
+        items = list(slice_columns)
+        if len(items) == 1 and isinstance(items[0], (list, tuple)):
+            first = items[0]
+            if isinstance(first, list) or not (isinstance(first[0], str) and first[0] in self.slices()):
+                items = list(first)
+
+        if columns is not None:
+            if isinstance(columns, dict):
+                for s_name, cols in columns.items():
+                    if isinstance(cols, (list, tuple)):
+                        for c in cols:
+                            items.append((s_name, c))
+                    else:
+                        items.append((s_name, cols))
+            elif isinstance(columns, (list, tuple)):
+                items.extend(columns)
+
+        if not items:
+            names = self.slice_names(())
+            per_slice_columns = None
+        else:
+            slice_order = []
+            slice_cols_map = {}
+            has_column_filter = False
+
+            for item in items:
+                s_name, cols = slice_spec(item)
+                has_column_filter = has_column_filter or cols is not None
+
+                if s_name not in slice_cols_map:
+                    slice_order.append(s_name)
+                    slice_cols_map[s_name] = list(cols) if cols is not None else None
+                else:
+                    if slice_cols_map[s_name] is not None:
+                        if cols is None:
+                            slice_cols_map[s_name] = None
+                        else:
+                            for c in cols:
+                                if c not in slice_cols_map[s_name]:
+                                    slice_cols_map[s_name].append(c)
+
+            names = self.slice_names(slice_order)
+
+            if has_column_filter:
+                per_slice_columns = [None if slice_cols_map[name] is None
+                                     else merge_column_specs(slice_cols_map[name])
+                                     for name in names]
+                for name, cols in zip(names, per_slice_columns):
+                    self._check_column_keys_(name, cols)
+                if all(c is None for c in per_slice_columns):
+                    per_slice_columns = None
+            else:
+                per_slice_columns = None
+
+        return names, per_slice_columns
+
+    def _check_column_keys_(self, slice, cols):
+        """Refuse a ``(slice, column, key)`` the slice's declaration says cannot be read.
+
+        Only where the slice declares the column's structure: an undeclared
+        slice, or a column declared plain ``'json'``, has nothing to check
+        against, and its keys are found or not when the data is.
+        """
+        keyed = [column_spec(spec) for spec in cols or ()]
+        keyed = [(column, keys) for column, keys in keyed if keys is not None]
+        if not keyed:
+            return
+        schema = self._slice_declaration_(slice)
+        for column, keys in keyed:
+            if column not in schema:
+                continue
+            declared = schema[column]
+            if not isinstance(declared, dict):
+                if declared == DATASLICE.DICT_COLUMN_TYPE:
+                    continue
+                raise TypeError(
+                    f"{self.__class__.__name__}: slice {slice!r} declares column {column!r} "
+                    f"as {declared!r}, which has no keys to take {keys!r} of"
+                )
+            for key in (keys if isinstance(keys, list) else [keys]):
+                path, node = key_path(key), declared
+                for depth, k in enumerate(path):
+                    if not isinstance(node, dict):
+                        raise TypeError(
+                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
+                            f"{'.'.join(path[:depth])!r} as {node!r}, which has no key {k!r}"
+                        )
+                    if k not in node:
+                        under = '.'.join(path[:depth])
+                        raise KeyError(
+                            f"{self.__class__.__name__}: slice {slice!r} column {column!r} declares "
+                            f"keys {list(node)}{' under ' + repr(under) if under else ''}, not [{k!r}]"
+                        )
+                    node = node[k]
+
+    def _slice_declaration_(self, slice) -> dict:
+        """*slice*'s declared schema wherever it is declared -- here, or on a table's tabs -- else ``{}``.
+
+        A table's slices are its tabs' topics, not its own, and every tab of
+        one table is one TAB class, so the first tab speaks for them all.
+        """
+        try:
+            return self.declared_schema(slice) or {}
+        except KeyError:
+            pass
+        n_tabs = getattr(self, 'n_tabs', 0) or 0
+        if n_tabs and hasattr(self, 'tab'):
+            try:
+                return self.tab(0).declared_schema(slice) or {}
+            except KeyError:
+                pass
+        return {}
+
     @staticmethod
-    def _node_is_sentinel(node):
+    def _node_is_sentinel_(node):
         """True when node is a sentinel the markers replace, :data:`SLICETOPIC` included.
 
         Which is what stops a :class:`DATASLICE` and a ``SLICETOPIC`` sharing one
         declaration: they are the same topic said two ways, and the two ways
         render differently.
         """
-        return Datablock._node_is_sentinel(node) or node == SLICETOPIC
+        return Datablock._node_is_sentinel_(node) or node == SLICETOPIC
 
     @staticmethod
-    def _node_is_dirtopic(node):
+    def _node_is_dirtopic_(node):
         """True when node is a directory topic, :data:`SLICETOPIC` included.
 
         A :class:`DATASLICE` is a :class:`~dbx.datablocks.DIR`, so the base test
         already covers the marker.  What this adds is the sentinel, which is a
         string and would otherwise read as a file named ``SLICETOPIC``.
         """
-        return Datablock._node_is_dirtopic(node) or node == SLICETOPIC
+        return Datablock._node_is_dirtopic_(node) or node == SLICETOPIC
 
-    def _is_dir_topic(self, *topicpath):
+    def _is_dir_topic_(self, *topicpath):
         """True when the topic resolves to a directory rather than a file."""
-        topicpath = self._normtopic(topicpath)
+        topicpath = self._normtopic_(topicpath)
         if not topicpath or topicpath[0] is None:
             return False
-        node = self._topicnode(*topicpath)
-        return self._node_is_dirtopic(node)
+        node = self._topicnode_(*topicpath)
+        return self._node_is_dirtopic_(node)
 
-    def _slicenames(self, slices) -> tuple:
+    def _slicenames_(self, slices) -> tuple:
         """Normalize a `*slices` varargs tuple; empty means *all* slices."""
         if len(slices) == 1 and isinstance(slices[0], (tuple, list)):
             slices = tuple(slices[0])
@@ -709,12 +714,8 @@ class DatatableBase(Datablock):
             )
         return tuple(slices)
 
-    def slice_names(self, slices) -> tuple:
-        """Normalize a `*slices` varargs tuple; empty means *all* slices."""
-        return self._slicenames(slices)
-
     @staticmethod
-    def _norm_shared_columns(shared):
+    def _norm_shared_columns_(shared):
         """A ``shared`` declaration as a tuple, or None.  A bare str is one name."""
         if shared is None:
             return None
@@ -722,7 +723,7 @@ class DatatableBase(Datablock):
             return (shared,)
         return tuple(str(c) for c in shared)
 
-    def _shared_defaults(self, shared, validate_shared):
+    def _shared_defaults_(self, shared, validate_shared):
         """``(shared, validate_shared)`` with this block's declaration applied.
 
         The declaration only fills in for a caller that said nothing. A caller
@@ -737,17 +738,17 @@ class DatatableBase(Datablock):
                 validate_shared = True
         return shared, bool(validate_shared)
 
-    def _ensure_cacheroot(self, cache=None) -> str:
+    def _ensure_cacheroot_(self, cache=None) -> str:
         cacheroot = cache or self.cacheroot
         os.makedirs(cacheroot, exist_ok=True)
         return cacheroot
 
-    def _read_slice(self, slice, **kwargs):
+    def _read_slice_(self, slice, **kwargs):
         raise NotImplementedError(
-            f"{self.__class__.__name__} must implement _read_slice(slice)"
+            f"{self.__class__.__name__} must implement _read_slice_(slice)"
         )
 
-    def _tab_stream(self, tab, slice, local: str | None = None) -> Stream:
+    def _tab_stream_(self, tab, slice, local: str | None = None) -> Stream:
         """One tab's slice as a `Stream`, cached under *local* when it is remote.
 
         A local tab is its own cache and *local* is ignored, as in
@@ -766,13 +767,13 @@ class DatatableBase(Datablock):
         remote = abfs_to_mds_azure(index_dir) if scheme in ('abfs', 'abfss') else index_dir
         if local is None:
             raise ValueError(
-                f"{self.__class__.__name__}._tab_stream: {index_dir} is remote, so it "
+                f"{self.__class__.__name__}._tab_stream_: {index_dir} is remote, so it "
                 f"needs a local cache directory of its own; pass local="
             )
         os.makedirs(local, exist_ok=True)
         return Stream(remote=remote, local=local)
 
-    def _tab_streams(self, slice, local: str):
+    def _tab_streams_(self, slice, local: str):
         """One `Stream` per tab, each cached in its own subdirectory of *local*.
 
         Subdivided by tab, because `StreamingDataset` takes either `streams=` or
@@ -782,11 +783,11 @@ class DatatableBase(Datablock):
         Named by the tab's hash: unique per tab, and the same across runs, so a
         cache is reused rather than rebuilt.
         """
-        return [self._tab_stream(tab, slice, local=os.path.join(local, tab.hash[:12]))
+        return [self._tab_stream_(tab, slice, local=os.path.join(local, tab.hash[:12]))
                 for tab in (self.tab(idx) for idx in range(self.n_tabs))]
 
     @staticmethod
-    def _find_slice_topics(topics_dict, prefix=()):
+    def _find_slice_topics_(topics_dict, prefix=()):
         """Every topic path in `topics_dict` marked with `SLICETOPIC`, as a tuple.
 
         A tuple because a block's slices are settled once its class is: nothing
@@ -798,21 +799,202 @@ class DatatableBase(Datablock):
             return ()
         for key, val in topics_dict.items():
             current = prefix + (key,)
-            if _is_topicmarker(val, DATASLICE) or val == SLICETOPIC:
+            if is_topicmarker(val, DATASLICE) or val == SLICETOPIC:
                 slice_topics.append('/'.join(current) if len(current) > 1 else key)
             elif isinstance(val, dict):
-                slice_topics.extend(DatatableBase._find_slice_topics(val, current))
+                slice_topics.extend(DatatabBase._find_slice_topics_(val, current))
         return tuple(slice_topics)
 
 
-class Datatab(DatatableBase):
+class UpstreamTabSlices:
+    """Slice routing for a tab or table that reads its own slices and an upstream one's.
+
+    A mixin, ahead of `Datatab` or `Datatable` in the bases. `Featuretab` owns
+    ``features`` and borrows the sample slices of the `Datatab` it was built
+    from; `Featuretable` does the same over a `Datatable`. Both answer
+    `dataset()` and `data()` for either, so both need the same three things:
+    work out which block owns a requested slice, keep the caller's order, and
+    refuse a name that two blocks both claim.
+
+    The upstream is found in the VAR field ``UPSTREAM_TABS`` names -- a tab or
+    a table, whichever the block was built from.
+    """
+
+    #: The VAR field(s) that may hold the upstream tab or table, most specific
+    #: first; the first one set is the upstream.
+    UPSTREAM_TABS: tuple[str, ...] = ()
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        # As DatatabBase does for shared_slice_columns, and for the same
+        # reason: a bare str is iterable, so 'idx' left unnormalised would be
+        # read as four one-letter columns.
+        self.shared_upstream_column = self._norm_shared_columns_(
+            getattr(self, 'shared_upstream_column', None)
+        )
+
+    # 2. Declared API ------------------------------------------------------
+
+    def dataset(self, *slices, upstream: list | None = None, mode='map',
+                nested=True, columns=None, shared=None, validate_shared=None,
+                skip_none=True, zip_validator=None, **kwargs):
+        """The requested slices -- this block's and the upstream block's -- zipped.
+
+        Keyed exactly as `DatatabBase.dataset()`, so a row is
+        ``{'features': {layer: value}, sample_slice: {column: value}, ...}``.
+
+        *shared* defaults to this block's ``shared_upstream_column``, and
+        *validate_shared* to True when it does -- so whether the features are
+        still paired with the samples they were computed from is settled by
+        whoever built the block, once, rather than by every consumer of it. A
+        column only one of the sources read carries is refused: it would be
+        compared against nothing and read as checked.
+        """
+        if mode not in ('map', 'iter'):
+            raise ValueError(
+                f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}"
+            )
+        routed = self._route_(slices, upstream)
+        shared, validate_shared = self._shared_defaults_(shared, validate_shared)
+        datasets = [owner.datastream(s_name, **kwargs) for owner, s_name, _ in routed]
+        names = [s_name for _, s_name, _ in routed]
+        per_slice_columns = [cols for _, _, cols in routed]
+        if all(c is None for c in per_slice_columns):
+            per_slice_columns = columns
+
+        zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
+        return zip_cls(
+            *datasets,
+            names=names,
+            nested=nested,
+            columns=per_slice_columns,
+            shared=shared,
+            validate_shared=validate_shared,
+            skip_none=skip_none,
+            zip_validator=zip_validator,
+        )
+
+    def data(self, *slices, upstream: list | None = None, nested=True,
+             concat=True, **kwargs):
+        """The requested slices read whole, keyed as `dataset()` keys one row.
+
+        A table reads its own slice through `Datatable._read_slice_`,
+        which already runs over every tab, so nothing here concatenates tabs
+        by hand.
+        """
+        routed = self._route_(slices, upstream)
+        out = {}
+        for owner, s_name, cols in routed:
+            spec = (s_name, cols) if cols else s_name
+            out[s_name] = DatatabBase.data(owner, spec, concat=concat, **kwargs)[s_name]
+        if nested:
+            return out
+        return {(s_name, c): vals
+                for s_name, cols in out.items()
+                for c, vals in cols.items()}
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _shared_defaults_(self, shared, validate_shared):
+        """As `DatatabBase._shared_defaults_`, from `shared_upstream_column` first.
+
+        This block's alignment question spans two blocks -- is feature row *i*
+        the features OF sample row *i*? -- so the column that answers it is one
+        the upstream slice holds and this block carried through when it was
+        built. That is a different declaration from the columns this block's own
+        slices share, and it takes precedence over it, since a zip that reaches
+        across the two blocks is the one where drift is possible.
+        """
+        declared = getattr(self, 'shared_upstream_column', None)
+        if shared is None and declared is not None:
+            shared = declared
+            if validate_shared is None:
+                validate_shared = True
+        return super()._shared_defaults_(shared, validate_shared)
+
+    def _upstream_block_(self):
+        for attr in self.UPSTREAM_TABS:
+            block = getattr(self.var, attr, None)
+            if block is None:
+                block = getattr(self, attr, None)
+            if block is not None:
+                return block
+        return None
+
+    @staticmethod
+    def _norm_items_(slice_columns):
+        """``*slice_columns`` as an ordered ``[(slice, columns | None)]`` list, as `slice_spec` reads each."""
+        items = list(slice_columns)
+        if len(items) == 1 and isinstance(items[0], (list, tuple)):
+            first = items[0]
+            # One tuple is one request -- (slice, ...) -- and one list several.
+            if isinstance(first, list) or not (len(first) >= 2 and isinstance(first[0], str)):
+                items = list(first)
+        return [slice_spec(item) for item in items]
+
+    def _route_(self, slice_columns, upstream=None):
+        """Resolve a request into an ordered ``[(block, slice, columns)]`` list.
+
+        Raises when the upstream block declares a slice this block also owns.
+        Rows are keyed by slice name, so two blocks claiming one name have no
+        way to both appear in a row -- and silently preferring either one is
+        how a caller ends up reading features while believing it asked for
+        samples.
+        """
+        what = self.__class__.__name__
+        block = self._upstream_block_()
+        own = tuple(self.slices())
+        up = tuple(block.slices()) if block is not None else ()
+
+        clash = sorted(set(own) & set(up))
+        if clash:
+            raise KeyError(
+                f"{what}: upstream {type(block).__name__} declares slice(s) "
+                f"{clash}, which this block also owns ({list(own)}). A row is "
+                f"keyed by slice name and cannot hold both -- rename the "
+                f"upstream slice."
+            )
+
+        items = self._norm_items_(slice_columns) or [(s, None) for s in own]
+        if upstream:
+            asked = {s for s, _ in items}
+            items = items + [(str(s), None) for s in upstream if str(s) not in asked]
+
+        routed, seen = [], {}
+        for s_name, cols in items:
+            if s_name in own:
+                owner = self
+            elif s_name in up:
+                owner = block
+            else:
+                raise KeyError(
+                    f"{what}: unknown slice {s_name!r}; "
+                    f"available slices are {list(own) + list(up)}"
+                )
+            if s_name in seen:
+                pos = seen[s_name]
+                _, _, prev = routed[pos]
+                merged = None if (prev is None or cols is None) else \
+                    merge_column_specs(prev + cols)
+                routed[pos] = (owner, s_name, merged)
+            else:
+                seen[s_name] = len(routed)
+                routed.append((owner, s_name, None if cols is None else merge_column_specs(cols)))
+        for owner, s_name, cols in routed:
+            owner._check_column_keys_(s_name, cols)
+        return routed
+
+
+class Datatab(DatatabBase):
     """One tab of a `Datatable`: a Datablock writing MDS slices."""
 
     @dataclass
     class VAR(Datablock.VAR):
         datapoints_per_row: int = 1
 
-    # 1. Datablock Protocol Methods ─────────────────────────────────
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, *args, cache=None, cache_limit=None, **kwargs):
         super().__init__(*args, cache=cache, cache_limit=cache_limit, **kwargs)
@@ -832,7 +1014,7 @@ class Datatab(DatatableBase):
         copy or redirection, or whose upload stopped half way -- and `TabMaker`
         calls it after every build and refuses the tab if it says no.
 
-        On the tab and not on `DatatableBase`: a table's `shard_sizes()` opens
+        On the tab and not on `DatatabBase`: a table's `shard_sizes()` opens
         the index of every tab, so the same override on the table would turn one
         validate() into a read per tab per slice. It needs no such thing -- a
         table is valid only when every tab of it validated.
@@ -843,10 +1025,10 @@ class Datatab(DatatableBase):
         return True
 
     def __stats__(self, slice, **kwargs) -> dict:
-        return {'n_rows': len(self._read_slice(slice))}
+        return {'n_rows': len(self._read_slice_(slice))}
 
     def __read__(self, *topicpath):
-        topicpath = self._normtopic(topicpath)
+        topicpath = self._normtopic_(topicpath)
         if topicpath:
             topic_str = '/'.join(topicpath)
             if topic_str in self.slices():
@@ -855,9 +1037,7 @@ class Datatab(DatatableBase):
             f"{self.__class__.__name__}.__read__ override to read {'/'.join(topicpath)!r}"
         )
 
-    # 2. Properties and Accessors ───────────────────────────────────
-
-    # 3. Utility and Private Methods ────────────────────────────────
+    # 2. Declared API ------------------------------------------------------
 
     @contextlib.contextmanager
     def slice_writers(self, slices=None, *, stage: bool = None, cache=None,
@@ -873,7 +1053,7 @@ class Datatab(DatatableBase):
             a declaration is refused: the declared ones are in this block's hash.
         """
         names = self.slices()
-        slices = self._writable_columns(slices, names)
+        slices = self._writable_columns_(slices, names)
 
         if stage is None:
             stage = not self.is_local_fs
@@ -883,7 +1063,7 @@ class Datatab(DatatableBase):
         if stage:
             staging = tempfile.mkdtemp(
                 prefix=f"{self.__class__.__name__}_",
-                dir=self._ensure_cacheroot(cache),
+                dir=self._ensure_cacheroot_(cache),
             )
             outdirs = {name: os.path.join(staging, name.replace('/', '_')) for name in names}
             for outdir in outdirs.values():
@@ -911,7 +1091,7 @@ class Datatab(DatatableBase):
         # image with another item's pose and no read ever raises. Tying the
         # check to flush_every made the guarantee a side effect of wanting
         # row-sized shards, which nothing said and nobody would guess.
-        sync = _ShardSync(flush_every)
+        sync = ShardSync(flush_every)
         try:
             for name in names:
                 writer = MDSWriter(
@@ -928,12 +1108,14 @@ class Datatab(DatatableBase):
                 writer.finish()
             if staging is not None:
                 for name in names:
-                    self._upload_slice(outdirs[name], targets[name])
+                    self._upload_slice_(outdirs[name], targets[name])
         finally:
             if staging is not None:
                 shutil.rmtree(staging, ignore_errors=True)
 
-    def _writable_columns(self, slices, names):
+    # 4. Helpers -----------------------------------------------------------
+
+    def _writable_columns_(self, slices, names):
         """The `{slice: {column: type}}` to write, declaration and argument agreed.
 
         The declaration wins wherever there is one, because it is what the hash
@@ -964,19 +1146,19 @@ class Datatab(DatatableBase):
             if columns and list(slices[name].items()) != list(columns.items()):
                 raise ValueError(
                     f"{self.__class__.__name__}.slice_writers: slice {name!r} is "
-                    f"declared {self._topicnode(*name.split('/'))} but would be "
+                    f"declared {self._topicnode_(*name.split('/'))} but would be "
                     f"written {dict(slices[name])!r}; the declared columns are in "
                     f"this block's hash, so the two may not differ"
                 )
         return slices
 
-    def _read_slice(self, slice, **kwargs):
+    def _read_slice_(self, slice, **kwargs):
         return read_mds_shard(
             self.path(*slice.split('/')), self.fs,
-            tmpdir=kwargs.pop('cache', None) or self._ensure_cacheroot(), **kwargs,
+            tmpdir=kwargs.pop('cache', None) or self._ensure_cacheroot_(), **kwargs,
         )
 
-    def _upload_slice(self, local_dir, target_dir):
+    def _upload_slice_(self, local_dir, target_dir):
         names = sorted(os.listdir(local_dir))
         for name in [n for n in names if n != 'index.json'] + \
                     [n for n in names if n == 'index.json']:
@@ -993,7 +1175,7 @@ def DatapointTableTab(table, idx, tag=None, **spec):
     return table(idx, tag=tag, **spec)
 
 
-class Datatable(DatatableBase, Datastack):
+class Datatable(DatatabBase, Datastack):
     """A table of DatapointTabs, sliced the same way as its tabs.
 
     A table's TOPICS only contains what the table itself owns: the structural
@@ -1023,25 +1205,13 @@ class Datatable(DatatableBase, Datastack):
     #: table rather than inside it. A subclass that wants its tabs nested still
     #: declares ``tabs`` itself and roots them there -- which is what it always
     #: was, an addressable location rather than something the machinery used.
-    TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
-
-    #: Slices come from TAB, not from this table's own TOPICS.
-    def slices(self):
-        """The TAB's slices: a table declares none of its own.
-
-        Slice topics belong to the tab, so a table reads them off ``TAB``
-        rather than out of its own TOPICS -- which is what keeps them out of
-        the table's TOPICS while leaving slice routing (`data()`, `dataset()`,
-        `valid_slice()`) working.
-
-        Falls back to its own TOPICS when TAB is unset or is not a
-        `DatatableBase` -- as for :class:`DatatablePart`, which overrides
-        TOPICS per instance and computes its TAB dynamically.
-        """
-        tab = getattr(self, 'TAB', None)
-        if isinstance(tab, type) and issubclass(tab, DatatableBase):
-            return DatatableBase._find_slice_topics(getattr(tab, 'TOPICS', None))
-        return DatatableBase._find_slice_topics(getattr(self, 'TOPICS', None))
+    TOPICS = {'tab_paths': DATADIR, 'done': DATAFILE('done')}
+    #: Every table built before the respelling: the base's sentinels, and the
+    #: TAB's slices the sentinel era added to a table's identity. A subclass
+    #: declaring SPECIALIZATIONS of its own includes these -- see __init_subclass__.
+    SPECIALIZATIONS = [Datablock.Specialization(
+        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'},
+        note="respelled only: DATADIR and DATAFILE for the sentinels")]
 
     Tab = staticmethod(DatapointTableTab)
 
@@ -1049,7 +1219,52 @@ class Datatable(DatatableBase, Datastack):
     class VAR(Datastack.VAR):
         datapoints_per_row: int = 1
 
-    # 1. Datastack / Table Protocol Methods ─────────────────────────
+    validate_tab = Datastack.validate_block
+    validate_block = Datastack.validate_block
+
+    UNSAFE_clear_tab = Datastack.UNSAFE_clear_block
+    UNSAFE_clear_tabs = Datastack.UNSAFE_clear_blocks
+
+    class TabMaker(Datastack.BlockMaker):
+        """Lightweight callable that forms and optionally builds a tab."""
+
+        def __init__(self, table=None, tab_idx: int | None = None, **kwargs):
+            if isinstance(table, int) and tab_idx is None:
+                tab_idx = table
+                table = None
+            super().__init__(tab_idx)
+            self.table = table
+            self.tab_idx = tab_idx
+            self.kwargs = kwargs
+
+        def __call__(self, table=None, *, build=True, journal=None):
+            tbl = table if table is not None else self.table
+            # Formed -- by __block__, then again by _adopt_'s .set() -- against the
+            # journal the table read once and the executor handed this worker.
+            with forming_with_journal(journal):
+                if tbl is not None and tbl.valid_tab(self.idx):
+                    return {'tab_idx': self.idx, 'skipped': True}
+                tab = tbl.__block__(self.idx, **self.kwargs)
+                tab = tbl._adopt_(tab, keyby=True)
+            skipped = tab.valid()
+            if build and not skipped:
+                tab.build()
+                if tbl is not None and hasattr(tbl, 'validate_tab'):
+                    validated = tbl.validate_tab(self.idx)
+                else:
+                    validated = tab.validate()
+                if not validated:
+                    raise ValueError(f"Tab {self.idx} of {tbl} failed to validate")
+                if hasattr(tbl, '_write_tab_path_'):
+                    tbl._write_tab_path_(self.idx)
+                elif hasattr(tbl, '_write_tab_built'):
+                    tbl._write_tab_built(self.idx)
+            result = {'tab_idx': self.idx, 'skipped': skipped}
+            del tab
+            gc.collect()
+            return result
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init_subclass__(cls, **kwargs):
         """A table's TAB is its BLOCK: declaring one declares the other.
@@ -1057,6 +1272,23 @@ class Datatable(DatatableBase, Datastack):
         A table may still name a BLOCK of its own, and then its TAB must be one.
         """
         super().__init_subclass__(**kwargs)
+        own = cls.__dict__.get('SPECIALIZATIONS')
+        if own is None and 'TOPICS' in cls.__dict__ and cls.SPECIALIZATIONS is Datatable.SPECIALIZATIONS:
+            # Datatable's describe a table spelled with Datatable's TOPICS. One
+            # declaring its own is another identity -- the specialization names
+            # topics it may not have, or reads as a narrower block of it -- so
+            # it starts with none, and declares what reaches its own past.
+            cls.SPECIALIZATIONS = []
+        if own is not None and cls.TOPICS is Datatable.TOPICS:
+            keys = {sp.key for sp in own}
+            missing = [sp for sp in Datatable.SPECIALIZATIONS if sp.key not in keys]
+            if missing:
+                warnings.warn(
+                    f"{cls.__qualname__} inherits Datatable's TOPICS but declares SPECIALIZATIONS "
+                    f"of its own without Datatable's: a table built before the TOPICS were "
+                    f"respelled will not be found. Include them -- SPECIALIZATIONS = "
+                    f"[*Datatable.SPECIALIZATIONS, ...].",
+                    stacklevel=2)
         tab = cls.__dict__.get('TAB')
         if tab is None:
             return
@@ -1118,16 +1350,8 @@ class Datatable(DatatableBase, Datastack):
     def __block__(self, idx: int) -> Datatab:
         return self.__tab__(idx)
 
-    def _tab_paths_topic(self) -> str | None:
-        topics = self.topics()
-        if 'tab_paths' in topics:
-            return 'tab_paths'
-        if 'built_tabs' in topics:
-            return 'built_tabs'
-        return None
-
     def __split__(self, *args, **kwargs):
-        topic_name = self._tab_paths_topic()
+        topic_name = self._tab_paths_topic_()
         # Only when the sentinels are THIS table's to write. Under a partial
         # redirection covering `tab_paths` -- what a specialization installs --
         # they are another block's, `path(ensure_dirpath=True)` refuses to
@@ -1198,10 +1422,11 @@ class Datatable(DatatableBase, Datastack):
             callable_results = []
 
         if to_build_callables:
-            build_exec_kwargs = self._executor_kwargs(
+            build_exec_kwargs = self._executor_kwargs_(
                 tag=f"EXECUTING {len(to_build_callables)} callables [{self.__class__.__name__}]"
             )
             build_executor = self.executor_cls(**build_exec_kwargs)
+            callable_kwargs = self._with_build_journal_(to_build_callables, callable_kwargs)
             built_results = build_executor.exec_callables(to_build_callables, self, **callable_kwargs)
             callable_results.extend(built_results)
 
@@ -1231,27 +1456,13 @@ class Datatable(DatatableBase, Datastack):
             self.log.info("%s.__stack__: done marker written", self.__class__.__name__)
         return self
 
-    def read(self, *topicpath):
-        """As `Datablock.read()`, but slice names bypass the TOPICS guard.
-
-        Slice topics are not in this table's TOPICS (they belong to the tab),
-        so the base `read()` would reject them with a KeyError.  Slice reads
-        are valid, they just skip the guard and fall through to `__read__`.
-        """
-        topicpath = self._normtopic(topicpath)
-        topic_str = '/'.join(topicpath)
-        if topic_str in self.slices():
-            # Bypass _topicnode: slices are not in TOPICS but are valid reads.
-            return self.__read__(*topicpath)
-        return super().read(*topicpath)
-
     def __read__(self, *topicpath):
-        topicpath = self._normtopic(topicpath)
+        topicpath = self._normtopic_(topicpath)
         if topicpath:
             topic_str = '/'.join(topicpath)
             if topic_str in self.slices():
                 return self.data(topic_str)
-        topic_name = self._tab_paths_topic()
+        topic_name = self._tab_paths_topic_()
         if topic_name and topicpath == (topic_name,):
             return self.path(topic_name)
         if topicpath == ('done',):
@@ -1264,91 +1475,46 @@ class Datatable(DatatableBase, Datastack):
     def valid(self):
         return self.valid_topic('done')
 
-    def _write_tab_path(self, i: int):
-        topic_name = self._tab_paths_topic()
-        if not topic_name:
-            return
-        if topic_name not in self.ownedtopics():
-            # Redirected: the sentinels are the other block's, and they name
-            # the same tabs -- a redirection that did not re-key the TAB is the
-            # only kind that can cover `tab_paths` at all. Writing ours in
-            # there would be writing into its data, which `path()` refuses.
-            self.log.detailed(
-                "%s: %r is redirected; not writing a sentinel for tab %d",
-                self.__class__.__name__, topic_name, i,
-            )
-            return
-        tab_dir = self.path(topic_name, ensure_dirpath=True)
-        sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
-        anchorkeypath = self.tab(i).anchorkeypath
-        with self.fs.open(sentinel_path, 'w') as f:
-            f.write(anchorkeypath)
-        if hasattr(self, '_built_tab_set_cache'):
-            self._built_tab_set_cache.add(i)
+    def __stats__(self, slice, **kwargs) -> dict:
+        return super().__stats__(slice, **kwargs)
 
-    def _built_tab_set(self) -> set[int]:
-        if not hasattr(self, '_built_tab_set_cache'):
-            topic_name = self._tab_paths_topic()
-            if not topic_name:
-                self._built_tab_set_cache = set()
-            else:
-                try:
-                    tab_dir = self.path(topic_name)
-                    if not self.fs.exists(tab_dir):
-                        self._built_tab_set_cache = set()
-                    else:
-                        files = self.fs.ls(tab_dir, detail=False)
-                        indices = set()
-                        for f in files:
-                            fname = os.path.basename(f)
-                            if fname.startswith('tab_') and fname.endswith('.path'):
-                                try:
-                                    idx = int(fname.removeprefix('tab_').removesuffix('.path'))
-                                    indices.add(idx)
-                                except ValueError:
-                                    pass
-                        self._built_tab_set_cache = indices
-                except Exception:
-                    self._built_tab_set_cache = set()
-        return self._built_tab_set_cache
+    # 2. Declared API ------------------------------------------------------
 
-    def _check_tab_path(self, i: int) -> bool:
-        topic_name = self._tab_paths_topic()
-        if not topic_name:
-            return False
-        if i in self._built_tab_set():
-            return True
-        try:
-            tab_dir = self.path(topic_name)
-            sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
-            return self.fs.exists(sentinel_path)
-        except Exception:
-            return False
+    #: Slices come from TAB, not from this table's own TOPICS.
+    def slices(self):
+        """The TAB's slices: a table declares none of its own.
 
-    def _remove_tab_path(self, i: int):
-        topic_name = self._tab_paths_topic()
-        if not topic_name:
-            return
-        try:
-            tab_dir = self.path(topic_name)
-            for prefix in ('tab_', 'block_'):
-                sentinel_path = os.path.join(tab_dir, f"{prefix}{i}.path")
-                if self.fs.exists(sentinel_path):
-                    self.fs.rm(sentinel_path)
-        except Exception:
-            pass
-        if hasattr(self, '_built_tab_set_cache') and self._built_tab_set_cache is not None:
-            self._built_tab_set_cache.discard(i)
+        Slice topics belong to the tab, so a table reads them off ``TAB``
+        rather than out of its own TOPICS -- which is what keeps them out of
+        the table's TOPICS while leaving slice routing (`data()`, `dataset()`,
+        `valid_slice()`) working.
 
-    _write_tab_built = _write_tab_path
-    _check_tab_built = _check_tab_path
-    _remove_tab_built = _remove_tab_path
-    _write_block_path = _write_tab_path
-    _remove_block_path = _remove_tab_path
+        Falls back to its own TOPICS when TAB is unset or is not a
+        `DatatabBase` -- as for :class:`DatatablePart`, which overrides
+        TOPICS per instance and computes its TAB dynamically.
+        """
+        tab = getattr(self, 'TAB', None)
+        if isinstance(tab, type) and issubclass(tab, DatatabBase):
+            return DatatabBase._find_slice_topics_(getattr(tab, 'TOPICS', None))
+        return DatatabBase._find_slice_topics_(getattr(self, 'TOPICS', None))
+
+    def read(self, *topicpath):
+        """As `Datablock.read()`, but slice names bypass the TOPICS guard.
+
+        Slice topics are not in this table's TOPICS (they belong to the tab),
+        so the base `read()` would reject them with a KeyError.  Slice reads
+        are valid, they just skip the guard and fall through to `__read__`.
+        """
+        topicpath = self._normtopic_(topicpath)
+        topic_str = '/'.join(topicpath)
+        if topic_str in self.slices():
+            # Bypass _topicnode_: slices are not in TOPICS but are valid reads.
+            return self.__read__(*topicpath)
+        return super().read(*topicpath)
 
     def valid_tab(self, i: int) -> bool:
-        if self._tab_paths_topic():
-            if self._check_tab_path(i):
+        if self._tab_paths_topic_():
+            if self._check_tab_path_(i):
                 return True
             return self.tab(i).valid()
         return self.tab(i).valid()
@@ -1390,12 +1556,6 @@ class Datatable(DatatableBase, Datastack):
         return self.UNSAFE_clear_block_redirections(OVERRIDE=OVERRIDE, parallelization=parallelization,
                                                     n_workers=n_workers, **kwargs)
 
-    validate_tab = Datastack.validate_block
-    validate_block = Datastack.validate_block
-
-    UNSAFE_clear_tab = Datastack.UNSAFE_clear_block
-    UNSAFE_clear_tabs = Datastack.UNSAFE_clear_blocks
-
     def validate_tabs(
         self,
         parallelization: str | None = None,
@@ -1428,8 +1588,148 @@ class Datatable(DatatableBase, Datastack):
             self.tab(idx).valid_slice(slice) for idx in range(self.n_tabs)
         )
 
-    def __stats__(self, slice, **kwargs) -> dict:
-        return super().__stats__(slice, **kwargs)
+    def tab(self, idx: int) -> Datatab:
+        return self.block(idx)
+
+    def tabs(self) -> list:
+        return self.blocks()
+
+    def datastream(self, slice, **kwargs) -> StreamingDataset:
+        self.slice_names((slice,))
+        cacheroot = self._ensure_cacheroot_(kwargs.pop('cache', None))
+        cache_dir = kwargs.pop('cache_dir',
+                               f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
+        local = os.path.join(cacheroot, cache_dir)
+        os.makedirs(local, exist_ok=True)
+        streams = self._tab_streams_(slice, local)
+        cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
+        shuffle = kwargs.pop('shuffle', False)
+        allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)
+        streaming_kwargs = dict(
+            streams=streams,
+            shuffle=shuffle,
+            allow_unsafe_types=allow_unsafe_types,
+            cache_limit=cache_limit,
+            **kwargs,
+        )
+        try:
+            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+        except (ValueError, TypeError) as exc:
+            SharedMemoryManager.clean_process_shared_memory()
+            streaming_kwargs['streams'] = self._tab_streams_(slice, local)
+            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def tab_redirections(self) -> pd.Series:
+        """`Datastack.block_redirections`, by tab."""
+        return self.block_redirections
+
+    @property
+    def use_tab_specializations(self):
+        """`use_block_specializations`, by its table name."""
+        return getattr(self, 'use_block_specializations', None)
+
+    @property
+    def n_tabs(self) -> int:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement n_tabs"
+        )
+
+    @property
+    def n_blocks(self) -> int:
+        return self.n_tabs
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _tab_paths_topic_(self) -> str | None:
+        topics = self.topics()
+        if 'tab_paths' in topics:
+            return 'tab_paths'
+        if 'built_tabs' in topics:
+            return 'built_tabs'
+        return None
+
+    def _write_tab_path_(self, i: int):
+        topic_name = self._tab_paths_topic_()
+        if not topic_name:
+            return
+        if topic_name not in self.ownedtopics():
+            # Redirected: the sentinels are the other block's, and they name
+            # the same tabs -- a redirection that did not re-key the TAB is the
+            # only kind that can cover `tab_paths` at all. Writing ours in
+            # there would be writing into its data, which `path()` refuses.
+            self.log.detailed(
+                "%s: %r is redirected; not writing a sentinel for tab %d",
+                self.__class__.__name__, topic_name, i,
+            )
+            return
+        tab_dir = self.path(topic_name, ensure_dirpath=True)
+        sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
+        anchorkeypath = self.tab(i).anchorkeypath
+        with self.fs.open(sentinel_path, 'w') as f:
+            f.write(anchorkeypath)
+        if hasattr(self, '_built_tab_set_cache'):
+            self._built_tab_set_cache.add(i)
+
+    _write_tab_built = _write_tab_path_
+    _write_block_path_ = _write_tab_path_
+
+    def _built_tab_set_(self) -> set[int]:
+        if not hasattr(self, '_built_tab_set_cache'):
+            topic_name = self._tab_paths_topic_()
+            if not topic_name:
+                self._built_tab_set_cache = set()
+            else:
+                try:
+                    tab_dir = self.path(topic_name)
+                    if not self.fs.exists(tab_dir):
+                        self._built_tab_set_cache = set()
+                    else:
+                        files = self.fs.ls(tab_dir, detail=False)
+                        indices = set()
+                        for f in files:
+                            fname = os.path.basename(f)
+                            if fname.startswith('tab_') and fname.endswith('.path'):
+                                try:
+                                    idx = int(fname.removeprefix('tab_').removesuffix('.path'))
+                                    indices.add(idx)
+                                except ValueError:
+                                    pass
+                        self._built_tab_set_cache = indices
+                except Exception:
+                    self._built_tab_set_cache = set()
+        return self._built_tab_set_cache
+
+    def _check_tab_path_(self, i: int) -> bool:
+        topic_name = self._tab_paths_topic_()
+        if not topic_name:
+            return False
+        if i in self._built_tab_set_():
+            return True
+        try:
+            tab_dir = self.path(topic_name)
+            sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
+            return self.fs.exists(sentinel_path)
+        except Exception:
+            return False
+
+    def _remove_tab_path_(self, i: int):
+        topic_name = self._tab_paths_topic_()
+        if not topic_name:
+            return
+        try:
+            tab_dir = self.path(topic_name)
+            for prefix in ('tab_', 'block_'):
+                sentinel_path = os.path.join(tab_dir, f"{prefix}{i}.path")
+                if self.fs.exists(sentinel_path):
+                    self.fs.rm(sentinel_path)
+        except Exception:
+            pass
+        if hasattr(self, '_built_tab_set_cache') and self._built_tab_set_cache is not None:
+            self._built_tab_set_cache.discard(i)
+    _remove_block_path_ = _remove_tab_path_
 
     def _topics_signature_(self, topics=None, *, declared=None):
         """Own TOPICS segments -- plus, in a sentinel declaration, the TAB's slices.
@@ -1452,123 +1752,31 @@ class Datatable(DatatableBase, Datastack):
         # The era of the declaration being RENDERED: a table reconstructed from a
         # sentinel-era declaration accumulated its TAB's slices then, whatever
         # this class is spelled in now.
-        if self._modern_topics(self.TOPICS if declared is None else declared):
+        if self._modern_topics_(self.TOPICS if declared is None else declared):
             return own
         # Then the TAB's slice topics, in the same format Datastack uses.
         tab = self.TAB
-        if isinstance(tab, type) and issubclass(tab, DatatableBase):
+        if isinstance(tab, type) and issubclass(tab, DatatabBase):
             # TAB is a class here, and slices() is an instance method as
             # topics() is, so the shared helper does the work rather than an
             # unbound call.
             slice_segments = tuple(
                 f"topic:{name}=SLICETOPIC"
-                for name in DatatableBase._find_slice_topics(getattr(tab, 'TOPICS', None))
+                for name in DatatabBase._find_slice_topics_(getattr(tab, 'TOPICS', None))
             )
         else:
             slice_segments = ()
         return own + slice_segments
 
-
-    # 2. Properties and Accessors ───────────────────────────────────
-
-    @property
-    def tab_redirections(self) -> pd.Series:
-        """`Datastack.block_redirections`, by tab."""
-        return self.block_redirections
-
-    @property
-    def use_tab_specializations(self):
-        """`use_block_specializations`, by its table name."""
-        return getattr(self, 'use_block_specializations', None)
-
-    @property
-    def n_tabs(self) -> int:
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement n_tabs"
-        )
-
-    @property
-    def n_blocks(self) -> int:
-        return self.n_tabs
-
-    def tab(self, idx: int) -> Datatab:
-        return self.block(idx)
-
-    def tabs(self) -> list:
-        return self.blocks()
-
-    def datastream(self, slice, **kwargs) -> StreamingDataset:
-        self.slice_names((slice,))
-        cacheroot = self._ensure_cacheroot(kwargs.pop('cache', None))
-        cache_dir = kwargs.pop('cache_dir',
-                               f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
-        local = os.path.join(cacheroot, cache_dir)
-        os.makedirs(local, exist_ok=True)
-        streams = self._tab_streams(slice, local)
-        cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
-        shuffle = kwargs.pop('shuffle', False)
-        allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)
-        streaming_kwargs = dict(
-            streams=streams,
-            shuffle=shuffle,
-            allow_unsafe_types=allow_unsafe_types,
-            cache_limit=cache_limit,
-            **kwargs,
-        )
-        try:
-            return StreamingDataset(**streaming_kwargs)
-        except (ValueError, TypeError) as exc:
-            SharedMemoryManager.clean_process_shared_memory()
-            streaming_kwargs['streams'] = self._tab_streams(slice, local)
-            return StreamingDataset(**streaming_kwargs)
-
-    # 3. Private and Utility Methods ────────────────────────────────
-
     def _block_class_(self):
         return getattr(self, 'BLOCK', None) or getattr(self, 'TAB', None)
 
-    def _read_slice(self, slice, *, tabs=None, **kwargs):
+    def _read_slice_(self, slice, *, tabs=None, **kwargs):
         indices = range(self.n_tabs) if tabs is None else tabs
         datapoints = []
         for idx in indices:
-            datapoints.extend(self.tab(idx)._read_slice(slice, **kwargs))
+            datapoints.extend(self.tab(idx)._read_slice_(slice, **kwargs))
         return datapoints
-
-    class TabMaker(Datastack.BlockMaker):
-        """Lightweight callable that forms and optionally builds a tab."""
-        def __init__(self, table=None, tab_idx: int | None = None, **kwargs):
-            if isinstance(table, int) and tab_idx is None:
-                tab_idx = table
-                table = None
-            super().__init__(tab_idx)
-            self.table = table
-            self.tab_idx = tab_idx
-            self.kwargs = kwargs
-
-        def __call__(self, table=None, *, build=True):
-            tbl = table if table is not None else self.table
-            if tbl is not None and tbl.valid_tab(self.idx):
-                return {'tab_idx': self.idx, 'skipped': True}
-
-            tab = tbl.__block__(self.idx, **self.kwargs)
-            tab = tbl._adopt(tab, keyby=True)
-            skipped = tab.valid()
-            if build and not skipped:
-                tab.build()
-                if tbl is not None and hasattr(tbl, 'validate_tab'):
-                    validated = tbl.validate_tab(self.idx)
-                else:
-                    validated = tab.validate()
-                if not validated:
-                    raise ValueError(f"Tab {self.idx} of {tbl} failed to validate")
-                if hasattr(tbl, '_write_tab_path'):
-                    tbl._write_tab_path(self.idx)
-                elif hasattr(tbl, '_write_tab_built'):
-                    tbl._write_tab_built(self.idx)
-            result = {'tab_idx': self.idx, 'skipped': skipped}
-            del tab
-            gc.collect()
-            return result
 
 
 class DatatablePartition(Datablock):
@@ -1580,13 +1788,18 @@ class DatatablePartition(Datablock):
     fold with the largest remaining capacity deficit.
     """
 
-    TOPICS = {'tabs': 'tabs.json'}
+    TOPICS = {'tabs': DATAFILE('tabs.json', 'one list of tab indices per fold')}
+    SPECIALIZATIONS = [Datablock.Specialization(
+        spec={}, topics={'tabs': 'tabs.json'},
+        note="respelled only: DATAFILE for the bare filename")]
 
     @dataclass
     class VAR(Datablock.VAR):
         datapoint_table: Datatable
         fractions: list[float]
         partition_slice: int | str
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __build__(self):
         table = self.var.datapoint_table
@@ -1630,6 +1843,14 @@ class DatatablePartition(Datablock):
         with self.fs.open(self.path('tabs', ensure_dirpath=True), 'w') as f:
             json.dump(folds_tabs, f)
 
+    def __read__(self, *topicpath):
+        topicpath = self._normtopic_(topicpath)
+        if topicpath == ('tabs',):
+            return json.loads(self.fs.cat(self.path('tabs')))
+        return super().__read__(*topicpath)
+
+    # 2. Declared API ------------------------------------------------------
+
     def n_folds(self) -> int:
         return len(self.var.fractions)
 
@@ -1641,10 +1862,6 @@ class DatatablePartition(Datablock):
         indices = self.tabs_indices(fold)
         table = self.var.datapoint_table
         return [table.tab(i) for i in indices]
-
-    @property
-    def datapoint_table(self) -> Datatable:
-        return self.var.datapoint_table
 
     def fold(self, fold: int | str) -> DatatablePart:
         return DatatablePart(
@@ -1659,11 +1876,11 @@ class DatatablePartition(Datablock):
             )
         )
 
-    def __read__(self, *topicpath):
-        topicpath = self._normtopic(topicpath)
-        if topicpath == ('tabs',):
-            return json.loads(self.fs.cat(self.path('tabs')))
-        return super().__read__(*topicpath)
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def datapoint_table(self) -> Datatable:
+        return self.var.datapoint_table
 
 
 class DatatablePart(Datatable):
@@ -1674,32 +1891,24 @@ class DatatablePart(Datatable):
         partition: DatatablePartition
         fold: int
 
-    @functools.cached_property
-    def tab_indices(self) -> list[int]:
-        return self.var.partition.tabs_indices(self.var.fold)
+    # 1. Protocol and hooks ------------------------------------------------
 
-    @property
-    def datapoint_table(self) -> Datatable:
-        return self.var.partition.datapoint_table
+    def __init__(self, *args, filter_built_tabs: bool = True, **kwargs):
+        # True by default: a part's tabs are its table's, so the ones the table
+        # has built are checked here, in the parent, and no callable is sent
+        # to form and check each one again in a worker.
+        super().__init__(*args, filter_built_tabs=filter_built_tabs, **kwargs)
 
-    @property
-    def datapoints_per_row(self) -> int:
-        return getattr(self.var.partition.datapoint_table.var, 'datapoints_per_row')
+    def __tab__(self, idx: int, *, tag=None, **spec) -> Datatab:
+        return self.tab(idx)
 
-    @property
-    def TAB(self):
-        return getattr(self.var.partition.datapoint_table, 'TAB', None)
+    def __block__(self, idx: int) -> Datatab:
+        return self.tab(idx)
+
+    # 2. Declared API ------------------------------------------------------
 
     def slices(self):
         return self.var.partition.datapoint_table.slices()
-
-    @property
-    def TOPICS(self):
-        return self.var.partition.datapoint_table.TOPICS
-
-    @property
-    def n_tabs(self) -> int:
-        return len(self.tab_indices)
 
     def tab(self, idx: int) -> Datatab:
         real_idx = self.tab_indices[idx]
@@ -1723,48 +1932,14 @@ class DatatablePart(Datatable):
 
     validate_block = validate_tab
 
-    def _write_tab_path(self, idx: int):
-        real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table._write_tab_path(real_idx)
-
-    def _check_tab_path(self, idx: int) -> bool:
-        real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table._check_tab_path(real_idx)
-
-    def _remove_tab_path(self, idx: int):
-        real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table._remove_tab_path(real_idx)
-
-    _write_tab_built = _write_tab_path
-    _check_tab_built = _check_tab_path
-    _remove_tab_built = _remove_tab_path
-    _write_block_path = _write_tab_path
-    _remove_block_path = _remove_tab_path
-
-    def __tab__(self, idx: int, *, tag=None, **spec) -> Datatab:
-        return self.tab(idx)
-
-    def __block__(self, idx: int) -> Datatab:
-        return self.tab(idx)
-
-    def _read_slice(self, slice, *, tabs=None, **kwargs):
-        if tabs is None:
-            indices = range(self.n_tabs)
-        else:
-            indices = tabs
-        datapoints = []
-        for idx in indices:
-            datapoints.extend(self.tab(idx)._read_slice(slice, **kwargs))
-        return datapoints
-
     def datastream(self, slice, **kwargs) -> StreamingDataset:
         self.slice_names((slice,))
-        cacheroot = self._ensure_cacheroot(kwargs.pop('cache', None))
+        cacheroot = self._ensure_cacheroot_(kwargs.pop('cache', None))
         cache_dir = kwargs.pop('cache_dir',
                                f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
         local = os.path.join(cacheroot, cache_dir)
         os.makedirs(local, exist_ok=True)
-        streams = self._tab_streams(slice, local)
+        streams = self._tab_streams_(slice, local)
         cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
         shuffle = kwargs.pop('shuffle', False)
         allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)
@@ -1776,11 +1951,65 @@ class DatatablePart(Datatable):
             **kwargs,
         )
         try:
-            return StreamingDataset(**streaming_kwargs)
+            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
         except (ValueError, TypeError) as exc:
             SharedMemoryManager.clean_process_shared_memory()
-            streaming_kwargs['streams'] = self._tab_streams(slice, local)
-            return StreamingDataset(**streaming_kwargs)
+            streaming_kwargs['streams'] = self._tab_streams_(slice, local)
+            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @functools.cached_property
+    def tab_indices(self) -> list[int]:
+        return self.var.partition.tabs_indices(self.var.fold)
+
+    @property
+    def datapoint_table(self) -> Datatable:
+        return self.var.partition.datapoint_table
+
+    @property
+    def datapoints_per_row(self) -> int:
+        return getattr(self.var.partition.datapoint_table.var, 'datapoints_per_row')
+
+    @property
+    def TAB(self):
+        return getattr(self.var.partition.datapoint_table, 'TAB', None)
+
+    @property
+    def TOPICS(self):
+        return self.var.partition.datapoint_table.TOPICS
+
+    @property
+    def n_tabs(self) -> int:
+        return len(self.tab_indices)
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _write_tab_path_(self, idx: int):
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.datapoint_table._write_tab_path_(real_idx)
+
+    _write_tab_built = _write_tab_path_
+    _write_block_path_ = _write_tab_path_
+
+    def _check_tab_path_(self, idx: int) -> bool:
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.datapoint_table._check_tab_path_(real_idx)
+
+    def _remove_tab_path_(self, idx: int):
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.datapoint_table._remove_tab_path_(real_idx)
+    _remove_block_path_ = _remove_tab_path_
+
+    def _read_slice_(self, slice, *, tabs=None, **kwargs):
+        if tabs is None:
+            indices = range(self.n_tabs)
+        else:
+            indices = tabs
+        datapoints = []
+        for idx in indices:
+            datapoints.extend(self.tab(idx)._read_slice_(slice, **kwargs))
+        return datapoints
 
     def _blocks_datalake_(self):
         """A part's tabs are its table's, and are stored where they are."""
@@ -1810,7 +2039,10 @@ class DatatablePart(Datatable):
 #: block at the same path; but a DatatablePartition, or the DatatablePart it
 #: builds, is now stored under its new name, and what was built under the old
 #: one is reached through a specialization, not found in place.
-DatapointBase = DatatableBase
+DatapointBase = DatatabBase
+#: Its name until the tab, the more basic of the two, named the base. Never
+#: built itself, so its fqcn is no directory on disk and moving it moved nothing.
+DatatableBase = DatatabBase
 DatapointTab = Datatab
 DatapointTable = Datatable
 DatapointPartition = DatatablePartition
@@ -1837,7 +2069,7 @@ DatapointFold = DatatablePart
 #: class the module it was defined in, so a subclass elsewhere is unaffected.
 _LEGACY_MODULE = 'dbx.datapoints'
 for _obj in (
-    DatatableBase,
+    DatatabBase,
     Datatab,
     Datatable,
     DatatablePartition,

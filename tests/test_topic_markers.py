@@ -466,6 +466,8 @@ class TestAMarkedTableCarriesOnlyItsOwnTopics:
 
         class LegacyTable(DatapointTable):
             TAB = LegacyTab
+            # Spelled as the base was before it took the markers.
+            TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
 
             @property
             def n_tabs(self):
@@ -500,8 +502,8 @@ class TestTheJournalRecordsMarkers:
         b = block(Marked, tmp_path)
         b.build()
         recorded = b.journal(loc=0).block
-        assert recorded._is_dir_topic('masks') and not recorded._is_dir_topic('data')
-        assert recorded._is_syntopic('cache') and not recorded._is_syntopic('masks')
+        assert recorded._is_dir_topic_('masks') and not recorded._is_dir_topic_('data')
+        assert recorded._is_syntopic_('cache') and not recorded._is_syntopic_('masks')
 
     def test_a_recorded_slice_keeps_its_columns(self, tmp_path):
         t = block(MarkedTab, tmp_path)
@@ -548,8 +550,8 @@ class TestADatadictIsAFileTopic:
 
     def test_it_is_not_a_directory_topic(self, tmp_path):
         b = block(Dicted, tmp_path)
-        assert b._is_dir_topic('meta') is False
-        assert b._is_dir_topic('note') is False
+        assert b._is_dir_topic_('meta') is False
+        assert b._is_dir_topic_('note') is False
 
     def test_it_locates_the_same_file_a_bare_filename_would(self, tmp_path):
         class Bare(Datablock):
@@ -721,7 +723,7 @@ class TestADatadirIsADirectory:
             TOPICS = {'masks': DATADIR('per-frame masks')}
 
         assert issubclass(DATADIR, DIR)
-        assert block(B, tmp_path)._is_dir_topic('masks') is True
+        assert block(B, tmp_path)._is_dir_topic_('masks') is True
 
     def test_the_note_renders(self):
         assert str(DATADIR('per-frame masks')) == "DATADIR('per-frame masks')"
@@ -756,7 +758,7 @@ class TestADatafileIsAFileTopic:
             VERSION = 1
             TOPICS = {'rows': DATAFILE('rows.csv')}
 
-        assert block(B, tmp_path)._is_dir_topic('rows') is False
+        assert block(B, tmp_path)._is_dir_topic_('rows') is False
 
     def test_the_note_is_optional_in_the_rendering(self):
         assert str(DATAFILE('rows.csv')) == "DATAFILE('rows.csv')"

@@ -57,7 +57,7 @@ class TestARespelledBlockReconstructsTheOldOne:
         assert new.hash != old.hash, "the respelling is a new identity"
         assert new.get_hash(sp) == old.hash
         assert new.get_typestr(sp) == old.typestr()
-        assert new._specialization_mismatch(sp) is None
+        assert new._specialization_mismatch_(sp) is None
         assert 'topic:tiles=SLICETOPIC' in new.get_typestr(sp)
 
     def test_a_table_adds_its_tabs_slices_as_the_old_era_did(self, tmp_path):

@@ -4,7 +4,7 @@ import pytest
 import sys
 from dbx.datablocks import Logger
 
-# Custom Logger that captures whether _print was called
+# Custom Logger that captures whether _print_ was called
 class CaptureLogger(Logger):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -12,11 +12,11 @@ class CaptureLogger(Logger):
         self.last_prefix = None
         self.last_msg = None
 
-    def _print(self, prefix, msg):
+    def _print_(self, prefix, msg):
         self.printed = True
         self.last_prefix = prefix
         self.last_msg = msg
-        super()._print(prefix, msg)
+        super()._print_(prefix, msg)
 
 def caller_func(logger, msg):
     logger.selected(msg)

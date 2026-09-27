@@ -282,8 +282,8 @@ class TestJournal:
 
     def test_entry_addresses_topics_by_path(self, built):
         entry = built.journal(iloc=-1)
-        assert entry.block._is_dir_topic('data', 'frames')
-        assert entry.block._is_syntopic('data', 'annotations')
+        assert entry.block._is_dir_topic_('data', 'frames')
+        assert entry.block._is_syntopic_('data', 'annotations')
         assert entry.block.is_topicgroup('data')
         assert not entry.block.is_topicgroup('model')
 

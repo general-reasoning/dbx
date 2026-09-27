@@ -19,7 +19,9 @@ from __future__ import annotations
 import contextlib
 import gc
 import json
+import atexit
 import os
+import weakref
 import shutil
 import tempfile
 import urllib.parse
@@ -49,7 +51,7 @@ except ImportError as exc:  # pragma: no cover
 from .datablocks import DIRTOPIC, Datablock, Datastack
 
 
-def _same_value(a, b):
+def _same_value_(a, b):
     """Equality that tolerates numpy/torch arrays as well as scalars."""
     if a is b:
         return True
@@ -108,6 +110,58 @@ class SharedMemoryManager:
                             pass
         except Exception:
             pass
+
+def release_shared_memory_when_collected(dataset):
+    """*dataset*, its shared memory released when it is garbage-collected.
+
+    mosaicml-streaming registers every `SharedMemory` it creates with
+    ``atexit`` -- ``atexit.register(self.cleanup)`` -- so the registry holds
+    each one, and its file descriptors, until the PROCESS exits, long after the
+    `StreamingDataset` that made it is gone. A process that opens a dataset per
+    tab, as a probe or a table build does, accumulates them without bound until
+    the next open fails with "Too many open files" -- in whatever needed a file
+    next, which is how it surfaced: Metal failing to load its shader library.
+
+    So the dataset's segments are found now, while it holds them, and released
+    -- closed, and taken off ``atexit`` -- by a finalizer when it is collected.
+    """
+    try:
+        from streaming.base.shared.memory import SharedMemory as StreamingSharedMemory
+    except Exception:
+        return dataset
+    found, seen = [], set()
+
+    def walk(obj, depth):
+        if id(obj) in seen or depth > 3:
+            return
+        seen.add(id(obj))
+        if isinstance(obj, StreamingSharedMemory):
+            found.append(obj)
+            return
+        attrs = getattr(obj, '__dict__', None)
+        if attrs is None:
+            return
+        # The dataset itself, then only streaming's own holders: SharedArray,
+        # SharedScalar, SharedBarrier -- not whatever else it references.
+        if depth and not (type(obj).__module__ or '').startswith('streaming.'):
+            return
+        for value in list(attrs.values()):
+            walk(value, depth + 1)
+
+    walk(dataset, 0)
+    if found:
+        weakref.finalize(dataset, _release_streaming_shared_memory_, found)
+    return dataset
+
+
+def _release_streaming_shared_memory_(shms):
+    for shm in shms:
+        try:
+            shm.cleanup()
+        except Exception:
+            pass
+        atexit.unregister(shm.cleanup)
+
 
 # Enable PID-qualified shared memory prefixing automatically on import
 SharedMemoryManager.enable_pid_prefixes()
@@ -310,7 +364,7 @@ class ZipBase:
     Not a dataset itself -- it defines no ``__getitem__`` and no
     ``__iter__``, and is mixed in front of whichever ``torch`` base supplies
     one.  A third way of reading the sources subclasses this and adds only
-    that, calling ``_merge(idx, samples)`` with one sample per source.
+    that, calling ``_merge_(idx, samples)`` with one sample per source.
 
     Beyond the plain merge, two things a multi-slice
     ``Datatable`` needs:
@@ -374,6 +428,8 @@ class ZipBase:
         datasets).
     """
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __init__(self, *datasets, names, nested=True,
                  columns=None, shared=None,
                  validate_shared=False, skip_none=True,
@@ -427,7 +483,9 @@ class ZipBase:
     def __len__(self):
         return len(self.datasets[0])
 
-    def _project(self, pos, sample, idx):
+    # 4. Helpers -----------------------------------------------------------
+
+    def _project_(self, pos, sample, idx):
         """One source's sample as an ordered ``[(column, value)]`` list.
 
         Column order is the caller's projection order when there is one, and
@@ -457,7 +515,7 @@ class ZipBase:
             items = [(k, v) for k, v in items if v is not None]
         return items
 
-    def _check_shared(self, idx, projected):
+    def _check_shared_(self, idx, projected):
         """Assert that every *shared* column agrees across the sources holding it.
 
         Alignment checking, not merging: two slices written in lockstep carry
@@ -480,16 +538,16 @@ class ZipBase:
                 carried[key] = carried.get(key, 0) + 1
                 if key not in seen:
                     seen[key] = (pos, value)
-                elif not _same_value(seen[key][1], value):
+                elif not _same_value_(seen[key][1], value):
                     raise ValueError(
                         f"{what}: shared key {key!r} disagrees "
                         f"between source {seen[key][0]} and source {pos} at "
                         f"index {idx} -- the streams are not aligned"
                     )
         if not self._shared_comparable:
-            self._check_shared_is_comparable(carried)
+            self._check_shared_is_comparable_(carried)
 
-    def _check_shared_is_comparable(self, carried):
+    def _check_shared_is_comparable_(self, carried):
         """Refuse a shared key that only one source carries.
 
         A key present in one source is compared against nothing, so the loop
@@ -513,7 +571,7 @@ class ZipBase:
             )
         self._shared_comparable = True
 
-    def _merge(self, idx, samples) -> dict:
+    def _merge_(self, idx, samples) -> dict:
         """Project and merge one sample per source into one row.
 
         *idx* only labels the item in error messages and is what the
@@ -529,9 +587,9 @@ class ZipBase:
         if self.zip_validator is not None:
             self.zip_validator(idx, *samples)
 
-        projected = [self._project(pos, sample, idx)
+        projected = [self._project_(pos, sample, idx)
                      for pos, sample in enumerate(samples)]
-        self._check_shared(idx, projected)
+        self._check_shared_(idx, projected)
 
         if self.nested:
             return {name: dict(items)
@@ -574,7 +632,7 @@ class ZipStreamingDataset(ZipBase, Dataset):
     """
 
     def __getitem__(self, idx):
-        return self._merge(idx, [ds[idx] for ds in self.datasets])
+        return self._merge_(idx, [ds[idx] for ds in self.datasets])
 
 
 class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
@@ -665,9 +723,19 @@ class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
     def __init__(self, *datasets, check_alignment=True, **kwargs):
         super().__init__(*datasets, **kwargs)
         if check_alignment:
-            self._check_shard_alignment()
+            self._check_shard_alignment_()
 
-    def _check_shard_alignment(self):
+    def __iter__(self):
+        # strict=True: sources of equal length can still yield partitions of
+        # unequal length if their world or batch_size configuration differs,
+        # and a plain zip() would truncate to the shortest and call that
+        # success.  The order sources are advanced in is fixed by zip(),
+        # which is what keeps their startup barriers deadlock-free.
+        iterators = [iter(ds) for ds in self.datasets]
+        for idx, samples in enumerate(zip(*iterators, strict=True)):
+            yield self._merge_(idx, samples)
+
+    def _check_shard_alignment_(self):
         """Refuse a zip whose shuffling sources shard differently.
 
         Static and cheap: ``samples_per_shard`` is read off the index each
@@ -703,16 +771,6 @@ class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
                 f"check_alignment=False if you have another reason to believe "
                 f"the orders agree."
             )
-
-    def __iter__(self):
-        # strict=True: sources of equal length can still yield partitions of
-        # unequal length if their world or batch_size configuration differs,
-        # and a plain zip() would truncate to the shortest and call that
-        # success.  The order sources are advanced in is fixed by zip(),
-        # which is what keeps their startup barriers deadlock-free.
-        iterators = [iter(ds) for ds in self.datasets]
-        for idx, samples in enumerate(zip(*iterators, strict=True)):
-            yield self._merge(idx, samples)
 
 
 # The class zips *several* datasets, so the plural reads truer -- but the
@@ -757,6 +815,8 @@ class ChunkShuffleSampler(Sampler):
         changes for the life of the sampler.
     """
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __init__(self, n: int, chunk_size: int = None, seed: int = 0,
                  fixed_epoch: bool = False):
         if n < 0:
@@ -770,15 +830,34 @@ class ChunkShuffleSampler(Sampler):
         self._fixed_epoch = fixed_epoch
         self._consumed = 0
 
+    def __len__(self):
+        return self.n
+
+    def __iter__(self):
+        order = self._full_order_()
+        start = self._consumed if self._consumed < len(order) else 0
+        for i in range(start, len(order)):
+            self._consumed = i + 1
+            yield order[i]
+        self._consumed = 0
+
+    # 2. Declared API ------------------------------------------------------
+
     def set_epoch(self, epoch: int):
         if not self._fixed_epoch and epoch != self.epoch:
             self.epoch = epoch
             self._consumed = 0
 
-    def __len__(self):
-        return self.n
+    def state_dict(self):
+        return {'epoch': self.epoch, 'consumed': self._consumed}
 
-    def _full_order(self):
+    def load_state_dict(self, state_dict):
+        self.epoch = state_dict['epoch']
+        self._consumed = state_dict['consumed']
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _full_order_(self):
         generator = torch.Generator().manual_seed(self.seed + self.epoch)
         num_chunks = (self.n + self.chunk_size - 1) // self.chunk_size
         order = []
@@ -790,21 +869,6 @@ class ChunkShuffleSampler(Sampler):
                 for p in torch.randperm(end - start, generator=generator).tolist()
             )
         return order
-
-    def __iter__(self):
-        order = self._full_order()
-        start = self._consumed if self._consumed < len(order) else 0
-        for i in range(start, len(order)):
-            self._consumed = i + 1
-            yield order[i]
-        self._consumed = 0
-
-    def state_dict(self):
-        return {'epoch': self.epoch, 'consumed': self._consumed}
-
-    def load_state_dict(self, state_dict):
-        self.epoch = state_dict['epoch']
-        self._consumed = state_dict['consumed']
 
 
 class ResumableDataLoader(DataLoader):
@@ -970,14 +1034,16 @@ def val_loader_workers(num_workers, prefetch_factor, val_max_batches):
 #  Lockstep shard boundaries
 # ═══════════════════════════════════════════════════════════════════════
 
-class _CountingWriter:
-    """An ``MDSWriter`` that counts its writes and tells a ``_ShardSync``.
+class _CountingWriter_:
+    """An ``MDSWriter`` that counts its writes and tells a ``ShardSync``.
 
     A proxy rather than a subclass so that ``slice_writers(flush_every=N)``
     is the only change a ``__build__()`` needs -- every other attribute and
     method, ``finish()`` included, passes straight through, so the writers
     a tab is handed behave exactly as before.
     """
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, name, writer, sync, structures=None):
         self.name = name
@@ -987,6 +1053,18 @@ class _CountingWriter:
         #: ``{column: schema}`` for the columns this slice declares by the
         #: structure of the dict they hold -- ``DATASLICE(a=dict(k='int'))``.
         self._structures = dict(structures or {})
+
+    def __getattr__(self, name):
+        # Reached only for attributes not found normally.  Going through
+        # __dict__ rather than self._writer keeps a lookup that happens
+        # before __init__ has run from recursing forever.
+        try:
+            writer = self.__dict__['_writer']
+        except KeyError:  # pragma: no cover
+            raise AttributeError(name) from None
+        return getattr(writer, name)
+
+    # 2. Declared API ------------------------------------------------------
 
     def write(self, sample):
         for column, schema in self._structures.items():
@@ -1037,18 +1115,8 @@ class _CountingWriter:
             self._writer.flush_shard()
             self._writer._reset_cache()
 
-    def __getattr__(self, name):
-        # Reached only for attributes not found normally.  Going through
-        # __dict__ rather than self._writer keeps a lookup that happens
-        # before __init__ has run from recursing forever.
-        try:
-            writer = self.__dict__['_writer']
-        except KeyError:  # pragma: no cover
-            raise AttributeError(name) from None
-        return getattr(writer, name)
 
-
-class _ShardSync:
+class ShardSync:
     """Counts a group of writers, and breaks them onto a new shard together.
 
     Two jobs, and only the second is optional.  Counting says whether the tab
@@ -1066,6 +1134,8 @@ class _ShardSync:
     the condition, which is what ``check_lockstep()`` reports at the end.
     """
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __init__(self, every: 'int | None' = None):
         #: None counts without ever rotating: the lockstep COUNT is what says
         #: whether a tab wrote its slices one sample per item, and that question
@@ -1074,12 +1144,14 @@ class _ShardSync:
         self.every = every
         self.writers = []
 
-    def track(self, name, writer, structures=None) -> _CountingWriter:
-        counting = _CountingWriter(name, writer, self, structures)
+    # 2. Declared API ------------------------------------------------------
+
+    def track(self, name, writer, structures=None) -> _CountingWriter_:
+        counting = _CountingWriter_(name, writer, self, structures)
         self.writers.append(counting)
         return counting
 
-    def wrote(self, writer: _CountingWriter):
+    def wrote(self, writer: _CountingWriter_):
         if self.every is None:
             return  # counting only: there is no boundary to break onto
         if writer.n_written % self.every:
@@ -1105,14 +1177,14 @@ class _ShardSync:
 #  Collation helpers
 # ═══════════════════════════════════════════════════════════════════════
 
-def _sanitize(obj):
+def _sanitize_(obj):
     """Recursively replace ``None`` with ``{}`` in nested dicts/lists."""
     if obj is None:
         return {}
     if isinstance(obj, dict):
-        return {k: _sanitize(v) for k, v in obj.items()}
+        return {k: _sanitize_(v) for k, v in obj.items()}
     if isinstance(obj, list):
-        return [_sanitize(v) for v in obj]
+        return [_sanitize_(v) for v in obj]
     return obj
 
 
@@ -1126,13 +1198,13 @@ def sanitize_collate(batch):
     1. Union all keys across the batch (some shards may omit optional
        columns entirely).
     2. Fill missing keys with ``None``.
-    3. Recursively replace ``None`` with ``{}`` via ``_sanitize()``.
+    3. Recursively replace ``None`` with ``{}`` via ``_sanitize_()``.
     4. Delegate to ``default_collate``.
     """
     from torch.utils.data._utils.collate import default_collate
     all_keys = set().union(*(s.keys() for s in batch))
     aligned = [{k: s.get(k, None) for k in all_keys} for s in batch]
-    return default_collate([_sanitize(sample) for sample in aligned])
+    return default_collate([_sanitize_(sample) for sample in aligned])
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1251,12 +1323,12 @@ def open_datastream(index_dir, *, local=None, cache_dir=None, cache=None,
     )
     SharedMemoryManager.enable_pid_prefixes()
     try:
-        return StreamingDataset(**streaming_kwargs)
+        return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
     except ValueError as exc:
         if 'Reused local directory' not in str(exc):
             raise
         SharedMemoryManager.clean_process_shared_memory()
-        return StreamingDataset(**streaming_kwargs)
+        return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1395,31 +1467,6 @@ def read_mds_shard(shard_dir, fs, cache_limit='2gb', tmpdir=None):
     finally:
         if cleanup is not None:
             shutil.rmtree(cleanup, ignore_errors=True)
-
-
-def _parse_slice_entries(raw_slices):
-    names = []
-    dtypes = {}
-    if isinstance(raw_slices, (tuple, list)):
-        for item in raw_slices:
-            if isinstance(item, str):
-                name, dtype = item, 'object'
-            elif isinstance(item, (tuple, list)):
-                if len(item) == 1:
-                    name, dtype = item[0], 'object'
-                elif len(item) >= 2:
-                    name, dtype = item[0], item[1]
-                else:
-                    raise ValueError(f"Invalid SLICES entry: {item!r}")
-            else:
-                raise TypeError(f"SLICES entry must be str or tuple, got {item!r}")
-            names.append(name)
-            dtypes[name] = dtype
-    elif isinstance(raw_slices, dict):
-        for name, dtype in raw_slices.items():
-            names.append(name)
-            dtypes[name] = dtype or 'object'
-    return tuple(dict.fromkeys(names)), dtypes
 
 
 def concat_data(result, dtype=None):

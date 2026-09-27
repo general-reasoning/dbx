@@ -136,13 +136,13 @@ class TestTheReconstructedIdentity:
     def test_a_pin_on_an_unknown_field_raises(self, tmp_path):
         block = v2(tmp_path)
         with pytest.raises(ValueError, match='does not declare'):
-            block._specialization_mismatch(
+            block._specialization_mismatch_(
                 Datablock.Specialization(spec=dict(nosuch=1), topics={'spectra': 'spectra.npy'}))
 
     def test_an_unknown_topic_raises(self, tmp_path):
         block = v2(tmp_path)
         with pytest.raises(KeyError):
-            block._specialization_mismatch(
+            block._specialization_mismatch_(
                 Datablock.Specialization(spec=dict(window='hann'), topics={'nosuch': 'nosuch.npy'}))
 
 
@@ -166,7 +166,7 @@ class TestMatching:
     def test_a_specialization_that_drops_nothing_is_refused(self, tmp_path):
         """It reconstructs this block's own identity, so there is no other block."""
         block = v2(tmp_path)
-        why = block._specialization_mismatch(
+        why = block._specialization_mismatch_(
             Datablock.Specialization(spec={}, topics={'spectra': 'spectra.npy', 'phases': 'phases.npy'}))
         assert 'own identity' in why
 
@@ -420,7 +420,7 @@ class RowTab(DatapointTab):
                 f.write(f"{topic}-{self.var.tab_idx}\n")
 
     def __read__(self, *topicpath):
-        with open(self.path(*self._normtopic(topicpath))) as f:
+        with open(self.path(*self._normtopic_(topicpath))) as f:
             return f.read()
 
 
@@ -450,7 +450,7 @@ class RowTableV1(DatapointTable):
         return super().__stack__(results)       # writes `done`
 
     def __read__(self, *topicpath):
-        topicpath = self._normtopic(topicpath)
+        topicpath = self._normtopic_(topicpath)
         if topicpath and topicpath[0] in ('summary', 'report'):
             with open(self.path(*topicpath)) as f:
                 return f.read()
@@ -655,7 +655,7 @@ class TestASpecializationAcrossAVersionBump:
     def test_a_version_is_not_matched_against_this_block(self, tmp_path):
         """It states what the OTHER block was; it is not a condition on this
         one, so it can never be the reason a specialization does not apply."""
-        assert v3(tmp_path)._specialization_mismatch(self.SP) is None
+        assert v3(tmp_path)._specialization_mismatch_(self.SP) is None
 
 
 class TestTheOwnedOwedPair:
@@ -686,7 +686,7 @@ class TestTheOwnedOwedPair:
 class TestOneJournalReadForAWholeTable:
     """A specialized TAB resolves as it is CONSTRUCTED, not as it is built.
 
-    `_install_specialization` runs in `__setstate__`, and resolving means
+    `_install_specialization_` runs in `__setstate__`, and resolving means
     reading the journal -- so a table that constructs N tabs paid N journal
     reads, each a glob over `**/*.parquet` plus a parquet read against whatever
     storage the lake is on. That is what made per-tab specializations
@@ -995,10 +995,11 @@ class TestAFailedSpecializationIsNotRemembered:
 
 
 class TestSetIsAnOrdinaryConstruction:
-    """`.set()` carries a resolved redirection -- except where it must not.
+    """`.set()` keeps a resolved redirection -- except where it must not.
 
-    Carrying is what keeps a `.set()` of an operational parameter, a deepcopy
-    or an unpickle in a worker from costing a journal scan each. But the
+    Nothing is carried in the state: a `.set()` of an operational parameter,
+    a deepcopy or an unpickle in a worker recovers the redirection from the
+    `.redirection` marker at its path, which costs no journal scan. But the
     decision to redirect at all is made by asking what is at THIS block's own
     path, so a `.set()` that MOVES the block has to ask again. Carrying there
     is how a reel came to live on paths resolved for a path nothing was ever

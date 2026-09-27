@@ -346,10 +346,10 @@ class TestDatastackClearBlocks(unittest.TestCase):
         tbl = MinimalTable(datalake=os.path.join(self.tmpdir, 'tbl')).build()
         self.assertTrue(tbl.valid_tab(0))
         self.assertTrue(tbl.valid_block(0))
-        self.assertTrue(tbl._check_tab_path(0))
+        self.assertTrue(tbl._check_tab_path_(0))
 
         tbl.UNSAFE_clear_tab(0, OVERRIDE=True)
-        self.assertFalse(tbl._check_tab_path(0))
+        self.assertFalse(tbl._check_tab_path_(0))
         self.assertFalse(tbl.valid_tab(0))
         self.assertFalse(tbl.valid_block(0))
         self.assertTrue(tbl.valid_tab(1))
@@ -376,24 +376,24 @@ class TestDatastackClearBlocks(unittest.TestCase):
                 return 2
 
         tbl = ValidatableTable(datalake=os.path.join(self.tmpdir, 'val_tbl')).build()
-        self.assertTrue(tbl._check_tab_path(0))
+        self.assertTrue(tbl._check_tab_path_(0))
 
         # Invalidate tab 0 data directly
         tbl.tab(0).UNSAFE_clear(OVERRIDE=True)
         # Force sentinel presence to simulate stale sentinel
-        tbl._write_tab_path(0)
-        self.assertTrue(tbl._check_tab_path(0))
+        tbl._write_tab_path_(0)
+        self.assertTrue(tbl._check_tab_path_(0))
         # validate_block should return False and remove the sentinel path
         self.assertFalse(tbl.validate_block(0))
-        self.assertFalse(tbl._check_tab_path(0))
+        self.assertFalse(tbl._check_tab_path_(0))
 
         # Now rebuild tab 0, and remove sentinel manually
         tbl.tab(0).build()
-        tbl._remove_tab_path(0)
-        self.assertFalse(tbl._check_tab_path(0))
+        tbl._remove_tab_path_(0)
+        self.assertFalse(tbl._check_tab_path_(0))
         # validate_block should return True and write the sentinel path
         self.assertTrue(tbl.validate_block(0))
-        self.assertTrue(tbl._check_tab_path(0))
+        self.assertTrue(tbl._check_tab_path_(0))
 
     def test_returns_self(self):
         """UNSAFE_clear_blocks should return the stack itself."""

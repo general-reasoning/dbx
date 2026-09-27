@@ -392,7 +392,7 @@ class TestBuildDeclines:
         capsys.readouterr()
         broken.build()
         out = capsys.readouterr().out
-        assert 'BUILD DECLINED' in out and 'INFO' in out
+        assert 'BUILD ELIDED' in out and 'INFO' in out
 
     def test_it_journals_no_build(self, source, broken):
         _, code = source

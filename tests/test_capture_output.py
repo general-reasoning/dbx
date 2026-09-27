@@ -60,7 +60,7 @@ class CapturedBlock(Datablock):
     def __post_build__(self, *args, **kwargs):
         CapturedBlock.build_log.append('__post_build__')
         # Check if log file exists at this point
-        logpath = self._dbxanchorhashpathx('log', ext='log', ensure_dirpath=True)
+        logpath = self._dbxanchorhashpathx_('log', ext='log', ensure_dirpath=True)
         log_exists_at_post_build = self.fs.exists(logpath)
         CapturedBlock.build_log.append(f'log_exists_at_post_build={log_exists_at_post_build}')
         super().__post_build__(*args, **kwargs)
@@ -216,7 +216,7 @@ class TestCaptureOutputContent:
             block.build()
 
         # Find the uploaded log file
-        logpath = block._dbxanchorhashpathx('log', ext='log', ensure_dirpath=False)
+        logpath = block._dbxanchorhashpathx_('log', ext='log', ensure_dirpath=False)
         # The actual log path includes a datetime stamp, so we need to find
         # the log directory and list files
         log_dir = os.path.dirname(logpath)

@@ -8,7 +8,7 @@ is needed.
 
 Key things tested:
     1. anchorkeypath / anchorpath / dirpath / path return protocol-prefixed URLs
-    2. _dbxanchorhashpathx returns protocol-prefixed URLs
+    2. _dbxanchorhashpathx_ returns protocol-prefixed URLs
     3. build() + valid() round-trip on memory://
     4. Journal entries are written and readable on memory://
     5. DatajournalEntry.anchorkeypath works on real journal data (url-based, no root)
@@ -138,19 +138,19 @@ class TestPathsOnMemory:
 
 
 # ---------------------------------------------------------------------------
-# 3. _dbxanchorhashpathx returns protocol-prefixed URLs
+# 3. _dbxanchorhashpathx_ returns protocol-prefixed URLs
 # ---------------------------------------------------------------------------
 
 class TestDbxAnchorHashPathX:
 
     def test_returns_protocol_prefixed_url(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
-        xpath = block._dbxanchorhashpathx('journal', 'parquet', ensure_dirpath=False)
+        xpath = block._dbxanchorhashpathx_('journal', 'parquet', ensure_dirpath=False)
         assert xpath.startswith('memory://')
 
     def test_local_returns_bare_path(self, tmp_path):
         block = MemSingleTopic(datalake=str(tmp_path))
-        xpath = block._dbxanchorhashpathx('journal', 'parquet', ensure_dirpath=False)
+        xpath = block._dbxanchorhashpathx_('journal', 'parquet', ensure_dirpath=False)
         assert not xpath.startswith('file://')
 
 

@@ -19,7 +19,10 @@ that are about that state (``test_dirty_check``) set and unset it themselves.
 """
 import os
 import shutil
+import sys
 import tempfile
+
+import pytest
 
 _TESTROOT = tempfile.mkdtemp(prefix='dbx-tests-')
 
@@ -35,6 +38,27 @@ os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
 def pytest_unconfigure(config):
     shutil.rmtree(_TESTROOT, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _restore_import_environment_():
+    """Put back ``sys.path`` and the ``DBX_*`` variables after every test.
+
+    The work-repo and revision tests clone dbx and the project into temporary
+    directories and prepend them to ``sys.path``, and set ``DBX_WORK_ROOT`` /
+    ``DBX_GIT_REPO`` -- as ``gitwrkreposetup`` is meant to, for a process that
+    then runs an experiment. Left in place, every later test that SPAWNS a
+    worker hands it that ``sys.path``: the worker imports the clone -- the
+    last commit, not the tree under test -- and one whose names have moved
+    since dies before it reports, leaving its parent waiting on results.
+    """
+    path = list(sys.path)
+    env = {k: v for k, v in os.environ.items() if k.startswith('DBX_')}
+    yield
+    sys.path[:] = path
+    for k in [k for k in os.environ if k.startswith('DBX_') and k not in env]:
+        del os.environ[k]
+    os.environ.update(env)
 
 
 # --- pinned tests ----------------------------------------------------------

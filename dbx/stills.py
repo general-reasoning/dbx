@@ -73,7 +73,7 @@ import lightning as L
 import lightning.pytorch.callbacks
 import lightning.pytorch.loggers
 
-from dbx.datablocks import DIR, Datablock
+from dbx.datablocks import DATADIR, DATAFILE, DIR, Datablock
 from dbx.dataparts import UNSAFE_allowed
 from dbx.datastreams import (
     ChunkShuffleSampler,
@@ -142,7 +142,7 @@ def is_intact_archive(path) -> bool:
 #
 # Every VAR field annotated with one of these also admits `str`, because dbx
 # accepts a SPECLINE anywhere a block can go and resolves it later. Keep the
-# `str` when narrowing one of these further: Datablock._coerce_to_annotation()
+# `str` when narrowing one of these further: Datablock._coerce_to_annotation_()
 # reads the annotation as TEXT and declines to coerce when it mentions `str`,
 # so dropping it arms literal-coercion on a field that holds paths and
 # speclines -- and a coerced value renders, and therefore hashes, differently.
@@ -218,14 +218,13 @@ class LightningBuilder(Datablock):
 
     VERSION = 1
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     # No TOPICS, deliberately, and NOT `TOPICS = []`: the two render
     # differently into the identity -- _topics_signature_() answers
     # ("topics:None",) for a class with no TOPICS and () for one declaring an
     # empty list -- so declaring the empty list here would move the hash of
     # every subclass that already has artifacts on disk.
-
-    # 1. Datablock protocol ─────────────────────────────────────────
-
     def valid(self):
         """True only when every nested Datablock in VAR has actually been built.
 
@@ -269,7 +268,13 @@ class LightningBuilder(Datablock):
             f"something called .build()/__build__() where .build_tree() was needed."
         )
 
-    # 2. Properties and accessors ───────────────────────────────────
+    def __lightning_module__(self):
+        """Build and return the ``LightningModule``.  Implement in a subclass."""
+        raise NotImplementedError(
+            f"{type(self).__name__} must implement __lightning_module__()"
+        )
+
+    # 3. Accessors ---------------------------------------------------------
 
     @property
     def lightning_module(self):
@@ -282,12 +287,6 @@ class LightningBuilder(Datablock):
         if getattr(self, '_lightning_module', None) is None:
             self._lightning_module = self.__lightning_module__()
         return self._lightning_module
-
-    def __lightning_module__(self):
-        """Build and return the ``LightningModule``.  Implement in a subclass."""
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement __lightning_module__()"
-        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -317,13 +316,22 @@ class Weights(Datablock):
     # for writing is IsADirectoryError on any real filesystem. (It survives on
     # blob storage only because there are no directories there to collide
     # with.) Naming the file makes path() a file and dirpath() its parent.
-    TOPICS = {'weights': 'weights.pt'}
+    TOPICS = {'weights': DATAFILE('weights.pt')}
+    SPECIALIZATIONS = [Datablock.Specialization(
+        spec={}, topics={'weights': 'weights.pt'},
+        note="respelled only: DATAFILE for the bare filename")]
 
     @dataclass
     class VAR(Datablock.VAR):
         ckpt: str | None = None   # registry key, url, local path, or None
 
-    # 1. Datablock protocol ─────────────────────────────────────────
+    #: Copy buffer for the streamed fetch. 64 MiB: large enough that a
+    #: multi-GB transfer is not dominated by per-chunk overhead.
+    CHUNK_BYTES = 64 * 1024 * 1024
+
+    _is_intact = staticmethod(is_intact_archive)
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def valid(self):
         """True when the weights are reachable, or none are wanted.
@@ -377,7 +385,7 @@ class Weights(Datablock):
         self.log.info("Weights: persisted %s", dest)
         return self
 
-    # 2. Properties and accessors ──────────────────────────────
+    # 2. Declared API ------------------------------------------------------
 
     def source_url(self) -> str:
         """Where ``var.ckpt`` is to be fetched from.  Override to add a registry.
@@ -412,14 +420,6 @@ class Weights(Datablock):
                 f"UNSAFE_clear() this block and rebuild it"
             )
         return dest
-
-    # 3. Private and utility methods ───────────────────────────
-
-    #: Copy buffer for the streamed fetch. 64 MiB: large enough that a
-    #: multi-GB transfer is not dominated by per-chunk overhead.
-    CHUNK_BYTES = 64 * 1024 * 1024
-
-    _is_intact = staticmethod(is_intact_archive)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -456,17 +456,16 @@ class CheckpointPath(CheckpointBuilder):
 
     VERSION = 1
 
-    #: Writes nothing, and says so.  `TOPICS = []` renders into the identity as
-    #: () where a class declaring no TOPICS at all renders as ("topics:None",);
-    #: either would do for a new class with no artifacts to re-key, and this is
-    #: the one that states the intent.
-    TOPICS = []
+    #: Writes nothing, and says so.  `TOPICS = {}` renders into the identity as
+    #: () -- as the list form `[]` it replaces did, so the hash did not move --
+    #: where a class declaring no TOPICS at all renders as ("topics:None",).
+    TOPICS = {}
 
     @dataclass
     class VAR(CheckpointBuilder.VAR):
         ckpt_path: str | None = None
 
-    # 1. Datablock protocol ─────────────────────────────────────────
+    # 1. Protocol and hooks ------------------------------------------------
 
     def valid(self):
         """True when the checkpoint this block names is actually there.
@@ -497,7 +496,7 @@ class CheckpointPath(CheckpointBuilder):
         """
         return self
 
-    # 2. Declared API ───────────────────────────────────────────────
+    # 2. Declared API ------------------------------------------------------
 
     def find_latest_ckpt(self, *, pull: bool = False) -> str | None:
         """The checkpoint this block names, or ``None`` when it names none.
@@ -538,7 +537,7 @@ class CheckpointPath(CheckpointBuilder):
         self._require_intact_(dest, src)
         return dest
 
-    # 3. Accessors ──────────────────────────────────────────────────
+    # 3. Accessors ---------------------------------------------------------
 
     @property
     def ckpt_step(self) -> int:
@@ -547,7 +546,7 @@ class CheckpointPath(CheckpointBuilder):
             return -1
         return Still._ckpt_step_(os.path.basename(str(self.var.ckpt_path)))
 
-    # 4. Helpers ────────────────────────────────────────────────────
+    # 4. Helpers -----------------------------------------------------------
 
     def _local_ckpt_path_(self) -> str:
         """Where a remote checkpoint is staged: under this block's own local key.
@@ -604,11 +603,15 @@ class StillDataModule(L.pytorch.LightningDataModule):
     train on without running it.
     """
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __init__(self, still, model):
         super().__init__()
         self._still = still
         self._model = model
         self._loaders = None
+
+    # 2. Declared API ------------------------------------------------------
 
     def setup(self, stage=None):
         """Build both loaders once, on whichever rank Lightning calls this on."""
@@ -641,7 +644,7 @@ class StillDataModule(L.pytorch.LightningDataModule):
 #: straightforward way to keep what the closures used to reach.
 
 
-class _LogCiteOnStart(L.pytorch.Callback):
+class _LogCiteOnStart_(L.pytorch.Callback):
     """Record the block's reconstructible identity in TensorBoard.
 
     So that a run directory answers "what produced this curve?" on its own --
@@ -671,7 +674,7 @@ class _LogCiteOnStart(L.pytorch.Callback):
             self.still.log.warning("could not log cite() to TensorBoard: %s", e)
 
 
-class _StepCheckpoint(L.pytorch.callbacks.Callback):
+class _StepCheckpoint_(L.pytorch.callbacks.Callback):
     """Save every *every_n_steps* optimizer steps.
 
     `on_train_batch_end` fires once per MICRO-batch, but `trainer.global_step`
@@ -698,7 +701,7 @@ class _StepCheckpoint(L.pytorch.callbacks.Callback):
                                      ckpts_dir=self.ckpts_dir)
 
 
-class _EpochCheckpoint(L.pytorch.callbacks.Callback):
+class _EpochCheckpoint_(L.pytorch.callbacks.Callback):
     """Save every *every_n_epochs* epochs."""
 
     def __init__(self, still, ckpts_dir, every_n_epochs):
@@ -715,7 +718,7 @@ class _EpochCheckpoint(L.pytorch.callbacks.Callback):
                                      ckpts_dir=self.ckpts_dir)
 
 
-class _FreeResumeCkpt(L.pytorch.Callback):
+class _FreeResumeCkpt_(L.pytorch.Callback):
     """Delete the downloaded resume checkpoint once every rank has read it.
 
     Fired from `on_train_start`, which Lightning reaches only after
@@ -802,8 +805,11 @@ class Still(CheckpointBuilder):
     #: way.
     #:
     #: The dict form, because the three are not alike: ``ckpts`` and ``logs``
-    #: are directories (:class:`DIR`) and ``done`` is one file.
-    TOPICS = {'ckpts': DIR, 'logs': DIR, 'done': 'done'}
+    #: are directories (:class:`DATADIR`) and ``done`` is one file.
+    TOPICS = {'ckpts': DATADIR, 'logs': DATADIR, 'done': DATAFILE('done')}
+    SPECIALIZATIONS = [Datablock.Specialization(
+        spec={}, topics={'ckpts': DIR, 'logs': DIR, 'done': 'done'},
+        note="respelled only: DATADIR for DIR, DATAFILE for the bare filename of done")]
 
     # A warm-start source in `ckpt_builder` needs *a* checkpoint, not a finished run:
     # branching off a still that is still training, or that stopped before
@@ -898,7 +904,49 @@ class Still(CheckpointBuilder):
         batch_size: int = 16
         still_seed: int = 42
 
-    # 1. Datablock protocol ─────────────────────────────────────────
+    #: VAR fields naming a block this still cannot run without.  ``ckpt_builder``
+    #: is deliberately absent: a run with nothing to warm-start from is the
+    #: ordinary case.
+    REQUIRED_BUILDERS = ('model_builder', 'lightning_builder',
+                         'training_dataset_builder', 'validation_dataset_builder')
+
+    # ── Dataloaders ────────────────────────────────────────────────
+
+    #
+    # The transform and the collator are the MODEL's business -- an
+    # augmentation pipeline and a collator are as model-specific as the forward
+    # pass -- so they are asked of the LightningModule rather than configured
+    # here. Every hook is optional: a module that implements none gets plain
+    # items and torch's default collate.
+    #
+    # The one non-obvious hook is `shared_train_collate_fn`. When there is no
+    # separate validation builder, train and val are two index subsets of ONE
+    # dataset, so training items arrive carrying whatever extra payload
+    # validation asked for (`val_dataset_kwargs`), and the training collator has
+    # to drop it. With a separate validation builder the two datasets are built
+    # independently and `train_collate_fn` applies as-is.
+
+    #: Every hook ``dataloaders`` asks the module for. All optional. The
+    #: canonical list, so that ``module_hooks`` can report what a module
+    #: actually supplies -- worth having because a MISSPELLED hook is silently
+    #: ignored, and the symptom is untransformed data rather than an error.
+    MODULE_HOOKS = (
+        'train_transform',
+        'val_transform',
+        'train_collate_fn',
+        'val_collate_fn',
+        'shared_train_collate_fn',
+        'train_dataset_kwargs',
+        'val_dataset_kwargs',
+    )
+
+    # ── Checkpoints ────────────────────────────────────────────────
+
+    #: Matches both ``step=1234`` and the doubled ``step=step=1234`` that
+    #: Lightning's own ModelCheckpoint used to emit.
+    CKPT_STEP_RE = re.compile(r'step=(?:step=)?(\d+)')
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(
         self,
@@ -955,12 +1003,6 @@ class Still(CheckpointBuilder):
     def __post_init__(self):
         super().__post_init__()
         self.__check_builders__()
-
-    #: VAR fields naming a block this still cannot run without.  ``ckpt_builder``
-    #: is deliberately absent: a run with nothing to warm-start from is the
-    #: ordinary case.
-    REQUIRED_BUILDERS = ('model_builder', 'lightning_builder',
-                         'training_dataset_builder', 'validation_dataset_builder')
 
     def __check_builders__(self):
         """Refuse to construct without every builder this still trains from.
@@ -1051,7 +1093,7 @@ class Still(CheckpointBuilder):
                         # cannot be freed here -- it is not loaded yet. Freed
                         # from on_train_start instead, which Lightning fires
                         # only once checkpoint restore is fully complete.
-                        trainer.callbacks.append(_FreeResumeCkpt(self, ckpt))
+                        trainer.callbacks.append(_FreeResumeCkpt_(self, ckpt))
             else:
                 # This branch is about RUN CONTINUITY -- whether there is
                 # optimizer/step state to resume -- NOT about weight init.
@@ -1131,7 +1173,30 @@ class Still(CheckpointBuilder):
         except Exception:
             return False
 
-    # 2. Declared API ───────────────────────────────────────────────
+    def __post_build__(self, *args, event="build:end", **kwargs):
+        """The journal entry for a build: once, from rank 0, and never a
+        ``build:end`` from a check.
+
+        Once, because a build happens once: :meth:`trainer_kwargs` runs the
+        workers inside ``fit`` and this is reached only by the process that
+        called it. Under a re-executing strategy it was one entry per rank,
+        each with its OWN tree id -- worse than a duplicate, since nothing
+        marked the two as one run and a reader could not tell a two-rank build
+        from two builds. The journal is what ``find_latest_ckpt``, every
+        redirect and every specialization resolve against.
+
+        A check run records ``build:check``. It is not in
+        :attr:`SPECIALIZATION_EVENTS`, which is the point: ``__build__``
+        withholds ``done`` and says the block is still unbuilt, and a
+        ``build:end`` beside that would advertise, to the one mechanism that
+        reads for it, a build that produced no data. The event is still
+        written, because that a check ran here is worth knowing.
+        """
+        if self.check_run and event == "build:end":
+            event = "build:check"
+        return super().__post_build__(*args, event=event, **kwargs)
+
+    # 2. Declared API ------------------------------------------------------
 
     def linklogs(self):
         """Symlink this run's local log dir under ``tensorlogs_root``.
@@ -1142,7 +1207,6 @@ class Still(CheckpointBuilder):
         return self.linklocal('logs', self._logslink_)
 
     # ── UNSAFE_ helpers ────────────────────────────────────────────
-
     def UNSAFE_done(self, *, OVERRIDE: bool = False):
         """Write the ``done`` topic locally and remotely, forcing ``valid``.
 
@@ -1177,29 +1241,6 @@ class Still(CheckpointBuilder):
             "local" if self.is_local_fs else "local + remote",
         )
         return self
-
-    def __post_build__(self, *args, event="build:end", **kwargs):
-        """The journal entry for a build: once, from rank 0, and never a
-        ``build:end`` from a check.
-
-        Once, because a build happens once: :meth:`trainer_kwargs` runs the
-        workers inside ``fit`` and this is reached only by the process that
-        called it. Under a re-executing strategy it was one entry per rank,
-        each with its OWN tree id -- worse than a duplicate, since nothing
-        marked the two as one run and a reader could not tell a two-rank build
-        from two builds. The journal is what ``find_latest_ckpt``, every
-        redirect and every specialization resolve against.
-
-        A check run records ``build:check``. It is not in
-        :attr:`SPECIALIZATION_EVENTS`, which is the point: ``__build__``
-        withholds ``done`` and says the block is still unbuilt, and a
-        ``build:end`` beside that would advertise, to the one mechanism that
-        reads for it, a build that produced no data. The event is still
-        written, because that a check ran here is worth knowing.
-        """
-        if self.check_run and event == "build:end":
-            event = "build:check"
-        return super().__post_build__(*args, event=event, **kwargs)
 
     def UNSAFE_clear(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False):
         """As the base, plus ``done``, the local staging dirs and the TB symlink.
@@ -1297,7 +1338,6 @@ class Still(CheckpointBuilder):
         return super().UNSAFE_copy_from(anchorkeypath, ckpts=ckpts, **kwargs)
 
     # ── Checkpoints ────────────────────────────────────────────────
-
     def find_latest_ckpt(self, *, pull: bool = False):
         """The most recent checkpoint, or ``None``.
 
@@ -1350,36 +1390,6 @@ class Still(CheckpointBuilder):
                 os.path.basename(result), self._ckpt_step_(os.path.basename(result)),
             )
         return result
-
-    # ── Dataloaders ────────────────────────────────────────────────
-
-    #
-    # The transform and the collator are the MODEL's business -- an
-    # augmentation pipeline and a collator are as model-specific as the forward
-    # pass -- so they are asked of the LightningModule rather than configured
-    # here. Every hook is optional: a module that implements none gets plain
-    # items and torch's default collate.
-    #
-    # The one non-obvious hook is `shared_train_collate_fn`. When there is no
-    # separate validation builder, train and val are two index subsets of ONE
-    # dataset, so training items arrive carrying whatever extra payload
-    # validation asked for (`val_dataset_kwargs`), and the training collator has
-    # to drop it. With a separate validation builder the two datasets are built
-    # independently and `train_collate_fn` applies as-is.
-
-    #: Every hook ``dataloaders`` asks the module for. All optional. The
-    #: canonical list, so that ``module_hooks`` can report what a module
-    #: actually supplies -- worth having because a MISSPELLED hook is silently
-    #: ignored, and the symptom is untransformed data rather than an error.
-    MODULE_HOOKS = (
-        'train_transform',
-        'val_transform',
-        'train_collate_fn',
-        'val_collate_fn',
-        'shared_train_collate_fn',
-        'train_dataset_kwargs',
-        'val_dataset_kwargs',
-    )
 
     @classmethod
     def module_hooks(cls, module) -> dict:
@@ -1552,7 +1562,6 @@ class Still(CheckpointBuilder):
         return training_dataloader, val_dataloader
 
     # ── Trainer assembly ───────────────────────────────────────────
-
     def trainer_kwargs(self, *, ckpts_dir, callbacks, tb_logger):
         """The ``L.pytorch.Trainer`` keyword arguments for this run."""
         var = self.var
@@ -1633,7 +1642,7 @@ class Still(CheckpointBuilder):
 
     def callbacks(self, *, ckpts_dir):
         """The callbacks for this run: identity logging and the checkpointers."""
-        callbacks = [_LogCiteOnStart(self)]
+        callbacks = [_LogCiteOnStart_(self)]
 
         if self.check_run:
             # A check writes no checkpoints. `done` is already withheld (see
@@ -1653,10 +1662,47 @@ class Still(CheckpointBuilder):
             return callbacks
 
         if self.var.ckpt_every_n_steps is not None:
-            callbacks.append(_StepCheckpoint(self, ckpts_dir, self.var.ckpt_every_n_steps))
+            callbacks.append(_StepCheckpoint_(self, ckpts_dir, self.var.ckpt_every_n_steps))
         if self.var.ckpt_every_n_epochs is not None:
-            callbacks.append(_EpochCheckpoint(self, ckpts_dir, self.var.ckpt_every_n_epochs))
+            callbacks.append(_EpochCheckpoint_(self, ckpts_dir, self.var.ckpt_every_n_epochs))
         return callbacks
+
+    def model(self):
+        """The model to train, from ``VAR.model_builder``.
+
+        A fresh instance per call, the same as asking the builder directly.
+        """
+        return self.var.model_builder.model()
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def lightning_module(self):
+        """The ``LightningModule`` to train, built once and kept.
+
+        Asked of ``VAR.lightning_builder``, which is the block that knows how
+        to build it -- and whose identity this still's key already depends on.
+        """
+        if getattr(self, '_lightning_module', None) is None:
+            self._lightning_module = self.var.lightning_builder.lightning_module
+        return self._lightning_module
+
+    @property
+    def train_batch_size(self) -> int:
+        """Batch size for the training loader."""
+        return self.var.batch_size
+
+    @property
+    def val_batch_size(self) -> int:
+        """Batch size for the validation loader.
+
+        Separate from ``train_batch_size`` so a subclass whose validation
+        metric depends on its own batch size -- an in-batch retrieval score,
+        where chance is ``1/B`` -- can vary one without the other.
+        """
+        return self.var.batch_size
+
+    # 4. Helpers -----------------------------------------------------------
 
     def _upload_and_free_(self, local_path, filename):
         """Push one checkpoint to remote and drop the local copy."""
@@ -1696,7 +1742,7 @@ class Still(CheckpointBuilder):
         see :meth:`trainer_kwargs` for why there is only one process there.
 
         The dedup is for two CALLBACKS landing on one ``(epoch, step)``, which
-        is a different collision from the one ``_StepCheckpoint`` already
+        is a different collision from the one ``_StepCheckpoint_`` already
         guards (several micro-batches sharing one ``global_step`` under
         ``accumulate_grad_batches > 1``). An epoch that ends on a multiple of
         ``ckpt_every_n_steps`` fires both, and they name the same file: the
@@ -1733,43 +1779,6 @@ class Still(CheckpointBuilder):
         self._upload_and_free_(local_path, filename)
         self._journal_ckpt_(filename)
 
-    # 3. Accessors and properties ───────────────────────────────────
-
-    @property
-    def lightning_module(self):
-        """The ``LightningModule`` to train, built once and kept.
-
-        Asked of ``VAR.lightning_builder``, which is the block that knows how
-        to build it -- and whose identity this still's key already depends on.
-        """
-        if getattr(self, '_lightning_module', None) is None:
-            self._lightning_module = self.var.lightning_builder.lightning_module
-        return self._lightning_module
-
-    def model(self):
-        """The model to train, from ``VAR.model_builder``.
-
-        A fresh instance per call, the same as asking the builder directly.
-        """
-        return self.var.model_builder.model()
-
-    @property
-    def train_batch_size(self) -> int:
-        """Batch size for the training loader."""
-        return self.var.batch_size
-
-    @property
-    def val_batch_size(self) -> int:
-        """Batch size for the validation loader.
-
-        Separate from ``train_batch_size`` so a subclass whose validation
-        metric depends on its own batch size -- an in-batch retrieval score,
-        where chance is ``1/B`` -- can vary one without the other.
-        """
-        return self.var.batch_size
-
-    # 4. Private methods and helpers ────────────────────────────────
-
     # ── Local working directories ──────────────────────────────────
 
     #
@@ -1778,7 +1787,6 @@ class Still(CheckpointBuilder):
     # When the primary url is itself local storage, dbx aliases localfs/localroot
     # to fs/root, so these transparently collapse to the non-local
     # .path()/.dirpath() equivalents -- no branching needed here for that case.
-
     @property
     def _local_workdir_(self):
         return self.localanchorkeypath
@@ -1798,7 +1806,6 @@ class Still(CheckpointBuilder):
         return os.path.join(self.tensorlogs_root, self.key)
 
     # ── UNSAFE_ helpers ────────────────────────────────────────────
-
     def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, ckpts: int = 0, **kwargs):
         if topic != 'ckpts' or not ckpts or kwargs.get('always_copy_whole_dirpath'):
             return super()._UNSAFE_copy_topic_(topic, anchorkeypath, **kwargs)
@@ -1809,7 +1816,7 @@ class Still(CheckpointBuilder):
         """Copy the earliest (``count > 0``) or latest (``count < 0``) checkpoints."""
         _src_path = topicpaths['ckpts'] if topicpaths is not None else 'ckpts'
         src_path = os.path.join(anchorkeypath, _src_path)
-        src_fs, _ = self._url_to_fs(src_path)
+        src_fs, _ = self._url_to_fs_(src_path)
         if not src_fs.exists(src_path):
             return
         entries = [os.path.basename(p.rstrip('/')) for p in src_fs.ls(src_path, detail=False)]
@@ -1822,21 +1829,15 @@ class Still(CheckpointBuilder):
         )
         dst_dir = self.dirpath('ckpts', ensure=True)
         for name in selected:
-            # _UNSAFE_copy_file prefers a direct server-side blob copy when src
+            # _UNSAFE_copy_file_ prefers a direct server-side blob copy when src
             # and dst are on the same remote filesystem (the common case here:
             # two stills' ckpts/ under one storage account) -- which matters
             # because checkpoints are large, and the generic get-then-put
             # fallback round-trips every byte through local disk.
-            self._UNSAFE_copy_file(
+            self._UNSAFE_copy_file_(
                 os.path.join(src_path, name),
                 os.path.join(dst_dir, name),
             )
-
-    # ── Checkpoints ────────────────────────────────────────────────
-
-    #: Matches both ``step=1234`` and the doubled ``step=step=1234`` that
-    #: Lightning's own ModelCheckpoint used to emit.
-    CKPT_STEP_RE = re.compile(r'step=(?:step=)?(\d+)')
 
     @classmethod
     def _ckpt_step_(cls, name):
@@ -1898,7 +1899,6 @@ class Still(CheckpointBuilder):
     # storage) -- dbx's push() checks src == dest directly. The is_local_fs
     # guards below only skip the (otherwise misleading) "syncing to remote" log
     # line when there is no separate remote to sync to.
-
     def _sync_ckpts_to_remote_(self, reason='?'):
         if self.is_local_fs:
             return
@@ -1941,7 +1941,6 @@ class Still(CheckpointBuilder):
                 self.log.warning("%s: log sync failed: %s", reason, e)
 
     # ── Dataloaders ────────────────────────────────────────────────
-
     @staticmethod
     def _module_hook_(module, name, default=None):
         """Call *module*'s *name* hook if it has one, else return *default*."""
@@ -1981,7 +1980,6 @@ class Still(CheckpointBuilder):
     #
     # Split out of __build__ so a subclass with a different architecture can
     # restate the rows without duplicating the training loop around them.
-
     @staticmethod
     def _banner_trunc_(s, w):
         s = str(s)
@@ -2040,7 +2038,6 @@ class Still(CheckpointBuilder):
         print(_footer)
 
     # ── Resume ─────────────────────────────────────────────────────
-
     def _resume_plan_(self):
         """The checkpoint this run *intends* to resume, named without downloading.
 

@@ -72,11 +72,11 @@ class TestSYNTOPICHasNoLocation:
         assert block.path('masks') == block.dirpath('masks')
 
     def test_it_is_neither_a_dir_topic_nor_a_file_topic(self, block):
-        assert block._is_syntopic('cache')
-        assert not block._is_dir_topic('cache')
-        assert block._is_dir_topic('masks')
-        assert not block._is_syntopic('masks')
-        assert not block._is_syntopic('data')
+        assert block._is_syntopic_('cache')
+        assert not block._is_dir_topic_('cache')
+        assert block._is_dir_topic_('masks')
+        assert not block._is_syntopic_('masks')
+        assert not block._is_syntopic_('data')
 
     def test_paths_records_it_as_none(self, block):
         assert block.paths()['cache'] is None
@@ -159,8 +159,8 @@ class TestSYNTOPICInTheJournal:
         entry = block.journal(iloc=-1)
         assert entry.block.TOPICS['cache'] == SYNTOPIC
         assert entry.block.paths()['cache'] is None
-        assert entry.block._is_syntopic('cache')
-        assert not entry.block._is_dir_topic('cache')
+        assert entry.block._is_syntopic_('cache')
+        assert not entry.block._is_dir_topic_('cache')
 
     def test_entry_listing_is_empty(self, block):
         block.build()

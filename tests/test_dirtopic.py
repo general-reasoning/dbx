@@ -63,8 +63,8 @@ class TestDIRTOPICBehavesAsADirectoryTopic:
         assert block.path('logs') == os.path.join(block.dirpath('logs'), 'train.log')
 
     def test_is_dir_topic(self, block):
-        assert block._is_dir_topic('checkpoints')
-        assert not block._is_dir_topic('logs')
+        assert block._is_dir_topic_('checkpoints')
+        assert not block._is_dir_topic_('logs')
 
     def test_builds_and_validates(self, block):
         block.build()
@@ -94,5 +94,5 @@ class TestDIRTOPICInTheJournal:
         entry = b.journal(iloc=-1)
         assert entry.block.TOPICS['checkpoints'] is None
         assert entry.block.TOPICS['logs'] == 'train.log'
-        assert entry.block._is_dir_topic('checkpoints')
-        assert not entry.block._is_dir_topic('logs')
+        assert entry.block._is_dir_topic_('checkpoints')
+        assert not entry.block._is_dir_topic_('logs')

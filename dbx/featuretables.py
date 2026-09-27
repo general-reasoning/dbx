@@ -19,10 +19,12 @@ except ImportError:
     torch = None
 
 import dbx
-from dbx.datablocks import Datablock, Datastack, DIRTOPIC
+from dbx.datablocks import DATADIR, DATAFILE, Datablock, Datastack, DIRTOPIC
 from dbx.backbones import ModelEvaluatorBuilder
 from dbx.datatables import (
-    DatatableBase,
+    DATASLICE,
+    DatatabBase,
+    UpstreamTabSlices,
     Datatab,
     Datatable,
     DatapointTableTab,
@@ -40,25 +42,18 @@ from dbx.datastreams import (
 )
 
 
-def _passthrough_collate(batch):
+def _passthrough_collate_(batch):
     return batch
 
 
-def _extract_slice_data(res, slice_name):
-
-    if isinstance(res, dict) and slice_name in res:
-        return res[slice_name]
-    return res
-
-
-def _flatten_item(x):
+def _flatten_item_(x):
     while isinstance(x, dict) and len(x) > 0:
         x = next(iter(x.values()))
     if torch is not None and isinstance(x, torch.Tensor):
         return x.detach().cpu().numpy().astype(np.float32)
     if isinstance(x, np.ndarray):
         if x.dtype == np.object_:
-            return np.array([_flatten_item(item) for item in x], dtype=np.float32)
+            return np.array([_flatten_item_(item) for item in x], dtype=np.float32)
         return x.astype(np.float32) if x.dtype != np.float32 else x
     try:
         return np.asarray(x, dtype=np.float32)
@@ -66,21 +61,21 @@ def _flatten_item(x):
         return np.array(x)
 
 
-def _to_tensor(inputs, device=None) -> torch.Tensor:
+def _to_tensor_(inputs, device=None) -> torch.Tensor:
     if isinstance(inputs, torch.Tensor):
         return inputs.to(device) if device is not None else inputs
 
     if isinstance(inputs, dict) and len(inputs) > 0:
         inputs = next(iter(inputs.values()))
-        return _to_tensor(inputs, device)
+        return _to_tensor_(inputs, device)
 
     if isinstance(inputs, np.ndarray):
         if inputs.dtype == np.object_:
             try:
-                stacked = np.stack([_flatten_item(x) for x in inputs])
+                stacked = np.stack([_flatten_item_(x) for x in inputs])
                 t = torch.from_numpy(np.ascontiguousarray(stacked))
             except Exception:
-                stacked = np.array([_flatten_item(x) for x in inputs], dtype=np.float32)
+                stacked = np.array([_flatten_item_(x) for x in inputs], dtype=np.float32)
                 t = torch.from_numpy(np.ascontiguousarray(stacked))
             return t.to(device) if device is not None else t
         t = torch.from_numpy(np.ascontiguousarray(inputs))
@@ -91,21 +86,21 @@ def _to_tensor(inputs, device=None) -> torch.Tensor:
             t = torch.stack(inputs)
             return t.to(device) if device is not None else t
         try:
-            stacked = np.stack([_flatten_item(x) for x in inputs])
+            stacked = np.stack([_flatten_item_(x) for x in inputs])
             t = torch.from_numpy(np.ascontiguousarray(stacked))
         except Exception:
-            stacked = np.array([_flatten_item(x) for x in inputs], dtype=np.float32)
+            stacked = np.array([_flatten_item_(x) for x in inputs], dtype=np.float32)
             t = torch.from_numpy(np.ascontiguousarray(stacked))
         return t.to(device) if device is not None else t
 
     try:
         t = torch.as_tensor(inputs)
     except Exception:
-        t = torch.tensor(_flatten_item(inputs))
+        t = torch.tensor(_flatten_item_(inputs))
     return t.to(device) if device is not None else t
 
 
-def _extract_pair_data(data_dict, pair: tuple[str, str]):
+def _extract_pair_data_(data_dict, pair: tuple[str, str]):
     s_name, c_name = pair[0], pair[1]
     if isinstance(data_dict, dict) and s_name in data_dict:
         val = data_dict[s_name]
@@ -150,6 +145,8 @@ class Datacollator(Datablock):
         labels: list[tuple[str, str]] | None = None
         length: int | None = None
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __call__(self, datapoints, *, signal_only: bool = False):
         """Collate a batch of datapoint rows into signal (and label) arrays.
 
@@ -175,7 +172,7 @@ class Datacollator(Datablock):
             or wants the one array, and a mapping only invited the two to be
             addressed by names that had to agree across three files.
         """
-        sig_arr = self._collate_pairs(datapoints, self.var.signals)
+        sig_arr = self._collate_pairs_(datapoints, self.var.signals)
 
         length = self.var.length
         if length is not None and getattr(sig_arr, 'ndim', 0) >= 1 and sig_arr.shape[-1] > length:
@@ -187,10 +184,12 @@ class Datacollator(Datablock):
         if not self.var.labels:
             return (sig_arr,)
 
-        lbl_arr = self._collate_pairs(datapoints, self.var.labels)
+        lbl_arr = self._collate_pairs_(datapoints, self.var.labels)
         if length is not None and getattr(lbl_arr, 'ndim', 0) >= 1 and lbl_arr.shape[-1] > length:
             lbl_arr = lbl_arr[..., :length]
         return (sig_arr, lbl_arr)
+
+    # 2. Declared API ------------------------------------------------------
 
     def slices(self):
         """The slices these pairs name, deduplicated, in declaration order.
@@ -207,6 +206,8 @@ class Datacollator(Datablock):
             seen[pair[0]] = None
         return list(seen)
 
+    # 3. Accessors ---------------------------------------------------------
+
     @property
     def signal_pairs(self) -> tuple[tuple[str, ...], ...]:
         """The signal ``(slice, column)`` pairs, each in full two-part form.
@@ -216,22 +217,24 @@ class Datacollator(Datablock):
         has to address the data itself -- a per-tab breakdown, a log line --
         reads, rather than normalizing ``var.signals`` again at each site.
         """
-        return self._norm_pairs(self.var.signals)
+        return self._norm_pairs_(self.var.signals)
 
     @property
     def label_pairs(self) -> tuple[tuple[str, str], ...]:
         """The label ``(slice, column)`` pairs, as :attr:`signal_pairs`; empty when there are none."""
-        return self._norm_pairs(self.var.labels or ())
+        return self._norm_pairs_(self.var.labels or ())
+
+    # 4. Helpers -----------------------------------------------------------
 
     @classmethod
-    def _norm_pairs(cls, pairs) -> tuple[tuple[str, ...], ...]:
+    def _norm_pairs_(cls, pairs) -> tuple[tuple[str, ...], ...]:
         """Every pair normalized, a triple naming several keys expanded to one per key."""
         out = []
         for pair in pairs:
             deeper = isinstance(pair, (list, tuple)) and (
                 len(pair) > 2 or (len(pair) == 2 and isinstance(pair[1], (list, tuple))))
             if not deeper:
-                out.append(cls._norm_pair(pair))
+                out.append(cls._norm_pair_(pair))
                 continue
             # Lists side by side, tuples deeper -- as dataset() reads a request.
             s_name, specs = slice_spec(tuple(pair))
@@ -244,7 +247,7 @@ class Datacollator(Datablock):
         return tuple(out)
 
     @staticmethod
-    def _norm_pair(pair: Any) -> tuple[str, str]:
+    def _norm_pair_(pair: Any) -> tuple[str, str]:
         if isinstance(pair, (list, tuple)):
             if len(pair) >= 2:
                 return str(pair[0]), str(pair[1])
@@ -253,7 +256,7 @@ class Datacollator(Datablock):
         return str(pair), str(pair)
 
     @staticmethod
-    def _as_array(val):
+    def _as_array_(val):
         if torch is not None and isinstance(val, torch.Tensor):
             return val.detach().cpu().numpy()
         arr = np.array(val)
@@ -262,12 +265,12 @@ class Datacollator(Datablock):
         return arr
 
     @classmethod
-    def _pick_pair(cls, row, pair, what):
+    def _pick_pair_(cls, row, pair, what):
         """The value a normalized pair -- or triple -- names in *row*."""
-        return cls._pick(row, pair[0], pair[1], what, key=pair[2] if len(pair) > 2 else None)
+        return cls._pick_(row, pair[0], pair[1], what, key=pair[2] if len(pair) > 2 else None)
 
     @staticmethod
-    def _pick(row, s_name, c_name, what, key=None):
+    def _pick_(row, s_name, c_name, what, key=None):
         """The value at ``(s_name, c_name)`` in one nested row, or a clear error.
 
         Exact, with no fallbacks. The previous version walked the row with
@@ -292,7 +295,7 @@ class Datacollator(Datablock):
             ) from None
         return project_column(value, key, where=f"{what}: slice {s_name!r} column {c_name!r}")
 
-    def _collate_batch(self, batch: dict, norm_pairs) -> np.ndarray:
+    def _collate_batch_(self, batch: dict, norm_pairs) -> np.ndarray:
         """Collate a ``{slice: {column: values}}`` mapping already stacked over rows.
 
         This is what ``data(*collator.slices(), concat=True)`` hands back, as
@@ -303,26 +306,26 @@ class Datacollator(Datablock):
         a model is then fed. Several are stacked along a new axis 1,
         mirroring the signals axis of the per-sample form.
         """
-        what = f"{self.__class__.__name__}._collate_batch"
-        arrays = [self._as_array(self._pick_pair(batch, pair, what)) for pair in norm_pairs]
+        what = f"{self.__class__.__name__}._collate_batch_"
+        arrays = [self._as_array_(self._pick_pair_(batch, pair, what)) for pair in norm_pairs]
         if len(arrays) == 1:
             return arrays[0]
         return np.stack(arrays, axis=1)
 
-    def _collate_pairs(self, datapoints, pairs) -> np.ndarray:
+    def _collate_pairs_(self, datapoints, pairs) -> np.ndarray:
         if not pairs:
             return np.array([])
 
-        norm_pairs = self._norm_pairs(pairs)
+        norm_pairs = self._norm_pairs_(pairs)
 
         if isinstance(datapoints, dict):
-            return self._collate_batch(datapoints, norm_pairs)
+            return self._collate_batch_(datapoints, norm_pairs)
 
-        what = f"{self.__class__.__name__}._collate_pairs"
+        what = f"{self.__class__.__name__}._collate_pairs_"
         batch_items = []
 
         for dp in datapoints:
-            dp_signals = [self._as_array(self._pick_pair(dp, pair, what)) for pair in norm_pairs]
+            dp_signals = [self._as_array_(self._pick_pair_(dp, pair, what)) for pair in norm_pairs]
 
             norm_signals = []
             for sig in dp_signals:
@@ -351,177 +354,7 @@ class Datacollator(Datablock):
             return np.concatenate(batch_items, axis=0)
 
 
-class _UpstreamSlices:
-    """Slice routing for a block that reads its own slices and an upstream block's.
-
-    `Featuretab` owns ``features`` and borrows the sample slices of the
-    `Datatab` it was built from; `Featuretable` does the same over a
-    `Datatable`. Both answer `dataset()` and `data()` for either, so both
-    need the same three things: work out which block owns a requested slice,
-    keep the caller's order, and refuse a name that two blocks both claim.
-    """
-
-    #: VAR field(s) that may hold the upstream block, most specific first.
-    UPSTREAM_VAR: tuple[str, ...] = ()
-
-    def __post_init__(self):
-        super().__post_init__()
-        # As DatatableBase does for shared_slice_columns, and for the same
-        # reason: a bare str is iterable, so 'idx' left unnormalised would be
-        # read as four one-letter columns.
-        self.shared_upstream_column = self._norm_shared_columns(
-            getattr(self, 'shared_upstream_column', None)
-        )
-
-    def _shared_defaults(self, shared, validate_shared):
-        """As `DatatableBase._shared_defaults`, from `shared_upstream_column` first.
-
-        This block's alignment question spans two blocks -- is feature row *i*
-        the features OF sample row *i*? -- so the column that answers it is one
-        the upstream slice holds and this block carried through when it was
-        built. That is a different declaration from the columns this block's own
-        slices share, and it takes precedence over it, since a zip that reaches
-        across the two blocks is the one where drift is possible.
-        """
-        declared = getattr(self, 'shared_upstream_column', None)
-        if shared is None and declared is not None:
-            shared = declared
-            if validate_shared is None:
-                validate_shared = True
-        return super()._shared_defaults(shared, validate_shared)
-
-    def _upstream_block(self):
-        for attr in self.UPSTREAM_VAR:
-            block = getattr(self.var, attr, None)
-            if block is None:
-                block = getattr(self, attr, None)
-            if block is not None:
-                return block
-        return None
-
-    @staticmethod
-    def _norm_items(slice_columns):
-        """``*slice_columns`` as an ordered ``[(slice, columns | None)]`` list, as `slice_spec` reads each."""
-        items = list(slice_columns)
-        if len(items) == 1 and isinstance(items[0], (list, tuple)):
-            first = items[0]
-            # One tuple is one request -- (slice, ...) -- and one list several.
-            if isinstance(first, list) or not (len(first) >= 2 and isinstance(first[0], str)):
-                items = list(first)
-        return [slice_spec(item) for item in items]
-
-    def _route(self, slice_columns, upstream=None):
-        """Resolve a request into an ordered ``[(block, slice, columns)]`` list.
-
-        Raises when the upstream block declares a slice this block also owns.
-        Rows are keyed by slice name, so two blocks claiming one name have no
-        way to both appear in a row -- and silently preferring either one is
-        how a caller ends up reading features while believing it asked for
-        samples.
-        """
-        what = self.__class__.__name__
-        block = self._upstream_block()
-        own = tuple(self.slices())
-        up = tuple(block.slices()) if block is not None else ()
-
-        clash = sorted(set(own) & set(up))
-        if clash:
-            raise KeyError(
-                f"{what}: upstream {type(block).__name__} declares slice(s) "
-                f"{clash}, which this block also owns ({list(own)}). A row is "
-                f"keyed by slice name and cannot hold both -- rename the "
-                f"upstream slice."
-            )
-
-        items = self._norm_items(slice_columns) or [(s, None) for s in own]
-        if upstream:
-            asked = {s for s, _ in items}
-            items = items + [(str(s), None) for s in upstream if str(s) not in asked]
-
-        routed, seen = [], {}
-        for s_name, cols in items:
-            if s_name in own:
-                owner = self
-            elif s_name in up:
-                owner = block
-            else:
-                raise KeyError(
-                    f"{what}: unknown slice {s_name!r}; "
-                    f"available slices are {list(own) + list(up)}"
-                )
-            if s_name in seen:
-                pos = seen[s_name]
-                _, _, prev = routed[pos]
-                merged = None if (prev is None or cols is None) else \
-                    merge_column_specs(prev + cols)
-                routed[pos] = (owner, s_name, merged)
-            else:
-                seen[s_name] = len(routed)
-                routed.append((owner, s_name, None if cols is None else merge_column_specs(cols)))
-        for owner, s_name, cols in routed:
-            owner._check_column_keys(s_name, cols)
-        return routed
-
-    def dataset(self, *slices, upstream: list | None = None, mode='map',
-                nested=True, columns=None, shared=None, validate_shared=None,
-                skip_none=True, zip_validator=None, **kwargs):
-        """The requested slices -- this block's and the upstream block's -- zipped.
-
-        Keyed exactly as `DatatableBase.dataset()`, so a row is
-        ``{'features': {layer: value}, sample_slice: {column: value}, ...}``.
-
-        *shared* defaults to this block's ``shared_upstream_column``, and
-        *validate_shared* to True when it does -- so whether the features are
-        still paired with the samples they were computed from is settled by
-        whoever built the block, once, rather than by every consumer of it. A
-        column only one of the sources read carries is refused: it would be
-        compared against nothing and read as checked.
-        """
-        if mode not in ('map', 'iter'):
-            raise ValueError(
-                f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}"
-            )
-        routed = self._route(slices, upstream)
-        shared, validate_shared = self._shared_defaults(shared, validate_shared)
-        datasets = [owner.datastream(s_name, **kwargs) for owner, s_name, _ in routed]
-        names = [s_name for _, s_name, _ in routed]
-        per_slice_columns = [cols for _, _, cols in routed]
-        if all(c is None for c in per_slice_columns):
-            per_slice_columns = columns
-
-        zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
-        return zip_cls(
-            *datasets,
-            names=names,
-            nested=nested,
-            columns=per_slice_columns,
-            shared=shared,
-            validate_shared=validate_shared,
-            skip_none=skip_none,
-            zip_validator=zip_validator,
-        )
-
-    def data(self, *slices, upstream: list | None = None, nested=True,
-             concat=True, **kwargs):
-        """The requested slices read whole, keyed as `dataset()` keys one row.
-
-        A table reads its own slice through `Datatable._read_slice`,
-        which already runs over every tab, so nothing here concatenates tabs
-        by hand.
-        """
-        routed = self._route(slices, upstream)
-        out = {}
-        for owner, s_name, cols in routed:
-            spec = (s_name, cols) if cols else s_name
-            out[s_name] = DatatableBase.data(owner, spec, concat=concat, **kwargs)[s_name]
-        if nested:
-            return out
-        return {(s_name, c): vals
-                for s_name, cols in out.items()
-                for c, vals in cols.items()}
-
-
-class Featuretab(_UpstreamSlices, Datatab):
+class Featuretab(UpstreamTabSlices, Datatab):
     """A tab storing multi-layer feature activations captured by an evaluator.
 
     Inherits access to the slices of the upstream `sampletab`. Calling `dataset()`
@@ -529,9 +362,15 @@ class Featuretab(_UpstreamSlices, Datatab):
     using the `ZipStreamingDataset` mechanism.
     """
 
-    UPSTREAM_VAR = ('datapoint_tab',)
+    UPSTREAM_TABS = ('datapoint_tab',)
     VERSION = 1
-    TOPICS = {'features': SLICETOPIC}
+    #: What a table sees of its TAB. An instance declares the columns -- one
+    #: ``ndarray:float32`` per feature, the evaluator's layers or
+    #: `feature_namemap` -- in __post_init__, since they are its spec's to say.
+    TOPICS = {'features': DATASLICE}
+    SPECIALIZATIONS = [Datablock.Specialization(
+        spec={}, topics={'features': SLICETOPIC},
+        note="respelled only: the sentinel for DATASLICE; the columns were the feature map's all along")]
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -541,11 +380,13 @@ class Featuretab(_UpstreamSlices, Datatab):
         feature_namemap: dict[str, str] | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     # TODO: carry `shared_upstream_column` through into the features slice at
     # build time, so the cross-block alignment check has something to compare.
     #
-    # As it stands `columns_spec` is built from `_feature_map` alone, so the
-    # features slice holds layer columns and nothing else. A stock feature tab
+    # As it stands the features slice declares `_feature_map`'s columns and
+    # nothing else. A stock feature tab
     # therefore has no column in common with its upstream sample slices, and
     # setting shared_upstream_column= on one is refused at read time ("carried
     # by fewer than two of the sources read") rather than checking anything.
@@ -559,7 +400,7 @@ class Featuretab(_UpstreamSlices, Datatab):
     #   * It must be VAR, not the kwarg it is now. Writing the column changes
     #     the bytes, so two feature tabs -- one carrying it, one not -- hold
     #     different data, and as a kwarg they would share a hash. That is the
-    #     fault VAR.LazyLoader._check_renderable exists to prevent, arrived at
+    #     fault VAR.LazyLoader._check_renderable_ exists to prevent, arrived at
     #     from the other side.
     #   * It needs the column's MDS type, which only a DATASLICE-declared
     #     upstream states (`datapoint_tab.declared_columns(slice)`). Under the
@@ -568,10 +409,7 @@ class Featuretab(_UpstreamSlices, Datatab):
     #     have to require a declared upstream, and say so.
     #   * Both build paths have to write it: __build_bulk__ can take it out of
     #     the `sample_data` it already read, but __build_streaming__ sees rows
-    #     only as whatever _passthrough_collate made of the batch.
-
-    # 1. Datablock / Datastream Protocol Methods ─────────────────────
-
+    #     only as whatever _passthrough_collate_ made of the batch.
     def __init__(
         self,
         *args,
@@ -610,6 +448,8 @@ class Featuretab(_UpstreamSlices, Datatab):
                 self._feature_map = {str(namemap): str(namemap)}
         else:
             self._feature_map = {name: name for name in layer_names}
+        self.TOPICS = {'features': DATASLICE(
+            {col_name: 'ndarray:float32' for col_name in self._feature_map})}
 
     def __build__(self):
         if self.streaming:
@@ -621,17 +461,11 @@ class Featuretab(_UpstreamSlices, Datatab):
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         datapoint_tab = self.var.datapoint_tab
 
-        columns_spec = {
-            col_name: "ndarray:float32"
-            for col_name in self._feature_map.keys()
-        }
-        slice_specs = {"features": columns_spec}
-
         collator = self.var.collator
-        with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
+        with self.slice_writers(size_limit=self.var.shard_size_limit_bytes) as writers:
             sample_data = datapoint_tab.data(*collator.slices(), concat=True)
             inputs = collator(sample_data, signal_only=True)
-            inputs = _to_tensor(inputs, "cpu")
+            inputs = _to_tensor_(inputs, "cpu")
 
             n_samples = len(inputs)
             n_batches = math.ceil(n_samples / self.device_batch_size)
@@ -665,26 +499,20 @@ class Featuretab(_UpstreamSlices, Datatab):
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         datapoint_tab = self.var.datapoint_tab
 
-        columns_spec = {
-            col_name: "ndarray:float32"
-            for col_name in self._feature_map.keys()
-        }
-        slice_specs = {"features": columns_spec}
-
         collator = self.var.collator
 
         dataset = datapoint_tab.dataset(*collator.slices())
         dl_kwargs = dict(self.dataloader_kwargs) if self.dataloader_kwargs else {}
         dl_kwargs.setdefault('batch_size', self.device_batch_size)
-        dl_kwargs.setdefault('collate_fn', _passthrough_collate)
+        dl_kwargs.setdefault('collate_fn', _passthrough_collate_)
 
 
         dataloader = torch.utils.data.DataLoader(dataset, **dl_kwargs)
 
-        with self.slice_writers(slice_specs, size_limit=self.var.shard_size_limit_bytes) as writers:
+        with self.slice_writers(size_limit=self.var.shard_size_limit_bytes) as writers:
             for batch_data in dataloader:
                 inputs = collator(batch_data, signal_only=True)
-                batch = _to_tensor(inputs, self.device)
+                batch = _to_tensor_(inputs, self.device)
                 result = evaluator(batch)
 
                 batch_len = len(batch)
@@ -702,17 +530,17 @@ class Featuretab(_UpstreamSlices, Datatab):
         gc.collect()
         return self
 
-    # 2. Properties and Accessors ───────────────────────────────────
-
     def __len__(self) -> int:
         return len(self.var.datapoint_tab)
 
+    # 4. Helpers -----------------------------------------------------------
 
-class Featuretable(_UpstreamSlices, Datatable):
+
+class Featuretable(UpstreamTabSlices, Datatable):
     """A table of `Featuretab` blocks built across a `Datatable`."""
 
     TAB = Featuretab
-    UPSTREAM_VAR = ('datapoint_table',)
+    UPSTREAM_TABS = ('datapoint_table',)
     VERSION = 1
 
     @dataclass
@@ -723,7 +551,7 @@ class Featuretable(_UpstreamSlices, Datatable):
         feature_namemap: dict | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
-    # 1. Datablock / Datastack Protocol Methods ─────────────────────
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(
         self,
@@ -797,11 +625,7 @@ class Featuretable(_UpstreamSlices, Datatable):
     def __block__(self, idx: int, **kwargs) -> Featuretab:
         return self.__tab__(idx, **kwargs)
 
-    # 2. Properties and Accessors ───────────────────────────────────
-
-    @property
-    def n_tabs(self) -> int:
-        return self.var.datapoint_table.n_tabs
+    # 2. Declared API ------------------------------------------------------
 
     def validate_tab(self, i: int, **kwargs) -> bool:
         """Return whether the tab at index *i* validates."""
@@ -820,20 +644,29 @@ class Featuretable(_UpstreamSlices, Datatable):
             )
         return coherent_signatures and coherent_datasets and self.tab(i).validate(**kwargs)
 
+    # 3. Accessors ---------------------------------------------------------
 
-class BipolarFeaturetab(_UpstreamSlices, Datatab):
+    @property
+    def n_tabs(self) -> int:
+        return self.var.datapoint_table.n_tabs
+
+
+class BipolarFeaturetab(UpstreamTabSlices, Datatab):
     """Bipolar (median-thresholded) encoding of a `Featuretab`.
 
     Maps continuous features to ``{-1, +1}^d`` via ``sign(features - median)``,
     and computes a tab-level bipolar signature ``{-1, 0, +1}^d`` by thresholding the mean.
     """
 
-    UPSTREAM_VAR = ('featuretab',)
+    UPSTREAM_TABS = ('featuretab',)
     VERSION = 1
     TOPICS = {
-        'bipolar_features': SLICETOPIC,
-        'tab_bipolar_features': SLICETOPIC,
+        'bipolar_features': DATASLICE(bipolar_features='ndarray:int8'),
+        'tab_bipolar_features': DATASLICE(tab_bipolar_features='ndarray:int8'),
     }
+    SPECIALIZATIONS = [Datablock.Specialization(
+        spec={}, topics={'bipolar_features': SLICETOPIC, 'tab_bipolar_features': SLICETOPIC},
+        note="respelled only: the sentinels for the DATASLICEs the build always wrote")]
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -843,12 +676,12 @@ class BipolarFeaturetab(_UpstreamSlices, Datatab):
         ternarize: bool = False
         datapoints_per_row: int = 1
 
-    # 1. Datablock / Datastream Protocol Methods ─────────────────────
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __build__(self):
         layer = self.var.layer
         res = self.featuretab.data(('features', layer), concat=True)
-        raw_data = _extract_pair_data(res, ('features', layer))
+        raw_data = _extract_pair_data_(res, ('features', layer))
 
         if hasattr(raw_data, 'numpy'):
             features = raw_data.numpy()
@@ -869,36 +702,34 @@ class BipolarFeaturetab(_UpstreamSlices, Datatab):
         thresh = self.var.threshold
         tab_bipolar = np.where(np.abs(tab_mean) >= thresh, np.sign(tab_mean), 0).astype(np.int8)
 
-        slice_specs = {
-            'bipolar_features': {'bipolar_features': 'ndarray:int8'},
-            'tab_bipolar_features': {'tab_bipolar_features': 'ndarray:int8'},
-        }
-        with self.slice_writers(slice_specs) as writers:
+        with self.slice_writers() as writers:
             for i in range(len(_bipolar)):
                 writers['bipolar_features'].write({'bipolar_features': _bipolar[i]})
                 writers['tab_bipolar_features'].write({'tab_bipolar_features': tab_bipolar})
         return self
 
-    # 2. Properties and Accessors ───────────────────────────────────
+    def __len__(self) -> int:
+        return len(self.featuretab)
 
-    @property
-    def featuretab(self) -> Featuretab:
-        return self.var.featuretab
+    # 2. Declared API ------------------------------------------------------
 
     def available_slices(self) -> tuple[str, ...]:
         own = tuple(self.slices())
         upstream = tuple(self.featuretab.slices()) if self.featuretab is not None else ()
         return own + upstream
 
-    def __len__(self) -> int:
-        return len(self.featuretab)
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def featuretab(self) -> Featuretab:
+        return self.var.featuretab
 
 
-class BipolarFeaturetable(_UpstreamSlices, Datatable):
+class BipolarFeaturetable(UpstreamTabSlices, Datatable):
     """A table of `BipolarFeaturetab` blocks built over a `Featuretable`."""
 
     TAB = BipolarFeaturetab
-    UPSTREAM_VAR = ('featuretable',)
+    UPSTREAM_TABS = ('featuretable',)
     VERSION = 1
 
     @dataclass
@@ -908,7 +739,7 @@ class BipolarFeaturetable(_UpstreamSlices, Datatable):
         threshold: float = 0.5
         ternarize: bool = False
 
-    # 1. Datablock / Datastack Protocol Methods ─────────────────────
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __tab__(self, idx: int, tag=None, **kwargs) -> BipolarFeaturetab:
         featuretab = self.var.featuretable.tab(idx)
@@ -932,7 +763,14 @@ class BipolarFeaturetable(_UpstreamSlices, Datatable):
     def __block__(self, idx: int, **kwargs) -> BipolarFeaturetab:
         return self.__tab__(idx, **kwargs)
 
-    # 2. Properties and Accessors ───────────────────────────────────
+    # 2. Declared API ------------------------------------------------------
+
+    def available_slices(self) -> tuple[str, ...]:
+        own = tuple(self.slices())
+        upstream = tuple(self.featuretable.slices()) if self.featuretable is not None else ()
+        return own + upstream
+
+    # 3. Accessors ---------------------------------------------------------
 
     @property
     def featuretable(self) -> Featuretable:
@@ -941,11 +779,6 @@ class BipolarFeaturetable(_UpstreamSlices, Datatable):
     @property
     def n_tabs(self) -> int:
         return self.featuretable.n_tabs
-
-    def available_slices(self) -> tuple[str, ...]:
-        own = tuple(self.slices())
-        upstream = tuple(self.featuretable.slices()) if self.featuretable is not None else ()
-        return own + upstream
 
 
 # ═══════════════════════════════════════════════════════════════════════

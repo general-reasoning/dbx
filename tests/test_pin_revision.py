@@ -22,6 +22,7 @@ import dbx._pinshim_  # noqa: F401  -- imported here only so the tests can reach
 
 import dbx.datablocks as dbxmod
 import dbx.dataparts as dataparts_mod
+import dbx.journals as journals_mod
 
 
 # ---------------------------------------------------------------------------
@@ -595,7 +596,8 @@ class TestInstRemoteEqualsRinst:
             def run(self, func):
                 return 'PROXY'
 
-        monkeypatch.setattr(dbxmod, 'remote', lambda **kw: calls.append(kw) or _Handle())
+        # Where DatajournalEntry.inst looks `remote` up: dbx.journals, since the split.
+        monkeypatch.setattr(journals_mod, 'remote', lambda **kw: calls.append(kw) or _Handle())
         monkeypatch.setattr(dbxmod.DatajournalEntry, 'read',
                             lambda self, *a, **k: '$pkg.mod.Block(datalake="u")')
         return calls

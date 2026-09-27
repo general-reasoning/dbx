@@ -14,7 +14,7 @@ sample row *i*?
 
 Both are kwargs and not VAR: they change no bytes, only what is checked on a
 read.  And neither defaults to the intersection of the declared columns, because
-`_check_shared` runs inside `_merge` and so is paid on every row of every epoch:
+`_check_shared_` runs inside `_merge_` and so is paid on every row of every epoch:
 dbx cannot know whether that intersection is two scalars or a
 ``(datapoints_per_row, ...)`` ndarray, and imposing an unbounded per-row cost
 the author never chose is worse than not checking.  Whoever declared the slices
@@ -27,7 +27,7 @@ import pytest
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
 from dbx.datapoints import SLICETOPIC, DatapointTab, DatapointTable
-from dbx.datafeatures import _UpstreamSlices
+from dbx.datafeatures import UpstreamTabSlices
 
 
 @pytest.fixture(autouse=True)
@@ -62,7 +62,7 @@ class SampleTable(DatapointTable):
         return 2
 
 
-class Derived(_UpstreamSlices, DatapointTab):
+class Derived(UpstreamTabSlices, DatapointTab):
     """The shape a `DatafeatureTab` has: own slice plus an upstream block's.
 
     Carries the upstream's bookkeeping column through, which is what makes the
@@ -71,7 +71,7 @@ class Derived(_UpstreamSlices, DatapointTab):
 
     VERSION = 1
     TOPICS = {'d': SLICETOPIC}
-    UPSTREAM_VAR = ('source',)
+    UPSTREAM_TABS = ('source',)
 
     @dataclass
     class VAR(DatapointTab.VAR):
@@ -151,7 +151,7 @@ class TestWhatTheCheckCatches:
         """
         ds = samples.dataset()
         with pytest.raises(ValueError, match='not aligned'):
-            ds._merge(0, [ds.datasets[0][0], ds.datasets[1][1]])
+            ds._merge_(0, [ds.datasets[0][0], ds.datasets[1][1]])
 
     def test_one_source_has_nothing_to_align_with(self, samples):
         """A single-slice read must not be refused for naming a shared column

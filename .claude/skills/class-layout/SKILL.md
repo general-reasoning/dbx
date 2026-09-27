@@ -87,8 +87,15 @@ private module-level functions. `_resume_plan_`, `_ckpt_step_`,
 `_local_workdir_`, `_default_source_`.
 
 The same for every private **class**, module-level or nested:
-`_ClassOrInstance_`, `_TopicMarkerMeta_`, `_CallableExecutorBase_`. A class is
-a member of its module's namespace exactly as a method is of its class's. The trailing underscore is what
+`_ClassOrInstance_`, `_DataSliceMeta_`, `_CallableExecutorBase_`. A class is
+a member of its module's namespace exactly as a method is of its class's.
+
+**Private means this module only.** A module-level name another dbx module
+imports is not private, whatever it is called: `TopicMarkerMeta`,
+`is_topicmarker`, `ShardSync` and `one_datalake` lost their underscores for
+that reason. Tests do not count -- a test may reach for a private to pin it
+down. And a private nothing uses is deleted, not kept "in case":
+`_parse_slice_entries_` and `_extract_slice_data_` were. The trailing underscore is what
 distinguishes a helper this code owns from the single-underscore names that
 arrive from elsewhere.
 

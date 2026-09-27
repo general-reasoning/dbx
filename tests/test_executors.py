@@ -79,7 +79,7 @@ def test_the_worker_done_knob_no_longer_drives_the_result_loop():
     stop sentinel was being applied to the main loop's wait for results -- in
     the direction that lost them."""
     ex = MultithreadingCallableExecutor(n_workers=2, worker_done_timeout_sec=0.1)
-    assert ex._result_idle_timeout() == ex.RESULT_IDLE_TIMEOUT_SEC
+    assert ex._result_idle_timeout_() == ex.RESULT_IDLE_TIMEOUT_SEC
     assert ex.RESULT_IDLE_TIMEOUT_SEC >= 3600
 
 # ---------------------------------------------------------
@@ -171,3 +171,27 @@ def test_executor_devices_parameter():
     ex_mp = MultiprocessingCallableExecutor(n_workers=2, devices=["cuda:0", "cuda:1"])
     assert ex_mp.devices == ["cuda:0", "cuda:1"]
 
+
+
+class DiesOnArrival:
+    """Unpickling it in the worker ends the worker: it dies before it reports."""
+
+    def __reduce__(self):
+        import os
+        return (os._exit, (3,))
+
+    def __call__(self, **kwargs):
+        return 'never'
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+def test_workers_that_die_before_reporting_are_noticed_not_waited_out(streaming):
+    """Not the idle timeout -- hours -- but at once: nothing alive is left to send."""
+    ex = MultiprocessingCallableExecutor(n_workers=1)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="every worker exited with results still missing"):
+        if streaming:
+            list(ex.exec_callables_streaming([DiesOnArrival()]))
+        else:
+            ex.exec_callables([DiesOnArrival()])
+    assert time.monotonic() - started < 60

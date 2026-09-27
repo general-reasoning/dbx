@@ -40,7 +40,7 @@ class ModelEvaluator:
         Logger instance.
     """
 
-    # 1. Datablock / Evaluator Protocol Methods ─────────────────────
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(
         self,
@@ -64,7 +64,7 @@ class ModelEvaluator:
 
     def __pre_call__(self):
         """Hook called before each forward pass (e.g. to lazily register hooks)."""
-        self._register_capture_hooks()
+        self._register_capture_hooks_()
 
     def __call__(self, x: Any) -> dict[str, Any]:
         """Run forward pass on batch *x* and return captured activations."""
@@ -86,6 +86,8 @@ class ModelEvaluator:
             result['final'] = z
         return result
 
+    # 2. Declared API ------------------------------------------------------
+
     def clear(self):
         """Release captured tensors and free accelerator memory."""
         self._captured.clear()
@@ -94,7 +96,7 @@ class ModelEvaluator:
             torch.cuda.empty_cache()
         return self
 
-    # 2. Properties and Accessors ───────────────────────────────────
+    # 3. Accessors ---------------------------------------------------------
 
     @property
     def model(self):
@@ -120,9 +122,9 @@ class ModelEvaluator:
         """Most recently captured activations (read-only snapshot)."""
         return dict(self._captured)
 
-    # 3. Private and Utility Methods ────────────────────────────────
+    # 4. Helpers -----------------------------------------------------------
 
-    def _make_capture_hook(self, name: str):
+    def _make_capture_hook_(self, name: str):
         def hook(module, input, output):
             t = output
             if isinstance(t, (tuple, list)):
@@ -132,15 +134,15 @@ class ModelEvaluator:
             self._captured[name] = t
         return hook
 
-    def _register_capture_hooks(self):
+    def _register_capture_hooks_(self):
         if self._hooks_registered:
             return
 
         for layer in self.capture_layers:
             if layer in ("backbone", "model"):
-                self.model.register_forward_hook(self._make_capture_hook(layer))
+                self.model.register_forward_hook(self._make_capture_hook_(layer))
             else:
-                getattr(self.model, layer).register_forward_hook(self._make_capture_hook(layer))
+                getattr(self.model, layer).register_forward_hook(self._make_capture_hook_(layer))
             self.log.debug(f"Registered capture hook: {layer}")
 
         self._hooks_registered = True
@@ -166,10 +168,12 @@ class ModelEvaluatorBuilder(Datablock):
         capture_layers: list = field(default_factory=list)  # list[str] — named layers
         capture_final: bool = True  # capture model output as 'features_final'
 
-    # 1. Datablock Protocol Methods ─────────────────────────────────
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, *args, capture_layers=None, capture_final=True, **kwargs):
         super().__init__(*args, capture_layers=capture_layers, capture_final=capture_final, **kwargs)
+
+    # 2. Declared API ------------------------------------------------------
 
     def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> ModelEvaluator:
         """Create a live `ModelEvaluator`.
@@ -190,6 +194,8 @@ class ModelEvaluatorBuilder(Datablock):
                 log=log,
             )
         return self._evaluators[device]
+
+    # 3. Accessors ---------------------------------------------------------
 
     @property
     def model(self):
@@ -250,7 +256,7 @@ class TransformerEvaluator(ModelEvaluator):
         Logger instance.
     """
 
-    # 1. Datablock / Evaluator Protocol Methods ─────────────────────
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(
         self,
@@ -284,32 +290,32 @@ class TransformerEvaluator(ModelEvaluator):
                 result['final'] = out[:, 0]
         return result
 
-    # 2. Properties and Accessors ───────────────────────────────────
+    # 3. Accessors ---------------------------------------------------------
 
     @property
     def layer_names(self) -> list[str]:
         blocks_spec = self.capture_blocks
         if blocks_spec == 'all' or self.capture_blocks_raw == 'all':
-            blocks = self._get_blocks(self.model)
+            blocks = self._get_blocks_(self.model)
             blocks_list = list(range(len(blocks)))
         elif isinstance(blocks_spec, (list, tuple)):
             if any(isinstance(b, int) and b < 0 for b in blocks_spec):
-                blocks = self._get_blocks(self.model)
+                blocks = self._get_blocks_(self.model)
                 blocks_list = [len(blocks) + b if isinstance(b, int) and b < 0 else b for b in blocks_spec]
             else:
                 blocks_list = list(blocks_spec)
         else:
             blocks_list = []
 
-        names = [self._capture_key(b) for b in blocks_list]
-        names += [self._capture_key(l) for l in self.capture_layers]
+        names = [self._capture_key_(b) for b in blocks_list]
+        names += [self._capture_key_(l) for l in self.capture_layers]
         if self.capture_final:
             names.append('final')
         return names
 
-    # 3. Private and Utility Methods ────────────────────────────────
+    # 4. Helpers -----------------------------------------------------------
 
-    def _get_blocks(self, model):
+    def _get_blocks_(self, model):
         """Extract transformer block container from model."""
         if hasattr(model, 'blocks'):
             return model.blocks
@@ -320,10 +326,10 @@ class TransformerEvaluator(ModelEvaluator):
         raise AttributeError(f"Could not find blocks/layers on model {type(model).__name__}")
 
     @staticmethod
-    def _capture_key(layer) -> str:
+    def _capture_key_(layer) -> str:
         return f"block.{layer}" if isinstance(layer, int) else str(layer)
 
-    def _make_capture_hook(self, name: str):
+    def _make_capture_hook_(self, name: str):
         cls_only = self.cls_token_only
 
         def hook(module, input, output):
@@ -337,11 +343,11 @@ class TransformerEvaluator(ModelEvaluator):
             self._captured[name] = t
         return hook
 
-    def _register_capture_hooks(self):
+    def _register_capture_hooks_(self):
         if self._hooks_registered:
             return
 
-        blocks = self._get_blocks(self.model)
+        blocks = self._get_blocks_(self.model)
 
         if self.capture_blocks_raw == 'all' or self.capture_blocks == 'all':
             self.capture_blocks = list(range(len(blocks)))
@@ -358,11 +364,11 @@ class TransformerEvaluator(ModelEvaluator):
 
         if isinstance(self.capture_blocks, list):
             for idx in self.capture_blocks:
-                key = self._capture_key(idx)
-                blocks[idx].register_forward_hook(self._make_capture_hook(key))
+                key = self._capture_key_(idx)
+                blocks[idx].register_forward_hook(self._make_capture_hook_(key))
                 self.log.debug(f"Registered capture hook: {key}")
 
-        super()._register_capture_hooks()
+        super()._register_capture_hooks_()
 
 
 class TransformerEvaluatorBuilder(ModelEvaluatorBuilder):
@@ -375,8 +381,6 @@ class TransformerEvaluatorBuilder(ModelEvaluatorBuilder):
     class VAR(ModelEvaluatorBuilder.VAR):
         capture_blocks: list = field(default_factory=list)  # list[int] — transformer block indices
         cls_token_only: bool = False  # capture only CLS token activations
-
-    # 1. Datablock Protocol Methods ─────────────────────────────────
 
     def __init__(self, *args, capture_blocks=None, capture_layers=None, capture_final=True, cls_token_only=False, **kwargs):
         super().__init__(*args, capture_layers=capture_layers, capture_final=capture_final, capture_blocks=capture_blocks, cls_token_only=cls_token_only, **kwargs)

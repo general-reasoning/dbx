@@ -16,7 +16,7 @@ class Built(Datablock):
         x: int = 1
 
     def __build__(self):
-        self._write_str('output', 'hello')
+        self._write_str_('output', 'hello')
 
 
 class TestDatajournalEntryMethods:

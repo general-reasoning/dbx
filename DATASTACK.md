@@ -378,7 +378,7 @@ via `np.array_split` — one chunk per worker.  Assign the device per worker
 chunk, not per block index, to avoid GPU thrashing.
 
 > [!NOTE]
-> **Why worker-local caching works:** Within a worker, `_run_items` passes
+> **Why worker-local caching works:** Within a worker, `_run_items_` passes
 > the **same** `ctx_args` (containing `stack`) to every callable in the
 > chunk.  So any attribute set on `stack` by the first BlockMaker persists
 > for all subsequent ones — enabling lazy init with `hasattr` guards.

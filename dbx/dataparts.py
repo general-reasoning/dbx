@@ -61,14 +61,6 @@ __eval__ = __builtins__['eval'] if isinstance(__builtins__, dict) else getattr(_
 __exec__ = __builtins__['exec'] if isinstance(__builtins__, dict) else getattr(__builtins__, 'exec')
 
 
-#: How dbx writes a timestamp: ``isoformat()`` with ``' '`` and ``':'`` replaced
-#: by ``'-'``, so that a timestamp can also be a path component. pandas cannot
-#: infer it -- dateutil reads the ``-`` between the hour and the minute as a
-#: date separator and raises -- so every parse of a journal ``datetime`` has to
-#: name it. That is what `_journal_datetimes_` is for.
-JOURNAL_DATETIME_FORMAT = '%Y-%m-%dT%H-%M-%S.%f'
-
-
 DBX_GIT_REPO = os.environ.get('DBX_GIT_REPO')
 if DBX_GIT_REPO is None:
     try:
@@ -178,6 +170,8 @@ class Logger:
         Caller-frame offset for function-name tagging (default ``2``).
     """
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __init__(
         self,
         name: Optional[str] = None,
@@ -238,15 +232,55 @@ class Logger:
             self._selection_ = os.environ.get('DBX_LOG_SELECTION')
             if self._selection_ is not None:
                 self._selection_ = [s.strip() for s in self._selection_.split(',')]
-            
+
+    # 2. Declared API ------------------------------------------------------
+
     def get(self, key):
         return getattr(self, f"_{key}_")
-    
+
     def ist(self, key):
         return getattr(self, f"_{key}_")
 
+    def error(self, msg, *args, **kwargs):
+        self._print_("ERROR", self._fmt_(msg, args))
 
-    def _print(self, prefix, msg):
+    def warning(self, msg, *args, **kwargs):
+        self._print_("WARNING", self._fmt_(msg, args))
+
+    def warn(self, msg, *args, **kwargs):
+        self._print_("WARNING", self._fmt_(msg, args))
+
+    def info(self, msg, *args, **kwargs):
+        self._print_("INFO", self._fmt_(msg, args))
+
+    def debug(self, msg, *args, **kwargs):
+        self._print_("DEBUG", self._fmt_(msg, args))
+
+    def verbose(self, msg, *args, **kwargs):
+        self._print_("VERBOSE", self._fmt_(msg, args))
+
+    def selected(self, msg, *args, **kwargs):
+        if not self._selection_:
+            return
+        frame = sys._getframe(self.stack_depth - 1)
+        module = frame.f_globals.get('__name__')
+        qualname = frame.f_code.co_qualname  # e.g. "MyClass.tag" (Python 3.11+)
+        function = frame.f_code.co_name      # e.g. "tag"
+        fqn_full  = f"{module}.{qualname}"   # "pkg.mod.MyClass.tag"
+        fqn_short = f"{module}.{function}"   # "pkg.mod.tag"
+        if fqn_full not in self._selection_ and fqn_short not in self._selection_:
+            return
+        self._print_("SELECTED", self._fmt_(msg, args))
+
+    def detailed(self, msg, *args, **kwargs):
+        self._print_("DETAILED", self._fmt_(msg, args))
+
+    def silent(self, msg, *args, **kwargs):
+        pass
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _print_(self, prefix, msg):
         """
         #TODO: figure out why the next line causes things to hang sometimes
         stack = inspect.stack() 
@@ -272,7 +306,7 @@ class Logger:
             dt = f"{datetime.datetime.now().isoformat()}: " if self.datetime else ""
             print(f"{prefix}: {dt}{tag}{msg}")
 
-    def _fmt(self, msg, args):
+    def _fmt_(self, msg, args):
         """Format message stdlib-style: msg % args when args are provided."""
         if args:
             try:
@@ -280,43 +314,6 @@ class Logger:
             except (TypeError, ValueError):
                 return f"{msg} {args}"
         return msg
-
-    def error(self, msg, *args, **kwargs):
-        self._print("ERROR", self._fmt(msg, args))
-
-    def warning(self, msg, *args, **kwargs):
-        self._print("WARNING", self._fmt(msg, args))
-
-    def warn(self, msg, *args, **kwargs):
-        self._print("WARNING", self._fmt(msg, args))
-
-    def info(self, msg, *args, **kwargs):
-        self._print("INFO", self._fmt(msg, args))
-
-    def debug(self, msg, *args, **kwargs):
-        self._print("DEBUG", self._fmt(msg, args))
-
-    def verbose(self, msg, *args, **kwargs):
-        self._print("VERBOSE", self._fmt(msg, args))
-
-    def selected(self, msg, *args, **kwargs):
-        if not self._selection_:
-            return
-        frame = sys._getframe(self.stack_depth - 1)
-        module = frame.f_globals.get('__name__')
-        qualname = frame.f_code.co_qualname  # e.g. "MyClass.tag" (Python 3.11+)
-        function = frame.f_code.co_name      # e.g. "tag"
-        fqn_full  = f"{module}.{qualname}"   # "pkg.mod.MyClass.tag"
-        fqn_short = f"{module}.{function}"   # "pkg.mod.tag"
-        if fqn_full not in self._selection_ and fqn_short not in self._selection_:
-            return
-        self._print("SELECTED", self._fmt(msg, args))
-
-    def detailed(self, msg, *args, **kwargs):
-        self._print("DETAILED", self._fmt(msg, args))
-
-    def silent(self, msg, *args, **kwargs):
-        pass
 
 
 class OutputTee:
@@ -343,6 +340,7 @@ class OutputTee:
     asynchronous and Python block-buffers a non-tty stdout, so interleaving of
     Python-level and fd-level writes can differ from a direct run.
     """
+
     def __init__(self, log_file):
         self.log_file = log_file
         
@@ -682,486 +680,6 @@ def default_datalake() -> 'str | None':
             or os.environ.get('DBX_URL'))
 
 
-def write_exec_journal(s: str, datalake: str | None = None, storage_options: dict | None = None, *,
-                       comment: str | None = None, session: str | None = None,
-                       datajournal_entries=None, dt: str | None = None,
-                       end_dt: str | None = None, url: str | None = None) -> dict:
-    """Record an exec expression string in the <datalake>/.journal/exec/ journal.
-
-    ``exec`` holds *s* VERBATIM -- the string as it was typed, comment and all,
-    so that a journal row can be re-run as it stands. ``comment`` holds the
-    trailing ``#`` comment on its own, because that is the half that says what
-    the command was *for*, and reading it out of the expression again at every
-    query is work the journal can do once. Pass *comment* to override what
-    :func:`exec_comment` reads off *s*.
-
-    ``session`` is the `Datajournal` session the command ran under, and
-    ``datajournal_entries`` the block journal entries it wrote -- the keys from
-    this row to what the command did. *dt* is when the command started --
-    ``datetime`` and ``exec:start:datetime`` -- and *end_dt* when it finished,
-    ``exec:end:datetime``: `exec` records the row once it is over. Returns the
-    row as written.
-    """
-    dbx_url = datalake or url or default_datalake() or './dbx'
-    exec_dir = os.path.join(dbx_url, '.journal', 'exec')
-    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
-    try:
-        fs.makedirs(exec_dir, exist_ok=True)
-    except Exception:
-        pass
-    id = str(uuid.uuid4())
-    file_path = os.path.join(exec_dir, f"exec_{id}.parquet")
-    dt = dt or datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-    entry_data = {
-        'exec': str(s),
-        'datetime': dt,
-        'exec:start:datetime': dt,
-        'exec:end:datetime': end_dt,
-        'id': id,
-        'session': session,
-        'datajournal_entries': list(datajournal_entries or []),
-        'comment': comment if comment is not None else exec_comment(s),
-    }
-    df = pd.DataFrame([entry_data])
-    with fs.open(file_path, 'wb') as f:
-        df.to_parquet(f)
-    return entry_data
-
-
-def _is_glob_(p: str) -> bool:
-    """A filter value is a shell-style glob when it has a wildcard and nothing only a regex would use.
-
-    ``'*a6*'`` (a6 anywhere) and ``'a6*'`` (a6 at the start) are globs;
-    ``'^a6'`` and ``'a6.*'`` are regexes. Deciding it is what keeps ``'a6*'``
-    meaning what it looks like: read as a regex as well, it would also match
-    any 'a' at all.
-    """
-    return any(ch in p for ch in '*?') and not any(ch in p for ch in '^$\\.+()|{}')
-
-
-def _match_single_journal_val(x, p) -> bool:
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return False
-    if isinstance(p, str) and _is_glob_(p):
-        # Anchored, as a glob is: the whole value, not a part of it.
-        return fnmatch.fnmatchcase(str(x), p)
-    if isinstance(p, str):
-        x_str = str(x)
-        if p in x_str:
-            return True
-        if '=' in p:
-            k_sub, v_sub = p.split('=', 1)
-            k_sub, v_sub = k_sub.strip(), v_sub.strip().strip("'\"")
-            pattern_re = rf"['\"]?{re.escape(k_sub)}['\"]?\s*[:=]\s*['\"]?[^,;)\n]*?{re.escape(v_sub)}"
-            if re.search(pattern_re, x_str):
-                return True
-        elif ':' in p:
-            k_sub, v_sub = p.split(':', 1)
-            k_sub, v_sub = k_sub.strip(), v_sub.strip().strip("'\"")
-            pattern_re = rf"['\"]?{re.escape(k_sub)}['\"]?\s*[:=]\s*['\"]?[^,;)\n]*?{re.escape(v_sub)}"
-            if re.search(pattern_re, x_str):
-                return True
-        try:
-            if re.search(p, x_str):
-                return True
-        except re.error:
-            pass
-        return False
-    elif isinstance(p, re.Pattern):
-        return bool(p.search(str(x)))
-    elif callable(p):
-        return bool(p(x))
-    else:
-        if x == p:
-            return True
-        return str(p) in str(x)
-
-
-def _match_journal_filter(x, spec) -> bool:
-    if isinstance(spec, tuple):
-        # ANDed
-        return all(_match_single_journal_val(x, p) for p in spec)
-    elif isinstance(spec, list):
-        # ORed
-        return any(_match_journal_filter(x, item) for item in spec)
-    else:
-        return _match_single_journal_val(x, spec)
-
-
-def _journal_datetimes_(series: pd.Series) -> pd.Series:
-    """Coerce a journal ``datetime`` column to real datetimes.
-
-    A block journal arrives already parsed -- `DatajournalFrame` does it on the way
-    in -- and is handed back untouched. The exec journal does not: it reaches a
-    filter holding the raw `JOURNAL_DATETIME_FORMAT` strings, which pandas
-    cannot parse unaided.
-
-    Anything the exact format misses is parsed again rather than left as NaT,
-    because a filter that quietly drops the rows it could not read is worse
-    than one that reads them: ``isoformat()`` omits ``.%f`` on a whole second,
-    and a frame may carry a timestamp that came from somewhere other than dbx.
-    """
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return series
-    parsed = pd.Series(pd.NaT, index=series.index, dtype='datetime64[ns]')
-    todo = series.notna()
-    for fmt in (JOURNAL_DATETIME_FORMAT, JOURNAL_DATETIME_FORMAT.removesuffix('.%f'), None):
-        if not todo.any():
-            break
-        parsed[todo] = pd.to_datetime(series[todo], format=fmt, errors='coerce')
-        todo &= parsed.isna()
-    return parsed
-
-
-def _journal_datetime_value_(v):
-    """Parse one datetime a caller filtered by, dbx's own format first."""
-    if isinstance(v, str):
-        try:
-            return datetime.datetime.strptime(v, JOURNAL_DATETIME_FORMAT)
-        except ValueError:
-            return pd.to_datetime(v)
-    return v
-
-
-def _journal_date_value_(v) -> datetime.date:
-    """Parse one date a caller filtered by. A datetime is truncated to its date."""
-    if isinstance(v, datetime.datetime):
-        return v.date()
-    if isinstance(v, datetime.date):
-        return v
-    return pd.Timestamp(_journal_datetime_value_(v)).date()
-
-
-def _journal_date_mask_(dt_series: pd.Series, v) -> pd.Series:
-    """Rows of *dt_series* falling on date *v*, or on any date in a list of them."""
-    if isinstance(v, (list, tuple)):
-        return dt_series.dt.date.isin([_journal_date_value_(x) for x in v])
-    return dt_series.dt.date == _journal_date_value_(v)
-
-
-def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
-    """Filter a journal DataFrame by column matching, substring/pattern matching anywhere in the string, and date/datetime."""
-    if df is None or df.empty or not filter_kwargs:
-        return df
-
-    for k, v in filter_kwargs.items():
-        if k not in df.columns:
-            if k == 'entry_code' and 'id' in df.columns:
-                k = 'id'
-            elif k == 'subhash' and 'code' in df.columns:
-                k = 'code'
-            elif k == 'subsignature' and 'signature' in df.columns:
-                k = 'signature'
-            elif k == 'date' and 'datetime' in df.columns:
-                df = df[_journal_date_mask_(_journal_datetimes_(df['datetime']), v)]
-                continue
-            else:
-                return df.iloc[0:0].reset_index(drop=True)
-
-        if k == 'date':
-            df = df[_journal_date_mask_(_journal_datetimes_(df['datetime']), v)]
-        elif k == 'datetime':
-            dt_series = _journal_datetimes_(df[k])
-            if isinstance(v, (list, tuple)):
-                df = df[dt_series.isin([_journal_datetime_value_(x) for x in v])]
-            else:
-                df = df[dt_series == _journal_datetime_value_(v)]
-        else:
-            df = df[df[k].apply(lambda x: _match_journal_filter(x, v))]
-
-    df = df.reset_index(drop=True)
-    return df
-
-
-#: The events a block journal entry holds when the command that wrote it
-#: CONSTRUCTED the block: built it, made it readable by redirection, or copied
-#: its data in. Anchored, because a filter string is a pattern and a bare
-#: 'UNSAFE_redirect' would also match a stack's 'UNSAFE_redirect_blocks:end'.
-#: A block instance rewrites its one entry file, so a build that failed ends
-#: at 'build:exception', and one that never finished at 'build:start': neither
-#: is here.
-CONSTRUCTED_EVENTS = ['^build:end$', '^UNSAFE_redirect$', '^UNSAFE_copy_from:END$']
-
-
-def _constructed_(frame, anchor, filters):
-    """The rows of a DatajournalFrame *filters* select: one anchor's, or ``{anchor: rows}``."""
-    from .datablocks import DatajournalFrame
-    filters = dict(filters)
-    filters.setdefault('event', CONSTRUCTED_EVENTS)
-    if filters['event'] is None:
-        del filters['event']
-    storage_options = getattr(frame, 'storage_options', None)
-    df = filter_journal_frame(pd.DataFrame(frame), **filters) if len(frame) else pd.DataFrame(frame)
-
-    def of(a):
-        rows = df[df['anchor'] == a] if 'anchor' in df.columns else df.iloc[0:0]
-        return DatajournalFrame(rows.reset_index(drop=True), storage_options=storage_options)
-
-    if anchor is not None:
-        return of(anchor)
-    present = df['anchor'].dropna().unique() if 'anchor' in df.columns else []
-    return {a: of(a) for a in sorted(present)}
-
-
-def _anchors_(frame) -> list:
-    return sorted(frame['anchor'].dropna().unique()) if 'anchor' in getattr(frame, 'columns', ()) else []
-
-
-def _shell_double_quoted_(text: str) -> str:
-    """*text* escaped for the inside of a bash double-quoted string: \\, ", $ and `."""
-    for ch in ('\\', '"', '$', '`'):
-        text = text.replace(ch, '\\' + ch)
-    return text
-
-
-class ExecjournalEntry(pd.Series):
-    """One `dbx.exec` command, as the exec journal recorded it.
-
-    The counterpart of `DatajournalEntry` for the exec journal: ``exec``,
-    ``exec``, ``datetime``, ``id``, ``session``, ``datajournal_entries`` and
-    ``comment`` are its columns; :meth:`entries` and :meth:`datajournal`
-    follow ``datajournal_entries`` to the block journal entries the command
-    wrote.
-    """
-    #: Carried by pandas across operations that rebuild the object -- see
-    #: `DatajournalEntry._metadata`.
-    _metadata = ['storage_options']
-
-    def __init__(self, series: pd.Series, *, storage_options: dict | None = None):
-        super().__init__(series)
-        self.storage_options = storage_options or {}
-
-    # 2. Declared API ---------------------------------------------------
-
-    def entries(self, *, n_workers: int | None = None) -> list:
-        """The `DatajournalEntry` of every block journal entry this command wrote, in the order written."""
-        from .datablocks import Datajournal
-        return Datajournal(storage_options=self.storage_options or None).read_entries(
-            ExecjournalEntry._written_paths_(self), n_workers=n_workers)
-
-    def datajournal(self, *, n_workers: int | None = None):
-        """The block journal entries this command wrote, as one `DatajournalFrame`.
-
-        Its ``datajournal_entries``, read as a block journal is -- the same
-        legacy columns resolved, filterable the same way -- one row per entry,
-        in the order written.
-        """
-        from .datablocks import Datajournal
-        return Datajournal(storage_options=self.storage_options or None).read_frame(
-            ExecjournalEntry._written_paths_(self), n_workers=n_workers)
-
-    def anchors(self) -> list:
-        """Every anchor this command wrote a block journal entry for, sorted."""
-        return _anchors_(self.datajournal())
-
-    def constructed(self, anchor: str | None = None, **filters):
-        """The block journal entries of what this command CONSTRUCTED.
-
-        *anchor* given: that anchor's entries, as a `DatajournalFrame`. Not
-        given: ``{anchor: DatajournalFrame}`` for every anchor with any.
-
-        *filters* are `DatajournalFrame` filters. ``event`` defaults to
-        `CONSTRUCTED_EVENTS` -- a block built, redirected, or copied in -- and
-        applies alongside any other filter unless given itself;
-        ``event=None`` drops it. A block the command found already built was
-        not constructed by it, and wrote no entry: it is not here.
-        """
-        return _constructed_(self.datajournal(), anchor, filters)
-
-    def rerun(self, **kwargs):
-        """Execute this command's ``exec`` string again, through `dbx.exec`, and return its value.
-
-        A new command, recorded as one: its own exec-journal row, session and
-        ``written_entries``. It runs against the code as it is NOW -- nothing
-        here checks out the revision the original ran under. *kwargs* bind
-        names for the statements, as `dbx.exec`'s own do.
-
-        Prints the command first, as the shell line that would run it --
-        ``dbx.pprint "..."`` -- so what is being re-run is on screen, and can be
-        pasted.
-        """
-        print(f'dbx.pprint "{_shell_double_quoted_(self["exec"])}"', flush=True)
-        return exec(self['exec'], **kwargs)
-
-    # 4. Helpers --------------------------------------------------------
-
-    @staticmethod
-    def _written_paths_(row) -> list:
-        """The ``datajournal_entries`` of *row* as a list of paths; empty for a row from before the column."""
-        paths = row.get('datajournal_entries')
-        if paths is None or (isinstance(paths, float) and pd.isna(paths)):
-            return []
-        return [str(p) for p in paths]
-
-
-class ExecjournalFrame(pd.DataFrame):
-    """The exec journal: one `dbx.exec` command per row, newest first.
-
-    The counterpart of `DatajournalFrame`. :meth:`get` answers with an
-    `ExecjournalEntry`, and :meth:`entries` with the block journal entries
-    of every command in the frame -- so a filter narrows to the commands and
-    ``.entries()`` goes on to what they wrote::
-
-        dbx.journal(comment='nightly').entries()
-    """
-    _metadata = ['storage_options']
-
-    def __init__(self, df: pd.DataFrame | None = None, *, storage_options: dict | None = None):
-        super().__init__(pd.DataFrame() if df is None else df)
-        self.storage_options = storage_options or {}
-
-    def __call__(self, entry):
-        return self.get(entry, dropna=True)
-
-    # 2. Declared API ---------------------------------------------------
-
-    def get(self, entry, *, dropna: bool = False) -> ExecjournalEntry:
-        """The command at LABEL *entry* (``.loc``). As `DatajournalFrame.get`."""
-        row = self.loc[entry]
-        if dropna:
-            row = row.dropna()
-        return ExecjournalEntry(row, storage_options=self.storage_options)
-
-    def entries(self, *, n_workers: int | None = None) -> list:
-        """The block journal entries every command here wrote: row by row, each in the order written."""
-        from .datablocks import Datajournal
-        return Datajournal(storage_options=self.storage_options or None).read_entries(
-            self._written_paths_(), n_workers=n_workers)
-
-    def datajournal(self, *, n_workers: int | None = None):
-        """What :meth:`entries` reads, as one `DatajournalFrame`."""
-        from .datablocks import Datajournal
-        return Datajournal(storage_options=self.storage_options or None).read_frame(
-            self._written_paths_(), n_workers=n_workers)
-
-    def anchors(self) -> list:
-        """Every anchor the commands here wrote a block journal entry for, sorted."""
-        return _anchors_(self.datajournal())
-
-    def constructed(self, anchor: str | None = None, **filters):
-        """As `ExecjournalEntry.constructed`, over every command here."""
-        return _constructed_(self.datajournal(), anchor, filters)
-
-    # 4. Helpers --------------------------------------------------------
-
-    def _written_paths_(self) -> list:
-        return [p for _, row in self.iterrows() for p in ExecjournalEntry._written_paths_(row)]
-
-
-#: The exec journal's columns in the order a frame shows them: the command first
-#: and what it was FOR last, with what it did between.
-EXEC_JOURNAL_COLUMNS = ['exec', 'datetime', 'exec:start:datetime', 'exec:end:datetime',
-                        'id', 'session', 'datajournal_entries', 'comment']
-
-
-def _exec_journal_columns_(df: pd.DataFrame) -> pd.DataFrame:
-    """Legacy column names resolved, and ``exec`` first, ``comment`` last."""
-    if 'written_entries' in df.columns:
-        # Its name for a day, before `datajournal_entries`: taken per row, so
-        # a journal holding rows of both kinds loses neither.
-        if 'datajournal_entries' in df.columns:
-            df['datajournal_entries'] = df['datajournal_entries'].combine_first(df['written_entries'])
-        else:
-            df = df.rename(columns={'written_entries': 'datajournal_entries'})
-        df = df.drop(columns=['written_entries'], errors='ignore')
-    middle = [c for c in df.columns if c not in ('exec', 'comment')]
-    return df[[c for c in ('exec',) if c in df.columns] + middle
-              + [c for c in ('comment',) if c in df.columns]]
-
-
-def read_exec_journal(
-    datalake: str | None = None,
-    loc: int | None = None,
-    *,
-    iloc: int | None = None,
-    filter: dict | None = None,
-    storage_options: dict | None = None,
-    log: Logger | None = None,
-    n_workers: int = 8,
-    index: str | None = None,
-    url: str | None = None,
-    **filter_kwargs,
-):
-    """Read recorded dbx.exec() entries from the <datalake>/.journal/exec/ journal.
-
-    Returns an `ExecjournalFrame`, or the one `ExecjournalEntry` at *loc* or *iloc*.
-    """
-    if loc is not None and iloc is not None:
-        raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-    if n_workers is None:
-        n_workers = 8
-
-    dbx_url = datalake or url or default_datalake() or './dbx'
-    exec_dir = os.path.join(dbx_url, '.journal', 'exec')
-    fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
-    try:
-        if not fs.exists(exec_dir):
-            files = []
-        else:
-            files = fs.glob(os.path.join(exec_dir, '*.parquet'))
-    except Exception:
-        files = []
-
-    if not files:
-        df = pd.DataFrame(columns=EXEC_JOURNAL_COLUMNS)
-    else:
-        def read_file(file):
-            with fs.open(file, 'rb') as f:
-                return pd.read_parquet(f)
-
-        dfs = []
-        with ThreadPoolExecutor(max_workers=min(n_workers, max(1, len(files)))) as ex:
-            futures = [ex.submit(read_file, file) for file in files]
-            for future in as_completed(futures):
-                try:
-                    dfs.append(future.result())
-                except Exception as e:
-                    if log:
-                        log.warning(f"Skipping unreadable exec journal file: {e}")
-                    continue
-        if not dfs:
-            df = pd.DataFrame(columns=EXEC_JOURNAL_COLUMNS)
-        else:
-            df = _exec_journal_columns_(pd.concat(dfs, ignore_index=True))
-            if 'datetime' in df.columns:
-                df = df.sort_values('datetime', ascending=False).reset_index(drop=True)
-
-    all_filters = dict(filter or {})
-    all_filters.update(filter_kwargs)
-
-    df = filter_journal_frame(df, **all_filters)
-
-    if index is ...:
-        # dbx.journal()'s default: by id, where there is one to index by.
-        index = 'id' if 'id' in df.columns else None
-    if index is not None:
-        if index in df.columns:
-            df = df.set_index(index, drop=False)
-        else:
-            raise KeyError(f"Column {index!r} not found in journal DataFrame")
-
-    frame = ExecjournalFrame(df, storage_options=storage_options)
-    if loc is not None:
-        return frame.get(loc, dropna=True)
-    elif iloc is not None:
-        return ExecjournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options)
-    return frame
-
-
-def execjournal(loc=None, *, iloc=None, datalake=None, storage_options=None, log=None,
-                n_workers=8, index: 'str | None' = ..., url=None, **filter_kwargs):
-    """Read the exec journal: every `dbx.exec` command, newest first, then filtered.
-
-    An `ExecjournalFrame`, or the `ExecjournalEntry` at *loc* / *iloc*. *index*
-    defaults to ``'id'``, so ``loc=`` is a command's id; ``index=None`` numbers
-    the rows. Filters are patterns, as on a block journal -- see
-    :func:`datajournal`. *datalake* (``url``, its old name) defaults to
-    ``DBX_DATALAKE``, then ``DBX_ROOT``, then ``DBX_URL``.
-    """
-    return read_exec_journal(datalake=datalake or url, loc=loc, iloc=iloc, storage_options=storage_options,
-                             log=log, n_workers=n_workers, index=index, **filter_kwargs)
-
-
 def anchors(datalake: str | None = None, *, storage_options: dict | None = None,
             url: str | None = None) -> list[str]:
     """Return every anchor used in the datalake at *url*, sorted.
@@ -1295,7 +813,7 @@ def exec(s=None, **kwargs):
     # Every block the command constructs -- however deep in whatever it calls
     # -- writes through one Datajournal, under one session. An exec inside an
     # exec joins the journal already open rather than starting a session.
-    from .datablocks import Datajournal
+    from .journals import Datajournal, write_exec_journal
     dj = Datajournal.current() or Datajournal()
     # ONE row, written when the command is over -- in `finally`, so a command
     # that raises is recorded too, with what it wrote before it did. Stamped
@@ -1498,6 +1016,10 @@ def read_frame(path, *, storage_options=None, log=Logger(), **kwargs) -> pd.Data
     return frame
 
 
+class _WorkersExited_(RuntimeError):
+    """Every worker of an executor exited while results were still owed."""
+
+
 class _CallableExecutorBase_:
     """
     Abstract base that implements the fan-out / collect / join scaffold shared by
@@ -1508,33 +1030,12 @@ class _CallableExecutorBase_:
         success=False → (False, worker_idx, item_idx, (exception, tbstr))
 
     Subclasses must implement:
-        _n_workers  → int
-        _make_queue()   → a Queue-like object
-        _make_event()   → an Event-like object
-        _make_worker(target, args) → a Thread/Process-like object with .start()/.join()
-        _after_start(items, workers) → called after workers are started (default: no-op)
+        _n_workers_  → int
+        _make_queue_()   → a Queue-like object
+        _make_event_()   → an Event-like object
+        _make_worker_(target, args) → a Thread/Process-like object with .start()/.join()
+        _after_start_(items, workers) → called after workers are started (default: no-op)
     """
-
-    @property
-    def _n_workers(self) -> int:
-        raise NotImplementedError
-
-    def _make_queue(self):
-        raise NotImplementedError
-
-    def _make_event(self):
-        raise NotImplementedError
-
-    def _make_worker(self, target, args):
-        raise NotImplementedError
-
-    def _after_start(self, items, workers):
-        """Hook called in the main process right after all workers have been started."""
-        pass
-
-    # ------------------------------------------------------------------
-    # Main-process collection (shared by exec_callables and its streaming twin)
-    # ------------------------------------------------------------------
 
     #: How long the main loop will wait for the NEXT result before giving up on
     #: the queue. Hours, because that is what the quantity means: it is the gap
@@ -1553,274 +1054,14 @@ class _CallableExecutorBase_:
     #: a hang -- which is what it used to look like, at log.debug.
     JOIN_REPORT_EVERY_SEC = 30
 
-    def _result_idle_timeout(self):
-        """Seconds to wait for the next result. See `RESULT_IDLE_TIMEOUT_SEC`.
+    #: The slice the wait for the next result is taken in. Between slices the
+    #: main loop asks whether any worker is still alive: one that died before
+    #: it reported -- unable to import what it was sent, say -- would otherwise
+    #: leave it waiting out RESULT_IDLE_TIMEOUT_SEC on results that cannot come.
+    RESULT_POLL_SEC = 5
 
-        Deliberately NOT ``worker_done_timeout_sec``, which used to serve here
-        as well. That one is the worker's wait for its stop sentinel -- which is
-        what its name says -- and a value chosen for it was being applied to a
-        completely different question, in the direction that loses results.
-        """
-        value = getattr(self, 'result_idle_timeout_sec', None)
-        return self.RESULT_IDLE_TIMEOUT_SEC if value is None else value
+    # 2. Declared API ------------------------------------------------------
 
-    def _log_result_idle_timeout(self, timeout, done_count, total, received):
-        """Say what timed out, that it is an idle timeout, and which items are missing.
-
-        At WARNING: the visible symptom is a progress bar that stops and a
-        process that looks hung for hours, so the one line explaining it has to
-        be one the operator sees. Shared by both result loops, which used to
-        carry two messages -- only one of which worked out what was missing.
-        """
-        missing = sorted(set(range(total)) - set(received))
-        self.log.warning(
-            f"result_queue idle for {timeout}s with {done_count}/{total} results in. "
-            f"This is an INTER-RESULT timeout, not a limit on the run: a callable "
-            f"that takes longer than {timeout}s to produce anything trips it on a "
-            f"perfectly healthy run, and result_idle_timeout_sec= is the knob. No "
-            f"further work will be handed out, and results still in flight are "
-            f"collected as the workers finish. Missing item indices "
-            f"({len(missing)}): {missing[:20]}{'...' if len(missing) > 20 else ''}"
-        )
-
-    def _drain_until_workers_exit(self, workers, result_queue, on_success=None):
-        """Read *result_queue* until every worker has exited, reporting as it goes.
-
-        A worker that had already begun a ``result_queue.put()`` when the main
-        loop stopped reading may be blocked writing into a full pipe, and would
-        then never reach its own exit -- the documented Queue/Process.join
-        deadlock. So this keeps reading regardless.
-
-        *on_success* is what makes the reading worth doing: given it, a result
-        that arrives after the timeout is KEPT rather than dropped on the floor,
-        which is the difference between a premature idle timeout costing a run
-        its results and costing it nothing at all. Left None -- on the paths
-        that are about to re-raise -- the messages are simply discarded.
-        """
-        drained = 0
-        last_report = time_module.monotonic()
-        while any(w.is_alive() for w in workers):
-            try:
-                msg = result_queue.get(timeout=1)
-            except Exception:
-                msg = None
-            if msg is not None:
-                drained += 1
-                if on_success is not None and msg[0]:
-                    on_success(msg)
-            now = time_module.monotonic()
-            if now - last_report >= self.JOIN_REPORT_EVERY_SEC:
-                alive = sum(1 for w in workers if w.is_alive())
-                self.log.info(
-                    f"Still waiting on {alive}/{len(workers)} worker(s) to finish "
-                    f"in-flight work; {drained} late result message(s) collected"
-                )
-                last_report = now
-        return drained
-
-    @staticmethod
-    def _eval_ctx_args_kwargs(ctx_args, ctx_kwargs):
-        """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``.
-
-        Called once per worker so that ``@``/``$``/``#``-prefixed strings are
-        evaluated inside the worker process rather than the main process.
-        Non-specline values pass through unchanged.
-        """
-        evaled_args = tuple(eval(a) for a in ctx_args)
-        evaled_kwargs = {k: eval(v) for k, v in ctx_kwargs.items()}
-        return evaled_args, evaled_kwargs
-
-    # ------------------------------------------------------------------
-    # Worker-side helper (called inside each worker)
-    # ------------------------------------------------------------------
-    def _run_items(self, items, ctx_args, ctx_kwargs, offset, worker_idx,
-                   result_queue, done_queue, abort_event):
-        """Run each item in *items* sequentially, accumulating results into
-        batches of *self.batch_size* before putting them on *result_queue*.
-        This amortises IPC / queue overhead when batch_size > 1.
-
-        Wire protocol:
-            success → (True,  worker_idx, [(item_idx, payload), ...])
-            failure → (False, worker_idx, item_idx, (exception, tbstr))
-        """
-        worker_label = self._worker_label(worker_idx)
-        self.log.debug(f"Executing {len(items)} callables on {worker_label}")
-        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
-        batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
-        exception = None
-        batch = []  # list of (item_idx, payload)
-        for i, item in enumerate(items):
-            exception = None
-            try:
-                if abort_event.is_set():
-                    break
-                payload = item(*ctx_args, **ctx_kwargs)
-                batch.append((offset + i, payload))
-            except Exception as e:
-                exception = e
-                self.log.info(f"ERROR executing callable {offset+i} on {worker_label}")
-            finally:
-                self._after_item(item)
-            if exception is not None:
-                # Flush any accumulated results before reporting the error
-                if batch:
-                    result_queue.put((True, worker_idx, batch))
-                    batch = []
-                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
-                # Guard against unpicklable exceptions (e.g. Azure SDK,
-                # fsspec exceptions holding open sockets/file handles).
-                # If the original exception can't be pickled, substitute
-                # a plain RuntimeError carrying the string representation.
-                try:
-                    result_queue.put((False, worker_idx, offset + i, (exception, tbstr)))
-                except Exception:
-                    safe_exc = RuntimeError(
-                        f"[unpicklable {type(exception).__name__}] {exception}"
-                    )
-                    result_queue.put((False, worker_idx, offset + i, (safe_exc, tbstr)))
-                break
-            if len(batch) >= batch_size:
-                result_queue.put((True, worker_idx, batch))
-                batch = []
-        # Flush any remaining results
-        if batch and exception is None:
-            result_queue.put((True, worker_idx, batch))
-        gc.collect()
-        if exception is None:
-            self.log.debug(f"Done executing {len(items)} callables on {worker_label}")
-        else:
-            self.log.debug(f"Abandoning callables on {worker_label} due to exception")
-        self.log.debug(f"Waiting on done_queue on {worker_label}")
-        # Use a timeout to avoid blocking forever if the main process
-        # is stuck (e.g. because it never received all expected results).
-        _timeout = getattr(self, 'worker_done_timeout_sec', 1000)
-        while True:
-            try:
-                sentinel = done_queue.get(timeout=_timeout)
-            except Exception:
-                # Timed out or queue broken — exit gracefully
-                self.log.info(
-                    f"done_queue timeout ({_timeout}s) on {worker_label}, "
-                    f"exiting without sentinel"
-                )
-                break
-            if sentinel is None:
-                self.log.debug(f"Done signal received on {worker_label}")
-                break
-
-    def _after_item(self, item):
-        """Hook called after each item is processed (e.g. to del block and gc)."""
-        pass
-
-    # ------------------------------------------------------------------
-    # Worker-side helper for work-stealing mode
-    # ------------------------------------------------------------------
-    def _run_items_stealing(self, work_queue, ctx_args, ctx_kwargs, worker_idx,
-                            result_queue, done_queue, abort_event):
-        """Pull callables one-at-a-time from *work_queue* and execute them.
-
-        Each item on *work_queue* is a ``(global_idx, callable)`` tuple.
-        A ``None`` sentinel signals that no more work is available.
-
-        Uses the same wire protocol and batch_size handling as ``_run_items``.
-        """
-        worker_label = self._worker_label(worker_idx)
-        self.log.debug(f"Work-stealing worker started on {worker_label}")
-        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
-        batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
-        exception = None
-        batch = []  # list of (item_idx, payload)
-        n_executed = 0
-        while True:
-            if abort_event.is_set():
-                break
-            try:
-                work_item = work_queue.get(timeout=1)
-            except Exception:
-                # Queue.get timed out — check abort and retry
-                continue
-            if work_item is None:
-                # Sentinel: no more work
-                break
-            item_idx, item = work_item
-            exception = None
-            try:
-                payload = item(*ctx_args, **ctx_kwargs)
-                batch.append((item_idx, payload))
-                n_executed += 1
-            except Exception as e:
-                exception = e
-                self.log.info(f"ERROR executing callable {item_idx} on {worker_label}")
-            finally:
-                self._after_item(item)
-            if exception is not None:
-                # Flush any accumulated results before reporting the error
-                if batch:
-                    result_queue.put((True, worker_idx, batch))
-                    batch = []
-                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
-                try:
-                    result_queue.put((False, worker_idx, item_idx, (exception, tbstr)))
-                except Exception:
-                    safe_exc = RuntimeError(
-                        f"[unpicklable {type(exception).__name__}] {exception}"
-                    )
-                    result_queue.put((False, worker_idx, item_idx, (safe_exc, tbstr)))
-                break
-            if len(batch) >= batch_size:
-                result_queue.put((True, worker_idx, batch))
-                batch = []
-        # Flush any remaining results
-        if batch and exception is None:
-            result_queue.put((True, worker_idx, batch))
-        gc.collect()
-        if exception is None:
-            self.log.debug(f"Done executing {n_executed} callables (work-stealing) on {worker_label}")
-        else:
-            self.log.debug(f"Abandoning work-stealing on {worker_label} due to exception")
-        self.log.debug(f"Waiting on done_queue on {worker_label}")
-        _timeout = getattr(self, 'worker_done_timeout_sec', 1000)
-        while True:
-            try:
-                sentinel = done_queue.get(timeout=_timeout)
-            except Exception:
-                self.log.info(
-                    f"done_queue timeout ({_timeout}s) on {worker_label}, "
-                    f"exiting without sentinel"
-                )
-                break
-            if sentinel is None:
-                self.log.debug(f"Done signal received on {worker_label}")
-                break
-
-    def _worker_label(self, worker_idx) -> str:
-        return f"worker {worker_idx}"
-
-    def _desc(self, streaming: bool) -> str:
-        """Helper to format the progress bar description."""
-        label = self._worker_label(0).split()[0].capitalize() # "Thread", "Process", etc.
-        prefix = "Streaming " if streaming else ""
-        desc = f"{prefix}{label}"
-        if hasattr(self, 'tag') and self.tag:
-            desc = f"{desc}: {self.tag}"
-        meta = []
-        if hasattr(self, 'batch_size') and self.batch_size is not None:
-            meta.append(f"bs={self.batch_size}")
-        if hasattr(self, '_n_workers'):
-            meta.append(f"nw={self._n_workers}")
-        if getattr(self, 'work_stealing', False):
-            meta.append("ws")
-        if meta:
-            suffix = ': '.join(meta)
-            if desc.endswith(']'):
-                desc = f"{desc[:-1]}: {suffix}]"
-            else:
-                desc = f"{desc} [{suffix}]"
-        return desc
-
-    # ------------------------------------------------------------------
-    # Main-process driver
-    # ------------------------------------------------------------------
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute all callables and return results as a flat list.
 
@@ -1837,9 +1078,9 @@ class _CallableExecutorBase_:
         """
         payloads = [None] * len(callables)
         if len(callables) > 0:
-            result_queue = self._make_queue()
-            done_queue   = self._make_queue()
-            abort_event  = self._make_event()
+            result_queue = self._make_queue_()
+            done_queue   = self._make_queue_()
+            abort_event  = self._make_event_()
             work_stealing = getattr(self, 'work_stealing', False)
 
             # Optionally shuffle callables to distribute heterogeneous
@@ -1855,27 +1096,27 @@ class _CallableExecutorBase_:
 
             if work_stealing:
                 # -- Work-stealing mode: shared queue, dynamic dispatch --
-                work_queue = self._make_queue()
+                work_queue = self._make_queue_()
                 for i, c in enumerate(callables):
                     work_queue.put((i, c))
                 # Add sentinels so each worker knows when to stop
-                for _ in range(self._n_workers):
+                for _ in range(self._n_workers_):
                     work_queue.put(None)
                 workers = [
-                    self._make_worker(
-                        target=self._run_items_stealing,
+                    self._make_worker_(
+                        target=self._run_items_stealing_,
                         args=(work_queue, ctx_args, ctx_kwargs, idx,
                               result_queue, done_queue, abort_event),
                     )
-                    for idx in range(self._n_workers)
+                    for idx in range(self._n_workers_)
                 ]
             else:
                 # -- Pre-partitioned mode (original behaviour) --
-                callable_lists   = np.array_split(callables, self._n_workers)
+                callable_lists   = np.array_split(callables, self._n_workers_)
                 callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
                 workers = [
-                    self._make_worker(
-                        target=self._run_items,
+                    self._make_worker_(
+                        target=self._run_items_,
                         args=(cl, ctx_args, ctx_kwargs, off, idx,
                               result_queue, done_queue, abort_event),
                     )
@@ -1888,10 +1129,10 @@ class _CallableExecutorBase_:
             try:
                 for w in workers:
                     w.start()
-                self._after_start(callables, workers)
+                self._after_start_(callables, workers)
                 # Progress bar is created AFTER forking so child processes
                 # do not inherit a live tqdm instance and redraw it on exit.
-                progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=False))
+                progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc_(streaming=False))
                 def _keep(msg):
                     """Store one success message. Used by the loop and the drain
                     alike, so a result that arrives after the timeout is late
@@ -1906,10 +1147,12 @@ class _CallableExecutorBase_:
 
                 while done_count < len(callables):
                     try:
-                        msg = result_queue.get(timeout=self._result_idle_timeout())
+                        msg = self._next_result_(result_queue, workers)
+                    except _WorkersExited_:
+                        raise
                     except Exception:
-                        self._log_result_idle_timeout(
-                            self._result_idle_timeout(), done_count, len(callables),
+                        self._log_result_idle_timeout_(
+                            self._result_idle_timeout_(), done_count, len(callables),
                             {i for i, p in enumerate(payloads) if p is not None},
                         )
                         break
@@ -1918,7 +1161,7 @@ class _CallableExecutorBase_:
                     else:       # failure: (False, worker_idx, item_idx, (exc, tbstr))
                         _, worker_idx, item_idx, (pexc, ptbstr) = msg
                         self.log.info(
-                            f"Received exception from {self._worker_label(worker_idx)}, "
+                            f"Received exception from {self._worker_label_(worker_idx)}, "
                             f"callable {item_idx}. Abandoning result_queue polling."
                         )
                         self.log.info(f"Exception: {pexc}")
@@ -1944,7 +1187,7 @@ class _CallableExecutorBase_:
                 # Keeping what arrives, not merely unblocking the writer: the
                 # workers are still running and still producing, and those
                 # results used to be pulled off the queue and thrown away.
-                self._drain_until_workers_exit(workers, result_queue, on_success=_keep)
+                self._drain_until_workers_exit_(workers, result_queue, on_success=_keep)
                 self.log.debug("Joining workers")
                 for w in workers:
                     w.join()
@@ -1972,33 +1215,33 @@ class _CallableExecutorBase_:
         giving bursty updates that mirror the actual IPC rhythm.
         """
         if len(callables) > 0:
-            result_queue = self._make_queue()
-            done_queue   = self._make_queue()
-            abort_event  = self._make_event()
+            result_queue = self._make_queue_()
+            done_queue   = self._make_queue_()
+            abort_event  = self._make_event_()
             work_stealing = getattr(self, 'work_stealing', False)
 
             if work_stealing:
                 # -- Work-stealing mode --
-                work_queue = self._make_queue()
+                work_queue = self._make_queue_()
                 for i, c in enumerate(callables):
                     work_queue.put((i, c))
-                for _ in range(self._n_workers):
+                for _ in range(self._n_workers_):
                     work_queue.put(None)
                 workers = [
-                    self._make_worker(
-                        target=self._run_items_stealing,
+                    self._make_worker_(
+                        target=self._run_items_stealing_,
                         args=(work_queue, ctx_args, ctx_kwargs, idx,
                               result_queue, done_queue, abort_event),
                     )
-                    for idx in range(self._n_workers)
+                    for idx in range(self._n_workers_)
                 ]
             else:
                 # -- Pre-partitioned mode --
-                callable_lists   = np.array_split(callables, self._n_workers)
+                callable_lists   = np.array_split(callables, self._n_workers_)
                 callable_offsets = np.cumsum([0] + [len(cl) for cl in callable_lists])
                 workers = [
-                    self._make_worker(
-                        target=self._run_items,
+                    self._make_worker_(
+                        target=self._run_items_,
                         args=(cl, ctx_args, ctx_kwargs, off, idx,
                               result_queue, done_queue, abort_event),
                     )
@@ -2009,10 +1252,10 @@ class _CallableExecutorBase_:
             try:
                 for w in workers:
                     w.start()
-                self._after_start(callables, workers)
+                self._after_start_(callables, workers)
                 # Progress bar is created AFTER forking so child processes
                 # do not inherit a live tqdm instance and redraw it on exit.
-                progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc(streaming=True))
+                progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc_(streaming=True))
                 # Reorder buffer: holds payloads that arrived before their
                 # predecessors, keyed by global item index.
                 pending = {}        # item_idx -> payload
@@ -2063,10 +1306,12 @@ class _CallableExecutorBase_:
 
                 while done_count < len(callables):
                     try:
-                        msg = result_queue.get(timeout=self._result_idle_timeout())
+                        msg = self._next_result_(result_queue, workers)
+                    except _WorkersExited_:
+                        raise
                     except Exception:
-                        self._log_result_idle_timeout(
-                            self._result_idle_timeout(), done_count, len(callables),
+                        self._log_result_idle_timeout_(
+                            self._result_idle_timeout_(), done_count, len(callables),
                             set(range(next_to_yield)) | set(pending),
                         )
                         timed_out = True
@@ -2085,7 +1330,7 @@ class _CallableExecutorBase_:
                     # here rather than in the finally below, because a generator
                     # may not yield while it is being closed.
                     _stop_workers()
-                    self._drain_until_workers_exit(workers, result_queue, on_success=_keep)
+                    self._drain_until_workers_exit_(workers, result_queue, on_success=_keep)
                     yield from _emit()
                 # Yield any remainder (last partial batch)
                 if emit_buf:
@@ -2097,7 +1342,7 @@ class _CallableExecutorBase_:
                 # that stopped iterating -- and a generator being closed may not
                 # yield, so there is nowhere for a late result to go. The
                 # recoverable case is handled above, before the finally.
-                self._drain_until_workers_exit(workers, result_queue)
+                self._drain_until_workers_exit_(workers, result_queue)
                 for w in workers:
                     w.join()
                 if e is not None:
@@ -2114,6 +1359,311 @@ class _CallableExecutorBase_:
         """Execute callables and yield results in input order (same as exec_callables_streaming)."""
         return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
 
+    # 4. Helpers -----------------------------------------------------------
+
+    @property
+    def _n_workers_(self) -> int:
+        raise NotImplementedError
+
+    def _make_queue_(self):
+        raise NotImplementedError
+
+    def _make_event_(self):
+        raise NotImplementedError
+
+    def _make_worker_(self, target, args):
+        raise NotImplementedError
+
+    def _after_start_(self, items, workers):
+        """Hook called in the main process right after all workers have been started."""
+        pass
+
+    def _result_idle_timeout_(self):
+        """Seconds to wait for the next result. See `RESULT_IDLE_TIMEOUT_SEC`.
+
+        Deliberately NOT ``worker_done_timeout_sec``, which used to serve here
+        as well. That one is the worker's wait for its stop sentinel -- which is
+        what its name says -- and a value chosen for it was being applied to a
+        completely different question, in the direction that loses results.
+        """
+        value = getattr(self, 'result_idle_timeout_sec', None)
+        return self.RESULT_IDLE_TIMEOUT_SEC if value is None else value
+
+    def _log_result_idle_timeout_(self, timeout, done_count, total, received):
+        """Say what timed out, that it is an idle timeout, and which items are missing.
+
+        At WARNING: the visible symptom is a progress bar that stops and a
+        process that looks hung for hours, so the one line explaining it has to
+        be one the operator sees. Shared by both result loops, which used to
+        carry two messages -- only one of which worked out what was missing.
+        """
+        missing = sorted(set(range(total)) - set(received))
+        self.log.warning(
+            f"result_queue idle for {timeout}s with {done_count}/{total} results in. "
+            f"This is an INTER-RESULT timeout, not a limit on the run: a callable "
+            f"that takes longer than {timeout}s to produce anything trips it on a "
+            f"perfectly healthy run, and result_idle_timeout_sec= is the knob. No "
+            f"further work will be handed out, and results still in flight are "
+            f"collected as the workers finish. Missing item indices "
+            f"({len(missing)}): {missing[:20]}{'...' if len(missing) > 20 else ''}"
+        )
+
+    def _drain_until_workers_exit_(self, workers, result_queue, on_success=None):
+        """Read *result_queue* until every worker has exited, reporting as it goes.
+
+        A worker that had already begun a ``result_queue.put()`` when the main
+        loop stopped reading may be blocked writing into a full pipe, and would
+        then never reach its own exit -- the documented Queue/Process.join
+        deadlock. So this keeps reading regardless.
+
+        *on_success* is what makes the reading worth doing: given it, a result
+        that arrives after the timeout is KEPT rather than dropped on the floor,
+        which is the difference between a premature idle timeout costing a run
+        its results and costing it nothing at all. Left None -- on the paths
+        that are about to re-raise -- the messages are simply discarded.
+        """
+        drained = 0
+        last_report = time_module.monotonic()
+        while any(w.is_alive() for w in workers):
+            try:
+                msg = result_queue.get(timeout=1)
+            except Exception:
+                msg = None
+            if msg is not None:
+                drained += 1
+                if on_success is not None and msg[0]:
+                    on_success(msg)
+            now = time_module.monotonic()
+            if now - last_report >= self.JOIN_REPORT_EVERY_SEC:
+                alive = sum(1 for w in workers if w.is_alive())
+                self.log.info(
+                    f"Still waiting on {alive}/{len(workers)} worker(s) to finish "
+                    f"in-flight work; {drained} late result message(s) collected"
+                )
+                last_report = now
+        return drained
+
+    def _next_result_(self, result_queue, workers):
+        """The next message on *result_queue*, waited for up to the idle timeout.
+
+        Taken in slices of RESULT_POLL_SEC, so that workers which have ALL
+        exited are noticed at once rather than hours later. Raises
+        `queue.Empty` on the idle timeout, as a plain get() would, and
+        `_WorkersExited_` when nothing is left alive to send what is missing.
+        """
+        deadline = time_module.monotonic() + self._result_idle_timeout_()
+        while True:
+            left = deadline - time_module.monotonic()
+            try:
+                return result_queue.get(timeout=max(0.01, min(self.RESULT_POLL_SEC, left)))
+            except queue.Empty:
+                if not any(w.is_alive() for w in workers):
+                    # A worker's queue is flushed before it exits: what it sent is here now.
+                    try:
+                        return result_queue.get_nowait()
+                    except queue.Empty:
+                        codes = [getattr(w, 'exitcode', None) for w in workers]
+                        raise _WorkersExited_(
+                            f"{self.tag}: every worker exited with results still missing "
+                            f"(exit codes {codes}) -- a worker that dies before it reports, "
+                            f"e.g. unable to import what it was sent, sends nothing") from None
+                if left <= 0:
+                    raise
+
+    @staticmethod
+    def _eval_ctx_args_kwargs_(ctx_args, ctx_kwargs):
+        """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``.
+
+        Called once per worker so that ``@``/``$``/``#``-prefixed strings are
+        evaluated inside the worker process rather than the main process.
+        Non-specline values pass through unchanged.
+        """
+        evaled_args = tuple(eval(a) for a in ctx_args)
+        evaled_kwargs = {k: eval(v) for k, v in ctx_kwargs.items()}
+        return evaled_args, evaled_kwargs
+
+    def _run_items_(self, items, ctx_args, ctx_kwargs, offset, worker_idx,
+                   result_queue, done_queue, abort_event):
+        """Run each item in *items* sequentially, accumulating results into
+        batches of *self.batch_size* before putting them on *result_queue*.
+        This amortises IPC / queue overhead when batch_size > 1.
+
+        Wire protocol:
+            success → (True,  worker_idx, [(item_idx, payload), ...])
+            failure → (False, worker_idx, item_idx, (exception, tbstr))
+        """
+        worker_label = self._worker_label_(worker_idx)
+        self.log.debug(f"Executing {len(items)} callables on {worker_label}")
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
+        batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
+        exception = None
+        batch = []  # list of (item_idx, payload)
+        for i, item in enumerate(items):
+            exception = None
+            try:
+                if abort_event.is_set():
+                    break
+                payload = item(*ctx_args, **ctx_kwargs)
+                batch.append((offset + i, payload))
+            except Exception as e:
+                exception = e
+                self.log.info(f"ERROR executing callable {offset+i} on {worker_label}")
+            finally:
+                self._after_item_(item)
+            if exception is not None:
+                # Flush any accumulated results before reporting the error
+                if batch:
+                    result_queue.put((True, worker_idx, batch))
+                    batch = []
+                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
+                # Guard against unpicklable exceptions (e.g. Azure SDK,
+                # fsspec exceptions holding open sockets/file handles).
+                # If the original exception can't be pickled, substitute
+                # a plain RuntimeError carrying the string representation.
+                try:
+                    result_queue.put((False, worker_idx, offset + i, (exception, tbstr)))
+                except Exception:
+                    safe_exc = RuntimeError(
+                        f"[unpicklable {type(exception).__name__}] {exception}"
+                    )
+                    result_queue.put((False, worker_idx, offset + i, (safe_exc, tbstr)))
+                break
+            if len(batch) >= batch_size:
+                result_queue.put((True, worker_idx, batch))
+                batch = []
+        # Flush any remaining results
+        if batch and exception is None:
+            result_queue.put((True, worker_idx, batch))
+        gc.collect()
+        if exception is None:
+            self.log.debug(f"Done executing {len(items)} callables on {worker_label}")
+        else:
+            self.log.debug(f"Abandoning callables on {worker_label} due to exception")
+        self.log.debug(f"Waiting on done_queue on {worker_label}")
+        # Use a timeout to avoid blocking forever if the main process
+        # is stuck (e.g. because it never received all expected results).
+        _timeout = getattr(self, 'worker_done_timeout_sec', 1000)
+        while True:
+            try:
+                sentinel = done_queue.get(timeout=_timeout)
+            except Exception:
+                # Timed out or queue broken — exit gracefully
+                self.log.info(
+                    f"done_queue timeout ({_timeout}s) on {worker_label}, "
+                    f"exiting without sentinel"
+                )
+                break
+            if sentinel is None:
+                self.log.debug(f"Done signal received on {worker_label}")
+                break
+
+    def _after_item_(self, item):
+        """Hook called after each item is processed (e.g. to del block and gc)."""
+        pass
+
+    def _run_items_stealing_(self, work_queue, ctx_args, ctx_kwargs, worker_idx,
+                            result_queue, done_queue, abort_event):
+        """Pull callables one-at-a-time from *work_queue* and execute them.
+
+        Each item on *work_queue* is a ``(global_idx, callable)`` tuple.
+        A ``None`` sentinel signals that no more work is available.
+
+        Uses the same wire protocol and batch_size handling as ``_run_items_``.
+        """
+        worker_label = self._worker_label_(worker_idx)
+        self.log.debug(f"Work-stealing worker started on {worker_label}")
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
+        batch_size = self.batch_size if (self.batch_size is not None and self.batch_size > 1) else 1
+        exception = None
+        batch = []  # list of (item_idx, payload)
+        n_executed = 0
+        while True:
+            if abort_event.is_set():
+                break
+            try:
+                work_item = work_queue.get(timeout=1)
+            except Exception:
+                # Queue.get timed out — check abort and retry
+                continue
+            if work_item is None:
+                # Sentinel: no more work
+                break
+            item_idx, item = work_item
+            exception = None
+            try:
+                payload = item(*ctx_args, **ctx_kwargs)
+                batch.append((item_idx, payload))
+                n_executed += 1
+            except Exception as e:
+                exception = e
+                self.log.info(f"ERROR executing callable {item_idx} on {worker_label}")
+            finally:
+                self._after_item_(item)
+            if exception is not None:
+                # Flush any accumulated results before reporting the error
+                if batch:
+                    result_queue.put((True, worker_idx, batch))
+                    batch = []
+                tbstr = '\n'.join(tb.format_tb(exception.__traceback__))
+                try:
+                    result_queue.put((False, worker_idx, item_idx, (exception, tbstr)))
+                except Exception:
+                    safe_exc = RuntimeError(
+                        f"[unpicklable {type(exception).__name__}] {exception}"
+                    )
+                    result_queue.put((False, worker_idx, item_idx, (safe_exc, tbstr)))
+                break
+            if len(batch) >= batch_size:
+                result_queue.put((True, worker_idx, batch))
+                batch = []
+        # Flush any remaining results
+        if batch and exception is None:
+            result_queue.put((True, worker_idx, batch))
+        gc.collect()
+        if exception is None:
+            self.log.debug(f"Done executing {n_executed} callables (work-stealing) on {worker_label}")
+        else:
+            self.log.debug(f"Abandoning work-stealing on {worker_label} due to exception")
+        self.log.debug(f"Waiting on done_queue on {worker_label}")
+        _timeout = getattr(self, 'worker_done_timeout_sec', 1000)
+        while True:
+            try:
+                sentinel = done_queue.get(timeout=_timeout)
+            except Exception:
+                self.log.info(
+                    f"done_queue timeout ({_timeout}s) on {worker_label}, "
+                    f"exiting without sentinel"
+                )
+                break
+            if sentinel is None:
+                self.log.debug(f"Done signal received on {worker_label}")
+                break
+
+    def _worker_label_(self, worker_idx) -> str:
+        return f"worker {worker_idx}"
+
+    def _desc_(self, streaming: bool) -> str:
+        """Helper to format the progress bar description."""
+        label = self._worker_label_(0).split()[0].capitalize() # "Thread", "Process", etc.
+        prefix = "Streaming " if streaming else ""
+        desc = f"{prefix}{label}"
+        if hasattr(self, 'tag') and self.tag:
+            desc = f"{desc}: {self.tag}"
+        meta = []
+        if hasattr(self, 'batch_size') and self.batch_size is not None:
+            meta.append(f"bs={self.batch_size}")
+        if hasattr(self, '_n_workers_'):
+            meta.append(f"nw={self._n_workers_}")
+        if getattr(self, 'work_stealing', False):
+            meta.append("ws")
+        if meta:
+            suffix = ': '.join(meta)
+            if desc.endswith(']'):
+                desc = f"{desc[:-1]}: {suffix}]"
+            else:
+                desc = f"{desc} [{suffix}]"
+        return desc
+
 
 class MultithreadingCallableExecutor(_CallableExecutorBase_):
     """Execute callables concurrently using threads.
@@ -2127,6 +1677,8 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
     tag : str
         Label for the progress bar.
     """
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000,
@@ -2145,24 +1697,26 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         self.devices = devices
         self.log = log
 
+    # 4. Helpers -----------------------------------------------------------
+
     @property
-    def _n_workers(self) -> int:
+    def _n_workers_(self) -> int:
         return self.n_workers
 
-    def _make_queue(self):
+    def _make_queue_(self):
         return queue.Queue()
 
-    def _make_event(self):
+    def _make_event_(self):
         return threading.Event()
 
-    def _make_worker(self, target, args):
+    def _make_worker_(self, target, args):
         return threading.Thread(target=target, args=args)
 
-    def _worker_label(self, worker_idx) -> str:
+    def _worker_label_(self, worker_idx) -> str:
         return f"thread {worker_idx}"
 
 
-def _mp_worker_fn(target, args):
+def _mp_worker_fn_(target, args):
     """Module-level wrapper used by MultiprocessingCallableExecutor.
 
     Defined at module level (not as a closure) so it is picklable by name,
@@ -2190,6 +1744,8 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
                  start_method: str = 'spawn', worker_done_timeout_sec: int = 1000,
                  result_idle_timeout_sec: float = None,
@@ -2215,31 +1771,33 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
             import multiprocessing as _mp
         self._mp = _mp.get_context(start_method)
 
+    # 4. Helpers -----------------------------------------------------------
+
     @property
-    def _n_workers(self) -> int:
+    def _n_workers_(self) -> int:
         return self.n_workers
 
-    def _make_queue(self):
+    def _make_queue_(self):
         return self._mp.Queue()
 
-    def _make_event(self):
+    def _make_event_(self):
         return self._mp.Event()
 
-    def _make_worker(self, target, args):
-        # Pass target and args explicitly so the module-level _mp_worker_fn
+    def _make_worker_(self, target, args):
+        # Pass target and args explicitly so the module-level _mp_worker_fn_
         # can be pickled by name (required for spawn/forkserver start methods).
-        return self._mp.Process(target=_mp_worker_fn, args=(target, args))
+        return self._mp.Process(target=_mp_worker_fn_, args=(target, args))
 
-    def _worker_label(self, worker_idx) -> str:
+    def _worker_label_(self, worker_idx) -> str:
         return f"process {worker_idx}"
 
-    def _after_start(self, items, workers):
+    def _after_start_(self, items, workers):
         """Release main-process references so forked memory can be reclaimed."""
         for item in items:
             del item
         gc.collect()
 
-    def _after_item(self, item):
+    def _after_item_(self, item):
         """Delete item reference inside the worker after each iteration."""
         del item
         gc.collect()
@@ -2263,6 +1821,8 @@ class RayCallableExecutor:
     tag : str
         Label for the progress bar.
     """
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, *, n_workers: int = 1, workers=None, worker_factory=None,
                  batch_size: int = None, tag: str = "",
@@ -2289,12 +1849,7 @@ class RayCallableExecutor:
         self.devices = devices
         self.log = log
 
-    @staticmethod
-    def _eval_ctx_args_kwargs(ctx_args, ctx_kwargs):
-        """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``."""
-        evaled_args = tuple(eval(a) for a in ctx_args)
-        evaled_kwargs = {k: eval(v) for k, v in ctx_kwargs.items()}
-        return evaled_args, evaled_kwargs
+    # 2. Declared API ------------------------------------------------------
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute all callables; streams chunked results if batch_size is set."""
@@ -2317,7 +1872,7 @@ class RayCallableExecutor:
             callable_offsets = np.cumsum([0] + [len(callable_list) for callable_list in callable_lists])
             
             threads = [
-                threading.Thread(target=self.__exec_callables_batched__, 
+                threading.Thread(target=self._exec_callables_batched_, 
                                  args=(worker, callable_list, ctx_args, ctx_kwargs, callable_offset, thread_idx, result_queue, done_queue, abort_event))
                 for thread_idx, (worker, callable_list, callable_offset) in enumerate(zip(self.workers, callable_lists, callable_offsets))
             ]
@@ -2395,7 +1950,7 @@ class RayCallableExecutor:
             callable_offsets = np.cumsum([0] + [len(callable_list) for callable_list in callable_lists])
             
             threads = [
-                threading.Thread(target=self.__exec_callables_sequential__, 
+                threading.Thread(target=self._exec_callables_sequential_, 
                                  args=(worker, callable_list, ctx_args, ctx_kwargs, callable_offset, thread_idx, result_queue, done_queue, abort_event))
                 for thread_idx, (worker, callable_list, callable_offset) in enumerate(zip(self.workers, callable_lists, callable_offsets))
             ]
@@ -2436,9 +1991,18 @@ class RayCallableExecutor:
             return
             yield # make it a generator
 
-    def __exec_callables_batched__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
+    # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _eval_ctx_args_kwargs_(ctx_args, ctx_kwargs):
+        """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``."""
+        evaled_args = tuple(eval(a) for a in ctx_args)
+        evaled_kwargs = {k: eval(v) for k, v in ctx_kwargs.items()}
+        return evaled_args, evaled_kwargs
+
+    def _exec_callables_batched_(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
         self.log.debug(f"Executing batch of {len(callables)} callables on worker {thread_idx}")
-        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
         try:
             batch_size = self.batch_size or len(callables)
             for i in range(0, len(callables), batch_size):
@@ -2456,9 +2020,9 @@ class RayCallableExecutor:
             if done_queue.get() is None:
                 break
 
-    def __exec_callables_sequential__(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
+    def _exec_callables_sequential_(self, worker, callables: Sequence[Callable], ctx_args, ctx_kwargs, offset: int, thread_idx: int, result_queue: queue.Queue, done_queue: queue.Queue, abort_event: threading.Event):
         self.log.debug(f"Executing {len(callables)} callables on worker {thread_idx}")
-        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
         batch_size = self.batch_size or 1
         exception = None
         for i in range(0, len(callables), batch_size):
@@ -2502,6 +2066,9 @@ class InlineCallableExecutor:
 
     Useful as a no-parallelism baseline and for debugging.
     """
+
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
@@ -2516,12 +2083,7 @@ class InlineCallableExecutor:
         self.devices = devices
         self.log = log
 
-    @staticmethod
-    def _eval_ctx_args_kwargs(ctx_args, ctx_kwargs):
-        """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``."""
-        evaled_args = tuple(eval(a) for a in ctx_args)
-        evaled_kwargs = {k: eval(v) for k, v in ctx_kwargs.items()}
-        return evaled_args, evaled_kwargs
+    # 2. Declared API ------------------------------------------------------
 
     def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute all callables and return results as a flat list (same as exec_callables)."""
@@ -2532,7 +2094,7 @@ class InlineCallableExecutor:
         return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
 
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
         payloads = []
         if len(callables) > 0:
             label = "Inline"
@@ -2562,7 +2124,7 @@ class InlineCallableExecutor:
         return payloads
 
     def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
         if len(callables) > 0:
             label = "Inline Streaming"
             if self.tag:
@@ -2601,12 +2163,21 @@ class InlineCallableExecutor:
             return
             yield
 
+    # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _eval_ctx_args_kwargs_(ctx_args, ctx_kwargs):
+        """Resolve specline expressions in ctx_args/ctx_kwargs via ``dbx.eval()``."""
+        evaled_args = tuple(eval(a) for a in ctx_args)
+        evaled_kwargs = {k: eval(v) for k, v in ctx_kwargs.items()}
+        return evaled_args, evaled_kwargs
+
 
 class _TorchCallableExecutorMixin_:
     """Mixin that adds device-management to a ``_CallableExecutorBase_`` subclass.
 
     Subclasses of this mixin combine it with ``MultithreadingCallableExecutor``
-    or ``MultiprocessingCallableExecutor`` and override ``_run_items`` so that
+    or ``MultiprocessingCallableExecutor`` and override ``_run_items_`` so that
     each callable is:
 
     1. moved to the worker's device via ``callable.to(device)`` if
@@ -2620,6 +2191,8 @@ class _TorchCallableExecutorMixin_:
     When *n_workers* exceeds ``len(devices)``, devices are assigned to
     workers round-robin.
     """
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, *, devices: list[str] = 'cuda', n_workers: int = None,
                  batch_size: int = None,
@@ -2642,38 +2215,34 @@ class _TorchCallableExecutorMixin_:
                          work_stealing=work_stealing, log=log)
         self.devices = devices
 
-    # ------------------------------------------------------------------
-    # Device helpers
-    # ------------------------------------------------------------------
-    def _device_for_worker(self, worker_idx: int) -> str:
+    # 4. Helpers -----------------------------------------------------------
+
+    def _device_for_worker_(self, worker_idx: int) -> str:
         """Return the device for *worker_idx* (round-robin over ``self.devices``)."""
         return self.devices[worker_idx % len(self.devices)]
 
     @staticmethod
-    def _maybe_to_device(item, device):
+    def _maybe_to_device_(item, device):
         """Call ``item.to(device)`` if *item* has a ``.to()`` method, else return unchanged."""
         if hasattr(item, 'to') and callable(item.to):
             return item.to(device)
         return item
 
     @staticmethod
-    def _args_kwargs_to_device(args, kwargs, device):
+    def _args_kwargs_to_device_(args, kwargs, device):
         device_args = [a.to(device) if hasattr(a, 'to') else a for a in args]
         device_kwargs = {k: v.to(device) if hasattr(v, 'to') else v
                          for k, v in kwargs.items()}
         return device_args, device_kwargs
 
-    # ------------------------------------------------------------------
-    # Override worker loops
-    # ------------------------------------------------------------------
-    def _run_items(self, items, ctx_args, ctx_kwargs, offset, worker_idx,
+    def _run_items_(self, items, ctx_args, ctx_kwargs, offset, worker_idx,
                    result_queue, done_queue, abort_event):
-        device = self._device_for_worker(worker_idx)
-        worker_label = self._worker_label(worker_idx)
+        device = self._device_for_worker_(worker_idx)
+        worker_label = self._worker_label_(worker_idx)
         self.log.debug(f"Executing {len(items)} callables on {worker_label} (device={device})")
 
-        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
-        device_ctx_args, device_ctx_kwargs = self._args_kwargs_to_device(
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
+        device_ctx_args, device_ctx_kwargs = self._args_kwargs_to_device_(
             ctx_args, ctx_kwargs, device,
         )
 
@@ -2685,15 +2254,15 @@ class _TorchCallableExecutorMixin_:
             try:
                 if abort_event.is_set():
                     break
-                item = self._maybe_to_device(item, device)
+                item = self._maybe_to_device_(item, device)
                 payload = item(*device_ctx_args, **device_ctx_kwargs)
-                self._maybe_to_device(item, 'cpu')
+                self._maybe_to_device_(item, 'cpu')
                 batch.append((offset + i, payload))
             except Exception as e:
                 exception = e
                 self.log.info(f"ERROR executing callable {offset+i} on {worker_label} (device={device})")
             finally:
-                self._after_item(item)
+                self._after_item_(item)
             if exception is not None:
                 if batch:
                     result_queue.put((True, worker_idx, batch))
@@ -2728,14 +2297,14 @@ class _TorchCallableExecutorMixin_:
                 self.log.debug(f"Done signal received on {worker_label}")
                 break
 
-    def _run_items_stealing(self, work_queue, ctx_args, ctx_kwargs, worker_idx,
+    def _run_items_stealing_(self, work_queue, ctx_args, ctx_kwargs, worker_idx,
                             result_queue, done_queue, abort_event):
-        device = self._device_for_worker(worker_idx)
-        worker_label = self._worker_label(worker_idx)
+        device = self._device_for_worker_(worker_idx)
+        worker_label = self._worker_label_(worker_idx)
         self.log.debug(f"Work-stealing worker started on {worker_label} (device={device})")
 
-        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs(ctx_args, ctx_kwargs)
-        device_ctx_args, device_ctx_kwargs = self._args_kwargs_to_device(
+        ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
+        device_ctx_args, device_ctx_kwargs = self._args_kwargs_to_device_(
             ctx_args, ctx_kwargs, device,
         )
 
@@ -2755,16 +2324,16 @@ class _TorchCallableExecutorMixin_:
             item_idx, item = work_item
             exception = None
             try:
-                item = self._maybe_to_device(item, device)
+                item = self._maybe_to_device_(item, device)
                 payload = item(*device_ctx_args, **device_ctx_kwargs)
-                self._maybe_to_device(item, 'cpu')
+                self._maybe_to_device_(item, 'cpu')
                 batch.append((item_idx, payload))
                 n_executed += 1
             except Exception as e:
                 exception = e
                 self.log.info(f"ERROR executing callable {item_idx} on {worker_label} (device={device})")
             finally:
-                self._after_item(item)
+                self._after_item_(item)
             if exception is not None:
                 if batch:
                     result_queue.put((True, worker_idx, batch))
@@ -3091,7 +2660,6 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         return wrkroot, wrkrepo
 
 
-
     use_wrkrepo = os.environ.get('DBX_USE_WORK_REPO') == 'True' or revision is not None
     if use_wrkrepo and DBX_USE_WORK_REPO is None:
         if DBX_GIT_REPO is None:
@@ -3400,6 +2968,7 @@ class SlurmRayCluster:
     """
     Manages a Ray cluster running inside a Slurm job.
     """
+
     def __init__(self, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log=Logger()):
         self.log = log
         self.job_id = None
@@ -3515,9 +3084,8 @@ wait
             # Cleanup on timeout
             self.cancel()
             raise RuntimeError("Timed out waiting for Ray cluster to start on Slurm")
-            
-        # (Already logged cluster start in the loop)
 
+        # (Already logged cluster start in the loop)
     def cancel(self):
         """Cancel the Slurm job and cleanup temporary files."""
         if self.job_id:
@@ -3539,10 +3107,45 @@ class Remote:
         """
         Base class for remote proxies. Defined as a non-actor to support inheritance.
         """
+
+        # 1. Protocol and hooks --------------------------------------------
+
         def __init__(self, obj):
             self._obj = obj
 
-        def _wrap(self, val):
+        # 2. Declared API --------------------------------------------------
+
+        def getattr(self, name):
+            val = getattr(self._obj, name)
+            return self._wrap_(val)
+
+        def call(self, name, *args, **kwargs):
+            if hasattr(self, name) and name != 'obj' and not name.startswith('__'):
+                attr = getattr(self, name)
+            else:
+                attr = getattr(self._obj, name)
+
+            if not callable(attr):
+                raise AttributeError(f"'{name}' is not callable")
+            res = attr(*args, **kwargs)
+            return self._wrap_(res)
+
+        def info(self, name):
+            if hasattr(self, name):
+                attr = getattr(self, name)
+            else:
+                attr = getattr(self._obj, name)
+            is_call = callable(attr)
+            return is_call, (None if is_call else self._wrap_(attr))
+
+        def environ(self, name):
+            """Helper for verification of remote environment."""
+
+            return os.environ.get(name)
+
+        # 4. Helpers -------------------------------------------------------
+
+        def _wrap_(self, val):
             """
             If val is a primitive (int, float, str, bool, None), return it directly.
             Otherwise, wrap it in a RemoteObject actor and return its handle.
@@ -3565,39 +3168,12 @@ class Remote:
             except Exception:
                 return val
 
-        def getattr(self, name):
-            val = getattr(self._obj, name)
-            return self._wrap(val)
-
-        def call(self, name, *args, **kwargs):
-            if hasattr(self, name) and name != 'obj' and not name.startswith('__'):
-                attr = getattr(self, name)
-            else:
-                attr = getattr(self._obj, name)
-
-            if not callable(attr):
-                raise AttributeError(f"'{name}' is not callable")
-            res = attr(*args, **kwargs)
-            return self._wrap(res)
-
-        def info(self, name):
-            if hasattr(self, name):
-                attr = getattr(self, name)
-            else:
-                attr = getattr(self._obj, name)
-            is_call = callable(attr)
-            return is_call, (None if is_call else self._wrap(attr))
-
-        def environ(self, name):
-            """Helper for verification of remote environment."""
-
-            return os.environ.get(name)
-
     class RemoteDBX(RemoteObject):
         """
         Ray Actor that acts as a remote handle to the `dbx` module.
         Inherits directly from RemoteObject.
         """
+
         def __init__(self, revision=None):
             """
             Initialize the remote dbx instance.
@@ -3620,7 +3196,7 @@ class Remote:
 
         def apply(self, func, *args, **kwargs):
             res = func(*args, **kwargs)
-            return self._wrap(res)
+            return self._wrap_(res)
 
         def apply_batch(self, funcs_args_kwargs):
             """
@@ -3629,8 +3205,10 @@ class Remote:
             results = []
             for func, args, kwargs in funcs_args_kwargs:
                 res = func(*args, **kwargs)
-                results.append(self._wrap(res))
+                results.append(self._wrap_(res))
             return results
+
+    # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, handle=None, *, revision=None, slurm=None):
         """
@@ -3668,10 +3246,10 @@ class Remote:
             def wrapper(*args, **kwargs):
                 import ray
                 res = ray.get(self._handle.call.remote(name, *args, **kwargs))
-                return self._unwrap_or_proxy(res)
+                return self._unwrap_or_proxy_(res)
             return wrapper
         else:
-            return self._unwrap_or_proxy(value)
+            return self._unwrap_or_proxy_(value)
 
     def __getstate__(self):
         """
@@ -3680,11 +3258,7 @@ class Remote:
         import ray
         return ray.get(self._handle.call.remote('__getstate__'))
 
-    def _unwrap_or_proxy(self, val):
-        import ray
-        if isinstance(val, ray.actor.ActorHandle):
-            return Remote(val) # Recursive wrapping
-        return val
+    # 2. Declared API ------------------------------------------------------
 
     def run(self, func, *args, **kwargs):
         """
@@ -3692,7 +3266,7 @@ class Remote:
         """
         import ray
         res = ray.get(self._handle.apply.remote(func, *args, **kwargs))
-        return self._unwrap_or_proxy(res)
+        return self._unwrap_or_proxy_(res)
 
     def run_batch(self, funcs_args_kwargs):
         """
@@ -3700,7 +3274,15 @@ class Remote:
         """
         import ray
         results = ray.get(self._handle.apply_batch.remote(funcs_args_kwargs))
-        return [self._unwrap_or_proxy(res) for res in results]
+        return [self._unwrap_or_proxy_(res) for res in results]
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _unwrap_or_proxy_(self, val):
+        import ray
+        if isinstance(val, ray.actor.ActorHandle):
+            return Remote(val) # Recursive wrapping
+        return val
 
 
 def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=None,
@@ -3956,3 +3538,16 @@ def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, p
 
 def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
     _pprint_.pprint(slurm_exec(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs))
+
+
+#: Names that moved to `dbx.journals`, still found here -- by an import, a
+#: recorded specline or a pickle that names them in this module. Looked up
+#: when asked for, since `journals` imports from here and not the reverse.
+_MOVED_TO_JOURNALS_ = frozenset({'JOURNAL_DATETIME_FORMAT', 'write_exec_journal', 'filter_journal_frame', 'CONSTRUCTED_EVENTS', 'ExecjournalEntry', 'ExecjournalFrame', 'EXEC_JOURNAL_COLUMNS', 'read_exec_journal', 'execjournal'})
+
+
+def __getattr__(name):
+    if name in _MOVED_TO_JOURNALS_:
+        from . import journals
+        return getattr(journals, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

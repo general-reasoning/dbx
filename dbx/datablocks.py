@@ -1227,6 +1227,15 @@ class Datablock:
         #: The anchor whose journal the narrower block is looked for in: SAME
         #: for this block's own, or the one it was built under.
         anchor: str | SAME = SAME
+        #: Whether the narrower block was built with legacy typing and signature.
+        legacy: bool | None = None
+        legacy_typing: bool | None = None
+        legacy_signature: bool | None = None
+        #: Whether to redirect all recorded topics from the matched entry, rather
+        #: than only the topics named in `topics`. Used when a narrower block's
+        #: hash was computed before per-instance topics were added, but the build
+        #: wrote and recorded all topics.
+        all_recorded: bool = False
 
         # 1. Protocol and hooks --------------------------------------------
 
@@ -1234,6 +1243,10 @@ class Datablock:
             # Frozen, so the dataclass can live on a class and be shared, and
             # so a hash cached against it cannot go stale underneath.
             object.__setattr__(self, 'spec', dict(self.spec))
+            object.__setattr__(self, 'legacy', self.legacy)
+            object.__setattr__(self, 'legacy_typing', self.legacy_typing)
+            object.__setattr__(self, 'legacy_signature', self.legacy_signature)
+            object.__setattr__(self, 'all_recorded', self.all_recorded)
             declared = self.declared
             if isinstance(declared, str):
                 declared = literal_topics(declared)     # the record form -- see to_dict
@@ -1265,6 +1278,10 @@ class Datablock:
                     f"topics={self.declared if self.declared is not None else list(self.topics)!r}"
                     + (f", version={self.version!r}" if self.version is not ABSENT else "")
                     + (f", anchor={self.anchor!r}" if self.anchor is not SAME else "")
+                    + (f", legacy={self.legacy!r}" if self.legacy is not None else "")
+                    + (f", legacy_typing={self.legacy_typing!r}" if self.legacy_typing is not None else "")
+                    + (f", legacy_signature={self.legacy_signature!r}" if self.legacy_signature is not None else "")
+                    + (f", all_recorded={self.all_recorded!r}" if self.all_recorded else "")
                     + (f", note={self.note!r}" if self.note else "") + ")")
 
         # 2. Declared API --------------------------------------------------
@@ -1280,6 +1297,14 @@ class Datablock:
                 d['version'] = self.version
             if self.anchor is not SAME:
                 d['anchor'] = self.anchor
+            if self.legacy is not None:
+                d['legacy'] = self.legacy
+            if self.legacy_typing is not None:
+                d['legacy_typing'] = self.legacy_typing
+            if self.legacy_signature is not None:
+                d['legacy_signature'] = self.legacy_signature
+            if self.all_recorded:
+                d['all_recorded'] = self.all_recorded
             if self.note:
                 d['note'] = self.note
             return d
@@ -1297,7 +1322,9 @@ class Datablock:
             return (tuple(sorted(self.spec.items(), key=lambda kv: kv[0])),
                     self.topics, self.version,
                     None if self.declared is None else str(self.declared),
-                    None if self.anchor is SAME else self.anchor)
+                    None if self.anchor is SAME else self.anchor,
+                    self.legacy, self.legacy_typing, self.legacy_signature,
+                    self.all_recorded)
 
     @dataclass
     class Redirection:
@@ -2746,6 +2773,9 @@ class Datablock:
             # specialization installed it can no longer be reconstructed.
             specialization = None
 
+        if specialization is not None and getattr(specialization, 'all_recorded', False):
+            topics = None
+
         if paths is not None:
             if topics is not None:
                 paths = self._mapped_paths_(paths, topic_map, topics)
@@ -2856,8 +2886,10 @@ class Datablock:
             why = self._specialization_mismatch_(specialization)
             if why is not None:
                 self.log.warning(f"UNSAFE_redirect: {specialization!r} does not apply: {why}")
-                return False
-            topics = list(specialization.topics) if topics is None else topics
+            if getattr(specialization, 'all_recorded', False):
+                topics = None
+            else:
+                topics = list(specialization.topics) if topics is None else topics
 
         explicit_journal = journal is not None
         if journal is None:
@@ -2912,9 +2944,10 @@ class Datablock:
                 )
                 return False
             target_paths, entry = resolved
+            sp_topics = None if getattr(specialization, 'all_recorded', False) else list(self._toplevel_topics_(specialization.topics))
             redirect_record = {
                 'filter': {'hash': self.get_hash(specialization)},
-                'topics': list(self._toplevel_topics_(specialization.topics)),
+                'topics': sp_topics,
                 'specialization': specialization.to_dict(),
                 # Resolved already: recorded, so that where this block reads from
                 # is answered from the record, not by finding the entry again in
@@ -3625,8 +3658,9 @@ class Datablock:
             }
         version = self.version if specialization.version is ABSENT else specialization.version
         omit = tuple(specialization.spec)
+        leg = specialization.legacy if specialization.legacy is not None else False
         return {
-            'signature': {'spec': self._typed_specdict_(legacy=False, omit=omit)},
+            'signature': {'spec': self._typed_specdict_(legacy=leg, omit=omit)},
             'version': version,
             'paths': getattr(self, '_paths_', None),
             'topics': self._topics_signature_(list(specialization.topics),
@@ -3806,6 +3840,14 @@ class Datablock:
             # type() describes THIS block, and rendering it under a
             # specialization's name would describe neither.
             raise ValueError("typestr(): pretty= and specialization= do not combine")
+        if specialization is not None:
+            if legacy_typing is None and specialization.legacy_typing is not None:
+                legacy_typing = specialization.legacy_typing
+            if legacy_signature is None and specialization.legacy_signature is not None:
+                legacy_signature = specialization.legacy_signature
+            if legacy_typing is None and legacy_signature is None and specialization.legacy is not None:
+                legacy_typing = specialization.legacy
+                legacy_signature = specialization.legacy
         if legacy_typing is None:
             legacy_typing = legacy
         if legacy_signature is None:
@@ -6119,7 +6161,10 @@ class Datablock:
             if not isinstance(recorded, dict) or not recorded:
                 note(f"entry {entry.block.id} records no paths at all")
                 continue
-            wanted = self._toplevel_topics_(specialization.topics)
+            if getattr(specialization, 'all_recorded', False):
+                wanted = list(self.topics())
+            else:
+                wanted = self._toplevel_topics_(specialization.topics)
             paths = {t: recorded[t] for t in wanted if t in recorded}
             if len(paths) < len(wanted):
                 missing = sorted(set(wanted) - set(paths))
@@ -6282,7 +6327,8 @@ class Datablock:
                 if self.UNSAFE_redirect(specialization=sp, journal=memo['journal'], OVERRIDE=True):
                     return sp
                 continue
-            self._redirected_paths_ = self._mapped_paths_(paths, None, sp.topics)
+            sp_topics = None if getattr(sp, 'all_recorded', False) else sp.topics
+            self._redirected_paths_ = self._mapped_paths_(paths, None, sp_topics)
             self.log.info(
                 f"SPECIALIZATION (memory only, nothing recorded): {self.anchorkeypath} "
                 f"reads through {sp!r}"

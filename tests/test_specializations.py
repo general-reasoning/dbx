@@ -1058,3 +1058,34 @@ class TestSetIsAnOrdinaryConstruction:
         """
         moved = self._redirected(tmp_path).set(tag='nowhere-near')
         assert moved.redirected_topics() == ['spectra']
+
+
+def test_specialization_reconstructs_legacy_build():
+    """A modern class (no LEGACY flags) can specialize back to a block built with legacy typing/signature."""
+    from dataclasses import dataclass
+    from dbx.datablocks import Datablock, DATAFILE
+
+    class LegacyBlock(Datablock):
+        LEGACY_TYPING = True
+        LEGACY_SIGNATURE = True
+        TOPICS = {'data': 'data.txt'}
+
+        @dataclass
+        class VAR(Datablock.VAR):
+            x: int = 1
+
+    class ModernBlock(Datablock):
+        TOPICS = {'data': DATAFILE('data.txt')}
+        SPECIALIZATIONS = [
+            Datablock.Specialization(spec={}, topics={'data': 'data.txt'}, legacy=True)
+        ]
+
+        @dataclass
+        class VAR(Datablock.VAR):
+            x: int = 1
+
+    old = LegacyBlock(datalake='/tmp/dummy')
+    new = ModernBlock(datalake='/tmp/dummy')
+    assert new.hash != old.hash
+    assert old.hash in new.specialization_hashes()
+

@@ -54,7 +54,7 @@ class TestDIRTOPICBehavesAsADirectoryTopic:
 
     @pytest.fixture
     def block(self, tmp_path):
-        return WithDIR(url=str(tmp_path))
+        return WithDIR(datalake=str(tmp_path))
 
     def test_dir_topic_path_is_the_dirpath(self, block):
         assert block.path('checkpoints') == block.dirpath('checkpoints')
@@ -75,21 +75,21 @@ class TestDIRTOPICDoesNotChangeIdentity:
     """A rename that moved the hash would orphan every stored artifact."""
 
     def test_signature_is_unaffected_by_the_spelling(self, tmp_path):
-        a = WithDIR(url=str(tmp_path), anchor='shared')
-        b = WithNone(url=str(tmp_path), anchor='shared')
+        a = WithDIR(datalake=str(tmp_path), anchor='shared')
+        b = WithNone(datalake=str(tmp_path), anchor='shared')
         assert a.signaturestr() == b.signaturestr()
         assert a.hash == b.hash
         assert a.key == b.key
 
     def test_dir_topic_renders_as_none_in_the_signature(self, tmp_path):
         """The recorded form is still `topic:name=None`, not `topic:name=DIRTOPIC`."""
-        assert 'topic:checkpoints=None' in WithDIR(url=str(tmp_path)).typestr()
+        assert 'topic:checkpoints=None' in WithDIR(datalake=str(tmp_path)).typestr()
 
 
 class TestDIRTOPICInTheJournal:
 
     def test_journal_records_the_dir_topic_as_none(self, tmp_path):
-        b = WithDIR(url=str(tmp_path))
+        b = WithDIR(datalake=str(tmp_path))
         b.build()
         entry = b.journal(iloc=-1)
         assert entry.block.TOPICS['checkpoints'] is None

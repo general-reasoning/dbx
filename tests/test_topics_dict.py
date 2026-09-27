@@ -85,28 +85,28 @@ class TestDictTopicsPaths:
     def test_path_returns_filepath_for_str_value(self, tmp_path, monkeypatch):
         """path(topic) should return a file path when TOPICS[topic] is a string."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsFileBlock(url=str(tmp_path))
+        block = DictTopicsFileBlock(datalake=str(tmp_path))
         p = block.path('alpha')
         assert p.endswith('alpha.csv')
 
     def test_path_returns_dirpath_for_none_value(self, tmp_path, monkeypatch):
         """path(topic) should return dirpath when TOPICS[topic] is None."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsMixedBlock(url=str(tmp_path))
+        block = DictTopicsMixedBlock(datalake=str(tmp_path))
         p = block.path('checkpoints')
         assert p == block.dirpath('checkpoints')
 
     def test_dirpath_returns_directory(self, tmp_path, monkeypatch):
         """dirpath(topic) should return the topic directory."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsFileBlock(url=str(tmp_path))
+        block = DictTopicsFileBlock(datalake=str(tmp_path))
         d = block.dirpath('alpha')
         assert d.endswith('/alpha')
 
     def test_topics_returns_keys(self, tmp_path, monkeypatch):
         """topics() should return the dict keys."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsFileBlock(url=str(tmp_path))
+        block = DictTopicsFileBlock(datalake=str(tmp_path))
         assert set(block.topics()) == {'alpha', 'beta'}
 
 
@@ -119,7 +119,7 @@ class TestDictTopicsBuildValid:
     def test_build_and_valid_file_topics(self, tmp_path, monkeypatch):
         """Build should create files and valid() should return True."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsFileBlock(url=str(tmp_path))
+        block = DictTopicsFileBlock(datalake=str(tmp_path))
         block.build()
         assert block.valid()
         for topic in block.TOPICS:
@@ -129,7 +129,7 @@ class TestDictTopicsBuildValid:
     def test_build_and_valid_mixed_topics(self, tmp_path, monkeypatch):
         """Build should work with mixed file/dir topics."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsMixedBlock(url=str(tmp_path))
+        block = DictTopicsMixedBlock(datalake=str(tmp_path))
         block.build()
         assert block.valid()
         # File topic
@@ -142,7 +142,7 @@ class TestDictTopicsBuildValid:
     def test_build_and_valid_dir_only_topics(self, tmp_path, monkeypatch):
         """Build should work when all topics are directories."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsDirOnlyBlock(url=str(tmp_path))
+        block = DictTopicsDirOnlyBlock(datalake=str(tmp_path))
         block.build()
         assert block.valid()
         for topic in block.TOPICS:
@@ -158,7 +158,7 @@ class TestDictTopicsClear:
     def test_clear_all_file_topics(self, tmp_path, monkeypatch):
         """UNSAFE_clear should remove all file-based topics."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsFileBlock(url=str(tmp_path))
+        block = DictTopicsFileBlock(datalake=str(tmp_path))
         block.build()
         assert block.valid()
         block.UNSAFE_clear(OVERRIDE=True)
@@ -167,7 +167,7 @@ class TestDictTopicsClear:
     def test_clear_specific_topic(self, tmp_path, monkeypatch):
         """UNSAFE_clear('alpha') should remove only that topic."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsFileBlock(url=str(tmp_path))
+        block = DictTopicsFileBlock(datalake=str(tmp_path))
         block.build()
         block.UNSAFE_clear('alpha', OVERRIDE=True)
         assert not block.validtopic('alpha')
@@ -176,7 +176,7 @@ class TestDictTopicsClear:
     def test_clear_mixed_topics(self, tmp_path, monkeypatch):
         """UNSAFE_clear should handle mixed file/dir topics."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsMixedBlock(url=str(tmp_path))
+        block = DictTopicsMixedBlock(datalake=str(tmp_path))
         block.build()
         assert block.valid()
         block.UNSAFE_clear(OVERRIDE=True)
@@ -193,7 +193,7 @@ class TestDictTopicsGet:
         """pulltopic(topic) should download a file topic straight to path."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path / 'store')
-        block = DictTopicsFileBlock(url=root)
+        block = DictTopicsFileBlock(datalake=root)
         block.build()
         dest = str(tmp_path / 'download' / 'alpha.csv')
         block.pulltopic('alpha', path=dest)
@@ -203,7 +203,7 @@ class TestDictTopicsGet:
         """pulltopic(topic) should download a directory topic."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path / 'store')
-        block = DictTopicsDirOnlyBlock(url=root)
+        block = DictTopicsDirOnlyBlock(datalake=root)
         block.build()
         dest = str(tmp_path / 'download')
         block.pulltopic('images', path=dest)
@@ -223,14 +223,14 @@ class TestDictTopicsHash:
     def test_dict_topics_hash_uses_topicfiles_format(self, tmp_path, monkeypatch):
         """Dict-TOPICS type should use topic:topic=file format."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsFileBlock(url=str(tmp_path))
+        block = DictTopicsFileBlock(datalake=str(tmp_path))
         assert 'topic:alpha=alpha.csv' in block.typestr()
         assert 'topic:beta=beta.csv' in block.typestr()
 
     def test_list_topics_hash_unchanged(self, tmp_path, monkeypatch):
         """List-TOPICS type should still use topic:topic format (no =)."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = ListTopicsBlock(url=str(tmp_path))
+        block = ListTopicsBlock(datalake=str(tmp_path))
         assert 'topic:part_a' in block.typestr()
         assert '=' not in block.typestr().split('topic:part_a')[1].split('/')[0]
 
@@ -243,20 +243,20 @@ class TestTopicsHelpers:
 
     def test_topics_is_list_true_for_list(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = ListTopicsBlock(url=str(tmp_path))
+        block = ListTopicsBlock(datalake=str(tmp_path))
         assert block._topics_is_list is True
 
     def test_topics_is_list_false_for_dict(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsFileBlock(url=str(tmp_path))
+        block = DictTopicsFileBlock(datalake=str(tmp_path))
         assert block._topics_is_list is False
 
     def test_topicfiles_returns_dict_topics(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = DictTopicsFileBlock(url=str(tmp_path))
+        block = DictTopicsFileBlock(datalake=str(tmp_path))
         assert block._topicfiles is block.TOPICS
 
     def test_topicfiles_returns_none_for_list(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-        block = ListTopicsBlock(url=str(tmp_path))
+        block = ListTopicsBlock(datalake=str(tmp_path))
         assert block._topicfiles is None

@@ -96,7 +96,7 @@ ALL = [Block, Renamed, Reordered, Extra, Deeper, Synthetic,
 
 
 def block(cls, tmp_path, **kwargs):
-    return cls(url=str(tmp_path), **kwargs)
+    return cls(datalake=str(tmp_path), **kwargs)
 
 
 class TestSignatureTopics:
@@ -224,7 +224,7 @@ class TestDifftopicsOtherSides:
         built = block(Block, tmp_path)
         built.build()
         assert block(Block, tmp_path).difftopics(journal=dict(loc=0)) == {}
-        renamed = Renamed(url=str(tmp_path), anchor=built.anchor)
+        renamed = Renamed(datalake=str(tmp_path), anchor=built.anchor)
         assert renamed.difftopics(journal=dict(event='build:end', loc=0)) == {
             'out': ('renamed.txt', 'out.txt')
         }
@@ -257,7 +257,7 @@ class TestDiffversion:
         neither does this -- though both values are still reported."""
         b = block(Block, tmp_path)
         assert b.diffversion('1') is None
-        assert b.hash == Block(url=str(tmp_path)).hash
+        assert b.hash == Block(datalake=str(tmp_path)).hash
 
     def test_an_undeclared_version_is_None_not_absent(self, tmp_path):
         a, b = block(Block, tmp_path), block(Unversioned, tmp_path)
@@ -273,7 +273,7 @@ class TestDiffversion:
         built = block(Block, tmp_path)
         built.build()
         assert block(Block, tmp_path).diffversion(journal=dict(loc=0)) is None
-        versioned = Versioned(url=str(tmp_path), anchor=built.anchor)
+        versioned = Versioned(datalake=str(tmp_path), anchor=built.anchor)
         assert versioned.diffversion(journal=dict(event='build:end', loc=0)) == (2, 1)
 
     def test_an_other_side_is_required(self, tmp_path):
@@ -329,7 +329,7 @@ class TestDiff:
         built = block(Block, tmp_path)
         built.build()
         assert not any(block(Block, tmp_path).diff(journal=dict(loc=0)))
-        renamed = Renamed(url=str(tmp_path), anchor=built.anchor)
+        renamed = Renamed(datalake=str(tmp_path), anchor=built.anchor)
         d = renamed.diff(journal=dict(event='build:end', loc=0))
         assert d.topics == {'out': ('renamed.txt', 'out.txt')}
 

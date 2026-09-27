@@ -103,7 +103,7 @@ class LetterTable(DatapointTable):
 
 @pytest.fixture
 def table(tmp_path):
-    return LetterTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+    return LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
 
 
 @pytest.fixture
@@ -127,8 +127,8 @@ class TestTopicsFromSlices:
 
     def test_table_slices_equal_tab_slices(self, tmp_path):
         """Table slices come from TAB, not from table's own TOPICS."""
-        table = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
-        assert table.slices() == LetterTab(url=str(tmp_path)).slices()
+        table = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        assert table.slices() == LetterTab(datalake=str(tmp_path)).slices()
         assert 'numbers' not in LetterTable.TOPICS
 
     def test_table_keeps_its_inherited_topics(self):
@@ -142,7 +142,7 @@ class TestTopicsFromSlices:
             TOPICS = {'debug': {'plots': DIRTOPIC}, 'depth': SLICETOPIC}
 
         assert Debuggable.TOPICS['debug'] == {'plots': DIRTOPIC}
-        assert 'depth' in Debuggable(url=str(tmp_path)).slices()
+        assert 'depth' in Debuggable(datalake=str(tmp_path)).slices()
 
     def test_topics_do_not_accumulate_down_the_hierarchy(self):
         """A subclass declaring TOPICS does not accumulate parent TOPICS unless explicitly specified."""
@@ -175,8 +175,8 @@ class TestTopicsFromSlices:
             TAB = GlyphTab
 
         assert 'glyphs' not in GlyphTable.TOPICS
-        a = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
-        b = GlyphTable(url=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        a = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        b = GlyphTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
         assert 'glyphs' in b.slices()
         assert a.hash != b.hash
 
@@ -201,7 +201,7 @@ class TestPlacement:
         assert tab.path('note').startswith(tab.anchorkeypath)
 
     def test_a_tab_without_a_table_can_address_its_slices_and_topics(self, tmp_path):
-        lone = LetterTab(url=str(tmp_path), spec=dict(n=2))
+        lone = LetterTab(datalake=str(tmp_path), spec=dict(n=2))
         assert lone.path('note') == os.path.join(
             lone.anchorkeypath, 'note', 'note.txt',
         )
@@ -232,8 +232,8 @@ class TestBuild:
     def test_staged_build_lands_the_same_data(self, tmp_path):
         """``stage=True`` is the remote-storage path; on local storage it must
         produce the same results as writing in place."""
-        direct = LetterTable(url=str(tmp_path / 'direct'), spec=dict(n_tabs_=1))
-        staged = LetterTable(url=str(tmp_path / 'staged'), spec=dict(n_tabs_=1))
+        direct = LetterTable(datalake=str(tmp_path / 'direct'), spec=dict(n_tabs_=1))
+        staged = LetterTable(datalake=str(tmp_path / 'staged'), spec=dict(n_tabs_=1))
         direct.tab(0).build(stage=False)
         staged.tab(0).build(stage=True)
         assert staged.tab(0).valid()
@@ -243,7 +243,7 @@ class TestBuild:
         """valid_slice() reads a non-empty index.json as "built", so an upload
         interrupted partway must not have landed the index before the shards
         it names."""
-        tab = LetterTab(url=str(tmp_path), spec=dict(n=3, base=0))
+        tab = LetterTab(datalake=str(tmp_path), spec=dict(n=3, base=0))
 
         uploaded = []
         original = type(tab.fs).put_file
@@ -268,7 +268,7 @@ class TestBuild:
             assert len(run) > 1, "a slice uploaded its index and no shards"
 
     def test_a_failed_build_leaves_the_tab_invalid(self, tmp_path):
-        broken = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1, fail=True))
+        broken = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1, fail=True))
         tab = broken.tab(0)
         with pytest.raises(RuntimeError, match='boom'):
             tab.build()
@@ -278,7 +278,7 @@ class TestBuild:
     def test_an_empty_slice_is_valid(self, tmp_path):
         """``MDSWriter.finish()`` writes an index.json even when nothing was
         written through it; presence of index.json counts as built and valid."""
-        empty = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1, per_tab=0))
+        empty = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1, per_tab=0))
         tab = empty.tab(0)
         tab.build()
         assert os.path.exists(tab.slice_index_path('numbers'))
@@ -476,7 +476,7 @@ class SizedTable(DatapointTable):
 
 
 def sized(tmp_path, **spec):
-    table = SizedTable(url=str(tmp_path), spec=spec)
+    table = SizedTable(datalake=str(tmp_path), spec=spec)
     table.build()
     return table
 
@@ -567,7 +567,7 @@ class TestScaffoldingErrors:
         # journaling resolves every topic path.
         # The hook's own message is what is under test.
         with pytest.raises(NotImplementedError, match="'a', 'b'"):
-            Bare(url=str(tmp_path), spec=dict(self.LONE)).__build__()
+            Bare(datalake=str(tmp_path), spec=dict(self.LONE)).__build__()
 
     def test_missing_tab_class(self, tmp_path):
         class NoTab(DatapointTable):
@@ -578,14 +578,14 @@ class TestScaffoldingErrors:
                 return 1
 
         with pytest.raises(NotImplementedError, match='TAB'):
-            NoTab(url=str(tmp_path)).build()
+            NoTab(datalake=str(tmp_path)).build()
 
     def test_missing_n_tabs(self, tmp_path):
         class NoCount(DatapointTable):
             TAB = LetterTab
 
         with pytest.raises(NotImplementedError, match='n_tabs'):
-            NoCount(url=str(tmp_path)).build()
+            NoCount(datalake=str(tmp_path)).build()
 
     def test_slice_writers_requires_every_slice(self, tmp_path):
         class Partial(DatapointTab):
@@ -596,7 +596,7 @@ class TestScaffoldingErrors:
                     pass
 
         with pytest.raises(ValueError, match=r"slice\(s\) \['b'\]"):
-            Partial(url=str(tmp_path), spec=dict(self.LONE)).__build__()
+            Partial(datalake=str(tmp_path), spec=dict(self.LONE)).__build__()
 
 
 # ---------------------------------------------------------------------------
@@ -616,17 +616,17 @@ class TestCache:
 
     def test_an_explicit_cache_beats_dbx_cache(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_CACHE', str(tmp_path / 'dbxcache'))
-        explicit = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1),
+        explicit = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1),
                                cache=str(tmp_path / 'scratch'))
         assert explicit.cacheroot == str(tmp_path / 'scratch')
 
     def test_cacheroot_honours_an_explicit_cache(self, tmp_path):
-        explicit = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1),
+        explicit = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1),
                                cache=str(tmp_path / 'scratch'))
         assert explicit.cacheroot == str(tmp_path / 'scratch')
 
     def test_tabs_inherit_the_tables_cache(self, tmp_path):
-        explicit = LetterTable(url=str(tmp_path), spec=dict(n_tabs_=1),
+        explicit = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1),
                                cache=str(tmp_path / 'scratch'))
         assert explicit.tab(0).cacheroot == str(tmp_path / 'scratch')
 
@@ -744,7 +744,7 @@ class TestExtraTopics:
     """Anything in TOPICS that is not a slice is an ordinary Datablock topic."""
 
     def _table(self, tmp_path):
-        return NestedTable(url=str(tmp_path), spec=dict(n_tabs_=1))
+        return NestedTable(datalake=str(tmp_path), spec=dict(n_tabs_=1))
 
     def test_extra_topics_merge_with_the_synthesized_data_group(self):
         assert NestedTab.TOPICS == {
@@ -901,7 +901,7 @@ class TestTableSampler:
 class TestValidTabAndSentinels:
 
     def test_sentinels_written_on_build(self, tmp_path):
-        tbl = LetterTable(url=str(tmp_path / "sentinel_test"), spec=dict(n_tabs_=3))
+        tbl = LetterTable(datalake=str(tmp_path / "sentinel_test"), spec=dict(n_tabs_=3))
         for i in range(3):
             assert not tbl.valid_tab(i)
             assert not tbl._check_tab_path(i)
@@ -920,7 +920,7 @@ class TestValidTabAndSentinels:
         class NoTabPathsTable(LetterTable):
             TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
 
-        tbl = NoTabPathsTable(url=str(tmp_path / "nobuilt_test"), spec=dict(n_tabs_=2))
+        tbl = NoTabPathsTable(datalake=str(tmp_path / "nobuilt_test"), spec=dict(n_tabs_=2))
         assert 'tab_paths' not in tbl.topics()
         assert not tbl.valid_tab(0)
         
@@ -930,7 +930,7 @@ class TestValidTabAndSentinels:
 
     def test_find_tabs(self, tmp_path):
         tbl = LetterTable(
-            url=str(tmp_path / "find_table"),
+            datalake=str(tmp_path / "find_table"),
             spec=dict(n_tabs_=4),
             parallelization="multithreading",
             n_workers=2,
@@ -972,7 +972,7 @@ class TestValidTabAndSentinels:
 
     def test_parallel_filtering_skips_already_valid_tabs(self, tmp_path):
         tbl = LetterTable(
-            url=str(tmp_path / "filter_test"),
+            datalake=str(tmp_path / "filter_test"),
             spec=dict(n_tabs_=4),
             parallelization="multithreading",
             n_workers=2,
@@ -995,15 +995,15 @@ class TestValidTabAndSentinels:
             assert tbl._check_tab_path(i)
 
     def test_filter_built_tabs_option(self, tmp_path):
-        tbl_default = LetterTable(url=str(tmp_path / "filter_default"), spec=dict(n_tabs_=2))
+        tbl_default = LetterTable(datalake=str(tmp_path / "filter_default"), spec=dict(n_tabs_=2))
         assert tbl_default.filter_built_tabs is False
 
-        tbl_explicit = LetterTable(url=str(tmp_path / "filter_explicit"), spec=dict(n_tabs_=2), filter_built_tabs=True)
+        tbl_explicit = LetterTable(datalake=str(tmp_path / "filter_explicit"), spec=dict(n_tabs_=2), filter_built_tabs=True)
         assert tbl_explicit.filter_built_tabs is True
 
     def test_valid_tabs_and_valid_blocks(self, tmp_path):
         tbl = LetterTable(
-            url=str(tmp_path / "valid_tabs_test"),
+            datalake=str(tmp_path / "valid_tabs_test"),
             spec=dict(n_tabs_=4),
             parallelization="multithreading",
             n_workers=2,
@@ -1045,8 +1045,8 @@ class TestValidTabAndSentinels:
 
     def test_block_redirections_by_every_name(self, tmp_path):
         """The stack-wide redirection API, and its tab names on a table."""
-        src_tbl = LetterTable(url=str(tmp_path / "rsrc"), spec=dict(n_tabs_=3)).build()
-        dst_tbl = LetterTable(url=str(tmp_path / "rdst"), spec=dict(n_tabs_=3),
+        src_tbl = LetterTable(datalake=str(tmp_path / "rsrc"), spec=dict(n_tabs_=3)).build()
+        dst_tbl = LetterTable(datalake=str(tmp_path / "rdst"), spec=dict(n_tabs_=3),
                               parallelization="multithreading", n_workers=2)
         dst_tbl.tab(1).UNSAFE_redirect(paths=src_tbl.tab(1).paths(), OVERRIDE=True)
 
@@ -1081,17 +1081,17 @@ class TestValidTabAndSentinels:
 
     def test_get_redirection_is_the_whole_api(self, tmp_path):
         """No private twin behind it any more; the property goes through it."""
-        tbl = LetterTable(url=str(tmp_path / "one"), spec=dict(n_tabs_=1))
+        tbl = LetterTable(datalake=str(tmp_path / "one"), spec=dict(n_tabs_=1))
         assert not hasattr(tbl.tab(0), '_get_redirection')
         assert tbl.tab(0).redirection is None and tbl.tab(0).get_redirection() is None
 
     def test_redirected_tabs_and_redirected_blocks(self, tmp_path):
         src_tbl = LetterTable(
-            url=str(tmp_path / "red_src"),
+            datalake=str(tmp_path / "red_src"),
             spec=dict(n_tabs_=3),
         ).build()
         dst_tbl = LetterTable(
-            url=str(tmp_path / "red_dst"),
+            datalake=str(tmp_path / "red_dst"),
             spec=dict(n_tabs_=3),
             parallelization="multithreading",
             n_workers=2,
@@ -1124,11 +1124,11 @@ class TestValidTabAndSentinels:
 
     def test_fold_valid_and_redirected_tabs(self, tmp_path):
         src_tbl = LetterTable(
-            url=str(tmp_path / "fold_src"),
+            datalake=str(tmp_path / "fold_src"),
             spec=dict(n_tabs_=4),
         ).build()
         dst_tbl = LetterTable(
-            url=str(tmp_path / "fold_dst"),
+            datalake=str(tmp_path / "fold_dst"),
             spec=dict(n_tabs_=4),
         )
         dst_tbl.tab(0).build()
@@ -1136,7 +1136,7 @@ class TestValidTabAndSentinels:
         dst_tbl.tab(2).UNSAFE_redirect(paths=src_tbl.tab(2).paths(), OVERRIDE=True)
 
         partition = DatapointPartition(
-            url=str(tmp_path / "partition"),
+            datalake=str(tmp_path / "partition"),
             validate_vars=False,
             spec=dict(
                 datapoint_table=dst_tbl,

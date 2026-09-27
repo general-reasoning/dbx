@@ -25,13 +25,13 @@ class SampleBlock(Datablock):
 
 
 def test_signature_and_norm_alias(tmp_path):
-    block = SampleBlock(url=str(tmp_path))
+    block = SampleBlock(datalake=str(tmp_path))
     assert block.signaturestr() == block.normstr()
     assert "(spec={'param': 'value'})" in block.signaturestr()
 
 
 def test_signature_and_hashes(tmp_path):
-    block = SampleBlock(url=str(tmp_path))
+    block = SampleBlock(datalake=str(tmp_path))
     sig = block.signaturestr()
     tp = block.typestr()
 
@@ -48,7 +48,7 @@ def test_signature_and_hashes(tmp_path):
 
 
 def test_super_properties_removed(tmp_path):
-    block = SampleBlock(url=str(tmp_path))
+    block = SampleBlock(datalake=str(tmp_path))
     assert not hasattr(block, 'superhash')
     assert not hasattr(block, 'supernorm')
     assert not hasattr(block, 'supersignature')
@@ -56,7 +56,7 @@ def test_super_properties_removed(tmp_path):
 
 
 def test_journal_writing_and_indexing(tmp_path):
-    block = SampleBlock(url=str(tmp_path))
+    block = SampleBlock(datalake=str(tmp_path))
     block.build()
 
     # Test standard journal call without index
@@ -72,13 +72,13 @@ def test_journal_writing_and_indexing(tmp_path):
     assert block.hash in j_indexed_hash.index
 
     # Test standalone journal function with index='code'
-    j_indexed_code = journal(SampleBlock, url=str(tmp_path), index='code')
+    j_indexed_code = journal(SampleBlock, datalake=str(tmp_path), index='code')
     assert j_indexed_code.index.name == 'code'
     assert block.code in j_indexed_code.index
 
 
 def test_invalid_index_raises_keyerror(tmp_path):
-    block = SampleBlock(url=str(tmp_path))
+    block = SampleBlock(datalake=str(tmp_path))
     block.build()
 
     with pytest.raises(KeyError):

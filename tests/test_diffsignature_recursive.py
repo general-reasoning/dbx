@@ -62,9 +62,9 @@ class Top(Datablock):
 
 
 def _tree(tmp_path, *, label='leaf', ratio=(0.75, 1.5), seed=42, epochs=10):
-    leaf = Leaf(url=str(tmp_path), spec=dict(label=label, ratio=ratio))
-    mid = Mid(url=str(tmp_path), spec=dict(leaf=leaf, seed=seed))
-    return Top(url=str(tmp_path), spec=dict(mid=mid, epochs=epochs))
+    leaf = Leaf(datalake=str(tmp_path), spec=dict(label=label, ratio=ratio))
+    mid = Mid(datalake=str(tmp_path), spec=dict(leaf=leaf, seed=seed))
+    return Top(datalake=str(tmp_path), spec=dict(mid=mid, epochs=epochs))
 
 
 class TestRecursiveDescent:
@@ -111,8 +111,8 @@ class TestRecursiveDescent:
     def test_url_difference_stays_at_the_top(self, tmp_path):
         class LegacyTop(Top):
             LEGACY_NORM = True
-        a = LegacyTop(url=str(tmp_path))
-        b = LegacyTop(url=str(tmp_path / 'elsewhere'))
+        a = LegacyTop(datalake=str(tmp_path))
+        b = LegacyTop(datalake=str(tmp_path / 'elsewhere'))
         diff = b.diffsubsig(a.subsignaturestr())
         assert 'url' in diff
 
@@ -160,8 +160,8 @@ class TestDeslash:
 
         a = _tree(tmp_path)
         b = _tree(tmp_path, label='CHANGED')
-        la = LegacyTree(url=str(tmp_path), spec=dict(mid=a.var.mid, epochs=10))
-        lb = LegacyTree(url=str(tmp_path), spec=dict(mid=b.var.mid, epochs=10))
+        la = LegacyTree(datalake=str(tmp_path), spec=dict(mid=a.var.mid, epochs=10))
+        lb = LegacyTree(datalake=str(tmp_path), spec=dict(mid=b.var.mid, epochs=10))
         raw = lb.diffsubsig(la.subsignaturestr(), recursive=False, raw=True)['spec'][0]
         assert '\\' in raw, "expected the flat form to carry escapes"
         clean = lb.diffsubsig(la.subsignaturestr(), recursive=False, raw=True,
@@ -232,11 +232,11 @@ class TestJournalFilters:
         diff came back empty and the real difference against the recorded build
         stayed hidden.
         """
-        a = self.Solo(url=str(tmp_path), spec={'x': 1})
+        a = self.Solo(datalake=str(tmp_path), spec={'x': 1})
         a.build()
         # A second INSTANCE: one journal file per instance, so writing from `a`
         # again would overwrite its build:end rather than add a row.
-        self.Solo(url=str(tmp_path), spec={'x': 1}).write_journal_entry(
+        self.Solo(datalake=str(tmp_path), spec={'x': 1}).write_journal_entry(
             event='UNSAFE_copy_from:END')
 
         filtered = a._journal_entry({'event': 'build:end', 'iloc': 0})
@@ -245,20 +245,20 @@ class TestJournalFilters:
         assert unfiltered.get('event') == 'UNSAFE_copy_from:END'
 
     def test_filtered_selector_reaches_the_right_norm(self, tmp_path):
-        a = self.Solo(url=str(tmp_path), spec={'x': 1})
+        a = self.Solo(datalake=str(tmp_path), spec={'x': 1})
         a.build()
-        b = self.Solo(url=str(tmp_path), spec={'x': 2})
+        b = self.Solo(datalake=str(tmp_path), spec={'x': 2})
         assert b.diffsubsig(journal={'event': 'build:end', 'iloc': 0}) == {
             'spec': {'x': (2, 1)}}
 
     def test_a_filter_matching_nothing_is_visible(self, tmp_path):
-        a = self.Solo(url=str(tmp_path), spec={'x': 1})
+        a = self.Solo(datalake=str(tmp_path), spec={'x': 1})
         a.build()
         with pytest.raises(Exception):
             a.diffsubsig(journal={'event': 'no:such:event', 'iloc': 0})
 
     def test_entry_path_rejects_extra_filters(self, tmp_path):
-        a = self.Solo(url=str(tmp_path), spec={'x': 1})
+        a = self.Solo(datalake=str(tmp_path), spec={'x': 1})
         a.build()
         entry_path = a.journal()['entry_path'].iloc[-1]
         with pytest.raises(ValueError, match='entry_path'):
@@ -310,7 +310,7 @@ class TestTypedLeaves:
             TOPICS = {'o': 'o.txt'}
             VAR = TestTypedLeaves._C
             def __build__(self): pass
-        return M(url='/tmp/dbx-typed'), L(url='/tmp/dbx-typed')
+        return M(datalake='/tmp/dbx-typed'), L(datalake='/tmp/dbx-typed')
 
     def test_types_survive_into_the_diff(self):
         modern, legacy = self._blocks()
@@ -371,8 +371,8 @@ class TestTypingNeverHidesADifference:
     def test_int_versus_float_is_still_reported(self):
         """``1 == 1.0`` in Python, so evaluating first would drop this entirely."""
         M = self._cls()
-        diff = M(url='/tmp/dbx-typed', spec=dict(n=1)).diffsubsig(
-            M(url='/tmp/dbx-typed', spec=dict(n=1.0)).subsignaturestr())
+        diff = M(datalake='/tmp/dbx-typed', spec=dict(n=1)).diffsubsig(
+            M(datalake='/tmp/dbx-typed', spec=dict(n=1.0)).subsignaturestr())
         assert diff == {'spec': {'n': ('1', '1.0')}}
 
     def test_quoted_versus_bare_is_still_visible(self):
@@ -383,7 +383,7 @@ class TestTypingNeverHidesADifference:
             def __build__(self): pass
 
         norm_quoted = "(url='/tmp/dbx-typed', spec={})"
-        diff = L(url='/tmp/dbx-typed').diffsubsig(norm_quoted, legacy=True)
+        diff = L(datalake='/tmp/dbx-typed').diffsubsig(norm_quoted, legacy=True)
         assert diff['url'] == ('/tmp/dbx-typed', "'/tmp/dbx-typed'")
 
 
@@ -405,7 +405,7 @@ class TestAbsentIsNotNone:
         class B(A):
             VAR = CB
 
-        diff = B(url=str(tmp_path)).diffsubsig(A(url=str(tmp_path)).subsignaturestr())
+        diff = B(datalake=str(tmp_path)).diffsubsig(A(datalake=str(tmp_path)).subsignaturestr())
         self_val, other_val = diff['spec']['added']
         assert self_val is None, "a real None value"
         assert other_val is ABSENT, "the key did not exist on the other side"
@@ -427,7 +427,7 @@ class TestAbsentIsNotNone:
         class B(A):
             VAR = CB
 
-        diff = B(url=str(tmp_path)).diffsubsig(A(url=str(tmp_path)).subsignaturestr(), raw=True)
+        diff = B(datalake=str(tmp_path)).diffsubsig(A(datalake=str(tmp_path)).subsignaturestr(), raw=True)
         assert diff['spec']['added'] == ('2', ABSENT)
 
 
@@ -445,7 +445,7 @@ class TestReportShowsTypes:
         class L(M):
             LEGACY_NORM = True
 
-        text = M(url='/tmp/dbx-typed').diffsubsig(
-            L(url='/tmp/dbx-typed').subsignaturestr(), report=True)
+        text = M(datalake='/tmp/dbx-typed').diffsubsig(
+            L(datalake='/tmp/dbx-typed').subsignaturestr(), report=True)
         assert 'self : 15.0' in text
         assert "other: '15.0'" in text

@@ -40,7 +40,7 @@ def test_exec_writes_journal_entry_for_datablock(tmp_path, monkeypatch):
     monkeypatch.setenv('DBX_ROOT', dbx_url)
 
     url = str(tmp_path / "exec_block")
-    expr = f"ExecSampleBlock(url='{url}')"
+    expr = f"ExecSampleBlock(datalake='{url}')"
     res = dbx.exec(expr, ExecSampleBlock=ExecSampleBlock)
 
     assert isinstance(res, ExecSampleBlock)
@@ -70,7 +70,7 @@ def test_exec_with_kwargs_and_datablock(tmp_path, monkeypatch):
     monkeypatch.setenv('DBX_ROOT', dbx_url)
 
     url = str(tmp_path / "exec_kw_block")
-    expr = f"ExecSampleBlock(url='{url}', spec=dict(val=val_param))"
+    expr = f"ExecSampleBlock(datalake='{url}', spec=dict(val=val_param))"
     res = dbx.exec(expr, ExecSampleBlock=ExecSampleBlock, val_param=99)
 
     assert isinstance(res, ExecSampleBlock)

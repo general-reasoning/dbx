@@ -61,14 +61,14 @@ class DummyTable(DatapointTable):
 
 @pytest.fixture
 def table(tmp_path):
-    tbl = DummyTable(url=str(tmp_path / 'table'))
+    tbl = DummyTable(datalake=str(tmp_path / 'table'))
     tbl.build()
     return tbl
 
 
 def test_datapoint_partition_and_fold(table, tmp_path):
     partition = DatapointPartition(
-        url=str(tmp_path / 'partition'),
+        datalake=str(tmp_path / 'partition'),
         spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0),
     ).build()
 
@@ -109,13 +109,13 @@ def test_datapoint_partition_and_fold(table, tmp_path):
 
 def test_partition_slice_parameter(table, tmp_path):
     p_by_str = DatapointPartition(
-        url=str(tmp_path / 'partition_str'),
+        datalake=str(tmp_path / 'partition_str'),
         spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice='letters'),
     ).build()
     assert p_by_str.valid()
 
     p_by_int = DatapointPartition(
-        url=str(tmp_path / 'partition_int'),
+        datalake=str(tmp_path / 'partition_int'),
         spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=1),
     ).build()
     assert p_by_int.valid()
@@ -125,12 +125,12 @@ def test_partition_slice_parameter(table, tmp_path):
 def test_a_part_resolves_its_tabs_redirections_through_the_table(table, tmp_path):
     """A part's tab i is the table's tab tab_indices[i]; so is its redirection."""
     partition = DatapointPartition(
-        url=str(tmp_path / 'partition_r'),
+        datalake=str(tmp_path / 'partition_r'),
         spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0),
     ).build()
     fold = partition.fold(0)
     real = fold.tab_indices[0]
-    other = DummyTable(url=str(tmp_path / 'elsewhere')).build()
+    other = DummyTable(datalake=str(tmp_path / 'elsewhere')).build()
     table.tab(real).UNSAFE_redirect(paths=other.tab(real).paths(), OVERRIDE=True)
 
     got = fold.get_tab_redirections(parallelization='inline')

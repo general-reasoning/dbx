@@ -38,7 +38,7 @@ class Mixed(Datablock):
 
 @pytest.fixture
 def block(tmp_path):
-    return Mixed(url=str(tmp_path))
+    return Mixed(datalake=str(tmp_path))
 
 
 class TestSYNTOPICIsItsOwnMarker:
@@ -102,7 +102,7 @@ class TestSYNTOPICCreatesNothing:
             TOPICS = {'data': 'data.txt', 'cache': SYNTOPIC}
             def __build__(self): pass
 
-        b = FileAndSyn(url=str(tmp_path))
+        b = FileAndSyn(datalake=str(tmp_path))
         b.leave_breadcrumbs()
         assert not os.path.exists(os.path.join(b.anchorkeypath, 'cache'))
         assert os.path.exists(b.path('data'))
@@ -122,7 +122,7 @@ class TestSYNTOPICIsVacuouslyValid:
             def __build__(self):
                 pass
 
-        b = AllSyn(url=str(tmp_path))
+        b = AllSyn(datalake=str(tmp_path))
         b.build()
         assert b.valid()
 
@@ -189,14 +189,14 @@ class TestSYNTOPICInTheSignature:
             TOPICS = {'data': 'data.txt'}
             def __build__(self): pass
 
-        a = WithCache(url=str(tmp_path), anchor='shared')
-        b = WithoutCache(url=str(tmp_path), anchor='shared')
+        a = WithCache(datalake=str(tmp_path), anchor='shared')
+        b = WithoutCache(datalake=str(tmp_path), anchor='shared')
         assert a.typestr() != b.typestr()
         assert a.hash != b.hash
 
     def test_it_renders_as_the_empty_tuple(self, tmp_path):
         """Pinned so the recorded form is a decision, not an accident."""
-        assert 'topic:cache=()' in Mixed(url=str(tmp_path)).typestr()
+        assert 'topic:cache=()' in Mixed(datalake=str(tmp_path)).typestr()
 
     def test_syntopic_and_dirtopic_give_different_signatures(self, tmp_path):
         class AsSyn(Datablock):
@@ -207,5 +207,5 @@ class TestSYNTOPICInTheSignature:
             TOPICS = {'x': DIRTOPIC}
             def __build__(self): pass
 
-        assert (AsSyn(url=str(tmp_path), anchor='s').typestr()
-                != AsDirTopic(url=str(tmp_path), anchor='s').typestr())
+        assert (AsSyn(datalake=str(tmp_path), anchor='s').typestr()
+                != AsDirTopic(datalake=str(tmp_path), anchor='s').typestr())

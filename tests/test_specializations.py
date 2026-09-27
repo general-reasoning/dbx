@@ -90,17 +90,17 @@ class V3(V2):
 
 
 def v1(url, **kw):
-    return V1(url=str(url), anchor=ANCHOR, spec={'sr': 16000}, **kw)
+    return V1(datalake=str(url), anchor=ANCHOR, spec={'sr': 16000}, **kw)
 
 
 def v2(url, **kw):
     spec = kw.pop('spec', {'sr': 16000})
-    return V2(url=str(url), anchor=ANCHOR, spec=spec, **kw)
+    return V2(datalake=str(url), anchor=ANCHOR, spec=spec, **kw)
 
 
 def v3(url, **kw):
     spec = kw.pop('spec', {'sr': 16000})
-    return V3(url=str(url), anchor=ANCHOR, spec=spec, **kw)
+    return V3(datalake=str(url), anchor=ANCHOR, spec=spec, **kw)
 
 
 @pytest.fixture
@@ -261,7 +261,7 @@ class TestItTravelsWithTheBlock:
     def test_a_relocation_resolves_again(self, tmp_path, built):
         """The carried paths are absolute, so a new url is a new question."""
         block = v2(tmp_path)
-        moved = block.set(url=str(tmp_path / 'elsewhere'))
+        moved = block.set(datalake=str(tmp_path / 'elsewhere'))
         assert moved.redirected_topics() == []
 
     def test_it_stays_out_of_quote(self, tmp_path, built):
@@ -484,11 +484,11 @@ class RowTableV2(RowTableV1):
 
 def v1table(url, **kw):
     spec = kw.pop('spec', {'n': 2})
-    return RowTableV1(url=str(url), anchor=TABLE_ANCHOR, spec=spec, **kw)
+    return RowTableV1(datalake=str(url), anchor=TABLE_ANCHOR, spec=spec, **kw)
 
 
 def v2table(url, **kw):
-    return RowTableV2(url=str(url), anchor=TABLE_ANCHOR, spec={'n': 2}, **kw)
+    return RowTableV2(datalake=str(url), anchor=TABLE_ANCHOR, spec={'n': 2}, **kw)
 
 
 @pytest.fixture
@@ -778,8 +778,8 @@ class TestOneJournalReadForAWholeTable:
         shared = table.child_specialization_journal()
         assert shared is not None
 
-        alone = RowTab(url=str(tmp_path), spec={'tab_idx': 0})
-        handed = RowTab(url=str(tmp_path), spec={'tab_idx': 0},
+        alone = RowTab(datalake=str(tmp_path), spec={'tab_idx': 0})
+        handed = RowTab(datalake=str(tmp_path), spec={'tab_idx': 0},
                         specialization_journal=shared)
         assert alone.specialization is not None           # not vacuous
         assert handed.specialization == alone.specialization
@@ -1045,7 +1045,7 @@ class TestSetIsAnOrdinaryConstruction:
     def test_a_move_to_empty_storage_comes_back_with_nothing(self, tmp_path):
         """No journal there, so nothing to resolve against -- rather than the
         old block's absolute paths, which describe another lake entirely."""
-        moved = self._redirected(tmp_path).set(url=str(tmp_path / 'elsewhere'))
+        moved = self._redirected(tmp_path).set(datalake=str(tmp_path / 'elsewhere'))
         assert moved._redirected_paths_ is None
 
     def test_a_move_that_still_qualifies_resolves_for_itself(self, tmp_path):

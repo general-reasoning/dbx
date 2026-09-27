@@ -86,7 +86,7 @@ class TwoDeps(Datablock):
 
 def _quote_upstream(tmp_path, name='up'):
     """Create a quoted spec value for an Upstream block at the given path."""
-    return quote(Upstream, url=str(tmp_path / name))
+    return quote(Upstream, datalake=str(tmp_path / name))
 
 
 def _make(cls, tmp_path, **extra_spec):
@@ -108,7 +108,7 @@ class TestValidateCfg:
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamNoSkip(
-            url=str(tmp_path / 'down'),
+            datalake=str(tmp_path / 'down'),
             spec={'src': up_spec},
         )
         result = down.valid_var()
@@ -120,7 +120,7 @@ class TestValidateCfg:
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamWithSkip(
-            url=str(tmp_path / 'down'),
+            datalake=str(tmp_path / 'down'),
             spec={'src': up_spec},
             validate_vars=False,
         )
@@ -132,7 +132,7 @@ class TestValidateCfg:
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamWithSkip(
-            url=str(tmp_path / 'down'),
+            datalake=str(tmp_path / 'down'),
             spec={'src': up_spec},
             validate_vars=False,
         )
@@ -145,7 +145,7 @@ class TestValidateCfg:
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamNoSkip(
-            url=str(tmp_path / 'down'),
+            datalake=str(tmp_path / 'down'),
             spec={'src': up_spec},
         )
         with pytest.raises(ValueError, match="Not all upstream Datablocks"):
@@ -154,7 +154,7 @@ class TestValidateCfg:
     def test_skip_all_deps(self, tmp_path):
         """validate_vars=False skips all deps."""
         down = TwoDeps(
-            url=str(tmp_path / 'down'),
+            datalake=str(tmp_path / 'down'),
             spec={
                 'required': _quote_upstream(tmp_path, 'req'),
                 'optional': _quote_upstream(tmp_path, 'opt'),
@@ -167,7 +167,7 @@ class TestValidateCfg:
     def test_skip_build_succeeds_with_invalid_deps(self, tmp_path):
         """With validate_vars=False, build succeeds even if all deps are invalid."""
         down = TwoDeps(
-            url=str(tmp_path / 'down'),
+            datalake=str(tmp_path / 'down'),
             spec={
                 'required': _quote_upstream(tmp_path, 'req'),
                 'optional': _quote_upstream(tmp_path, 'opt'),
@@ -180,7 +180,7 @@ class TestValidateCfg:
     def test_default_build_raises_on_invalid_deps(self, tmp_path):
         """Default validate_vars=True, build fails if deps are invalid."""
         down = TwoDeps(
-            url=str(tmp_path / 'down'),
+            datalake=str(tmp_path / 'down'),
             spec={
                 'required': _quote_upstream(tmp_path, 'req'),
                 'optional': _quote_upstream(tmp_path, 'opt'),
@@ -194,7 +194,7 @@ class TestValidateCfg:
         up_spec = _quote_upstream(tmp_path)
 
         down = DownstreamWithSkip(
-            url=str(tmp_path / 'down'),
+            datalake=str(tmp_path / 'down'),
             spec={'src': up_spec},
             validate_vars=False,
         )

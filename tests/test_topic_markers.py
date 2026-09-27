@@ -103,7 +103,7 @@ class MarkedTable(DatapointTable):
 
 
 def block(cls, tmp_path, **kwargs):
-    return cls(url=str(tmp_path), **kwargs)
+    return cls(datalake=str(tmp_path), **kwargs)
 
 
 # ---------------------------------------------------------------------------

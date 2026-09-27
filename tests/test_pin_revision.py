@@ -597,7 +597,7 @@ class TestInstRemoteEqualsRinst:
 
         monkeypatch.setattr(dbxmod, 'remote', lambda **kw: calls.append(kw) or _Handle())
         monkeypatch.setattr(dbxmod.DatajournalEntry, 'read',
-                            lambda self, *a, **k: '$pkg.mod.Block(url="u")')
+                            lambda self, *a, **k: '$pkg.mod.Block(datalake="u")')
         return calls
 
     @pytest.fixture

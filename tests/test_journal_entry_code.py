@@ -33,7 +33,7 @@ class Built(Datablock):
 
 
 def block(tmp_path, x=1, **kwargs):
-    return Built(url=str(tmp_path), spec={'x': x}, **kwargs)
+    return Built(datalake=str(tmp_path), spec={'x': x}, **kwargs)
 
 
 class TestEveryCallGetsItsOwnCode:

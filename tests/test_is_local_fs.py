@@ -17,22 +17,22 @@ class TestIsLocalFs(unittest.TestCase):
 
     def test_local_bare_path(self):
         """A bare path like /tmp/... should use the local filesystem."""
-        block = Datablock(url="/tmp/dbx_test_local_fs")
+        block = Datablock(datalake="/tmp/dbx_test_local_fs")
         self.assertTrue(block.is_local_fs)
 
     def test_local_file_url(self):
         """An explicit file:// URL should be recognized as local."""
-        block = Datablock(url="file:///tmp/dbx_test_local_fs")
+        block = Datablock(datalake="file:///tmp/dbx_test_local_fs")
         self.assertTrue(block.is_local_fs)
 
     def test_memory_fs(self):
         """A memory:// URL should NOT be local."""
-        block = Datablock(url="memory://dbx_test_local_fs")
+        block = Datablock(datalake="memory://dbx_test_local_fs")
         self.assertFalse(block.is_local_fs)
 
     def test_protocol_tuple(self):
         """When fs.protocol is a tuple, the first element is used."""
-        block = Datablock(url="/tmp/dbx_test_local_fs")
+        block = Datablock(datalake="/tmp/dbx_test_local_fs")
         # Local filesystem protocol can be a tuple ('file', 'local')
         # on some fsspec versions; either way the property should handle it.
         original_protocol = block.fs.protocol
@@ -48,7 +48,7 @@ class TestIsLocalFs(unittest.TestCase):
 
     def test_protocol_string(self):
         """When fs.protocol is a string, it's used directly."""
-        block = Datablock(url="/tmp/dbx_test_local_fs")
+        block = Datablock(datalake="/tmp/dbx_test_local_fs")
         original_protocol = block.fs.protocol
         try:
             block.fs.protocol = 'file'
@@ -68,7 +68,7 @@ class TestIsLocalFs(unittest.TestCase):
     def test_survives_pickle_roundtrip(self):
         """is_local_fs should work after pickling and unpickling."""
         import pickle
-        block = Datablock(url="/tmp/dbx_test_local_fs")
+        block = Datablock(datalake="/tmp/dbx_test_local_fs")
         self.assertTrue(block.is_local_fs)
 
         data = pickle.dumps(block)
@@ -85,7 +85,7 @@ class TestIsLocalFsSubclass(unittest.TestCase):
         class MyBlock(Datablock):
             pass
 
-        block = MyBlock(url="/tmp/dbx_test_local_fs")
+        block = MyBlock(datalake="/tmp/dbx_test_local_fs")
         self.assertTrue(block.is_local_fs)
 
 

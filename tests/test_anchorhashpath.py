@@ -13,7 +13,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         class MyBlock(Datablock):
             pass
         
-        block = MyBlock(url="/tmp/dbx_test")
+        block = MyBlock(datalake="/tmp/dbx_test")
         # Default keyby='tag_version_hash'; key includes version + hash components
         self.assertTrue(hasattr(block, 'anchorkey'))
         self.assertTrue(hasattr(block, 'anchorkeypath'))

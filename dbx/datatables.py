@@ -1105,7 +1105,7 @@ class Datatable(DatatableBase, Datastack):
             # by tab. Without it a tab fell back to DBX_ROOT, and a table built
             # anywhere else (a test's tmp_path, a second lake) wrote its tabs to
             # an unrelated root, where they were then looked for in vain.
-            url=self._url_,
+            datalake=self._datalake_,
             storage_options=self.storage_options,
             capture_output=self.capture_output,
             cache=getattr(self, 'cache', None),
@@ -1651,7 +1651,7 @@ class DatatablePartition(Datablock):
             # As a table gives its tabs its url: a fold of a partition belongs
             # where the partition does, not wherever DBX_ROOT happens to point
             # in the process that asks for it.
-            url=self._url_,
+            datalake=self._datalake_,
             storage_options=self.storage_options,
             spec=dict(
                 partition=self,
@@ -1782,9 +1782,9 @@ class DatatablePart(Datatable):
             streaming_kwargs['streams'] = self._tab_streams(slice, local)
             return StreamingDataset(**streaming_kwargs)
 
-    def _blocks_url_(self):
+    def _blocks_datalake_(self):
         """A part's tabs are its table's, and are stored where they are."""
-        return self.var.partition.datapoint_table._blocks_url_()
+        return self.var.partition.datapoint_table._blocks_datalake_()
 
     def _block_class_(self):
         """A part's tabs are its table's, and so is its BLOCK."""

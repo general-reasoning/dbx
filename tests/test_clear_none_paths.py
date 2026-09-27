@@ -90,7 +90,7 @@ class MixedTopics(Datablock):
 # ---------------------------------------------------------------------------
 
 def _make_block(cls, tmp_path, **kwargs):
-    return cls(url=str(tmp_path), **kwargs)
+    return cls(datalake=str(tmp_path), **kwargs)
 
 
 # ---------------------------------------------------------------------------

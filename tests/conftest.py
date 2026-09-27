@@ -1,6 +1,6 @@
 """Suite-wide isolation from the developer's environment.
 
-A block constructed without ``url=`` falls back to ``DBX_ROOT``, so a test
+A block constructed without ``datalake=`` falls back to ``DBX_ROOT``, so a test
 that leaves it out addresses whatever root the shell happens to point at --
 which for anyone with a real one configured is a LIVE DATALAKE. Those tests
 then need that lake's driver installed (``adlfs`` for ``abfss://``, absent
@@ -26,6 +26,7 @@ _TESTROOT = tempfile.mkdtemp(prefix='dbx-tests-')
 # Assigned at import, not from a fixture: conftest is imported before the test
 # modules are, so this is in place even for a block built at module scope.
 os.environ['DBX_ROOT'] = _TESTROOT
+os.environ.pop('DBX_DATALAKE', None)      # it outranks DBX_ROOT -- and may name a real lake
 os.environ.pop('DBX_URL', None)          # the alias DBX_ROOT is read ahead of
 os.environ['DBX_LOCAL'] = os.path.join(_TESTROOT, 'local')
 os.environ.pop('DBX_CACHE', None)        # else streaming caches land in the developer's

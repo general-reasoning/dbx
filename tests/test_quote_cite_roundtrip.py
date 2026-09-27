@@ -72,10 +72,10 @@ class Top(Datablock):
 @pytest.fixture
 def nested(tmp_path):
     """``Top -> Mid -> Leaf``, each tagged and with an operational kwarg."""
-    leaf = Leaf(url=str(tmp_path), spec=dict(label='leaf', size=3)).set(tag='leaf')
-    mid = Mid(url=str(tmp_path), spec=dict(leaf=leaf, seed=42),
+    leaf = Leaf(datalake=str(tmp_path), spec=dict(label='leaf', size=3)).set(tag='leaf')
+    mid = Mid(datalake=str(tmp_path), spec=dict(leaf=leaf, seed=42),
               local=str(tmp_path / 'local'), n_workers=7).set(tag='mid')
-    return Top(url=str(tmp_path), spec=dict(mid=mid, epochs=10),
+    return Top(datalake=str(tmp_path), spec=dict(mid=mid, epochs=10),
                local=str(tmp_path / 'local'), n_workers=7).set(tag='top')
 
 
@@ -276,7 +276,7 @@ class TestCiteInJournal:
 
     @pytest.fixture
     def built(self, tmp_path):
-        b = Solo(url=str(tmp_path), spec=dict(label='solo')).set(tag='solo')
+        b = Solo(datalake=str(tmp_path), spec=dict(label='solo')).set(tag='solo')
         b.build()
         return b
 

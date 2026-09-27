@@ -70,7 +70,7 @@ class RemoteTab:
 
 @pytest.fixture
 def table(tmp_path):
-    return Table(url=str(tmp_path), spec=dict(n_tabs_=2))
+    return Table(datalake=str(tmp_path), spec=dict(n_tabs_=2))
 
 
 @pytest.fixture

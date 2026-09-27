@@ -109,7 +109,7 @@ def test_datablock_logger_has_working_stack_depth(monkeypatch, tmp_path):
         def __build__(self, *a, **kw): return self
         def __read__(self, topic): return None
 
-    block = SimpleBlock(url=str(tmp_path))
+    block = SimpleBlock(datalake=str(tmp_path))
     assert block.log.stack_depth is not None
     assert isinstance(block.log.stack_depth, int)
 

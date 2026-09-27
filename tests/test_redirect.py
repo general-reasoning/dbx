@@ -58,7 +58,7 @@ class Renamed(Built):
 
 
 def block(tmp_path, x=1, cls=Built, **kwargs):
-    return cls(url=str(tmp_path), spec={'x': x}, **kwargs)
+    return cls(datalake=str(tmp_path), spec={'x': x}, **kwargs)
 
 
 @pytest.fixture
@@ -235,7 +235,7 @@ class TestReadingFollows:
         broken.UNSAFE_redirect(filter={'hash': src.hash, 'event': 'build:end'}, OVERRIDE=True)
         assert broken.read('output') == 'data-1'
 
-        rebuilt = Built(url=str(tmp_path), spec={'x': 1})
+        rebuilt = Built(datalake=str(tmp_path), spec={'x': 1})
         with open(rebuilt.path('output', ensure_dirpath=True), 'w') as f:
             f.write('data-1-rebuilt')
         rebuilt.write_journal_entry(event='build:end')
@@ -262,7 +262,7 @@ class TestTopicMap:
     def renamed_source(self, tmp_path):
         """Under Built's anchor: a filter selects from the journal of the block
         doing the redirecting, and a journal is per anchor."""
-        src = Renamed(url=str(tmp_path), spec={'x': 1}, anchor=Built(url=str(tmp_path)).anchor)
+        src = Renamed(datalake=str(tmp_path), spec={'x': 1}, anchor=Built(datalake=str(tmp_path)).anchor)
         src.build()
         return src, src.journal(loc=0).block.id
 
@@ -280,7 +280,7 @@ class TestTopicMap:
 
     def test_an_unmentioned_topic_keeps_its_name(self, tmp_path):
         """Topics line up by name to begin with; the map only adds to that."""
-        src = TwoTopics(url=str(tmp_path), spec={'x': 1})
+        src = TwoTopics(datalake=str(tmp_path), spec={'x': 1})
         src.build()
         code = src.journal(loc=0).block.id
         b = block(tmp_path, x=2, cls=TwoTopics)
@@ -318,7 +318,7 @@ class TestValidity:
             def __valid__(self, path=None):
                 return False
 
-        assert not Fussy(url=str(tmp_path), spec={'x': 1}).build().valid()
+        assert not Fussy(datalake=str(tmp_path), spec={'x': 1}).build().valid()
 
     def test_the_hook_is_given_no_path_without_a_redirection(self, tmp_path):
         seen = []
@@ -328,7 +328,7 @@ class TestValidity:
                 seen.append(path)
                 return super().__valid__(path=path)
 
-        Watching(url=str(tmp_path), spec={'x': 1}).valid()
+        Watching(datalake=str(tmp_path), spec={'x': 1}).valid()
         assert seen == [None]
 
     def test_the_hook_is_given_the_redirected_to_block_dir(self, source, tmp_path):
@@ -340,7 +340,7 @@ class TestValidity:
                 seen.append(path)
                 return super().__valid__(path=path)
 
-        b = Watching(url=str(tmp_path), spec={'x': 2}, anchor=src.anchor)
+        b = Watching(datalake=str(tmp_path), spec={'x': 2}, anchor=src.anchor)
         b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
         b.valid()
         assert seen == [src.anchorkeypath]
@@ -353,7 +353,7 @@ class TestValidity:
                 seen.append(path)
                 return super().__valid__(path=path)
 
-        b = Watching(url=str(tmp_path), spec={'x': 2})
+        b = Watching(datalake=str(tmp_path), spec={'x': 2})
         b.UNSAFE_redirect(paths={'output': str(tmp_path / 'x.txt')}, OVERRIDE=True)
         b.valid()
         assert seen == [None]
@@ -544,7 +544,7 @@ class TestLegacyRedirections:
         _, code = source
         broken.write_journal_entry(event='UNSAFE_redirect', redirection=code,
                                    journal_prefix='redirect-')
-        fresh = Built(url=broken._url_, spec={'x': 2})
+        fresh = Built(datalake=broken._url_, spec={'x': 2})
         assert fresh.redirection.entry.block.id == code
         assert fresh.read('output') == 'data-1'
 
@@ -612,26 +612,26 @@ class TestRestructuredRedirect:
     def test_redirect_dict_validation(self, tmp_path):
         # Multiple non-None
         with pytest.raises(ValueError, match="exactly one"):
-            Built(url=str(tmp_path), redirect={'code': 'c1', 'paths': {'output': '/x'}})
+            Built(datalake=str(tmp_path), redirect={'code': 'c1', 'paths': {'output': '/x'}})
 
         # Zero non-None
         with pytest.raises(ValueError, match="exactly one"):
-            Built(url=str(tmp_path), redirect={'code': None, 'filter': None, 'paths': None})
+            Built(datalake=str(tmp_path), redirect={'code': None, 'filter': None, 'paths': None})
 
     def test_redirect_to_paths(self, tmp_path):
         p = {'output': '/custom/output.txt'}
-        b = Built(url=str(tmp_path), redirect={'paths': p})
+        b = Built(datalake=str(tmp_path), redirect={'paths': p})
         assert b._paths_ == p
         assert b.path('output') == '/custom/output.txt'
         # Neither: a redirection says where this block's data is READ from, and
         # a block does not become a different block by being read elsewhere.
         assert '_paths_' not in b.typestr()
         assert '_paths_' not in b.signaturestr()
-        assert b.hash == Built(url=str(tmp_path)).hash
+        assert b.hash == Built(datalake=str(tmp_path)).hash
 
     def test_redirect_to_code(self, tmp_path, source):
         src_block, code = source
-        b = Built(url=str(tmp_path), spec={'x': 2}, redirect={'code': code})
+        b = Built(datalake=str(tmp_path), spec={'x': 2}, redirect={'code': code})
         assert b._paths_ == src_block.paths()
         assert b.path('output') == src_block.path('output')
 
@@ -648,7 +648,7 @@ class TestRestructuredRedirect:
 
     def test_redirect_to_filter(self, tmp_path, source):
         src_block, code = source
-        b = Built(url=str(tmp_path), spec={'x': 2}, redirect={'filter': {'event': 'build:end'}})
+        b = Built(datalake=str(tmp_path), spec={'x': 2}, redirect={'filter': {'event': 'build:end'}})
         assert b._paths_ == src_block.paths()
         assert b.path('output') == src_block.path('output')
 
@@ -660,11 +660,11 @@ class TestRestructuredRedirect:
 
     def test_redirect_code_not_found(self, tmp_path):
         with pytest.raises(ValueError, match="no journal entry found"):
-            Built(url=str(tmp_path), redirect={'code': 'nonexistent_code'})
+            Built(datalake=str(tmp_path), redirect={'code': 'nonexistent_code'})
 
     def test_redirect_filter_not_found(self, tmp_path):
         with pytest.raises(ValueError, match="matches no journal entry"):
-            Built(url=str(tmp_path), redirect={'filter': {'event': 'nonexistent_event'}})
+            Built(datalake=str(tmp_path), redirect={'filter': {'event': 'nonexistent_event'}})
 
     def test_custom_path_hook_specialization(self, tmp_path):
         class SpecialBlock(Built):
@@ -672,18 +672,18 @@ class TestRestructuredRedirect:
                 return f"/special/{topic}.dat"
 
         # Without redirect, uses __path__ hook
-        b_normal = SpecialBlock(url=str(tmp_path))
+        b_normal = SpecialBlock(datalake=str(tmp_path))
         assert b_normal.path('output') == "/special/output.dat"
 
         # With redirect, uses self._paths_
-        b_redirected = SpecialBlock(url=str(tmp_path), redirect={'paths': {'output': '/override.dat'}})
+        b_redirected = SpecialBlock(datalake=str(tmp_path), redirect={'paths': {'output': '/override.dat'}})
         assert b_redirected.path('output') == "/override.dat"
 
 
 class TestNewRedirectFeatures:
 
     def test_unsafe_redirect_paths_parameter(self, tmp_path):
-        b = Built(url=str(tmp_path))
+        b = Built(datalake=str(tmp_path))
         b.UNSAFE_redirect(paths={'output': '/custom/path.txt'}, OVERRIDE=True)
         assert b.path('output') == '/custom/path.txt'
         assert b._paths_ == {'output': '/custom/path.txt'}
@@ -691,7 +691,7 @@ class TestNewRedirectFeatures:
         assert '_paths_' not in b.typestr()
 
     def test_hidden_topic_redirection_and_clear(self, tmp_path):
-        b = Built(url=str(tmp_path))
+        b = Built(datalake=str(tmp_path))
         b.UNSAFE_redirect(paths={'output': '/custom/path.txt'}, OVERRIDE=True)
         assert b.redirection is not None
         assert b.redirection.paths == {'output': '/custom/path.txt'}
@@ -707,9 +707,9 @@ class TestNewRedirectFeatures:
         class DummyStack(Datastack):
             BLOCK = Built
             def blocks(self):
-                return [Built(url=str(tmp_path), spec={'x': i}) for i in range(3)]
+                return [Built(datalake=str(tmp_path), spec={'x': i}) for i in range(3)]
 
-        stack = DummyStack(url=str(tmp_path))
+        stack = DummyStack(datalake=str(tmp_path))
         results = stack.UNSAFE_redirect_blocks(
             redirector=lambda blk, stack, idx, journal=None: {'paths': {'output': f"/redirected/{blk.spec['x']}.txt"}},
             OVERRIDE=True
@@ -723,15 +723,15 @@ class TestNewRedirectFeatures:
         from dbx.datablocks import Datastack
 
         # Build one instance so there is a journal entry for the child block anchor
-        src = Built(url=str(tmp_path), spec={'x': 100}).build()
+        src = Built(datalake=str(tmp_path), spec={'x': 100}).build()
         src_code = src.journal(loc=0).block.id
 
         class DummyStack(Datastack):
             BLOCK = Built
             def blocks(self):
-                return [Built(url=str(tmp_path), spec={'x': i}) for i in range(2)]
+                return [Built(datalake=str(tmp_path), spec={'x': i}) for i in range(2)]
 
-        stack = DummyStack(url=str(tmp_path))
+        stack = DummyStack(datalake=str(tmp_path))
         passed_journals = []
 
         def redirect_fn(blk, stack, idx, journal=None):
@@ -754,7 +754,7 @@ class TestNewRedirectFeatures:
 
     def test_unsafe_redirect_filter_records_entry_id(self, source, tmp_path):
         src, code = source
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         ret = b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
         assert ret is True
         assert b.journal(loc=0).block.redirection == code
@@ -762,11 +762,11 @@ class TestNewRedirectFeatures:
         assert b.path('output') == src.path('output')
 
     def test_unsafe_redirect_topic_map_remapped_paths(self, tmp_path):
-        src = Renamed(url=str(tmp_path), spec={'x': 1}, anchor=Built(url=str(tmp_path)).anchor)
+        src = Renamed(datalake=str(tmp_path), spec={'x': 1}, anchor=Built(datalake=str(tmp_path)).anchor)
         src.build()
         code = src.journal(loc=0).block.id
 
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         assert b.UNSAFE_redirect(filter={'entry_code': code}, topic_map={'output': 'result'}, OVERRIDE=True) is True
         assert b._paths_ == {'output': src.path('result')}
         assert b.path('output') == src.path('result')
@@ -783,20 +783,20 @@ class TestNewRedirectFeatures:
         assert b._paths_ is None
 
     def test_unsafe_redirect_filter_fallback_to_paths(self, tmp_path):
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         b.UNSAFE_redirect(filter={'entry_code': 'nonexistent'}, paths={'output': '/custom/fallback.txt'}, OVERRIDE=True)
         assert b._paths_ == {'output': '/custom/fallback.txt'}
         assert b.path('output') == '/custom/fallback.txt'
         assert b.journal(loc=0).block.redirection == {'output': '/custom/fallback.txt'}
 
     def test_unsafe_redirect_drops_redirect_kwarg(self, tmp_path):
-        b = Built(url=str(tmp_path))
+        b = Built(datalake=str(tmp_path))
         with pytest.raises(TypeError, match="unexpected keyword argument 'redirect'"):
             b.UNSAFE_redirect(redirect={'paths': {'output': '/x'}}, OVERRIDE=True)
 
     def test_unsafe_redirect_with_provided_journal_and_filter(self, source, tmp_path):
         src, code = source
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         j = src.journal()
         
         # Patch b.journal to ensure it's not called
@@ -809,7 +809,7 @@ class TestNewRedirectFeatures:
 
     def test_unsafe_redirect_with_provided_journal_no_filter(self, source, tmp_path):
         src, code = source
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         j = src.journal(entry_code=code)
         
         with patch.object(b, 'journal', side_effect=AssertionError("b.journal should not be called")):
@@ -821,7 +821,7 @@ class TestNewRedirectFeatures:
 
     def test_unsafe_redirect_remote_instantiation(self, source, tmp_path):
         src, code = source
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         j = src.journal(entry_code=code)
 
         # Simulate a journal entry that doesn't have .paths stored directly
@@ -842,7 +842,7 @@ class TestNewRedirectFeatures:
 
     def test_unsafe_redirect_with_redirector_filter(self, source, tmp_path):
         src, code = source
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: {'filter': {'entry_code': code}}, OVERRIDE=True)
         assert ret is True
         assert b.journal(loc=0).block.redirection == code
@@ -850,7 +850,7 @@ class TestNewRedirectFeatures:
         assert b.path('output') == src.path('output')
 
     def test_unsafe_redirect_with_redirector_paths(self, tmp_path):
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: {'paths': {'output': '/custom/path.txt'}}, OVERRIDE=True)
         assert ret is True
         assert b.journal(loc=0).block.redirection == {'output': '/custom/path.txt'}
@@ -859,7 +859,7 @@ class TestNewRedirectFeatures:
 
     def test_unsafe_redirect_with_redirector_overrides_params(self, source, tmp_path):
         src, code = source
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         # Explicit filter is 'wrong_code', but redirector returns the correct code
         ret = b.UNSAFE_redirect(
             redirector=lambda blk, journal=None: {'filter': {'entry_code': code}},
@@ -871,13 +871,13 @@ class TestNewRedirectFeatures:
         assert b._paths_ == src.paths()
 
     def test_unsafe_redirect_with_redirector_returning_none(self, tmp_path):
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: None, OVERRIDE=True)
         assert ret is False
 
     def test_unsafe_redirect_with_redirector_returning_none_falls_back(self, source, tmp_path):
         src, code = source
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         # Redirector returns None, but explicit filter is provided -> falls back to filter
         ret = b.UNSAFE_redirect(redirector=lambda blk, journal=None: None, filter={'entry_code': code}, OVERRIDE=True)
         assert ret is True
@@ -886,17 +886,17 @@ class TestNewRedirectFeatures:
 
     def test_unsafe_redirect_validate_parameter(self, source, tmp_path):
         src, code = source
-        b_valid = Built(url=str(tmp_path), spec={'x': 2})
+        b_valid = Built(datalake=str(tmp_path), spec={'x': 2})
         # Redirect to valid source with validate=True -> succeeds
         ret_valid = b_valid.UNSAFE_redirect(filter={'entry_code': code}, validate=True, OVERRIDE=True)
         assert ret_valid is True
 
-        b_invalid = Built(url=str(tmp_path), spec={'x': 3})
+        b_invalid = Built(datalake=str(tmp_path), spec={'x': 3})
         # Redirect to non-existent file with validate=True -> fails (returns False)
         ret_invalid = b_invalid.UNSAFE_redirect(paths={'output': str(tmp_path / 'nonexistent.txt')}, validate=True, OVERRIDE=True)
         assert ret_invalid is False
 
-        b_invalid_no_validate = Built(url=str(tmp_path), spec={'x': 4})
+        b_invalid_no_validate = Built(datalake=str(tmp_path), spec={'x': 4})
         # Same non-existent redirect with validate=False -> returns True
         ret_no_val = b_invalid_no_validate.UNSAFE_redirect(paths={'output': str(tmp_path / 'nonexistent.txt')}, validate=False, OVERRIDE=True)
         assert ret_no_val is True
@@ -908,9 +908,9 @@ class TestNewRedirectFeatures:
         class DummyStack(Datastack):
             BLOCK = Built
             def blocks(self):
-                return [Built(url=str(tmp_path), spec={'x': i}) for i in range(2)]
+                return [Built(datalake=str(tmp_path), spec={'x': i}) for i in range(2)]
 
-        stack = DummyStack(url=str(tmp_path))
+        stack = DummyStack(datalake=str(tmp_path))
         # Valid redirection with validate=True
         results = stack.UNSAFE_redirect_blocks(
             redirector=lambda blk, stack, idx, journal=None: {'filter': {'entry_code': code}},
@@ -933,7 +933,7 @@ class TestNewRedirectFeatures:
         assert src.valid()
         assert src.read('output') == 'data-1'
 
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         b.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
         assert b.valid()
         assert b.read('output') == 'data-1'
@@ -952,15 +952,15 @@ class TestNewRedirectFeatures:
 
     def test_unsafe_redirect_chaining(self, tmp_path):
         """Block A is built. Block B redirects to A. Block C redirects to B."""
-        a = Built(url=str(tmp_path), spec={'x': 1}).build()
+        a = Built(datalake=str(tmp_path), spec={'x': 1}).build()
         code_a = a.journal(loc=0).block.id
 
-        b = Built(url=str(tmp_path), spec={'x': 2})
+        b = Built(datalake=str(tmp_path), spec={'x': 2})
         b.UNSAFE_redirect(filter={'entry_code': code_a}, OVERRIDE=True)
         code_b = b.journal(loc=0).block.id
 
         # C redirects to B's journal entry
-        c = Built(url=str(tmp_path), spec={'x': 3})
+        c = Built(datalake=str(tmp_path), spec={'x': 3})
         c.UNSAFE_redirect(filter={'entry_code': code_b}, OVERRIDE=True)
 
         assert c.valid()
@@ -972,14 +972,14 @@ class TestNewRedirectFeatures:
         from dbx.datablocks import Datastack
 
         # Build source blocks
-        src_blocks = [Built(url=str(tmp_path), spec={'x': 10 + i}).build() for i in range(3)]
+        src_blocks = [Built(datalake=str(tmp_path), spec={'x': 10 + i}).build() for i in range(3)]
 
         class DummyStack(Datastack):
             BLOCK = Built
             def blocks(self):
-                return [Built(url=str(tmp_path), spec={'x': i}) for i in range(3)]
+                return [Built(datalake=str(tmp_path), spec={'x': i}) for i in range(3)]
 
-        stack = DummyStack(url=str(tmp_path))
+        stack = DummyStack(datalake=str(tmp_path))
 
         # Redirect stack child blocks to corresponding source blocks
         results = stack.UNSAFE_redirect_blocks(
@@ -1105,7 +1105,7 @@ class TestDryValidateOverBlocks:
             def blocks(self):
                 return [block(tmp_path, x=i) for i in range(3)]
 
-        stack = DummyStack(url=str(tmp_path))
+        stack = DummyStack(datalake=str(tmp_path))
         results = stack.UNSAFE_redirect_blocks(
             redirector=lambda blk, stack, idx, journal=None: dict(
                 paths={'output': there if idx < 2 else absent},
@@ -1126,7 +1126,7 @@ class TestDryValidateOverBlocks:
             def blocks(self):
                 return [block(tmp_path, x=i) for i in range(2)]
 
-        results = DummyStack(url=str(tmp_path)).UNSAFE_redirect_blocks(
+        results = DummyStack(datalake=str(tmp_path)).UNSAFE_redirect_blocks(
             redirector=lambda blk, stack, idx, journal=None: {'paths': {'output': '/redirected/x.txt'}},
             OVERRIDE=True)
         assert results == [True, True]

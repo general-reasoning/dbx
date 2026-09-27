@@ -63,7 +63,7 @@ class DummySampleTable(DatapointTable):
 
     def __tab__(self, idx: int, tag=None) -> DummySampleTab:
         return self.TAB(
-            url=self.path('tabs'),
+            datalake=self.path('tabs'),
             spec=dict(samples_per_tab=self.var.samples_per_tab),
             tag=tag or f"tab_{idx}",
         )
@@ -108,7 +108,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
     url = str(tmp_path)
 
     sampletable = DummySampleTable(
-        url=url,
+        datalake=url,
         spec=dict(samples_per_tab=5),
         tag="sample_table",
     ).build()
@@ -116,7 +116,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretable = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=eval_factory,
@@ -130,7 +130,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
     ).build()
 
     probe = FeatureAffineLogisticProbe(
-        url=url,
+        datalake=url,
         spec=dict(
             feature_table=featuretable,
             collator=Datacollator(spec=dict(
@@ -165,10 +165,10 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
     in declaration order, and the layout records the widths."""
     url = str(tmp_path)
 
-    sampletable = DummySampleTable(url=url, spec=dict(samples_per_tab=5),
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5),
                                    tag="sample_table_multi").build()
     featuretable = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
@@ -182,7 +182,7 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
     ).build()
 
     probe = FeatureAffineLogisticProbe(
-        url=url,
+        datalake=url,
         spec=dict(
             feature_table=featuretable,
             # 'final' is 8 wide, the upstream 'samples' column is 4.
@@ -205,10 +205,10 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
 def test_affine_logistic_probe_refuses_a_missing_signal_column(tmp_path):
     """No silent fallback to an arbitrary column."""
     url = str(tmp_path)
-    sampletable = DummySampleTable(url=url, spec=dict(samples_per_tab=5),
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5),
                                    tag="sample_table_bad").build()
     featuretable = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
@@ -222,7 +222,7 @@ def test_affine_logistic_probe_refuses_a_missing_signal_column(tmp_path):
     ).build()
 
     probe = FeatureAffineLogisticProbe(
-        url=url,
+        datalake=url,
         spec=dict(
             feature_table=featuretable,
             collator=Datacollator(spec=dict(
@@ -241,7 +241,7 @@ def test_datafeature_stats_probe(tmp_path):
     url = str(tmp_path)
 
     sampletable = DummySampleTable(
-        url=url,
+        datalake=url,
         spec=dict(samples_per_tab=5),
         tag="sample_table_stats",
     ).build()
@@ -249,7 +249,7 @@ def test_datafeature_stats_probe(tmp_path):
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretable = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=eval_factory,
@@ -263,7 +263,7 @@ def test_datafeature_stats_probe(tmp_path):
     ).build()
 
     stats_probe = FeatureStatsProbe(
-        url=url,
+        datalake=url,
         spec=dict(
             feature_table=featuretable,
             collator=Datacollator(spec=dict(
@@ -310,10 +310,10 @@ def test_stats_probe_describes_every_declared_pair(tmp_path):
     which is what the old per-tab 'describes the first pair only' warning was
     apologising for."""
     url = str(tmp_path)
-    sampletable = DummySampleTable(url=url, spec=dict(samples_per_tab=5),
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5),
                                    tag="sample_table_all").build()
     featuretable = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
@@ -327,7 +327,7 @@ def test_stats_probe_describes_every_declared_pair(tmp_path):
     ).build()
 
     probe = FeatureStatsProbe(
-        url=url,
+        datalake=url,
         spec=dict(
             feature_table=featuretable,
             collator=Datacollator(spec=dict(
@@ -348,7 +348,7 @@ def test_datafeature_stats_probe_parallel(tmp_path):
     url = str(tmp_path)
 
     sampletable = DummySampleTable(
-        url=url,
+        datalake=url,
         spec=dict(samples_per_tab=5),
         tag="sample_table_stats_par",
     ).build()
@@ -356,7 +356,7 @@ def test_datafeature_stats_probe_parallel(tmp_path):
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretable = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=eval_factory,
@@ -370,7 +370,7 @@ def test_datafeature_stats_probe_parallel(tmp_path):
     ).build()
 
     stats_probe = FeatureStatsProbe(
-        url=url,
+        datalake=url,
         spec=dict(
             feature_table=featuretable,
             collator=Datacollator(spec=dict(
@@ -393,7 +393,7 @@ def test_datafeature_affine_logistic_probe_parallel(tmp_path):
     url = str(tmp_path)
 
     sampletable = DummySampleTable(
-        url=url,
+        datalake=url,
         spec=dict(samples_per_tab=5),
         tag="sample_table_log_par",
     ).build()
@@ -401,7 +401,7 @@ def test_datafeature_affine_logistic_probe_parallel(tmp_path):
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretable = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=eval_factory,
@@ -415,7 +415,7 @@ def test_datafeature_affine_logistic_probe_parallel(tmp_path):
     ).build()
 
     probe = FeatureAffineLogisticProbe(
-        url=url,
+        datalake=url,
         spec=dict(
             feature_table=featuretable,
             collator=Datacollator(spec=dict(
@@ -472,7 +472,7 @@ class UnevenSampleTable(DummySampleTable):
 
     def __tab__(self, idx: int, tag=None) -> DummySampleTab:
         return self.TAB(
-            url=self.path('tabs'),
+            datalake=self.path('tabs'),
             spec=dict(samples_per_tab=3 + 4 * idx),
             tag=tag or f"tab_{idx}",
         )
@@ -487,9 +487,9 @@ def test_datafeature_stats_probe_over_tabs_of_different_sizes(tmp_path):
     reaches it.
     """
     url = str(tmp_path)
-    sampletable = UnevenSampleTable(url=url, tag="uneven_samples").build()
+    sampletable = UnevenSampleTable(datalake=url, tag="uneven_samples").build()
     featuretable = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
@@ -500,7 +500,7 @@ def test_datafeature_stats_probe_over_tabs_of_different_sizes(tmp_path):
         tag="uneven_features",
     ).build()
     probe = FeatureStatsProbe(
-        url=url,
+        datalake=url,
         spec=dict(feature_table=featuretable,
                   collator=Datacollator(spec=dict(signals=[("features", "final")]))),
         tag="uneven_stats",

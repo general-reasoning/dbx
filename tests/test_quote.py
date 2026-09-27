@@ -64,7 +64,7 @@ class MixedSpecBlock(Datablock):
 # ---------------------------------------------------------------------------
 
 def _make_block(cls, tmp_path, **kwargs):
-    return cls(url=str(tmp_path), **kwargs)
+    return cls(datalake=str(tmp_path), **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ class TestCiteInQuote:
         q = block.quote()
         root_str = str(tmp_path)
         # cite(root) should produce repr(root), i.e. quoted with apostrophes
-        assert f"url='{root_str}'" in q
+        assert f"datalake='{root_str}'" in q
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ class TestCiteStringQuoting:
             _make_block(SimpleBlock, tmp_path, hash='abc123')
 
     def test_quote_overall_format(self, tmp_path):
-        """Verify the full format: $fqcn(url='...', spec={...})."""
+        """Verify the full format: $fqcn(datalake='...', spec={...})."""
         block = _make_block(SimpleBlock, tmp_path)
         q = block.quote()
         root_str = str(tmp_path)
@@ -185,7 +185,7 @@ class TestCiteStringQuoting:
         # Must end with )
         assert q.endswith(')')
         # Must contain root= with a repr'd string value
-        assert f"url='{root_str}'" in q
+        assert f"datalake='{root_str}'" in q
         # Must contain spec= with a dict value
         assert 'spec={' in q
 
@@ -194,12 +194,12 @@ class TestCiteStringQuoting:
         block = _make_block(SimpleBlock, tmp_path, anchor='custom.anchor')
         q = block.quote()
         root_str = str(tmp_path)
-        assert f"url='{root_str}'" in q
+        assert f"datalake='{root_str}'" in q
         assert "anchor='custom.anchor'" in q
         assert 'hash=' not in q, "hash is derived, never carried"
         # Both should appear before spec=
         spec_idx = q.index('spec=')
-        assert q.index('url=') < spec_idx
+        assert q.index('datalake=') < spec_idx
         assert q.index('anchor=') < spec_idx
 
 
@@ -249,7 +249,7 @@ class TestQuoteTailkwargs:
         # Count top-level = signs (rough check)
         prefix = q[q.index('(') + 1 : q.rindex(')')]
         # Should only have root= and spec=
-        assert 'url=' in prefix
+        assert 'datalake=' in prefix
         assert 'spec=' in prefix
 
 

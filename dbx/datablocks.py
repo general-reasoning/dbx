@@ -59,6 +59,7 @@ __eval__ = __builtins__['eval']
 
 from . import dataparts
 from .dataparts import (
+    default_datalake,
     InlineCallableExecutor,
     JOURNAL_DATETIME_FORMAT,
     Logger,
@@ -638,7 +639,7 @@ def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_options=None, log=None, n_workers=8, index: 'str | None' = ..., unnormalized: bool = False, **filter_kwargs):
+def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage_options=None, log=None, n_workers=8, index: 'str | None' = ..., unnormalized: bool = False, url=None, **filter_kwargs):
     """Read a block journal, or wrap a frame of one.
 
     Parameters
@@ -652,7 +653,8 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_opti
         If given, return a single :class:`DatajournalEntry` at this positional index.
         Mutually exclusive with *loc*.
     url : str, optional
-        Storage URL.  Defaults to ``DBX_ROOT`` or its alias ``DBX_URL``.
+        The datalake (``url``, its old name, is accepted). Defaults to
+        ``DBX_DATALAKE``, then ``DBX_ROOT``, then ``DBX_URL``.
     storage_options : dict, optional
         Storage options for fsspec.  Defaults to ``default_storage_options()``.
     log : Logger, optional
@@ -681,6 +683,7 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_opti
     if cls_anchor_or_df is None:
         raise TypeError("datajournal() needs an anchor, a Datablock class or block, or a frame; "
                         "the exec journal is execjournal()")
+    url = _one_datalake_(datalake, url, 'datajournal')
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):
@@ -694,15 +697,15 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_opti
             anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
         elif hasattr(cls_anchor_or_df, 'anchor'):
             anchor = cls_anchor_or_df.anchor
-            if url is None and hasattr(cls_anchor_or_df, 'url'):
-                url = cls_anchor_or_df.url
+            if url is None and hasattr(cls_anchor_or_df, 'datalake'):
+                url = cls_anchor_or_df.datalake
             if storage_options is None and hasattr(cls_anchor_or_df, 'storage_options'):
                 storage_options = cls_anchor_or_df.storage_options
             if log is None and hasattr(cls_anchor_or_df, 'log'):
                 log = cls_anchor_or_df.log
         else:
             anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
-        return Datablock.Journal(anchor, loc=loc, iloc=iloc, url=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
+        return Datablock.Journal(anchor, loc=loc, iloc=iloc, datalake=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
 
 
 
@@ -718,7 +721,7 @@ def journal(cls_anchor_or_df=None, loc=None, **kwargs):
     return datajournal(cls_anchor_or_df, loc, **kwargs)
 
 
-def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs):
+def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=None, **kwargs):
     """Check validity of the top matching build/instance for specified events for given anchors.
 
     Parameters
@@ -752,7 +755,7 @@ def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs)
         parser.add_argument("anchors", nargs="*", help="Anchor keys or Datablock names")
         parser.add_argument("--n-workers", type=int, default=None, help="Number of workers for journal scanning")
         parser.add_argument("--summary", action="store_true", help="Return boolean AND of results")
-        parser.add_argument("--url", type=str, default=None, help="Storage URL")
+        parser.add_argument("--datalake", "--url", dest="url", type=str, default=None, help="The datalake")
         parser.add_argument("--events", nargs="+", default=None, help="Event names to check validity for (default: build:end)")
 
         cli_argv = [a for a in sys.argv[1:] if not a.startswith(dataparts.PIN_FLAGS)]
@@ -802,8 +805,9 @@ def valid(*args, n_workers=None, summary=False, url=None, events=None, **kwargs)
         j_kwargs = dict(kwargs)
         if n_workers is not None:
             j_kwargs['n_workers'] = n_workers
+        url = _one_datalake_(datalake, url, 'valid')
         if url is not None:
-            j_kwargs['url'] = url
+            j_kwargs['datalake'] = url
 
         try:
             j = datajournal(anchor_key, **j_kwargs)
@@ -1184,7 +1188,7 @@ class Block:
 
     def to_dict(self, *, deslash: bool = False) -> dict:
         d = {name: getattr(self, name) for name in (
-            'hash', 'code', 'version', 'revision', 'gitrepo', 'url',
+            'hash', 'code', 'version', 'revision', 'gitrepo', 'datalake',
             'anchor', 'tag', 'key', 'keyby', 'tree', 'session', 'id')}
         d['note'] = self.note()
         # The TEXT of each rendering, not the path of the file it was written to.
@@ -1283,13 +1287,19 @@ class Block:
         return self._entry.get('gitrepo')
 
     @property
+    def datalake(self):
+        """The datalake the block was stored in -- recorded as ``url`` before the rename."""
+        return DatajournalEntry.column(self._entry, 'datalake')
+
+    @property
     def url(self):
-        return self._entry.get('url')
+        """The name `datalake` had first."""
+        return self.datalake
 
     @property
     def root(self):
-        """Protocol-free root derived from ``url`` via ``fsspec.url_to_fs``."""
-        url = self._entry.get('url')
+        """Protocol-free root derived from ``datalake`` via ``fsspec.url_to_fs``."""
+        url = self.datalake
         if url is None:
             return self._entry.get('root')  # legacy fallback
         _, root = fsspec.url_to_fs(url, **self._entry.storage_options)
@@ -1314,7 +1324,7 @@ class Block:
         recorded = DatajournalEntry.column(self._entry, 'anchorkeypath')
         if recorded is not None:
             return recorded
-        url = self._entry.get('url')
+        url = self.datalake
         if url is None:
             root = self._entry.get('root')  # legacy: only 'root' available
             return os.path.join(root, self.anchorkey) if root else self.anchorkey
@@ -1349,7 +1359,7 @@ class Block:
 
     @staticmethod
     def _fs(entry):
-        url = entry.get('url') or entry.get('root')  # legacy fallback
+        url = DatajournalEntry.column(entry, 'datalake') or entry.get('root')  # legacy fallback
         fs, _ = fsspec.url_to_fs(url, **entry.storage_options)
         return fs
 
@@ -1713,6 +1723,7 @@ class DatajournalEntry(pd.Series):
         'signature': ('signature', 'subsignature', 'norm'),
         'type': ('type', 'signature', 'hashstr'),
         'tree': ('tree', 'session', 'uuid'),
+        'datalake': ('datalake', 'url'),
     }
 
     @staticmethod
@@ -1833,6 +1844,14 @@ class DatajournalFrame(pd.DataFrame):
         return thingsframe
 
     
+def _one_datalake_(datalake, url, what):
+    """*datalake*, or *url* -- its name before the rename -- and never two that disagree."""
+    if url is not None and datalake is not None and url != datalake:
+        raise ValueError(f"{what}: datalake={datalake!r} and url={url!r} disagree; "
+                         f"url is datalake's old name")
+    return datalake if datalake is not None else url
+
+
 #: The ``use_specializations`` a stack's ``use_block_specializations`` gives the
 #: blocks it is forming, innermost last -- per thread, since blocks are formed
 #: in parallel. A block's own ``use_specializations=`` wins over it.
@@ -1903,9 +1922,9 @@ class Datajournal:
 
     # 1. Protocol -------------------------------------------------------
 
-    def __init__(self, url: str | None = None, *, storage_options: dict | None = None,
-                 log: 'Logger | None' = None, n_workers: int | None = 8):
-        self.url = url
+    def __init__(self, datalake: str | None = None, *, storage_options: dict | None = None,
+                 log: 'Logger | None' = None, n_workers: int | None = 8, url: str | None = None):
+        self.datalake = _one_datalake_(datalake, url, 'Datajournal')
         self.storage_options = storage_options
         self.log = log
         self.n_workers = n_workers
@@ -1915,7 +1934,7 @@ class Datajournal:
 
     def __repr__(self):
         args = [f"{k}={v!r}" for k, v, default in (
-            ('url', self.url, None),
+            ('datalake', self.datalake, None),
             ('storage_options', self.storage_options, None),
             ('n_workers', self.n_workers, 8)) if v != default]
         # Qualified, so that a repr() carrying it is evaluable as a specline.
@@ -1927,7 +1946,7 @@ class Datajournal:
         # dfn.yaml. The session goes with it, because a copy made on the way
         # to a worker or a child block is the same journal session, not a new
         # one -- otherwise one build tree would be written under many.
-        return {'url': self.url, 'storage_options': self.storage_options,
+        return {'datalake': self.datalake, 'storage_options': self.storage_options,
                 'n_workers': self.n_workers, 'session': self._session}
 
     def __enter__(self):
@@ -1955,8 +1974,15 @@ class Datajournal:
         # across objects nobody holds.
         return self
 
+    @property
+    def url(self):
+        """The name `datalake` had first."""
+        return self.datalake
+
     def __setstate__(self, state):
         state = dict(state)
+        if 'url' in state:                      # pickled before the rename
+            state['datalake'] = state.pop('url')
         session = state.pop('session', None)
         self.__init__(**state)
         if session is not None:
@@ -1970,25 +1996,26 @@ class Datajournal:
         with _ACTIVE_DATAJOURNALS_LOCK:
             return _ACTIVE_DATAJOURNALS[-1] if _ACTIVE_DATAJOURNALS else None
 
-    def read(self, anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None,
-             log=None, n_workers=None, index=None, unnormalized: bool = False, **filter_kwargs):
+    def read(self, anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None,
+             log=None, n_workers=None, index=None, unnormalized: bool = False, url=None, **filter_kwargs):
         """Read *anchor*'s journal under *url*: every entry, newest first, then filtered.
 
         Returns a `DatajournalFrame`, or the one `DatajournalEntry` at *loc*
         (a label) or *iloc* (a position). *url*, *storage_options*, *log* and
-        *n_workers* default to this handle's, and *url* then to ``DBX_ROOT`` or
-        its alias ``DBX_URL``.
+        *n_workers* default to this handle's, and *datalake* then to
+        ``DBX_DATALAKE``, ``DBX_ROOT``, ``DBX_URL``.
         """
         log = log or self.log or Logger()
         n_workers = n_workers or self.n_workers or 8
+        url = _one_datalake_(datalake, url, 'Datajournal.read')
         if url is None:
-            url = self.url
+            url = self.datalake
         if storage_options is None:
             storage_options = self.storage_options
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         if url is None:
-            url = os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
+            url = default_datalake()
         # A url may arrive as a specline -- a block's `_url_` is one whenever it
         # was constructed with env(...) -- and it is resolved here as
         # __setstate__ resolves a block's own. Without this, fsspec takes
@@ -2200,7 +2227,7 @@ class Datajournal:
                                          'version': block.version,
                                          'dbx_version': block.dbx_version,
                                          'revision': block.revision, 
-                                         'url': block.url,
+                                         'datalake': block.datalake,
                                          'anchor': block.anchor,
                                          'hash': block.hash,
                                          'keyby': block.keyby,
@@ -2366,6 +2393,14 @@ class Datajournal:
             elif legacy in df.columns:
                 df = df.drop(columns=[legacy])
         df = Datajournal._legacy_tree_(df)
+        if 'url' in df.columns:
+            # `datalake` was `url` until it was renamed; a journal spanning the
+            # rename has both, each row filled in one.
+            if 'datalake' in df.columns:
+                df['datalake'] = df['datalake'].where(df['datalake'].notna(), df['url'])
+            else:
+                df = df.rename(columns={'url': 'datalake'})
+            df = df.drop(columns=['url'], errors='ignore')
         columns = [c for c in Datablock.JOURNAL_COLUMNS
                    if c in df.columns and c != 'event']
         # Anything unlisted keeps its place at the back, ahead of
@@ -2490,7 +2525,7 @@ class Datablock:
         'hash', 'code', 'tree', 'session', 'id',
         'datetime', 'build:start:datetime', 'build:end:datetime',
         'version', 'dbx_version', 'revision',
-        'url', 'anchor', 'keyby', 'key', 'anchorkeypath', 'tag',
+        'datalake', 'anchor', 'keyby', 'key', 'anchorkeypath', 'tag',
         'topics', 'paths',
         'spec', 'dfn', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type',
         'gitrepo', 'entry_path', 'event',
@@ -2858,7 +2893,7 @@ class Datablock:
     #: `dfn`, `quote()`, `cite()` and the journal record -- because a block
     #: reconstructed from any of those must come back the same block, and one
     #: that came back carrying a stale journal would not.
-    TRANSIENT_PARAMS = ('specialization_journal',)
+    TRANSIENT_PARAMS = ('specialization_journal', 'url')
 
     #: VAR field names exempt from :meth:`VAR.LazyLoader._check_renderable` --
     #: the check that a value can be rendered into the identity deterministically.
@@ -2868,6 +2903,23 @@ class Datablock:
     #: rather than switched on from the environment -- it belongs where the next
     #: reader of the declaration will see it.
     VAR_IDENTITY_EXEMPTIONS = frozenset()
+
+    @property
+    def url(self) -> str:
+        """The name `datalake` had first."""
+        return self.datalake
+
+    @url.setter
+    def url(self, value):
+        self.datalake = value
+
+    @property
+    def _url_(self):
+        return self._datalake_
+
+    @_url_.setter
+    def _url_(self, value):
+        self._datalake_ = value
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -2885,6 +2937,10 @@ class Datablock:
     def __init__(
         self,
         *,
+        datalake: str = None,
+        # The name `datalake` had first: accepted, never recorded. Every
+        # quote() journalled before the rename spells it, and inst() evaluates
+        # those.
         url: str = None,
         spec: Optional[Union[str, dict]] = None,
         anchor: str = None,
@@ -2946,7 +3002,7 @@ class Datablock:
         self._uuid = uuid.uuid4().hex[:16] if uuid16 else str(uuid.uuid4())  # unique per live instance, not preserved across serialization
         self.log.detailed(f"__init__: ------------------------------------------------> {tag=}")
         state = {
-            'url': url,
+            'datalake': _one_datalake_(datalake, url, type(self).__name__),
             'spec': spec,
             'anchor': anchor,
             'tag': tag,
@@ -3019,13 +3075,15 @@ class Datablock:
             return v
 
         # Explicit parameters
-        self._url_ = _unquote(state.get('url'))
-        # Resolve specline URLs (e.g. "$dbx.getenv('KEY')") to real paths.
-        self.url = eval(self._url_) if self._url_ is not None else None
-        if self.url is None:
-            self.url = os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
-        if self.url is None:
-            raise ValueError(f"No url for {self.__class__.__name__}: pass url= or set DBX_ROOT or its alias DBX_URL")
+        # 'url' is the key a state pickled before the rename carries.
+        self._datalake_ = _unquote(state.get('datalake', state.get('url')))
+        # Resolve specline datalakes (e.g. "$dbx.getenv('KEY')") to real paths.
+        self.datalake = eval(self._datalake_) if self._datalake_ is not None else None
+        if self.datalake is None:
+            self.datalake = default_datalake()
+        if self.datalake is None:
+            raise ValueError(f"No datalake for {self.__class__.__name__}: pass datalake= or set "
+                             f"DBX_DATALAKE (or DBX_ROOT, or DBX_URL)")
 
         self._local_ = _unquote(state.get('local'))
         if self._local_ == 'None':
@@ -3041,12 +3099,12 @@ class Datablock:
         if self.storage_options is None or not isinstance(self.storage_options, dict):
             self.storage_options = default_storage_options()
 
-        self.fs, self.root = fsspec.url_to_fs(self.url, **self.storage_options)
+        self.fs, self.root = fsspec.url_to_fs(self.datalake, **self.storage_options)
         _url_protocol = self.fs.protocol if isinstance(self.fs.protocol, str) else self.fs.protocol[0]
         if _url_protocol in ('file', 'local', ''):
             # url/root is already local storage: local=True and local=False
             # must be identical, so DBX_LOCAL/local= are never consulted.
-            self.local = self.url
+            self.local = self.datalake
             self.localfs, self.localroot = self.fs, self.root
         else:
             # Resolve specline LOCALs (e.g. "$dbx.getenv('KEY')") to real paths.
@@ -3243,7 +3301,7 @@ class Datablock:
             pass
 
         try:
-            fs, root = fsspec.url_to_fs(self.url, **(self.storage_options or {}))
+            fs, root = fsspec.url_to_fs(self.datalake, **(self.storage_options or {}))
             pattern = os.path.join(fs_full_path(fs, root), "**/journal/**/*.parquet")
             parquet_files = fs.glob(pattern)
             for file in parquet_files:
@@ -3387,7 +3445,7 @@ class Datablock:
         # it. The list is closed: anchorkeypath is url + anchor + key, and key
         # is f(keyby, hash, tag, version) of which `set()` can change only
         # keyby and tag, since `spec` is refused and VERSION is the class's.
-        if {'url', 'local', 'storage_options', 'anchor', 'tag', 'keyby'} & set(kw):
+        if {'datalake', 'url', 'local', 'storage_options', 'anchor', 'tag', 'keyby'} & set(kw):
             _kw.pop('__redirected_paths__', None)
         _kw.update(kw)     
         return self.__class__(**_kw)
@@ -4744,7 +4802,7 @@ class Datablock:
         try:
             dirpath = self._journal_hashdirpath()
             legacy_dirpath = os.path.join(
-                Datablock._dbxanchorpathx(self.url, self.anchor, 'journal',
+                Datablock._dbxanchorpathx(self.datalake, self.anchor, 'journal',
                                           fqcn=self.fqcn, storage_options=self.storage_options),
                 self.hash,
             )
@@ -5714,9 +5772,25 @@ class Datablock:
     
     @functools.cached_property
     def _rootkwargs_(self):
+        """The root kwargs as quote(), cite() and repr() render them: ``datalake=``, ``anchor=``."""
         rootkwargs = {}
-        if self._url_ is not None:
-            rootkwargs['url'] = self._url_
+        if self._datalake_ is not None:
+            rootkwargs['datalake'] = self._datalake_
+        if self._anchor_ is not None:
+            rootkwargs['anchor'] = self._anchor_
+        return rootkwargs
+
+    @functools.cached_property
+    def _identity_rootkwargs_(self):
+        """The root kwargs as a LEGACY signature renders them -- spelled ``url=``, as it always was.
+
+        A block built under LEGACY_SIGNATURE or LEGACY_NORM carries its root
+        kwargs in its identity, so the text ``url=...`` is in its hash, and the
+        rename to datalake may not reach it.
+        """
+        rootkwargs = {}
+        if self._datalake_ is not None:
+            rootkwargs['url'] = self._datalake_
         if self._anchor_ is not None:
             rootkwargs['anchor'] = self._anchor_
         return rootkwargs
@@ -5730,7 +5804,7 @@ class Datablock:
             # 'tree' groups a build tree's journal entries; pinning one into a
             # recorded quote would have inst() rejoin a tree that is over.
             # 'datajournal' says where entries are written, not what a block is.
-            if k not in ['url', 'anchor', 'hash', 'spec', 'tree', 'datajournal',
+            if k not in ['datalake', 'url', 'anchor', 'hash', 'spec', 'tree', 'datajournal',
                          '__redirected_paths__']
             # None means "ask the class", which is what every block that never
             # mentioned the feature says -- and saying it out loud in every
@@ -5893,7 +5967,7 @@ class Datablock:
         every other parameter, operational ones included -- what the block WAS,
         down to the run it was part of. ``url`` and ``anchor`` are rendered as
         :meth:`quote` renders them, only when given, so a block rooted by
-        ``DBX_ROOT`` stays relocatable. Private state
+        the environment's datalake stays relocatable. Private state
         (``__redirected_paths__``) is not a kwarg and is not rendered. A nested
         block renders as its own ``repr()``. *pretty* and *deslash* are as for
         :meth:`quote`.
@@ -5901,7 +5975,7 @@ class Datablock:
         self.tree   # generated on first access; render the one this block has
         kwargs = {**self._rootkwargs_, 'spec': self.__expand_spec__('repr_all')}
         kwargs.update({k: v for k, v in self.__getstate__().items()
-                       if k not in ('url', 'anchor', 'spec') and not k.startswith('__')})
+                       if k not in ('datalake', 'url', 'anchor', 'spec') and not k.startswith('__')})
         r = self._render_call_(kwargs, pretty=pretty, deslash=deslash, dollar=True)
         self.log.detailed(f"repr: ------------> {r=}")
         return r
@@ -6044,14 +6118,14 @@ class Datablock:
             sig_spec = self.__expand_spec__('signature', legacy=norm, legacy_typing=True)
             if omit:
                 sig_spec = {k: v for k, v in sig_spec.items() if k not in set(omit)}
-            kwargs_dict = {**(self._rootkwargs_ if norm else {}), 'spec': sig_spec}
+            kwargs_dict = {**(self._identity_rootkwargs_ if norm else {}), 'spec': sig_spec}
             sig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not norm)
         else:
             # Rendered FROM the typed dict, so the text and the dict cannot
             # disagree, and a leaf is quoted exactly when it is a string.
             # Root kwargs only on explicit opt-in: signature and hash are
             # relocatable, and nothing about typing changes that.
-            root = ''.join(f"{k}={v!r}, " for k, v in self._rootkwargs_.items()) if norm else ''
+            root = ''.join(f"{k}={v!r}, " for k, v in self._identity_rootkwargs_.items()) if norm else ''
             sig = f"({root}spec={self._typed_specdict(legacy=False, omit=omit)!r})"
         if deslash:
             sig = sig.replace('\\', '')
@@ -6326,7 +6400,7 @@ class Datablock:
 
         def _normalize_subsig_dict(d):
             if 'spec' not in d and d:
-                root_keys = {'url', 'local', 'local_must_exist', 'storage_options', 'anchor', 'tag', 'revision', 'keyby', 'uuid16', 'redirect', 'validate_vars'}
+                root_keys = {'datalake', 'url', 'local', 'local_must_exist', 'storage_options', 'anchor', 'tag', 'revision', 'keyby', 'uuid16', 'redirect', 'validate_vars'}
                 spec_part = {}
                 root_part = {}
                 for k, v in d.items():
@@ -7742,13 +7816,14 @@ class Datablock:
                                       journal_prefix=journal_prefix, redirection=redirection)
 
     @staticmethod
-    def Journal(anchor, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, **filter_kwargs):
+    def Journal(anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, url=None, **filter_kwargs):
         """*anchor*'s journal, read by a default `Datajournal`. See `Datajournal.read`."""
-        return Datajournal().read(anchor, loc, iloc=iloc, url=url, storage_options=storage_options,
+        return Datajournal().read(anchor, loc, iloc=iloc, datalake=_one_datalake_(datalake, url, 'Journal'),
+                                  storage_options=storage_options,
                                   log=log, n_workers=n_workers, index=index,
                                   unnormalized=unnormalized, **filter_kwargs)
 
-    def journal(self, loc: int = None, *, iloc: int = None, url=None, storage_options=None, log=None, n_workers=None, index: str | None = None, unnormalized: bool = False, **filter_kwargs):
+    def journal(self, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=None, index: str | None = None, unnormalized: bool = False, url=None, **filter_kwargs):
         """This block's anchor's journal, read through :attr:`datajournal`. See `Datajournal.read`."""
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
@@ -7756,7 +7831,7 @@ class Datablock:
             self.anchor,
             loc=loc,
             iloc=iloc,
-            url=self.url if url is None else url,
+            datalake=self.datalake if (datalake is None and url is None) else _one_datalake_(datalake, url, 'journal'),
             storage_options=self.storage_options if storage_options is None else storage_options,
             log=getattr(self, 'log', None) if log is None else log,
             n_workers=n_workers,
@@ -7827,7 +7902,7 @@ def _shared_journal_(caller, block):
     """
     if caller.journal is None or caller.anchor is None:
         return None
-    if block.anchor != caller.anchor or (caller.url is not None and block.url != caller.url):
+    if block.anchor != caller.anchor or (caller.datalake is not None and block.datalake != caller.datalake):
         return None
     return caller.journal
 
@@ -7839,11 +7914,11 @@ class DatablockRedirectionGetter:
     block of another anchor -- a stack whose blocks are not all one kind --
     would find none of its entries there, so it reads its own instead.
     """
-    def __init__(self, idx: int, journal=None, anchor=None, url=None):
+    def __init__(self, idx: int, journal=None, anchor=None, datalake=None):
         self.idx = idx
         self.journal = journal
         self.anchor = anchor
-        self.url = url
+        self.datalake = datalake
 
     def __call__(self, stack):
         block = stack.block(self.idx)
@@ -7856,11 +7931,11 @@ class DatablockSpecializationFinder:
     The block is formed with specializations OFF and not cached: finding must
     not install anything, and forming a block normally can.
     """
-    def __init__(self, idx: int, journal=None, anchor=None, url=None):
+    def __init__(self, idx: int, journal=None, anchor=None, datalake=None):
         self.idx = idx
         self.journal = journal
         self.anchor = anchor
-        self.url = url
+        self.datalake = datalake
 
     def __call__(self, stack):
         block = stack._form_block_(self.idx, use_specializations=False)
@@ -7967,7 +8042,7 @@ class Datastack(Datablock):
             def blocks(self):
                 n = self._total_items()
                 return [
-                    MyBlock(url=self._url_, spec=dict(path=self.var.path, idx=i))
+                    MyBlock(datalake=self._datalake_, spec=dict(path=self.var.path, idx=i))
                     for i in range(math.ceil(n / self.var.block_size))
                 ]
 
@@ -8926,7 +9001,7 @@ class Datastack(Datablock):
         """``(journal, anchor, url)`` of this stack's blocks: read once, for all of them.
 
         From :attr:`BLOCK` when the stack declares one: the class's anchor under
-        :meth:`_blocks_url_` -- the blocks are taken to share it -- with no block
+        :meth:`_blocks_datalake_` -- the blocks are taken to share it -- with no block
         formed at all. Otherwise from ``block(0)``, formed only to say where its
         journal is: uncached, and with specializations off, since forming it
         normally can install one and record it. Raises FileNotFoundError when
@@ -8934,15 +9009,15 @@ class Datastack(Datablock):
         """
         block_cls = self._block_class_()
         if block_cls is not None:
-            anchor, url = block_cls.anchor, self._blocks_url_()
-            return self.datajournal.read(anchor, url=url, storage_options=self.storage_options,
-                                         log=self.log, **kwargs), anchor, url
+            anchor, lake = block_cls.anchor, self._blocks_datalake_()
+            return self.datajournal.read(anchor, datalake=lake, storage_options=self.storage_options,
+                                         log=self.log, **kwargs), anchor, lake
         first = self._form_block_(0, use_specializations=False)
-        return first.journal(**kwargs), first.anchor, first.url
+        return first.journal(**kwargs), first.anchor, first.datalake
 
-    def _blocks_url_(self):
-        """Where this stack's blocks are stored: its own url -- a DatatablePart's are its table's."""
-        return self.url
+    def _blocks_datalake_(self):
+        """Where this stack's blocks are stored: its own datalake -- a DatatablePart's are its table's."""
+        return self.datalake
 
     def _form_block_(self, idx: int, *, use_specializations='stack'):
         """Block *idx*, formed and adopted -- uncached; :meth:`block` caches it.

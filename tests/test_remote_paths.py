@@ -105,34 +105,34 @@ class TestFsFullPath:
 class TestPathsOnMemory:
 
     def test_anchorkeypath_has_protocol(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         assert block.anchorkeypath.startswith('memory://')
 
     def test_anchorpath_has_protocol(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         assert block.anchorpath().startswith('memory://')
 
     def test_dirpath_has_protocol(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         assert block.dirpath('output').startswith('memory://')
 
     def test_path_has_protocol(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         assert block.path('output').startswith('memory://')
 
     def test_multi_topic_dirpath_has_protocol(self, mem_url):
-        block = MemMultiTopic(url=mem_url)
+        block = MemMultiTopic(datalake=mem_url)
         for topic in block.TOPICS:
             assert block.dirpath(topic).startswith('memory://')
 
     def test_multi_topic_path_has_protocol(self, mem_url):
-        block = MemMultiTopic(url=mem_url)
+        block = MemMultiTopic(datalake=mem_url)
         for topic in block.TOPICS:
             assert block.path(topic).startswith('memory://')
 
     def test_local_paths_bare(self, tmp_path):
         """On local fs, paths should remain bare (no file:// prefix)."""
-        block = MemSingleTopic(url=str(tmp_path))
+        block = MemSingleTopic(datalake=str(tmp_path))
         assert not block.anchorkeypath.startswith('file://')
         assert not block.path('output').startswith('file://')
 
@@ -144,12 +144,12 @@ class TestPathsOnMemory:
 class TestDbxAnchorHashPathX:
 
     def test_returns_protocol_prefixed_url(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         xpath = block._dbxanchorhashpathx('journal', 'parquet', ensure_dirpath=False)
         assert xpath.startswith('memory://')
 
     def test_local_returns_bare_path(self, tmp_path):
-        block = MemSingleTopic(url=str(tmp_path))
+        block = MemSingleTopic(datalake=str(tmp_path))
         xpath = block._dbxanchorhashpathx('journal', 'parquet', ensure_dirpath=False)
         assert not xpath.startswith('file://')
 
@@ -161,44 +161,44 @@ class TestDbxAnchorHashPathX:
 class TestBuildOnMemory:
 
     def test_single_topic_lifecycle(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         assert block.valid() is False
         block.build()
         assert block.valid() is True
 
     def test_multi_topic_lifecycle(self, mem_url):
-        block = MemMultiTopic(url=mem_url)
+        block = MemMultiTopic(datalake=mem_url)
         assert block.valid() is False
         block.build()
         assert block.valid() is True
 
     def test_built_file_is_readable(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         block.build()
         with block.fs.open(block.path('output'), 'r') as f:
             content = f.read()
         assert content == 'hello from memory'
 
     def test_clear_after_build(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         block.build()
         assert block.valid() is True
         block.UNSAFE_clear(OVERRIDE=True)
         assert block.valid() is False
 
     def test_leave_breadcrumbs_on_memory(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         assert block.valid() is False
         block.leave_breadcrumbs()
         assert block.valid() is True
 
     def test_dirpath_ensure_on_memory(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         dp = block.dirpath('output', ensure=True)
         assert block.fs.isdir(dp)
 
     def test_ls_on_memory(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         block.build()
         files = block.ls('output')
         assert len(files) >= 1
@@ -211,30 +211,30 @@ class TestBuildOnMemory:
 class TestJournalOnMemory:
 
     def test_journal_entry_written_on_build(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         block.build()
         j = block.journal()
         assert isinstance(j, DatajournalFrame)
         assert len(j) >= 1
 
     def test_journal_entry_has_correct_url(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         block.build()
         j = block.journal()
         entry = j.get(0)
         assert entry.block.url == mem_url
 
     def test_journal_entry_has_correct_hash(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         block.build()
         j = block.journal()
         entry = j.get(0)
         assert entry.block.hash == block.hash
 
     def test_static_journal_on_memory(self, mem_url):
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         block.build()
-        j = Datablock.Journal(block.anchor, url=mem_url)
+        j = Datablock.Journal(block.anchor, datalake=mem_url)
         assert isinstance(j, DatajournalFrame)
         assert len(j) >= 1
 
@@ -305,7 +305,7 @@ class TestDatajournalEntryPaths:
 
     def test_journal_entry_from_real_build(self, mem_url):
         """DatajournalEntry produced by a real build has correct anchorkeypath."""
-        block = MemSingleTopic(url=mem_url)
+        block = MemSingleTopic(datalake=mem_url)
         block.build()
         j = block.journal()
         entry = j.get(0)

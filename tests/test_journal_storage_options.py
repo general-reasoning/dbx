@@ -45,13 +45,13 @@ class TestDefaultStorageOptions:
 # DatajournalEntry storage_options
 # ---------------------------------------------------------------------------
 
-def _make_entry(url='/tmp/dbx', anchor='mod.Block', hash_='abc123',
+def _make_entry(datalake='/tmp/dbx', anchor='mod.Block', hash_='abc123',
                 storage_options=None):
     """Helper to construct a DatajournalEntry with minimal fields."""
     data = {
         'anchor': anchor,
         'hash': hash_,
-        'url': url,
+        'url': datalake,             # recorded as `url` before the rename
         'keyby': 'taghash',
         'tag': None,
     }
@@ -72,19 +72,19 @@ class TestDatajournalEntryStorageOptions:
     def test_root_uses_storage_options(self):
         """storage_options should be passed to fsspec.url_to_fs in root property."""
         so = {'account_name': 'test'}
-        entry = _make_entry(url='memory://bucket/data', storage_options=so)
+        entry = _make_entry(datalake='memory://bucket/data', storage_options=so)
         # Should not raise; memory:// doesn't care about account_name
         root = entry.block.root
         assert 'bucket/data' in root
 
     def test_anchorkeypath_local(self):
-        entry = _make_entry(url='/tmp/dbx', anchor='mod.Block', hash_='abc123')
+        entry = _make_entry(datalake='/tmp/dbx', anchor='mod.Block', hash_='abc123')
         # local paths: no protocol prefix
         path = entry.block.anchorkeypath
         assert '/tmp/dbx/mod.Block' in path
 
     def test_anchorkeypath_memory_fs(self):
-        entry = _make_entry(url='memory://bucket/data', anchor='mod.Block',
+        entry = _make_entry(datalake='memory://bucket/data', anchor='mod.Block',
                             hash_='abc123')
         path = entry.block.anchorkeypath
         # Should include protocol for non-local fs

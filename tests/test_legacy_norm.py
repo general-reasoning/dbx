@@ -61,7 +61,7 @@ class ModernBlock(Datablock):
 
 
 def _pin(cls):
-    return cls(url=PIN_URL, spec=dict(label='lbl', size=3)).set(tag='pin')
+    return cls(datalake=PIN_URL, spec=dict(label='lbl', size=3)).set(tag='pin')
 
 
 class TestDefault:
@@ -99,7 +99,7 @@ class TestModernNormQuotesStrings:
 
     def test_url_is_omitted(self):
         norm = _pin(ModernBlock).normstr()
-        assert "url=" not in norm
+        assert "datalake=" not in norm
 
     def test_non_string_spec_value_is_repr_d_once(self):
         assert "'size': 3" in _pin(ModernBlock).normstr()
@@ -146,8 +146,8 @@ class TestSpecValueCollision:
         v: object = None
 
     def _pair(self, cls):
-        return (cls(url=PIN_URL, spec=dict(v=5)),
-                cls(url=PIN_URL, spec=dict(v='5')))
+        return (cls(datalake=PIN_URL, spec=dict(v=5)),
+                cls(datalake=PIN_URL, spec=dict(v='5')))
 
     def test_legacy_collides(self):
         class L(Datablock):
@@ -176,7 +176,7 @@ class TestReprAlwaysQuotes:
 
     @pytest.mark.parametrize('cls', [LegacyBlock, ModernBlock])
     def test_url_is_quoted(self, cls):
-        assert f"url={PIN_URL!r}" in repr(_pin(cls))
+        assert f"datalake={PIN_URL!r}" in repr(_pin(cls))
 
     @pytest.mark.parametrize('cls', [LegacyBlock, ModernBlock])
     def test_string_tailkwarg_is_quoted(self, cls):
@@ -264,8 +264,8 @@ class TestLegacyOverridePropagates:
             TOPICS = {'o': 'o.txt'}
             VAR = TestLegacyOverridePropagates._Parent
             def __build__(self): pass
-        child = Child(url=PIN_URL)
-        return Parent(url=PIN_URL, spec=dict(child=child, ori_extent=15.0))
+        child = Child(datalake=PIN_URL)
+        return Parent(datalake=PIN_URL, spec=dict(child=child, ori_extent=15.0))
 
     def test_child_is_rendered_modern_too(self):
         norm = self._tree().normstr(legacy=False)
@@ -299,8 +299,8 @@ class TestDiffnormLegacyOverride:
     def test_two_live_legacy_blocks_diff_with_typed_leaves(self):
         """The intended use: render BOTH sides modern to get real types."""
         L = self._cls()
-        a = L(url=PIN_URL, spec=dict(ori_extent=20.0))
-        b = L(url=PIN_URL, spec=dict(ori_extent=15.0))
+        a = L(datalake=PIN_URL, spec=dict(ori_extent=20.0))
+        b = L(datalake=PIN_URL, spec=dict(ori_extent=15.0))
         assert a.diffnorm(b.normstr(legacy=False), legacy=False) == {
             'spec': {'ori_extent': (20.0, 15.0)}}
         # Without the override both sides are legacy, so both are strings.
@@ -310,8 +310,8 @@ class TestDiffnormLegacyOverride:
     def test_override_against_a_legacy_other_side_flags_every_scalar(self):
         """Documented consequence: the other side is recorded text, not re-rendered."""
         L = self._cls()
-        a = L(url=PIN_URL, spec=dict(ori_extent=15.0))
-        b = L(url=PIN_URL, spec=dict(ori_extent=15.0))
+        a = L(datalake=PIN_URL, spec=dict(ori_extent=15.0))
+        b = L(datalake=PIN_URL, spec=dict(ori_extent=15.0))
         assert a.diffnorm(b.normstr()) == {}, "same era, same value -> no diff"
         mismatched = a.diffnorm(b.normstr(), legacy=False)
         assert 'ori_extent' in mismatched['spec']

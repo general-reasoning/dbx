@@ -68,7 +68,7 @@ class DummySampleTable(DatapointTable):
 
     def __tab__(self, idx: int) -> DummySampleTab:
         return self.TAB(
-            url=self.url,
+            datalake=self.url,
             spec=dict(n_samples=self.var.samples_per_tab),
             tag=f"tab_{idx}",
         )
@@ -93,7 +93,7 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
     # 1. Build upstream sample tab
-    sampletab = DummySampleTab(url=url, tag="samples_0").build()
+    sampletab = DummySampleTab(datalake=url, tag="samples_0").build()
     assert sampletab.slices() == ("samples", "labels")
     assert sampletab.valid()
 
@@ -101,7 +101,7 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab = DatafeatureTab(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
@@ -135,11 +135,11 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
 def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
-    sampletab = DummySampleTab(url=url, tag="samples_1").build()
+    sampletab = DummySampleTab(datalake=url, tag="samples_1").build()
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab = DatafeatureTab(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
@@ -150,7 +150,7 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     ).build()
 
     bipolar_tab = BipolarDatafeatureTab(
-        url=url,
+        datalake=url,
         spec=dict(
             featuretab=featuretab,
             layer="final",
@@ -180,7 +180,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
 
     # 1. Build sample table with 2 tabs
     sampletable = DummySampleTable(
-        url=url,
+        datalake=url,
         spec=dict(samples_per_tab=5),
         tag="sample_table",
     ).build()
@@ -189,7 +189,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
 
     # 2. Build feature table
     featuretable = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=eval_factory,
@@ -210,7 +210,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
 
     # 3. Build bipolar feature table
     bipolar_table = BipolarDatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             featuretable=featuretable,
             layer="final",
@@ -233,11 +233,11 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
 
 def test_custom_features_mapping(tmp_path):
     url = str(tmp_path)
-    sampletab = DummySampleTab(url=url, tag="samples_cust").build()
+    sampletab = DummySampleTab(datalake=url, tag="samples_cust").build()
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab = DatafeatureTab(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
@@ -255,11 +255,11 @@ def test_custom_features_mapping(tmp_path):
 
 def test_signal_selection(tmp_path):
     url = str(tmp_path)
-    sampletab = DummySampleTab(url=url, tag="samples_sig").build()
+    sampletab = DummySampleTab(datalake=url, tag="samples_sig").build()
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab = DatafeatureTab(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
@@ -389,12 +389,12 @@ def test_datacollator_refuses_a_missing_column():
 
 def test_datafeature_tab_streaming(tmp_path):
     url = str(tmp_path)
-    sampletab = DummySampleTab(url=url, tag="samples_str").build()
+    sampletab = DummySampleTab(datalake=url, tag="samples_str").build()
 
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretab_bulk = DatafeatureTab(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
@@ -406,7 +406,7 @@ def test_datafeature_tab_streaming(tmp_path):
     ).build()
 
     featuretab_stream = DatafeatureTab(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
@@ -430,7 +430,7 @@ def test_datafeature_tab_streaming(tmp_path):
 def test_datafeature_table_streaming(tmp_path):
     url = str(tmp_path)
     sampletable = DummySampleTable(
-        url=url,
+        datalake=url,
         spec=dict(samples_per_tab=5),
         tag="sample_table_str",
     ).build()
@@ -438,7 +438,7 @@ def test_datafeature_table_streaming(tmp_path):
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
     featuretable_stream = DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_table=sampletable,
             evaluator_factory=eval_factory,
@@ -484,10 +484,10 @@ def test_an_upstream_slice_named_features_is_refused(tmp_path):
     preferring either is how a caller reads features believing it asked for
     samples, so this is an error rather than a precedence rule."""
     url = str(tmp_path)
-    sampletab = FeaturesNamedSampleTab(url=url, tag="clash_samples").build()
+    sampletab = FeaturesNamedSampleTab(datalake=url, tag="clash_samples").build()
 
     featuretab = DatafeatureTab(
-        url=url,
+        datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),

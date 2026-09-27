@@ -59,7 +59,7 @@ class Upstream(Datablock):
 
 
 def block(cls, tmp_path, **spec):
-    return cls(url=str(tmp_path), spec=spec)
+    return cls(datalake=str(tmp_path), spec=spec)
 
 
 @pytest.mark.pinned
@@ -138,7 +138,7 @@ class TestWhatPasses:
         assert block(Held, tmp_path, thing=value).hash
 
     def test_a_datablock(self, tmp_path):
-        assert block(Held, tmp_path, thing=Upstream(url=str(tmp_path))).hash
+        assert block(Held, tmp_path, thing=Upstream(datalake=str(tmp_path))).hash
 
     def test_a_specline_whatever_it_resolves_to(self, tmp_path, monkeypatch):
         """The identity renders the LINE for anything that does not resolve to a

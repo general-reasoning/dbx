@@ -45,19 +45,19 @@ class TestDirectoryTopicsNoLongerRaise:
     """The regression this fixes."""
 
     def test_dir_topic_breadcrumbs_do_not_raise(self, tmp_path):
-        DirTopic(url=str(tmp_path)).leave_breadcrumbs()
+        DirTopic(datalake=str(tmp_path)).leave_breadcrumbs()
 
     def test_list_topics_breadcrumbs_do_not_raise(self, tmp_path):
-        ListTopics(url=str(tmp_path)).leave_breadcrumbs()
+        ListTopics(datalake=str(tmp_path)).leave_breadcrumbs()
 
     def test_mixed_topics_breadcrumbs_do_not_raise(self, tmp_path):
-        Mixed(url=str(tmp_path)).leave_breadcrumbs()
+        Mixed(datalake=str(tmp_path)).leave_breadcrumbs()
 
 
 class TestWhereTheBreadcrumbLands:
 
     def test_dir_topic_gets_a_sibling_crumbs_file(self, tmp_path):
-        b = DirTopic(url=str(tmp_path))
+        b = DirTopic(datalake=str(tmp_path))
         b.leave_breadcrumbs()
         crumb = b.dirpath('masks') + '.crumbs'
         assert os.path.isfile(crumb)
@@ -65,20 +65,20 @@ class TestWhereTheBreadcrumbLands:
         assert os.listdir(b.dirpath('masks')) == []
 
     def test_file_topic_breadcrumb_is_its_own_file(self, tmp_path):
-        b = FileTopics(url=str(tmp_path))
+        b = FileTopics(datalake=str(tmp_path))
         b.leave_breadcrumbs()
         for topic in b.TOPICS:
             assert os.path.isfile(b.path(topic))
             assert os.path.getsize(b.path(topic)) == 0
 
     def test_list_topic_gets_a_sibling_crumbs_file(self, tmp_path):
-        b = ListTopics(url=str(tmp_path))
+        b = ListTopics(datalake=str(tmp_path))
         b.leave_breadcrumbs()
         for topic in b.TOPICS:
             assert os.path.isfile(b.dirpath(topic) + '.crumbs')
 
     def test_syntopic_gets_nothing(self, tmp_path):
-        b = Mixed(url=str(tmp_path))
+        b = Mixed(datalake=str(tmp_path))
         b.leave_breadcrumbs()
         assert not os.path.exists(os.path.join(b.anchorkeypath, 'cache'))
         assert not os.path.exists(os.path.join(b.anchorkeypath, 'cache.crumbs'))
@@ -93,26 +93,26 @@ class TestLeaveBreadcrumbsAtPathDirectly:
         return str(d)
 
     def test_crumbs_names_a_file_inside(self, tmp_path, dirpath):
-        b = FileTopics(url=str(tmp_path))
+        b = FileTopics(datalake=str(tmp_path))
         out = b.leave_breadcrumbs_at_path(dirpath, crumbs='inside.txt')
         assert out == f"{dirpath}/inside.txt"
         assert os.path.isfile(out)
 
     def test_no_crumbs_appends_dot_crumbs(self, tmp_path, dirpath):
-        b = FileTopics(url=str(tmp_path))
+        b = FileTopics(datalake=str(tmp_path))
         out = b.leave_breadcrumbs_at_path(dirpath)
         assert out == f"{dirpath}.crumbs"
         assert os.path.isfile(out)
 
     def test_the_directory_is_created_for_a_named_crumb(self, tmp_path):
-        b = FileTopics(url=str(tmp_path))
+        b = FileTopics(datalake=str(tmp_path))
         missing = str(tmp_path / 'not-there-yet')
         out = b.leave_breadcrumbs_at_path(missing, crumbs='x.txt')
         assert os.path.isfile(out)
 
     def test_existing_content_is_not_clobbered(self, tmp_path, dirpath):
         """A breadcrumb marks absence; it must never erase a real artifact."""
-        b = FileTopics(url=str(tmp_path))
+        b = FileTopics(datalake=str(tmp_path))
         target = os.path.join(dirpath, 'real.txt')
         with open(target, 'w') as f:
             f.write('precious')
@@ -123,7 +123,7 @@ class TestLeaveBreadcrumbsAtPathDirectly:
             assert f.read() == 'precious'
 
     def test_is_idempotent(self, tmp_path, dirpath):
-        b = FileTopics(url=str(tmp_path))
+        b = FileTopics(datalake=str(tmp_path))
         first = b.leave_breadcrumbs_at_path(dirpath)
         second = b.leave_breadcrumbs_at_path(dirpath)
         assert first == second
@@ -134,13 +134,13 @@ class TestValidityIsPreserved:
     """Breadcrumbs exist to make a block read as valid; that must still hold."""
 
     def test_file_topics_become_valid(self, tmp_path):
-        b = FileTopics(url=str(tmp_path))
+        b = FileTopics(datalake=str(tmp_path))
         assert b.valid() is False
         b.leave_breadcrumbs()
         assert b.valid() is True
 
     def test_dir_topic_becomes_valid(self, tmp_path):
-        b = DirTopic(url=str(tmp_path))
+        b = DirTopic(datalake=str(tmp_path))
         b.leave_breadcrumbs()
         assert b.valid() is True
 
@@ -156,7 +156,7 @@ class TestValidityIsPreserved:
                 with open(self.path('output', ensure_dirpath=True), 'w') as f:
                     f.write('real')
 
-        b = Real(url=str(tmp_path))
+        b = Real(datalake=str(tmp_path))
         b.leave_breadcrumbs()
         b.build()
         with open(b.path('output')) as f:

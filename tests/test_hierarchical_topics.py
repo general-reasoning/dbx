@@ -58,12 +58,12 @@ class Deep(Datablock):
 
 @pytest.fixture
 def block(tmp_path):
-    return Nested(url=str(tmp_path))
+    return Nested(datalake=str(tmp_path))
 
 
 @pytest.fixture
 def built(tmp_path):
-    b = Nested(url=str(tmp_path))
+    b = Nested(datalake=str(tmp_path))
     b.build()
     return b
 
@@ -82,7 +82,7 @@ class TestEnumeration:
         class Flat(Datablock):
             TOPICS = {'a': 'a.txt', 'b': DIRTOPIC}
             def __build__(self): pass
-        assert Flat(url=str(tmp_path)).leaftopics() == [('a',), ('b',)]
+        assert Flat(datalake=str(tmp_path)).leaftopics() == [('a',), ('b',)]
 
     def test_group_detection(self, block):
         assert block.is_topicgroup('data')
@@ -114,7 +114,7 @@ class TestAddressing:
         assert block.dirpath('data', 'frames').endswith('/data/frames')
 
     def test_three_levels(self, tmp_path):
-        b = Deep(url=str(tmp_path))
+        b = Deep(datalake=str(tmp_path))
         assert b.path('a', 'b', 'c').endswith('a/b/c/c.txt')
         b.build()
         assert b.valid()
@@ -155,7 +155,7 @@ class TestBadPaths:
             TOPICS = {'data/frames': DIRTOPIC}
             def __build__(self): pass
         with pytest.raises(ValueError, match="may not contain"):
-            Slashed(url=str(tmp_path)).signaturestr()
+            Slashed(datalake=str(tmp_path)).signaturestr()
 
 
 class TestValidity:
@@ -181,7 +181,7 @@ class TestValidity:
 
     def test_valid_covers_the_whole_tree(self, block, built):
         assert built.valid()
-        assert not block.__class__(url=block.url + '/elsewhere').valid()
+        assert not block.__class__(datalake=block.url + '/elsewhere').valid()
 
 
 class TestReadAndListing:
@@ -204,7 +204,7 @@ class TestReadAndListing:
                 seen.append(topic)
                 return topic
 
-        assert Flat(url=str(tmp_path)).read('out') == 'out'
+        assert Flat(datalake=str(tmp_path)).read('out') == 'out'
         assert seen == ['out']
 
     def test_ls_of_a_leaf(self, built):
@@ -257,8 +257,8 @@ class TestSignature:
             TOPICS = {'a': 'x.txt'}
             def __build__(self): pass
 
-        a = Grouped(url=str(tmp_path), anchor='s')
-        b = Flat(url=str(tmp_path), anchor='s')
+        a = Grouped(datalake=str(tmp_path), anchor='s')
+        b = Flat(datalake=str(tmp_path), anchor='s')
         assert a.typestr() != b.typestr()
         assert a.hash != b.hash
 

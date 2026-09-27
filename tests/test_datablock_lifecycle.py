@@ -165,7 +165,7 @@ class NestedBlock(Datablock):
 
 def _make_block(cls, tmp_path, **kwargs):
     """Instantiate a Datablock subclass rooted in a pytest tmp_path."""
-    return cls(url=str(tmp_path), **kwargs)
+    return cls(datalake=str(tmp_path), **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -607,9 +607,9 @@ class TestValidTree:
     
     def test_valid_tree_invalid_initial(self, tmp_path):
         from dbx.dataparts import quote
-        child = SingleTopicBlock(url=str(tmp_path / "child"))
+        child = SingleTopicBlock(datalake=str(tmp_path / "child"))
         parent = NestedBlock(
-            url=str(tmp_path / "parent"),
+            datalake=str(tmp_path / "parent"),
             spec={'child': quote(child)},
         )
         
@@ -629,9 +629,9 @@ class TestValidTree:
         
     def test_valid_tree_mixed_validity(self, tmp_path):
         from dbx.dataparts import quote
-        child = SingleTopicBlock(url=str(tmp_path / "child"))
+        child = SingleTopicBlock(datalake=str(tmp_path / "child"))
         parent = NestedBlock(
-            url=str(tmp_path / "parent"),
+            datalake=str(tmp_path / "parent"),
             spec={'child': quote(child)},
         )
         

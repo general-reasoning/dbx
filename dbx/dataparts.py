@@ -672,11 +672,21 @@ def eval(name):
     return term
 
 
-def write_exec_journal(s: str, url: str | None = None, storage_options: dict | None = None, *,
+def default_datalake() -> 'str | None':
+    """The datalake the environment names: ``DBX_DATALAKE``, else ``DBX_ROOT``, else ``DBX_URL``.
+
+    ``DBX_ROOT`` and ``DBX_URL`` are its names from before the rename, still
+    read, in the order they always were.
+    """
+    return (os.environ.get('DBX_DATALAKE') or os.environ.get('DBX_ROOT')
+            or os.environ.get('DBX_URL'))
+
+
+def write_exec_journal(s: str, datalake: str | None = None, storage_options: dict | None = None, *,
                        comment: str | None = None, session: str | None = None,
                        datajournal_entries=None, dt: str | None = None,
-                       end_dt: str | None = None) -> dict:
-    """Record an exec expression string in the $DBX_ROOT/.journal/exec/ journal.
+                       end_dt: str | None = None, url: str | None = None) -> dict:
+    """Record an exec expression string in the <datalake>/.journal/exec/ journal.
 
     ``exec`` holds *s* VERBATIM -- the string as it was typed, comment and all,
     so that a journal row can be re-run as it stands. ``comment`` holds the
@@ -692,7 +702,7 @@ def write_exec_journal(s: str, url: str | None = None, storage_options: dict | N
     ``exec:end:datetime``: `exec` records the row once it is over. Returns the
     row as written.
     """
-    dbx_url = url or os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL') or './dbx'
+    dbx_url = datalake or url or default_datalake() or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
     fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
     try:
@@ -1060,7 +1070,7 @@ def _exec_journal_columns_(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def read_exec_journal(
-    url: str | None = None,
+    datalake: str | None = None,
     loc: int | None = None,
     *,
     iloc: int | None = None,
@@ -1069,9 +1079,10 @@ def read_exec_journal(
     log: Logger | None = None,
     n_workers: int = 8,
     index: str | None = None,
+    url: str | None = None,
     **filter_kwargs,
 ):
-    """Read recorded dbx.exec() entries from the $DBX_ROOT/.journal/exec/ journal.
+    """Read recorded dbx.exec() entries from the <datalake>/.journal/exec/ journal.
 
     Returns an `ExecjournalFrame`, or the one `ExecjournalEntry` at *loc* or *iloc*.
     """
@@ -1080,7 +1091,7 @@ def read_exec_journal(
     if n_workers is None:
         n_workers = 8
 
-    dbx_url = url or os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL') or './dbx'
+    dbx_url = datalake or url or default_datalake() or './dbx'
     exec_dir = os.path.join(dbx_url, '.journal', 'exec')
     fs, _ = fsspec.url_to_fs(exec_dir, **(storage_options or {}))
     try:
@@ -1137,32 +1148,35 @@ def read_exec_journal(
     return frame
 
 
-def execjournal(loc=None, *, iloc=None, url=None, storage_options=None, log=None,
-                n_workers=8, index: 'str | None' = ..., **filter_kwargs):
+def execjournal(loc=None, *, iloc=None, datalake=None, storage_options=None, log=None,
+                n_workers=8, index: 'str | None' = ..., url=None, **filter_kwargs):
     """Read the exec journal: every `dbx.exec` command, newest first, then filtered.
 
     An `ExecjournalFrame`, or the `ExecjournalEntry` at *loc* / *iloc*. *index*
     defaults to ``'id'``, so ``loc=`` is a command's id; ``index=None`` numbers
     the rows. Filters are patterns, as on a block journal -- see
-    :func:`datajournal`. *url* defaults to ``DBX_ROOT``, then ``DBX_URL``.
+    :func:`datajournal`. *datalake* (``url``, its old name) defaults to
+    ``DBX_DATALAKE``, then ``DBX_ROOT``, then ``DBX_URL``.
     """
-    return read_exec_journal(url=url, loc=loc, iloc=iloc, storage_options=storage_options,
+    return read_exec_journal(datalake=datalake or url, loc=loc, iloc=iloc, storage_options=storage_options,
                              log=log, n_workers=n_workers, index=index, **filter_kwargs)
 
 
-def anchors(url: str | None = None, *, storage_options: dict | None = None) -> list[str]:
+def anchors(datalake: str | None = None, *, storage_options: dict | None = None,
+            url: str | None = None) -> list[str]:
     """Return every anchor used in the datalake at *url*, sorted.
 
     A block lives at ``{root}/{anchor}/{key}/...``, so an anchor is a top-level
     directory of the root. Dot-directories (``.journal`` and the like) are the
     lake's own bookkeeping, not anchors, and are left out, as are plain files.
 
-    *url* defaults to ``DBX_ROOT`` or its alias ``DBX_URL`` -- read in that
-    order, as a block reads them -- and may be a specline.
+    *datalake* (``url``, its old name) defaults to ``DBX_DATALAKE``, then
+    ``DBX_ROOT``, then ``DBX_URL`` -- as a block reads them -- and may be a
+    specline.
     """
-    url = url or os.environ.get('DBX_ROOT') or os.environ.get('DBX_URL')
+    url = datalake or url or default_datalake()
     if url is None:
-        raise ValueError("No url for anchors(): pass url= or set DBX_ROOT or its alias DBX_URL")
+        raise ValueError("No datalake for anchors(): pass datalake= or set DBX_DATALAKE (or DBX_ROOT, or DBX_URL)")
     url = eval(url)
     if storage_options is None:
         storage_options = default_storage_options()

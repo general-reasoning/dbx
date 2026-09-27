@@ -53,7 +53,7 @@ class TwoSlices(DatapointTab):
 
 
 def tab(tmp_path, **spec):
-    return TwoSlices(url=str(tmp_path), spec=spec)
+    return TwoSlices(datalake=str(tmp_path), spec=spec)
 
 
 @pytest.mark.pinned
@@ -129,7 +129,7 @@ class TestASingleSliceTabIsUnaffected:
                     for i in range(3):
                         writers['only'].write({'i': i})
 
-        t = OneSlice(url=str(tmp_path))
+        t = OneSlice(datalake=str(tmp_path))
         t.build()
         assert t.validate() and t.data('only') == {'only': {'i': [0, 1, 2]}}
 
@@ -149,4 +149,4 @@ class TestATableRefusesARaggedTab:
                 return super().__tab__(idx, n=4, skip=2 if idx == 1 else None)
 
         with pytest.raises(ValueError, match='lockstep'):
-            RaggedTable(url=str(tmp_path)).build()
+            RaggedTable(datalake=str(tmp_path)).build()

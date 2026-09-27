@@ -44,9 +44,9 @@ def newest_is_another_event(tmp_path):
     One journal file per instance, so the second entry has to come from a second
     instance -- writing again from the first would overwrite its build:end.
     """
-    block = Built(url=str(tmp_path), spec={'x': 1})
+    block = Built(datalake=str(tmp_path), spec={'x': 1})
     block.build()
-    Built(url=str(tmp_path), spec={'x': 1}).write_journal_entry(
+    Built(datalake=str(tmp_path), spec={'x': 1}).write_journal_entry(
         event='UNSAFE_copy_from:END')
     return block
 
@@ -66,8 +66,8 @@ class TestFilteredIndexIsRenumbered:
         # Distinct specs: build() is idempotent, so rebuilding the same identity
         # returns early and writes no second build:end.
         for x in (1, 2, 3):
-            Built(url=str(tmp_path), spec={'x': x}).build()
-        j = Built(url=str(tmp_path), spec={'x': 1}).journal(event='build:end')
+            Built(datalake=str(tmp_path), spec={'x': x}).build()
+        j = Built(datalake=str(tmp_path), spec={'x': 1}).journal(event='build:end')
         assert len(j) == 3
         times = list(j['datetime'])
         assert times == sorted(times, reverse=True)
@@ -88,15 +88,15 @@ class TestLastbuilt:
 
     def test_returns_the_newest_of_several_builds(self, tmp_path):
         for x in (1, 2, 3):
-            Built(url=str(tmp_path), spec={'x': x}).build()
-        block = Built(url=str(tmp_path), spec={'x': 1})
+            Built(datalake=str(tmp_path), spec={'x': x}).build()
+        block = Built(datalake=str(tmp_path), spec={'x': 1})
         entry = block.lastbuilt()
         newest = block.journal(event='build:end')['datetime'].max()
         assert entry.get('datetime') == newest
 
     def test_returns_none_when_nothing_was_built(self, tmp_path):
-        Built(url=str(tmp_path), spec={'x': 1}).write_journal_entry(event='note')
-        assert Built(url=str(tmp_path), spec={'x': 1}).lastbuilt() is None
+        Built(datalake=str(tmp_path), spec={'x': 1}).write_journal_entry(event='note')
+        assert Built(datalake=str(tmp_path), spec={'x': 1}).lastbuilt() is None
 
 
 class TestLocSelectorWithFilters:

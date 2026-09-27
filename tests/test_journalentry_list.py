@@ -59,7 +59,7 @@ class DirTopicBlock(Datablock):
 
 def _built(cls, tmp_path):
     """Build a block and return (block, its last journal entry)."""
-    block = cls(url=str(tmp_path))
+    block = cls(datalake=str(tmp_path))
     block.build()
     entry = block.lastbuilt()
     assert isinstance(entry, DatajournalEntry)

@@ -87,7 +87,7 @@ class Derived(_UpstreamSlices, DatapointTab):
 
 @pytest.fixture
 def samples(tmp_path):
-    s = Samples(url=str(tmp_path), shared_slice_columns='idx')
+    s = Samples(datalake=str(tmp_path), shared_slice_columns='idx')
     s.build()
     return s
 
@@ -99,14 +99,14 @@ class TestTheDeclarationIsTheDefault:
         assert ds.shared == {'idx'} and ds.validate_shared is True
 
     def test_a_block_declaring_nothing_checks_nothing(self, tmp_path):
-        plain = Samples(url=str(tmp_path))
+        plain = Samples(datalake=str(tmp_path))
         plain.build()
         ds = plain.dataset()
         assert not ds.shared and ds.validate_shared is False
 
     def test_a_caller_passing_shared_is_not_validated_unasked(self, tmp_path):
         """What validate_shared=False meant before this defaulting existed."""
-        plain = Samples(url=str(tmp_path))
+        plain = Samples(datalake=str(tmp_path))
         plain.build()
         assert plain.dataset(shared={'idx'}).validate_shared is False
 
@@ -115,7 +115,7 @@ class TestTheDeclarationIsTheDefault:
         assert samples.dataset(shared={'x'}).shared == {'x'}
 
     def test_a_table_declares_it_the_same_way(self, tmp_path):
-        table = SampleTable(url=str(tmp_path), shared_slice_columns='idx')
+        table = SampleTable(datalake=str(tmp_path), shared_slice_columns='idx')
         table.build()
         ds = table.dataset()
         assert ds.shared == {'idx'} and ds.validate_shared is True
@@ -126,7 +126,7 @@ class TestTheDeclarationIsTheDefault:
         assert samples.dataset().shared == {'idx'}
 
     def test_a_sequence_is_taken_as_given(self, tmp_path):
-        s = Samples(url=str(tmp_path), shared_slice_columns=['idx', 'x'])
+        s = Samples(datalake=str(tmp_path), shared_slice_columns=['idx', 'x'])
         assert s.shared_slice_columns == ('idx', 'x')
 
     def test_it_survives_a_reconstruction(self, samples):
@@ -134,8 +134,8 @@ class TestTheDeclarationIsTheDefault:
 
     def test_it_is_not_in_the_identity(self, tmp_path):
         """It changes no bytes, only what is checked on a read."""
-        assert Samples(url=str(tmp_path), shared_slice_columns='idx').hash == \
-               Samples(url=str(tmp_path)).hash
+        assert Samples(datalake=str(tmp_path), shared_slice_columns='idx').hash == \
+               Samples(datalake=str(tmp_path)).hash
 
 
 class TestWhatTheCheckCatches:
@@ -177,7 +177,7 @@ class TestAKeyOnlyOneSourceCarriesIsRefused:
             samples.dataset(('a', ['idx']), ('b', ['y']))[0]
 
     def test_a_key_no_source_carries_is_refused(self, tmp_path):
-        s = Samples(url=str(tmp_path), shared_slice_columns='nonesuch')
+        s = Samples(datalake=str(tmp_path), shared_slice_columns='nonesuch')
         s.build()
         with pytest.raises(ValueError, match='fewer than two'):
             s.dataset()[0]
@@ -193,7 +193,7 @@ class TestTheUpstreamDeclaration:
 
     @pytest.fixture
     def derived(self, samples, tmp_path):
-        d = Derived(url=str(tmp_path), spec=dict(source=samples),
+        d = Derived(datalake=str(tmp_path), spec=dict(source=samples),
                     shared_upstream_column='idx')
         d.build()
         return d
@@ -208,7 +208,7 @@ class TestTheUpstreamDeclaration:
     def test_a_shifted_derived_slice_is_caught(self, samples, tmp_path):
         """Exactly the fault the declaration exists for: the derived rows are
         no longer the ones computed from the samples they are paired with."""
-        shifted = Derived(url=str(tmp_path), spec=dict(source=samples, offset=1),
+        shifted = Derived(datalake=str(tmp_path), spec=dict(source=samples, offset=1),
                           shared_upstream_column='idx')
         shifted.build()
         with pytest.raises(ValueError, match='not aligned'):
@@ -217,7 +217,7 @@ class TestTheUpstreamDeclaration:
     def test_without_the_declaration_the_shift_reads_clean(self, samples, tmp_path):
         """What the default buys. Nothing raises, and every row pairs a derived
         value with the wrong sample."""
-        shifted = Derived(url=str(tmp_path), spec=dict(source=samples, offset=1))
+        shifted = Derived(datalake=str(tmp_path), spec=dict(source=samples, offset=1))
         shifted.build()
         assert shifted.dataset('d', 'a')[0] == {'d': {'idx': 1, 'z': 0}, 'a': {'idx': 0, 'x': 0}}
 
@@ -225,18 +225,18 @@ class TestTheUpstreamDeclaration:
         assert derived.shared_upstream_column == ('idx',)
 
     def test_it_takes_precedence_over_the_slice_declaration(self, samples, tmp_path):
-        d = Derived(url=str(tmp_path), spec=dict(source=samples),
+        d = Derived(datalake=str(tmp_path), spec=dict(source=samples),
                     shared_upstream_column='idx', shared_slice_columns='z')
         d.build()
         assert d.dataset('d', 'a').shared == {'idx'}
 
     def test_the_slice_declaration_still_applies_alone(self, samples, tmp_path):
-        d = Derived(url=str(tmp_path), spec=dict(source=samples),
+        d = Derived(datalake=str(tmp_path), spec=dict(source=samples),
                     shared_slice_columns='idx')
         d.build()
         assert d.dataset('d', 'a').shared == {'idx'}
 
     def test_it_is_not_in_the_identity(self, samples, tmp_path):
-        assert Derived(url=str(tmp_path), spec=dict(source=samples),
+        assert Derived(datalake=str(tmp_path), spec=dict(source=samples),
                        shared_upstream_column='idx').hash == \
-               Derived(url=str(tmp_path), spec=dict(source=samples)).hash
+               Derived(datalake=str(tmp_path), spec=dict(source=samples)).hash

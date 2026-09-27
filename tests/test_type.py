@@ -36,12 +36,12 @@ class Solo(Datablock):
 
 @pytest.fixture
 def block(tmp_path):
-    return Solo(url=str(tmp_path))
+    return Solo(datalake=str(tmp_path))
 
 
 @pytest.fixture
 def built(tmp_path):
-    b = Solo(url=str(tmp_path), spec=dict(label='solo')).set(tag='solo')
+    b = Solo(datalake=str(tmp_path), spec=dict(label='solo')).set(tag='solo')
     b.build()
     return b
 

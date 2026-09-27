@@ -123,7 +123,7 @@ class SimpleStack(Datastack):
         return math.ceil(self.var.total_items / self.var.block_size)
 
     def __block__(self, idx):
-        return StackBlock(url=self.url, spec=dict(idx=idx))
+        return StackBlock(datalake=self.url, spec=dict(idx=idx))
 
     def blocks(self):
         return [self.__block__(i) for i in range(self.n_blocks)]
@@ -182,13 +182,13 @@ class TestDatablockSerialization:
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_identity_preserved(self, url, roundtrip):
-        block = SimpleBlock(url=url, spec=dict(label="'hello'"))
+        block = SimpleBlock(datalake=url, spec=dict(label="'hello'"))
         restored = roundtrip(block)
         _assert_identity_preserved(block, restored)
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_tag_preserved(self, url, roundtrip):
-        block = TaggedBlock(url=url, tag="my-tag", spec=dict(value=99))
+        block = TaggedBlock(datalake=url, tag="my-tag", spec=dict(value=99))
         restored = roundtrip(block)
         _assert_identity_preserved(block, restored)
         assert restored._tag_ == "my-tag"
@@ -196,14 +196,14 @@ class TestDatablockSerialization:
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_custom_anchor_preserved(self, url, roundtrip):
-        block = SimpleBlock(url=url, anchor="custom/anchor")
+        block = SimpleBlock(datalake=url, anchor="custom/anchor")
         restored = roundtrip(block)
         assert restored.anchor == "custom/anchor"
         _assert_identity_preserved(block, restored)
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_multi_topic_identity(self, url, roundtrip):
-        block = MultiTopicBlock(url=url, spec=dict(n=10))
+        block = MultiTopicBlock(datalake=url, spec=dict(n=10))
         restored = roundtrip(block)
         _assert_identity_preserved(block, restored)
         assert restored.TOPICS == block.TOPICS
@@ -211,7 +211,7 @@ class TestDatablockSerialization:
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_valid_false_before_build(self, url, roundtrip):
         """A fresh block is invalid; the clone should also be invalid."""
-        block = SimpleBlock(url=url)
+        block = SimpleBlock(datalake=url)
         restored = roundtrip(block)
         assert block.valid() is False
         assert restored.valid() is False
@@ -219,7 +219,7 @@ class TestDatablockSerialization:
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_build_after_roundtrip(self, url, roundtrip):
         """A cloned block can be built independently."""
-        block = SimpleBlock(url=url, spec=dict(label="'rt'"))
+        block = SimpleBlock(datalake=url, spec=dict(label="'rt'"))
         restored = roundtrip(block)
         restored.build()
         assert restored.valid() is True
@@ -232,7 +232,7 @@ class TestDatablockSerialization:
             kwargs = dict(keyby=keyby)
             if keyby == 'tag':
                 kwargs['tag'] = 'test-tag'
-            block = SimpleBlock(url=url, **kwargs)
+            block = SimpleBlock(datalake=url, **kwargs)
             restored = roundtrip(block)
             assert restored.keyby == keyby
             assert restored.key == block.key
@@ -242,7 +242,7 @@ class TestDatablockSetPreservation:
     """Datablock.set() uses deepcopy internally — verify it works."""
 
     def test_set_preserves_identity(self, url):
-        block = SimpleBlock(url=url, tag="v1", spec=dict(label="'orig'"))
+        block = SimpleBlock(datalake=url, tag="v1", spec=dict(label="'orig'"))
         clone = block.set(tag="v2")
         assert clone.tag == "v2"
         assert clone.hash == block.hash  # spec unchanged, hash same
@@ -250,14 +250,14 @@ class TestDatablockSetPreservation:
 
     def test_set_refuses_a_new_spec(self, url):
         """A new spec is a new block, so set() sends you to construct it."""
-        block = SimpleBlock(url=url, spec=dict(label="'a'"))
+        block = SimpleBlock(datalake=url, spec=dict(label="'a'"))
         with pytest.raises(ValueError, match='spec'):
             block.set(spec=dict(label="'b'"))
         with pytest.raises(ValueError, match='spec'):
             block.replace(spec=dict(label="'b'"))
 
     def test_respecifying_through_dfn_keeps_everything_else(self, url):
-        block = SimpleBlock(url=url, tag="v1", spec=dict(label="'a'"))
+        block = SimpleBlock(datalake=url, tag="v1", spec=dict(label="'a'"))
         other = type(block)(**{**block.dfn, 'spec': dict(label="'b'")})
         assert other.var.label == "'b'"
         assert other.hash != block.hash
@@ -273,7 +273,7 @@ class TestDatastackSerialization:
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_identity_preserved(self, url, roundtrip):
-        stack = SimpleStack(url=url, spec=dict(total_items=6, block_size=2))
+        stack = SimpleStack(datalake=url, spec=dict(total_items=6, block_size=2))
         restored = roundtrip(stack)
         _assert_identity_preserved(stack, restored)
 
@@ -281,7 +281,7 @@ class TestDatastackSerialization:
     def test_executor_cls_default(self, url, roundtrip):
         """Default (inline) executor_cls survives roundtrip."""
         from dbx.dataparts import InlineCallableExecutor
-        stack = SimpleStack(url=url)
+        stack = SimpleStack(datalake=url)
         restored = roundtrip(stack)
         assert restored.executor_cls is InlineCallableExecutor
 
@@ -289,7 +289,7 @@ class TestDatastackSerialization:
     def test_executor_cls_multithreading(self, url, roundtrip):
         """Multithreading executor_cls survives roundtrip."""
         from dbx.dataparts import MultithreadingCallableExecutor
-        stack = SimpleStack(url=url, parallelization='multithreading', n_workers=4)
+        stack = SimpleStack(datalake=url, parallelization='multithreading', n_workers=4)
         restored = roundtrip(stack)
         assert restored.executor_cls is MultithreadingCallableExecutor
         assert restored.n_workers == 4
@@ -298,20 +298,20 @@ class TestDatastackSerialization:
     def test_executor_cls_multiprocessing(self, url, roundtrip):
         """Multiprocessing executor_cls survives roundtrip."""
         from dbx.dataparts import MultiprocessingCallableExecutor
-        stack = SimpleStack(url=url, parallelization='multiprocessing', n_workers=2)
+        stack = SimpleStack(datalake=url, parallelization='multiprocessing', n_workers=2)
         restored = roundtrip(stack)
         assert restored.executor_cls is MultiprocessingCallableExecutor
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_n_blocks_preserved(self, url, roundtrip):
-        stack = SimpleStack(url=url, spec=dict(total_items=10, block_size=3))
+        stack = SimpleStack(datalake=url, spec=dict(total_items=10, block_size=3))
         restored = roundtrip(stack)
         assert restored.n_blocks == stack.n_blocks
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_build_after_roundtrip(self, url, roundtrip):
         """A roundtripped Datastack can still build all its blocks."""
-        stack = SimpleStack(url=url, spec=dict(total_items=4, block_size=2))
+        stack = SimpleStack(datalake=url, spec=dict(total_items=4, block_size=2))
         restored = roundtrip(stack)
         restored.build()
         blocks = restored.blocks()
@@ -320,7 +320,7 @@ class TestDatastackSerialization:
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_tag_on_stack(self, url, roundtrip):
-        stack = SimpleStack(url=url, tag="stack-v1")
+        stack = SimpleStack(datalake=url, tag="stack-v1")
         restored = roundtrip(stack)
         assert restored.tag == "stack-v1"
         _assert_identity_preserved(stack, restored)
@@ -333,7 +333,7 @@ class TestDatastackSetPreservation:
         """This is the exact bug that motivated the executor_cls property fix."""
         from dbx.dataparts import MultithreadingCallableExecutor
         stack = SimpleStack(
-            url=url,
+            datalake=url,
             parallelization='multithreading',
             n_workers=4,
             tag="v1",
@@ -346,7 +346,7 @@ class TestDatastackSetPreservation:
     def test_respec_through_dfn_preserves_executor(self, url):
         from dbx.dataparts import MultiprocessingCallableExecutor
         stack = SimpleStack(
-            url=url,
+            datalake=url,
             parallelization='multiprocessing',
             n_workers=2,
             spec=dict(total_items=6, block_size=2),
@@ -360,7 +360,7 @@ class TestDatastackSetPreservation:
     def test_set_then_build(self, url):
         """set() clone can build successfully."""
         stack = SimpleStack(
-            url=url,
+            datalake=url,
             parallelization='multithreading',
             n_workers=2,
             spec=dict(total_items=4, block_size=2),
@@ -399,8 +399,8 @@ class TestNestedDatablockInSpec:
 
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_deepcopy_block_with_block_attr(self, url, roundtrip):
-        inner = SimpleBlock(url=url, spec=dict(label="'inner'"))
-        outer = OuterBlock(url=url, inner_block=inner)
+        inner = SimpleBlock(datalake=url, spec=dict(label="'inner'"))
+        outer = OuterBlock(datalake=url, inner_block=inner)
         restored = roundtrip(outer)
         _assert_identity_preserved(outer, restored)
         # The inner block attribute should also survive
@@ -408,8 +408,8 @@ class TestNestedDatablockInSpec:
 
     def test_set_with_nested_block(self, url):
         """set() on a block that holds another block in kwargs."""
-        inner = SimpleBlock(url=url, spec=dict(label="'inner'"))
-        outer = OuterBlock(url=url, inner_block=inner)
+        inner = SimpleBlock(datalake=url, spec=dict(label="'inner'"))
+        outer = OuterBlock(datalake=url, inner_block=inner)
         clone = outer.set(tag="cloned")
         assert clone.tag == "cloned"
         assert hasattr(clone, 'inner_block')

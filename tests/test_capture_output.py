@@ -100,7 +100,7 @@ class SlowCapturedBlock(Datablock):
 # ---------------------------------------------------------------------------
 
 def _make_block(cls, tmp_path, **kwargs):
-    return cls(url=str(tmp_path), capture_output=True, **kwargs)
+    return cls(datalake=str(tmp_path), capture_output=True, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +250,7 @@ class TestCaptureOutputDisabled:
     """When capture_output=False (default), behavior is unchanged."""
 
     def test_no_capture_by_default(self, tmp_path):
-        block = CapturedBlock(url=str(tmp_path))  # capture_output defaults to False
+        block = CapturedBlock(datalake=str(tmp_path))  # capture_output defaults to False
         assert block.capture_output is False
         CapturedBlock.build_log = []
 

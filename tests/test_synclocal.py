@@ -63,14 +63,14 @@ def make_ckpts(block, steps, *, via_fs=False):
 class TestSyncLocalLatest:
 
     def test_pulls_highest_key(self, tmp_path):
-        block = CkptBlock(url=str(tmp_path / 'store'))
+        block = CkptBlock(datalake=str(tmp_path / 'store'))
         make_ckpts(block, [10, 100, 20, 5])
         result = block.synclocal('ckpts', suffix='.pt', key=step_key, latest=True)
         assert result.endswith('ckpt_step_100.pt')
         assert os.path.isfile(result)
 
     def test_falls_back_on_validate_failure(self, tmp_path):
-        block = CkptBlock(url=str(tmp_path / 'store'))
+        block = CkptBlock(datalake=str(tmp_path / 'store'))
         make_ckpts(block, [10, 100, 20, 5])
 
         def validate(path):
@@ -80,19 +80,19 @@ class TestSyncLocalLatest:
         assert result.endswith('ckpt_step_10.pt')
 
     def test_returns_none_when_all_invalid(self, tmp_path):
-        block = CkptBlock(url=str(tmp_path / 'store'))
+        block = CkptBlock(datalake=str(tmp_path / 'store'))
         make_ckpts(block, [10, 20])
         result = block.synclocal('ckpts', suffix='.pt', key=step_key, latest=True, validate=lambda p: False)
         assert result is None
 
     def test_returns_none_when_no_entries(self, tmp_path):
-        block = CkptBlock(url=str(tmp_path / 'store'))
+        block = CkptBlock(datalake=str(tmp_path / 'store'))
         block.dirpath('ckpts', ensure=True)
         result = block.synclocal('ckpts', suffix='.pt', key=step_key, latest=True)
         assert result is None
 
     def test_suffix_filters_out_non_matching_entries(self, tmp_path):
-        block = CkptBlock(url=str(tmp_path / 'store'))
+        block = CkptBlock(datalake=str(tmp_path / 'store'))
         make_ckpts(block, [10, 100])
         dirpath = block.dirpath('ckpts')
         with open(os.path.join(dirpath, 'ckpt_step_999.tmp'), 'w') as f:
@@ -103,7 +103,7 @@ class TestSyncLocalLatest:
     def test_nonlocal_url_stages_via_dbx_local(self, tmp_path, monkeypatch, mem_url):
         staging = tmp_path / 'staging'
         monkeypatch.setenv('DBX_LOCAL', str(staging))
-        block = CkptBlock(url=mem_url)
+        block = CkptBlock(datalake=mem_url)
         make_ckpts(block, [5, 50], via_fs=True)
         result = block.synclocal('ckpts', suffix='.pt', key=step_key, latest=True)
         assert result.startswith(str(staging))
@@ -114,7 +114,7 @@ class TestSyncLocalLatest:
     def test_already_local_entries_are_not_repulled(self, tmp_path, monkeypatch, mem_url):
         staging = tmp_path / 'staging'
         monkeypatch.setenv('DBX_LOCAL', str(staging))
-        block = CkptBlock(url=mem_url)
+        block = CkptBlock(datalake=mem_url)
         make_ckpts(block, [5, 50], via_fs=True)
 
         block.synclocal('ckpts', suffix='.pt', key=step_key, latest=True)
@@ -135,7 +135,7 @@ class TestSyncLocalLatest:
 class TestSyncLocalAll:
 
     def test_pulls_every_matching_entry_sorted(self, tmp_path):
-        block = CkptBlock(url=str(tmp_path / 'store'))
+        block = CkptBlock(datalake=str(tmp_path / 'store'))
         make_ckpts(block, [10, 100, 20, 5])
         result = block.synclocal('ckpts', suffix='.pt', key=step_key, latest=False)
         assert [os.path.basename(p) for p in result] == [
@@ -145,7 +145,7 @@ class TestSyncLocalAll:
             assert os.path.isfile(p)
 
     def test_default_key_is_lexical(self, tmp_path):
-        block = CkptBlock(url=str(tmp_path / 'store'))
+        block = CkptBlock(datalake=str(tmp_path / 'store'))
         dirpath = block.dirpath('ckpts', ensure=True)
         for name in ('b.txt', 'a.txt', 'c.txt'):
             with open(os.path.join(dirpath, name), 'w') as f:

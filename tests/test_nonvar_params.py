@@ -63,7 +63,7 @@ class CustomParamStack(Datastack):
         return self.var.count
 
     def __block__(self, idx):
-        return CustomParamBlock(url=self.url, spec=dict(val=idx))
+        return CustomParamBlock(datalake=self.url, spec=dict(val=idx))
 
     def __init__(self, *args, devices: list | None = None, device_batch_size: int = 32, **kwargs):
         super().__init__(
@@ -86,7 +86,7 @@ class CustomParamStack(Datastack):
 def test_nonvar_params_pickle_roundtrip(tmp_path):
     """Non-VAR parameters must survive pickle.dumps / pickle.loads."""
     url = str(tmp_path / "block")
-    block = CustomParamBlock(url=url, device_batch_size=128, devices=["cuda:0", "cuda:1"])
+    block = CustomParamBlock(datalake=url, device_batch_size=128, devices=["cuda:0", "cuda:1"])
     assert block.device_batch_size == 128
     assert block._devices == ["cuda:0", "cuda:1"]
 
@@ -100,7 +100,7 @@ def test_nonvar_params_pickle_roundtrip(tmp_path):
 def test_nonvar_params_deepcopy(tmp_path):
     """Non-VAR parameters must survive copy.deepcopy()."""
     url = str(tmp_path / "block")
-    block = CustomParamBlock(url=url, device_batch_size=256, devices=["cuda:2"])
+    block = CustomParamBlock(datalake=url, device_batch_size=256, devices=["cuda:2"])
     copied = copy.deepcopy(block)
 
     assert copied.device_batch_size == 256
@@ -110,8 +110,8 @@ def test_nonvar_params_deepcopy(tmp_path):
 def test_nonvar_params_do_not_affect_hash(tmp_path):
     """Changing non-VAR parameters must NOT change the block hash."""
     url = str(tmp_path / "block")
-    block1 = CustomParamBlock(url=url, device_batch_size=32, devices=["cuda:0"])
-    block2 = CustomParamBlock(url=url, device_batch_size=128, devices=["cuda:1", "cuda:2"])
+    block1 = CustomParamBlock(datalake=url, device_batch_size=32, devices=["cuda:0"])
+    block2 = CustomParamBlock(datalake=url, device_batch_size=128, devices=["cuda:1", "cuda:2"])
 
     assert block1.hash == block2.hash
 
@@ -120,7 +120,7 @@ def test_datastack_devices_passed_to_executor(tmp_path):
     """Datastack preserving devices across pickle and passing to build."""
     url = str(tmp_path / "stack")
     stack = CustomParamStack(
-        url=url,
+        datalake=url,
         parallelization="inline",
         devices=["cuda:0", "cuda:1"],
         device_batch_size=64,

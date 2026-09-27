@@ -39,7 +39,7 @@ class NoteBlock(Datablock):
 
 
 def _make(tmp_path, **kw):
-    return NoteBlock(url=str(tmp_path), **kw)
+    return NoteBlock(datalake=str(tmp_path), **kw)
 
 
 # ---------------------------------------------------------------------------

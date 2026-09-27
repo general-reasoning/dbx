@@ -61,11 +61,11 @@ class TestEvalJournal:
         dbx_url = str(tmp_path / 'dbx_root')
         monkeypatch.setenv('DBX_ROOT', dbx_url)
 
-        block = Built(url=dbx_url, spec={'x': 1})
+        block = Built(datalake=dbx_url, spec={'x': 1})
         block.build()
 
         # Execute dbx expression string
-        expr = f"dbx.datablocks.Datablock(url={dbx_url!r}, spec={{'x': 1}})"
+        expr = f"dbx.datablocks.Datablock(datalake={dbx_url!r}, spec={{'x': 1}})"
         res = dbx.exec(expr)
         assert isinstance(res, Datablock)
 
@@ -101,16 +101,16 @@ class TestEvalJournal:
         dbx_url = str(tmp_path / 'dbx_root')
         monkeypatch.setenv('DBX_ROOT', dbx_url)
 
-        write_exec_journal("expr1", url=dbx_url)
-        write_exec_journal("expr2", url=dbx_url)
-        write_exec_journal("expr3", url=dbx_url)
+        write_exec_journal("expr1", datalake=dbx_url)
+        write_exec_journal("expr2", datalake=dbx_url)
+        write_exec_journal("expr3", datalake=dbx_url)
 
         # Full journal
-        j = read_exec_journal(url=dbx_url)
+        j = read_exec_journal(datalake=dbx_url)
         assert len(j) == 3
 
         # iloc / loc access (most recent first)
-        entry_0 = read_exec_journal(url=dbx_url, iloc=0)
+        entry_0 = read_exec_journal(datalake=dbx_url, iloc=0)
         assert isinstance(entry_0, pd.Series)
         assert entry_0['exec'] == 'expr3'
 
@@ -124,7 +124,7 @@ class TestEvalJournal:
         assert j_filtered.iloc[0]['exec'] == 'expr2'
 
         # Index
-        j_indexed = read_exec_journal(url=dbx_url, index='exec')
+        j_indexed = read_exec_journal(datalake=dbx_url, index='exec')
         assert 'expr2' in j_indexed.index
         assert isinstance(j_indexed.loc['expr2'], pd.Series)
 
@@ -133,9 +133,9 @@ class TestEvalJournal:
         dbx_url = str(tmp_path / 'dbx_root')
         monkeypatch.setenv('DBX_ROOT', dbx_url)
 
-        write_exec_journal("autopath.pipeline.Run(a=1)", url=dbx_url)
-        write_exec_journal("autopath.model.Train(b=2)", url=dbx_url)
-        write_exec_journal("dbx.Datablock(x=3)", url=dbx_url)
+        write_exec_journal("autopath.pipeline.Run(a=1)", datalake=dbx_url)
+        write_exec_journal("autopath.model.Train(b=2)", datalake=dbx_url)
+        write_exec_journal("dbx.Datablock(x=3)", datalake=dbx_url)
 
         # Single prefix match
         j_auto = dbx.journal(exec='autopath.')
@@ -217,8 +217,8 @@ class TestExecStatements:
         dbx_url = str(tmp_path / 'dbx_root')
         monkeypatch.setenv('DBX_ROOT', dbx_url)
 
-        write_exec_journal("expr1  # nightly refresh", url=dbx_url)
-        write_exec_journal("expr2  # one-off", url=dbx_url)
+        write_exec_journal("expr1  # nightly refresh", datalake=dbx_url)
+        write_exec_journal("expr2  # one-off", datalake=dbx_url)
 
         j = dbx.journal(comment='nightly')
         assert len(j) == 1

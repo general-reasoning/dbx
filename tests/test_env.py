@@ -4,7 +4,7 @@ Tests for the env() specline factory and getenv() function.
 Verifies:
 1. env() basics: returns a specline string, idempotent.
 2. getenv() resolves environment variables.
-3. Datablock with url=env('X'): norm/signature contain the specline, which
+3. Datablock with datalake=env('X'): norm/signature contain the specline, which
    is what _url_ holds; url holds what it resolved to.
 4. Relocatability: changing the env var does not change the hash.
 5. Spec fields with env(): specline kept in norm, resolved in var.
@@ -100,37 +100,37 @@ class TestEnvBasics:
 
 
 # ---------------------------------------------------------------------------
-# 2. Datablock with url=env('X')
+# 2. Datablock with datalake=env('X')
 # ---------------------------------------------------------------------------
 
 class TestEnvInRoot:
 
     def test_root_resolves_to_actual_path(self):
-        block = EnvBlock(url=env('TEST_ROOT'))
+        block = EnvBlock(datalake=env('TEST_ROOT'))
         assert block.root == '/tmp/test_root_value'
 
     def test_url_underscore_is_specline(self):
-        block = EnvBlock(url=env('TEST_ROOT'))
+        block = EnvBlock(datalake=env('TEST_ROOT'))
         assert block._url_ == "$dbx.getenv('TEST_ROOT')"
 
     def test_handle_contains_specline(self):
-        block = EnvBlock(url=env('TEST_ROOT'))
+        block = EnvBlock(datalake=env('TEST_ROOT'))
         handle = block.normstr()
         assert "$dbx.getenv('TEST_ROOT')" in handle
         assert '/tmp/test_root_value' not in handle
 
     def test_signature_contains_specline(self):
-        block = EnvBlock(url=env('TEST_ROOT'))
+        block = EnvBlock(datalake=env('TEST_ROOT'))
         assert "$dbx.getenv('TEST_ROOT')" in block.signaturestr()
         assert '/tmp/test_root_value' not in block.signaturestr()
 
     def test_anchorkeypath_uses_resolved_path(self):
-        block = EnvBlock(url=env('TEST_ROOT'))
+        block = EnvBlock(datalake=env('TEST_ROOT'))
         assert block.anchorkeypath.startswith('/tmp/test_root_value')
 
     def test_build_with_env_root(self, tmp_path, monkeypatch):
         monkeypatch.setenv('TEST_BUILD_ROOT', str(tmp_path))
-        block = EnvBlock(url=env('TEST_BUILD_ROOT'))
+        block = EnvBlock(datalake=env('TEST_BUILD_ROOT'))
         assert block.valid() is False
         block.build()
         assert block.valid() is True
@@ -144,11 +144,11 @@ class TestEnvRelocatability:
 
     def test_hash_stable_across_env_values(self, monkeypatch):
         monkeypatch.setenv('RELOCATE_ROOT', '/path/a')
-        block_a = EnvBlock(url=env('RELOCATE_ROOT'))
+        block_a = EnvBlock(datalake=env('RELOCATE_ROOT'))
         hash_a = block_a.hash
 
         monkeypatch.setenv('RELOCATE_ROOT', '/path/b')
-        block_b = EnvBlock(url=env('RELOCATE_ROOT'))
+        block_b = EnvBlock(datalake=env('RELOCATE_ROOT'))
         hash_b = block_b.hash
 
         assert hash_a == hash_b
@@ -156,13 +156,13 @@ class TestEnvRelocatability:
     def test_hash_differs_for_different_env_keys(self, monkeypatch):
         monkeypatch.setenv('ROOT_X', '/same/path')
         monkeypatch.setenv('ROOT_Y', '/same/path')
-        block_x = EnvBlock(url=env('ROOT_X'))
-        block_y = EnvBlock(url=env('ROOT_Y'))
+        block_x = EnvBlock(datalake=env('ROOT_X'))
+        block_y = EnvBlock(datalake=env('ROOT_Y'))
         assert block_x.hash != block_y.hash
 
     def test_hash_differs_from_literal_root(self):
-        block_env = EnvBlock(url=env('TEST_ROOT'))
-        block_lit = EnvBlock(url='/tmp/test_root_value')
+        block_env = EnvBlock(datalake=env('TEST_ROOT'))
+        block_lit = EnvBlock(datalake='/tmp/test_root_value')
         assert block_env.hash != block_lit.hash
 
 
@@ -174,19 +174,19 @@ class TestEnvInSpec:
 
     def test_var_resolves_to_real_path(self, monkeypatch):
         monkeypatch.setenv('SPEC_PATH', '/data/resolved')
-        block = EnvSpecBlock(url='/tmp/dbx_test_env',
+        block = EnvSpecBlock(datalake='/tmp/dbx_test_env',
                              spec=dict(data_path=env('SPEC_PATH')))
         assert block.var.data_path == '/data/resolved'
 
     def test_spec_stores_specline(self, monkeypatch):
         monkeypatch.setenv('SPEC_PATH', '/data/resolved')
-        block = EnvSpecBlock(url='/tmp/dbx_test_env',
+        block = EnvSpecBlock(datalake='/tmp/dbx_test_env',
                              spec=dict(data_path=env('SPEC_PATH')))
         assert block.spec['data_path'] == "$dbx.getenv('SPEC_PATH')"
 
     def test_handle_contains_specline(self, monkeypatch):
         monkeypatch.setenv('SPEC_PATH', '/data/resolved')
-        block = EnvSpecBlock(url='/tmp/dbx_test_env',
+        block = EnvSpecBlock(datalake='/tmp/dbx_test_env',
                              spec=dict(data_path=env('SPEC_PATH')))
         handle = block.normstr()
         assert "$dbx.getenv('SPEC_PATH')" in handle
@@ -194,18 +194,18 @@ class TestEnvInSpec:
 
     def test_hash_stable_across_env_values(self, monkeypatch):
         monkeypatch.setenv('SPEC_PATH', '/path/a')
-        block_a = EnvSpecBlock(url='/tmp/dbx_test_env',
+        block_a = EnvSpecBlock(datalake='/tmp/dbx_test_env',
                                spec=dict(data_path=env('SPEC_PATH')))
         hash_a = block_a.hash
 
         monkeypatch.setenv('SPEC_PATH', '/path/b')
-        block_b = EnvSpecBlock(url='/tmp/dbx_test_env',
+        block_b = EnvSpecBlock(datalake='/tmp/dbx_test_env',
                                spec=dict(data_path=env('SPEC_PATH')))
         assert block_a.hash == block_b.hash
 
     def test_build_with_env_spec(self, tmp_path, monkeypatch):
         monkeypatch.setenv('SPEC_PATH', '/data/build_test')
-        block = EnvSpecBlock(url=str(tmp_path),
+        block = EnvSpecBlock(datalake=str(tmp_path),
                              spec=dict(data_path=env('SPEC_PATH')))
         block.build()
         assert block.valid() is True
@@ -215,7 +215,7 @@ class TestEnvInSpec:
     def test_combined_env_root_and_spec(self, monkeypatch):
         monkeypatch.setenv('MY_ROOT', '/tmp/combined')
         monkeypatch.setenv('MY_DATA', '/data/combined')
-        block = EnvSpecBlock(url=env('MY_ROOT'),
+        block = EnvSpecBlock(datalake=env('MY_ROOT'),
                              spec=dict(data_path=env('MY_DATA')))
         assert block.root == '/tmp/combined'
         assert block.var.data_path == '/data/combined'
@@ -231,7 +231,7 @@ class TestEnvQuoteRoundtrip:
 
     def test_quote_roundtrip_with_env_root(self, monkeypatch):
         monkeypatch.setenv('RT_ROOT', '/tmp/roundtrip')
-        block = EnvBlock(url=env('RT_ROOT'))
+        block = EnvBlock(datalake=env('RT_ROOT'))
         quote = block.quote()
         assert quote.startswith('$')
         restored = dbx_eval(quote)
@@ -242,7 +242,7 @@ class TestEnvQuoteRoundtrip:
 
 
 class TestEnvInJournalUrl:
-    """`journal(url=...)` takes a url like everything else does: as a specline.
+    """`journal(datalake=...)` takes a url like everything else does: as a specline.
 
     A block's `_url_` IS one whenever it was constructed with env(...), and
     fsspec would read "$dbx.getenv('X')" as a protocol-less relative path and
@@ -253,15 +253,15 @@ class TestEnvInJournalUrl:
     def test_a_specline_url_names_the_same_journal_as_the_resolved_one(self, tmp_path, monkeypatch):
         import dbx
         monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path))
-        built = EnvBlock(url=env('JOURNAL_ROOT'), spec=dict(label="'x'"))
+        built = EnvBlock(datalake=env('JOURNAL_ROOT'), spec=dict(label="'x'"))
         built.build()
         anchor = built.anchor
-        assert len(dbx.journal(anchor, url=str(tmp_path))) == len(dbx.journal(anchor, url=env('JOURNAL_ROOT')))
-        assert len(dbx.journal(anchor, url=env('JOURNAL_ROOT'))) > 0
+        assert len(dbx.journal(anchor, datalake=str(tmp_path))) == len(dbx.journal(anchor, datalake=env('JOURNAL_ROOT')))
+        assert len(dbx.journal(anchor, datalake=env('JOURNAL_ROOT'))) > 0
 
     def test_a_block_finds_its_own_journal_through_either_spelling(self, tmp_path, monkeypatch):
         import dbx
         monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path))
-        built = EnvBlock(url=env('JOURNAL_ROOT'), spec=dict(label="'y'"))
+        built = EnvBlock(datalake=env('JOURNAL_ROOT'), spec=dict(label="'y'"))
         built.build()
-        assert len(dbx.journal(built.anchor, url=built._url_)) == len(built.journal())
+        assert len(dbx.journal(built.anchor, datalake=built._url_)) == len(built.journal())

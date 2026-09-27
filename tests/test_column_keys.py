@@ -44,7 +44,7 @@ class AnnotatedTab(Datatab):
 
 @pytest.fixture
 def tab(tmp_path):
-    return AnnotatedTab(url=str(tmp_path), spec=dict(n=4)).build()
+    return AnnotatedTab(datalake=str(tmp_path), spec=dict(n=4)).build()
 
 
 class TestDatasetAndData:
@@ -188,24 +188,24 @@ class TestADictColumnDeclaredByItsStructure:
         assert repr(m) == "DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')"
 
     def test_it_is_in_the_hash(self, tmp_path):
-        text = DeclaredTab(url=str(tmp_path)).typestr()
+        text = DeclaredTab(datalake=str(tmp_path)).typestr()
         assert "topic:annotations=DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')" in text
 
     def test_the_writer_gets_json(self, tmp_path):
-        t = DeclaredTab(url=str(tmp_path))
+        t = DeclaredTab(datalake=str(tmp_path))
         assert t.declared_columns('annotations') == {'annotations': 'json', 'idx': 'int'}
         assert t.declared_schema('annotations') == {
             'annotations': {'cohort': 'str', 'recurrence': 'int'}, 'idx': 'int'}
 
     def test_built_and_read_back_by_key(self, tmp_path):
-        t = DeclaredTab(url=str(tmp_path)).build()
+        t = DeclaredTab(datalake=str(tmp_path)).build()
         assert t.data(('annotations', 'annotations', 'recurrence')) == {
             'annotations': {'annotations': [0, 1, 2]}}
         assert t.dataset(('annotations', 'annotations', 'cohort'))[2] == {
             'annotations': {'annotations': 'c2'}}
 
     def test_an_explicit_json_agrees_with_the_declaration(self, tmp_path):
-        t = DeclaredTab(url=str(tmp_path))
+        t = DeclaredTab(datalake=str(tmp_path))
         assert t._writable_columns({'annotations': {'annotations': 'json', 'idx': 'int'}},
                                    ['annotations']) == {'annotations': {'annotations': 'json', 'idx': 'int'}}
 
@@ -249,19 +249,19 @@ class TestTheDeclaredStructureIsChecked:
     ])
     def test_a_row_is_refused_when_written(self, tmp_path, row, error, match):
         with pytest.raises(error, match=match):
-            BadRowTab(url=str(tmp_path), spec=dict(row=row)).build()
+            BadRowTab(datalake=str(tmp_path), spec=dict(row=row)).build()
 
     def test_a_row_that_matches_is_written(self, tmp_path):
-        t = BadRowTab(url=str(tmp_path), spec=dict(row={'cohort': 'c', 'recurrence': 1})).build()
+        t = BadRowTab(datalake=str(tmp_path), spec=dict(row={'cohort': 'c', 'recurrence': 1})).build()
         assert t.data(('annotations', 'annotations', 'cohort')) == {'annotations': {'annotations': ['c']}}
 
     def test_nested_structure_too(self, tmp_path):
         with pytest.raises(ValueError, match=r"\['site'\].*missing \['code'\]"):
-            NestedTab(url=str(tmp_path), spec=dict(row={'site': {'name': 'x'}})).build()
-        NestedTab(url=str(tmp_path / 'ok'), spec=dict(row={'site': {'name': 'x', 'code': 1}})).build()
+            NestedTab(datalake=str(tmp_path), spec=dict(row={'site': {'name': 'x'}})).build()
+        NestedTab(datalake=str(tmp_path / 'ok'), spec=dict(row={'site': {'name': 'x', 'code': 1}})).build()
 
     def test_a_key_the_slice_does_not_declare_is_refused_before_reading(self, tmp_path):
-        t = DeclaredTab(url=str(tmp_path))            # not built: nothing is read
+        t = DeclaredTab(datalake=str(tmp_path))            # not built: nothing is read
         with pytest.raises(KeyError, match=r"declares keys \['cohort', 'recurrence'\], not \['stage'\]"):
             t.dataset(('annotations', 'annotations', 'stage'))
         with pytest.raises(KeyError, match="not"):
@@ -269,7 +269,7 @@ class TestTheDeclaredStructureIsChecked:
 
     def test_a_key_of_a_column_declared_scalar_is_refused(self, tmp_path):
         with pytest.raises(TypeError, match="declares column 'idx' as 'int'"):
-            DeclaredTab(url=str(tmp_path)).dataset(('annotations', 'idx', 'k'))
+            DeclaredTab(datalake=str(tmp_path)).dataset(('annotations', 'idx', 'k'))
 
     def test_an_undeclared_slice_is_not_checked(self, tab):
         """AnnotatedTab passes its columns to the writer: there is no declaration to hold it to."""
@@ -287,7 +287,7 @@ def test_a_table_holds_a_key_to_its_tabs_declaration(tmp_path):
         def n_tabs(self):
             return 2
 
-    table = DeclaredTable(url=str(tmp_path))
+    table = DeclaredTable(datalake=str(tmp_path))
     with pytest.raises(KeyError, match=r"not \['stage'\]"):
         table.dataset(('annotations', 'annotations', 'stage'))
     table.build()
@@ -327,14 +327,14 @@ class TestNested:
         assert repr(back['m']) == repr(m) and repr(back['d']) == repr(d)
 
     def test_a_path_reads_a_deep_entry(self, tmp_path):
-        t = DeepTab(url=str(tmp_path)).build()
+        t = DeepTab(datalake=str(tmp_path)).build()
         assert t.data(('annotations', 'annotations', ('site', 'geo', 'lat'))) == {
             'annotations': {'annotations': [0.0, 1.0, 2.0]}}
         row = t.dataset(('annotations', 'annotations', ['label', ('site', 'code')]))[1]
         assert row['annotations']['annotations'] == {'label': 1, 'site': {'code': 11}}
 
     def test_a_path_is_checked_against_the_declaration(self, tmp_path):
-        t = DeepTab(url=str(tmp_path))
+        t = DeepTab(datalake=str(tmp_path))
         with pytest.raises(KeyError, match=r"declares keys \['lat', 'lon'\] under 'site.geo', not \['alt'\]"):
             t.dataset(('annotations', 'annotations', ('site', 'geo', 'alt')))
         with pytest.raises(TypeError, match="declares 'label' as 'int', which has no key 'x'"):
@@ -347,10 +347,10 @@ class TestNested:
                     writers['annotations'].write({'annotations': {
                         'label': 0, 'site': {'code': 1, 'geo': {'lat': 0.0}}}, 'idx': 0})
         with pytest.raises(ValueError, match=r"\['site'\]\['geo'\].*missing \['lon'\]"):
-            Bad(url=str(tmp_path)).build()
+            Bad(datalake=str(tmp_path)).build()
 
     def test_a_collator_path(self, tmp_path):
-        t = DeepTab(url=str(tmp_path)).build()
+        t = DeepTab(datalake=str(tmp_path)).build()
         c = Datacollator(spec=dict(
             signals=[('annotations', 'annotations', ['label', ('site', 'geo', 'lat')])],
             labels=[('annotations', 'annotations', ('site', 'code'))]))
@@ -371,19 +371,19 @@ class TestNested:
 class TestListsSideBySideTuplesDeeper:
 
     def test_several_columns_one_of_them_narrowed(self, tmp_path):
-        t = DeepTab(url=str(tmp_path)).build()
+        t = DeepTab(datalake=str(tmp_path)).build()
         row = t.dataset(('annotations', [('annotations', 'site', 'code'), 'idx']))[1]
         assert row['annotations'] == {'annotations': 11, 'idx': 1}
 
     def test_the_path_may_be_spelled_flat_or_nested(self, tmp_path):
-        t = DeepTab(url=str(tmp_path)).build()
+        t = DeepTab(datalake=str(tmp_path)).build()
         flat = t.data(('annotations', 'annotations', 'site', 'geo', 'lat'))
         nested = t.data(('annotations', 'annotations', ('site', 'geo', 'lat')))
         also = t.data(('annotations', ('annotations', 'site', 'geo', 'lat')))
         assert flat == nested == also == {'annotations': {'annotations': [0.0, 1.0, 2.0]}}
 
     def test_several_keys_under_a_path(self, tmp_path):
-        t = DeepTab(url=str(tmp_path)).build()
+        t = DeepTab(datalake=str(tmp_path)).build()
         row = t.dataset(('annotations', 'annotations', 'site', 'geo', ['lat', 'lon']))[2]
         assert row['annotations']['annotations'] == {'site': {'geo': {'lat': 2.0, 'lon': -2.0}}}
 

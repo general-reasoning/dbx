@@ -91,7 +91,7 @@ class DummySampleTable(DatapointTable):
         # The tabs differ in SPEC, not only in tag. A tag is not part of the
         # signature, so tabs differing only by tag share one hash -- and a
         # crossed index would then go unnoticed by a parity test.
-        return self.TAB(url=self.url,
+        return self.TAB(datalake=self.url,
                         spec=dict(n_samples=self.var.samples_per_tab + idx,
                                   source=tab_specline(idx)),
                         tag=f"tab_{idx}")
@@ -122,9 +122,9 @@ def lake(monkeypatch):
 def featuretable(tmp_path):
     url = str(tmp_path)
     return DatafeatureTable(
-        url=url,
+        datalake=url,
         spec=dict(
-            datapoint_table=DummySampleTable(url=url,
+            datapoint_table=DummySampleTable(datalake=url,
                                              spec=dict(samples_per_tab=5),
                                              tag="sample_table"),
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),

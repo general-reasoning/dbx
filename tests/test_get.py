@@ -97,7 +97,7 @@ class MemSingleFileBlock(Datablock):
 class TestPullPush:
 
     def test_pull_file(self, tmp_path):
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         block.build()
         src = block.path('output')
         dest = str(tmp_path / 'download' / 'output.txt')
@@ -111,7 +111,7 @@ class TestPullPush:
         """fsspec's fs.get(dir, dest, recursive=True) nests dir's basename
         under dest (no trailing slash on src), so contents land at
         dest/<basename(src)>/... rather than directly under dest."""
-        block = TopicsDirBlock(url=str(tmp_path / 'store'))
+        block = TopicsDirBlock(datalake=str(tmp_path / 'store'))
         block.build()
         src = block.dirpath('part_a')
         dest = str(tmp_path / 'download')
@@ -119,7 +119,7 @@ class TestPullPush:
         assert os.path.isfile(os.path.join(dest, 'part_a', 'data.txt'))
 
     def test_pull_noop_when_src_equals_dest(self, tmp_path):
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         block.build()
         src = block.path('output')
         # Same path: must not error and must not need a destination fs op.
@@ -127,7 +127,7 @@ class TestPullPush:
         assert os.path.isfile(src)
 
     def test_push_file(self, tmp_path):
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         src = str(tmp_path / 'local' / 'output.txt')
         os.makedirs(os.path.dirname(src))
         with open(src, 'w') as f:
@@ -140,20 +140,20 @@ class TestPullPush:
             assert f.read() == 'uploaded content'
 
     def test_push_noop_when_src_equals_dest(self, tmp_path):
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         block.build()
         dest = block.path('output')
         block.push(dest, dest)
         assert os.path.isfile(dest)
 
     def test_pull_missing_source_warns_and_noops(self, tmp_path):
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         result = block.pull(os.path.join(str(tmp_path), 'store', 'nope'), str(tmp_path / 'dest'))
         assert result is block
         assert not os.path.exists(str(tmp_path / 'dest'))
 
     def test_push_free_src_removes_source_on_success(self, tmp_path):
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         src = str(tmp_path / 'local' / 'output.txt')
         os.makedirs(os.path.dirname(src))
         with open(src, 'w') as f:
@@ -164,7 +164,7 @@ class TestPullPush:
         assert not os.path.exists(src)
 
     def test_push_free_src_false_keeps_source(self, tmp_path):
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         src = str(tmp_path / 'local' / 'output.txt')
         os.makedirs(os.path.dirname(src))
         with open(src, 'w') as f:
@@ -176,7 +176,7 @@ class TestPullPush:
 
     def test_push_free_src_skipped_when_noop(self, tmp_path):
         """No source to free when src/dest coincide (nothing was copied)."""
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         block.build()
         dest = block.path('output')
         block.push(dest, dest, free_src=True)
@@ -184,7 +184,7 @@ class TestPullPush:
 
     def test_pull_show_progress(self, tmp_path):
         """show_progress=True must not change the outcome, just report it."""
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         block.build()
         src = block.path('output')
         dest = str(tmp_path / 'download' / 'output.txt')
@@ -192,7 +192,7 @@ class TestPullPush:
         assert os.path.isfile(dest)
 
     def test_push_show_progress(self, tmp_path):
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         src = str(tmp_path / 'local' / 'output.txt')
         os.makedirs(os.path.dirname(src))
         with open(src, 'w') as f:
@@ -210,7 +210,7 @@ class TestPullTopicDefaultLocal:
 
     def test_local_url_is_a_noop(self, tmp_path):
         """When url is itself local, local staging aliases the canonical path."""
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         block.build()
         result = block.pulltopic('output')
         assert result is block
@@ -219,7 +219,7 @@ class TestPullTopicDefaultLocal:
     def test_nonlocal_url_stages_to_dbx_local(self, tmp_path, monkeypatch, mem_url):
         staging = tmp_path / 'staging'
         monkeypatch.setenv('DBX_LOCAL', str(staging))
-        block = MemSingleFileBlock(url=mem_url)
+        block = MemSingleFileBlock(datalake=mem_url)
         block.build()
         block.pulltopic('output')
         local_path = block.path('output', local=True)
@@ -236,7 +236,7 @@ class TestPullTopicDefaultLocal:
 class TestPullTopicExplicitPath:
 
     def test_downloads_to_root_join_path(self, tmp_path):
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         block.build()
         dest = str(tmp_path / 'download' / 'output.txt')
         block.pulltopic('output', path=dest)
@@ -246,7 +246,7 @@ class TestPullTopicExplicitPath:
 
     def test_root_and_path_are_joined(self, tmp_path):
         """path is joined with root, not overridden by it."""
-        block = SingleFileBlock(url=str(tmp_path / 'store'))
+        block = SingleFileBlock(datalake=str(tmp_path / 'store'))
         block.build()
         local_root = str(tmp_path / 'local')
         block.pulltopic('output', path='nested/output.txt', root=local_root)
@@ -254,7 +254,7 @@ class TestPullTopicExplicitPath:
         assert os.path.isfile(expected)
 
     def test_downloads_specific_topic(self, tmp_path):
-        block = MultiTopicBlock(url=str(tmp_path / 'store'))
+        block = MultiTopicBlock(datalake=str(tmp_path / 'store'))
         block.build()
         dest = str(tmp_path / 'download' / 'alpha.txt')
         block.pulltopic('alpha', path=dest)
@@ -263,7 +263,7 @@ class TestPullTopicExplicitPath:
             assert f.read() == 'data for alpha'
 
     def test_downloads_topic_directory(self, tmp_path):
-        block = TopicsDirBlock(url=str(tmp_path / 'store'))
+        block = TopicsDirBlock(datalake=str(tmp_path / 'store'))
         block.build()
         dest = str(tmp_path / 'download')
         block.pulltopic('part_a', path=dest)
@@ -278,7 +278,7 @@ class TestPullTopicExplicitPath:
 class TestPullTopics:
 
     def test_default_pulls_every_topic_to_local_staging(self, tmp_path):
-        block = MultiTopicBlock(url=str(tmp_path / 'store'))
+        block = MultiTopicBlock(datalake=str(tmp_path / 'store'))
         block.build()
         result = block.pulltopics()
         assert result is block
@@ -290,7 +290,7 @@ class TestPullTopics:
         pulltopics() nests each topic under its own name. For file topics
         that name becomes the exact destination filename (the topic name
         itself, not the remote basename)."""
-        block = MultiTopicBlock(url=str(tmp_path / 'store'))
+        block = MultiTopicBlock(datalake=str(tmp_path / 'store'))
         block.build()
         dest = str(tmp_path / 'download')
         block.pulltopics(path=dest)
@@ -308,7 +308,7 @@ class TestPushTopic:
 
     def test_pushes_from_explicit_path(self, tmp_path, monkeypatch, mem_url):
         monkeypatch.setenv('DBX_LOCAL', str(tmp_path / 'staging'))
-        block = SingleFileBlock(url=mem_url)
+        block = SingleFileBlock(datalake=mem_url)
         src = str(tmp_path / 'local' / 'output.txt')
         os.makedirs(os.path.dirname(src))
         with open(src, 'w') as f:
@@ -321,7 +321,7 @@ class TestPushTopic:
     def test_pushes_from_local_staging_by_default(self, tmp_path, monkeypatch, mem_url):
         staging = tmp_path / 'staging'
         monkeypatch.setenv('DBX_LOCAL', str(staging))
-        block = SingleFileBlock(url=mem_url)
+        block = SingleFileBlock(datalake=mem_url)
         local_path = block.path('output', local=True)
         os.makedirs(os.path.dirname(local_path))
         with open(local_path, 'w') as f:
@@ -336,7 +336,7 @@ class TestPushTopics:
     def test_explicit_path_disambiguates_per_topic(self, tmp_path):
         """Mirror of the pulltopics() disambiguation: for file topics, the
         source at root/path/<topic> is the exact file to upload."""
-        block = MultiTopicBlock(url=str(tmp_path / 'store2'))
+        block = MultiTopicBlock(datalake=str(tmp_path / 'store2'))
         src_root = str(tmp_path / 'upload')
         os.makedirs(src_root)
         for topic in ('alpha', 'beta'):
@@ -367,7 +367,7 @@ class TestPullTopicOverride:
                 captured['path'] = path
                 return self
 
-        block = CustomPullBlock(url=root)
+        block = CustomPullBlock(datalake=root)
         block.build()
         dest = str(tmp_path / 'download')
         block.pulltopic('mytopic', path=dest)

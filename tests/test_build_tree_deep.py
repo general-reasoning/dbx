@@ -103,33 +103,33 @@ class RootWithExemptions(Root):
 
 def _make_tree(url):
     """Build a Root -> Mid -> Leaf tree and return (root, mid, leaf)."""
-    leaf = Leaf(url=url, spec=dict(label="'L'"))
+    leaf = Leaf(datalake=url, spec=dict(label="'L'"))
     mid_spec = dict(
         label="'M'",
         dep=quote(leaf),
     )
-    mid = Mid(url=url, spec=mid_spec)
+    mid = Mid(datalake=url, spec=mid_spec)
     root_spec = dict(
         label="'R'",
         child=quote(mid),
     )
-    root = Root(url=url, spec=root_spec)
+    root = Root(datalake=url, spec=root_spec)
     return root, mid, leaf
 
 
 def _make_tree_with_exemptions(url):
     """Build a RootWithExemptions -> Mid -> Leaf tree."""
-    leaf = Leaf(url=url, spec=dict(label="'L'"))
+    leaf = Leaf(datalake=url, spec=dict(label="'L'"))
     mid_spec = dict(
         label="'M'",
         dep=quote(leaf),
     )
-    mid = Mid(url=url, spec=mid_spec)
+    mid = Mid(datalake=url, spec=mid_spec)
     root_spec = dict(
         label="'R'",
         child=quote(mid),
     )
-    root = RootWithExemptions(url=url, spec=root_spec)
+    root = RootWithExemptions(datalake=url, spec=root_spec)
     return root, mid, leaf
 
 

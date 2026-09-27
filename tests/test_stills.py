@@ -139,13 +139,13 @@ LIGHTNING_KNOBS = ('learning_rate',)
 def toy_builders(root, **knobs):
     """The four required builder blocks, with *knobs* routed to their owners."""
     model = ToyModelBuilder(
-        url=str(root), tag='toymodel',
+        datalake=str(root), tag='toymodel',
         spec={k: v for k, v in knobs.items() if k in MODEL_KNOBS})
     lightning = ToyLightningBuilder(
-        url=str(root), tag='toylightning',
+        datalake=str(root), tag='toylightning',
         spec=dict(model_builder=model, width=knobs.get('width', 8),
                   **{k: v for k, v in knobs.items() if k in LIGHTNING_KNOBS}))
-    data = ToyBuilder(url=str(root), tag='toydata',
+    data = ToyBuilder(datalake=str(root), tag='toydata',
                       spec=dict(n=256, width=knobs.get('width', 8)))
     return dict(model_builder=model, lightning_builder=lightning,
                 training_dataset_builder=data, validation_dataset_builder=data)
@@ -162,7 +162,7 @@ def make_still(root, **spec):
         train_log_every_n_steps=4, gradient_clip_val=0.0,
     )
     base.update(spec)
-    return ToyStill(url=str(root), tag='toy', spec=base, num_workers=0)
+    return ToyStill(datalake=str(root), tag='toy', spec=base, num_workers=0)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -180,8 +180,8 @@ class TestIdentity:
 
     def test_an_operational_argument_does_not(self, tmp_path):
         spec = toy_builders(tmp_path)
-        a = ToyStill(url=str(tmp_path), tag='t', spec=spec, num_workers=0, n_devices=1)
-        b = ToyStill(url=str(tmp_path), tag='t', spec=spec, num_workers=8, n_devices=4,
+        a = ToyStill(datalake=str(tmp_path), tag='t', spec=spec, num_workers=0, n_devices=1)
+        b = ToyStill(datalake=str(tmp_path), tag='t', spec=spec, num_workers=8, n_devices=4,
                      prefetch_factor=16, debug_share_train_val=True)
         assert a.hash == b.hash
 
@@ -281,7 +281,7 @@ class TestDataloaders:
         assert train.dataset is val.dataset
 
     def test_a_separate_validation_builder_is_used_as_is(self, tmp_path):
-        val_builder = ToyBuilder(url=str(tmp_path), tag='valdata',
+        val_builder = ToyBuilder(datalake=str(tmp_path), tag='valdata',
                                  spec=dict(n=64, width=8))
         train, val = make_still(
             tmp_path, validation_dataset_builder=val_builder).dataloaders()
@@ -308,7 +308,7 @@ class TestDataloaders:
 
     def test_the_val_loader_is_sized_from_val_max_batches(self, tmp_path):
         still = ToyStill(
-            url=str(tmp_path), tag='toy', num_workers=12, prefetch_factor=4,
+            datalake=str(tmp_path), tag='toy', num_workers=12, prefetch_factor=4,
             spec=dict(**toy_builders(tmp_path), val_max_batches=1),
         )
         train, val = still.dataloaders()
@@ -318,18 +318,18 @@ class TestDataloaders:
 
     def test_a_missing_builder_raises_on_construction_not_hours_later(self, tmp_path):
         with pytest.raises(TypeError, match="model_builder"):
-            ToyStill(url=str(tmp_path), tag='toy', spec=dict())
+            ToyStill(datalake=str(tmp_path), tag='toy', spec=dict())
 
     def test_the_error_names_every_builder_that_is_missing(self, tmp_path):
         spec = toy_builders(tmp_path)
         del spec['training_dataset_builder'], spec['validation_dataset_builder']
         with pytest.raises(TypeError) as e:
-            ToyStill(url=str(tmp_path), tag='toy', spec=spec)
+            ToyStill(datalake=str(tmp_path), tag='toy', spec=spec)
         assert 'training_dataset_builder' in str(e.value)
         assert 'validation_dataset_builder' in str(e.value)
 
     def test_ckpt_builder_is_not_required(self, tmp_path):
-        assert ToyStill(url=str(tmp_path), tag='toy',
+        assert ToyStill(datalake=str(tmp_path), tag='toy',
                         spec=toy_builders(tmp_path)).var.ckpt_builder is None
 
 
@@ -364,7 +364,7 @@ class TestLoaderHardening:
             def dataloader_worker_init_fn(self):
                 return sentinel
 
-        still = HardenedStill(url=str(tmp_path), tag='h', num_workers=2,
+        still = HardenedStill(datalake=str(tmp_path), tag='h', num_workers=2,
                               spec=toy_builders(tmp_path))
         train, val = still.dataloaders()
         assert train.worker_init_fn is sentinel
@@ -538,7 +538,7 @@ class TestLoadWeightsOnly:
 
     @pytest.fixture
     def still(self, tmp_path):
-        return ToyStill(url=str(tmp_path), tag='toy', spec=toy_builders(tmp_path),
+        return ToyStill(datalake=str(tmp_path), tag='toy', spec=toy_builders(tmp_path),
                         num_workers=0, strict_loading=False)
 
     def _ckpt_(self, tmp_path, payload):
@@ -644,8 +644,8 @@ class TestLightning:
             def __lightning_module__(self):
                 return ToyLightning(ToyModel())
 
-        up = Upstream(url=str(tmp_path), tag='u')
-        wrapper = Wrapper(url=str(tmp_path), tag='w', spec=dict(upstream=up))
+        up = Upstream(datalake=str(tmp_path), tag='u')
+        wrapper = Wrapper(datalake=str(tmp_path), tag='w', spec=dict(upstream=up))
         # The whole point: a topicless block must NOT report itself valid while
         # an upstream it needs is unbuilt, or build_tree() skips the subtree.
         assert wrapper.valid() is False
@@ -674,9 +674,9 @@ class TestLightning:
             def __lightning_module__(self):
                 return ToyLightning(ToyModel())
 
-        up = Upstream(url=str(tmp_path), tag='u')
+        up = Upstream(datalake=str(tmp_path), tag='u')
         assert up.valid() is False
-        w = Wrapper(url=str(tmp_path), tag='w', validate_vars=False,
+        w = Wrapper(datalake=str(tmp_path), tag='w', validate_vars=False,
                     spec=dict(upstream=up))
         assert w.valid() is True
         w.build()      # skipped, not raised
@@ -690,7 +690,7 @@ class TestLightning:
                 return ToyLightning(ToyModel())
 
         with pytest.raises(NotImplementedError, match="unreachable"):
-            Wrapper(url=str(tmp_path), tag='w').__build__()
+            Wrapper(datalake=str(tmp_path), tag='w').__build__()
 
     def test_the_module_is_cached(self, tmp_path):
         class Wrapper(LightningBuilder):
@@ -699,7 +699,7 @@ class TestLightning:
             def __lightning_module__(self):
                 return ToyLightning(ToyModel())
 
-        w = Wrapper(url=str(tmp_path), tag='w')
+        w = Wrapper(datalake=str(tmp_path), tag='w')
         assert w.lightning_module is w.lightning_module
 
     def test_an_unimplemented_module_says_so(self, tmp_path):
@@ -707,7 +707,7 @@ class TestLightning:
             VERSION = 1
 
         with pytest.raises(NotImplementedError, match="__lightning_module__"):
-            Wrapper(url=str(tmp_path), tag='w').lightning_module
+            Wrapper(datalake=str(tmp_path), tag='w').lightning_module
 
     def test_the_lightning_builder_in_var_supplies_the_still_its_module(self, tmp_path):
         still = make_still(tmp_path, learning_rate=0.123)
@@ -724,7 +724,7 @@ class TestLightning:
 
 class TestWeights:
     def test_no_ckpt_is_trivially_valid_and_has_no_local_path(self, tmp_path):
-        w = Weights(url=str(tmp_path), tag='none', spec=dict(ckpt=None))
+        w = Weights(datalake=str(tmp_path), tag='none', spec=dict(ckpt=None))
         assert w.valid() is True
         w.build()
         assert w.path_local() is None
@@ -732,7 +732,7 @@ class TestWeights:
     def test_fetches_persists_and_hands_back_a_local_path(self, tmp_path):
         src = tmp_path / 'src.pt'
         torch.save({'k': torch.zeros(3)}, src)
-        w = Weights(url=str(tmp_path / 'store'), tag='w',
+        w = Weights(datalake=str(tmp_path / 'store'), tag='w',
                         spec=dict(ckpt=str(src)))
         assert w.valid() is False
         w.build()
@@ -744,7 +744,7 @@ class TestWeights:
     def test_a_truncated_blob_is_not_valid(self, tmp_path):
         src = tmp_path / 'src.pt'
         torch.save({'k': torch.zeros(3)}, src)
-        w = Weights(url=str(tmp_path / 'store'), tag='w', spec=dict(ckpt=str(src)))
+        w = Weights(datalake=str(tmp_path / 'store'), tag='w', spec=dict(ckpt=str(src)))
         w.build()
         with open(w.path('weights'), 'r+b') as f:
             f.truncate(16)
@@ -764,11 +764,11 @@ class TestWeights:
                 except KeyError:
                     raise ValueError(f"unknown checkpoint {self.var.ckpt!r}") from None
 
-        ok = Registry(url=str(tmp_path / 's1'), tag='a', spec=dict(ckpt='published-v1'))
+        ok = Registry(datalake=str(tmp_path / 's1'), tag='a', spec=dict(ckpt='published-v1'))
         ok.build()
         assert ok.valid() is True
 
-        bad = Registry(url=str(tmp_path / 's2'), tag='b', spec=dict(ckpt='nope'))
+        bad = Registry(datalake=str(tmp_path / 's2'), tag='b', spec=dict(ckpt='nope'))
         with pytest.raises(ValueError, match="unknown checkpoint"):
             bad.build()
 
@@ -796,7 +796,7 @@ class TestCheckpointPath:
         return source.find_latest_ckpt(pull=True)
 
     def make(self, root, path):
-        return CheckpointPath(url=str(root), tag='cp', spec=dict(ckpt_path=path))
+        return CheckpointPath(datalake=str(root), tag='cp', spec=dict(ckpt_path=path))
 
     # Identity ──────────────────────────────────────────────────────
 
@@ -891,7 +891,7 @@ class TestCheckpointPath:
 # ═══════════════════════════════════════════════════════════════════════
 
 def _toy(root, **kw):
-    return ToyStill(url=str(root), tag='toy', spec=toy_builders(root), num_workers=0, **kw)
+    return ToyStill(datalake=str(root), tag='toy', spec=toy_builders(root), num_workers=0, **kw)
 
 
 def _trainer_kwargs(root, **kw):
@@ -1249,7 +1249,7 @@ class TestACheckRunDoesNotContinueAnything:
         assert not _toy(tmp_path, check_run=True)._resuming_own_ckpts_()
 
     def test_neither_does_from_scratch(self, tmp_path):
-        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+        still = ToyStill(datalake=str(tmp_path), tag='toy', num_workers=0,
                          spec=dict(toy_builders(tmp_path), from_scratch=True))
         assert not still._resuming_own_ckpts_()
 
@@ -1604,7 +1604,7 @@ class TestTheBuildSyncsOnce:
         """`finally` and not after the fit, because this is also the path for
         an exception or a preempted node -- where the checkpoints on local
         disk are worth more than the traceback."""
-        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+        still = ToyStill(datalake=str(tmp_path), tag='toy', num_workers=0,
                          spec=dict(toy_builders(tmp_path), max_epochs=1))
         calls = []
         monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
@@ -1650,7 +1650,7 @@ class TestOneCheckpointPerStep:
             self.saved.append(os.path.basename(path))
 
     def _still(self, tmp_path, monkeypatch):
-        still = ToyStill(url=str(tmp_path), tag='toy', num_workers=0,
+        still = ToyStill(datalake=str(tmp_path), tag='toy', num_workers=0,
                          spec=dict(toy_builders(tmp_path), ckpt_every_n_epochs=1,
                                    ckpt_every_n_steps=2))
         monkeypatch.setattr(type(still), 'is_local_fs', property(lambda s: False))
@@ -1714,7 +1714,7 @@ class TestClearingLeavesNothingBehind:
         fine, and why this one needs a non-local protocol to be a test of
         anything.
         """
-        still = ToyStill(url='memory://lake', tag='toy', num_workers=0,
+        still = ToyStill(datalake='memory://lake', tag='toy', num_workers=0,
                          local=str(tmp_path / 'staging'),
                          spec=dict(toy_builders(tmp_path), max_epochs=1))
         still.UNSAFE_done(OVERRIDE=True)

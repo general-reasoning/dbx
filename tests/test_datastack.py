@@ -68,7 +68,7 @@ class SimpleStack(Datastack):
 
     def __block__(self, idx):
         return CounterBlock(
-            url=self.url,
+            datalake=self.url,
             spec=dict(idx=idx),
         )
 
@@ -93,7 +93,7 @@ class TestDatastackAbstract(unittest.TestCase):
             TOPICS = {'bad': 'bad.txt'}
 
         with tempfile.TemporaryDirectory() as tmp:
-            stack = BadStack(url=tmp)
+            stack = BadStack(datalake=tmp)
             with self.assertRaises(NotImplementedError):
                 stack.blocks()
 
@@ -102,7 +102,7 @@ class TestDatastackAbstract(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
-                SimpleStack(url=tmp, parallelization='quantum')
+                SimpleStack(datalake=tmp, parallelization='quantum')
 
 
 class TestDatastackIsDatablock(unittest.TestCase):
@@ -114,15 +114,15 @@ class TestDatastackIsDatablock(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_isinstance(self):
-        stack = SimpleStack(url=self.tmpdir)
+        stack = SimpleStack(datalake=self.tmpdir)
         self.assertIsInstance(stack, Datablock)
 
     def test_has_hash(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, block_size=3))
+        stack = SimpleStack(datalake=self.tmpdir, spec=dict(total_items=10, block_size=3))
         self.assertIsNotNone(stack.hash)
 
     def test_has_var(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, block_size=2))
+        stack = SimpleStack(datalake=self.tmpdir, spec=dict(total_items=6, block_size=2))
         self.assertEqual(stack.var.total_items, 6)
         self.assertEqual(stack.var.block_size, 2)
 
@@ -135,23 +135,23 @@ class TestDatastackBlocks(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_block_count(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=10, block_size=3))
+        stack = SimpleStack(datalake=self.tmpdir, spec=dict(total_items=10, block_size=3))
         blocks = stack.blocks()
         self.assertEqual(len(blocks), 4)  # ceil(10/3) = 4
 
     def test_block_count_exact(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=9, block_size=3))
+        stack = SimpleStack(datalake=self.tmpdir, spec=dict(total_items=9, block_size=3))
         blocks = stack.blocks()
         self.assertEqual(len(blocks), 3)  # 9/3 = 3
 
     def test_blocks_are_datablocks(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=4, block_size=2))
+        stack = SimpleStack(datalake=self.tmpdir, spec=dict(total_items=4, block_size=2))
         for blk in stack.blocks():
             self.assertIsInstance(blk, Datablock)
             self.assertIsInstance(blk, CounterBlock)
 
     def test_block_configs(self):
-        stack = SimpleStack(url=self.tmpdir, spec=dict(total_items=6, block_size=3))
+        stack = SimpleStack(datalake=self.tmpdir, spec=dict(total_items=6, block_size=3))
         blocks = stack.blocks()
         indices = [s.var.idx for s in blocks]
         self.assertEqual(indices, [0, 1])
@@ -168,7 +168,7 @@ class TestDatastackBuild(unittest.TestCase):
     def test_inline_build(self):
         """Default (inline) build should build all blocks."""
         stack = SimpleStack(
-            url=self.tmpdir,
+            datalake=self.tmpdir,
             spec=dict(total_items=6, block_size=2),
         )
         stack.build()
@@ -182,7 +182,7 @@ class TestDatastackBuild(unittest.TestCase):
     def test_multithreading_build(self):
         """Multithreading build should build all blocks."""
         stack = SimpleStack(
-            url=self.tmpdir,
+            datalake=self.tmpdir,
             spec=dict(total_items=6, block_size=2),
             parallelization='multithreading',
             n_workers=2,
@@ -197,7 +197,7 @@ class TestDatastackBuild(unittest.TestCase):
     def test_multiprocessing_build(self):
         """Multiprocessing build should build all blocks (no cross-process state)."""
         stack = SimpleStack(
-            url=self.tmpdir,
+            datalake=self.tmpdir,
             spec=dict(total_items=4, block_size=2),
             parallelization='multiprocessing',
             n_workers=2,
@@ -211,7 +211,7 @@ class TestDatastackBuild(unittest.TestCase):
     def test_build_returns_self(self):
         """build() should return the stack itself."""
         stack = SimpleStack(
-            url=self.tmpdir,
+            datalake=self.tmpdir,
             spec=dict(total_items=3, block_size=3),
         )
         result = stack.build()
@@ -226,37 +226,37 @@ class TestDatastackParallelization(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_default_is_inline(self):
-        stack = SimpleStack(url=self.tmpdir)
+        stack = SimpleStack(datalake=self.tmpdir)
         from dbx.dataparts import InlineCallableExecutor
         self.assertIs(stack.executor_cls, InlineCallableExecutor)
 
     def test_explicit_inline(self):
-        stack = SimpleStack(url=self.tmpdir, parallelization='inline')
+        stack = SimpleStack(datalake=self.tmpdir, parallelization='inline')
         from dbx.dataparts import InlineCallableExecutor
         self.assertIs(stack.executor_cls, InlineCallableExecutor)
 
     def test_multithreading(self):
-        stack = SimpleStack(url=self.tmpdir, parallelization='multithreading')
+        stack = SimpleStack(datalake=self.tmpdir, parallelization='multithreading')
         from dbx.dataparts import MultithreadingCallableExecutor
         self.assertIs(stack.executor_cls, MultithreadingCallableExecutor)
 
     def test_multiprocessing(self):
-        stack = SimpleStack(url=self.tmpdir, parallelization='multiprocessing')
+        stack = SimpleStack(datalake=self.tmpdir, parallelization='multiprocessing')
         from dbx.dataparts import MultiprocessingCallableExecutor
         self.assertIs(stack.executor_cls, MultiprocessingCallableExecutor)
 
     def test_ray(self):
-        stack = SimpleStack(url=self.tmpdir, parallelization='ray')
+        stack = SimpleStack(datalake=self.tmpdir, parallelization='ray')
         from dbx.dataparts import RayCallableExecutor
         self.assertIs(stack.executor_cls, RayCallableExecutor)
 
     def test_case_insensitive(self):
-        stack = SimpleStack(url=self.tmpdir, parallelization='Multithreading')
+        stack = SimpleStack(datalake=self.tmpdir, parallelization='Multithreading')
         from dbx.dataparts import MultithreadingCallableExecutor
         self.assertIs(stack.executor_cls, MultithreadingCallableExecutor)
 
     def test_n_workers_stored(self):
-        stack = SimpleStack(url=self.tmpdir, n_workers=8)
+        stack = SimpleStack(datalake=self.tmpdir, n_workers=8)
         self.assertEqual(stack.n_workers, 8)
 
 
@@ -270,7 +270,7 @@ class TestDatastackClearBlocks(unittest.TestCase):
 
     def _build_stack(self, **kwargs):
         stack = SimpleStack(
-            url=self.tmpdir,
+            datalake=self.tmpdir,
             spec=dict(total_items=6, block_size=2),
             **kwargs,
         )
@@ -343,7 +343,7 @@ class TestDatastackClearBlocks(unittest.TestCase):
             def n_tabs(self):
                 return 2
 
-        tbl = MinimalTable(url=os.path.join(self.tmpdir, 'tbl')).build()
+        tbl = MinimalTable(datalake=os.path.join(self.tmpdir, 'tbl')).build()
         self.assertTrue(tbl.valid_tab(0))
         self.assertTrue(tbl.valid_block(0))
         self.assertTrue(tbl._check_tab_path(0))
@@ -375,7 +375,7 @@ class TestDatastackClearBlocks(unittest.TestCase):
             def n_tabs(self):
                 return 2
 
-        tbl = ValidatableTable(url=os.path.join(self.tmpdir, 'val_tbl')).build()
+        tbl = ValidatableTable(datalake=os.path.join(self.tmpdir, 'val_tbl')).build()
         self.assertTrue(tbl._check_tab_path(0))
 
         # Invalidate tab 0 data directly
@@ -462,7 +462,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return math.ceil(self.var.total_items / self.var.shard_size)
 
             def __block__(self, idx):
-                return CounterBlock(url=self.url, spec=dict(idx=idx))
+                return CounterBlock(datalake=self.url, spec=dict(idx=idx))
 
             def blocks(self):
                 return [self.__block__(i) for i in range(self.n_blocks)]
@@ -472,7 +472,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return super().__split__()
 
         TrackedStack.pre_stack_called = False
-        stack = TrackedStack(url=self.tmpdir, spec=dict(total_items=3, shard_size=3))
+        stack = TrackedStack(datalake=self.tmpdir, spec=dict(total_items=3, shard_size=3))
         stack.build()
         self.assertTrue(TrackedStack.pre_stack_called)
 
@@ -511,7 +511,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return self.var.n
 
             def __block__(self, idx):
-                return OrderedBlock(url=self.url, spec=dict(idx=idx))
+                return OrderedBlock(datalake=self.url, spec=dict(idx=idx))
 
             def blocks(self):
                 return [self.__block__(i) for i in range(self.n_blocks)]
@@ -525,7 +525,7 @@ class TestDatastackPreStack(unittest.TestCase):
                 return self
 
         call_order.clear()
-        stack = OrderedStack(url=self.tmpdir, spec=dict(n=2))
+        stack = OrderedStack(datalake=self.tmpdir, spec=dict(n=2))
         stack.build()
         # pre_stack must come first, then blocks, then stack
         self.assertEqual(call_order[0], "pre_stack")
@@ -538,7 +538,7 @@ class TestDatastackPreStack(unittest.TestCase):
 
     def test_default_split_returns_callables(self):
         """Default __split__() should return (callables, kwargs) tuple."""
-        stack = SimpleStack(url=self.tmpdir)
+        stack = SimpleStack(datalake=self.tmpdir)
         callables, kwargs = stack.__split__()
         self.assertIsInstance(callables, list)
         self.assertIsInstance(kwargs, dict)
@@ -551,7 +551,7 @@ class TestValidateAndCustomCallable(unittest.TestCase):
         os.environ.setdefault('DBX_DIRTY_REPO_OK', '1')
 
     def test_validate_default_calls_valid(self):
-        block = CounterBlock(url=self.tmpdir, spec=dict(idx=0))
+        block = CounterBlock(datalake=self.tmpdir, spec=dict(idx=0))
         block.build()
         self.assertTrue(block.validate())
 
@@ -562,8 +562,8 @@ class TestValidateAndCustomCallable(unittest.TestCase):
                 validated.append(True)
                 return self.valid()
 
-        b1 = CustomBlock(url=os.path.join(self.tmpdir, 'src'), spec=dict(idx=0)).build()
-        b2 = CustomBlock(url=os.path.join(self.tmpdir, 'dst'), spec=dict(idx=0))
+        b1 = CustomBlock(datalake=os.path.join(self.tmpdir, 'src'), spec=dict(idx=0)).build()
+        b2 = CustomBlock(datalake=os.path.join(self.tmpdir, 'dst'), spec=dict(idx=0))
         b2.UNSAFE_copy_from(b1.anchorkeypath, OVERRIDE=True, validate=True)
         self.assertTrue(validated)
 
@@ -581,8 +581,8 @@ class TestValidateAndCustomCallable(unittest.TestCase):
             copied_custom.append(block.var.idx)
             return UNSAFE_copy_block_from_callable(block, anchorkeypath, overwrite, topicpaths, validate, always_copy_whole_dirpath)
 
-        src_stack = SimpleStack(url=os.path.join(self.tmpdir, 'src_stack'), spec=dict(total_items=4, block_size=2)).build()
-        dst_stack = SimpleStack(url=os.path.join(self.tmpdir, 'dst_stack'), spec=dict(total_items=4, block_size=2))
+        src_stack = SimpleStack(datalake=os.path.join(self.tmpdir, 'src_stack'), spec=dict(total_items=4, block_size=2)).build()
+        dst_stack = SimpleStack(datalake=os.path.join(self.tmpdir, 'dst_stack'), spec=dict(total_items=4, block_size=2))
 
         dst_stack.UNSAFE_copy_blocks_from(lambda blk: src_stack.blocks()[blk.var.idx].anchorkeypath, OVERRIDE=True, callable=custom_copy)
         self.assertEqual(len(copied_custom), 2)
@@ -600,7 +600,7 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
     def test_valid_blocks(self):
         import pandas as pd
         stack = SimpleStack(
-            url=os.path.join(self.tmpdir, 'valid_stack'),
+            datalake=os.path.join(self.tmpdir, 'valid_stack'),
             spec=dict(total_items=12, block_size=3),  # 4 blocks: 0, 1, 2, 3
             parallelization='multithreading',
             n_workers=2,
@@ -638,12 +638,12 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
     def test_redirected_blocks(self):
         import pandas as pd
         src_stack = SimpleStack(
-            url=os.path.join(self.tmpdir, 'red_src_stack'),
+            datalake=os.path.join(self.tmpdir, 'red_src_stack'),
             spec=dict(total_items=9, block_size=3),  # 3 blocks: 0, 1, 2
         ).build()
 
         dst_stack = SimpleStack(
-            url=os.path.join(self.tmpdir, 'red_dst_stack'),
+            datalake=os.path.join(self.tmpdir, 'red_dst_stack'),
             spec=dict(total_items=9, block_size=3),
             parallelization='multithreading',
             n_workers=2,
@@ -690,10 +690,10 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
                 return 4
 
             def __block__(self, idx):
-                return CustomValidateBlock(url=self.url, spec=dict(idx=idx))
+                return CustomValidateBlock(datalake=self.url, spec=dict(idx=idx))
 
         stack = CustomValidateStack(
-            url=os.path.join(self.tmpdir, 'validate_stack'),
+            datalake=os.path.join(self.tmpdir, 'validate_stack'),
             parallelization='multithreading',
             n_workers=2,
         )
@@ -720,7 +720,7 @@ class TestValidAndRedirectedBlocks(unittest.TestCase):
 
     def test_find_blocks(self):
         stack = SimpleStack(
-            url=os.path.join(self.tmpdir, 'find_stack'),
+            datalake=os.path.join(self.tmpdir, 'find_stack'),
             spec=dict(total_items=12, block_size=3),  # 4 blocks: idx 0, 1, 2, 3
             parallelization='multithreading',
             n_workers=2,
@@ -798,12 +798,12 @@ class TestBLOCK:
                 return 1
 
             def __block__(self, idx):
-                return made(url=self.url, spec=dict(idx=idx))
+                return made(datalake=self.url, spec=dict(idx=idx))
         return S
 
     def test_a_block_of_the_declared_class(self, tmp_path):
         S = self._stack(CounterBlock, CounterBlock)
-        assert isinstance(S(url=str(tmp_path)).block(0), CounterBlock)
+        assert isinstance(S(datalake=str(tmp_path)).block(0), CounterBlock)
 
     def test_a_block_of_another_class_is_refused(self, tmp_path):
         class Other(Datablock):
@@ -812,16 +812,16 @@ class TestBLOCK:
                 idx: int = 0
         S = self._stack(CounterBlock, Other)
         with pytest.raises(TypeError, match="not the CounterBlock its BLOCK declares"):
-            S(url=str(tmp_path)).block(0)
+            S(datalake=str(tmp_path)).block(0)
 
     def test_no_block_warns_once_per_class(self, tmp_path):
         S = self._stack(None, CounterBlock)
         with pytest.warns(FutureWarning, match="declares no BLOCK"):
-            S(url=str(tmp_path))
+            S(datalake=str(tmp_path))
         import warnings
         with warnings.catch_warnings():
             warnings.simplefilter('error')
-            S(url=str(tmp_path))                     # the same class: not again
+            S(datalake=str(tmp_path))                     # the same class: not again
 
     def test_a_tables_tab_is_its_block(self):
         from dbx.datatables import Datatab, Datatable
@@ -858,8 +858,8 @@ class TestBLOCK:
         sys.path.insert(0, os.path.dirname(__file__))
         from test_partition_fold import DummyTable
         from dbx.datatables import DatatablePartition
-        table = DummyTable(url=str(tmp_path / 'table')).build()
-        part = DatatablePartition(url=str(tmp_path / 'p'), spec=dict(
+        table = DummyTable(datalake=str(tmp_path / 'table')).build()
+        part = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
             datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0)).build().fold(0)
         assert part._block_class_() is DummyTable.BLOCK is DummyTable.TAB
         assert isinstance(part.block(0), DummyTable.TAB)
@@ -869,14 +869,14 @@ class TestAnchorOnTheClass:
 
     def test_the_class_answers_as_its_instances_do(self, tmp_path):
         assert CounterBlock.anchor == CounterBlock.fqcn == f"{__name__}.CounterBlock"
-        assert CounterBlock(url=str(tmp_path)).anchor == CounterBlock.anchor
+        assert CounterBlock(datalake=str(tmp_path)).anchor == CounterBlock.anchor
 
     def test_ANCHOR_is_the_class_anchor_and_an_instance_may_still_name_its_own(self, tmp_path):
         class Anchored(CounterBlock):
             ANCHOR = 'lake.anchored'
         assert Anchored.anchor == 'lake.anchored'
-        assert Anchored(url=str(tmp_path)).anchor == 'lake.anchored'
-        assert Anchored(url=str(tmp_path), anchor='mine').anchor == 'mine'
+        assert Anchored(datalake=str(tmp_path)).anchor == 'lake.anchored'
+        assert Anchored(datalake=str(tmp_path), anchor='mine').anchor == 'mine'
         assert Anchored.fqcn.endswith('.Anchored')
 
     def test_a_class_journal_is_read_under_its_anchor(self, tmp_path):
@@ -884,8 +884,8 @@ class TestAnchorOnTheClass:
 
         class Anchored(CounterBlock):
             ANCHOR = 'lake.anchored2'
-        Anchored(url=str(tmp_path), spec=dict(idx=0)).build()
-        assert len(dbx.datajournal(Anchored, url=str(tmp_path))) == 1
+        Anchored(datalake=str(tmp_path), spec=dict(idx=0)).build()
+        assert len(dbx.datajournal(Anchored, datalake=str(tmp_path))) == 1
 
     def test_a_stack_finds_its_blocks_journal_from_BLOCK_alone(self, tmp_path):
         class S(Datastack):
@@ -896,11 +896,11 @@ class TestAnchorOnTheClass:
                 return 2
 
             def __block__(self, idx):
-                return CounterBlock(url=self.url, spec=dict(idx=idx))
+                return CounterBlock(datalake=self.url, spec=dict(idx=idx))
 
         for i in range(2):
-            CounterBlock(url=str(tmp_path), spec=dict(idx=i)).build()
-        stack = S(url=str(tmp_path))
+            CounterBlock(datalake=str(tmp_path), spec=dict(idx=i)).build()
+        stack = S(datalake=str(tmp_path))
         formed = []
         original = S.__block__
         S.__block__ = lambda self, idx: formed.append(idx) or original(self, idx)

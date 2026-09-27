@@ -52,7 +52,7 @@ class NewTable(Datatable):
 class TestARespelledBlockReconstructsTheOldOne:
 
     def test_a_tab(self, tmp_path):
-        new, old = NewTab(url=str(tmp_path)), OldTab(url=str(tmp_path))
+        new, old = NewTab(datalake=str(tmp_path)), OldTab(datalake=str(tmp_path))
         sp = NewTab.SPECIALIZATIONS[0]
         assert new.hash != old.hash, "the respelling is a new identity"
         assert new.get_hash(sp) == old.hash
@@ -61,7 +61,7 @@ class TestARespelledBlockReconstructsTheOldOne:
         assert 'topic:tiles=SLICETOPIC' in new.get_typestr(sp)
 
     def test_a_table_adds_its_tabs_slices_as_the_old_era_did(self, tmp_path):
-        new, old = NewTable(url=str(tmp_path)), OldTable(url=str(tmp_path))
+        new, old = NewTable(datalake=str(tmp_path)), OldTable(datalake=str(tmp_path))
         sp = NewTable.SPECIALIZATIONS[0]
         assert 'topic:tiles=SLICETOPIC' in old.typestr()          # the sentinel era accumulated
         assert 'topic:tiles' not in new.typestr()                  # the marker era does not
@@ -76,7 +76,7 @@ class TestNothingIsInherited:
             Datablock.Specialization(spec={}, topics=['tiles'])
 
     def test_the_declaration_not_the_class_is_rendered(self, tmp_path):
-        new = NewTab(url=str(tmp_path))
+        new = NewTab(datalake=str(tmp_path))
         other = Datablock.Specialization(spec={}, topics={'tiles': 'tiles.bin'})
         assert "topic:tiles='tiles.bin'" not in new.get_typestr(other)   # sentinel-era: bare
         assert 'topic:tiles=tiles.bin' in new.get_typestr(other)
@@ -94,7 +94,7 @@ class TestNothingIsInherited:
 class TestLooking:
 
     def test_types_typestrs_hashes_and_signatures(self, tmp_path):
-        new, old = NewTab(url=str(tmp_path)), OldTab(url=str(tmp_path))
+        new, old = NewTab(datalake=str(tmp_path)), OldTab(datalake=str(tmp_path))
         sp = NewTab.SPECIALIZATIONS[0]
         assert new.specialization_hashes() == [old.hash]
         assert new.specialization_typestrs() == [old.typestr()]
@@ -106,7 +106,7 @@ class TestLooking:
         assert new.get_type() == new.type() and new.get_typestr() == new.typestr()
 
     def test_a_block_with_none_lists_none(self, tmp_path):
-        old = OldTab(url=str(tmp_path))
+        old = OldTab(datalake=str(tmp_path))
         assert old.specialization_types() == old.specialization_typestrs() == old.specialization_hashes() == []
 
 

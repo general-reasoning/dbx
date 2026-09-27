@@ -44,9 +44,9 @@ class NormBlock(Datablock):
 def _built_pair(tmp_path):
     """Build ``a`` (x=1) which writes the journal; return (a, b) where ``b``
     (x=2) shares the anchor's journal but is not built."""
-    a = NormBlock(url=str(tmp_path), spec={'x': 1})
+    a = NormBlock(datalake=str(tmp_path), spec={'x': 1})
     a.build()
-    b = NormBlock(url=str(tmp_path), spec={'x': 2})
+    b = NormBlock(datalake=str(tmp_path), spec={'x': 2})
     return a, b
 
 

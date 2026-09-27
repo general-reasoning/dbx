@@ -36,7 +36,7 @@ class Built(Datablock):
 
 
 def block(tmp_path, x=1, **kwargs):
-    return Built(url=str(tmp_path), spec={'x': x}, **kwargs)
+    return Built(datalake=str(tmp_path), spec={'x': x}, **kwargs)
 
 
 class Stack(Datastack):
@@ -52,7 +52,7 @@ class Stack(Datastack):
         return self.var.n
 
     def __block__(self, idx):
-        return Built(url=self.url, spec={'x': idx})
+        return Built(datalake=self.url, spec={'x': idx})
 
 
 class TestAHandleIsNotTheRecords:
@@ -98,7 +98,7 @@ class TestTheBlockWritesThroughIt:
 
     def test_a_stack_hands_it_to_its_blocks(self, tmp_path):
         dj = Datajournal()
-        stack = Stack(url=str(tmp_path), datajournal=dj)
+        stack = Stack(datalake=str(tmp_path), datajournal=dj)
         assert all(stack.block(i).datajournal is dj for i in range(stack.n_blocks))
 
 
@@ -280,10 +280,10 @@ class TestExec:
 
     def _row(self, tmp_path):
         from dbx.dataparts import read_exec_journal
-        return read_exec_journal(url=str(tmp_path), iloc=0)
+        return read_exec_journal(datalake=str(tmp_path), iloc=0)
 
     def test_blocks_share_one_session_and_the_row_lists_their_entries(self, tmp_path):
-        a, b = dbx.exec("a = Built(url=root, spec={'x': 1}); b = Built(url=root, spec={'x': 2}); "
+        a, b = dbx.exec("a = Built(datalake=root, spec={'x': 1}); b = Built(datalake=root, spec={'x': 2}); "
                         "a.build(); b.build(); (a, b)", Built=Built, root=str(tmp_path))
         row = self._row(tmp_path)
         session = row['session']
@@ -296,7 +296,7 @@ class TestExec:
 
     def test_a_block_constructed_deep_inside_is_covered(self, tmp_path):
         def pipeline():
-            blk = Built(url=str(tmp_path), spec={'x': 5})
+            blk = Built(datalake=str(tmp_path), spec={'x': 5})
             blk.build()
             return None
         dbx.exec("pipeline()", pipeline=pipeline)
@@ -304,31 +304,31 @@ class TestExec:
 
     def test_a_failing_command_still_records_what_it_wrote(self, tmp_path):
         with pytest.raises(ZeroDivisionError):
-            dbx.exec("Built(url=root, spec={'x': 1}).build(); 1/0", Built=Built, root=str(tmp_path))
+            dbx.exec("Built(datalake=root, spec={'x': 1}).build(); 1/0", Built=Built, root=str(tmp_path))
         assert len(self._row(tmp_path)['datajournal_entries']) == 1
 
     def test_one_row_written_when_the_command_is_over(self, tmp_path):
         from dbx.dataparts import read_exec_journal
         seen = []
-        dbx.exec("seen.append(len(read(url=root)))", seen=seen, read=read_exec_journal, root=str(tmp_path))
+        dbx.exec("seen.append(len(read(datalake=root)))", seen=seen, read=read_exec_journal, root=str(tmp_path))
         assert seen == [0]
-        assert len(read_exec_journal(url=str(tmp_path))) == 1
+        assert len(read_exec_journal(datalake=str(tmp_path))) == 1
 
     def test_a_failing_command_is_one_row_too(self, tmp_path):
         from dbx.dataparts import read_exec_journal
         with pytest.raises(ZeroDivisionError):
             dbx.exec("1/0")
-        assert len(read_exec_journal(url=str(tmp_path))) == 1
+        assert len(read_exec_journal(datalake=str(tmp_path))) == 1
 
     def test_the_scope_closes_with_the_command(self, tmp_path):
         dbx.exec("1 + 1")
         assert Datajournal.current() is None
 
     def test_a_nested_exec_joins_the_session(self, tmp_path):
-        outer = dbx.exec("dbx.exec('Built(url=root, spec={\"x\": 3})', Built=Built, root=root)",
+        outer = dbx.exec("dbx.exec('Built(datalake=root, spec={\"x\": 3})', Built=Built, root=root)",
                          Built=Built, root=str(tmp_path), dbx=dbx)
         from dbx.dataparts import read_exec_journal
-        rows = read_exec_journal(url=str(tmp_path))
+        rows = read_exec_journal(datalake=str(tmp_path))
         assert rows['session'].nunique() == 1 and len(rows) == 2
 
 
@@ -340,7 +340,7 @@ class TestExecjournal:
         monkeypatch.setenv('DBX_ROOT', str(tmp_path))
 
     def _run(self, tmp_path):
-        return dbx.exec("a = Built(url=root, spec={'x': 1}); b = Built(url=root, spec={'x': 2}); "
+        return dbx.exec("a = Built(datalake=root, spec={'x': 1}); b = Built(datalake=root, spec={'x': 2}); "
                         "a.build(); b.build(); (a, b)  # two", Built=Built, root=str(tmp_path))
 
     def test_the_types(self, tmp_path):
@@ -360,7 +360,7 @@ class TestExecjournal:
 
     def test_a_filter_then_entries(self, tmp_path):
         self._run(tmp_path)
-        dbx.exec("Built(url=root, spec={'x': 9}).build()  # other", Built=Built, root=str(tmp_path))
+        dbx.exec("Built(datalake=root, spec={'x': 9}).build()  # other", Built=Built, root=str(tmp_path))
         row_id = dbx.journal(comment='two', iloc=0)['id']
         assert len(dbx.journal(id=row_id).entries()) == 2
         assert len(dbx.journal().entries()) == 3
@@ -371,7 +371,7 @@ class TestExecjournal:
 
     def test_rerun_executes_it_again_as_a_new_command(self, tmp_path):
         """A rebuild of a valid block writes nothing, so the command writes a note -- which always writes."""
-        s = "b = Built(url=root, spec={'x': 4}); b.write_journal_entry(event='note'); b.hash"
+        s = "b = Built(datalake=root, spec={'x': 4}); b.write_journal_entry(event='note'); b.hash"
         h = dbx.exec(s, Built=Built, root=str(tmp_path))
         first = dbx.journal(iloc=0)
         assert first.rerun(Built=Built, root=str(tmp_path)) == h
@@ -418,7 +418,7 @@ class TestRepr:
             class VAR(Datablock.VAR):
                 child: Datablock = None
 
-        outer = Outer(url=str(tmp_path), spec={'child': inner})
+        outer = Outer(datalake=str(tmp_path), spec={'child': inner})
         assert repr(inner.repr()) in outer.repr()
         assert repr(inner.quote()) in outer.quote()
 
@@ -442,7 +442,7 @@ class TestExecTimes:
         import time
         from dbx.dataparts import read_exec_journal
         dbx.exec("sleep(0.05)", sleep=time.sleep)
-        row = read_exec_journal(url=str(tmp_path), iloc=0)
+        row = read_exec_journal(datalake=str(tmp_path), iloc=0)
         assert row['datetime'] == row['exec:start:datetime']
         assert row['exec:end:datetime'] > row['exec:start:datetime']
 
@@ -450,7 +450,7 @@ class TestExecTimes:
         from dbx.dataparts import read_exec_journal
         with pytest.raises(ZeroDivisionError):
             dbx.exec("1/0")
-        row = read_exec_journal(url=str(tmp_path), iloc=0)
+        row = read_exec_journal(datalake=str(tmp_path), iloc=0)
         assert row['exec:start:datetime'] and row['exec:end:datetime']
 
 
@@ -473,7 +473,7 @@ class TestJournalIndex:
         b = block(tmp_path)
         b.build()
         entry_id = b.journal(iloc=0)['id']
-        assert dbx.journal(Built, url=str(tmp_path), loc=entry_id).block.id == entry_id
+        assert dbx.journal(Built, datalake=str(tmp_path), loc=entry_id).block.id == entry_id
 
     def test_none_numbers_it(self, tmp_path):
         dbx.exec("1 + 1")
@@ -503,7 +503,7 @@ class TestExecjournalShape:
 
     def test_a_row_under_the_old_column_name_still_reads(self, tmp_path):
         import os
-        dbx.exec("Built(url=root, spec={'x': 1}).build()", Built=Built, root=str(tmp_path))
+        dbx.exec("Built(datalake=root, spec={'x': 1}).build()", Built=Built, root=str(tmp_path))
         exec_dir = os.path.join(str(tmp_path), '.journal', 'exec')
         [f] = os.listdir(exec_dir)
         old = pd.read_parquet(os.path.join(exec_dir, f)).rename(
@@ -515,7 +515,7 @@ class TestExecjournalShape:
         assert [len(v) for v in rows['datajournal_entries']] == [0, 1]
 
     def test_datajournal_is_a_frame_of_what_it_wrote(self, tmp_path):
-        a, b = dbx.exec("a = Built(url=root, spec={'x': 1}); b = Built(url=root, spec={'x': 2}); "
+        a, b = dbx.exec("a = Built(datalake=root, spec={'x': 1}); b = Built(datalake=root, spec={'x': 2}); "
                         "a.build(); b.build(); (a, b)", Built=Built, root=str(tmp_path))
         entry = dbx.journal(iloc=0)
         frame = entry.datajournal()
@@ -597,9 +597,9 @@ class TestConstructed:
 
     def _run(self, tmp_path):
         return dbx.exec(
-            "a = Built(url=root, spec={'x': 1}); b = Built(url=root, spec={'x': 2}); o = Other(url=root); "
+            "a = Built(datalake=root, spec={'x': 1}); b = Built(datalake=root, spec={'x': 2}); o = Other(datalake=root); "
             "a.build(); b.build(); o.build(); "
-            "n = Built(url=root, spec={'x': 3}); n.write_journal_entry(event='note'); (a, b, o)",
+            "n = Built(datalake=root, spec={'x': 3}); n.write_journal_entry(event='note'); (a, b, o)",
             Built=Built, Other=Other, root=str(tmp_path))
 
     def test_by_anchor(self, tmp_path):
@@ -616,7 +616,7 @@ class TestConstructed:
 
     def test_a_failed_build_was_not_constructed(self, tmp_path):
         with pytest.raises(RuntimeError):
-            dbx.exec("Other(url=root, spec={'fail': True}).build()", Other=Other, root=str(tmp_path))
+            dbx.exec("Other(datalake=root, spec={'fail': True}).build()", Other=Other, root=str(tmp_path))
         entry = dbx.journal(iloc=0)
         assert len(entry.datajournal()) == 1 and entry.datajournal().iloc[0]['event'] == 'build:exception'
         assert entry.constructed() == {}
@@ -640,7 +640,7 @@ class TestConstructed:
 
     def test_over_a_frame_of_commands(self, tmp_path):
         a, b, o = self._run(tmp_path)
-        dbx.exec("Built(url=root, spec={'x': 9}).build()", Built=Built, root=str(tmp_path))
+        dbx.exec("Built(datalake=root, spec={'x': 9}).build()", Built=Built, root=str(tmp_path))
         got = dbx.journal().constructed()
         assert len(got[a.anchor]) == 3 and len(got[o.anchor]) == 1
 
@@ -656,7 +656,7 @@ class TestTwoJournals:
         from dbx.dataparts import ExecjournalFrame
         b = block(tmp_path)
         dbx.exec("b.build()", b=b)
-        assert isinstance(dbx.datajournal(Built, url=str(tmp_path)), DatajournalFrame)
+        assert isinstance(dbx.datajournal(Built, datalake=str(tmp_path)), DatajournalFrame)
         assert isinstance(dbx.datajournal(b), DatajournalFrame)
         assert isinstance(dbx.execjournal(), ExecjournalFrame)
         assert dbx.execjournal(iloc=0)['exec'] == 'b.build()'

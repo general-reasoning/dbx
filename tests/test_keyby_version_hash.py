@@ -66,13 +66,13 @@ class TestKeybyVersionHash:
 
     def test_versioned_key_format(self, tmp_path):
         """When VERSION is set, key should be 'version={version}/{hash[:8]}'."""
-        block = VersionedBlock(url=str(tmp_path), keyby='version_hash')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='version_hash')
         assert block.key == f"version={block.version}/{block.hash[:8]}"
         assert block.key.startswith("version=v3/")
 
     def test_unversioned_falls_back_to_hash(self, tmp_path):
         """When VERSION is absent, key should be just the hash."""
-        block = UnversionedBlock(url=str(tmp_path), keyby='version_hash')
+        block = UnversionedBlock(datalake=str(tmp_path), keyby='version_hash')
         assert block.version is None
         assert block.key == block.hash
 
@@ -85,38 +85,38 @@ class TestKeybyVersionHash:
             VERSION = "2"
             TOPICS = {'a': 'a.txt'}
 
-        b1 = V1(url=str(tmp_path), keyby='version_hash')
-        b2 = V2(url=str(tmp_path), keyby='version_hash')
+        b1 = V1(datalake=str(tmp_path), keyby='version_hash')
+        b2 = V2(datalake=str(tmp_path), keyby='version_hash')
         assert b1.key.startswith("version=1/")
         assert b2.key.startswith("version=2/")
 
     def test_construction_succeeds(self, tmp_path):
         """keyby='version_hash' must not raise at construction time."""
-        block = VersionedBlock(url=str(tmp_path), keyby='version_hash')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='version_hash')
         assert block.keyby == 'version_hash'
 
     def test_invalid_keyby_still_rejected(self, tmp_path):
         """Unknown keyby values must still raise ValueError."""
         with pytest.raises(ValueError, match="keyby must be"):
-            Datablock(url=str(tmp_path), keyby='nonexistent')
+            Datablock(datalake=str(tmp_path), keyby='nonexistent')
 
     def test_build_and_read(self, tmp_path):
         """A version_hash block can be built and read normally."""
-        block = VersionedBlock(url=str(tmp_path), keyby='version_hash', spec=dict(x=42))
+        block = VersionedBlock(datalake=str(tmp_path), keyby='version_hash', spec=dict(x=42))
         block.build()
         assert block.valid()
         assert block.read('out') == "x=42"
 
     def test_pickle_roundtrip(self, tmp_path):
         """keyby='version_hash' survives pickle serialization."""
-        block = VersionedBlock(url=str(tmp_path), keyby='version_hash')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='version_hash')
         restored = pickle.loads(pickle.dumps(block))
         assert restored.keyby == 'version_hash'
         assert restored.key == block.key
 
     def test_deepcopy_roundtrip(self, tmp_path):
         """keyby='version_hash' survives deepcopy."""
-        block = VersionedBlock(url=str(tmp_path), keyby='version_hash')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='version_hash')
         restored = copy.deepcopy(block)
         assert restored.keyby == 'version_hash'
         assert restored.key == block.key
@@ -131,22 +131,22 @@ class TestKeybyTagHash:
 
     def test_tag_hash_matches_taghash(self, tmp_path):
         """tag_hash and taghash must produce identical keys."""
-        a = VersionedBlock(url=str(tmp_path), keyby='taghash', tag='mytag')
-        b = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='mytag')
+        a = VersionedBlock(datalake=str(tmp_path), keyby='taghash', tag='mytag')
+        b = VersionedBlock(datalake=str(tmp_path), keyby='tag_hash', tag='mytag')
         assert a.key == b.key
 
     def test_tag_hash_without_tag_falls_back(self, tmp_path):
         """tag_hash without tag= falls back to hash, just like taghash."""
-        block = VersionedBlock(url=str(tmp_path), keyby='tag_hash')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='tag_hash')
         assert block.key == block.hash
 
     def test_tag_hash_with_tag(self, tmp_path):
         """tag_hash with tag= produces '{tag}/{hash[:8]}'."""
-        block = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='run1')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='tag_hash', tag='run1')
         assert block.key == f"run1/{block.hash[:8]}"
 
     def test_tag_hash_pickle_roundtrip(self, tmp_path):
-        block = VersionedBlock(url=str(tmp_path), keyby='tag_hash', tag='t')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='tag_hash', tag='t')
         restored = pickle.loads(pickle.dumps(block))
         assert restored.keyby == 'tag_hash'
         assert restored.key == block.key
@@ -160,43 +160,43 @@ class TestKeybyTagVersionHash:
 
     def test_tag_and_version(self, tmp_path):
         """Both tag and version present: '{tag}/version={version}/{hash}'."""
-        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp1')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='tag_version_hash', tag='exp1')
         expected = f"exp1/version=v3/{block.hash}"
         assert block.key == expected
 
     def test_tag_only(self, tmp_path):
         """Tag present, no version: '{tag}/{hash}'."""
-        block = UnversionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='exp2')
+        block = UnversionedBlock(datalake=str(tmp_path), keyby='tag_version_hash', tag='exp2')
         assert block.version is None
         expected = f"exp2/{block.hash}"
         assert block.key == expected
 
     def test_version_only(self, tmp_path):
         """No tag, version present: 'version={version}/{hash}'."""
-        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='tag_version_hash')
         expected = f"version=v3/{block.hash}"
         assert block.key == expected
 
     def test_neither_tag_nor_version(self, tmp_path):
         """Neither tag nor version: falls back to full hash."""
-        block = UnversionedBlock(url=str(tmp_path), keyby='tag_version_hash')
+        block = UnversionedBlock(datalake=str(tmp_path), keyby='tag_version_hash')
         assert block.version is None
         assert block.key == block.hash
 
     def test_build_and_read(self, tmp_path):
         """tag_version_hash block can build and read."""
-        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='b', spec=dict(x=7))
+        block = VersionedBlock(datalake=str(tmp_path), keyby='tag_version_hash', tag='b', spec=dict(x=7))
         block.build()
         assert block.valid()
         assert block.read('out') == "x=7"
 
     def test_pickle_roundtrip(self, tmp_path):
-        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='t')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='tag_version_hash', tag='t')
         restored = pickle.loads(pickle.dumps(block))
         assert restored.keyby == 'tag_version_hash'
         assert restored.key == block.key
 
     def test_deepcopy_roundtrip(self, tmp_path):
-        block = VersionedBlock(url=str(tmp_path), keyby='tag_version_hash', tag='t')
+        block = VersionedBlock(datalake=str(tmp_path), keyby='tag_version_hash', tag='t')
         restored = copy.deepcopy(block)
         assert restored.key == block.key

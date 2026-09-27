@@ -102,38 +102,38 @@ class OverridingBlock(LegacyBlock):
 
 
 def test_legacy_CONFIG_is_bound_to_VAR(url):
-    b = LegacyBlock(url=url)
+    b = LegacyBlock(datalake=url)
     assert b.VAR is LegacyBlock.CONFIG
     assert b.var.label == "'legacy'"
     assert b.var.n == 3
 
 
 def test_cfg_and_config_alias_var(url):
-    b = LegacyBlock(url=url)
+    b = LegacyBlock(datalake=url)
     assert b.cfg is b.var
     assert b.config is b.var
 
 
 def test_modern_VAR_is_not_shadowed_by_the_alias(url):
-    b = ModernBlock(url=url)
+    b = ModernBlock(datalake=url)
     assert b.VAR is ModernBlock.VAR
     assert b.var.label == "'legacy'"
 
 
 def test_legacy_and_modern_specs_agree(url):
-    legacy = LegacyBlock(url=url)
-    modern = ModernBlock(url=url)
+    legacy = LegacyBlock(datalake=url)
+    modern = ModernBlock(datalake=url)
     assert legacy.spec == modern.spec
 
 
 def test_legacy_CONFIG_inherited_through_a_subclass(url):
-    b = DerivedLegacyBlock(url=url)
+    b = DerivedLegacyBlock(datalake=url)
     assert b.VAR is LegacyBlock.CONFIG
     assert b.var.n == 3
 
 
 def test_VAR_override_beats_an_inherited_legacy_CONFIG(url):
-    b = OverridingBlock(url=url)
+    b = OverridingBlock(datalake=url)
     assert b.VAR is OverridingBlock.VAR
     assert b.var.label == "'overridden'"
     assert b.var.n == 7
@@ -145,7 +145,7 @@ def test_VAR_override_beats_an_inherited_legacy_CONFIG(url):
     lambda b: type(b)(**b.__getstate__()),
 ])
 def test_legacy_block_survives_serialization(url, roundtrip):
-    original = LegacyBlock(url=url, spec=dict(label="'x'", n=5))
+    original = LegacyBlock(datalake=url, spec=dict(label="'x'", n=5))
     restored = roundtrip(original)
     assert restored.VAR is LegacyBlock.CONFIG
     assert restored.var.label == "'x'"
@@ -155,7 +155,7 @@ def test_legacy_block_survives_serialization(url, roundtrip):
 
 
 def test_legacy_block_builds(url):
-    b = LegacyBlock(url=url)
+    b = LegacyBlock(datalake=url)
     b.build()
     assert b.valid()
     assert b.read('output') == "built:'legacy':3"
@@ -167,7 +167,7 @@ def test_legacy_block_builds(url):
 
 def _legacy_state(url):
     """A dfn/state dict as it was recorded before the rename."""
-    state = ModernBlock(url=url).__getstate__()
+    state = ModernBlock(datalake=url).__getstate__()
     assert state.pop('validate_vars') is True
     state['validate_cfg'] = False
     return state
@@ -184,7 +184,7 @@ def test_legacy_validate_cfg_is_honored_by_init(url):
     assert 'validate_cfg' not in restored.kwargs
     assert restored.__getstate__()['validate_vars'] is False
     assert 'validate_cfg=' not in restored.quote()  # NB: tmp_path contains the test name
-    assert restored.hash == ModernBlock(url=url).hash
+    assert restored.hash == ModernBlock(datalake=url).hash
 
 
 def test_legacy_validate_cfg_is_honored_by_setstate(url):
@@ -201,8 +201,8 @@ def test_validate_vars_is_not_part_of_identity(url):
     norm() is built from url/anchor/hash and spec only, so neither the
     explicit params nor any dynamic kwarg reaches the hash.
     """
-    checked = ModernBlock(url=url)
-    unchecked = ModernBlock(url=url, validate_vars=False)
+    checked = ModernBlock(datalake=url)
+    unchecked = ModernBlock(datalake=url, validate_vars=False)
     assert checked.normstr() == unchecked.normstr()
     assert checked.hash == unchecked.hash
     assert checked.key == unchecked.key
@@ -215,8 +215,8 @@ def test_TREE_SKIP_VALIDATION_replaces_it(url):
     class Skipping(ParentBlock):
         TREE_SKIP_VALIDATION = ('child',)
 
-    spec = dict(child=ModernBlock(url=url))
+    spec = dict(child=ModernBlock(datalake=url))
     # The child is never built, so without the exemption it reports invalid.
-    assert ParentBlock(url=url, spec=spec).valid_var() == {'child': False}
-    assert Skipping(url=url, spec=spec).valid_var() == {}
-    assert Skipping(url=url, spec=spec).valid_tree() == {}
+    assert ParentBlock(datalake=url, spec=spec).valid_var() == {'child': False}
+    assert Skipping(datalake=url, spec=spec).valid_var() == {}
+    assert Skipping(datalake=url, spec=spec).valid_tree() == {}

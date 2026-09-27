@@ -1122,3 +1122,31 @@ def test_specialization_unsafe_redirect_all_topics(tmp_path):
     assert set(modern.redirected_topics()) == {'a', 'b'}
 
 
+def test_specialization_reconstructs_legacy_list_topics():
+    """A Specialization can declare topics as a list to reconstruct legacy list-form TOPICS."""
+    from dbx.datablocks import Datablock, DATADIR
+
+    class LegacyListBlock(Datablock):
+        VERSION = 6
+        LEGACY_NORM = True
+        TOPICS = ['shards']
+
+    class ModernListBlock(Datablock):
+        VERSION = 6
+        TOPICS = {'shards': DATADIR}
+        SPECIALIZATIONS = [
+            Datablock.Specialization(
+                spec={},
+                topics=['shards'],
+                legacy=True,
+                note='Legacy pre-marker build with list TOPICS',
+            )
+        ]
+
+    old = LegacyListBlock()
+    new = ModernListBlock()
+    assert old.hash == new.get_hash(ModernListBlock.SPECIALIZATIONS[0])
+    assert old.hash in new.specialization_hashes()
+
+
+

@@ -1263,12 +1263,15 @@ class Datablock:
             declared = self.declared
             if isinstance(declared, str):
                 declared = literal_topics(declared)     # the record form -- see to_dict
-            if isinstance(self.topics, dict):
-                # {name: node}: the topics AS THAT BLOCK DECLARED THEM. Their
-                # names are still mine; their nodes, and so the era they are
-                # spelled in, are its -- which is what a migration from the
-                # sentinels to the markers changes and a list of names cannot say.
-                declared = dict(self.topics)
+            if declared is None:
+                if isinstance(self.topics, dict):
+                    # {name: node}: the topics AS THAT BLOCK DECLARED THEM. Their
+                    # names are still mine; their nodes, and so the era they are
+                    # spelled in, are its -- which is what a migration from the
+                    # sentinels to the markers changes and a list of names cannot say.
+                    declared = dict(self.topics)
+                elif isinstance(self.topics, (list, tuple)):
+                    declared = tuple(self.topics)
             if declared is None:
                 raise TypeError(
                     f"Specialization topics={self.topics!r} names topics without declaring "
@@ -1276,7 +1279,7 @@ class Datablock:
                     f"topics={{'spectra': 'spectra.npy', 'tiles': SLICETOPIC}} -- since "
                     f"nothing of a narrower block's identity is taken from this class's TOPICS."
                 )
-            object.__setattr__(self, 'declared', None if declared is None else dict(declared))
+            object.__setattr__(self, 'declared', tuple(declared) if isinstance(declared, (list, tuple)) else (None if declared is None else dict(declared)))
             object.__setattr__(self, 'topics', tuple(self.declared or self.topics))
             if self.anchor is not SAME and not (isinstance(self.anchor, str) and self.anchor):
                 raise TypeError(f"Specialization anchor= is SAME or an anchor string, got {self.anchor!r}")
@@ -6025,6 +6028,8 @@ class Datablock:
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
         # computed using the older version of these methods
         if declared is not None:
+            if isinstance(declared, (list, tuple)):
+                return tuple(f"topic:{topic}" for topic in declared)
             # A narrower block's own declaration: ITS nodes, in ITS order, in ITS
             # era -- a sentinel renders bare, as it did when that block was built.
             modern = self._modern_topics_(declared)

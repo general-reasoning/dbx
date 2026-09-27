@@ -688,6 +688,8 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, url=None, storage_opti
     else:
         if isinstance(cls_anchor_or_df, str):
             anchor = cls_anchor_or_df
+        elif isinstance(cls_anchor_or_df, type) and issubclass(cls_anchor_or_df, Datablock):
+            anchor = cls_anchor_or_df.anchor
         elif isinstance(cls_anchor_or_df, type):
             anchor = cls_anchor_or_df.__module__ + "." + cls_anchor_or_df.__name__
         elif hasattr(cls_anchor_or_df, 'anchor'):
@@ -994,6 +996,22 @@ class CallableTp(CallableStr):
         if deslash:
             t = t.replace('\\', '')
         return t
+
+
+class _ClassOrInstance:
+    """A read-only attribute that answers on the class and on an instance alike.
+
+    ``Cls.x`` is ``for_class(Cls)`` and ``obj.x`` is ``for_instance(obj)`` --
+    so what a class says about all its instances (its anchor) and what one
+    instance says about itself (an ``anchor=`` it was given) are one name.
+    """
+
+    def __init__(self, for_class, for_instance, doc=None):
+        self.for_class, self.for_instance = for_class, for_instance
+        self.__doc__ = doc
+
+    def __get__(self, obj, owner=None):
+        return self.for_class(owner) if obj is None else self.for_instance(obj)
 
 
 class Block:
@@ -5502,9 +5520,10 @@ class Datablock:
             s.startswith('@') or s.startswith('$') or s.startswith('#')
         )
     
-    @property
-    def fqcn(self):
-        return f"{self.__class__.__module__}.{self.__class__.__name__}"
+    fqcn = _ClassOrInstance(
+        lambda cls: f"{cls.__module__}.{cls.__name__}",
+        lambda self: f"{type(self).__module__}.{type(self).__name__}",
+        doc="``module.Name`` of the class -- on the class itself, too.")
     
     @property
     def version(self):
@@ -7293,11 +7312,20 @@ class Datablock:
         return self.code
 
     ### anchorage: begin
-    @property
-    def anchor(self):
-        if self._anchor_ is not None:
-            return self._anchor_
-        return self.fqcn
+    #: The anchor every instance of this class is stored under, unless it is
+    #: given an ``anchor=`` of its own. None means the class's `fqcn`.
+    ANCHOR = None
+
+    anchor = _ClassOrInstance(
+        lambda cls: cls.ANCHOR or cls.fqcn,
+        lambda self: (self.__dict__.get('_anchor_')
+                      or type(self).ANCHOR or type(self).fqcn),
+        doc="""The directory a block is stored under, below its datalake.
+
+        On the CLASS, the anchor every instance takes when not given its own --
+        :attr:`ANCHOR`, else the `fqcn` -- which is what lets a stack find its
+        blocks' journal from its ``BLOCK`` alone. On an instance, its own
+        ``anchor=`` when it was given one.""")
 
     @property
     def tag(self):
@@ -7790,6 +7818,20 @@ class DatablockValidityChecker:
         return stack.valid_block(self.idx)
 
 
+def _shared_journal_(caller, block):
+    """The journal a stack read for its blocks, if *block* is one it was read for -- else None.
+
+    Read under ONE anchor and ONE url, it holds the entries of the blocks
+    stored there and no others: a block of another anchor, or rooted
+    elsewhere, reads its own.
+    """
+    if caller.journal is None or caller.anchor is None:
+        return None
+    if block.anchor != caller.anchor or (caller.url is not None and block.url != caller.url):
+        return None
+    return caller.journal
+
+
 class DatablockRedirectionGetter:
     """Lightweight callable resolving the redirection of the block at index `idx`.
 
@@ -7797,15 +7839,15 @@ class DatablockRedirectionGetter:
     block of another anchor -- a stack whose blocks are not all one kind --
     would find none of its entries there, so it reads its own instead.
     """
-    def __init__(self, idx: int, journal=None, anchor=None):
+    def __init__(self, idx: int, journal=None, anchor=None, url=None):
         self.idx = idx
         self.journal = journal
         self.anchor = anchor
+        self.url = url
 
     def __call__(self, stack):
         block = stack.block(self.idx)
-        shared = self.journal if self.anchor is None or block.anchor == self.anchor else None
-        return block.get_redirection(journal=shared)
+        return block.get_redirection(journal=_shared_journal_(self, block))
 
 
 class DatablockSpecializationFinder:
@@ -7814,15 +7856,15 @@ class DatablockSpecializationFinder:
     The block is formed with specializations OFF and not cached: finding must
     not install anything, and forming a block normally can.
     """
-    def __init__(self, idx: int, journal=None, anchor=None):
+    def __init__(self, idx: int, journal=None, anchor=None, url=None):
         self.idx = idx
         self.journal = journal
         self.anchor = anchor
+        self.url = url
 
     def __call__(self, stack):
         block = stack._form_block_(self.idx, use_specializations=False)
-        shared = self.journal if self.anchor is None or block.anchor == self.anchor else None
-        return block.find_specialization(journal=shared)
+        return block.find_specialization(journal=_shared_journal_(self, block))
 
 
 class DatablockRedirectionClearer:
@@ -8069,10 +8111,7 @@ class Datastack(Datablock):
         if self.n_blocks == 0:
             return None
         try:
-            # Block 0 only says where the journal is -- its url and anchor --
-            # so it is formed for that alone: uncached, and with specializations
-            # off, since forming it normally can install one and record it.
-            return self._form_block_(0, use_specializations=False).journal(**kwargs)
+            return self._blocks_journal_(**kwargs)[0]
         except Exception as e:
             self.log.detailed(f"block_journal: could not load journal for child blocks: {e}")
             return None
@@ -8209,17 +8248,17 @@ class Datastack(Datablock):
         n = self.n_blocks
         if n == 0:
             return pd.Series([], dtype=object)
-        anchor = None
+        anchor = url = None
         if journal is None:
-            first = self.block(0)
-            journal, anchor = self.block_journal(), first.anchor
-            self.log.info(f"{self.__class__.__name__}: read the {first.anchor} journal once "
+            try:
+                journal, anchor, url = self._blocks_journal_()
+            except FileNotFoundError:
+                journal = None      # nothing to share: each block reads its own
+            self.log.info(f"{self.__class__.__name__}: read the {anchor} journal once "
                           f"({0 if journal is None else len(journal)} entries) to resolve {n} "
                           f"block redirection(s)")
-            if journal is None:
-                anchor = None       # nothing to share: each block reads its own
         results = self._exec_over_blocks_(
-            [self.DatablockRedirectionGetter(i, journal, anchor) for i in range(n)],
+            [self.DatablockRedirectionGetter(i, journal, anchor, url) for i in range(n)],
             tag=f"RESOLVING REDIRECTION of {n} blocks [{self.__class__.__name__}]",
             parallelization=parallelization, n_workers=n_workers, **kwargs)
         series = pd.Series(results, dtype=object)
@@ -8239,15 +8278,14 @@ class Datastack(Datablock):
         n = self.n_blocks
         if n == 0:
             return pd.Series([], dtype=object)
-        anchor = None
+        anchor = url = None
         if journal is None:
-            first = self._form_block_(0, use_specializations=False)
             try:
-                journal, anchor = first.journal(), first.anchor
+                journal, anchor, url = self._blocks_journal_()
             except FileNotFoundError:
                 journal = None          # nothing built under this anchor: nothing to find
         results = self._exec_over_blocks_(
-            [self.DatablockSpecializationFinder(i, journal, anchor) for i in range(n)],
+            [self.DatablockSpecializationFinder(i, journal, anchor, url) for i in range(n)],
             tag=f"FINDING SPECIALIZATIONS of {n} blocks [{self.__class__.__name__}]",
             parallelization=parallelization, n_workers=n_workers, **kwargs)
         series = pd.Series(results, dtype=object)
@@ -8883,6 +8921,28 @@ class Datastack(Datablock):
     def _block_class_(self):
         """The class this stack's blocks are: its BLOCK, or None when it declares none."""
         return getattr(self, 'BLOCK', None)
+
+    def _blocks_journal_(self, **kwargs):
+        """``(journal, anchor, url)`` of this stack's blocks: read once, for all of them.
+
+        From :attr:`BLOCK` when the stack declares one: the class's anchor under
+        :meth:`_blocks_url_` -- the blocks are taken to share it -- with no block
+        formed at all. Otherwise from ``block(0)``, formed only to say where its
+        journal is: uncached, and with specializations off, since forming it
+        normally can install one and record it. Raises FileNotFoundError when
+        nothing was ever journalled there.
+        """
+        block_cls = self._block_class_()
+        if block_cls is not None:
+            anchor, url = block_cls.anchor, self._blocks_url_()
+            return self.datajournal.read(anchor, url=url, storage_options=self.storage_options,
+                                         log=self.log, **kwargs), anchor, url
+        first = self._form_block_(0, use_specializations=False)
+        return first.journal(**kwargs), first.anchor, first.url
+
+    def _blocks_url_(self):
+        """Where this stack's blocks are stored: its own url -- a DatatablePart's are its table's."""
+        return self.url
 
     def _form_block_(self, idx: int, *, use_specializations='stack'):
         """Block *idx*, formed and adopted -- uncached; :meth:`block` caches it.

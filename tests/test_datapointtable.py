@@ -1062,16 +1062,18 @@ class TestValidTabAndSentinels:
             assert got[1].paths == src_tbl.tab(1).paths()
         only = dst_tbl.get_tab_redirections(redirected_only=True)
         assert only.index.tolist() == [1]
-        # One journal read for the lot, not one per tab.
+        # One journal read for the lot, not one per tab -- located from the
+        # table's TAB, with no tab formed to find it.
+        from dbx.datablocks import Datajournal
         reads = []
-        original = type(dst_tbl.tab(0)).journal
-        def counting(self, *a, **kw):
-            reads.append(self.anchor)
-            return original(self, *a, **kw)
+        original = Datajournal.read
+        def counting(self, anchor, *a, **kw):
+            reads.append(anchor)
+            return original(self, anchor, *a, **kw)
         import unittest.mock
-        with unittest.mock.patch.object(type(dst_tbl.tab(0)), 'journal', counting):
+        with unittest.mock.patch.object(Datajournal, 'read', counting):
             dst_tbl.get_tab_redirections(parallelization="inline")
-        assert len(reads) == 1
+        assert reads == [LetterTable.TAB.anchor]
 
         assert dst_tbl.tab_redirections.index.tolist() == [0, 1, 2]
         assert dst_tbl.block_redirections is dst_tbl.block_redirections   # resolved once

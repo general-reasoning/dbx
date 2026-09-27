@@ -1782,6 +1782,10 @@ class DatatablePart(Datatable):
             streaming_kwargs['streams'] = self._tab_streams(slice, local)
             return StreamingDataset(**streaming_kwargs)
 
+    def _blocks_url_(self):
+        """A part's tabs are its table's, and are stored where they are."""
+        return self.var.partition.datapoint_table._blocks_url_()
+
     def _block_class_(self):
         """A part's tabs are its table's, and so is its BLOCK."""
         table = getattr(getattr(self, 'var', None), 'partition', None)

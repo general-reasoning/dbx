@@ -863,3 +863,50 @@ class TestBLOCK:
             datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0)).build().fold(0)
         assert part._block_class_() is DummyTable.BLOCK is DummyTable.TAB
         assert isinstance(part.block(0), DummyTable.TAB)
+
+
+class TestAnchorOnTheClass:
+
+    def test_the_class_answers_as_its_instances_do(self, tmp_path):
+        assert CounterBlock.anchor == CounterBlock.fqcn == f"{__name__}.CounterBlock"
+        assert CounterBlock(url=str(tmp_path)).anchor == CounterBlock.anchor
+
+    def test_ANCHOR_is_the_class_anchor_and_an_instance_may_still_name_its_own(self, tmp_path):
+        class Anchored(CounterBlock):
+            ANCHOR = 'lake.anchored'
+        assert Anchored.anchor == 'lake.anchored'
+        assert Anchored(url=str(tmp_path)).anchor == 'lake.anchored'
+        assert Anchored(url=str(tmp_path), anchor='mine').anchor == 'mine'
+        assert Anchored.fqcn.endswith('.Anchored')
+
+    def test_a_class_journal_is_read_under_its_anchor(self, tmp_path):
+        import dbx
+
+        class Anchored(CounterBlock):
+            ANCHOR = 'lake.anchored2'
+        Anchored(url=str(tmp_path), spec=dict(idx=0)).build()
+        assert len(dbx.datajournal(Anchored, url=str(tmp_path))) == 1
+
+    def test_a_stack_finds_its_blocks_journal_from_BLOCK_alone(self, tmp_path):
+        class S(Datastack):
+            BLOCK = CounterBlock
+
+            @property
+            def n_blocks(self):
+                return 2
+
+            def __block__(self, idx):
+                return CounterBlock(url=self.url, spec=dict(idx=idx))
+
+        for i in range(2):
+            CounterBlock(url=str(tmp_path), spec=dict(idx=i)).build()
+        stack = S(url=str(tmp_path))
+        formed = []
+        original = S.__block__
+        S.__block__ = lambda self, idx: formed.append(idx) or original(self, idx)
+        try:
+            journal, anchor, url = stack._blocks_journal_()
+        finally:
+            S.__block__ = original
+        assert formed == [], "no block is formed to find the journal"
+        assert anchor == CounterBlock.anchor and len(journal) >= 2

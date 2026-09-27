@@ -97,6 +97,8 @@ def test_an_anchor_must_be_one():
 def test_a_renamed_block_reads_what_its_old_name_built(tmp_path):
     Before(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
     after = After(datalake=str(tmp_path), spec={'tab_idx': 2})
+    assert after.redirected_topics() == [], "constructing it installs nothing"
+    after.build()                       # adopts, and builds nothing -- After.__build__ would raise
     assert after.anchor != Before.anchor
     assert after.hash == Before(datalake=str(tmp_path), spec={'tab_idx': 2}).hash
     assert after.redirected_topics() == ['rows']
@@ -113,8 +115,8 @@ def test_under_its_own_anchor_the_same_identity_is_still_refused(tmp_path):
 def test_a_table_reads_each_anchor_once_for_all_its_tabs(tmp_path, monkeypatch):
     BeforeTable(datalake=str(tmp_path), spec={'n': 4}).build()
     reads = _count_reads(monkeypatch)
-    table = AfterTable(datalake=str(tmp_path), spec={'n': 4})
-    tabs = [table.tab(i) for i in range(4)]
+    AfterTable(datalake=str(tmp_path), spec={'n': 4}).build()
+    tabs = [AfterTable(datalake=str(tmp_path), spec={'n': 4}).tab(i) for i in range(4)]
     assert all(t.redirected_topics() == ['rows'] for t in tabs)
     for i, t in enumerate(tabs):
         with open(t.path('rows')) as f:
@@ -148,18 +150,20 @@ class Unspecialized(Datatab):
 def test_an_instance_declares_its_own(tmp_path):
     Before(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
     assert Unspecialized.SPECIALIZATIONS in (None, [])
-    block = _renamed_by_instance(str(tmp_path))
+    block = _renamed_by_instance(str(tmp_path)).build()
     assert block.redirected_topics() == ['rows']
     assert block.valid()
 
 
 def test_none_keeps_the_class_and_empty_declares_none(tmp_path):
     Before(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
-    # First: once one construction installs the redirection, its .redirection
-    # marker answers every later one, whatever they declare.
+    # First: once a build installs the redirection, its .redirection marker
+    # answers every later construction, whatever they declare.
     off = After(datalake=str(tmp_path), spec={'tab_idx': 2}, SPECIALIZATIONS=[])
+    assert off._install_specialization_() is None
     assert off.SPECIALIZATIONS == [] and off.redirected_topics() == []
-    assert After(datalake=str(tmp_path), spec={'tab_idx': 2}).redirected_topics() == ['rows']
+    on = After(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
+    assert on.redirected_topics() == ['rows']
 
 
 def test_they_are_not_the_identity(tmp_path):

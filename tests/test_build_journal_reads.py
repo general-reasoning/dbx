@@ -86,7 +86,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from test_specializations import TestOneJournalReadForAWholeTable, v1table  # noqa: E402
+from test_specializations import TestOneJournalReadForAWholeTable, adopted, v1table  # noqa: E402
 
 
 @pytest.fixture
@@ -97,15 +97,15 @@ def grown(tmp_path, monkeypatch):
 
 
 def test_the_record_carries_the_paths(grown):
-    tab = v1table(grown, spec={'n': 3}).tab(0)           # installs, and records
+    tab = adopted(v1table(grown, spec={'n': 3}).tab(0))  # installs, and records
     entry = tab.journal(event='^UNSAFE_redirect$', hash=tab.hash, iloc=0, index=None)
     assert 'paths' in entry.block.redirection
 
 
 def test_where_a_specialized_tab_reads_from_costs_no_journal_read(grown, monkeypatch):
-    v1table(grown, spec={'n': 3}).tab(0)                  # installed, recorded
-    fresh = v1table(grown, spec={'n': 3}).tab(0)          # forming it: the table's one read
+    adopted(v1table(grown, spec={'n': 3}).tab(0))         # installed, recorded
     reads = _count_full_reads(monkeypatch)
+    fresh = v1table(grown, spec={'n': 3}).tab(0)          # forming it reads nothing at all
     assert fresh.get_redirection().specialization is not None
     fresh.valid()           # False -- the grown `extra` is unbuilt -- and asked cheaply
     assert fresh.redirected_topics() == ['rows']
@@ -115,7 +115,7 @@ def test_where_a_specialized_tab_reads_from_costs_no_journal_read(grown, monkeyp
 def test_an_older_record_without_paths_answers_from_the_marker(grown, monkeypatch):
     """Records written before the paths were: the .redirection topic holds them."""
     from dbx.datablocks import Datablock
-    tab = v1table(grown, spec={'n': 3}).tab(0)
+    tab = adopted(v1table(grown, spec={'n': 3}).tab(0))
     original = Datablock._recorded_redirection_
 
     def without_paths(self, journal=None):
@@ -123,8 +123,8 @@ def test_an_older_record_without_paths_answers_from_the_marker(grown, monkeypatc
         return {k: v for k, v in rec.items() if k != 'paths'} if isinstance(rec, dict) else rec
 
     monkeypatch.setattr(Datablock, '_recorded_redirection_', without_paths)
-    fresh = v1table(grown, spec={'n': 3}).tab(0)          # forming it: the table's one read
     reads = _count_full_reads(monkeypatch)
+    fresh = v1table(grown, spec={'n': 3}).tab(0)          # forming it reads nothing
     red = fresh.get_redirection()
     assert red is not None and red.paths == tab.get_redirection().paths
     assert reads == []
@@ -132,10 +132,10 @@ def test_an_older_record_without_paths_answers_from_the_marker(grown, monkeypatc
 
 def test_a_redirected_tab_formed_again_records_nothing_more(grown):
     table = v1table(grown, spec={'n': 3})
-    tab = table.tab(0)
+    tab = adopted(table.tab(0))
     before = len(tab.journal(event='^UNSAFE_redirect$', hash=tab.hash, index=None))
     for _ in range(3):
-        v1table(grown, spec={'n': 3}).tab(0)
+        adopted(v1table(grown, spec={'n': 3}).tab(0))   # finds the marker: installs nothing
     after = len(tab.journal(event='^UNSAFE_redirect$', hash=tab.hash, index=None))
     assert after == before == 1
 
@@ -185,7 +185,7 @@ def test_a_table_carries_no_journal_in_its_state(tmp_path):
     import copy
     Table(datalake=str(tmp_path), spec={'n': 2}).build()
     table = Table(datalake=str(tmp_path), spec={'n': 2})
-    table.tab(0)
+    table.child_specialization_journal()               # read, and cached on the instance
     assert '__child_journal__' in table.__dict__
     state = table.__getstate__()
     assert not any('journal' in k for k in state if k.startswith('__'))
@@ -194,7 +194,7 @@ def test_a_table_carries_no_journal_in_its_state(tmp_path):
 
 
 def test_a_copy_reads_the_journal_once_when_it_needs_it(tmp_path, monkeypatch):
-    """A worker's copy: re-reads on first use, then forms every tab from the cache."""
+    """A worker's copy reads nothing to form its tabs, and a build of it reads once."""
     Table(datalake=str(tmp_path), spec={'n': 4}).build()
     table = Table(datalake=str(tmp_path), spec={'n': 4})
     blob = pickle.dumps(table)
@@ -203,6 +203,9 @@ def test_a_copy_reads_the_journal_once_when_it_needs_it(tmp_path, monkeypatch):
     assert reads == [], "unpickling alone reads nothing"
     for i in range(4):
         twin.tab(i)
+    assert reads == [], "forming tabs resolves nothing, so reads nothing"
+    assert twin.child_specialization_journal() is not None
+    twin.child_specialization_journal()
     assert len([a for a in reads if a == Tab.anchor]) == 1
 
 

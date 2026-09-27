@@ -103,6 +103,17 @@ def v3(url, **kw):
     return V3(datalake=str(url), anchor=ANCHOR, spec=spec, **kw)
 
 
+def adopted(block):
+    """*block*, its specialization installed -- which construction never does.
+
+    What `build()` does first, before building what it does not cover; this is
+    that half alone, for looking at a block that has adopted an older build but
+    not yet built the rest.
+    """
+    block._install_specialization_(journal=block.__dict__.get('__specialization_journal__'))
+    return block
+
+
 @pytest.fixture
 def built(tmp_path):
     """The narrower block, built."""
@@ -174,17 +185,17 @@ class TestMatching:
 class TestReadingThroughIt:
 
     def test_the_topic_resolves_to_the_narrower_blocks_path(self, tmp_path, built):
-        assert v2(tmp_path).path('spectra') == built.path('spectra')
+        assert adopted(v2(tmp_path)).path('spectra') == built.path('spectra')
 
     def test_and_reads_its_data(self, tmp_path, built):
-        assert v2(tmp_path).read('spectra') == 'spectra-16000'
+        assert adopted(v2(tmp_path)).read('spectra') == 'spectra-16000'
 
     def test_the_grown_topic_stays_this_blocks_own(self, tmp_path, built):
         block = v2(tmp_path)
         assert block.path('phases').startswith(block.anchorkeypath)
 
     def test_it_reports_which_specialization(self, tmp_path, built):
-        assert v2(tmp_path).specialization == V2.SPECIALIZATIONS[0]
+        assert adopted(v2(tmp_path)).specialization == V2.SPECIALIZATIONS[0]
 
     def test_nothing_is_installed_when_there_is_no_build_to_find(self, tmp_path):
         block = v2(tmp_path)
@@ -213,7 +224,7 @@ class TestReadingThroughIt:
 class TestBuildingTheRest:
 
     def test_the_topics_divide(self, tmp_path, built):
-        block = v2(tmp_path)
+        block = adopted(v2(tmp_path))
         assert block.redirected_topics() == ['spectra']
         assert block.ownedtopics() == ['phases']
 
@@ -237,7 +248,7 @@ class TestBuildingTheRest:
 
     def test_writing_to_a_redirected_topic_is_refused(self, tmp_path, built):
         """A __build__ that ignores ownedtopics() must not clobber the source."""
-        block = v2(tmp_path)
+        block = adopted(v2(tmp_path))
         with pytest.raises(ValueError, match='REDIRECTED'):
             block.path('spectra', ensure_dirpath=True)
         assert built.read('spectra') == 'spectra-16000'
@@ -255,8 +266,10 @@ class TestItTravelsWithTheBlock:
         assert back.path('spectra') == block.path('spectra')
 
     def test_set_of_an_operational_parameter(self, tmp_path, built):
-        block = v2(tmp_path)
-        assert block.set(tag='t').path('spectra') == block.path('spectra')
+        block = adopted(v2(tmp_path))
+        # verbose= moves nothing; a tag= would -- tag is in the key -- and a moved
+        # block installs for itself, in its own build.
+        assert block.set(verbose=True).path('spectra') == block.path('spectra')
 
     def test_a_relocation_resolves_again(self, tmp_path, built):
         """The carried paths are absolute, so a new url is a new question."""
@@ -277,19 +290,19 @@ class TestItTravelsWithTheBlock:
 class TestRecordingIt:
 
     def test_installing_one_records_it(self, tmp_path, built):
-        v2(tmp_path)
+        adopted(v2(tmp_path))
         later = v2(tmp_path, use_specializations=False)
         assert later.redirected_topics() == ['spectra']
         assert later.redirection.specialization == V2.SPECIALIZATIONS[0]
 
     def test_memory_mode_writes_nothing(self, tmp_path, built):
-        block = v2(tmp_path, use_specializations='memory')
+        block = adopted(v2(tmp_path, use_specializations='memory'))
         assert block.redirected_topics() == ['spectra']
         assert v2(tmp_path, use_specializations=False).redirected_topics() == []
 
     def test_the_record_is_what_later_constructions_read(self, tmp_path, built):
         """So the journal is scanned once per block, not once per construction."""
-        v2(tmp_path)
+        adopted(v2(tmp_path))
         later = v2(tmp_path)
         assert later.redirected_topics() == ['spectra']
         # It came off the recorded redirection, not off a fresh resolution.
@@ -322,7 +335,7 @@ class TestRecordingIt:
         assert v2(tmp_path).UNSAFE_specialize(OVERRIDE=True) is None
 
     def test_it_reports_which_specialization_in_memory_mode_too(self, tmp_path, built):
-        assert v2(tmp_path, use_specializations='memory').specialization == V2.SPECIALIZATIONS[0]
+        assert adopted(v2(tmp_path, use_specializations='memory')).specialization == V2.SPECIALIZATIONS[0]
 
 
 class TestTheReport:
@@ -508,7 +521,7 @@ class TestASpecializedTable:
             v1table(tmp_path).hash
 
     def test_it_resolves_to_the_older_build(self, tmp_path, built_table):
-        table = v2table(tmp_path)
+        table = adopted(v2table(tmp_path))
         assert table.specialization == RowTableV2.SPECIALIZATIONS[0]
         assert table.redirected_topics() == ['summary', 'tab_paths', 'done']
         assert table.ownedtopics() == ['report']
@@ -524,7 +537,7 @@ class TestASpecializedTable:
         error, no warning, and a topic that never gets made however many times
         you rebuild.
         """
-        table = v2table(tmp_path)
+        table = adopted(v2table(tmp_path))
         assert table.valid()                       # `done`, through the redirection
         assert not table.valid_topic('report')     # ... and yet
         assert table.owedtopics() == ['report']    # which is what build() asks
@@ -542,7 +555,7 @@ class TestASpecializedTable:
         before doing anything else. The tab machinery was therefore not merely
         unnecessary for a specialized table, it was unreachable.
         """
-        table = v2table(tmp_path)
+        table = adopted(v2table(tmp_path))
         with pytest.raises(Exception):
             table.path('tab_paths', ensure_dirpath=True)
         table.build()                              # the split no longer calls it
@@ -594,7 +607,7 @@ class TestOwedTopics:
 
     def test_a_specialized_block_owes_what_it_did_not_redirect(self, tmp_path,
                                                                built):
-        block = v2(tmp_path)
+        block = adopted(v2(tmp_path))
         assert block.redirected_topics() == ['spectra']
         assert block.owedtopics() == ['phases']
         block.build()
@@ -635,7 +648,7 @@ class TestASpecializationAcrossAVersionBump:
 
     def test_it_resolves_and_builds_only_what_it_did_not_cover(self, tmp_path,
                                                                built):
-        block = v3(tmp_path)
+        block = adopted(v3(tmp_path))
         assert block.specialization == self.SP
         assert block.redirected_topics() == ['spectra']
         assert block.ownedtopics() == ['phases']
@@ -662,11 +675,11 @@ class TestTheOwnedOwedPair:
     """Two names one letter apart, so what separates them is worth pinning."""
 
     def test_owned_is_what_this_block_must_produce(self, tmp_path, built):
-        block = v2(tmp_path)
+        block = adopted(v2(tmp_path))
         assert block.ownedtopics() == ['phases']
 
     def test_owed_is_the_subset_not_yet_there(self, tmp_path, built):
-        block = v2(tmp_path)
+        block = adopted(v2(tmp_path))
         assert block.owedtopics() == ['phases']
         block.build()
         assert block.ownedtopics() == ['phases']   # ownership does not change
@@ -729,14 +742,21 @@ class TestOneJournalReadForAWholeTable:
         seen = self._counting(monkeypatch)
 
         table = v1table(tmp_path, spec={'n': self.N})
-        tabs = [table.tab(i) for i in range(self.N)]
+        [table.tab(i) for i in range(self.N)]
+        assert seen == [], "forming the tabs resolves nothing, so reads nothing"
 
+        # A table not yet built -- another tag -- so its build builds every tab:
+        # the one that was built is valid() still, since its own identity did
+        # not move when its TAB grew, and a build of it skips.
+        fresh = v1table(tmp_path, spec={'n': self.N}, tag='again')
+        fresh.build()                                      # installs, tab by tab
+        # One read, in the parent, handed to every tab-building callable --
+        # O(1), against O(N) before.
+        assert len(seen) <= 1, seen
+        tabs = [v1table(tmp_path, spec={'n': self.N}, tag='again').tab(i) for i in range(self.N)]
         assert tabs[0].redirected_topics() == ['rows']     # they did resolve
         assert tabs[-1].redirected_topics() == ['rows']
         assert tabs[-1].ownedtopics() == ['extra']
-        # One to read the shared journal, one for the tab constructed to get
-        # it -- O(1), against O(N) before.
-        assert len(seen) <= 2, seen
 
     def test_a_table_whose_tabs_declare_none_reads_no_journal(self, tmp_path,
                                                               monkeypatch):
@@ -754,7 +774,7 @@ class TestOneJournalReadForAWholeTable:
         v1table(tmp_path, spec={'n': 2}).build()          # narrow, first
         self._grow_the_tab(monkeypatch)
 
-        tab = v1table(tmp_path, spec={'n': 2}).tab(0)
+        tab = adopted(v1table(tmp_path, spec={'n': 2}).tab(0))
         assert tab.redirected_topics() == ['rows']        # it really resolved
         assert 'specialization_journal' not in tab.parameters
         assert '__specialization_journal__' not in tab.parameters
@@ -778,9 +798,11 @@ class TestOneJournalReadForAWholeTable:
         shared = table.child_specialization_journal()
         assert shared is not None
 
-        alone = RowTab(datalake=str(tmp_path), spec={'tab_idx': 0})
-        handed = RowTab(datalake=str(tmp_path), spec={'tab_idx': 0},
-                        specialization_journal=shared)
+        # In memory, so the first to install records nothing the second reads.
+        alone = adopted(RowTab(datalake=str(tmp_path), spec={'tab_idx': 0},
+                               use_specializations='memory'))
+        handed = adopted(RowTab(datalake=str(tmp_path), spec={'tab_idx': 0},
+                                use_specializations='memory', specialization_journal=shared))
         assert alone.specialization is not None           # not vacuous
         assert handed.specialization == alone.specialization
         assert handed.redirected_topics() == alone.redirected_topics()
@@ -906,7 +928,7 @@ class TestTheGateIsPerSpecialization:
     def _partially_built(self, tmp_path, forget_the_memo=True):
         """A V2 living on the specialization, with its own topic built."""
         v1(tmp_path).build()
-        first = v2(tmp_path)
+        first = adopted(v2(tmp_path))
         assert first.ownedtopics() == ['phases'], first.ownedtopics()
         first.build()
         own = sorted(x for x in os.listdir(first.anchorkeypath) if x != '.journal')
@@ -918,12 +940,12 @@ class TestTheGateIsPerSpecialization:
     def test_the_memo_intact_keeps_it(self, tmp_path):
         """The easy half, and the reason this went unnoticed."""
         self._partially_built(tmp_path, forget_the_memo=False)
-        assert v2(tmp_path).redirected_topics() == ['spectra']
+        assert adopted(v2(tmp_path)).redirected_topics() == ['spectra']
 
     def test_the_memo_is_a_cache_and_not_the_answer(self, tmp_path):
         """Resolving again has to reach the same conclusion as reading it."""
         self._partially_built(tmp_path)
-        again = v2(tmp_path)
+        again = adopted(v2(tmp_path))
         assert again.redirected_topics() == ['spectra']
         assert again.ownedtopics() == ['phases']
         assert again.valid()
@@ -931,7 +953,7 @@ class TestTheGateIsPerSpecialization:
     def test_without_it_the_block_would_rebuild_what_it_reads(self, tmp_path):
         """What going invalid here costs: the whole narrower build, again."""
         self._partially_built(tmp_path)
-        assert v2(tmp_path).read('spectra') == 'spectra-16000'
+        assert adopted(v2(tmp_path)).read('spectra') == 'spectra-16000'
 
     def test_half_of_a_specializations_topics_present_declines_it(self, tmp_path):
         """The mixing case the all-or-nothing rule was written for.
@@ -971,9 +993,10 @@ class TestAFailedSpecializationIsNotRemembered:
     def test_a_later_construction_picks_up_a_target_built_since(self, tmp_path):
         """Claim two, and the reason a failure must not be memoized."""
         missed = v2(tmp_path)
+        assert adopted(missed)._redirected_paths_ is None
         assert missed._redirected_paths_ is None
         v1(tmp_path).build()                       # the target arrives late
-        assert v2(tmp_path).redirected_topics() == ['spectra']
+        assert adopted(v2(tmp_path)).redirected_topics() == ['spectra']
 
     def test_the_instance_that_missed_does_not_pick_it_up(self, tmp_path):
         """The limit of that: resolution happens at construction, not at build.
@@ -1009,19 +1032,18 @@ class TestSetIsAnOrdinaryConstruction:
 
     def _redirected(self, tmp_path):
         v1(tmp_path).build()
-        b = v2(tmp_path)
+        b = adopted(v2(tmp_path))
         assert b.redirected_topics() == ['spectra']
         return b
 
     def test_an_operational_parameter_carries_it(self, tmp_path):
         """The case the carry exists for: same block, same path, no rescan."""
         carried = self._redirected(tmp_path).set(verbose=True)
-        assert carried.__dict__.get('__redirected_paths__') is not None
+        assert carried._redirected_paths_ is not None       # off the .redirection marker
 
     def test_a_deepcopy_carries_it(self, tmp_path):
         import copy as _copy
-        assert _copy.deepcopy(self._redirected(tmp_path)
-                              ).__dict__.get('__redirected_paths__') is not None
+        assert _copy.deepcopy(self._redirected(tmp_path))._redirected_paths_ is not None
 
     @pytest.mark.pinned
     def test_a_move_onto_built_data_is_not_redirected_over(self, tmp_path):
@@ -1056,5 +1078,5 @@ class TestSetIsAnOrdinaryConstruction:
         that moved but still has nothing of its own at the new path resolves
         to the same build -- by its own reasoning, not by inheritance.
         """
-        moved = self._redirected(tmp_path).set(tag='nowhere-near')
+        moved = adopted(self._redirected(tmp_path).set(tag='nowhere-near'))
         assert moved.redirected_topics() == ['spectra']

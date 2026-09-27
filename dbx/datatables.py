@@ -35,6 +35,7 @@ except ImportError as exc:  # pragma: no cover
 
 from .datablocks import (
     DATADICT,
+    SAME,
     DATADIR,
     DATAFILE,
     DIR,
@@ -1185,12 +1186,36 @@ class Datatable(DatatabBase, Datastack):
 
     The table's `slices()` is derived from ``TAB``'s slice topics rather than
     from ``TOPICS``, so slice routing (``data()``, ``dataset()``,
-    ``valid_slice()``) continues to work without polluting ``TOPICS``. Pointing
-    a table at a differently-sliced TAB still rekeys the table because the TAB
-    class is part of :attr:`signature`.
+    ``valid_slice()``) continues to work without polluting ``TOPICS``.
 
     The tab's ordinary (non-slice) topics are written into each tab under the
     tab's own key; the table has nothing at those paths.
+
+    KNOWN GAP -- A TABLE'S IDENTITY DOES NOT FOLLOW ITS TAB
+    -------------------------------------------------------
+    A table's hash is its own spec, VERSION and TOPICS. None of them names the
+    TAB: an identity names no class, and a table spelled with the topic
+    markers -- this base, and every table inheriting its TOPICS -- carries
+    nothing of its TAB's topics either. (A table in the older spelling carries
+    its TAB's *slices*, so a change to those re-keys it; nothing else does.)
+    So editing the TAB class -- a topic added or respelled, a VERSION bump, a
+    VAR field with a default, or ``TAB =`` another class altogether -- moves
+    every TAB's hash and leaves the table's where it was:
+
+    * the table's old ``done`` marker still answers, so ``valid()`` is True;
+    * ``build()`` therefore skips the table -- after adopting, block by block,
+      whatever the TAB's SPECIALIZATIONS resolve to (see `Datastack.build`) --
+      and builds none of the topics the re-keyed tabs still owe;
+    * a tab without a specialization back to its old identity reads as
+      unbuilt, and one with a partial specialization owes what it did not
+      cover, while the table reports itself built.
+
+    Until this is settled: after changing a TAB, rebuild its tables explicitly
+    -- build each tab (``table.tab(i).build()``), or clear the table's ``done``
+    and build it. The ways out, not yet chosen, are for `valid()` to require
+    valid tabs (a check per tab), for a stack's build to run whenever a block
+    owes topics, or for the TAB's identity to enter the table's (a one-time
+    re-key of every table, rescued by a base specialization).
     """
 
     TAB = None
@@ -1210,10 +1235,13 @@ class Datatable(DatatabBase, Datastack):
     #: TAB's slices the sentinel era added to a table's identity. A subclass
     #: declaring SPECIALIZATIONS of its own includes these -- see __init_subclass__.
     SPECIALIZATIONS = [Datablock.Specialization(
-        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'},
-        note="respelled only: DATADIR and DATAFILE for the sentinels")]
+        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, BLOCK=None,
+        note="respelled only: DATADIR and DATAFILE for the sentinels; built before a table's type named its TAB")]
 
     Tab = staticmethod(DatapointTableTab)
+
+    #: A table's BLOCK is its TAB, and its type says so: ``TAB=<fqcn>``.
+    _block_entry = 'TAB'
 
     @dataclass
     class VAR(Datastack.VAR):
@@ -1320,18 +1348,10 @@ class Datatable(DatatabBase, Datastack):
             raise NotImplementedError(
                 f"{self.__class__.__name__} must set TAB = <Datatab subclass>"
             )
-        # A TAB that declares SPECIALIZATIONS resolves them as it is
-        # constructed, which means reading the journal -- once per tab, for
-        # every tab of the table. Handing down the one this table already read
-        # makes that a single read. Only when the TAB declares any: a table
-        # whose tabs have none must not read a journal it has no use for.
-        # See Datastack.child_specialization_journal.
-        specialization_journal = (
-            self.child_specialization_journal()
-            if getattr(self.TAB, 'SPECIALIZATIONS', None) else None
-        )
+        # No journal handed down: forming a tab resolves nothing -- a tab's
+        # specializations are installed by its build(), and a table's build
+        # hands its tab-building callables the one journal it read.
         return self.TAB(
-            specialization_journal=specialization_journal,
             # The table's own url, RAW -- the specline it was given, not what
             # that resolved to -- so a relocatable table stays relocatable tab
             # by tab. Without it a tab fell back to DBX_ROOT, and a table built

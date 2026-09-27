@@ -106,13 +106,15 @@ def test_a_feature_tab_built_under_the_sentinel_is_read_under_the_marker(tmp_pat
         old_bipolar = bipolar_old.data('bipolar_features')['bipolar_features']['bipolar_features']
 
     tab = _features(url, ef)
+    assert tab.redirected_topics() == [], "constructing it adopts nothing"
+    tab.build()                                 # adopts: nothing left to build
     assert tab.redirected_topics() == ['features']
     assert tab.valid()
     assert (tab.data(('features', 'final'))['features']['final'] == old_final).all()
     assert tab.declared_columns('features') == {'final': 'ndarray:float32'}
 
     bipolar = BipolarFeaturetab(datalake=url, tag='bipolar', spec=dict(
-        featuretab=tab, layer='final', threshold=0.3))
+        featuretab=tab, layer='final', threshold=0.3)).build()
     assert sorted(bipolar.redirected_topics()) == ['bipolar_features', 'tab_bipolar_features']
     assert bipolar.valid()
     got = bipolar.data('bipolar_features')['bipolar_features']['bipolar_features']
@@ -135,6 +137,9 @@ def test_a_feature_table_built_under_the_sentinel_is_read_under_the_marker(tmp_p
 
     new = table()
     assert new.hash != old.hash
+    assert not new.valid(), "constructing it adopts nothing"
+    # Adopts its own old build -- and, first, each tab's: the tabs moved too.
+    new.build()
     assert new.valid()
     got = new.data(('features', 'final'), concat=True)['features']['final']
     assert got.shape == old_final.shape == (10, 8)

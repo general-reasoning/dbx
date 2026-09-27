@@ -1227,6 +1227,10 @@ class Datablock:
         #: The anchor whose journal the narrower block is looked for in: SAME
         #: for this block's own, or the one it was built under.
         anchor: str | SAME = SAME
+        #: For a Datastack: the BLOCK fqcn -- a Datatable's TAB -- the narrower
+        #: stack's type names: SAME for this stack's own, a string for another,
+        #: or None for a stack built before a stack's type named its BLOCK.
+        BLOCK: str | SAME | None = SAME
 
         # 1. Protocol and hooks --------------------------------------------
 
@@ -1254,6 +1258,8 @@ class Datablock:
             object.__setattr__(self, 'topics', tuple(self.declared or self.topics))
             if self.anchor is not SAME and not (isinstance(self.anchor, str) and self.anchor):
                 raise TypeError(f"Specialization anchor= is SAME or an anchor string, got {self.anchor!r}")
+            if not (self.BLOCK is SAME or self.BLOCK is None or (isinstance(self.BLOCK, str) and self.BLOCK)):
+                raise TypeError(f"Specialization BLOCK= is SAME, None or a block fqcn, got {self.BLOCK!r}")
 
         def __hash__(self):
             # frozen=True would hash the field tuple, and one of those fields is
@@ -1265,6 +1271,7 @@ class Datablock:
                     f"topics={self.declared if self.declared is not None else list(self.topics)!r}"
                     + (f", version={self.version!r}" if self.version is not ABSENT else "")
                     + (f", anchor={self.anchor!r}" if self.anchor is not SAME else "")
+                    + (f", BLOCK={self.BLOCK!r}" if self.BLOCK is not SAME else "")
                     + (f", note={self.note!r}" if self.note else "") + ")")
 
         # 2. Declared API --------------------------------------------------
@@ -1280,6 +1287,8 @@ class Datablock:
                 d['version'] = self.version
             if self.anchor is not SAME:
                 d['anchor'] = self.anchor
+            if self.BLOCK is not SAME:
+                d['BLOCK'] = self.BLOCK
             if self.note:
                 d['note'] = self.note
             return d
@@ -1297,7 +1306,8 @@ class Datablock:
             return (tuple(sorted(self.spec.items(), key=lambda kv: kv[0])),
                     self.topics, self.version,
                     None if self.declared is None else str(self.declared),
-                    None if self.anchor is SAME else self.anchor)
+                    None if self.anchor is SAME else self.anchor,
+                    'SAME' if self.BLOCK is SAME else self.BLOCK)
 
     @dataclass
     class Redirection:
@@ -1765,17 +1775,16 @@ class Datablock:
             # After __post_init__, so the instance's own win over any a class
             # computes there, as they win over the class's.
             self.SPECIALIZATIONS = [self.Specialization(**r) for r in self._SPECIALIZATIONS_]
-        # After __post_init__, because a class may compute its TOPICS there and
-        # a specialization is named in terms of them.
         if specialization_journal is None:
             specialization_journal = _forming_journal_(self.anchor, self.datalake)
         if specialization_journal is not None:
-            # Kept for get_redirection(), outside the state: never pickled or
-            # copied, and shared with every sibling it was handed to.
+            # Kept for build() and get_redirection(), outside the state: never
+            # pickled or copied, and shared with every sibling it was handed to.
             self.__dict__['__specialization_journal__'] = specialization_journal
-        # Nothing is carried in: a copy or an unpickled block finds an installed
-        # redirection in its `.redirection` marker, and installs one otherwise.
-        self._install_specialization_(journal=specialization_journal)
+        # Nothing is installed here: constructing a block, or asking whether it
+        # is valid, reads no journal and writes nothing. A redirection installed
+        # before is found in its `.redirection` marker; one not yet installed
+        # is build()'s to install -- see there.
         self.log.detailed(f"======--------------> code: {self.code}")
 
 
@@ -2293,6 +2302,13 @@ class Datablock:
         return isinstance(self._topicnode_(*topicpath), dict)
 
     def build(self, *args, **kwargs):
+        # A SPECIALIZATION is installed here, and only here: an older build of a
+        # narrower block that covers what this build would produce is adopted
+        # rather than recomputed -- recorded, so every later construction reads
+        # through it -- and the topics it does not cover are built. After
+        # __post_init__, as construction is complete, since a class may compute
+        # its TOPICS there and a specialization is named in terms of them.
+        self._install_specialization_(journal=self.__dict__.get('__specialization_journal__'))
         # A redirected block answers its reads out of another entry's data (see
         # :attr:`redirection`), so building it would produce data that nothing
         # would go on to read. Declining is also what makes a redirect stick:
@@ -3065,8 +3081,8 @@ class Datablock:
         -- in the journal, whose latest redirection record is the one that
         holds -- an ``UNSAFE_clear_redirection`` entry that supersedes it.
 
-        A specialized block constructed again with specializations on will find
-        its specialization again and redirect itself again; construct it with
+        A specialized block BUILT again with specializations on will find its
+        specialization again and redirect itself again; construct it with
         ``use_specializations=False`` to keep it reading its own. Returns
         whether there was a redirection to clear.
         """
@@ -3620,17 +3636,19 @@ class Datablock:
     def type(self, *, deslash: bool = False, legacy: 'bool | None' = None,
                  legacy_typing: 'bool | None' = None,
                  legacy_signature: 'bool | None' = None,
-                 specialization: 'Datablock.Specialization | None' = None) -> dict:
+                 specialization: 'Datablock.Specialization | None' = None,
+                 with_block: bool = True) -> dict:
         """The full type as a dictionary: the structured form of :meth:`typestr`.
 
         *specialization* describes the narrower block that one names instead,
-        as ``typestr(specialization=)`` renders it.
+        as ``typestr(specialization=)`` renders it; *with_block* is typestr's.
         """
         if specialization is None:
             return {
                 'signature': self.signature(
                     legacy=legacy, legacy_typing=legacy_typing,
                     legacy_signature=legacy_signature, deslash=deslash),
+                **self._type_entries_(with_block=with_block),
                 'version': self.version,
                 'paths': getattr(self, '_paths_', None),
                 'topics': self._topics_signature_(),
@@ -3639,6 +3657,7 @@ class Datablock:
         omit = tuple(specialization.spec)
         return {
             'signature': {'spec': self._typed_specdict_(legacy=False, omit=omit)},
+            **self._type_entries_(specialization, with_block=with_block),
             'version': version,
             'paths': getattr(self, '_paths_', None),
             'topics': self._topics_signature_(list(specialization.topics),
@@ -3798,7 +3817,8 @@ class Datablock:
     def typestr(self, *, deslash: bool = False, legacy: 'bool | None' = None,
              legacy_typing: 'bool | None' = None,
              legacy_signature: 'bool | None' = None, pretty: bool = False,
-             specialization: 'Datablock.Specialization | None' = None):
+             specialization: 'Datablock.Specialization | None' = None,
+             with_block: bool = True):
         """The identity string :attr:`hash` is the sha256 of.
 
         *specialization* renders the identity of the NARROWER block that one
@@ -3808,6 +3828,10 @@ class Datablock:
         that block's era -- and NOTHING of them is inherited from this class's
         TOPICS. (A Datatable adds its TAB's slices, as its own identity does.)
         See :meth:`get_hash`.
+
+        *with_block* False computes it under the rules from before a stack's
+        type named its BLOCK -- a Datatable's its TAB -- which is what
+        reconstructing a stack built then needs. See :meth:`_type_entries_`.
         """
         omit, topics = ((), None) if specialization is None else (
             tuple(specialization.spec), list(specialization.topics))
@@ -3842,6 +3866,7 @@ class Datablock:
         # class's otherwise. Taking it from the class unconditionally was what
         # made VERSION unbumpable while a specialization was live: the
         # reconstruction moved with the bump, onto an identity nothing built.
+        parts.extend(f"{k}={v}" for k, v in self._type_entries_(specialization, with_block=with_block).items())
         parts.append(f"version={version}")
         parts.extend(self._topics_signature_(
             topics, declared=None if specialization is None else specialization.declared))
@@ -3850,7 +3875,8 @@ class Datablock:
             tp = tp.replace('\\', '')
         return tp
 
-    def get_hash(self, specialization: 'Datablock.Specialization | None' = None):
+    def get_hash(self, specialization: 'Datablock.Specialization | None' = None, *,
+                 with_block: bool = True):
         """This block's hash, or the hash of one of its :attr:`SPECIALIZATIONS`.
 
         With *specialization*, the hash of the narrower block it describes --
@@ -3862,7 +3888,13 @@ class Datablock:
 
         Cached per specialization, and never into ``_hash``: that one is this
         block's own, and a specialized hash is emphatically not it.
+
+        *with_block* False: the hash under the rules from before a stack's type
+        named its BLOCK -- see :meth:`typestr`. Not cached.
         """
+        if not with_block:
+            return hashlib.sha256(self.typestr(specialization=specialization,
+                                               with_block=False).encode()).hexdigest()
         if specialization is None:
             if not hasattr(self, '_hash'):
                 sha = hashlib.sha256()
@@ -3966,7 +3998,7 @@ class Datablock:
         return rows
 
     def find_specialization(self, journal=None):
-        """The :class:`Specialization` construction would install here, or None -- found, NOT installed.
+        """The :class:`Specialization` build() would install here, or None -- found, NOT installed.
 
         The first, in declaration order, that applies, finds this block unbuilt
         where it covers, and resolves to data that is still there -- which is
@@ -3982,12 +4014,13 @@ class Datablock:
     def UNSAFE_specialize(self, *, journal=None, dry_run: bool = False, dry_validate: bool = False, OVERRIDE: bool = False):
         """Install the applicable specialization AND record it in the journal.
 
-        The explicit form of what construction does on its own: a redirection
+        The explicit form of what build() does before building anything -- and
+        construction never does: a redirection
         that outlives this instance, so the next run reads the narrower block's
         data without scanning the journal for it, and the journal says which
         specialization was installed and when. Here for a block constructed
-        with ``use_specializations='memory'``, and for installing one after the
-        fact.
+        with ``use_specializations='memory'``, and for adopting one without
+        building the topics it does not cover.
 
         *dry_run* reports what the first applicable specialization WOULD do and
         returns its proposed :class:`Redirection`, writing nothing -- the same
@@ -6175,6 +6208,15 @@ class Datablock:
                  f"none is a {' or '.join(self.SPECIALIZATION_EVENTS)}")
         return None
 
+    def _type_entries_(self, specialization=None, *, with_block: bool = True) -> dict:
+        """Entries of this block's type beyond its signature, version and topics: ``{name: text}``.
+
+        Rendered ``name=text``, after the signature and before the version --
+        so, like everything in the type, they are identity. None here; a
+        Datastack names its BLOCK, a Datatable its TAB.
+        """
+        return {}
+
     def _specialization_anchor_(self, specialization):
         """The anchor whose journal *specialization*'s narrower block is looked for in."""
         return self.anchor if specialization.anchor is SAME else specialization.anchor
@@ -6236,7 +6278,7 @@ class Datablock:
 
         In the usual case the difference is invisible, because a resolved
         specialization writes ``.redirection`` and later constructions read
-        that instead of asking again. It shows up when the memo is not there:
+        that, and later builds do not ask again. It shows up when the memo is not there:
         cleared, never written because the resolving instance was configured
         ``use_specializations='memory'``, or written at another path because
         the instance that resolved was retagged afterwards. A cache that is
@@ -6300,7 +6342,7 @@ class Datablock:
         writes nothing, at the cost of resolving again next time.
         """
         # Already redirected -- in memory, or recorded in the .redirection topic
-        # a previous construction wrote -- is already installed: resolving it
+        # a previous build wrote -- is already installed: resolving it
         # again would read the journal and redirect, and record, all over again.
         if not self._specializing_() or self._redirected_paths_ is not None:
             return None
@@ -6443,6 +6485,22 @@ class DatablockSpecializationFinder:
         with forming_with_journal(journal):
             block = stack._form_block_(self.idx, use_specializations=False)
         return block.find_specialization(journal=_shared_journal_(journal, block))
+
+
+class DatablockSpecializationInstaller:
+    """Lightweight callable installing the specialization the block at `idx` resolves -- building nothing.
+
+    What the block's own build() would do first. Run over a stack's blocks by
+    the stack's build(), which is the call that sanctions writing it.
+    """
+
+    def __init__(self, idx: int):
+        self.idx = idx
+
+    def __call__(self, stack, *, journal=None):
+        with forming_with_journal(journal):
+            block = stack._form_block_(self.idx)
+        return block._install_specialization_(journal=_shared_journal_(journal, block))
 
 
 class DatablockRedirectionClearer:
@@ -6596,6 +6654,7 @@ class Datastack(Datablock):
     DatablockRedirectionGetter = DatablockRedirectionGetter
     DatablockRedirectionClearer = DatablockRedirectionClearer
     DatablockSpecializationFinder = DatablockSpecializationFinder
+    DatablockSpecializationInstaller = DatablockSpecializationInstaller
     DatablockValidationChecker = DatablockValidationChecker
     DatablockSignatureMatcher = DatablockSignatureMatcher
     BlockValidChecker = DatablockValidityChecker
@@ -6634,6 +6693,39 @@ class Datastack(Datablock):
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement __block__(idx)"
         )
+
+    #: The name the BLOCK is rendered under in this stack's type.
+    _block_entry = 'BLOCK'
+
+    def _type_entries_(self, specialization=None, *, with_block: bool = True) -> dict:
+        """``{'BLOCK': fqcn}`` -- a Datatable's ``{'TAB': fqcn}``: the block class is part of what a stack IS.
+
+        Without it a stack's hash disregarded its BLOCK -- an identity names no
+        class, and a marker-spelled table carries none of its TAB's topics --
+        so editing the BLOCK, or pointing it at another class, moved every
+        block and left the stack valid over them. *with_block* False, or a
+        *specialization* whose BLOCK is None, computes the type under the rules
+        from before: no entry. A specialization's BLOCK string names another.
+        """
+        entries = super()._type_entries_(specialization, with_block=with_block)
+        block = self._block_class_()
+        if specialization is not None and specialization.BLOCK is not SAME:
+            block = specialization.BLOCK
+        if not with_block or block is None:
+            return entries
+        return {**entries, self._block_entry: block if isinstance(block, str) else block.fqcn}
+
+    def build(self, *args, **kwargs):
+        # The blocks adopt what their specializations resolve to FIRST. A stack
+        # whose own build is then elided -- itself adopted whole -- or skipped
+        # as valid never forms its blocks, and blocks that moved to identities
+        # of their own would be left unadopted, reading as unbuilt.
+        self.__dict__['__build_journal__'] = self._build_journal_()
+        try:
+            self._install_block_specializations_(journal=self.__dict__['__build_journal__'])
+            return super().build(*args, **kwargs)
+        finally:
+            self.__dict__.pop('__build_journal__', None)
 
     def __build__(self, *args, **kwargs):
         """Build all blocks using BlockMaker + the configured executor.
@@ -6710,19 +6802,18 @@ class Datastack(Datablock):
     def child_specialization_journal(self):
         """The children's journal, read ONCE, for them to resolve against.
 
-        A block that declares :attr:`SPECIALIZATIONS` resolves them in
-        ``__setstate__`` -- at CONSTRUCTION, before anything calls
-        ``__build__`` -- and resolving means reading the journal. A stack
-        constructs every child, so a stack whose children are specialized pays
-        one journal read PER CHILD: invisible against a local directory, and a
-        glob over ``**/*.parquet`` plus a parquet read per child against object
-        storage, which is where these stacks live.
+        A block that declares :attr:`SPECIALIZATIONS` resolves them in its
+        build() -- never at construction -- and resolving means reading the
+        journal. A stack's build builds every child, so a stack whose children
+        are specialized would pay one journal read PER CHILD: invisible against
+        a local directory, and a glob over ``**/*.parquet`` plus a parquet read
+        per child against object storage, which is where these stacks live.
 
-        Hand this to each child as ``specialization_journal=`` and the N reads
-        become one. :class:`~dbx.datatables.Datatable` does that for its
-        tabs already; a stack with a hand-written ``__block__`` opts in with
-        one line, and a stack whose children declare no specializations should
-        not call this at all -- there is nothing for them to resolve.
+        A stack's build reads it once and hands it to the callables that adopt
+        and build its blocks; this is the same read, for a caller that forms
+        the children itself and hands it down as ``specialization_journal=``.
+        A stack whose children declare no specializations should not call this
+        at all -- there is nothing for them to resolve.
 
         Reading it means constructing child 0 -- for where its journal is, with
         specializations off and uncached -- which is itself a child
@@ -6882,6 +6973,27 @@ class Datastack(Datablock):
         if found_only:
             return series[series.notna()]
         return series
+
+    def _install_block_specializations_(self, parallelization: str | None = None,
+                                        n_workers: int | None = None, journal=None, **kwargs):
+        """Install, block by block, the specialization each resolves -- only when BLOCK declares any.
+
+        The journal is read once, here, and handed to every callable. Returns the
+        installed `Specialization`s by block index, or None when there is
+        nothing to install.
+        """
+        n = self.n_blocks
+        block_cls = self._block_class_()
+        if n == 0 or block_cls is None or not getattr(block_cls, 'SPECIALIZATIONS', None):
+            return None
+        shared = journal if journal is not None else self._build_journal_()
+        if shared is None:
+            return None
+        results = self._exec_over_blocks_(
+            [self.DatablockSpecializationInstaller(i) for i in range(n)], journal=shared,
+            tag=f"ADOPTING SPECIALIZATIONS of {n} blocks [{self.__class__.__name__}]",
+            parallelization=parallelization, n_workers=n_workers, **kwargs)
+        return pd.Series(results, dtype=object)
 
     def validate_block(self, idx: int, **kwargs) -> bool:
         """Return whether the block at index *idx* validates."""
@@ -7549,6 +7661,11 @@ class Datastack(Datablock):
         Read only when there is something to resolve against it -- a BLOCK that
         declares SPECIALIZATIONS -- and once, here in the parent.
         """
+        # Read once per build(): the blocks' adoption and the building of the
+        # rest are both this build's -- see build() -- and share the one read.
+        building = self.__dict__.get('__build_journal__', ABSENT)
+        if building is not ABSENT:
+            return building
         block_cls = self._block_class_()
         if block_cls is None or not getattr(block_cls, 'SPECIALIZATIONS', None):
             return None
@@ -7588,11 +7705,10 @@ class Datastack(Datablock):
         """Block *idx*, formed and adopted -- uncached; :meth:`block` caches it.
 
         Formed with ``use_specializations`` as this stack's
-        ``use_block_specializations`` says, unless the call names one: the block
-        resolves its specialization AS it is constructed -- inside ``__block__``,
-        which is the subclass's -- so the setting has to be in force while it
-        is, not handed over afterwards. A block's own ``use_specializations=``
-        wins over it.
+        ``use_block_specializations`` says, unless the call names one: forming
+        is inside ``__block__``, which is the subclass's, so the setting has to
+        be in force while it runs, for the block's build to use it later. A
+        block's own ``use_specializations=`` wins over it.
         """
         wanted = (getattr(self, 'use_block_specializations', None)
                   if use_specializations == 'stack' else use_specializations)

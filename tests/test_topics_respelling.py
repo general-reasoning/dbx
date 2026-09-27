@@ -136,14 +136,19 @@ def test_a_table_on_the_base_topics_built_before_the_respelling_is_found(tmp_pat
     def table():
         return LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=2, per_tab=2))
 
+    from dbx.datablocks import Datastack
     with monkeypatch.context() as m:
         m.setattr(Datatable, 'TOPICS', {'tab_paths': DIRTOPIC, 'done': 'done'})
         m.setattr(Datatable, 'SPECIALIZATIONS', [])
+        # ... and before a table's type named its TAB.
+        m.setattr(Datastack, '_type_entries_', lambda self, specialization=None, **kw: {})
         old = table().build()
         old_hash = old.hash
     new = table()
     assert new.hash != old_hash
     assert old_hash in new.specialization_hashes()
+    assert not new.valid(), "constructing it adopts nothing"
+    new.build()                                 # adopts both topics: nothing left to build
     assert sorted(new.redirected_topics()) == ['done', 'tab_paths']
     assert new.valid()
 

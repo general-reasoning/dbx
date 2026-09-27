@@ -1089,3 +1089,36 @@ def test_specialization_reconstructs_legacy_build():
     assert new.hash != old.hash
     assert old.hash in new.specialization_hashes()
 
+
+def test_specialization_unsafe_redirect_all_topics(tmp_path):
+    """UNSAFE_redirect_all_topics redirects all topics recorded in the matched build."""
+    from dbx.datablocks import Datablock, DATAFILE
+
+    class HistoricalBlock(Datablock):
+        ANCHOR = 'TestBlock'
+        TOPICS = {'a': 'a.txt'}
+
+        def __build__(self):
+            # Simulates historical build writing/recording an undeclared topic 'b'
+            self.TOPICS = {'a': 'a.txt', 'b': 'b.txt'}
+            with open(self.path('a', ensure_dirpath=True), 'w') as f:
+                f.write('A')
+            with open(self.path('b', ensure_dirpath=True), 'w') as f:
+                f.write('B')
+            return self
+
+    class ModernBlock(Datablock):
+        ANCHOR = 'TestBlock'
+        TOPICS = {'a': DATAFILE('a.txt'), 'b': DATAFILE('b.txt')}
+        SPECIALIZATIONS = [
+            Datablock.Specialization(spec={}, topics={'a': 'a.txt'}, UNSAFE_redirect_all_topics=True)
+        ]
+
+    hist = HistoricalBlock(datalake=str(tmp_path)).build()
+    assert hist.valid_path(hist.path('a'))
+
+    modern = ModernBlock(datalake=str(tmp_path))
+    assert modern.valid()
+    assert set(modern.redirected_topics()) == {'a', 'b'}
+
+

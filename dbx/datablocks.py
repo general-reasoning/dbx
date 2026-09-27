@@ -1228,14 +1228,27 @@ class Datablock:
         #: for this block's own, or the one it was built under.
         anchor: str | SAME = SAME
         #: Whether the narrower block was built with legacy typing and signature.
+        #: Setting legacy=True sets both legacy_typing and legacy_signature to True,
+        #: allowing a modern block (without LEGACY_TYPING/LEGACY_SIGNATURE class flags)
+        #: to reconstruct the exact hash of historical builds that were serialized
+        #: with stringified/quoted spec dictionaries.
         legacy: bool | None = None
         legacy_typing: bool | None = None
         legacy_signature: bool | None = None
-        #: Whether to redirect all recorded topics from the matched entry, rather
-        #: than only the topics named in `topics`. Used when a narrower block's
-        #: hash was computed before per-instance topics were added, but the build
-        #: wrote and recorded all topics.
-        all_recorded: bool = False
+        #: Whether to redirect all topics recorded by the matched build entry,
+        #: rather than restricting redirection to the subset named in `topics`.
+        #:
+        #: By default (False), a specialization only redirects the topics declared
+        #: in its `topics` mapping, leaving any other topics to be built by this block.
+        #: When True, all topics recorded in the matched build's journal entry are
+        #: redirected.
+        #:
+        #: NOTE: This is an UNSAFE escape hatch intended strictly for historical
+        #: corner cases where a build wrote and recorded multiple topics, but an
+        #: earlier hash implementation underdeclared topics (e.g. hashed on a single
+        #: topic like 'count' before instance topics were added to the hash).
+        #: Its use is discouraged unless absolutely necessary to reach such legacy builds.
+        UNSAFE_redirect_all_topics: bool = False
 
         # 1. Protocol and hooks --------------------------------------------
 
@@ -1246,7 +1259,7 @@ class Datablock:
             object.__setattr__(self, 'legacy', self.legacy)
             object.__setattr__(self, 'legacy_typing', self.legacy_typing)
             object.__setattr__(self, 'legacy_signature', self.legacy_signature)
-            object.__setattr__(self, 'all_recorded', self.all_recorded)
+            object.__setattr__(self, 'UNSAFE_redirect_all_topics', self.UNSAFE_redirect_all_topics)
             declared = self.declared
             if isinstance(declared, str):
                 declared = literal_topics(declared)     # the record form -- see to_dict
@@ -1281,7 +1294,7 @@ class Datablock:
                     + (f", legacy={self.legacy!r}" if self.legacy is not None else "")
                     + (f", legacy_typing={self.legacy_typing!r}" if self.legacy_typing is not None else "")
                     + (f", legacy_signature={self.legacy_signature!r}" if self.legacy_signature is not None else "")
-                    + (f", all_recorded={self.all_recorded!r}" if self.all_recorded else "")
+                    + (f", UNSAFE_redirect_all_topics={self.UNSAFE_redirect_all_topics!r}" if self.UNSAFE_redirect_all_topics else "")
                     + (f", note={self.note!r}" if self.note else "") + ")")
 
         # 2. Declared API --------------------------------------------------
@@ -1303,8 +1316,8 @@ class Datablock:
                 d['legacy_typing'] = self.legacy_typing
             if self.legacy_signature is not None:
                 d['legacy_signature'] = self.legacy_signature
-            if self.all_recorded:
-                d['all_recorded'] = self.all_recorded
+            if self.UNSAFE_redirect_all_topics:
+                d['UNSAFE_redirect_all_topics'] = self.UNSAFE_redirect_all_topics
             if self.note:
                 d['note'] = self.note
             return d
@@ -1324,7 +1337,7 @@ class Datablock:
                     None if self.declared is None else str(self.declared),
                     None if self.anchor is SAME else self.anchor,
                     self.legacy, self.legacy_typing, self.legacy_signature,
-                    self.all_recorded)
+                    self.UNSAFE_redirect_all_topics)
 
     @dataclass
     class Redirection:
@@ -2773,7 +2786,7 @@ class Datablock:
             # specialization installed it can no longer be reconstructed.
             specialization = None
 
-        if specialization is not None and getattr(specialization, 'all_recorded', False):
+        if specialization is not None and getattr(specialization, 'UNSAFE_redirect_all_topics', False):
             topics = None
 
         if paths is not None:
@@ -2886,7 +2899,7 @@ class Datablock:
             why = self._specialization_mismatch_(specialization)
             if why is not None:
                 self.log.warning(f"UNSAFE_redirect: {specialization!r} does not apply: {why}")
-            if getattr(specialization, 'all_recorded', False):
+            if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 topics = None
             else:
                 topics = list(specialization.topics) if topics is None else topics
@@ -2944,7 +2957,7 @@ class Datablock:
                 )
                 return False
             target_paths, entry = resolved
-            sp_topics = None if getattr(specialization, 'all_recorded', False) else list(self._toplevel_topics_(specialization.topics))
+            sp_topics = None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(specialization.topics))
             redirect_record = {
                 'filter': {'hash': self.get_hash(specialization)},
                 'topics': sp_topics,
@@ -6161,7 +6174,7 @@ class Datablock:
             if not isinstance(recorded, dict) or not recorded:
                 note(f"entry {entry.block.id} records no paths at all")
                 continue
-            if getattr(specialization, 'all_recorded', False):
+            if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 wanted = list(self.topics())
             else:
                 wanted = self._toplevel_topics_(specialization.topics)
@@ -6327,7 +6340,7 @@ class Datablock:
                 if self.UNSAFE_redirect(specialization=sp, journal=memo['journal'], OVERRIDE=True):
                     return sp
                 continue
-            sp_topics = None if getattr(sp, 'all_recorded', False) else sp.topics
+            sp_topics = None if getattr(sp, 'UNSAFE_redirect_all_topics', False) else sp.topics
             self._redirected_paths_ = self._mapped_paths_(paths, None, sp_topics)
             self.log.info(
                 f"SPECIALIZATION (memory only, nothing recorded): {self.anchorkeypath} "

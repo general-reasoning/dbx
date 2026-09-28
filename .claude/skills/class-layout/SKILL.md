@@ -101,9 +101,13 @@ arrive from elsewhere.
 
 Three things it does **not** apply to:
 
-- **Data attributes.** `self._entry`, `self._lightning_module` keep the plain
-  leading underscore. A private property is still a `def` and does take the
-  trailing one, even though it is read as an attribute.
+- **Data attributes** -- most of them. `self._entry`, `self._lightning_module`
+  may keep the plain leading underscore. Two exceptions take both
+  underscores: an attribute that captures an `__init__()` argument, as given,
+  is `_{arg}_` -- `_tag_`, `_use_specializations_`, `_SPECIALIZATIONS_` --
+  which is what `__getstate__` reads back to reproduce the call; and a
+  private property, which is still a `def`, even though it is read as an
+  attribute. Every private METHOD has both, without exception.
 - **Nested closures.** A function defined inside a method is a local, not a
   member — it shares no namespace with anything, so there is nothing for the
   trailing underscore to disambiguate. `_atexit_sync` inside `__build__` stays

@@ -1191,16 +1191,16 @@ class Datatable(DatatabBase, Datastack):
     The tab's ordinary (non-slice) topics are written into each tab under the
     tab's own key; the table has nothing at those paths.
 
-    KNOWN GAP -- A TABLE'S IDENTITY DOES NOT FOLLOW ITS TAB
-    -------------------------------------------------------
-    A table's hash is its own spec, VERSION and TOPICS. None of them names the
-    TAB: an identity names no class, and a table spelled with the topic
-    markers -- this base, and every table inheriting its TOPICS -- carries
-    nothing of its TAB's topics either. (A table in the older spelling carries
-    its TAB's *slices*, so a change to those re-keys it; nothing else does.)
-    So editing the TAB class -- a topic added or respelled, a VERSION bump, a
-    VAR field with a default, or ``TAB =`` another class altogether -- moves
-    every TAB's hash and leaves the table's where it was:
+    The TAB is part of the table's identity: its type names it, ``TAB=<fqcn>``,
+    after the spec -- so ``TAB =`` another class is another table. See
+    `Datastack._type_entries_`; ``with_block=False`` gives the type under the
+    rules from before, as a ``Datatable.Specialization``'s ``TAB=None`` does.
+
+    KNOWN GAP -- THE TAB IS NAMED BY ITS FQCN, NOT ITS CONTENTS
+    -----------------------------------------------------------
+    Edit the TAB class IN PLACE -- a topic added or respelled, a VERSION bump,
+    a VAR field with a default -- and every tab re-keys while the table does
+    not:
 
     * the table's old ``done`` marker still answers, so ``valid()`` is True;
     * ``build()`` therefore skips the table -- after adopting, block by block,
@@ -1210,12 +1210,10 @@ class Datatable(DatatabBase, Datastack):
       unbuilt, and one with a partial specialization owes what it did not
       cover, while the table reports itself built.
 
-    Until this is settled: after changing a TAB, rebuild its tables explicitly
-    -- build each tab (``table.tab(i).build()``), or clear the table's ``done``
-    and build it. The ways out, not yet chosen, are for `valid()` to require
-    valid tabs (a check per tab), for a stack's build to run whenever a block
-    owes topics, or for the TAB's identity to enter the table's (a one-time
-    re-key of every table, rescued by a base specialization).
+    After such an edit, rebuild the table's tabs explicitly -- build each tab
+    (``table.tab(i).build()``), or clear the table's ``done`` and build it.
+    The ways out, not yet chosen: `valid()` requiring valid tabs (a check per
+    tab), or a stack's build running whenever a block owes topics.
     """
 
     TAB = None
@@ -1231,17 +1229,38 @@ class Datatable(DatatabBase, Datastack):
     #: declares ``tabs`` itself and roots them there -- which is what it always
     #: was, an addressable location rather than something the machinery used.
     TOPICS = {'tab_paths': DATADIR, 'done': DATAFILE('done')}
+
+    @dataclass(frozen=True, repr=False, eq=False)   # the base's repr (note last) and equality
+    class Specialization(Datablock.Specialization):
+        """A Datablock's Specialization, and the TAB the narrower table's type names.
+
+        A table's BLOCK is its TAB, so this is `Datastack.Specialization` with
+        the field named for what it is. *TAB*: SAME for this table's own; a
+        string for another fqcn; None for a table built before a table's type
+        named its TAB at all.
+        """
+        TAB: str | SAME | None = SAME
+
+        __hash__ = Datablock.Specialization.__hash__
+
+        def __post_init__(self):
+            super().__post_init__()
+            if not (self.TAB is SAME or self.TAB is None or (isinstance(self.TAB, str) and self.TAB)):
+                raise TypeError(f"Specialization TAB= is SAME, None or a TAB fqcn, got {self.TAB!r}")
+
+        @property
+        def _block_(self):
+            return self.TAB
+
     #: Every table built before the respelling: the base's sentinels, and the
     #: TAB's slices the sentinel era added to a table's identity. A subclass
     #: declaring SPECIALIZATIONS of its own includes these -- see __init_subclass__.
-    SPECIALIZATIONS = [Datablock.Specialization(
-        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, BLOCK=None,
+    SPECIALIZATIONS = [Specialization(
+        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, TAB=None,
         note="respelled only: DATADIR and DATAFILE for the sentinels; built before a table's type named its TAB")]
 
     Tab = staticmethod(DatapointTableTab)
 
-    #: A table's BLOCK is its TAB, and its type says so: ``TAB=<fqcn>``.
-    _block_entry = 'TAB'
 
     @dataclass
     class VAR(Datastack.VAR):
@@ -1328,6 +1347,11 @@ class Datatable(DatatabBase, Datastack):
                 )
         else:
             cls.BLOCK = tab
+
+    def _type_entries_(self, specialization=None, *, with_block: bool = True) -> dict:
+        """A stack's entries, its BLOCK named for what a table's is: ``TAB=<fqcn>``."""
+        entries = super()._type_entries_(specialization, with_block=with_block)
+        return {('TAB' if k == 'BLOCK' else k): v for k, v in entries.items()}
 
     def __init__(self, *args, cache=None, cache_limit=None, filter_built_tabs: bool = False,
                  use_tab_specializations: 'bool | str | None' = None, **kwargs):

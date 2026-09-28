@@ -8,7 +8,7 @@ class left its hash, and its `done`, exactly where they were.
 The entry is the class's fqcn: ``BLOCK=<fqcn>`` -- ``TAB=<fqcn>`` for a table --
 after the spec, before the version and the topics. ``with_block=False`` computes
 a type under the rules from before, as reconstructing a stack built then needs;
-a Specialization says the same with ``BLOCK=None``.
+a Specialization says the same with ``BLOCK=None`` -- a table's with ``TAB=None``.
 """
 from dataclasses import dataclass
 
@@ -106,22 +106,37 @@ class TestASpecializationSaysWhichRules:
 
     def test_BLOCK_None_reconstructs_the_old_rules(self, tmp_path):
         stack = _made(Stack, tmp_path)
-        sp = Datablock.Specialization(spec={}, topics={}, BLOCK=None)
+        sp = Datastack.Specialization(spec={}, topics={}, BLOCK=None)
         assert 'BLOCK=' not in stack.get_typestr(sp)
 
     def test_BLOCK_SAME_is_this_stacks_own_and_a_string_another(self, tmp_path):
         stack = _made(Stack, tmp_path)
-        own = Datablock.Specialization(spec={}, topics={})
+        own = Datastack.Specialization(spec={}, topics={})
         assert own.BLOCK is SAME and f"BLOCK={Leaf.fqcn}" in stack.get_typestr(own)
-        other = Datablock.Specialization(spec={}, topics={}, BLOCK='pkg.OldLeaf')
+        other = Datastack.Specialization(spec={}, topics={}, BLOCK='pkg.OldLeaf')
         assert "BLOCK=pkg.OldLeaf" in stack.get_typestr(other)
 
     def test_it_round_trips(self):
-        sp = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, BLOCK=None)
-        again = Datablock.Specialization(**sp.to_dict())
+        sp = Datastack.Specialization(spec={}, topics={'x': 'x.txt'}, BLOCK=None)
+        again = Datastack.Specialization.from_record(sp.to_dict())
         assert again.BLOCK is None and again.key == sp.key
-        assert Datablock.Specialization(spec={}, topics={'x': 'x.txt'}).key != sp.key
+        assert Datastack.Specialization(spec={}, topics={'x': 'x.txt'}).key != sp.key
 
     def test_anything_else_is_refused(self):
         with pytest.raises(TypeError, match="BLOCK= is SAME, None or a block fqcn"):
-            Datablock.Specialization(spec={}, topics={}, BLOCK=Leaf)
+            Datastack.Specialization(spec={}, topics={}, BLOCK=Leaf)
+
+    def test_a_block_specialization_has_no_BLOCK_and_a_tables_calls_it_TAB(self, tmp_path):
+        assert not hasattr(Datablock.Specialization(spec={}, topics={}), 'BLOCK')
+        sp = Datatable.Specialization(spec={}, topics={}, TAB=None)
+        assert not hasattr(sp, 'BLOCK')
+        assert 'TAB=' not in _made(TableA, tmp_path).get_typestr(sp)
+        assert f"TAB={TabA.fqcn}" in _made(TableA, tmp_path).get_typestr(
+            Datatable.Specialization(spec={}, topics={}))
+        with pytest.raises(TypeError, match="TAB= is SAME, None or a TAB fqcn"):
+            Datatable.Specialization(spec={}, topics={}, TAB=TabA)
+
+    def test_a_plain_block_specialization_names_the_stacks_own(self, tmp_path):
+        """SAME, as Datastack.Specialization's default: nothing to say about the block class."""
+        stack = _made(Stack, tmp_path)
+        assert f"BLOCK={Leaf.fqcn}" in stack.get_typestr(Datablock.Specialization(spec={}, topics={}))

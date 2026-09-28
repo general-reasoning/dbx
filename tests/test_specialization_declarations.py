@@ -10,7 +10,7 @@ block's own identity".
 """
 import pytest
 
-from dbx.datablocks import DIRTOPIC, Datablock
+from dbx.datablocks import ABSENT, DIRTOPIC, SAME, Datablock
 from dbx.datatables import DATASLICE, SLICETOPIC, Datatab, Datatable
 
 
@@ -44,8 +44,8 @@ class NewTable(Datatable):
     """Respelled with the markers; its own identity no longer carries the TAB's slices."""
     TAB = NewTab
     TOPICS = {'tab_paths': DIR, 'done': DATAFILE('done')}
-    SPECIALIZATIONS = [Datablock.Specialization(
-        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, BLOCK=None,
+    SPECIALIZATIONS = [Datatable.Specialization(
+        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, TAB=None,
         note="respelled only; built before a table's type named its TAB")]
 
 
@@ -86,10 +86,22 @@ class TestNothingIsInherited:
         sp = Datablock.Specialization(spec={'w': 'hann'},
                                       topics={'tiles': DATASLICE(tile='ndarray:uint8'), 'x': 'x.npy'},
                                       version=None, note='n')
-        again = Datablock.Specialization(**sp.to_dict())
+        again = Datablock.Specialization.from_record(sp.to_dict())
         # A marker read back is a new object: equal as rendered, which is what an identity is.
-        assert again.key == sp.key and repr(again.declared) == repr(sp.declared)
-        assert again.topics == ('tiles', 'x')
+        assert again.key == sp.key and repr(again.topics) == repr(sp.topics)
+        assert again.topic_names == ('tiles', 'x')
+
+    def test_a_record_from_before_topics_was_the_declaration_still_reads(self):
+        """Records once carried the names as `topics` and the declaration as `declared`."""
+        old = {'spec': {}, 'topics': ['tiles'], 'declared': "{'tiles': 'SLICETOPIC'}"}
+        sp = Datablock.Specialization.from_record(old)
+        assert sp.topics == {'tiles': 'SLICETOPIC'} and sp.topic_names == ('tiles',)
+
+    def test_note_is_last(self):
+        sp = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, anchor='a.B', note='why')
+        assert repr(sp).endswith("note='why')") and list(sp.to_dict())[-1] == 'note'
+        with pytest.raises(TypeError):
+            Datablock.Specialization({}, {'x': 'x.txt'}, ABSENT, SAME, 'why')   # keyword-only
 
 
 class TestLooking:

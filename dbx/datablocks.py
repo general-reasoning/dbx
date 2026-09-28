@@ -1223,14 +1223,10 @@ class Datablock:
         #: The anchor whose journal the narrower block is looked for in: SAME
         #: for this block's own, or the one it was built under.
         anchor: str | SAME = SAME
-        #: Whether the narrower block was built with legacy typing and signature.
-        #: Setting legacy=True sets both legacy_typing and legacy_signature to True,
-        #: allowing a modern block (without LEGACY_TYPING/LEGACY_SIGNATURE class flags)
-        #: to reconstruct the exact hash of historical builds that were serialized
-        #: with stringified/quoted spec dictionaries.
-        legacy: bool | None = field(default=None, kw_only=True)
-        legacy_typing: bool | None = field(default=None, kw_only=True)
-        legacy_signature: bool | None = field(default=None, kw_only=True)
+        #: Legacy serialization flags to reconstruct historical identities.
+        #: Can be a collection of flags (e.g. ['signature', 'typing']), ['all']
+        #: (or True) for all legacy flags, or None.
+        legacy: tuple[str, ...] | list[str] | str | bool | None = field(default=None, kw_only=True)
         #: Whether to redirect all topics recorded by the matched build entry,
         #: rather than restricting redirection to the subset named in `topics`.
         #:
@@ -1255,14 +1251,35 @@ class Datablock:
             # Frozen, so the dataclass can live on a class and be shared, and
             # so a hash cached against it cannot go stale underneath.
             object.__setattr__(self, 'spec', dict(self.spec))
-            object.__setattr__(self, 'legacy', self.legacy)
-            object.__setattr__(self, 'legacy_typing', self.legacy_typing)
-            object.__setattr__(self, 'legacy_signature', self.legacy_signature)
+            leg = self.legacy
+            if leg is True:
+                leg = ('all',)
+            elif leg is False or leg is None:
+                leg = None
+            elif isinstance(leg, str):
+                leg = ('all',) if leg == 'all' else (leg,)
+            elif isinstance(leg, (list, tuple, set, frozenset)):
+                if not leg:
+                    leg = None
+                elif 'all' in leg:
+                    leg = ('all',)
+                else:
+                    leg = tuple(sorted(set(leg)))
+            else:
+                raise TypeError(f"Specialization legacy= must be a list/tuple of strings, 'all', True, or None; got {leg!r}")
+
+            if leg is not None:
+                allowed = {'all', 'signature', 'typing'}
+                unknown = set(leg) - allowed
+                if unknown:
+                    raise ValueError(f"Specialization legacy= contains unrecognized flag(s) {sorted(unknown)!r}; allowed flags are {sorted(allowed)!r}")
+
+            object.__setattr__(self, 'legacy', leg)
             object.__setattr__(self, 'UNSAFE_redirect_all_topics', self.UNSAFE_redirect_all_topics)
             topics = self.topics
             if isinstance(topics, str):
                 topics = literal_topics(topics)         # the record form -- see to_dict
-            if isinstance(topics, (list, tuple)) and (self.legacy or self.legacy_typing or self.legacy_signature):
+            if isinstance(topics, (list, tuple)) and self.legacy:
                 topics = tuple(topics)
             elif not isinstance(topics, dict):
                 raise TypeError(
@@ -1298,9 +1315,7 @@ class Datablock:
                     f"topics={self.topics!r}"
                     + (f", version={self.version!r}" if self.version is not ABSENT else "")
                     + (f", anchor={self.anchor!r}" if self.anchor is not SAME else "")
-                    + (f", legacy={self.legacy!r}" if self.legacy is not None else "")
-                    + (f", legacy_typing={self.legacy_typing!r}" if self.legacy_typing is not None else "")
-                    + (f", legacy_signature={self.legacy_signature!r}" if self.legacy_signature is not None else "")
+                    + (f", legacy={list(self.legacy)!r}" if self.legacy is not None else "")
                     + (f", UNSAFE_redirect_all_topics={self.UNSAFE_redirect_all_topics!r}" if self.UNSAFE_redirect_all_topics else "")
                     + ''.join(f", {n}={v!r}" for n, v in self._extra_fields_() if v is not SAME)
                     + (f", note={self.note!r}" if self.note else "") + ")")
@@ -1317,11 +1332,7 @@ class Datablock:
             if self.anchor is not SAME:
                 d['anchor'] = self.anchor
             if self.legacy is not None:
-                d['legacy'] = self.legacy
-            if self.legacy_typing is not None:
-                d['legacy_typing'] = self.legacy_typing
-            if self.legacy_signature is not None:
-                d['legacy_signature'] = self.legacy_signature
+                d['legacy'] = list(self.legacy)
             if self.UNSAFE_redirect_all_topics:
                 d['UNSAFE_redirect_all_topics'] = self.UNSAFE_redirect_all_topics
             d.update((n, v) for n, v in self._extra_fields_() if v is not SAME)
@@ -1340,22 +1351,40 @@ class Datablock:
             record = dict(record)
             if 'declared' in record:
                 record['topics'] = record.pop('declared')
+            legacy_flags = set()
+            legacy_val = record.pop('legacy', None)
+            if legacy_val is True:
+                legacy_flags.add('all')
+            elif isinstance(legacy_val, (list, tuple)):
+                legacy_flags.update(legacy_val)
+            elif isinstance(legacy_val, str):
+                legacy_flags.add(legacy_val)
+            if record.pop('legacy_typing', None):
+                legacy_flags.add('typing')
+            if record.pop('legacy_signature', None):
+                legacy_flags.add('signature')
+            if legacy_flags:
+                record['legacy'] = sorted(legacy_flags)
             return cls(**record)
 
         # 3. Accessors -----------------------------------------------------
 
         @property
-        def topic_names(self) -> tuple[str, ...]:
-            """The narrower block's topic names, in declaration order."""
-            return tuple(self.topics)
+        def legacy_typing(self) -> bool:
+            """Whether legacy typing is enabled for this specialization."""
+            return bool(self.legacy and ('all' in self.legacy or 'typing' in self.legacy))
+
+        @property
+        def legacy_signature(self) -> bool:
+            """Whether legacy signature is enabled for this specialization."""
+            return bool(self.legacy and ('all' in self.legacy or 'signature' in self.legacy))
 
         # 4. Helpers -------------------------------------------------------
 
         #: The fields every Specialization has; a subclass's others -- a
         #: Datastack's BLOCK, a Datatable's TAB -- are recorded and keyed too.
         _base_fields = frozenset({'spec', 'topics', 'version', 'note', 'anchor',
-                                  'legacy', 'legacy_typing', 'legacy_signature',
-                                  'UNSAFE_redirect_all_topics'})
+                                  'legacy', 'UNSAFE_redirect_all_topics'})
 
         def _extra_fields_(self):
             """``(name, value)`` of the fields a subclass adds, in declaration order."""
@@ -1376,9 +1405,9 @@ class Datablock:
             identities, and one would otherwise be served the other's hash.
             """
             return (tuple(sorted(self.spec.items(), key=lambda kv: kv[0])),
-                    self.topic_names, self.version, str(self.topics),
+                    tuple(self.topics), self.version, str(self.topics),
                     None if self.anchor is SAME else self.anchor,
-                    self.legacy, self.legacy_typing, self.legacy_signature,
+                    self.legacy,
                     self.UNSAFE_redirect_all_topics,
                     # A subclass's field at SAME overrides nothing: that
                     # specialization IS the plain one, and keys as it.
@@ -2966,7 +2995,7 @@ class Datablock:
             if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 topics = None
             else:
-                topics = list(specialization.topic_names) if topics is None else topics
+                topics = list(specialization.topics) if topics is None else topics
 
         explicit_journal = journal is not None
         if journal is None:
@@ -3021,7 +3050,7 @@ class Datablock:
                 )
                 return False
             target_paths, entry = resolved
-            sp_topics = None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(specialization.topic_names))
+            sp_topics = None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(specialization.topics))
             redirect_record = {
                 'filter': {'hash': self.get_hash(specialization)},
                 'topics': sp_topics,
@@ -3737,13 +3766,13 @@ class Datablock:
             }
         version = self.version if specialization.version is ABSENT else specialization.version
         omit = tuple(specialization.spec)
-        leg = specialization.legacy if specialization.legacy is not None else False
+        leg = legacy_typing if legacy_typing is not None else (legacy if legacy is not None else specialization.legacy_typing)
         return {
             'signature': {'spec': self._typed_specdict_(legacy=leg, omit=omit)},
             **self._type_entries_(specialization, with_block=with_block),
             'version': version,
             'paths': getattr(self, '_paths_', None),
-            'topics': self._topics_signature_(list(specialization.topic_names),
+            'topics': self._topics_signature_(list(specialization.topics),
                                               declared=specialization.topics),
         }
 
@@ -3917,7 +3946,7 @@ class Datablock:
         reconstructing a stack built then needs. See :meth:`_type_entries_`.
         """
         omit, topics = ((), None) if specialization is None else (
-            tuple(specialization.spec), list(specialization.topic_names))
+            tuple(specialization.spec), list(specialization.topics))
         version = self.version
         if specialization is not None and specialization.version is not ABSENT:
             version = specialization.version
@@ -3926,13 +3955,10 @@ class Datablock:
             # specialization's name would describe neither.
             raise ValueError("typestr(): pretty= and specialization= do not combine")
         if specialization is not None:
-            if legacy_typing is None and specialization.legacy_typing is not None:
-                legacy_typing = specialization.legacy_typing
-            if legacy_signature is None and specialization.legacy_signature is not None:
-                legacy_signature = specialization.legacy_signature
-            if legacy_typing is None and legacy_signature is None and specialization.legacy is not None:
-                legacy_typing = specialization.legacy
-                legacy_signature = specialization.legacy
+            if legacy_typing is None and specialization.legacy_typing:
+                legacy_typing = True
+            if legacy_signature is None and specialization.legacy_signature:
+                legacy_signature = True
         if legacy_typing is None:
             legacy_typing = legacy
         if legacy_signature is None:
@@ -4055,7 +4081,7 @@ class Datablock:
         """
         rows = []
         for sp in (self.SPECIALIZATIONS or []):
-            named = self._toplevel_topics_(sp.topic_names)
+            named = self._toplevel_topics_(sp.topics)
             row = self.SpecializationRow(
                 specialization=sp, hash=None, matches=False, why=None,
                 entry=None, paths=None, topics=named,
@@ -6210,7 +6236,7 @@ class Datablock:
                 f"{unknown}, which {self.VAR.__name__} does not declare. A pin names a "
                 f"VAR field this class has and the narrower block did not."
             )
-        self._topic_leaves_(specialization.topic_names)   # raises on a topic we do not declare
+        self._topic_leaves_(specialization.topics)   # raises on a topic we do not declare
         typed = self._typed_specdict_()
         for k, v in specialization.spec.items():
             mine, pinned = typed[k], self._specialization_pin_(k, v)
@@ -6278,7 +6304,7 @@ class Datablock:
             if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 wanted = list(self.topics())
             else:
-                wanted = self._toplevel_topics_(specialization.topic_names)
+                wanted = self._toplevel_topics_(specialization.topics)
             paths = {t: recorded[t] for t in wanted if t in recorded}
             if len(paths) < len(wanted):
                 missing = sorted(set(wanted) - set(paths))
@@ -6398,10 +6424,10 @@ class Datablock:
                 self.log.detailed(f"specialization: {sp!r} does not apply: {why}")
                 continue
             # Per specialization, over the topics IT covers -- see `_unbuilt_`.
-            if not self._unbuilt_(sp.topic_names):
+            if not self._unbuilt_(sp.topics):
                 self.log.detailed(
                     f"specialization: {sp!r} does not apply: this block has data of "
-                    f"its own under {self._toplevel_topics_(sp.topic_names)!r}, which a "
+                    f"its own under {self._toplevel_topics_(sp.topics)!r}, which a "
                     f"build wrote here; reading the rest from elsewhere would mix two "
                     f"computations under one hash"
                 )
@@ -6450,7 +6476,7 @@ class Datablock:
                 if self.UNSAFE_redirect(specialization=sp, journal=memo['journal'], OVERRIDE=True):
                     return sp
                 continue
-            sp_topics = None if getattr(sp, 'UNSAFE_redirect_all_topics', False) else sp.topic_names
+            sp_topics = None if getattr(sp, 'UNSAFE_redirect_all_topics', False) else sp.topics
             self._redirected_paths_ = self._mapped_paths_(paths, None, sp_topics)
             self.log.info(
                 f"SPECIALIZATION (memory only, nothing recorded): {self.anchorkeypath} "

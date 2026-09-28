@@ -89,19 +89,112 @@ class TestNothingIsInherited:
         again = Datablock.Specialization.from_record(sp.to_dict())
         # A marker read back is a new object: equal as rendered, which is what an identity is.
         assert again.key == sp.key and repr(again.topics) == repr(sp.topics)
-        assert again.topic_names == ('tiles', 'x')
+        assert tuple(again.topics) == ('tiles', 'x')
 
     def test_a_record_from_before_topics_was_the_declaration_still_reads(self):
         """Records once carried the names as `topics` and the declaration as `declared`."""
         old = {'spec': {}, 'topics': ['tiles'], 'declared': "{'tiles': 'SLICETOPIC'}"}
         sp = Datablock.Specialization.from_record(old)
-        assert sp.topics == {'tiles': 'SLICETOPIC'} and sp.topic_names == ('tiles',)
+        assert sp.topics == {'tiles': 'SLICETOPIC'} and tuple(sp.topics) == ('tiles',)
 
     def test_note_is_last(self):
         sp = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, anchor='a.B', note='why')
         assert repr(sp).endswith("note='why')") and list(sp.to_dict())[-1] == 'note'
         with pytest.raises(TypeError):
             Datablock.Specialization({}, {'x': 'x.txt'}, ABSENT, SAME, 'why')   # keyword-only
+
+
+class TestLegacySpecialization:
+
+    def test_legacy_default_and_none(self):
+        sp = Datablock.Specialization(spec={}, topics={'x': 'x.txt'})
+        assert sp.legacy is None
+        assert sp.legacy_typing is False
+        assert sp.legacy_signature is False
+        assert 'legacy' not in sp.to_dict()
+
+        sp_none = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=None)
+        assert sp_none.legacy is None
+        assert sp_none.legacy_typing is False
+        assert sp_none.legacy_signature is False
+
+        sp_false = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=False)
+        assert sp_false.legacy is None
+
+    def test_legacy_true_and_all(self):
+        sp_true = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=True)
+        assert sp_true.legacy == ('all',)
+        assert sp_true.legacy_typing is True
+        assert sp_true.legacy_signature is True
+        assert sp_true.to_dict()['legacy'] == ['all']
+
+        sp_all_str = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy='all')
+        assert sp_all_str.legacy == ('all',)
+        assert sp_all_str.key == sp_true.key
+
+        sp_all_list = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=['all'])
+        assert sp_all_list.legacy == ('all',)
+        assert sp_all_list.key == sp_true.key
+
+    def test_legacy_individual_flags(self):
+        sp_typing = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=['typing'])
+        assert sp_typing.legacy == ('typing',)
+        assert sp_typing.legacy_typing is True
+        assert sp_typing.legacy_signature is False
+        assert sp_typing.to_dict()['legacy'] == ['typing']
+
+        sp_sig = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=['signature'])
+        assert sp_sig.legacy == ('signature',)
+        assert sp_sig.legacy_typing is False
+        assert sp_sig.legacy_signature is True
+        assert sp_sig.to_dict()['legacy'] == ['signature']
+
+        sp_both = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=['signature', 'typing'])
+        assert sp_both.legacy == ('signature', 'typing')
+        assert sp_both.legacy_typing is True
+        assert sp_both.legacy_signature is True
+        assert sp_both.to_dict()['legacy'] == ['signature', 'typing']
+
+        # Order invariance
+        sp_both_rev = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=['typing', 'signature'])
+        assert sp_both_rev.legacy == ('signature', 'typing')
+        assert sp_both.key == sp_both_rev.key
+
+    def test_legacy_invalid_flags(self):
+        with pytest.raises(ValueError, match="unrecognized flag"):
+            Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=['invalid'])
+
+        with pytest.raises(TypeError, match="must be a list/tuple of strings"):
+            Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=123)
+
+    def test_legacy_from_record_backward_compatibility(self):
+        # Round trip modern
+        sp = Datablock.Specialization(spec={}, topics={'x': 'x.txt'}, legacy=['signature', 'typing'])
+        restored = Datablock.Specialization.from_record(sp.to_dict())
+        assert restored.legacy == ('signature', 'typing')
+        assert restored.legacy_typing is True
+        assert restored.legacy_signature is True
+
+        # Historical record with legacy=True
+        hist_true = {'spec': {}, 'topics': "{'x': 'x.txt'}", 'legacy': True}
+        restored_true = Datablock.Specialization.from_record(hist_true)
+        assert restored_true.legacy == ('all',)
+        assert restored_true.legacy_typing is True
+        assert restored_true.legacy_signature is True
+
+        # Historical record with legacy_typing and legacy_signature fields
+        hist_fields = {'spec': {}, 'topics': "{'x': 'x.txt'}", 'legacy_typing': True, 'legacy_signature': True}
+        restored_fields = Datablock.Specialization.from_record(hist_fields)
+        assert restored_fields.legacy == ('signature', 'typing')
+        assert restored_fields.legacy_typing is True
+        assert restored_fields.legacy_signature is True
+
+        # Historical record with only legacy_typing
+        hist_typing = {'spec': {}, 'topics': "{'x': 'x.txt'}", 'legacy_typing': True}
+        restored_typing = Datablock.Specialization.from_record(hist_typing)
+        assert restored_typing.legacy == ('typing',)
+        assert restored_typing.legacy_typing is True
+        assert restored_typing.legacy_signature is False
 
 
 class TestLooking:

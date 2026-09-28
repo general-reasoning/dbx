@@ -674,6 +674,43 @@ def journal(cls_anchor_or_df=None, loc=None, **kwargs):
     return datajournal(cls_anchor_or_df, loc, **kwargs)
 
 
+def constructed(anchor=None, *, event=..., datalake=None, storage_options=None,
+                n_workers=8, url=None, **filters) -> 'DatajournalFrame':
+    """The block journal entries of what was CONSTRUCTED: built, redirected, or copied in.
+
+    *anchor* -- a Datablock class, an anchor string or a block -- reads that
+    anchor's journal; None reads every anchor in the datalake (`anchors`)
+    into one frame, newest first. An anchor with no journal contributes
+    nothing.
+
+    *event* ``...``, the default, is `CONSTRUCTED_EVENTS`; None drops the
+    event filter, and anything else is the filter, as `DatajournalFrame`
+    takes one. *filters* are its other filters.
+    """
+    if event is ...:
+        event = CONSTRUCTED_EVENTS
+    if event is not None:
+        filters['event'] = event
+    datalake = one_datalake(datalake, url, 'constructed')
+    if anchor is not None:
+        return datajournal(anchor, datalake=datalake, storage_options=storage_options,
+                           n_workers=n_workers, **filters)
+    frames = []
+    for a in dataparts.anchors(datalake, storage_options=storage_options):
+        try:
+            frames.append(datajournal(a, datalake=datalake, storage_options=storage_options,
+                                      n_workers=n_workers, **filters))
+        except FileNotFoundError:
+            continue
+    frames = [f for f in frames if len(f)]
+    if not frames:
+        return DatajournalFrame(pd.DataFrame(), storage_options=storage_options or {})
+    frame = pd.concat(frames)
+    if 'datetime' in frame.columns:
+        frame = frame.sort_values('datetime', ascending=False, kind='stable')
+    return DatajournalFrame(frame, storage_options=storage_options or {})
+
+
 class CallableSignature(CallableStr):
     """A signature string already rendered and stored, e.g. on a journal row.
 

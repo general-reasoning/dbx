@@ -110,8 +110,7 @@ def adopted(block):
     that half alone, for looking at a block that has adopted an older build but
     not yet built the rest.
     """
-    block._install_specialization_(journal=block.__dict__.get('__specialization_journal__'))
-    return block
+    return block.specialize()
 
 
 @pytest.fixture

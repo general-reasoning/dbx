@@ -129,3 +129,32 @@ def test_a_query_does_not_reach_the_blocks_a_stack_caches(grown):
     table.find_tab_specializations(parallelization='inline')
     assert all(table.tab(i).use_specializations == RowTab.USE_SPECIALIZATIONS for i in range(3))
     assert all(adopted(table.tab(i)).specialization is not None for i in range(3))
+
+
+class TestSpecializeMethod:
+
+    def test_find_specialization_returns_joined_row_with_paths(self, grown):
+        table = v1table(grown, spec={'n': 3}, use_tab_specializations=False)
+        tab = table.tab(0)
+        row = tab.find_specialization()
+        assert row is not None
+        assert isinstance(row, Datablock.Specialization)
+        assert isinstance(row, dict)
+        assert row.resolved is True
+        assert 'rows' in row.paths
+        assert row.paths['rows'].endswith('rows.txt')
+        rendered = str(row)
+        assert 'RESOLVED to journal entry' in rendered
+        assert 'paths' in rendered
+        assert 'rows:' in rendered
+        assert 'specialization Specialization(' in rendered
+
+    def test_specialize_installs_specialization(self, grown):
+        tab = v1table(grown, spec={'n': 3}, tag='spec_only').tab(0)
+        assert not tab.redirected()
+        assert tab.find_specialization() is not None
+        res = tab.specialize()
+        assert res is tab
+        assert tab.redirected()
+        assert tab.validtopic('rows')
+

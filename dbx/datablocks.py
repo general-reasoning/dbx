@@ -1433,13 +1433,15 @@ class Datablock:
         #: -- in `redirection`, and in the journal entry that records it.
         specialization: Optional['Datablock.Specialization'] = None
 
-    class SpecializationRow(dict):
-        """What one declared :class:`Specialization` did, and why.
+    class SpecializationRow(dict, Specialization):
+        """What one declared `Specialization` did, and why.
 
-        A dict, like :class:`Validation`, so every reader written against the
-        mapping goes on working -- and a type, so the answer can render itself
-        instead of each caller assembling one out of the keys. Truthy exactly
-        when it RESOLVED, which is the question being asked::
+        A join of the declared `Specialization` and its resolution in the journal.
+        A dict, like `Validation`, so every reader written against the mapping
+        goes on working -- and a `Specialization` subclass, so attributes like
+        `spec`, `topics`, `legacy`, etc. and equality comparison against
+        `Specialization` work directly. Truthy exactly when it RESOLVED,
+        which is the question being asked::
 
             row = block.specializations()[0]
             if not row:
@@ -1452,9 +1454,66 @@ class Datablock:
         `builds` (this block's topics that it does NOT name -- what a build
         would still have to produce).
         """
+        def __hash__(self):
+            return hash(self.key)
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            sp = self.get('specialization')
+            if sp is not None:
+                for f in ('spec', 'topics', 'version', 'anchor', 'legacy', 'UNSAFE_redirect_all_topics', 'note'):
+                    object.__setattr__(self, f, getattr(sp, f, None))
+
+        def __getattr__(self, name):
+            if name in self:
+                return self[name]
+            sp = self.get('specialization')
+            if sp is not None and hasattr(sp, name):
+                return getattr(sp, name)
+            raise AttributeError(f"{self.__class__.__name__!r} object has no attribute {name!r}")
+
+        def _extra_fields_(self):
+            sp = self.get('specialization')
+            if sp is not None and hasattr(sp, '_extra_fields_'):
+                return sp._extra_fields_()
+            return ()
+
+        def __eq__(self, other):
+            if isinstance(other, Datablock.Specialization):
+                return self.key == other.key
+            return super().__eq__(other)
 
         def __bool__(self):
             return self.resolved
+
+        @property
+        def resolved(self) -> bool:
+            """Whether it found a build to read, which is the whole question."""
+            return self.get('paths') is not None
+
+        @property
+        def entry(self):
+            return self.get('entry')
+
+        @property
+        def paths(self):
+            return self.get('paths')
+
+        @property
+        def hash(self):
+            return self.get('hash')
+
+        @property
+        def why(self):
+            return self.get('why')
+
+        @property
+        def matches(self):
+            return self.get('matches')
+
+        @property
+        def builds(self):
+            return self.get('builds')
 
         def __repr__(self):
             sp = self.get('specialization')
@@ -1466,6 +1525,8 @@ class Datablock:
             else:
                 verdict = "DOES NOT APPLY"
             lines = [f"{self.__class__.__name__}: {verdict}"]
+            if sp is not None:
+                lines.append(f"    specialization {sp!r}")
             for label, value in (
                 ('why', self.get('why')),
                 ('note', note or None),
@@ -1475,14 +1536,14 @@ class Datablock:
             ):
                 if value is not None:
                     lines.append(f"    {label:7} {value}")
+            paths = self.get('paths')
+            if paths:
+                for i, (topic, path) in enumerate(paths.items()):
+                    prefix = "    paths  " if i == 0 else "           "
+                    lines.append(f"{prefix} {topic}: {path}")
             return '\n'.join(lines)
 
         __str__ = __repr__
-
-        @property
-        def resolved(self) -> bool:
-            """Whether it found a build to read, which is the whole question."""
-            return self.get('paths') is not None
 
     class Validation(dict):
         """``{topic: bool}`` -- whether each topic's data is where it is read from.
@@ -2405,20 +2466,27 @@ class Datablock:
         """True when *topicpath* names a group of topics rather than a leaf."""
         return isinstance(self._topicnode_(*topicpath), dict)
 
+    def specialize(self, journal=None):
+        """Install the applicable specialization without building any unspecialized topics."""
+        j = journal if journal is not None else self.__dict__.get('__specialization_journal__')
+        self._install_specialization_(journal=j)
+        return self
+
     def build(self, *args, **kwargs):
-        # A SPECIALIZATION is installed here, and only here: an older build of a
+        # A SPECIALIZATION is installed here: an older build of a
         # narrower block that covers what this build would produce is adopted
         # rather than recomputed -- recorded, so every later construction reads
         # through it -- and the topics it does not cover are built. After
         # __post_init__, as construction is complete, since a class may compute
         # its TOPICS there and a specialization is named in terms of them.
-        self._install_specialization_(journal=self.__dict__.get('__specialization_journal__'))
+        if not kwargs.pop('_specialized_', False):
+            self.specialize(journal=self.__dict__.get('__specialization_journal__'))
         # A redirected block answers its reads out of another entry's data (see
-        # :attr:`redirection`), so building it would produce data that nothing
+        # redirection), so building it would produce data that nothing
         # would go on to read. Declining is also what makes a redirect stick:
         # a build_tree() sweeping past would otherwise quietly rebuild the very
         # block someone redirected away from. Costs one journal read per
-        # instance, which :attr:`redirection` caches.
+        # instance, which redirection caches.
         if self._redirected_paths_ is not None and not self.ownedtopics():
             entry = self.redirection.entry if self.redirection is not None else None
             whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
@@ -4115,17 +4183,28 @@ class Datablock:
         return rows
 
     def find_specialization(self, journal=None):
-        """The :class:`Specialization` build() would install here, or None -- found, NOT installed.
+        """The `SpecializationRow` build() would install here, or None -- found, NOT installed.
 
         The first, in declaration order, that applies, finds this block unbuilt
         where it covers, and resolves to data that is still there -- which is
-        what :meth:`_install_specialization_` installs. Asked of a block
-        constructed with ``use_specializations=False``, it says what WOULD be
+        what `_install_specialization_` installs. Asked of a block
+        constructed with `use_specializations=False`, it says what WOULD be
         installed without anything being redirected or recorded. For why each
-        declared specialization did or did not apply, see :meth:`specializations`.
+        declared specialization did or did not apply, see `specializations()`.
         """
-        for sp, _ in self._specialization_candidates_(journal):
-            return sp
+        memo = {'journal': journal}
+        for sp, (paths, entry) in self._specialization_candidates_(journal, _memo=memo):
+            named = self._toplevel_topics_(sp.topics)
+            return self.SpecializationRow(
+                specialization=sp,
+                hash=self.get_hash(sp),
+                matches=True,
+                why=None,
+                entry=entry.block.id,
+                paths=paths,
+                topics=named,
+                builds=[t for t in self.topics() if t not in named],
+            )
         return None
 
     def UNSAFE_specialize(self, *, journal=None, dry_run: bool = False, dry_validate: bool = False, OVERRIDE: bool = False):
@@ -6855,6 +6934,16 @@ class Datastack(Datablock):
             return entries
         return {**entries, 'BLOCK': block if isinstance(block, str) else block.fqcn}
 
+    def specialize(self, journal=None, parallelization: str | None = None,
+                   n_workers: int | None = None, **kwargs):
+        """Install block and stack specializations without building any unspecialized topics."""
+        build_journal = journal if journal is not None else self._build_journal_()
+        self._install_block_specializations_(journal=build_journal,
+                                            parallelization=parallelization,
+                                            n_workers=n_workers, **kwargs)
+        super().specialize(journal=journal)
+        return self
+
     def build(self, *args, **kwargs):
         # The blocks adopt what their specializations resolve to FIRST. A stack
         # whose own build is then elided -- itself adopted whole -- or skipped
@@ -6862,8 +6951,8 @@ class Datastack(Datablock):
         # of their own would be left unadopted, reading as unbuilt.
         self.__dict__['__build_journal__'] = self._build_journal_()
         try:
-            self._install_block_specializations_(journal=self.__dict__['__build_journal__'])
-            return super().build(*args, **kwargs)
+            self.specialize(journal=self.__dict__['__build_journal__'])
+            return super().build(*args, _specialized_=True, **kwargs)
         finally:
             self.__dict__.pop('__build_journal__', None)
 

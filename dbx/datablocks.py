@@ -7439,28 +7439,41 @@ class Datastack(Datablock):
         blk = self.block(idx)
         return UNSAFE_clear_block_callable(blk, topics, clear_dirpath, stack=self, idx=idx)
 
-    def UNSAFE_clear_blocks(self, *topics, OVERRIDE: bool = False, clear_dirpath: bool = False, callable=UNSAFE_clear_block_callable):
-        """Clear all block data, parallelized using the stack's builder settings.
+    def UNSAFE_clear_blocks(self, *topics, indices=None, clear_done: bool = True, OVERRIDE: bool = False, clear_dirpath: bool = False, callable=UNSAFE_clear_block_callable):
+        """Clear block data, parallelized using the stack's builder settings.
 
         The interactive UNSAFE confirmation prompt is shown **once** at the
-        stack level.  Individual ``block.UNSAFE_clear()`` calls are invoked
-        with ``OVERRIDE=True`` so they do not re-prompt.
+        stack level.  Individual `block.UNSAFE_clear()` calls are invoked
+        with `OVERRIDE=True` so they do not re-prompt.
 
         Parameters
         ----------
         *topics : str
-            Forwarded to each block's ``UNSAFE_clear()``.
+            Forwarded to each block's `UNSAFE_clear()`.
+        indices : sequence of int, optional
+            If provided, only clear the blocks at these indices. If None,
+            clears all blocks in the stack.
+        clear_done : bool, default True
+            If True and the stack has a 'done' topic that is valid, clear it
+            so subsequent builds will rebuild the cleared blocks.
         OVERRIDE : bool
-            If ``True``, skip the interactive confirmation.
+            If `True`, skip the interactive confirmation.
         clear_dirpath : bool
-            Forwarded to each block's ``UNSAFE_clear()``.
+            Forwarded to each block's `UNSAFE_clear()`.
         callable : callable, default UNSAFE_clear_block_callable
             Callable invoked per block to execute the clear operation.
         """
         if not UNSAFE_allowed("UNSAFE_clear_blocks", OVERRIDE=OVERRIDE):
             return self
 
-        block_list = self.blocks()
+        if indices is not None:
+            idx_list = [int(i) for i in indices]
+            block_list = [self.block(i) for i in idx_list]
+            callables = [functools.partial(callable, blk, topics, clear_dirpath, stack=self, idx=i) for i, blk in zip(idx_list, block_list)]
+        else:
+            block_list = self.blocks()
+            callables = [functools.partial(callable, blk, topics, clear_dirpath, stack=self, idx=idx) for idx, blk in enumerate(block_list)]
+
         self.log.info(
             f"UNSAFE_clear_blocks: clearing {len(block_list)} blocks, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}"
@@ -7475,8 +7488,10 @@ class Datastack(Datablock):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
         executor = callable_executor(self.parallelization, **executor_kwargs)
 
-        callables = [functools.partial(callable, blk, topics, clear_dirpath, stack=self, idx=idx) for idx, blk in enumerate(block_list)]
         executor.exec_callables(callables)
+
+        if clear_done and hasattr(self, 'valid_topic') and self.valid_topic('done'):
+            self.UNSAFE_clear('done', OVERRIDE=True)
 
         self.log.info(f"UNSAFE_clear_blocks complete: {self.__class__.__name__}")
         self.write_journal_entry(event="UNSAFE_clear_blocks:end")

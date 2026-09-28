@@ -1041,19 +1041,30 @@ class Datatab(DatatabBase):
     # 2. Declared API ------------------------------------------------------
 
     @contextlib.contextmanager
-    def slice_writers(self, slices=None, *, stage: bool = None, cache=None,
+    def slice_writers(self, slices=None, *, only=None, stage: bool = None, cache=None,
                       flush_every: int = None, **writer_kwargs):
         """One `MDSWriter` per slice, as `{slice: writer}`.
 
         Parameters
         ----------
-        slices : dict, optional
-            `{slice_name: {column: mds_type}}`, one entry per declared slice.
+        slices : dict or sequence of str, optional
+            `{slice_name: {column: mds_type}}`, or sequence of slice names to write.
             Omit it when every slice declares its own columns -- `DATASLICE(idx='int')`
             -- and the declaration is written. Passing columns that disagree with
             a declaration is refused: the declared ones are in this block's hash.
+        only : sequence of str, optional
+            If provided, restrict the writers to only the named slices. Existing
+            directories for undeclared or unselected slices are preserved.
         """
-        names = self.slices()
+        if isinstance(slices, (list, tuple, set)):
+            if only is None:
+                only = list(slices)
+            slices = None
+        elif slices is not None and only is None:
+            if any(s not in slices for s in self.slices()):
+                only = [s for s in self.slices() if s in slices]
+
+        names = [n for n in self.slices() if n in only] if only is not None else self.slices()
         slices = self._writable_columns_(slices, names)
 
         if stage is None:

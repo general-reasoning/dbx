@@ -3345,7 +3345,19 @@ class Datablock:
                     raise (e)
 
         had_redirection = False
+
+        def clear_topic(topicpath):
+            # A group names a directory but holds no data of its own; clearing
+            # it means clearing what is under it.
+            if clear_dirpath:
+                clear_path(self.dirpath(*topicpath, redirect=False), recursive=True)
+                return
+            for leaf in self._leaves_under_(*topicpath):
+                clear_path(self.__path__(*leaf), recursive=self._is_dir_topic_(*leaf))
+
         if len(topics) == 0:
+            for topic in self.topics():
+                clear_topic((topic,))
             try:
                 red_dir = self.dirpath('.redirection')
                 if self.fs.exists(red_dir):
@@ -3354,28 +3366,38 @@ class Datablock:
                     clear_path(red_dir, recursive=True)
             except Exception:
                 pass
-
             self._redirected_paths_ = None
-            # Invalidate @functools.cached_property cache on this instance after clearing.
             self.__dict__.pop('redirection', None)
-
-        def clear_topic(topicpath):
-            # A group names a directory but holds no data of its own; clearing
-            # it means clearing what is under it.
-            if clear_dirpath:
-                clear_path(self.dirpath(*topicpath), recursive=True)
-                return
-            for leaf in self._leaves_under_(*topicpath):
-                clear_path(self.__path__(*leaf), recursive=self._is_dir_topic_(*leaf))
-
-        if len(topics) == 0:
-            for topic in self.topics():
-                clear_topic((topic,))
+            self.__dict__.pop('__specialization__', None)
+            self.__dict__.pop('__redirected_paths__', None)
             self.write_journal_entry(event="UNSAFE_clear", redirection={'cleared': True})
         else:
+            cleared_topic_names = set()
             for topic in topics:
-                clear_topic(self._normtopic_((topic,)))
-            self.write_journal_entry(event=f"UNSAFE_clear:{[topics]}", redirection={'cleared': True})
+                norm_t = self._normtopic_((topic,))
+                cleared_topic_names.add(norm_t[0])
+                clear_topic(norm_t)
+            try:
+                red_dir = self.dirpath('.redirection')
+                red_yaml = os.path.join(red_dir, 'paths.yaml')
+                if self.fs.exists(red_yaml):
+                    paths = read_yaml(red_yaml, storage_options=self.storage_options)
+                    if isinstance(paths, dict):
+                        updated = {k: v for k, v in paths.items() if k not in cleared_topic_names}
+                        if not updated:
+                            had_redirection = True
+                            self.log.info(f"UNSAFE_clear: removing .redirection for {self.anchorkeypath} as all redirected topics were cleared")
+                            clear_path(red_dir, recursive=True)
+                            self._redirected_paths_ = None
+                        else:
+                            write_yaml(updated, red_yaml, storage_options=self.storage_options)
+                            self._redirected_paths_ = updated
+            except Exception as e:
+                self.log.detailed(f"UNSAFE_clear: updating .redirection failed: {e}")
+            self.__dict__.pop('redirection', None)
+            self.__dict__.pop('__specialization__', None)
+            self.__dict__.pop('__redirected_paths__', None)
+            self.write_journal_entry(event=f"UNSAFE_clear:{list(topics)}", redirection={'cleared': True})
 
         msg = f"UNSAFE_clear: cleared block {self.hash}"
         if had_redirection:
@@ -4173,7 +4195,12 @@ class Datablock:
             journal = _shared_journal_(journal, self)
         rows = []
         for sp in (self.SPECIALIZATIONS or []):
-            named = self._toplevel_topics_(sp.topics)
+            if getattr(sp, 'UNSAFE_redirect_all_topics', False):
+                named = list(self.topics())
+            elif getattr(sp, 'redirect_topics', None) is not None:
+                named = list(self._toplevel_topics_(sp.redirect_topics))
+            else:
+                named = self._toplevel_topics_(sp.topics)
             row = self.SpecializationRow(
                 specialization=sp, hash=None, matches=False, why=None,
                 entry=None, paths=None, topics=named,
@@ -6543,10 +6570,11 @@ class Datablock:
                 self.log.detailed(f"specialization: {sp!r} does not apply: {why}")
                 continue
             # Per specialization, over the topics IT covers -- see `_unbuilt_`.
-            if not self._unbuilt_(sp.topics):
+            cov_topics = sp.redirect_topics if getattr(sp, 'redirect_topics', None) is not None else sp.topics
+            if not self._unbuilt_(cov_topics):
                 self.log.detailed(
                     f"specialization: {sp!r} does not apply: this block has data of "
-                    f"its own under {self._toplevel_topics_(sp.topics)!r}, which a "
+                    f"its own under {self._toplevel_topics_(cov_topics)!r}, which a "
                     f"build wrote here; reading the rest from elsewhere would mix two "
                     f"computations under one hash"
                 )
@@ -7512,7 +7540,7 @@ class Datastack(Datablock):
 
         executor.exec_callables(callables)
 
-        if clear_done and hasattr(self, 'valid_topic') and self.valid_topic('done'):
+        if clear_done and getattr(self, 'has_topics', lambda: False)() and 'done' in self.topics() and self.valid_topic('done'):
             self.UNSAFE_clear('done', OVERRIDE=True)
 
         self.log.info(f"UNSAFE_clear_blocks complete: {self.__class__.__name__}")

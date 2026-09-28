@@ -144,6 +144,7 @@ class Datacollator(Datablock):
         signals: list[tuple[str, str]]
         labels: list[tuple[str, str]] | None = None
         length: int | None = None
+        skip_missing: bool = False
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -257,6 +258,8 @@ class Datacollator(Datablock):
 
     @staticmethod
     def _as_array_(val):
+        if val is None:
+            return None
         if torch is not None and isinstance(val, torch.Tensor):
             return val.detach().cpu().numpy()
         arr = np.array(val)
@@ -265,12 +268,12 @@ class Datacollator(Datablock):
         return arr
 
     @classmethod
-    def _pick_pair_(cls, row, pair, what):
+    def _pick_pair_(cls, row, pair, what, allow_none: bool = False):
         """The value a normalized pair -- or triple -- names in *row*."""
-        return cls._pick_(row, pair[0], pair[1], what, key=pair[2] if len(pair) > 2 else None)
+        return cls._pick_(row, pair[0], pair[1], what, key=pair[2] if len(pair) > 2 else None, allow_none=allow_none)
 
     @staticmethod
-    def _pick_(row, s_name, c_name, what, key=None):
+    def _pick_(row, s_name, c_name, what, key=None, allow_none: bool = False):
         """The value at ``(s_name, c_name)`` in one nested row, or a clear error.
 
         Exact, with no fallbacks. The previous version walked the row with
@@ -282,6 +285,8 @@ class Datacollator(Datablock):
         try:
             slice_row = row[s_name]
         except (KeyError, TypeError):
+            if allow_none:
+                return None
             raise KeyError(
                 f"{what}: row has no slice {s_name!r}; it provides "
                 f"{sorted(row) if isinstance(row, dict) else type(row).__name__}"
@@ -289,11 +294,13 @@ class Datacollator(Datablock):
         try:
             value = slice_row[c_name]
         except (KeyError, TypeError):
+            if allow_none:
+                return None
             raise KeyError(
                 f"{what}: slice {s_name!r} has no column {c_name!r}; it provides "
                 f"{sorted(slice_row) if isinstance(slice_row, dict) else type(slice_row).__name__}"
             ) from None
-        return project_column(value, key, where=f"{what}: slice {s_name!r} column {c_name!r}")
+        return project_column(value, key, where=f"{what}: slice {s_name!r} column {c_name!r}", allow_none=allow_none)
 
     def _collate_batch_(self, batch: dict, norm_pairs) -> np.ndarray:
         """Collate a ``{slice: {column: values}}`` mapping already stacked over rows.
@@ -307,7 +314,11 @@ class Datacollator(Datablock):
         mirroring the signals axis of the per-sample form.
         """
         what = f"{self.__class__.__name__}._collate_batch_"
-        arrays = [self._as_array_(self._pick_pair_(batch, pair, what)) for pair in norm_pairs]
+        skip_missing = getattr(self.var, 'skip_missing', False)
+        arrays = [self._as_array_(self._pick_pair_(batch, pair, what, allow_none=skip_missing)) for pair in norm_pairs]
+        if skip_missing and any(a is None for a in arrays):
+            if all(a is None for a in arrays):
+                return None
         if len(arrays) == 1:
             return arrays[0]
         return np.stack(arrays, axis=1)
@@ -322,10 +333,13 @@ class Datacollator(Datablock):
             return self._collate_batch_(datapoints, norm_pairs)
 
         what = f"{self.__class__.__name__}._collate_pairs_"
+        skip_missing = getattr(self.var, 'skip_missing', False)
         batch_items = []
 
         for dp in datapoints:
-            dp_signals = [self._as_array_(self._pick_pair_(dp, pair, what)) for pair in norm_pairs]
+            dp_signals = [self._as_array_(self._pick_pair_(dp, pair, what, allow_none=skip_missing)) for pair in norm_pairs]
+            if skip_missing and any(s is None for s in dp_signals):
+                continue
 
             norm_signals = []
             for sig in dp_signals:

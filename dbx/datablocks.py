@@ -1665,7 +1665,8 @@ class Datablock:
         # This instance's SPECIALIZATIONS, in place of the class's; None keeps
         # the class's and [] declares none. Where to look for an older build,
         # never what this block is: not in the hash.
-        SPECIALIZATIONS: 'list[Datablock.Specialization | dict] | None' = None,
+        SPECIALIZATIONS: 'list[Datablock.Specialization | dict] | Datablock.Specialization | dict | None' = None,
+        SPECIALIZATION: 'list[Datablock.Specialization | dict] | Datablock.Specialization | dict | None' = None,
         # A journal already read, for :meth:`_install_specialization_` to resolve
         # against instead of reading one itself. Operational, and transient: it
         # travels under a private state key so it never reaches `parameters`,
@@ -1685,6 +1686,8 @@ class Datablock:
         local_must_exist: bool = False,
         **kwargs,
     ):
+        if SPECIALIZATIONS is None and SPECIALIZATION is not None:
+            SPECIALIZATIONS = SPECIALIZATION
         # Initialize early logger for __post_init__ if needed, though usually hash is needed
         self.log = Logger(
             f"{self.fqcn}",
@@ -1888,7 +1891,10 @@ class Datablock:
                                     else self.USE_SPECIALIZATIONS)
         # As records -- literals -- so that __getstate__, and so quote() and the
         # journal, carry them in a form that evaluates back.
-        self._SPECIALIZATIONS_ = self._specialization_records_(state.get('SPECIALIZATIONS'))
+        specs = state.get('SPECIALIZATIONS')
+        if specs is None:
+            specs = state.get('SPECIALIZATION')
+        self._SPECIALIZATIONS_ = self._specialization_records_(specs)
         self.validate_vars = state.get('validate_vars', True)
         self._paths_ = None
 
@@ -5008,6 +5014,8 @@ class Datablock:
             return None
         if isinstance(given, str):
             given = ast.literal_eval(given)     # as a quote() renders them, read back as text
+        if isinstance(given, (Datablock.Specialization, dict)):
+            given = [given]
         if not isinstance(given, (list, tuple)):
             raise TypeError(f"SPECIALIZATIONS= is a list of Specializations or None, got {given!r}")
         records = []
@@ -7218,7 +7226,8 @@ class Datastack(Datablock):
         if n == 0:
             return pd.Series([], dtype=object)
         block_cls = self._block_class_()
-        if block_cls is not None and not getattr(block_cls, 'SPECIALIZATIONS', None):
+        block_specs = self._block_specializations_()
+        if not block_specs:
             series = pd.Series([None] * n, dtype=object)   # nothing declared: nothing to find
             return series[series.notna()] if found_only else series
         shared = self._shared_blocks_journal_(journal)
@@ -7241,7 +7250,8 @@ class Datastack(Datablock):
         """
         n = self.n_blocks
         block_cls = self._block_class_()
-        if n == 0 or block_cls is None or not getattr(block_cls, 'SPECIALIZATIONS', None):
+        block_specs = self._block_specializations_()
+        if n == 0 or block_cls is None or not block_specs:
             return None
         kind = self._block_kind_()
         item_label = 'tabs' if kind == 'TAB' else 'blocks'
@@ -7917,6 +7927,18 @@ class Datastack(Datablock):
         """The class this stack's blocks are: its BLOCK, or None when it declares none."""
         return getattr(self, 'BLOCK', None)
 
+    def _block_specializations_(self):
+        """The specializations for this stack's blocks: from instance attributes, or the BLOCK class."""
+        specs = getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None)
+        if specs is None:
+            specs = getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
+        if specs is not None:
+            if isinstance(specs, (Datablock.Specialization, dict)):
+                return [specs]
+            return list(specs)
+        block_cls = self._block_class_()
+        return getattr(block_cls, 'SPECIALIZATIONS', None) or []
+
     def _block_kind_(self) -> str:
         """'TAB' if this stack or its table declares TAB, else 'BLOCK'."""
         if getattr(self, 'TAB', None) is not None:
@@ -7943,8 +7965,9 @@ class Datastack(Datablock):
             anchor, lake = block_cls.anchor, self._blocks_datalake_()
             # And every other anchor BLOCK's specializations look in: a renamed
             # class's old journal, read here once rather than by every block.
+            block_specs = self._block_specializations_()
             others = [a for a in dict.fromkeys(
-                sp.anchor for sp in (getattr(block_cls, 'SPECIALIZATIONS', None) or [])
+                sp.anchor for sp in block_specs
                 if sp.anchor is not SAME) if a != anchor]
             frames = []
             for a in [anchor] + others:
@@ -7976,7 +7999,8 @@ class Datastack(Datablock):
         if building is not ABSENT:
             return building
         block_cls = self._block_class_()
-        if block_cls is None or not getattr(block_cls, 'SPECIALIZATIONS', None):
+        block_specs = self._block_specializations_()
+        if block_cls is None or not block_specs:
             return None
         kind = self._block_kind_()
         item_label = 'tabs' if kind == 'TAB' else 'blocks'
@@ -8083,7 +8107,8 @@ class Datastack(Datablock):
         if journal is not None:
             return BlocksJournal(journal, block_cls.anchor if block_cls is not None else None,
                                  self._blocks_datalake_())
-        if block_cls is None or not getattr(block_cls, 'SPECIALIZATIONS', None):
+        block_specs = self._block_specializations_()
+        if block_cls is None or not block_specs:
             return None
         kind = self._block_kind_()
         item_label = 'tabs' if kind == 'TAB' else 'blocks'

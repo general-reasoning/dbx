@@ -1375,6 +1375,7 @@ class Datatable(DatatabBase, Datastack):
         # No journal handed down: forming a tab resolves nothing -- a tab's
         # specializations are installed by its build(), and a table's build
         # hands its tab-building callables the one journal it read.
+        tab_specs = getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None) or getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None)
         return self.TAB(
             # The table's own url, RAW -- the specline it was given, not what
             # that resolved to -- so a relocatable table stays relocatable tab
@@ -1388,6 +1389,7 @@ class Datatable(DatatabBase, Datastack):
             cache_limit=getattr(self, 'cache_limit', None),
             verbose=False,
             spec=spec,
+            SPECIALIZATIONS=tab_specs,
             tag=tag if tag is not None else f"tab_{idx:06d}",
         )
 

@@ -176,20 +176,21 @@ def _flat_parts_(parts) -> list:
     return out
 
 
-def _pair_array_(collator: Datacollator, data: dict, pair: tuple[str, str]) -> np.ndarray:
+def _pair_array_(collator: Datacollator, data: dict, pair: tuple[str, str], *, allow_none: bool = False) -> np.ndarray | None:
     """One ``(slice, column)`` of a ``{slice: {column: values}}`` mapping, as an array.
 
     Addressed exactly, through the collator's own lookup, so a pair naming a
     column that is not there raises instead of resolving to whatever the
     mapping happened to hold first.
     """
-    value = Datacollator._pick_pair_(data, pair, f"probes: pair {pair!r}")
+    value = Datacollator._pick_pair_(data, pair, f"probes: pair {pair!r}", allow_none=allow_none)
     return Datacollator._as_array_(value)
 
 
 def signal_matrix(collator: Datacollator, data: dict, *,
                   aggregation: str | None = None,
-                  normalization: str | None = None):
+                  normalization: str | None = None,
+                  allow_none: bool = False):
     """Every signal pair flattened and concatenated into one ``(N, D)`` matrix.
 
     This is what "treat all features as a single vector" means concretely: the
@@ -216,7 +217,14 @@ def signal_matrix(collator: Datacollator, data: dict, *,
 
     blocks, layout = [], []
     for pair in collator.signal_pairs:
-        arr = np.asarray(_pair_array_(collator, data, pair), dtype=np.float32)
+        raw = _pair_array_(collator, data, pair, allow_none=allow_none)
+        if raw is None:
+            if allow_none:
+                return None, None
+            raise ValueError(f"signal_matrix: pair {pair!r} is missing")
+        arr = np.asarray(raw)
+        if arr.dtype == object and allow_none and all(x is None for x in arr.ravel()):
+            return None, None
         if arr.ndim == 0:
             raise ValueError(
                 f"signal_matrix: pair {pair!r} is a scalar, not a per-sample column"
@@ -239,7 +247,8 @@ def signal_matrix(collator: Datacollator, data: dict, *,
         )
 
     X = blocks[0] if len(blocks) == 1 else np.concatenate(blocks, axis=1)
-    X = np.asarray(normalize_features(X, normalization), dtype=np.float32)
+    if X.dtype != object:
+        X = np.asarray(normalize_features(X, normalization), dtype=np.float32)
     return X, layout
 
 
@@ -259,7 +268,7 @@ def aggregate_features_np(arr: np.ndarray, aggregation: str):
     return arr.mean(axis=tuple(range(1, arr.ndim - 1)))
 
 
-def label_vector(collator: Datacollator, data: dict) -> np.ndarray:
+def label_vector(collator: Datacollator, data: dict, *, allow_none: bool = False) -> np.ndarray | None:
     """The single label pair as a 1-D array of per-sample labels."""
     pairs = collator.label_pairs
     if len(pairs) != 1:
@@ -267,7 +276,14 @@ def label_vector(collator: Datacollator, data: dict) -> np.ndarray:
             f"label_vector: a classifier fits one label column, but the "
             f"collator declares {len(pairs)}: {pairs!r}"
         )
-    y = np.asarray(_pair_array_(collator, data, pairs[0]))
+    raw = _pair_array_(collator, data, pairs[0], allow_none=allow_none)
+    if raw is None:
+        if allow_none:
+            return None
+        raise ValueError(f"label_vector: label pair {pairs[0]!r} is missing")
+    y = np.asarray(raw)
+    if y.dtype == object and allow_none and all(x is None for x in y.ravel()):
+        return None
     y = y.reshape(len(y), -1)
     if y.shape[1] != 1:
         raise ValueError(
@@ -287,6 +303,7 @@ class TabAffineLogisticCallable:
     def __call__(self):
         table = self.probe.var.feature_table
         collator = self.probe.var.collator
+        skip_missing = getattr(collator.var, 'skip_missing', False) or getattr(self.probe.var, 'skip_missing', False)
 
         block = table if self.tab_idx is None else table.tab(self.tab_idx)
         data = block.data(*collator.slices(), concat=True)
@@ -296,15 +313,44 @@ class TabAffineLogisticCallable:
             collator, data,
             aggregation=self.probe.var.aggregation,
             normalization=self.probe.var.normalization,
+            allow_none=skip_missing,
         )
-        y = label_vector(collator, data)
+        y = label_vector(collator, data, allow_none=skip_missing)
         del data
+
+        if X is None or y is None:
+            if skip_missing:
+                gc.collect()
+                return None
+            raise ValueError(
+                f"{type(self).__name__}: tab {self.tab_idx} missing signals or labels "
+                f"(X is None: {X is None}, y is None: {y is None})"
+            )
 
         if len(X) != len(y):
             raise ValueError(
                 f"{type(self).__name__}: tab {self.tab_idx} has {len(X)} feature "
                 f"rows and {len(y)} labels"
             )
+
+        if skip_missing:
+            valid_y = np.array([v is not None and not (isinstance(v, (float, np.floating)) and np.isnan(v)) for v in y], dtype=bool)
+            if X.dtype == object:
+                valid_x = np.array([all(v is not None and not (isinstance(v, (float, np.floating)) and np.isnan(v)) for v in row) for row in X], dtype=bool)
+            else:
+                valid_x = ~np.isnan(X).any(axis=1) if np.issubdtype(X.dtype, np.floating) else np.ones(len(X), dtype=bool)
+            valid = valid_x & valid_y
+            n_valid = int(valid.sum())
+            if n_valid == 0:
+                gc.collect()
+                return None
+            if n_valid < len(y):
+                X = X[valid]
+                y = y[valid]
+
+        if X.dtype == object:
+            X = np.asarray(X, dtype=np.float32)
+
         gc.collect()
         return {'signals': X, 'labels': y, 'layout': layout}
 
@@ -393,6 +439,21 @@ class FeatureAffineLogisticProbe(Datablock):
             "COMPUTING LOGISTIC INPUT DATA",
             lambda i: TabAffineLogisticCallable(self, i),
         )
+
+        n_total = len(results)
+        valid_results = [res for res in results if res is not None]
+        n_skipped = n_total - len(valid_results)
+        if n_skipped > 0:
+            self.log.info(
+                f"{self.__class__.__name__}: skipped {n_skipped}/{n_total} tabs "
+                f"with missing signals or labels ({len(valid_results)} valid tabs remaining)"
+            )
+        if not valid_results:
+            raise ValueError(
+                f"{self.__class__.__name__}: all {n_total} tabs were skipped "
+                f"due to missing signals or labels"
+            )
+        results = valid_results
 
         # Every tab must lay its columns out identically, or the rows being
         # stacked here do not describe the same feature at the same position.

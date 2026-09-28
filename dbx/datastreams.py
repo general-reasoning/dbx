@@ -298,8 +298,14 @@ def merge_column_specs(specs) -> list:
     return [c if merged[c] is None else (c, merged[c]) for c in order]
 
 
-def _at_path_(value, path, where):
+def _at_path_(value, path, where, *, allow_none: bool = False):
     for depth, key in enumerate(path):
+        if value is None and allow_none:
+            return None
+        if isinstance(value, list) and allow_none and all(x is None for x in value):
+            return [None] * len(value)
+        if isinstance(value, list) and allow_none:
+            return [_at_path_(item, path[depth:], where, allow_none=True) if item is not None else None for item in value]
         if not isinstance(value, dict):
             at = '.'.join(path[:depth]) or 'the column'
             detail = ""
@@ -310,6 +316,8 @@ def _at_path_(value, path, where):
             raise TypeError(f"{where}: asked for {'.'.join(path)!r}, but {at} holds a "
                             f"{type(value).__name__}{detail}, which is not a dict")
         if key not in value:
+            if allow_none:
+                return None
             at = '.'.join(path[:depth])
             raise KeyError(f"{where}: no key(s) [{key!r}]{' under ' + repr(at) if at else ''}; "
                            f"it has {sorted(value)}")
@@ -317,19 +325,19 @@ def _at_path_(value, path, where):
     return value
 
 
-def project_column(value, keys, *, where: str = ''):
+def project_column(value, keys, *, where: str = '', allow_none: bool = False):
     """The part of one column's *value* a spec asks for: all of it, one key or path, or a pruned dict."""
     if keys is None:
         return value
     if not isinstance(keys, list):
-        return _at_path_(value, key_path(keys), where)
+        return _at_path_(value, key_path(keys), where, allow_none=allow_none)
     out = {}
     for key in keys:
         path = key_path(key)
         node = out
         for k in path[:-1]:
             node = node.setdefault(k, {})
-        node[path[-1]] = _at_path_(value, path, where)
+        node[path[-1]] = _at_path_(value, path, where, allow_none=allow_none)
     return out
 
 

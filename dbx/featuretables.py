@@ -391,6 +391,17 @@ class Featuretab(UpstreamTabSlices, Datatab):
         datapoint_tab: Datatab
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
+        #: Which evaluator layers the `features` slice keeps, and under what
+        #: column names: ``{column: layer}``.  ``{"custom_output": "final"}``
+        #: writes the evaluator's ``final`` layer as the column
+        #: ``custom_output``.  None keeps every layer in
+        #: ``evaluator_factory.layer_names``, each under its own name; a list,
+        #: tuple or single string keeps just those layers, likewise unrenamed.
+        #:
+        #: The keys are the slice's declared columns.  A layer the evaluator
+        #: does not return is skipped at build time without complaint, so its
+        #: column is declared but never written.  Being VAR, it is part of the
+        #: block's identity: tabs differing only here are different blocks.
         feature_namemap: dict[str, str] | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
@@ -562,6 +573,7 @@ class Featuretable(UpstreamTabSlices, Datatable):
         datapoint_table: Datatable
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
+        #: Passed unchanged to every tab; see `Featuretab.VAR.feature_namemap`.
         feature_namemap: dict | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 

@@ -7044,9 +7044,13 @@ class Datastack(Datablock):
         return self
 
     def build(self, *args, deep: bool = False, **kwargs):
-        # A stack that is already valid and owes no topics has nothing to build.
-        # super().build() logs the skip or elision and returns immediately.
-        if not deep and (self.valid() and not self.owedtopics() or (self._redirected_paths_ is not None and not self.ownedtopics())):
+        # A stack that is completely redirected answers from elsewhere;
+        # its build is elided regardless of deep.
+        if self._redirected_paths_ is not None and not self.ownedtopics():
+            return super().build(*args, deep=deep, **kwargs)
+        # An unredirected (or partially redirected) stack that is already valid
+        # and owes no topics has nothing to build unless deep=True forces it.
+        if not deep and self.valid() and not self.owedtopics():
             return super().build(*args, deep=deep, **kwargs)
         # The blocks adopt what their specializations resolve to FIRST. A stack
         # whose own build is then elided -- itself adopted whole -- or skipped

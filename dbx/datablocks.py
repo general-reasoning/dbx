@@ -2468,7 +2468,13 @@ class Datablock:
 
     def specialize(self, journal=None):
         """Install the applicable specialization without building any unspecialized topics."""
+        if self.valid():
+            return self
+        if isinstance(journal, BlocksJournal):
+            journal = _shared_journal_(journal, self)
         j = journal if journal is not None else self.__dict__.get('__specialization_journal__')
+        if isinstance(j, BlocksJournal):
+            j = _shared_journal_(j, self)
         self._install_specialization_(journal=j)
         return self
 
@@ -4147,6 +4153,8 @@ class Datablock:
         a topic that was renamed, a build that was cleared -- shows up here as a
         row with a reason, rather than as a block that quietly rebuilds.
         """
+        if isinstance(journal, BlocksJournal):
+            journal = _shared_journal_(journal, self)
         rows = []
         for sp in (self.SPECIALIZATIONS or []):
             named = self._toplevel_topics_(sp.topics)
@@ -4192,6 +4200,8 @@ class Datablock:
         installed without anything being redirected or recorded. For why each
         declared specialization did or did not apply, see `specializations()`.
         """
+        if isinstance(journal, BlocksJournal):
+            journal = _shared_journal_(journal, self)
         memo = {'journal': journal}
         for sp, (paths, entry) in self._specialization_candidates_(journal, _memo=memo):
             named = self._toplevel_topics_(sp.topics)
@@ -6355,6 +6365,8 @@ class Datablock:
 
         h = self.get_hash(specialization)
         anchor = self._specialization_anchor_(specialization)
+        if isinstance(journal, BlocksJournal):
+            journal = _shared_journal_(journal, self)
         try:
             if specialization.anchor is not SAME:
                 j = self._journal_under_(anchor, journal, hash=h)
@@ -6497,6 +6509,10 @@ class Datablock:
         *_memo*, given, holds the journal: read the first time a candidate needs
         it, and kept there for the caller.
         """
+        if not self._specializing_():
+            return
+        if isinstance(journal, BlocksJournal):
+            journal = _shared_journal_(journal, self)
         memo = _memo if _memo is not None else {'journal': journal}
         for sp in (self.SPECIALIZATIONS or []):
             why = self._specialization_mismatch_(sp)
@@ -6546,8 +6562,11 @@ class Datablock:
         # Already redirected -- in memory, or recorded in the .redirection topic
         # a previous build wrote -- is already installed: resolving it
         # again would read the journal and redirect, and record, all over again.
-        if not self._specializing_() or self._redirected_paths_ is not None:
+        # Likewise, if the block is already valid, do not install a redirection.
+        if not self._specializing_() or self._redirected_paths_ is not None or self.valid():
             return None
+        if isinstance(journal, BlocksJournal):
+            journal = _shared_journal_(journal, self)
         # Read at most once -- and only if a candidate gets as far as resolving --
         # for finding one and for redirecting to it alike.
         memo = {'journal': journal}
@@ -6701,9 +6720,18 @@ class DatablockSpecializationInstaller:
         self.idx = idx
 
     def __call__(self, stack, *, journal=None):
+        if stack._block_paths_topic_() and stack._check_block_path_(self.idx):
+            return (None, True)
         with forming_with_journal(journal):
             block = stack._form_block_(self.idx)
-        return block._install_specialization_(journal=_shared_journal_(journal, block))
+        if block.valid():
+            if stack._block_paths_topic_():
+                stack._write_block_path_(self.idx)
+            return (None, True)
+        sp = block._install_specialization_(journal=_shared_journal_(journal, block))
+        if sp is not None and stack._block_paths_topic_():
+            stack._write_block_path_(self.idx)
+        return (sp, False)
 
 
 class DatablockRedirectionClearer:
@@ -6942,7 +6970,8 @@ class Datastack(Datablock):
         self._install_block_specializations_(journal=build_journal,
                                             parallelization=parallelization,
                                             n_workers=n_workers, **kwargs)
-        super().specialize(journal=journal)
+        stack_journal = None if isinstance(journal, BlocksJournal) else journal
+        super().specialize(journal=stack_journal)
         return self
 
     def build(self, *args, **kwargs):
@@ -7216,14 +7245,53 @@ class Datastack(Datablock):
         block_cls = self._block_class_()
         if n == 0 or block_cls is None or not getattr(block_cls, 'SPECIALIZATIONS', None):
             return None
+        kind = self._block_kind_()
+        item_label = 'tabs' if kind == 'TAB' else 'blocks'
+
+        # If all blocks are already marked built/valid, nothing to specialize.
+        if self._block_paths_topic_():
+            try:
+                built_set = self._built_block_set_()
+                if len(built_set) == n:
+                    self.log.info(
+                        f"{self.__class__.__name__}: all {n} {item_label} already valid, "
+                        f"skipping specialization adoption"
+                    )
+                    return pd.Series([None] * n, dtype=object)
+            except Exception:
+                pass
+
         shared = journal if journal is not None else self._build_journal_()
         if shared is None:
             return None
+        tag = f"CHECKING VALIDITY & SPECIALIZING {n} {item_label} [{self.__class__.__name__}]"
         results = self._exec_over_blocks_(
             [self.DatablockSpecializationInstaller(i) for i in range(n)], journal=shared,
-            tag=f"ADOPTING SPECIALIZATIONS of {n} blocks [{self.__class__.__name__}]",
+            tag=tag,
             parallelization=parallelization, n_workers=n_workers, **kwargs)
-        return pd.Series(results, dtype=object)
+
+        specializations = []
+        n_already_valid = 0
+        n_specialized = 0
+        for r in results:
+            if isinstance(r, tuple) and len(r) == 2:
+                sp, was_valid = r
+                specializations.append(sp)
+                if was_valid:
+                    n_already_valid += 1
+                elif sp is not None:
+                    n_specialized += 1
+            else:
+                specializations.append(r)
+                if r is not None:
+                    n_specialized += 1
+
+        n_unresolved = n - n_already_valid - n_specialized
+        self.log.info(
+            f"{self.__class__.__name__}: specialization adoption complete for {n} {item_label}: "
+            f"{n_already_valid} already valid, {n_specialized} specialized, {n_unresolved} unresolved"
+        )
+        return pd.Series(specializations, dtype=object)
 
     def validate_block(self, idx: int, **kwargs) -> bool:
         """Return whether the block at index *idx* validates."""

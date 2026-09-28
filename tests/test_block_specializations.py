@@ -198,3 +198,40 @@ class TestSpecializeMethod:
         assert res is not None
         assert all(v is None for v in res)
 
+    def test_stack_with_own_specializations_and_blocks_journal_does_not_crash(self, grown):
+        from dbx.datablocks import BlocksJournal
+        from test_specializations import v2table
+
+        table = v2table(grown, tag='stack_spec_test')
+        bj = BlocksJournal(journal=None, anchor=RowTab.anchor, datalake=str(grown))
+        # Must not raise AttributeError: 'BlocksJournal' object has no attribute 'empty'
+        table.specialize(journal=bj)
+
+    def test_install_block_specializations_skips_valid_and_specializes_invalid(self, grown):
+        # Build tab 0 directly without specializations
+        tab0 = v1table(grown, spec={'n': 3}, tag='mixed_valid', use_tab_specializations=False).tab(0)
+        tab0.build()
+        assert tab0.valid()
+        assert not tab0.redirected()
+
+        # Table with use_tab_specializations=True has tab 0 valid, tabs 1 and 2 unbuilt
+        table = v1table(grown, spec={'n': 3}, tag='mixed_valid')
+        res = table._install_block_specializations_()
+        assert res is not None
+        # tab 0 was already valid, so not specialized
+        assert res[0] is None
+        # tabs 1 and 2 adopted specializations
+        assert res[1] is not None
+        assert res[2] is not None
+
+        # Verify tab 0 stayed unredirected with its direct data
+        t0 = table.tab(0)
+        assert not t0.redirected()
+        with t0.fs.open(t0.path('rows'), 'r') as f:
+            assert f.read() == "rows-0\n"
+
+        # Verify tab 1 was redirected
+        t1 = table.tab(1)
+        assert t1.redirected()
+
+

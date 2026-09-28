@@ -570,7 +570,9 @@ def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
     frame itself, so that filtering on ``type`` or reading ``df['signature']``
     means what it says -- most of the point of a journal being a DataFrame.
     """
-    if df is None or df.empty:
+    if hasattr(df, 'journal'):
+        df = df.journal
+    if df is None or getattr(df, 'empty', True):
         return df
 
     def col(name):
@@ -1554,7 +1556,9 @@ class DatajournalFrame(pd.DataFrame):
                  parse_datetimes: bool = True, logger: Logger = Logger(),
                  index: str | None = None, unnormalized: bool = False, **filter_kwargs):
         
-        # Guard against an empty journal (no parquet files written yet).
+        # Guard against an empty journal (no parquet files written yet), or unwrap BlocksJournal.
+        if hasattr(df, 'journal'):
+            df = df.journal
         if df is None:
             df = pd.DataFrame()
 

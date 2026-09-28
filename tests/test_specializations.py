@@ -1140,6 +1140,8 @@ def test_specialization_unsafe_redirect_all_topics(tmp_path):
     assert hist.valid_path(hist.path('a'))
 
     modern = ModernBlock(datalake=str(tmp_path))
+    assert not modern.valid(), "constructing it adopts nothing"
+    modern.build()
     assert modern.valid()
     assert set(modern.redirected_topics()) == {'a', 'b'}
 

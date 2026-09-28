@@ -22,7 +22,7 @@ import collections
 import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
-from dataclasses import dataclass, fields, asdict, replace
+from dataclasses import dataclass, field, fields, asdict, replace
 import datetime
 import functools
 import gc
@@ -1215,30 +1215,22 @@ class Datablock:
         #: The VAR fields the narrower block never had, each at the value that
         #: makes the two computations agree: ``{field: value}``.
         spec: dict
-        #: The narrower block's TOPICS declaration, as given; held, once
-        #: constructed, as its topic names in declaration order.
-        topics: Topics | tuple[str, ...]
+        #: The narrower block's TOPICS declaration, ``{name: TopicNode}``, in its
+        #: own spelling -- or, read back from a record, that rendered as text.
+        topics: Topics | str
         #: The narrower block's VERSION, or ABSENT to take this class's.
         version: int | str | None | ABSENT = ABSENT
-        note: str = ''
-        #: The narrower block's topic DECLARATION -- or, read back from a
-        #: journal record, its rendering -- which *topics* was given as.
-        declared: Topics | str | None = None
         #: The anchor whose journal the narrower block is looked for in: SAME
         #: for this block's own, or the one it was built under.
         anchor: str | SAME = SAME
-        #: For a Datastack: the BLOCK fqcn -- a Datatable's TAB -- the narrower
-        #: stack's type names: SAME for this stack's own, a string for another,
-        #: or None for a stack built before a stack's type named its BLOCK.
-        BLOCK: str | SAME | None = SAME
         #: Whether the narrower block was built with legacy typing and signature.
         #: Setting legacy=True sets both legacy_typing and legacy_signature to True,
         #: allowing a modern block (without LEGACY_TYPING/LEGACY_SIGNATURE class flags)
         #: to reconstruct the exact hash of historical builds that were serialized
         #: with stringified/quoted spec dictionaries.
-        legacy: bool | None = None
-        legacy_typing: bool | None = None
-        legacy_signature: bool | None = None
+        legacy: bool | None = field(default=None, kw_only=True)
+        legacy_typing: bool | None = field(default=None, kw_only=True)
+        legacy_signature: bool | None = field(default=None, kw_only=True)
         #: Whether to redirect all topics recorded by the matched build entry,
         #: rather than restricting redirection to the subset named in `topics`.
         #:
@@ -1252,7 +1244,10 @@ class Datablock:
         #: earlier hash implementation underdeclared topics (e.g. hashed on a single
         #: topic like 'count' before instance topics were added to the hash).
         #: Its use is discouraged unless absolutely necessary to reach such legacy builds.
-        UNSAFE_redirect_all_topics: bool = False
+        UNSAFE_redirect_all_topics: bool = field(default=False, kw_only=True)
+        #: Why the coincidence holds. Last -- and keyword-only, so that it is
+        #: last in a subclass's constructor too, after its BLOCK or TAB.
+        note: str = field(default='', kw_only=True)
 
         # 1. Protocol and hooks --------------------------------------------
 
@@ -1264,64 +1259,63 @@ class Datablock:
             object.__setattr__(self, 'legacy_typing', self.legacy_typing)
             object.__setattr__(self, 'legacy_signature', self.legacy_signature)
             object.__setattr__(self, 'UNSAFE_redirect_all_topics', self.UNSAFE_redirect_all_topics)
-            declared = self.declared
-            if isinstance(declared, str):
-                declared = literal_topics(declared)     # the record form -- see to_dict
-            if declared is None:
-                if isinstance(self.topics, dict):
-                    # {name: node}: the topics AS THAT BLOCK DECLARED THEM. Their
-                    # names are still mine; their nodes, and so the era they are
-                    # spelled in, are its -- which is what a migration from the
-                    # sentinels to the markers changes and a list of names cannot say.
-                    declared = dict(self.topics)
-                elif isinstance(self.topics, (list, tuple)):
-                    declared = tuple(self.topics)
-            if declared is None:
+            topics = self.topics
+            if isinstance(topics, str):
+                topics = literal_topics(topics)         # the record form -- see to_dict
+            if isinstance(topics, (list, tuple)) and (self.legacy or self.legacy_typing or self.legacy_signature):
+                topics = tuple(topics)
+            elif not isinstance(topics, dict):
                 raise TypeError(
                     f"Specialization topics={self.topics!r} names topics without declaring "
                     f"them. Declare each as the narrower block did -- "
                     f"topics={{'spectra': 'spectra.npy', 'tiles': SLICETOPIC}} -- since "
                     f"nothing of a narrower block's identity is taken from this class's TOPICS."
                 )
-            object.__setattr__(self, 'declared', tuple(declared) if isinstance(declared, (list, tuple)) else (None if declared is None else dict(declared)))
-            object.__setattr__(self, 'topics', tuple(self.declared or self.topics))
+            # {name: node}: the topics AS THAT BLOCK DECLARED THEM. Their names
+            # are still mine; their nodes, and so the era they are spelled in,
+            # are its -- which is what a migration from the sentinels to the
+            # markers changes and a list of names cannot say.
+            object.__setattr__(self, 'topics', topics if isinstance(topics, tuple) else dict(topics))
             if self.anchor is not SAME and not (isinstance(self.anchor, str) and self.anchor):
                 raise TypeError(f"Specialization anchor= is SAME or an anchor string, got {self.anchor!r}")
-            if not (self.BLOCK is SAME or self.BLOCK is None or (isinstance(self.BLOCK, str) and self.BLOCK)):
-                raise TypeError(f"Specialization BLOCK= is SAME, None or a block fqcn, got {self.BLOCK!r}")
+
 
         def __hash__(self):
             # frozen=True would hash the field tuple, and one of those fields is
             # a dict. `key` is the same information, flattened.
             return hash(self.key)
 
+        def __eq__(self, other):
+            # By key, across the family: a table's specialization read back from
+            # its journal is a Datatable.Specialization, and equals the plain
+            # Datablock.Specialization the class declared when its TAB is SAME.
+            if not isinstance(other, Datablock.Specialization):
+                return NotImplemented
+            return self.key == other.key
+
         def __repr__(self):
             return (f"Specialization(spec={dict(self.spec)!r}, "
-                    f"topics={self.declared if self.declared is not None else list(self.topics)!r}"
+                    f"topics={self.topics!r}"
                     + (f", version={self.version!r}" if self.version is not ABSENT else "")
                     + (f", anchor={self.anchor!r}" if self.anchor is not SAME else "")
-                    + (f", BLOCK={self.BLOCK!r}" if self.BLOCK is not SAME else "")
                     + (f", legacy={self.legacy!r}" if self.legacy is not None else "")
                     + (f", legacy_typing={self.legacy_typing!r}" if self.legacy_typing is not None else "")
                     + (f", legacy_signature={self.legacy_signature!r}" if self.legacy_signature is not None else "")
                     + (f", UNSAFE_redirect_all_topics={self.UNSAFE_redirect_all_topics!r}" if self.UNSAFE_redirect_all_topics else "")
+                    + ''.join(f", {n}={v!r}" for n, v in self._extra_fields_() if v is not SAME)
                     + (f", note={self.note!r}" if self.note else "") + ")")
 
         # 2. Declared API --------------------------------------------------
 
         def to_dict(self):
-            """The record form: literal, so it round-trips through the journal."""
-            d = {'spec': dict(self.spec), 'topics': list(self.topics)}
-            if self.declared is not None:
-                # Its rendering, which literal_topics reads back: a marker is
-                # not a literal, and a record has to be.
-                d['declared'] = str(self.declared)
+            """The record form: literal, so it round-trips through the journal -- see `from_record`."""
+            # The declaration as its rendering, which literal_topics reads back:
+            # a marker is not a literal, and a record has to be.
+            d = {'spec': dict(self.spec), 'topics': str(self.topics)}
             if self.version is not ABSENT:
                 d['version'] = self.version
             if self.anchor is not SAME:
                 d['anchor'] = self.anchor
-            if self.BLOCK is not SAME:
-                d['BLOCK'] = self.BLOCK
             if self.legacy is not None:
                 d['legacy'] = self.legacy
             if self.legacy_typing is not None:
@@ -1330,11 +1324,48 @@ class Datablock:
                 d['legacy_signature'] = self.legacy_signature
             if self.UNSAFE_redirect_all_topics:
                 d['UNSAFE_redirect_all_topics'] = self.UNSAFE_redirect_all_topics
+            d.update((n, v) for n, v in self._extra_fields_() if v is not SAME)
             if self.note:
                 d['note'] = self.note
             return d
 
+        @classmethod
+        def from_record(cls, record: dict) -> 'Datablock.Specialization':
+            """A Specialization from its `to_dict` record -- or from one written before.
+
+            Records written while the declaration was a separate ``declared``
+            field carry ``'topics'`` as the names and ``'declared'`` as the
+            declaration's rendering; the declaration is what ``topics`` is now.
+            """
+            record = dict(record)
+            if 'declared' in record:
+                record['topics'] = record.pop('declared')
+            return cls(**record)
+
         # 3. Accessors -----------------------------------------------------
+
+        @property
+        def topic_names(self) -> tuple[str, ...]:
+            """The narrower block's topic names, in declaration order."""
+            return tuple(self.topics)
+
+        # 4. Helpers -------------------------------------------------------
+
+        #: The fields every Specialization has; a subclass's others -- a
+        #: Datastack's BLOCK, a Datatable's TAB -- are recorded and keyed too.
+        _base_fields = frozenset({'spec', 'topics', 'version', 'note', 'anchor',
+                                  'legacy', 'legacy_typing', 'legacy_signature',
+                                  'UNSAFE_redirect_all_topics'})
+
+        def _extra_fields_(self):
+            """``(name, value)`` of the fields a subclass adds, in declaration order."""
+            return [(f.name, getattr(self, f.name)) for f in fields(self)
+                    if f.name not in self._base_fields]
+
+        @property
+        def _block_(self):
+            """The block class the narrower stack's type names -- SAME: none named here."""
+            return SAME
 
         @property
         def key(self):
@@ -1345,12 +1376,13 @@ class Datablock:
             identities, and one would otherwise be served the other's hash.
             """
             return (tuple(sorted(self.spec.items(), key=lambda kv: kv[0])),
-                    self.topics, self.version,
-                    None if self.declared is None else str(self.declared),
+                    self.topic_names, self.version, str(self.topics),
                     None if self.anchor is SAME else self.anchor,
-                    'SAME' if self.BLOCK is SAME else self.BLOCK,
                     self.legacy, self.legacy_typing, self.legacy_signature,
-                    self.UNSAFE_redirect_all_topics)
+                    self.UNSAFE_redirect_all_topics,
+                    # A subclass's field at SAME overrides nothing: that
+                    # specialization IS the plain one, and keys as it.
+                    tuple((n, v) for n, v in self._extra_fields_() if v is not SAME))
 
     @dataclass
     class Redirection:
@@ -1817,7 +1849,7 @@ class Datablock:
         if self._SPECIALIZATIONS_ is not None:
             # After __post_init__, so the instance's own win over any a class
             # computes there, as they win over the class's.
-            self.SPECIALIZATIONS = [self.Specialization(**r) for r in self._SPECIALIZATIONS_]
+            self.SPECIALIZATIONS = [self.Specialization.from_record(r) for r in self._SPECIALIZATIONS_]
         if specialization_journal is None:
             specialization_journal = _forming_journal_(self.anchor, self.datalake)
         if specialization_journal is not None:
@@ -2809,7 +2841,7 @@ class Datablock:
         topics = recorded.get('topics')
         spec_record = recorded.get('specialization')
         try:
-            specialization = (self.Specialization(**spec_record)
+            specialization = (self.Specialization.from_record(spec_record)
                               if isinstance(spec_record, dict) else None)
         except TypeError:
             # Recorded when a specialization could name its topics without
@@ -2930,10 +2962,11 @@ class Datablock:
             why = self._specialization_mismatch_(specialization)
             if why is not None:
                 self.log.warning(f"UNSAFE_redirect: {specialization!r} does not apply: {why}")
+                return False
             if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 topics = None
             else:
-                topics = list(specialization.topics) if topics is None else topics
+                topics = list(specialization.topic_names) if topics is None else topics
 
         explicit_journal = journal is not None
         if journal is None:
@@ -2988,7 +3021,7 @@ class Datablock:
                 )
                 return False
             target_paths, entry = resolved
-            sp_topics = None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(specialization.topics))
+            sp_topics = None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(specialization.topic_names))
             redirect_record = {
                 'filter': {'hash': self.get_hash(specialization)},
                 'topics': sp_topics,
@@ -3710,8 +3743,8 @@ class Datablock:
             **self._type_entries_(specialization, with_block=with_block),
             'version': version,
             'paths': getattr(self, '_paths_', None),
-            'topics': self._topics_signature_(list(specialization.topics),
-                                              declared=specialization.declared),
+            'topics': self._topics_signature_(list(specialization.topic_names),
+                                              declared=specialization.topics),
         }
 
     def tp(self, *, deslash: bool = False, legacy: 'bool | None' = None) -> dict:
@@ -3884,7 +3917,7 @@ class Datablock:
         reconstructing a stack built then needs. See :meth:`_type_entries_`.
         """
         omit, topics = ((), None) if specialization is None else (
-            tuple(specialization.spec), list(specialization.topics))
+            tuple(specialization.spec), list(specialization.topic_names))
         version = self.version
         if specialization is not None and specialization.version is not ABSENT:
             version = specialization.version
@@ -3927,7 +3960,7 @@ class Datablock:
         parts.extend(f"{k}={v}" for k, v in self._type_entries_(specialization, with_block=with_block).items())
         parts.append(f"version={version}")
         parts.extend(self._topics_signature_(
-            topics, declared=None if specialization is None else specialization.declared))
+            topics, declared=None if specialization is None else specialization.topics))
         tp = os.path.join(*parts)
         if deslash:
             tp = tp.replace('\\', '')
@@ -4022,7 +4055,7 @@ class Datablock:
         """
         rows = []
         for sp in (self.SPECIALIZATIONS or []):
-            named = self._toplevel_topics_(sp.topics)
+            named = self._toplevel_topics_(sp.topic_names)
             row = self.SpecializationRow(
                 specialization=sp, hash=None, matches=False, why=None,
                 entry=None, paths=None, topics=named,
@@ -4864,8 +4897,8 @@ class Datablock:
         records = []
         for sp in given:
             if isinstance(sp, dict):
-                sp = cls.Specialization(**sp)
-            if not isinstance(sp, cls.Specialization):
+                sp = cls.Specialization.from_record(sp)
+            if not isinstance(sp, Datablock.Specialization):
                 raise TypeError(f"SPECIALIZATIONS= holds {sp!r}, which is not a Specialization")
             records.append(sp.to_dict())
         return records
@@ -6177,7 +6210,7 @@ class Datablock:
                 f"{unknown}, which {self.VAR.__name__} does not declare. A pin names a "
                 f"VAR field this class has and the narrower block did not."
             )
-        self._topic_leaves_(specialization.topics)   # raises on a topic we do not declare
+        self._topic_leaves_(specialization.topic_names)   # raises on a topic we do not declare
         typed = self._typed_specdict_()
         for k, v in specialization.spec.items():
             mine, pinned = typed[k], self._specialization_pin_(k, v)
@@ -6245,7 +6278,7 @@ class Datablock:
             if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 wanted = list(self.topics())
             else:
-                wanted = self._toplevel_topics_(specialization.topics)
+                wanted = self._toplevel_topics_(specialization.topic_names)
             paths = {t: recorded[t] for t in wanted if t in recorded}
             if len(paths) < len(wanted):
                 missing = sorted(set(wanted) - set(paths))
@@ -6365,10 +6398,10 @@ class Datablock:
                 self.log.detailed(f"specialization: {sp!r} does not apply: {why}")
                 continue
             # Per specialization, over the topics IT covers -- see `_unbuilt_`.
-            if not self._unbuilt_(sp.topics):
+            if not self._unbuilt_(sp.topic_names):
                 self.log.detailed(
                     f"specialization: {sp!r} does not apply: this block has data of "
-                    f"its own under {self._toplevel_topics_(sp.topics)!r}, which a "
+                    f"its own under {self._toplevel_topics_(sp.topic_names)!r}, which a "
                     f"build wrote here; reading the rest from elsewhere would mix two "
                     f"computations under one hash"
                 )
@@ -6417,7 +6450,7 @@ class Datablock:
                 if self.UNSAFE_redirect(specialization=sp, journal=memo['journal'], OVERRIDE=True):
                     return sp
                 continue
-            sp_topics = None if getattr(sp, 'UNSAFE_redirect_all_topics', False) else sp.topics
+            sp_topics = None if getattr(sp, 'UNSAFE_redirect_all_topics', False) else sp.topic_names
             self._redirected_paths_ = self._mapped_paths_(paths, None, sp_topics)
             self.log.info(
                 f"SPECIALIZATION (memory only, nothing recorded): {self.anchorkeypath} "
@@ -6758,11 +6791,28 @@ class Datastack(Datablock):
             f"{self.__class__.__name__} must implement __block__(idx)"
         )
 
-    #: The name the BLOCK is rendered under in this stack's type.
-    _block_entry = 'BLOCK'
+    @dataclass(frozen=True, repr=False, eq=False)   # the base's repr (note last) and equality
+    class Specialization(Datablock.Specialization):
+        """A Datablock's Specialization, and the BLOCK the narrower stack's type names.
+
+        *BLOCK*: SAME for this stack's own; a string for another fqcn; None for
+        a stack built before a stack's type named its BLOCK at all.
+        """
+        BLOCK: str | SAME | None = SAME
+
+        __hash__ = Datablock.Specialization.__hash__
+
+        def __post_init__(self):
+            super().__post_init__()
+            if not (self.BLOCK is SAME or self.BLOCK is None or (isinstance(self.BLOCK, str) and self.BLOCK)):
+                raise TypeError(f"Specialization BLOCK= is SAME, None or a block fqcn, got {self.BLOCK!r}")
+
+        @property
+        def _block_(self):
+            return self.BLOCK
 
     def _type_entries_(self, specialization=None, *, with_block: bool = True) -> dict:
-        """``{'BLOCK': fqcn}`` -- a Datatable's ``{'TAB': fqcn}``: the block class is part of what a stack IS.
+        """``{'BLOCK': fqcn}``: the block class is part of what a stack IS -- a Datatable calls it TAB.
 
         Without it a stack's hash disregarded its BLOCK -- an identity names no
         class, and a marker-spelled table carries none of its TAB's topics --
@@ -6773,11 +6823,11 @@ class Datastack(Datablock):
         """
         entries = super()._type_entries_(specialization, with_block=with_block)
         block = self._block_class_()
-        if specialization is not None and specialization.BLOCK is not SAME:
-            block = specialization.BLOCK
+        if specialization is not None and specialization._block_ is not SAME:
+            block = specialization._block_
         if not with_block or block is None:
             return entries
-        return {**entries, self._block_entry: block if isinstance(block, str) else block.fqcn}
+        return {**entries, 'BLOCK': block if isinstance(block, str) else block.fqcn}
 
     def build(self, *args, **kwargs):
         # The blocks adopt what their specializations resolve to FIRST. A stack

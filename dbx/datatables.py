@@ -1055,14 +1055,10 @@ class Datatab(DatatabBase):
         only : sequence of str, optional
             If provided, restrict the writers to only the named slices. Existing
             directories for undeclared or unselected slices are preserved.
-        """
         if isinstance(slices, (list, tuple, set)):
             if only is None:
                 only = list(slices)
             slices = None
-        elif slices is not None and only is None:
-            if any(s not in slices for s in self.slices()):
-                only = [s for s in self.slices() if s in slices]
 
         names = [n for n in self.slices() if n in only] if only is not None else self.slices()
         slices = self._writable_columns_(slices, names)

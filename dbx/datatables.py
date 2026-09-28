@@ -1055,6 +1055,7 @@ class Datatab(DatatabBase):
         only : sequence of str, optional
             If provided, restrict the writers to only the named slices. Existing
             directories for undeclared or unselected slices are preserved.
+        """
         if isinstance(slices, (list, tuple, set)):
             if only is None:
                 only = list(slices)

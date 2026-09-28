@@ -2219,13 +2219,13 @@ class Datablock:
         node = self._topicnode_(*topicpath)
 
         if isinstance(node, dict):
-            return {name: self.path(*topicpath, name, ensure_dirpath=ensure_dirpath,
-                                    bare=bare, local=local)
+            return {name: self.__path__(*topicpath, name, ensure_dirpath=ensure_dirpath,
+                                        bare=bare, local=local)
                     for name in node}
         if self._node_is_syntopic_(node):
             return None
 
-        dirpath = self.dirpath(*topicpath, local=local)
+        dirpath = self.dirpath(*topicpath, local=local, redirect=False)
         if ensure_dirpath and dirpath is not None:
             ensure_path(dirpath, storage_options=self.storage_options)
 
@@ -4375,17 +4375,18 @@ class Datablock:
         ensure: bool = False,
         list: bool = False,
         local: bool = False,
+        redirect: bool = True,
     ):
         """The directory for a topic, one path segment per level.
 
         A group has a directory of its own -- ``dirpath('data')`` is the parent
         of ``dirpath('data', 'frames')`` -- so this answers for groups and
-        leaves alike.  A :data:`SYNTOPIC` has no location and gives ``None``.
+        leaves alike.  A `SYNTOPIC` has no location and gives ``None``.
 
         A redirected topic answers with the directory of the path it is
         redirected to -- the path itself for a directory topic, its parent for a
         file one -- so a listing of a redirected block lists the data it
-        actually reads. As in :meth:`path`, ``local=True`` is never redirected:
+        actually reads. As in `path()`, ``local=True`` is never redirected:
         the local cache is this block's own.
         """
         topicpath = self._normtopic_(topicpath)
@@ -4394,7 +4395,7 @@ class Datablock:
             return None
         anchorkeypath = self.localanchorkeypath if local else self.anchorkeypath
         fs = self.localfs if local else self.fs
-        if not local:
+        if not local and redirect:
             redirected = self._redirect_dirpath_(*topicpath)
             if redirected is not None:
                 if list:
@@ -7850,17 +7851,28 @@ class Datastack(Datablock):
         """The class this stack's blocks are: its BLOCK, or None when it declares none."""
         return getattr(self, 'BLOCK', None)
 
+    def _block_kind_(self) -> str:
+        """'TAB' if this stack or its table declares TAB, else 'BLOCK'."""
+        if getattr(self, 'TAB', None) is not None:
+            return 'TAB'
+        table = getattr(getattr(self, 'var', None), 'partition', None)
+        table = getattr(table, 'datapoint_table', None)
+        if table is not None and getattr(table, 'TAB', None) is not None:
+            return 'TAB'
+        return 'BLOCK'
+
     def _blocks_journal_(self, **kwargs):
         """``(journal, anchor, url)`` of this stack's blocks: read once, for all of them.
 
-        From :attr:`BLOCK` when the stack declares one: the class's anchor under
-        :meth:`_blocks_datalake_` -- the blocks are taken to share it -- with no block
+        From `BLOCK` when the stack declares one: the class's anchor under
+        `_blocks_datalake_()` -- the blocks are taken to share it -- with no block
         formed at all. Otherwise from ``block(0)``, formed only to say where its
         journal is: uncached, and with specializations off, since forming it
         normally can install one and record it. Raises FileNotFoundError when
         nothing was ever journalled there.
         """
         block_cls = self._block_class_()
+        kind = self._block_kind_()
         if block_cls is not None:
             anchor, lake = block_cls.anchor, self._blocks_datalake_()
             # And every other anchor BLOCK's specializations look in: a renamed
@@ -7871,8 +7883,10 @@ class Datastack(Datablock):
             frames = []
             for a in [anchor] + others:
                 try:
+                    read_kwargs = dict(kwargs)
+                    read_kwargs.setdefault('desc', f"Reading {a} ({kind}) journal files")
                     frames.append(self.datajournal.read(a, datalake=lake, storage_options=self.storage_options,
-                                                        log=self.log, **kwargs))
+                                                        log=self.log, **read_kwargs))
                 except FileNotFoundError:
                     if a == anchor and not others:
                         raise
@@ -7898,12 +7912,18 @@ class Datastack(Datablock):
         block_cls = self._block_class_()
         if block_cls is None or not getattr(block_cls, 'SPECIALIZATIONS', None):
             return None
+        kind = self._block_kind_()
+        item_label = 'tabs' if kind == 'TAB' else 'blocks'
+        n_items = getattr(self, 'n_tabs', self.n_blocks)
+        anchor = block_cls.anchor
+        self.log.info(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
+                      f"for {n_items} {item_label} to resolve against...")
         try:
             journal, anchor, lake = self._blocks_journal_()
         except FileNotFoundError:
             return None
-        self.log.info(f"{self.__class__.__name__}: read the {anchor} journal once "
-                      f"({len(journal)} entries) for {self.n_blocks} blocks to resolve against")
+        self.log.info(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
+                      f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
         return BlocksJournal(journal, anchor, lake)
 
     def _with_build_journal_(self, callables, callable_kwargs):
@@ -7999,12 +8019,18 @@ class Datastack(Datablock):
                                  self._blocks_datalake_())
         if block_cls is None or not getattr(block_cls, 'SPECIALIZATIONS', None):
             return None
+        kind = self._block_kind_()
+        item_label = 'tabs' if kind == 'TAB' else 'blocks'
+        n_items = getattr(self, 'n_tabs', self.n_blocks)
+        anchor = block_cls.anchor
+        self.log.info(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
+                      f"for {n_items} {item_label} to resolve against...")
         try:
             journal, anchor, lake = self._blocks_journal_()
         except FileNotFoundError:
             return None                 # nothing to share: each block reads its own
-        self.log.info(f"{self.__class__.__name__}: read the {anchor} journal once "
-                      f"({len(journal)} entries) for {self.n_blocks} blocks")
+        self.log.info(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
+                      f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
         return BlocksJournal(journal, anchor, lake)
 
 

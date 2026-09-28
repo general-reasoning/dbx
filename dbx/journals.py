@@ -1771,7 +1771,7 @@ class Datajournal:
             return _ACTIVE_DATAJOURNALS[-1] if _ACTIVE_DATAJOURNALS else None
 
     def read(self, anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None,
-             log=None, n_workers=None, index=None, unnormalized: bool = False, url=None, **filter_kwargs):
+             log=None, n_workers=None, index=None, unnormalized: bool = False, url=None, desc=None, **filter_kwargs):
         """Read *anchor*'s journal under *url*: every entry, newest first, then filtered.
 
         Returns a `DatajournalFrame`, or the one `DatajournalEntry` at *loc*
@@ -1842,8 +1842,9 @@ class Datajournal:
 
         log.detailed(f"READING JOURNAL: from {anchordirpath=}, files: {parquet_files}")
         df = None
+        desc = desc or f"Reading {anchor} journal files"
         if len(parquet_files) > 0:
-            dfs = [d for d in Datajournal._read_files_(fs, parquet_files, n_workers=n_workers, log=log)
+            dfs = [d for d in Datajournal._read_files_(fs, parquet_files, n_workers=n_workers, log=log, desc=desc)
                    if d is not None]
             if dfs:
                 df = pd.concat(dfs, ignore_index=True)
@@ -2113,7 +2114,7 @@ class Datajournal:
         block.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
     @staticmethod
-    def _read_files_(fs, files, *, n_workers, log):
+    def _read_files_(fs, files, *, n_workers, log, desc=None):
         """One frame per entry file, aligned with *files*; None where one could not be read."""
         def read_entry_file(file):
             # Through `fs`, not by path: a glob returns paths as that
@@ -2124,10 +2125,11 @@ class Datajournal:
             with fs.open(file, 'rb') as f:
                 return pd.read_parquet(f, engine='pyarrow')
 
+        desc = desc or 'Reading journal files'
         results = [None] * len(files)
         with ThreadPoolExecutor(max_workers=max(1, min(n_workers, len(files)))) as ex:
             futures = {ex.submit(read_entry_file, file): i for i, file in enumerate(files)}
-            for future in tqdm.tqdm(as_completed(futures), desc='Reading journal files', total=len(files)):
+            for future in tqdm.tqdm(as_completed(futures), desc=desc, total=len(files)):
                 i = futures[future]
                 try:
                     _df = future.result()

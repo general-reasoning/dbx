@@ -158,3 +158,43 @@ class TestSpecializeMethod:
         assert tab.redirected()
         assert tab.validtopic('rows')
 
+    def test_find_specialization_on_redirected_block_resolves(self, grown):
+        table = v1table(grown, spec={'n': 3}, tag='spec_redirected')
+        tab = table.tab(0)
+        tab.specialize()
+        assert tab.redirected()
+        row = tab.find_specialization()
+        assert row is not None
+        assert row.resolved is True
+        assert 'rows' in row.paths
+
+    def test_valid_block_not_re_specialized(self, grown):
+        table = v1table(grown, spec={'n': 3}, tag='valid_tab', use_tab_specializations=False)
+        tab = table.tab(0)
+        tab.build()
+        assert tab.valid()
+        assert not tab.redirected()
+
+        # When already valid, specialize() must not install a redirection
+        tab_to_spec = v1table(grown, spec={'n': 3}, tag='valid_tab').tab(0)
+        assert not tab_to_spec.redirected()
+        res = tab_to_spec.specialize()
+        assert res is tab_to_spec
+        assert not tab_to_spec.redirected()
+        with tab_to_spec.fs.open(tab_to_spec.path('rows'), 'r') as f:
+            assert f.read() == "rows-0\n"
+
+    def test_datastack_specialize_with_blocks_journal_does_not_crash(self, grown):
+        from dbx.datablocks import BlocksJournal
+        table = v1table(grown, spec={'n': 3}, tag='bj_test')
+        bj = BlocksJournal(journal=None, anchor='nonexistent', datalake=str(grown))
+        table.specialize(journal=bj)
+
+    def test_valid_stack_skips_block_specializations(self, grown):
+        table = v1table(grown, spec={'n': 3}, tag='all_valid')
+        table.build()
+        assert table.valid()
+        res = table._install_block_specializations_()
+        assert res is not None
+        assert all(v is None for v in res)
+

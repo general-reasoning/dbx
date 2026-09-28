@@ -1746,6 +1746,8 @@ class Datatable(DatatabBase, Datastack):
                     self._built_tab_set_cache = set()
         return self._built_tab_set_cache
 
+    _built_block_set_ = _built_tab_set_
+
     def _check_tab_path_(self, i: int) -> bool:
         topic_name = self._tab_paths_topic_()
         if not topic_name:
@@ -1758,6 +1760,8 @@ class Datatable(DatatabBase, Datastack):
             return self.fs.exists(sentinel_path)
         except Exception:
             return False
+
+    _check_block_path_ = _check_tab_path_
 
     def _remove_tab_path_(self, i: int):
         topic_name = self._tab_paths_topic_()

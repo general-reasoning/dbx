@@ -302,8 +302,13 @@ def _at_path_(value, path, where):
     for depth, key in enumerate(path):
         if not isinstance(value, dict):
             at = '.'.join(path[:depth]) or 'the column'
+            detail = ""
+            if isinstance(value, list) and value and all(x is None for x in value):
+                detail = f" (a list of {len(value)} None values; entries may be null/empty)"
+            elif value is None:
+                detail = " (value is None; entry may be null/empty)"
             raise TypeError(f"{where}: asked for {'.'.join(path)!r}, but {at} holds a "
-                            f"{type(value).__name__}, which is not a dict")
+                            f"{type(value).__name__}{detail}, which is not a dict")
         if key not in value:
             at = '.'.join(path[:depth])
             raise KeyError(f"{where}: no key(s) [{key!r}]{' under ' + repr(at) if at else ''}; "

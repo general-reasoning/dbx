@@ -2491,7 +2491,26 @@ class Datablock:
         self._install_specialization_(journal=j)
         return self
 
-    def build(self, *args, **kwargs):
+    def build(self, *args, deep: bool = False, **kwargs):
+        # A redirected block answers its reads out of another entry's data (see
+        # redirection), so building it would produce data that nothing
+        # would go on to read. Declining is also what makes a redirect stick:
+        # a build_tree() sweeping past would otherwise quietly rebuild the very
+        # block someone redirected away from. Costs one journal read per
+        # instance, which redirection caches.
+        if self._redirected_paths_ is not None and not self.ownedtopics():
+            entry = self.redirection.entry if self.redirection is not None else None
+            whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
+                       if entry is not None else f"the paths {self._redirected_paths_}")
+            self.log.info(
+                f"BUILD ELIDED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
+                f"from there instead: nothing would read what a build of it wrote. Undo the "
+                f"redirection, or construct with redirect=False, to build it anyway."
+            )
+            return self
+        if not deep and self.valid() and not self.owedtopics():
+            self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
+            return self
         # A SPECIALIZATION is installed here: an older build of a
         # narrower block that covers what this build would produce is adopted
         # rather than recomputed -- recorded, so every later construction reads
@@ -2500,12 +2519,6 @@ class Datablock:
         # its TOPICS there and a specialization is named in terms of them.
         if not kwargs.pop('_specialized_', False):
             self.specialize(journal=self.__dict__.get('__specialization_journal__'))
-        # A redirected block answers its reads out of another entry's data (see
-        # redirection), so building it would produce data that nothing
-        # would go on to read. Declining is also what makes a redirect stick:
-        # a build_tree() sweeping past would otherwise quietly rebuild the very
-        # block someone redirected away from. Costs one journal read per
-        # instance, which redirection caches.
         if self._redirected_paths_ is not None and not self.ownedtopics():
             entry = self.redirection.entry if self.redirection is not None else None
             whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
@@ -2882,7 +2895,7 @@ class Datablock:
             self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: END --------------------------------")
             self.write_journal_entry(event=f"build_tree:{s}:end")
         if not exclude_self:
-            self.build(*args, **kwargs)
+            self.build(*args, deep=deep, **kwargs)
         return self
 
     def valid_var(self, *, reduce=False):
@@ -7030,7 +7043,11 @@ class Datastack(Datablock):
         super().specialize(journal=stack_journal)
         return self
 
-    def build(self, *args, **kwargs):
+    def build(self, *args, deep: bool = False, **kwargs):
+        # A stack that is already valid and owes no topics has nothing to build.
+        # super().build() logs the skip or elision and returns immediately.
+        if not deep and (self.valid() and not self.owedtopics() or (self._redirected_paths_ is not None and not self.ownedtopics())):
+            return super().build(*args, deep=deep, **kwargs)
         # The blocks adopt what their specializations resolve to FIRST. A stack
         # whose own build is then elided -- itself adopted whole -- or skipped
         # as valid never forms its blocks, and blocks that moved to identities
@@ -7038,7 +7055,7 @@ class Datastack(Datablock):
         self.__dict__['__build_journal__'] = self._build_journal_()
         try:
             self.specialize(journal=self.__dict__['__build_journal__'])
-            return super().build(*args, _specialized_=True, **kwargs)
+            return super().build(*args, deep=deep, _specialized_=True, **kwargs)
         finally:
             self.__dict__.pop('__build_journal__', None)
 

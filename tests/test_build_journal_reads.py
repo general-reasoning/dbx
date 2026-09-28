@@ -224,3 +224,23 @@ def test_the_journal_is_not_in_the_tables_definition(tmp_path):
     table = Table(datalake=str(tmp_path), spec={'n': 2})
     table.tab(0)
     assert '__child_journal__' not in table.dfn and 'child_journal' not in table.quote()
+
+
+def test_already_built_table_shortcircuits_build_and_build_tree(tmp_path, monkeypatch):
+    Table(datalake=str(tmp_path), spec={'n': 4}).build()
+    reads = _count_full_reads(monkeypatch)
+    table = Table(datalake=str(tmp_path), spec={'n': 4})
+    assert table.valid()
+    table.build()
+    assert reads == [], "build() on an already-valid table must not read tab journals"
+    table.build_tree()
+    assert reads == [], "build_tree() on an already-valid table must not read tab journals"
+
+
+def test_build_tree_deep_forces_build(tmp_path, monkeypatch):
+    Table(datalake=str(tmp_path), spec={'n': 4}).build()
+    reads = _count_full_reads(monkeypatch)
+    table = Table(datalake=str(tmp_path), spec={'n': 4})
+    table.build_tree(deep=True)
+    tab_reads = [a for a in reads if a == Tab.anchor]
+    assert len(tab_reads) >= 1, "build_tree(deep=True) must force build"

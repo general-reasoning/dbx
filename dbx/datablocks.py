@@ -1241,6 +1241,10 @@ class Datablock:
         #: topic like 'count' before instance topics were added to the hash).
         #: Its use is discouraged unless absolutely necessary to reach such legacy builds.
         UNSAFE_redirect_all_topics: bool = field(default=False, kw_only=True)
+        #: Specific subset of topics to redirect from the matched build. If None,
+        #: redirects all topics declared in `topics` (or all recorded topics if
+        #: `UNSAFE_redirect_all_topics` is True).
+        redirect_topics: tuple[str, ...] | list[str] | None = field(default=None, kw_only=True)
         #: Why the coincidence holds. Last -- and keyword-only, so that it is
         #: last in a subclass's constructor too, after its BLOCK or TAB.
         note: str = field(default='', kw_only=True)
@@ -1335,6 +1339,8 @@ class Datablock:
                 d['legacy'] = list(self.legacy)
             if self.UNSAFE_redirect_all_topics:
                 d['UNSAFE_redirect_all_topics'] = self.UNSAFE_redirect_all_topics
+            if self.redirect_topics is not None:
+                d['redirect_topics'] = list(self.redirect_topics)
             d.update((n, v) for n, v in self._extra_fields_() if v is not SAME)
             if self.note:
                 d['note'] = self.note
@@ -1384,7 +1390,7 @@ class Datablock:
         #: The fields every Specialization has; a subclass's others -- a
         #: Datastack's BLOCK, a Datatable's TAB -- are recorded and keyed too.
         _base_fields = frozenset({'spec', 'topics', 'version', 'note', 'anchor',
-                                  'legacy', 'UNSAFE_redirect_all_topics'})
+                                  'legacy', 'UNSAFE_redirect_all_topics', 'redirect_topics'})
 
         def _extra_fields_(self):
             """``(name, value)`` of the fields a subclass adds, in declaration order."""
@@ -1409,6 +1415,7 @@ class Datablock:
                     None if self.anchor is SAME else self.anchor,
                     self.legacy,
                     self.UNSAFE_redirect_all_topics,
+                    tuple(self.redirect_topics) if self.redirect_topics is not None else None,
                     # A subclass's field at SAME overrides nothing: that
                     # specialization IS the plain one, and keys as it.
                     tuple((n, v) for n, v in self._extra_fields_() if v is not SAME))
@@ -3074,6 +3081,8 @@ class Datablock:
                 return False
             if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 topics = None
+            elif getattr(specialization, 'redirect_topics', None) is not None:
+                topics = list(specialization.redirect_topics)
             else:
                 topics = list(specialization.topics) if topics is None else topics
 
@@ -3336,18 +3345,19 @@ class Datablock:
                     raise (e)
 
         had_redirection = False
-        try:
-            red_dir = self.dirpath('.redirection')
-            if self.fs.exists(red_dir):
-                had_redirection = True
-                self.log.info(f"UNSAFE_clear: removing .redirection for {self.anchorkeypath} (the underlying block being redirected to is not affected)")
-                clear_path(red_dir, recursive=True)
-        except Exception:
-            pass
+        if len(topics) == 0:
+            try:
+                red_dir = self.dirpath('.redirection')
+                if self.fs.exists(red_dir):
+                    had_redirection = True
+                    self.log.info(f"UNSAFE_clear: removing .redirection for {self.anchorkeypath} (the underlying block being redirected to is not affected)")
+                    clear_path(red_dir, recursive=True)
+            except Exception:
+                pass
 
-        self._redirected_paths_ = None
-        # Invalidate @functools.cached_property cache on this instance after clearing.
-        self.__dict__.pop('redirection', None)
+            self._redirected_paths_ = None
+            # Invalidate @functools.cached_property cache on this instance after clearing.
+            self.__dict__.pop('redirection', None)
 
         def clear_topic(topicpath):
             # A group names a directory but holds no data of its own; clearing
@@ -4210,7 +4220,12 @@ class Datablock:
             journal = _shared_journal_(journal, self)
         memo = {'journal': journal}
         for sp, (paths, entry) in self._specialization_candidates_(journal, _memo=memo):
-            named = self._toplevel_topics_(sp.topics)
+            if getattr(sp, 'UNSAFE_redirect_all_topics', False):
+                named = list(self.topics())
+            elif getattr(sp, 'redirect_topics', None) is not None:
+                named = list(self._toplevel_topics_(sp.redirect_topics))
+            else:
+                named = list(self._toplevel_topics_(sp.topics))
             return self.SpecializationRow(
                 specialization=sp,
                 hash=self.get_hash(sp),
@@ -6403,6 +6418,8 @@ class Datablock:
                 continue
             if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 wanted = list(self.topics())
+            elif getattr(specialization, 'redirect_topics', None) is not None:
+                wanted = list(self._toplevel_topics_(specialization.redirect_topics))
             else:
                 wanted = self._toplevel_topics_(specialization.topics)
             paths = {t: recorded[t] for t in wanted if t in recorded}
@@ -6581,7 +6598,12 @@ class Datablock:
                 if self.UNSAFE_redirect(specialization=sp, journal=memo['journal'], OVERRIDE=True):
                     return sp
                 continue
-            sp_topics = None if getattr(sp, 'UNSAFE_redirect_all_topics', False) else sp.topics
+            if getattr(sp, 'UNSAFE_redirect_all_topics', False):
+                sp_topics = None
+            elif getattr(sp, 'redirect_topics', None) is not None:
+                sp_topics = sp.redirect_topics
+            else:
+                sp_topics = sp.topics
             self._redirected_paths_ = self._mapped_paths_(paths, None, sp_topics)
             self.log.info(
                 f"SPECIALIZATION (memory only, nothing recorded): {self.anchorkeypath} "

@@ -6509,8 +6509,6 @@ class Datablock:
         *_memo*, given, holds the journal: read the first time a candidate needs
         it, and kept there for the caller.
         """
-        if not self._specializing_():
-            return
         if isinstance(journal, BlocksJournal):
             journal = _shared_journal_(journal, self)
         memo = _memo if _memo is not None else {'journal': journal}

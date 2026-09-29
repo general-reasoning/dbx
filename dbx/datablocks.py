@@ -1245,6 +1245,12 @@ class Datablock:
         #: redirects all topics declared in `topics` (or all recorded topics if
         #: `UNSAFE_redirect_all_topics` is True).
         redirect_topics: tuple[str, ...] | list[str] | None = field(default=None, kw_only=True)
+        #: Mapping from current VAR field names to historical ones,
+        #: ``{current_name: historical_name}``.  Mirrors `redirect_topics`
+        #: for vars: when a VAR field has been renamed, the specialization
+        #: reconstructs the historical identity under the old key name so
+        #: the hash matches what was built before the rename.
+        redirect_vars: dict | None = field(default=None, kw_only=True)
         #: Why the coincidence holds. Last -- and keyword-only, so that it is
         #: last in a subclass's constructor too, after its BLOCK or TAB.
         note: str = field(default='', kw_only=True)
@@ -1299,6 +1305,11 @@ class Datablock:
             object.__setattr__(self, 'topics', topics if isinstance(topics, tuple) else dict(topics))
             if self.anchor is not SAME and not (isinstance(self.anchor, str) and self.anchor):
                 raise TypeError(f"Specialization anchor= is SAME or an anchor string, got {self.anchor!r}")
+            rv = self.redirect_vars
+            if rv is not None:
+                if not isinstance(rv, dict):
+                    raise TypeError(f"Specialization redirect_vars= must be a dict or None, got {rv!r}")
+                object.__setattr__(self, 'redirect_vars', dict(rv))
 
 
         def __hash__(self):
@@ -1321,6 +1332,7 @@ class Datablock:
                     + (f", anchor={self.anchor!r}" if self.anchor is not SAME else "")
                     + (f", legacy={list(self.legacy)!r}" if self.legacy is not None else "")
                     + (f", UNSAFE_redirect_all_topics={self.UNSAFE_redirect_all_topics!r}" if self.UNSAFE_redirect_all_topics else "")
+                    + (f", redirect_vars={self.redirect_vars!r}" if self.redirect_vars else "")
                     + ''.join(f", {n}={v!r}" for n, v in self._extra_fields_() if v is not SAME)
                     + (f", note={self.note!r}" if self.note else "") + ")")
 
@@ -1341,6 +1353,8 @@ class Datablock:
                 d['UNSAFE_redirect_all_topics'] = self.UNSAFE_redirect_all_topics
             if self.redirect_topics is not None:
                 d['redirect_topics'] = list(self.redirect_topics)
+            if self.redirect_vars is not None:
+                d['redirect_vars'] = dict(self.redirect_vars)
             d.update((n, v) for n, v in self._extra_fields_() if v is not SAME)
             if self.note:
                 d['note'] = self.note
@@ -1390,7 +1404,8 @@ class Datablock:
         #: The fields every Specialization has; a subclass's others -- a
         #: Datastack's BLOCK, a Datatable's TAB -- are recorded and keyed too.
         _base_fields = frozenset({'spec', 'topics', 'version', 'note', 'anchor',
-                                  'legacy', 'UNSAFE_redirect_all_topics', 'redirect_topics'})
+                                  'legacy', 'UNSAFE_redirect_all_topics', 'redirect_topics',
+                                  'redirect_vars'})
 
         def _extra_fields_(self):
             """``(name, value)`` of the fields a subclass adds, in declaration order."""
@@ -1416,6 +1431,7 @@ class Datablock:
                     self.legacy,
                     self.UNSAFE_redirect_all_topics,
                     tuple(self.redirect_topics) if self.redirect_topics is not None else None,
+                    tuple(sorted(self.redirect_vars.items())) if self.redirect_vars is not None else None,
                     # A subclass's field at SAME overrides nothing: that
                     # specialization IS the plain one, and keys as it.
                     tuple((n, v) for n, v in self._extra_fields_() if v is not SAME))
@@ -3739,8 +3755,8 @@ class Datablock:
     def signaturestr(self, *, deslash: bool = False, legacy: bool | None = None,
                   legacy_typing: bool | None = None,
                   legacy_signature: bool | None = None, pretty: bool = False,
-                  omit=()):
-        """The base identity string that :meth:`typestr` -- and hence :attr:`hash` and :attr:`code` -- is built from.
+                  omit=(), redirect_vars=None):
+        """The base identity string that `typestr` -- and hence `hash` and `code` -- is built from.
 
         Two independent opt-outs, because they were two different things
         sharing one name:
@@ -3754,6 +3770,10 @@ class Datablock:
         ``legacy=`` is the era switch and sets BOTH -- which is what it has
         always meant, back when they were one thing. The two named arguments
         override it individually.
+
+        *redirect_vars*, when given, is ``{current_name: historical_name}`` and
+        is forwarded to `_typed_specdict_` so the rendered spec uses the
+        historical key names and sort order.
         """
         if legacy_typing is None:
             legacy_typing = legacy
@@ -3774,6 +3794,8 @@ class Datablock:
             sig_spec = self.__expand_spec__('signature', legacy=norm, legacy_typing=True)
             if omit:
                 sig_spec = {k: v for k, v in sig_spec.items() if k not in set(omit)}
+            if redirect_vars:
+                sig_spec = {redirect_vars.get(k, k): v for k, v in sig_spec.items()}
             kwargs_dict = {**(self._identity_rootkwargs_ if norm else {}), 'spec': sig_spec}
             sig = self.__repr_from_kwargs__(kwargs_dict, anchor=None, quote_strs=not norm)
         else:
@@ -3782,7 +3804,7 @@ class Datablock:
             # Root kwargs only on explicit opt-in: signature and hash are
             # relocatable, and nothing about typing changes that.
             root = ''.join(f"{k}={v!r}, " for k, v in self._identity_rootkwargs_.items()) if norm else ''
-            sig = f"({root}spec={self._typed_specdict_(legacy=False, omit=omit)!r})"
+            sig = f"({root}spec={self._typed_specdict_(legacy=False, omit=omit, redirect_vars=redirect_vars)!r})"
         if deslash:
             sig = sig.replace('\\', '')
         self.log.detailed(f"signature: ------------> legacy={legacy}")
@@ -3958,9 +3980,10 @@ class Datablock:
             }
         version = self.version if specialization.version is ABSENT else specialization.version
         omit = tuple(specialization.spec)
+        redirect_vars = getattr(specialization, 'redirect_vars', None)
         leg = legacy_typing if legacy_typing is not None else (legacy if legacy is not None else specialization.legacy_typing)
         return {
-            'signature': {'spec': self._typed_specdict_(legacy=leg, omit=omit)},
+            'signature': {'spec': self._typed_specdict_(legacy=leg, omit=omit, redirect_vars=redirect_vars)},
             **self._type_entries_(specialization, with_block=with_block),
             'version': version,
             'paths': getattr(self, '_paths_', None),
@@ -4139,6 +4162,7 @@ class Datablock:
         """
         omit, topics = ((), None) if specialization is None else (
             tuple(specialization.spec), list(specialization.topics))
+        redirect_vars = getattr(specialization, 'redirect_vars', None) if specialization is not None else None
         version = self.version
         if specialization is not None and specialization.version is not ABSENT:
             version = specialization.version
@@ -4170,7 +4194,8 @@ class Datablock:
         # with it. Masked, until keyby stopped naming the hash, by __setstate__
         # building the logger name out of self.key and caching _hash on the way.
         parts = [self.signaturestr(deslash=deslash, legacy_typing=legacy_typing,
-                                legacy_signature=legacy_signature, omit=omit)]
+                                legacy_signature=legacy_signature, omit=omit,
+                                redirect_vars=redirect_vars)]
         # The narrower block's version when the specialization names one, this
         # class's otherwise. Taking it from the class unconditionally was what
         # made VERSION unbumpable while a specialization was live: the
@@ -4231,10 +4256,12 @@ class Datablock:
         return self.get_type(specialization)['signature']
 
     def get_signaturestr(self, specialization: 'Datablock.Specialization | None' = None, **kwargs) -> str:
-        """:meth:`signaturestr`, or the narrower block's: the fields *specialization* pins, dropped."""
+        """`signaturestr`, or the narrower block's: the fields *specialization* pins, dropped."""
         if specialization is None:
             return self.signaturestr(**kwargs)
-        return self.signaturestr(omit=tuple(specialization.spec), **kwargs)
+        redirect_vars = getattr(specialization, 'redirect_vars', None)
+        return self.signaturestr(omit=tuple(specialization.spec),
+                                redirect_vars=redirect_vars, **kwargs)
 
     def get_typestr(self, specialization: 'Datablock.Specialization | None' = None, **kwargs) -> str:
         """``typestr(specialization=...)``: the identity :meth:`get_hash` is the sha256 of."""
@@ -4985,7 +5012,8 @@ class Datablock:
         # only when it clearly denoted something other than text.
         return value if isinstance(parsed, str) else parsed
 
-    def _typed_specdict_(self, *, legacy: 'bool | None' = None, omit=()) -> dict:
+    def _typed_specdict_(self, *, legacy: 'bool | None' = None, omit=(),
+                         redirect_vars=None) -> dict:
         """The spec as real Python values -- ints as ints, blocks as sub-dicts.
 
         Built from ``self.var``, NOT by parsing the rendered signature. The
@@ -4995,12 +5023,21 @@ class Datablock:
 
         Speclines stay strings, since a specline IS a string; every other leaf
         is its declared type.
+
+        *redirect_vars*, when given, is a ``{current_name: historical_name}``
+        mapping.  Each current field is emitted under its historical name, and
+        the keys are sorted by historical name so the rendered spec matches the
+        identity of the build before the rename.
         """
         legacy = self._legacy_typing_(legacy)
+        renames = redirect_vars or {}
         fields = self.VAR.__dataclass_fields__
         keys = [f.name for f in fields.values()]
         if not legacy:
-            keys = sorted(keys)
+            # Sort by the OUTPUT name: the historical name for renamed fields,
+            # the current name for everything else.  This reproduces the sort
+            # order the narrower block used, because *its* fields had those names.
+            keys = sorted(keys, key=lambda k: renames.get(k, k))
         # *omit* drops fields the class did not used to have, so what is left
         # renders exactly as the narrower block rendered it. Dropping keys
         # cannot reorder the rest, which is what makes the reconstruction exact.
@@ -5009,10 +5046,11 @@ class Datablock:
 
         out = {}
         for k in keys:
+            out_key = renames.get(k, k)
             value = getattr(self.var, k)
             raw = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else value
             if isinstance(value, Datablock):
-                out[k] = value._typed_specdict_(legacy=legacy)
+                out[out_key] = value._typed_specdict_(legacy=legacy)
             elif self.is_specline(raw):
                 # A specline standing for a block renders as that block, the
                 # same as holding the block directly -- which is what keeps
@@ -5023,10 +5061,10 @@ class Datablock:
                     evaluated = dataparts.eval(raw)
                 except Exception:
                     evaluated = None
-                out[k] = (evaluated._typed_specdict_(legacy=legacy)
+                out[out_key] = (evaluated._typed_specdict_(legacy=legacy)
                           if isinstance(evaluated, Datablock) else raw)
             else:
-                out[k] = self._coerce_to_annotation_(value, fields[k].type)
+                out[out_key] = self._coerce_to_annotation_(value, fields[k].type)
         return out
 
     def _legacy_norm_(self) -> bool:

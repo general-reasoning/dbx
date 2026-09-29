@@ -153,7 +153,7 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
         datalake=url,
         spec=dict(
             featuretab=featuretab,
-            layer="final",
+            feature="final",
             threshold=0.3,
         ),
         tag="bipolar_1",
@@ -216,7 +216,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
         datalake=url,
         spec=dict(
             featuretable=featuretable,
-            layer="final",
+            feature="final",
         ),
         devices=["cpu"],
         tag="bipolar_table",

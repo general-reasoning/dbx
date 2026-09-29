@@ -700,7 +700,7 @@ class BipolarFeaturetab(UpstreamTabSlices, Datatab):
     @dataclass
     class VAR(Datablock.VAR):
         featuretab: Featuretab
-        layer: str = 'final'
+        feature: str = 'final'
         threshold: float = 0.5
         ternarize: bool = False
         datapoints_per_row: int = 1
@@ -708,9 +708,9 @@ class BipolarFeaturetab(UpstreamTabSlices, Datatab):
     # 1. Protocol and hooks ------------------------------------------------
 
     def __build__(self):
-        layer = self.var.layer
-        res = self.featuretab.data(('features', layer), concat=True)
-        raw_data = _extract_pair_data_(res, ('features', layer))
+        feature = self.var.feature
+        res = self.featuretab.data(('features', feature), concat=True)
+        raw_data = _extract_pair_data_(res, ('features', feature))
 
         if hasattr(raw_data, 'numpy'):
             features = raw_data.numpy()
@@ -757,7 +757,7 @@ class BipolarFeaturetable(UpstreamTabSlices, Datatable):
     @dataclass
     class VAR(Datatable.VAR):
         featuretable: Featuretable = None
-        layer: str = 'final'
+        feature: str = 'final'
         threshold: float = 0.5
         ternarize: bool = False
 
@@ -776,7 +776,7 @@ class BipolarFeaturetable(UpstreamTabSlices, Datatable):
             verbose=False,
             spec=dict(
                 featuretab=dbx.quote(featuretab),
-                layer=self.var.layer,
+                feature=self.var.feature,
                 threshold=self.var.threshold,
                 ternarize=self.var.ternarize,
             ),

@@ -8,7 +8,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from test_specializations import RowTab, TestOneJournalReadForAWholeTable, adopted, v1table  # noqa: E402
+from test_specializations import RowTab, TestOneJournalReadForAWholeTable, adopted, v1, v1table  # noqa: E402
 
 from dbx.datablocks import Datablock  # noqa: E402
 
@@ -322,6 +322,59 @@ class TestSpecializeMethod:
         assert res is not None
         assert len(res) == 3
         assert all(x is None for x in res)
+
+    def test_chased_redirections(self, grown):
+        # Create block C with actual data
+        b_c = v1(grown, tag='block_c').build()
+        assert b_c.valid()
+        c_path = b_c.path('spectra')
+
+        # Block B redirects to Block C
+        b_b = v1(grown, tag='block_b')
+        assert b_b.UNSAFE_redirect(paths={'spectra': c_path}, OVERRIDE=True)
+        assert b_b._redirected_paths_['spectra'] == c_path
+
+        # Block A redirects to Block B (which is itself redirected)
+        b_a = v1(grown, tag='block_a')
+        b_intermediate = os.path.join(b_b.anchorkeypath, 'spectra')
+        assert b_a.UNSAFE_redirect(paths={'spectra': b_intermediate}, OVERRIDE=True)
+
+        # b_a must have chased through b_b to point directly to c_path!
+        assert b_a._redirected_paths_['spectra'] == c_path
+        with b_a.fs.open(b_a.path('spectra'), 'r') as f:
+            assert f.read() == "spectra-16000"
+
+    def test_installer_does_not_skip_invalid_block_on_stale_sentinel(self, grown):
+        table = v1table(grown, spec={'n': 2}, tag='installer_sentinel_test')
+        # Simulate a stale sentinel existing for tab 0 when tab 0 is not actually valid
+        topic_name = table._block_paths_topic_()
+        if topic_name:
+            sentinel_dir = table.path(topic_name, ensure_dirpath=True)
+            sentinel_file = os.path.join(sentinel_dir, "tab_0.path")
+            with table.fs.open(sentinel_file, 'w') as f:
+                f.write("/nonexistent/path")
+
+            assert table._check_block_path_(0) is True
+
+            # The block itself is invalid
+            assert table.tab(0).valid() is False
+
+            # Installer should NOT return (None, True) since block is invalid
+            installer = table.DatablockSpecializationInstaller(0)
+            res = installer(table)
+            # Either it tries to specialize and fails/succeeds, but it must NOT return (None, True)
+            assert res != (None, True)
+
+    def test_read_mds_shard_raises_on_missing_index(self, tmp_path):
+        import fsspec
+        from dbx.datastreams import read_mds_shard
+        import pytest
+
+        fs = fsspec.filesystem('file')
+        nonexistent = str(tmp_path / "nonexistent_shard")
+        with pytest.raises(FileNotFoundError, match="MDS shard index not found"):
+            read_mds_shard(nonexistent, fs)
+
 
 
 

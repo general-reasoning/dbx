@@ -1408,7 +1408,7 @@ def read_mds_shard(shard_dir, fs, cache_limit='2gb', tmpdir=None):
 
         index_path = os.path.join(local_dir, 'index.json')
         if not os.path.exists(index_path):
-            return []
+            raise FileNotFoundError(f"MDS shard index not found: {index_path} (shard_dir={shard_dir})")
 
         with open(index_path) as f:
             index = json.load(f)

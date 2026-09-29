@@ -3173,6 +3173,7 @@ class Datablock:
                 )
                 return False
             target_paths, entry = resolved
+            target_paths = self._chase_redirected_paths_(target_paths)
             sp_topics = None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(specialization.topics))
             redirect_record = {
                 'filter': {'hash': self.get_hash(specialization)},
@@ -3187,8 +3188,8 @@ class Datablock:
         # If the redirector gave us paths directly, use those immediately.
         redirector_paths = paths if (redirector is not None and isinstance(res, dict) and 'paths' in res) else None
         if redirector_paths is not None:
-            target_paths = redirector_paths
-            redirect_record = redirector_paths
+            target_paths = self._chase_redirected_paths_(redirector_paths)
+            redirect_record = target_paths
 
         if target_paths is None and filter is not None and journal is not None:
             try:
@@ -3201,18 +3202,20 @@ class Datablock:
                             target_paths = entry.inst(remote=remote).paths()
                         except Exception as e:
                             self.log.detailed(f"UNSAFE_redirect: entry.inst() failed: {e}")
+                    if target_paths is not None:
+                        target_paths = self._chase_redirected_paths_(target_paths)
                     redirect_record = (entry.block.id if topics is None else
                                        {'filter': dict(filter), 'topics': list(topics)})
             except Exception as e:
                 self.log.warning(f"UNSAFE_redirect: filter {filter!r} failed on journal: {e}")
 
         if target_paths is None and paths is not None:
-            target_paths = paths
-            redirect_record = paths
+            target_paths = self._chase_redirected_paths_(paths)
+            redirect_record = target_paths
             if topics is not None:
                 # A bare paths dict cannot carry the restriction -- it IS the
                 # record -- so the restriction has to be said in the dict form.
-                redirect_record = {'paths': paths, 'topics': list(topics)}
+                redirect_record = {'paths': target_paths, 'topics': list(topics)}
 
         if target_paths is None and filter is None and explicit_journal:
             try:
@@ -3225,6 +3228,8 @@ class Datablock:
                             target_paths = entry.inst(remote=remote).paths()
                         except Exception as e:
                             self.log.detailed(f"UNSAFE_redirect: entry.inst() failed: {e}")
+                    if target_paths is not None:
+                        target_paths = self._chase_redirected_paths_(target_paths)
                     redirect_record = entry.block.id
             except Exception as e:
                 self.log.warning(f"UNSAFE_redirect: failed reading journal: {e}")
@@ -3234,6 +3239,7 @@ class Datablock:
             return False
 
         remapped_paths = self._mapped_paths_(target_paths, topic_map, topics)
+        remapped_paths = self._chase_redirected_paths_(remapped_paths)
 
         if dry_run:
             validation = None
@@ -5579,6 +5585,53 @@ class Datablock:
             return redirected
         return os.path.dirname(redirected)
 
+    def _find_block_redirection_yaml_(self, topic: str, path: str) -> str | None:
+        """Find the .redirection/paths.yaml for the block owning *path*, or None."""
+        parts = [p for p in str(topic).split('/') if p]
+        max_levels = len(parts) + 1
+        d = os.path.dirname(path)
+        for _ in range(max_levels):
+            candidate = os.path.join(d, '.redirection', 'paths.yaml')
+            try:
+                if self.fs.exists(candidate):
+                    return candidate
+            except Exception:
+                pass
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+        return None
+
+    def _chase_redirected_paths_(self, paths: dict[str, str]) -> dict[str, str]:
+        """Chase chained redirections for each topic until reaching terminal, non-redirected paths."""
+        if not paths or not isinstance(paths, dict):
+            return paths
+        final_paths = {}
+        for topic, path in paths.items():
+            if not isinstance(path, str):
+                final_paths[topic] = path
+                continue
+            curr_path = path
+            visited = set()
+            while curr_path and curr_path not in visited:
+                visited.add(curr_path)
+                red_yaml = self._find_block_redirection_yaml_(topic, curr_path)
+                if red_yaml is None:
+                    break
+                try:
+                    target_red_paths = read_yaml(red_yaml, storage_options=self.storage_options)
+                    if isinstance(target_red_paths, dict) and topic in target_red_paths:
+                        next_path = target_red_paths[topic]
+                        if isinstance(next_path, str) and next_path != curr_path:
+                            curr_path = next_path
+                            continue
+                except Exception:
+                    pass
+                break
+            final_paths[topic] = curr_path
+        return final_paths
+
     def _journal_hashdirpath_(self):
         """The directory holding THIS block's journal entries, and no others."""
         return self.datajournal.dirpath(self, 'journal')
@@ -6502,6 +6555,7 @@ class Datablock:
                 note(f"entry {entry.block.id} records no path for {missing} -- a "
                      f"specialization is all of its topics or none of them")
                 continue
+            paths = self._chase_redirected_paths_(paths)
             gone = sorted(t for t, p in paths.items() if not self.valid_path(p))
             if gone:
                 self.log.verbose(
@@ -6814,12 +6868,10 @@ class DatablockSpecializationInstaller:
         self.idx = idx
 
     def __call__(self, stack, *, journal=None):
-        if stack._block_paths_topic_() and stack._check_block_path_(self.idx):
-            return (None, True)
         with forming_with_journal(journal):
             block = stack._form_block_(self.idx)
         if block.valid():
-            if stack._block_paths_topic_():
+            if stack._block_paths_topic_() and not stack._check_block_path_(self.idx):
                 stack._write_block_path_(self.idx)
             return (None, True)
         sp = block._install_specialization_(journal=_shared_journal_(journal, block))
@@ -8245,9 +8297,11 @@ class Datastack(Datablock):
                     red_yaml = os.path.join(recorded_path, '.redirection', 'paths.yaml')
                     try:
                         if s.fs.exists(red_yaml):
-                            s._redirected_paths_ = read_yaml(red_yaml, storage_options=s.storage_options)
+                            red_paths = read_yaml(red_yaml, storage_options=s.storage_options)
+                            s._redirected_paths_ = s._chase_redirected_paths_(red_paths)
                         elif s.fs.exists(recorded_path):
-                            s._redirected_paths_ = {t: os.path.join(recorded_path, t) for t in s.topics()}
+                            raw_paths = {t: os.path.join(recorded_path, t) for t in s.topics()}
+                            s._redirected_paths_ = s._chase_redirected_paths_(raw_paths)
                     except Exception:
                         pass
         finally:

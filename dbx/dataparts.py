@@ -1020,7 +1020,84 @@ class _WorkersExited_(RuntimeError):
     """Every worker of an executor exited while results were still owed."""
 
 
-class _CallableExecutorBase_:
+def _with_payloads_(exc, payloads):
+    """*exc*, carrying the results that DID arrive before it was raised, as ``executor_payloads``.
+
+    An executor that raises returns nothing, so the results of the callables
+    that succeeded -- their values, and under a `Datajournal` scope the entry
+    paths they wrote -- would go down with the raise. None stands for an item
+    that never arrived, as in exec_callables' own result.
+    """
+    try:
+        exc.executor_payloads = list(payloads)
+    except Exception:
+        pass    # an exception type that takes no attributes: raised as it is
+    return exc
+
+
+class _CarriesDatajournal_:
+    """An executor's public entry points, carrying the open `Datajournal` scope to its workers.
+
+    A ``with Datajournal()`` scope -- the one every ``dbx.exec`` command runs
+    in -- is its process's, and a worker process has none: a block built
+    there would write under that process's own session, and the command's
+    exec-journal row would list none of it. So an executor whose workers are
+    other processes (``CROSSES_PROCESSES``) sends each callable out in the
+    scope's handle (`Datajournal.carry`) and takes back what it wrote
+    (`Datajournal.collect`) before a caller sees the result. The results
+    themselves are unchanged. With no scope open, or workers that are threads
+    of this process, the callables go out as they are.
+
+    Subclasses implement the dispatch: ``_exec_callables_`` and
+    ``_exec_callables_streaming_``, with these methods' signatures and results.
+    """
+
+    #: True for an executor whose workers are other processes.
+    CROSSES_PROCESSES = False
+
+    # 2. Declared API ------------------------------------------------------
+
+    def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """Execute all callables and return their results as a flat list, in input order."""
+        callables, dj = self._carry_datajournal_(callables)
+        if dj is None:
+            return self._exec_callables_(callables, *ctx_args, **ctx_kwargs)
+        try:
+            payloads = self._exec_callables_(callables, *ctx_args, **ctx_kwargs)
+        except BaseException as exc:
+            dj.collect_raised(exc)
+            raise
+        return [dj.collect(p) for p in payloads]
+
+    def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """Execute callables and yield their results in input order: in lists of *batch_size*, when it is over 1."""
+        callables, dj = self._carry_datajournal_(callables)
+        stream = self._exec_callables_streaming_(callables, *ctx_args, **ctx_kwargs)
+        if dj is None:
+            yield from stream
+            return
+        batched = self.batch_size is not None and self.batch_size > 1
+        try:
+            for out in stream:
+                yield [dj.collect(p) for p in out] if batched else dj.collect(out)
+        except BaseException as exc:
+            dj.collect_raised(exc)
+            raise
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _carry_datajournal_(self, callables):
+        """*callables* as they go out, and the handle to collect into -- None when there is nothing to carry."""
+        if not self.CROSSES_PROCESSES:
+            return callables, None
+        from .journals import Datajournal
+        dj = Datajournal.current()
+        if dj is None:
+            return callables, None
+        return dj.carry(callables), dj
+
+
+class _CallableExecutorBase_(_CarriesDatajournal_):
     """
     Abstract base that implements the fan-out / collect / join scaffold shared by
     MultithreadingCallableExecutor and MultiprocessingCallableExecutor.
@@ -1062,7 +1139,17 @@ class _CallableExecutorBase_:
 
     # 2. Declared API ------------------------------------------------------
 
-    def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+    def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """Execute all callables and return results as a flat list (same as exec_callables)."""
+        return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
+
+    def execute_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """Execute callables and yield results in input order (same as exec_callables_streaming)."""
+        return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _exec_callables_(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute all callables and return results as a flat list.
 
         When *batch_size* is set, workers accumulate that many results before
@@ -1194,13 +1281,13 @@ class _CallableExecutorBase_:
                 self.log.info(f"{self.tag}: workers stopped")
             if pexc is not None:
                 self.log.verbose("Reraising exception from worker")
-                raise pexc
+                raise _with_payloads_(pexc, payloads)
             if exc is not None:
                 self.log.verbose("Reraising production-loop exception")
-                raise exc
+                raise _with_payloads_(exc, payloads)
         return payloads
 
-    def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+    def _exec_callables_streaming_(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute callables and yield results in **input order**.
 
         A reorder buffer holds out-of-order arrivals from parallel workers;
@@ -1337,29 +1424,23 @@ class _CallableExecutorBase_:
                     yield emit_buf
             finally:
                 _stop_workers()
-                # Discarding here, unlike exec_callables: this runs on the paths
-                # that are ending the stream -- a worker exception, or a consumer
-                # that stopped iterating -- and a generator being closed may not
-                # yield, so there is nowhere for a late result to go. The
+                # This runs on the paths that are ending the stream -- a worker
+                # exception, or a consumer that stopped iterating -- and a
+                # generator being closed may not yield, so a late result cannot
+                # be handed on. It can be KEPT, and after a worker exception it
+                # is, with what arrived but was never yielded: on the exception,
+                # as exec_callables does. A consumer that stopped has no
+                # exception to carry them, and they are discarded. The
                 # recoverable case is handled above, before the finally.
-                self._drain_until_workers_exit_(workers, result_queue)
+                self._drain_until_workers_exit_(workers, result_queue,
+                                                on_success=_keep if e is not None else None)
                 for w in workers:
                     w.join()
                 if e is not None:
-                    raise e
+                    raise _with_payloads_(e, [*emit_buf, *pending.values()])
         else:
             return
             yield  # make this a generator
-
-    def execute(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        """Execute all callables and return results as a flat list (same as exec_callables)."""
-        return self.exec_callables(callables, *ctx_args, **ctx_kwargs)
-
-    def execute_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
-        """Execute callables and yield results in input order (same as exec_callables_streaming)."""
-        return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
-
-    # 4. Helpers -----------------------------------------------------------
 
     @property
     def _n_workers_(self) -> int:
@@ -1744,6 +1825,8 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
+    CROSSES_PROCESSES = True
+
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
@@ -1803,7 +1886,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         gc.collect()
 
 
-class RayCallableExecutor:
+class RayCallableExecutor(_CarriesDatajournal_):
     """Execute callables on pre-created Ray actor workers.
 
     Requires the ``ray`` optional dependency (``pip install datablocks[ray]``).
@@ -1821,6 +1904,8 @@ class RayCallableExecutor:
     tag : str
         Label for the progress bar.
     """
+
+    CROSSES_PROCESSES = True
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -1861,7 +1946,9 @@ class RayCallableExecutor:
         """Execute callables and yield results in input order (same as exec_callables_streaming)."""
         return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
 
-    def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+    # 4. Helpers -----------------------------------------------------------
+
+    def _exec_callables_(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         if len(callables) > 0:
             result_queue = queue.Queue()
             done_queue = queue.Queue()
@@ -1915,15 +2002,18 @@ class RayCallableExecutor:
             self.log.debug(f"Joining threads")
             for thread in threads:
                 thread.join()
-                
+
             if e is not None:
+                # What the other threads put after the failure stopped the
+                # loop: results, kept on the exception, as the base executor does.
+                self._drain_successes_(result_queue, payloads.__setitem__)
                 self.log.verbose("Raising exception")
-                raise e
+                raise _with_payloads_(e, payloads)
             self.log.debug("Workers successfully joined")
             return payloads
         return []
 
-    def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+    def _exec_callables_streaming_(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         if len(callables) > 0:
             result_queue = queue.Queue()
             done_queue = queue.Queue()
@@ -1986,12 +2076,25 @@ class RayCallableExecutor:
                 for thread in threads:
                     thread.join()
                 if e is not None:
-                    raise e
+                    # Never yielded: the batch in hand, and what the other
+                    # threads put after the failure stopped the loop.
+                    late = []
+                    self._drain_successes_(result_queue, lambda _idx, p: late.append(p))
+                    raise _with_payloads_(e, [*batch, *late])
         else:
             return
             yield # make it a generator
 
-    # 4. Helpers -----------------------------------------------------------
+    @staticmethod
+    def _drain_successes_(result_queue, keep):
+        """``keep(callable_idx, payload)`` for every success left on *result_queue*, once the threads have joined."""
+        while True:
+            try:
+                success, _thread_idx, callable_idx, payload = result_queue.get_nowait()
+            except queue.Empty:
+                return
+            if success:
+                keep(callable_idx, payload)
 
     @staticmethod
     def _eval_ctx_args_kwargs_(ctx_args, ctx_kwargs):

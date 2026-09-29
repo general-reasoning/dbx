@@ -266,6 +266,8 @@ is given an anchor.
 Filter values are patterns: a substring, a regex (`id='^a6'`), or a glob
 (`id='*a6*'`, `id='a6*'`).
 
+See [JOURNALS.md](JOURNALS.md).
+
 ## CLI
 
 The package installs several console entry points:

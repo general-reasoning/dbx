@@ -2888,11 +2888,11 @@ class Datablock:
                 self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s}: already valid --------")
                 continue
             self.write_journal_entry(event=f"build_tree:{s}:begin")
-            self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: BEGIN --------------------------------")
+            self.log.verbose(f">>>>>>>>>>>>>>>>>>>>>>>> BUILDING SUBTREE at {s}: BEGIN >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
             # A child built as part of this tree belongs to this run. VAR is
             # where it was constructed, which is too early to know that.
             self._adopt_(c).build_tree(*args, deep=deep, **kwargs)
-            self.log.verbose(f"------------------------ BUILDING SUBTREE at {s}: END --------------------------------")
+            self.log.verbose(f"<<<<<<<<<<<<<<<<<<<<<<<< BUILDING SUBTREE at {s}: END <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
             self.write_journal_entry(event=f"build_tree:{s}:end")
         if not exclude_self:
             self.build(*args, deep=deep, **kwargs)

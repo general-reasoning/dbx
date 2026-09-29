@@ -301,7 +301,7 @@ class ExecjournalEntry(pd.Series):
 
     The counterpart of `DatajournalEntry` for the exec journal: ``exec``,
     ``exec``, ``datetime``, ``id``, ``session``, ``datajournal_entries`` and
-    ``comment`` are its columns; :meth:`entries` and :meth:`datajournal`
+    ``comment`` are its columns; :meth:`dataentries` and :meth:`datajournal`
     follow ``datajournal_entries`` to the block journal entries the command
     wrote.
     """
@@ -317,7 +317,7 @@ class ExecjournalEntry(pd.Series):
 
     # 2. Declared API ------------------------------------------------------
 
-    def entries(self, *, n_workers: int | None = None) -> list:
+    def dataentries(self, *, n_workers: int | None = None) -> list:
         """The `DatajournalEntry` of every block journal entry this command wrote, in the order written."""
         return Datajournal(storage_options=self.storage_options or None).read_entries(
             ExecjournalEntry._written_paths_(self), n_workers=n_workers)
@@ -380,11 +380,11 @@ class ExecjournalFrame(pd.DataFrame):
     """The exec journal: one `dbx.exec` command per row, newest first.
 
     The counterpart of `DatajournalFrame`. :meth:`get` answers with an
-    `ExecjournalEntry`, and :meth:`entries` with the block journal entries
+    `ExecjournalEntry`, and :meth:`dataentries` with the block journal entries
     of every command in the frame -- so a filter narrows to the commands and
-    ``.entries()`` goes on to what they wrote::
+    ``.dataentries()`` goes on to what they wrote::
 
-        dbx.journal(comment='nightly').entries()
+        dbx.journal(comment='nightly').dataentries()
     """
     _metadata = ['storage_options']
 
@@ -406,13 +406,13 @@ class ExecjournalFrame(pd.DataFrame):
             row = row.dropna()
         return ExecjournalEntry(row, storage_options=self.storage_options)
 
-    def entries(self, *, n_workers: int | None = None) -> list:
+    def dataentries(self, *, n_workers: int | None = None) -> list:
         """The block journal entries every command here wrote: row by row, each in the order written."""
         return Datajournal(storage_options=self.storage_options or None).read_entries(
             self._written_paths_(), n_workers=n_workers)
 
     def datajournal(self, *, n_workers: int | None = None):
-        """What :meth:`entries` reads, as one `DatajournalFrame`."""
+        """What :meth:`dataentries` reads, as one `DatajournalFrame`."""
         return Datajournal(storage_options=self.storage_options or None).read_frame(
             self._written_paths_(), n_workers=n_workers)
 
@@ -1353,8 +1353,10 @@ class DatajournalEntry(pd.Series):
     """A single row from a Datablock journal, with convenience accessors.
 
     Inherits from :class:`pandas.Series` so all standard pandas
-    operations work.  Named properties expose journal-specific fields
-    (``anchor``, ``hash``, ``url``, ``revision``, …).
+    operations work, among them attribute access to the row's columns
+    (``entry.anchor``, ``entry.hash``, ``entry.revision``, …) -- the raw
+    recorded values, absent where the column was null. The Datablock-shaped
+    view of the entry is :attr:`block`.
     """
     #: pandas carries only the attributes named here across operations that
     #: rebuild the object -- pickling among them. Without this, an entry that
@@ -1574,10 +1576,10 @@ class DatajournalEntry(pd.Series):
     def block(self):
         """This entry's `Block`: the block as it was when the entry was written.
 
-        The Datablock-shaped API lives there, and the accessors on this class
-        forward to it, so ``entry.paths()`` and ``entry.block.paths()`` are the
-        same call. Reach for ``.block`` when you want to hand something a
-        block-like object rather than a pandas row.
+        The Datablock-shaped API lives there and ONLY there: nothing on this
+        class forwards to it. ``entry.paths`` is the row's ``paths`` column --
+        pandas attribute access, a string -- and calling it raises; the
+        recorded mapping is ``entry.block.paths()``.
         """
         return Block(self)
 
@@ -1633,9 +1635,12 @@ class DatajournalFrame(pd.DataFrame):
     def get(self, entry:int, *, dropna: bool = False):
         """Return the entry at LABEL *entry* (``.loc``, not ``.iloc``).
 
-        A DatajournalFrame is numbered 0..N-1 newest-first, including one built with
-        filter kwargs, so a label is also a position -- but only for a journal
-        this class constructed. Index a frame you sliced yourself with ``.iloc``.
+        What a label is depends on how the frame was indexed. `dbx.datajournal`
+        indexes by ``id`` by default, so there *entry* is an entry's id.
+        ``index=None``, `Datablock.journal` and the frames
+        `ExecjournalEntry.datajournal` returns are numbered 0..N-1, and there
+        a label is also a position. For a frame you sliced yourself, use
+        ``.iloc`` for a position.
         """
         entry = self.loc[entry]
         if dropna:
@@ -1730,7 +1735,9 @@ class Datajournal:
     which is how ``dbx.exec`` puts one command's blocks under one session.
     The scope is the process, threads included. Another process has none of
     its own: a block pickled into one writes to that process's default unless
-    it was given a journal explicitly. It is operational, like ``tree``: not part
+    it was given a journal explicitly -- or was sent there by a dbx executor
+    (multiprocessing, torch_multiprocessing, ray), which carries the scope's
+    handle with the work and brings its written entries back (:meth:`carry`). It is operational, like ``tree``: not part
     of the signature, and never rendered into ``quote()`` or ``cite()``.
 
     *url*, *storage_options*, *log* and *n_workers* are the defaults
@@ -2088,10 +2095,49 @@ class Datajournal:
         rewrites its one entry file (see :meth:`write`), so the file holds the
         latest entry and the path is listed where it first appeared. Only this
         object's writes -- a block pickled into another process writes through
-        a copy, which keeps the session but collects its own list.
+        a copy, which keeps the session but collects its own list. A callable
+        sent there by an executor brings its copy's list back: see :meth:`carry`.
         """
         with self._written_lock:
             return list(self._written)
+
+    def carry(self, callables) -> list:
+        """*callables* wrapped to run under this handle in another process: `JournaledCallable`\\ s.
+
+        For an executor about to send work out of this process, which a
+        ``with`` scope does not reach. Each wrapper runs its callable inside
+        this handle -- the session crosses with it, as a pickled handle's does
+        -- and returns its value with the entry paths it wrote, a
+        `JournaledResult`, for :meth:`collect` to take back here.
+        """
+        return [JournaledCallable(c, self) for c in callables]
+
+    def collect(self, payload):
+        """The value a :meth:`carry` wrapper returned, its written paths added to this handle's.
+
+        Anything that is not a `JournaledResult` is handed back unchanged:
+        the None of a result that never arrived, say.
+        """
+        if not isinstance(payload, JournaledResult):
+            return payload
+        with self._written_lock:
+            for path in payload.datajournal_entries:
+                self._written.setdefault(path, None)
+        return payload.value
+
+    def collect_raised(self, exc: BaseException) -> None:
+        """Add the paths behind an executor's *exc* to this handle's: the failed call's, and its siblings'.
+
+        A failed build writes an entry too -- ``build:exception`` -- and the
+        :meth:`carry` wrapper sends its paths home on the exception, as
+        ``datajournal_entries``, since an exception is all a failure returns.
+        The calls that succeeded before it are on the exception as well, as
+        ``executor_payloads``: an executor that raises returns no results, and
+        keeps the ones that arrived there instead.
+        """
+        self.collect(JournaledResult(None, getattr(exc, 'datajournal_entries', None) or []))
+        for payload in getattr(exc, 'executor_payloads', None) or []:
+            self.collect(payload)
 
     def path(self, block, x, ext=None, *, ensure_dirpath: bool = True, filename_prefix: str = ''):
         """The file *block*'s artefact *x* is written to: ``.journal/{fqcn}/{x}/{hash}/``, per instance.
@@ -2258,6 +2304,60 @@ class Datajournal:
         if df['tree'].isna().all():
             df = df.drop(columns=['tree'])
         return df
+
+
+class JournaledCallable:
+    """A callable sent to another process with the `Datajournal` it was dispatched under.
+
+    A ``with Datajournal()`` scope is its process's, threads included, and a
+    worker process has none: a block built there writes to that process's
+    default -- another session, and paths nobody in the parent lists. Made by
+    `Datajournal.carry`, this runs the callable inside the handle it carries
+    and returns a `JournaledResult` -- its value, and the entry paths the call
+    wrote -- for `Datajournal.collect` to take back into the handle it came
+    from. Only this call's paths: a worker that runs several callables holds
+    one unpickled handle for all of them, and under ``fork`` that handle is a
+    copy of the parent's, holding its paths already.
+
+    A call that raises sends its paths home on the exception, as
+    ``datajournal_entries``, for `Datajournal.collect_raised`.
+    """
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __init__(self, fn, datajournal: 'Datajournal'):
+        self.fn = fn
+        self.datajournal = datajournal
+
+    def __call__(self, *args, **kwargs):
+        dj = self.datajournal
+        before = len(dj.written_entries())
+        with dj:
+            try:
+                value = self.fn(*args, **kwargs)
+            except BaseException as exc:
+                exc.datajournal_entries = dj.written_entries()[before:]
+                raise
+        return JournaledResult(value, dj.written_entries()[before:])
+
+    # 2. Declared API ------------------------------------------------------
+
+    def to(self, device):
+        """``fn.to(device)`` where *fn* has one, as a torch executor moves a callable; self either way."""
+        to = getattr(self.fn, 'to', None)
+        if callable(to):
+            self.fn = to(device)
+        return self
+
+
+class JournaledResult:
+    """What a `JournaledCallable` returns: the call's *value*, and the *datajournal_entries* it wrote."""
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __init__(self, value, datajournal_entries):
+        self.value = value
+        self.datajournal_entries = list(datajournal_entries)
 
 
 #: The journal a block uses when it is given none: one per process, so its

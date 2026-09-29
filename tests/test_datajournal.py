@@ -6,8 +6,10 @@ handle has a ``session`` fixed for its lifetime and written to every entry,
 and remembers every entry path it wrote (``written_entries()``).
 """
 import copy
+import functools
 import os
 import pickle
+import time
 from dataclasses import dataclass
 
 import pandas as pd
@@ -353,7 +355,7 @@ class TestExecjournal:
 
     def test_an_entry_gives_back_what_it_wrote_in_order(self, tmp_path):
         a, b = self._run(tmp_path)
-        entries = dbx.journal(iloc=0).entries()
+        entries = dbx.journal(iloc=0).dataentries()
         assert all(isinstance(e, DatajournalEntry) for e in entries)
         assert [e.block.hash for e in entries] == [a.hash, b.hash]
         assert [e.block.typestr() for e in entries] == [a.typestr(), b.typestr()]
@@ -362,12 +364,12 @@ class TestExecjournal:
         self._run(tmp_path)
         dbx.exec("Built(datalake=root, spec={'x': 9}).build()  # other", Built=Built, root=str(tmp_path))
         row_id = dbx.journal(comment='two', iloc=0)['id']
-        assert len(dbx.journal(id=row_id).entries()) == 2
-        assert len(dbx.journal().entries()) == 3
+        assert len(dbx.journal(id=row_id).dataentries()) == 2
+        assert len(dbx.journal().dataentries()) == 3
 
     def test_a_command_that_wrote_nothing(self, tmp_path):
         dbx.exec("1 + 1")
-        assert dbx.journal(iloc=0).entries() == []
+        assert dbx.journal(iloc=0).dataentries() == []
 
     def test_rerun_executes_it_again_as_a_new_command(self, tmp_path):
         """A rebuild of a valid block writes nothing, so the command writes a note -- which always writes."""
@@ -378,7 +380,7 @@ class TestExecjournal:
         rows = dbx.journal()
         assert len(rows) == 2 and rows['exec'].nunique() == 1
         assert rows.iloc[0]['session'] != first['session']
-        assert len(dbx.journal(iloc=0).entries()) == 1
+        assert len(dbx.journal(iloc=0).dataentries()) == 1
 
 
 class TestRepr:
@@ -521,7 +523,7 @@ class TestExecjournalShape:
         frame = entry.datajournal()
         assert isinstance(frame, DatajournalFrame)
         assert list(frame['hash']) == [a.hash, b.hash]
-        assert list(frame['entry_path']) == [e['entry_path'] for e in entry.entries()]
+        assert list(frame['entry_path']) == [e['entry_path'] for e in entry.dataentries()]
         assert list(dbx.journal().datajournal()['hash']) == [a.hash, b.hash]
 
     def test_a_command_that_wrote_nothing_has_an_empty_frame(self, tmp_path):
@@ -671,3 +673,108 @@ class TestTwoJournals:
     def test_datajournal_needs_to_be_told_what(self):
         with pytest.raises(TypeError, match="execjournal"):
             dbx.datajournal(None)
+
+
+class Timed(Datablock):
+    """Sleeps *delay* seconds, then builds -- or fails, with *fail*."""
+    TOPICS = {'output': 'output.txt'}
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        delay: float = 0.0
+        fail: bool = False
+
+    def __build__(self):
+        time.sleep(self.var.delay)
+        if self.var.fail:
+            raise RuntimeError("boom")
+        with open(self.path('output', ensure_dirpath=True), 'w') as f:
+            f.write('data')
+
+
+class FailingStack(Datastack):
+    """Two `Timed` blocks: the first builds after 6s, the second fails after 3s.
+
+    So the failure reaches the parent first, and the success only while it
+    drains the workers -- the result that used to go down with the raise.
+    """
+    BLOCK = Timed
+    TOPICS = {'meta': 'meta.txt'}
+
+    @property
+    def n_blocks(self):
+        return 2
+
+    def __block__(self, idx):
+        return Timed(datalake=self.url, spec={'delay': 6.0 if idx == 0 else 3.0, 'fail': idx == 1})
+
+
+def _built_under_the_scope(i, delay=0.0):
+    """Top level, so a spawned worker can unpickle it by name."""
+    time.sleep(delay)
+    b = Built(datalake=os.environ['DBX_ROOT'], spec={'x': 100 + i})
+    b.build()
+    return b.hash
+
+
+def _fails_after(delay):
+    time.sleep(delay)
+    raise RuntimeError("boom")
+
+
+class TestAcrossProcesses:
+    """A process executor carries the open scope to its workers and brings what they wrote back."""
+
+    @pytest.fixture(autouse=True)
+    def lake(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+
+    def test_a_stack_built_in_worker_processes(self, tmp_path):
+        s = dbx.exec("s = Stack(datalake=root, parallelization='multiprocessing', n_workers=2); s.build(); s",
+                     Stack=Stack, root=str(tmp_path))
+        e = dbx.execjournal(iloc=0)
+        frame = e.datajournal()
+        assert sorted(frame['hash']) == sorted([s.hash] + [b.hash for b in s.blocks()])
+        assert set(frame['session']) == {e['session']}
+
+    def test_a_block_that_failed_in_a_worker(self, tmp_path):
+        with pytest.raises(Exception):
+            dbx.exec("FailingStack(datalake=root, parallelization='multiprocessing', n_workers=2).build()",
+                     FailingStack=FailingStack, root=str(tmp_path))
+        frame = dbx.execjournal(iloc=0).datajournal()
+        events = frame[frame['anchor'] == Timed.anchor]['event']
+        # The failed block's own entry, from its worker -- the stack records a
+        # build:exception of its own, in this process -- and its sibling's,
+        # which succeeded after the failure had stopped the collecting.
+        assert sorted(events) == ['build:end', 'build:exception']
+
+    def test_results_are_the_callables_values(self, tmp_path):
+        from dbx.dataparts import callable_executor
+        with Datajournal() as dj:
+            hashes = callable_executor('multiprocessing', n_workers=2).exec_callables(
+                [functools.partial(_built_under_the_scope, i) for i in range(2)])
+        assert hashes == [block(tmp_path, x=100 + i).hash for i in range(2)]
+        assert len(dj.written_entries()) == 2
+
+    def test_no_scope_nothing_carried(self, tmp_path):
+        from dbx.dataparts import callable_executor
+        before = DEFAULT_DATAJOURNAL.written_entries()
+        hashes = callable_executor('multiprocessing', n_workers=1).exec_callables(
+            [functools.partial(_built_under_the_scope, 0)])
+        assert hashes == [block(tmp_path, x=100).hash]
+        assert DEFAULT_DATAJOURNAL.written_entries() == before
+
+    def test_a_stream_keeps_what_arrived_after_a_failure(self, tmp_path):
+        from dbx.dataparts import callable_executor
+        with Datajournal() as dj:
+            stream = callable_executor('multiprocessing', n_workers=2).exec_callables_streaming(
+                [functools.partial(_fails_after, 3.0), functools.partial(_built_under_the_scope, 0, 6.0)])
+            with pytest.raises(RuntimeError, match="boom"):
+                list(stream)
+        assert dj.written_entries() == [block(tmp_path, x=100).journal(iloc=0)['entry_path']]
+
+    def test_threads_are_not_wrapped(self):
+        from dbx.dataparts import callable_executor
+        with Datajournal():
+            assert callable_executor('multithreading', n_workers=2).exec_callables(
+                [lambda: 1, lambda: 2]) == [1, 2]

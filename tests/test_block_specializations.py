@@ -234,4 +234,61 @@ class TestSpecializeMethod:
         t1 = table.tab(1)
         assert t1.redirected()
 
+    def test_valid_does_not_install_specialization(self, grown):
+        table = v1table(grown, spec={'n': 3}, tag='valid_no_spec')
+        # table is not built, tabs are not built
+        # calling valid() must NOT install specializations
+        assert not table.valid()
+        assert not table.tab(0).valid()
+        assert not table.tab(0).redirected()
+
+        # calling valid_tabs() must NOT install specializations
+        v_series = table.valid_tabs()
+        assert not v_series.any()
+        assert not table.tab(0).redirected()
+        assert not table.tab(1).redirected()
+        assert not table.tab(2).redirected()
+
+    def test_valid_tabs_with_all_sentinels_reads_no_journal(self, grown, monkeypatch):
+        # Build the table so all tab_paths sentinels exist
+        table = v1table(grown, spec={'n': 3}, tag='sentinels_built')
+        table.build()
+        assert table.valid()
+
+        # Re-instantiate table: sentinels exist on disk
+        t2 = v1table(grown, spec={'n': 3}, tag='sentinels_built')
+        # Monkeypatch _build_journal_ to fail if called
+        def fail_build_journal(*args, **kwargs):
+            raise AssertionError("_build_journal_ should not be called by valid_tabs!")
+        monkeypatch.setattr(t2, '_build_journal_', fail_build_journal)
+
+        # valid_tabs must succeed and return all True without calling _build_journal_
+        valid_res = t2.valid_tabs()
+        assert len(valid_res) == 3
+        assert valid_res.all()
+
+    def test_tab_adopts_redirected_sentinel_path(self, grown):
+        # Build table
+        table = v1table(grown, spec={'n': 3}, tag='sentinel_adopt')
+        table.build()
+        assert table.valid()
+
+        # Point tab 0 sentinel to tab 1's path
+        topic_name = table._tab_paths_topic_()
+        sentinel_0 = os.path.join(table.path(topic_name), 'tab_0.path')
+        sentinel_1 = os.path.join(table.path(topic_name), 'tab_1.path')
+        with table.fs.open(sentinel_1, 'r') as f:
+            target_path = f.read().strip()
+        with table.fs.open(sentinel_0, 'w') as f:
+            f.write(target_path)
+
+        # Reconstruct table with redirected paths (as when adopted whole) and access tab(0)
+        t2 = v1table(grown, spec={'n': 3}, tag='sentinel_adopt')
+        t2._redirected_paths_ = {'tab_paths': table.path(topic_name), 'done': table.path('done')}
+        tab0 = t2.tab(0)
+        assert tab0.valid_topic('rows')
+        with tab0.fs.open(tab0.path('rows'), 'r') as f:
+            assert f.read() == "rows-1\n"
+
+
 

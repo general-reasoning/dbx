@@ -6717,18 +6717,13 @@ def UNSAFE_copy_block_from_callable(block, anchorkeypath, overwrite=False, topic
 
 
 class DatablockValidityChecker:
-    """Lightweight callable that checks if a block at index `idx` is valid.
-
-    *journal*, a ctx kwarg -- the `BlocksJournal` the stack read once -- is what
-    the block is formed against, rather than each check reading it.
-    """
+    """Lightweight callable that checks if a block at index `idx` is valid."""
 
     def __init__(self, idx: int):
         self.idx = idx
 
-    def __call__(self, stack, *, journal=None):
-        with forming_with_journal(journal):
-            return stack.valid_block(self.idx)
+    def __call__(self, stack):
+        return stack.valid_block(self.idx)
 
 
 def _shared_journal_(caller, block):
@@ -7206,6 +7201,15 @@ class Datastack(Datablock):
         n = self.n_blocks
         if n == 0:
             return pd.Series([], dtype=bool)
+        if self._block_paths_topic_():
+            try:
+                built_set = self._built_block_set_()
+                if len(built_set) == n:
+                    if false_only:
+                        return pd.Series([], dtype=bool)
+                    return pd.Series(True, index=pd.RangeIndex(n), dtype=bool)
+            except Exception:
+                pass
         executors = self._get_executors_()
         if parallelization is not None:
             key = parallelization.lower()
@@ -7227,7 +7231,7 @@ class Datastack(Datablock):
         )
         executor = executor_cls(**exec_kwargs)
         checkers = [self.DatablockValidityChecker(i) for i in range(n)]
-        results = executor.exec_callables(checkers, self, **self._with_build_journal_(checkers, {}))
+        results = executor.exec_callables(checkers, self)
         series = pd.Series(results, dtype=bool)
         if false_only:
             return series[~series]
@@ -8009,6 +8013,20 @@ class Datastack(Datablock):
         except Exception:
             return False
 
+    def _read_block_path_(self, i: int) -> str | None:
+        topic_name = self._block_paths_topic_()
+        if not topic_name:
+            return None
+        try:
+            block_dir = self.path(topic_name)
+            sentinel_path = os.path.join(block_dir, f"block_{i}.path")
+            if self.fs.exists(sentinel_path):
+                with self.fs.open(sentinel_path, 'r') as f:
+                    return f.read().strip()
+        except Exception:
+            pass
+        return None
+
     def _block_class_(self):
         """The class this stack's blocks are: its BLOCK, or None when it declares none."""
         return getattr(self, 'BLOCK', None)
@@ -8154,6 +8172,17 @@ class Datastack(Datablock):
                 else:
                     raise
             s = self._adopt_(s, keyby=True)
+            if self._redirected_paths_ is not None and self._block_paths_topic_():
+                recorded_path = self._read_block_path_(idx)
+                if recorded_path and s.anchorkeypath != recorded_path:
+                    red_yaml = os.path.join(recorded_path, '.redirection', 'paths.yaml')
+                    try:
+                        if s.fs.exists(red_yaml):
+                            s._redirected_paths_ = read_yaml(red_yaml, storage_options=s.storage_options)
+                        elif s.fs.exists(recorded_path):
+                            s._redirected_paths_ = {t: os.path.join(recorded_path, t) for t in s.topics()}
+                    except Exception:
+                        pass
         finally:
             stack.pop()
         declared = self._block_class_()

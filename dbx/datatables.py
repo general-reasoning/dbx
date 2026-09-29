@@ -1772,6 +1772,24 @@ class Datatable(DatatabBase, Datastack):
             return False
 
     _check_block_path_ = _check_tab_path_
+    _block_paths_topic_ = _tab_paths_topic_
+
+    def _read_tab_path_(self, i: int) -> str | None:
+        topic_name = self._tab_paths_topic_()
+        if not topic_name:
+            return None
+        try:
+            tab_dir = self.path(topic_name)
+            for prefix in ('tab_', 'block_'):
+                sentinel_path = os.path.join(tab_dir, f"{prefix}{i}.path")
+                if self.fs.exists(sentinel_path):
+                    with self.fs.open(sentinel_path, 'r') as f:
+                        return f.read().strip()
+        except Exception:
+            pass
+        return None
+
+    _read_block_path_ = _read_tab_path_
 
     def _remove_tab_path_(self, i: int):
         topic_name = self._tab_paths_topic_()

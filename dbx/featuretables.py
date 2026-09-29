@@ -632,6 +632,8 @@ class Featuretable(UpstreamTabSlices, Datatable):
             feature_namemap=self.spec.get('feature_namemap'),
             shard_size_limit_bytes=self.spec.get('shard_size_limit_bytes', 1 << 26),
         )
+        tab_specs = (getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
+                     or getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None))
         return self.TAB(
             datalake=self._datalake_,
             storage_options=self.storage_options,
@@ -640,6 +642,7 @@ class Featuretable(UpstreamTabSlices, Datatable):
             cache_limit=getattr(self, 'cache_limit', None),
             verbose=False,
             spec=spec,
+            SPECIALIZATIONS=tab_specs,
             device_batch_size=self.device_batch_size,
             device=device,
             streaming=self.streaming,

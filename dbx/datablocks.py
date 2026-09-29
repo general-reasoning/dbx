@@ -5644,7 +5644,10 @@ class Datablock:
         """
         if journal is not None and isinstance(journal, pd.DataFrame) and not journal.empty:
             if 'hash' in journal.columns and 'redirection' in journal.columns:
-                sub = journal[journal['hash'] == self.hash]
+                mask = journal['hash'] == self.hash
+                if 'anchor' in journal.columns:
+                    mask = mask & (journal['anchor'] == self.anchor)
+                sub = journal[mask]
                 if not sub.empty:
                     latest = None
                     for _, row in sub.iterrows():
@@ -6870,7 +6873,9 @@ class DatablockSpecializationInstaller:
     def __call__(self, stack, *, journal=None):
         with forming_with_journal(journal):
             block = stack._form_block_(self.idx)
-        if block.valid():
+        red_yaml = os.path.join(block.anchorkeypath, '.redirection', 'paths.yaml')
+        is_recorded = block.fs.exists(red_yaml)
+        if is_recorded or block.__valid__(path=None) or (block.valid() and not getattr(block, 'SPECIALIZATIONS', None)):
             if stack._block_paths_topic_() and not stack._check_block_path_(self.idx):
                 stack._write_block_path_(self.idx)
             return (None, True)

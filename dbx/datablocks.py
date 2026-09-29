@@ -3005,6 +3005,16 @@ class Datablock:
         if paths is not None:
             if topics is not None:
                 paths = self._mapped_paths_(paths, topic_map, topics)
+            existing = self.__dict__.get('__redirected_paths__')
+            if existing is None:
+                red_yaml = os.path.join(self.anchorkeypath, '.redirection', 'paths.yaml')
+                try:
+                    if self.fs.exists(red_yaml):
+                        existing = read_yaml(red_yaml, storage_options=self.storage_options)
+                except Exception:
+                    pass
+            if existing:
+                paths = {**paths, **existing}
             self.log.verbose(
                 f"REDIRECTION: {self.anchorkeypath} reads from the given paths instead: {paths}"
             )
@@ -3013,11 +3023,20 @@ class Datablock:
                                     topics=topics, specialization=specialization)
 
         if filter is None and isinstance(recorded, dict) and not ('filter' in recorded or 'paths' in recorded or 'topic_map' in recorded or 'topics' in recorded):
+            existing = self.__dict__.get('__redirected_paths__')
+            if existing is None:
+                red_yaml = os.path.join(self.anchorkeypath, '.redirection', 'paths.yaml')
+                try:
+                    if self.fs.exists(red_yaml):
+                        existing = read_yaml(red_yaml, storage_options=self.storage_options)
+                except Exception:
+                    pass
+            combined = {**recorded, **existing} if existing else recorded
             self.log.verbose(
-                f"REDIRECTION: {self.anchorkeypath} reads from the given paths instead: {recorded}"
+                f"REDIRECTION: {self.anchorkeypath} reads from the given paths instead: {combined}"
             )
-            self.__dict__['__redirected_paths__'] = recorded
-            return self.Redirection(paths=recorded, entry=None, filter=None, topic_map=None)
+            self.__dict__['__redirected_paths__'] = combined
+            return self.Redirection(paths=combined, entry=None, filter=None, topic_map=None)
 
         if specialization is not None and self._redirected_paths_ is not None:
             # A specialization recorded before its paths were: the .redirection
@@ -3062,6 +3081,7 @@ class Datablock:
     def UNSAFE_redirect(self, *, redirector: Callable|None = None, journal: DatajournalFrame|None = None, filter: dict|None = None, topic_map: dict|None = None,
                         paths: dict|None = None, topics: list|None = None,
                         specialization: 'Datablock.Specialization | None' = None,
+                        merge: bool = False,
                         dry_run: bool = False, dry_validate: bool = False,
                         validate: bool = False, remote: bool | Remote = False, OVERRIDE: bool = False):
         """Record that this block's topics are read from somewhere else and the location of this somewhere else.
@@ -3116,9 +3136,11 @@ class Datablock:
             if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 topics = None
             elif getattr(specialization, 'redirect_topics', None) is not None:
-                topics = list(specialization.redirect_topics)
+                topics = list(specialization.redirect_topics) if topics is None else list(topics)
             else:
-                topics = list(specialization.topics) if topics is None else topics
+                topics = list(specialization.topics) if topics is None else list(topics)
+            if journal is not None:
+                journal = self._specialization_journal_(journal, specialization)
 
         explicit_journal = journal is not None
         if journal is None:
@@ -3174,7 +3196,9 @@ class Datablock:
                 return False
             target_paths, entry = resolved
             target_paths = self._chase_redirected_paths_(target_paths)
-            sp_topics = None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(specialization.topics))
+            sp_topics = list(topics) if topics is not None else (
+                None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(specialization.topics))
+            )
             redirect_record = {
                 'filter': {'hash': self.get_hash(specialization)},
                 'topics': sp_topics,
@@ -3282,11 +3306,24 @@ class Datablock:
                          f"{len(validation)} topics are MISSING: {validation.missing()!r}\n")
                    if isinstance(validation, dict) else "")
                 + f"  - I would still build these topics myself: "
-                  f"{[t for t in self.topics() if t not in remapped_paths]!r}"
+                f"{[t for t in self.topics() if t not in remapped_paths]!r}"
             )
             return (proposal, validation) if dry_validate else proposal
 
-        self._redirected_paths_ = remapped_paths
+        if merge:
+            existing = dict(self._redirected_paths_) if self._redirected_paths_ is not None else {}
+            if not existing:
+                try:
+                    red_yaml = os.path.join(self.anchorkeypath, '.redirection', 'paths.yaml')
+                    if self.fs.exists(red_yaml):
+                        existing = read_yaml(red_yaml, storage_options=self.storage_options) or {}
+                except Exception:
+                    pass
+            combined_paths = {**existing, **remapped_paths}
+            self._redirected_paths_ = combined_paths
+        else:
+            self._redirected_paths_ = remapped_paths
+
         self.__dict__.pop('redirection', None)
 
         try:
@@ -3303,7 +3340,10 @@ class Datablock:
         )
 
         if validate:
-            val_res = self.validate()
+            if topics is not None and not all(t in self._redirected_paths_ for t in self.topics()):
+                val_res = self.valid_topics(list(remapped_paths))
+            else:
+                val_res = self.validate()
             is_val = bool(all(val_res.values())) if isinstance(val_res, dict) else bool(val_res)
             if not is_val:
                 self.log.warning(f"UNSAFE_redirect: block {self.hash} remains invalid after redirection")
@@ -4234,7 +4274,7 @@ class Datablock:
         if isinstance(journal, BlocksJournal):
             journal = _shared_journal_(journal, self)
         rows = []
-        for sp in (self.SPECIALIZATIONS or []):
+        for i, sp in enumerate(self.SPECIALIZATIONS or []):
             if getattr(sp, 'UNSAFE_redirect_all_topics', False):
                 named = list(self.topics())
             elif getattr(sp, 'redirect_topics', None) is not None:
@@ -4263,7 +4303,13 @@ class Datablock:
                 continue
             row['matches'] = True
             reasons = []
-            resolved = self._specialization_paths_(sp, journal=journal, why=reasons)
+            sp_j = journal
+            if isinstance(sp_j, dict):
+                anchor = self._specialization_anchor_(sp)
+                sp_j = sp_j.get(anchor, sp_j.get(None))
+            elif isinstance(sp_j, (list, tuple)):
+                sp_j = sp_j[i] if i < len(sp_j) else None
+            resolved = self._specialization_paths_(sp, journal=sp_j, why=reasons)
             if resolved is None:
                 row['why'] = '; '.join(reasons) or (
                     f"no entry with hash {row['hash']} records data that is still there")
@@ -6491,6 +6537,19 @@ class Datablock:
                     "no topic and no version, so there is no narrower block to read")
         return None
 
+    def _specialization_journal_(self, journal, specialization):
+        """Extract the journal specific to specialization if journal is a dict or list/tuple."""
+        if isinstance(journal, dict):
+            anchor = self._specialization_anchor_(specialization)
+            return journal.get(anchor, journal.get(None))
+        if isinstance(journal, (list, tuple)):
+            try:
+                idx = (self.SPECIALIZATIONS or []).index(specialization)
+                return journal[idx] if idx < len(journal) else None
+            except (ValueError, IndexError):
+                return None
+        return journal
+
     def _specialization_paths_(self, specialization, journal=None, why=None):
         """``{topic: path}`` for *specialization*, from the journal, or None.
 
@@ -6516,6 +6575,7 @@ class Datablock:
         anchor = self._specialization_anchor_(specialization)
         if isinstance(journal, BlocksJournal):
             journal = _shared_journal_(journal, self)
+        journal = self._specialization_journal_(journal, specialization)
         try:
             if specialization.anchor is not SAME:
                 j = self._journal_under_(anchor, journal, hash=h)
@@ -6556,7 +6616,7 @@ class Datablock:
                     f"for {missing}; skipping it"
                 )
                 note(f"entry {entry.block.id} records no path for {missing} -- a "
-                     f"specialization is all of its topics or none of them")
+                 f"specialization is all of its topics or none of them")
                 continue
             paths = self._chase_redirected_paths_(paths)
             gone = sorted(t for t, p in paths.items() if not self.valid_path(p))
@@ -6595,10 +6655,15 @@ class Datablock:
         what spares each block a read of its own. Otherwise *anchor*'s journal
         is read here, once per instance: kept on it, never in its state.
         """
-        if journal is not None and 'anchor' in getattr(journal, 'columns', ()):
-            rows = journal[journal['anchor'] == anchor]
-            if len(rows):
-                return DatajournalFrame(rows, storage_options=self.storage_options, **filter_kwargs)
+        if isinstance(journal, dict):
+            journal = journal.get(anchor, journal.get(None))
+        if journal is not None and not isinstance(journal, (list, tuple)):
+            if 'anchor' in getattr(journal, 'columns', ()):
+                rows = journal[journal['anchor'] == anchor]
+                if len(rows):
+                    return DatajournalFrame(rows, storage_options=self.storage_options, **filter_kwargs)
+            else:
+                return DatajournalFrame(journal, storage_options=self.storage_options, **filter_kwargs)
         cache = self.__dict__.setdefault('__anchor_journals__', {})
         if anchor not in cache:
             try:
@@ -6679,13 +6744,15 @@ class Datablock:
                     f"computations under one hash"
                 )
                 continue
-            if memo['journal'] is None and not memo.get('read'):
+            sp_j = self._specialization_journal_(memo.get('journal'), sp)
+            if sp_j is None and memo.get('journal') is None and not memo.get('read'):
                 memo['read'] = True
                 try:
                     memo['journal'] = self.journal()
+                    sp_j = memo['journal']
                 except FileNotFoundError:
                     pass
-            resolved = self._specialization_paths_(sp, journal=memo['journal'])
+            resolved = self._specialization_paths_(sp, journal=sp_j)
             if resolved is None:
                 self.log.verbose(
                     f"SPECIALIZATION: {sp!r} applies to {self.anchorkeypath}, but no "
@@ -6698,9 +6765,8 @@ class Datablock:
     def _install_specialization_(self, journal=None):
         """Read a narrower block's data instead of having none, or None.
 
-        What :meth:`find_specialization` finds, installed: the first candidate
-        that resolves -- resolves, not merely applies, so a specialization whose
-        build has been cleared does not shadow the next one.
+        What :meth:`find_specialization` finds, installed: candidates
+        that resolve are installed to satisfy missing topics.
 
         Installing it is recorded, through :meth:`UNSAFE_redirect`: the journal
         says this block read another's build and which specialization said it
@@ -6710,42 +6776,47 @@ class Datablock:
         ``use_specializations='memory'`` installs the paths on this instance and
         writes nothing, at the cost of resolving again next time.
         """
-        # Already redirected -- in memory, or recorded in the .redirection topic
-        # a previous build wrote -- is already installed: resolving it
-        # again would read the journal and redirect, and record, all over again.
-        # Likewise, if the block is already valid, do not install a redirection.
-        if not self._specializing_() or self._redirected_paths_ is not None or self.valid():
+        # If the block is not specializing or already valid, do not install a redirection.
+        if not self._specializing_() or self.valid():
             return None
         if isinstance(journal, BlocksJournal):
             journal = _shared_journal_(journal, self)
         # Read at most once -- and only if a candidate gets as far as resolving --
         # for finding one and for redirecting to it alike.
         memo = {'journal': journal}
+        installed = []
+        needed = {t for t in self.topics() if not self.valid_topic(t)}
         for sp, (paths, entry) in self._specialization_candidates_(journal, _memo=memo):
-            if self.use_specializations != 'memory':
-                if self.UNSAFE_redirect(specialization=sp, journal=memo['journal'], OVERRIDE=True):
-                    return sp
+            offered = {t: p for t, p in paths.items() if t in needed and self.valid_path(p)}
+            if not offered:
                 continue
-            if getattr(sp, 'UNSAFE_redirect_all_topics', False):
-                sp_topics = None
-            elif getattr(sp, 'redirect_topics', None) is not None:
-                sp_topics = sp.redirect_topics
-            else:
-                sp_topics = sp.topics
-            self._redirected_paths_ = self._mapped_paths_(paths, None, sp_topics)
-            self.log.info(
-                f"SPECIALIZATION (memory only, nothing recorded): {self.anchorkeypath} "
-                f"reads through {sp!r}"
-            )
+            if self.use_specializations != 'memory':
+                sp_j = self._specialization_journal_(memo.get('journal'), sp)
+                if self.UNSAFE_redirect(specialization=sp, topics=list(offered.keys()), journal=sp_j, OVERRIDE=True, merge=True):
+                    installed.append(sp)
+                    needed -= set(offered.keys())
+                    if not needed:
+                        break
+                continue
+            if self._redirected_paths_ is None:
+                self._redirected_paths_ = {}
+            self._redirected_paths_.update(offered)
             self.__dict__.pop('redirection', None)
             self.__dict__['__specialization__'] = sp
+            installed.append(sp)
+            needed -= set(offered.keys())
+            self.log.info(
+                f"SPECIALIZATION (memory only, nothing recorded): {self.anchorkeypath} "
+                f"reads {list(offered.keys())} through {sp!r}"
+            )
             self.log.verbose(
-                f"SPECIALIZATION: {self.anchorkeypath} reads {list(self._redirected_paths_)} "
+                f"SPECIALIZATION: {self.anchorkeypath} reads {list(offered.keys())} "
                 f"from journal entry {entry.block.id} (hash {self.get_hash(sp)}) instead, "
                 f"as {sp!r}"
             )
-            return sp
-        return None
+            if not needed:
+                break
+        return installed[0] if len(installed) == 1 else (installed or None)
 
     def _anchorpath_(self, anchor=None, *, local: bool = False):
         anchor = anchor or self.anchor
@@ -6820,7 +6891,11 @@ def _shared_journal_(caller, block):
     stored there and no others: a block of another anchor, or rooted
     elsewhere, reads its own.
     """
-    if caller is None or caller.journal is None or caller.anchor is None:
+    if caller is None:
+        return None
+    if isinstance(caller, (dict, list, tuple)):
+        return caller
+    if getattr(caller, 'journal', None) is None or getattr(caller, 'anchor', None) is None:
         return None
     if block.anchor != caller.anchor or (caller.datalake is not None and block.datalake != caller.datalake):
         return None
@@ -6875,7 +6950,7 @@ class DatablockSpecializationInstaller:
             block = stack._form_block_(self.idx)
         red_yaml = os.path.join(block.anchorkeypath, '.redirection', 'paths.yaml')
         is_recorded = block.fs.exists(red_yaml)
-        if is_recorded or block.__valid__(path=None) or (block.valid() and not getattr(block, 'SPECIALIZATIONS', None)):
+        if (is_recorded and block.valid()) or block.__valid__(path=None) or (block.valid() and not getattr(block, 'SPECIALIZATIONS', None)):
             if stack._block_paths_topic_() and not stack._check_block_path_(self.idx):
                 stack._write_block_path_(self.idx)
             return (None, True)

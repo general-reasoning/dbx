@@ -376,6 +376,140 @@ class TestSpecializeMethod:
             read_mds_shard(nonexistent, fs)
 
 
+class TestCombineSpecializations:
+
+    def test_combining_multiple_specializations(self, tmp_path):
+        from dbx.datablocks import Datablock, DATAFILE
+
+        class Source1(Datablock):
+            VERSION = 1
+            TOPICS = {'t1': DATAFILE('t1.txt')}
+
+            def __build__(self):
+                p = self.path('t1', ensure_dirpath=True)
+                with self.fs.open(p, 'w') as f:
+                    f.write("content_t1")
+
+        class Source2(Datablock):
+            VERSION = 1
+            TOPICS = {'t2': DATAFILE('t2.txt')}
+
+            def __build__(self):
+                p = self.path('t2', ensure_dirpath=True)
+                with self.fs.open(p, 'w') as f:
+                    f.write("content_t2")
+
+        lake = str(tmp_path / "lake")
+        s1 = Source1(datalake=lake, tag="common")
+        s1.build()
+        assert s1.valid()
+
+        s2 = Source2(datalake=lake, tag="common")
+        s2.build()
+        assert s2.valid()
+
+        class Composite(Datablock):
+            VERSION = 1
+            TOPICS = {'t1': DATAFILE('t1.txt'), 't2': DATAFILE('t2.txt')}
+            SPECIALIZATIONS = [
+                Datablock.Specialization(
+                    spec={},
+                    topics={'t1': DATAFILE('t1.txt')},
+                    redirect_topics=['t1'],
+                    anchor=Source1.anchor,
+                    note='t1 from Source1',
+                ),
+                Datablock.Specialization(
+                    spec={},
+                    topics={'t2': DATAFILE('t2.txt')},
+                    redirect_topics=['t2'],
+                    anchor=Source2.anchor,
+                    note='t2 from Source2',
+                ),
+            ]
+
+        comp = Composite(datalake=lake, tag="common", use_specializations=False)
+        assert not comp.valid()
+
+        comp_specialized = Composite(datalake=lake, tag="common", use_specializations=True)
+        res = comp_specialized._install_specialization_()
+        assert res is not None
+        assert comp_specialized.valid()
+        assert comp_specialized._redirected_paths_['t1'] == s1.path('t1')
+        assert comp_specialized._redirected_paths_['t2'] == s2.path('t2')
+        with comp_specialized.fs.open(comp_specialized.path('t1'), 'r') as f:
+            assert f.read() == "content_t1"
+        with comp_specialized.fs.open(comp_specialized.path('t2'), 'r') as f:
+            assert f.read() == "content_t2"
+
+    def test_polymorphic_journal_dict_and_list(self, tmp_path):
+        from dbx.datablocks import Datablock, DATAFILE
+
+        class SourceA(Datablock):
+            VERSION = 1
+            TOPICS = {'ta': DATAFILE('ta.txt')}
+
+            def __build__(self):
+                p = self.path('ta', ensure_dirpath=True)
+                with self.fs.open(p, 'w') as f:
+                    f.write("from_A")
+
+        class SourceB(Datablock):
+            VERSION = 1
+            TOPICS = {'tb': DATAFILE('tb.txt')}
+
+            def __build__(self):
+                p = self.path('tb', ensure_dirpath=True)
+                with self.fs.open(p, 'w') as f:
+                    f.write("from_B")
+
+        lake = str(tmp_path / "lake")
+        sa = SourceA(datalake=lake, tag="multi_j")
+        sa.build()
+        sb = SourceB(datalake=lake, tag="multi_j")
+        sb.build()
+
+        class Target(Datablock):
+            VERSION = 1
+            TOPICS = {'ta': DATAFILE('ta.txt'), 'tb': DATAFILE('tb.txt')}
+            SPECIALIZATIONS = [
+                Datablock.Specialization(
+                    spec={},
+                    topics={'ta': DATAFILE('ta.txt')},
+                    redirect_topics=['ta'],
+                    anchor=SourceA.anchor,
+                ),
+                Datablock.Specialization(
+                    spec={},
+                    topics={'tb': DATAFILE('tb.txt')},
+                    redirect_topics=['tb'],
+                    anchor=SourceB.anchor,
+                ),
+            ]
+
+        # Test passing journal as dict
+        j_dict = {
+            SourceA.anchor: sa.journal(),
+            SourceB.anchor: sb.journal(),
+        }
+        target_dict = Target(datalake=lake, tag="multi_j", use_specializations=True)
+        res = target_dict._install_specialization_(journal=j_dict)
+        assert res is not None
+        assert target_dict.valid()
+        assert target_dict._redirected_paths_['ta'] == sa.path('ta')
+        assert target_dict._redirected_paths_['tb'] == sb.path('tb')
+
+        # Test passing journal as list (corresponding to SPECIALIZATIONS order)
+        j_list = [sa.journal(), sb.journal()]
+        target_list = Target(datalake=lake, tag="multi_j_list", use_specializations=True)
+        res_list = target_list._install_specialization_(journal=j_list)
+        assert res_list is not None
+        assert target_list.valid()
+        assert target_list._redirected_paths_['ta'] == sa.path('ta')
+        assert target_list._redirected_paths_['tb'] == sb.path('tb')
+
+
+
 
 
 

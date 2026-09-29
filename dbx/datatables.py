@@ -1686,7 +1686,7 @@ class Datatable(DatatabBase, Datastack):
         )
         try:
             return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OSError, FileExistsError, FileNotFoundError) as exc:
             SharedMemoryManager.clean_process_shared_memory()
             streaming_kwargs['streams'] = self._tab_streams_(slice, local)
             return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
@@ -2046,7 +2046,7 @@ class DatatablePart(Datatable):
         )
         try:
             return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OSError, FileExistsError, FileNotFoundError) as exc:
             SharedMemoryManager.clean_process_shared_memory()
             streaming_kwargs['streams'] = self._tab_streams_(slice, local)
             return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))

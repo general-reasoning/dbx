@@ -14,6 +14,7 @@ imports from here at the top, so the names in it are not there yet when this
 module is executed.
 """
 import ast
+import contextlib
 import copy
 import datetime
 import fnmatch
@@ -300,37 +301,43 @@ class ExecjournalEntry(pd.Series):
     """One `dbx.exec` command, as the exec journal recorded it.
 
     The counterpart of `DatajournalEntry` for the exec journal: ``exec``,
-    ``exec``, ``datetime``, ``id``, ``session``, ``datajournal_entries`` and
+    ``datetime``, ``id``, ``session``, ``datajournal_entries`` and
     ``comment`` are its columns; :meth:`dataentries` and :meth:`datajournal`
-    follow ``datajournal_entries`` to the block journal entries the command
-    wrote.
+    follow the command's session to the block journal entries written under
+    it -- through the session's index, in every process that wrote one, and
+    ``datajournal_entries`` for a row from before the index.
     """
     #: Carried by pandas across operations that rebuild the object -- see
-    #: `DatajournalEntry._metadata`.
-    _metadata = ['storage_options']
+    #: `DatajournalEntry._metadata`. *datalake* is the one the exec journal was
+    #: read from, where the command's session index is.
+    _metadata = ['storage_options', 'datalake']
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, series: pd.Series, *, storage_options: dict | None = None):
+    def __init__(self, series: pd.Series, *, storage_options: dict | None = None,
+                 datalake: str | None = None):
         super().__init__(series)
         self.storage_options = storage_options or {}
+        self.datalake = datalake
 
     # 2. Declared API ------------------------------------------------------
 
     def dataentries(self, *, n_workers: int | None = None) -> list:
         """The `DatajournalEntry` of every block journal entry this command wrote, in the order written."""
         return Datajournal.read_entries(
-            ExecjournalEntry._written_paths_(self), storage_options=self.storage_options or None, n_workers=n_workers)
+            ExecjournalEntry._written_paths_(self, self.datalake, self.storage_options),
+            storage_options=self.storage_options or None, n_workers=n_workers)
 
     def datajournal(self, *, n_workers: int | None = None):
         """The block journal entries this command wrote, as one `DatajournalFrame`.
 
-        Its ``datajournal_entries``, read as a block journal is -- the same
-        legacy columns resolved, filterable the same way -- one row per entry,
-        in the order written.
+        What :meth:`dataentries` reads, read as a block journal is -- the
+        same legacy columns resolved, filterable the same way -- one row per
+        entry, in the order written.
         """
         return Datajournal.read_frame(
-            ExecjournalEntry._written_paths_(self), storage_options=self.storage_options or None, n_workers=n_workers)
+            ExecjournalEntry._written_paths_(self, self.datalake, self.storage_options),
+            storage_options=self.storage_options or None, n_workers=n_workers)
 
     def anchors(self) -> list:
         """Every anchor this command wrote a block journal entry for, sorted."""
@@ -368,12 +375,23 @@ class ExecjournalEntry(pd.Series):
     # 4. Helpers -----------------------------------------------------------
 
     @staticmethod
-    def _written_paths_(row) -> list:
-        """The ``datajournal_entries`` of *row* as a list of paths; empty for a row from before the column."""
-        paths = row.get('datajournal_entries')
-        if paths is None or (isinstance(paths, float) and pd.isna(paths)):
-            return []
-        return [str(p) for p in paths]
+    def _written_paths_(row, datalake, storage_options) -> list:
+        """The entry paths of *row*'s command: its session's index, then any ``datajournal_entries`` it lacks.
+
+        A row shares its session -- and so these -- with an exec nested in
+        it, or run in a process it started. A row from before the index has
+        only ``datajournal_entries``; one from before that column, neither.
+        """
+        listed = row.get('datajournal_entries')
+        if listed is None or (isinstance(listed, float) and pd.isna(listed)):
+            listed = []
+        session = row.get('session')
+        indexed = []
+        if isinstance(session, str) and session:
+            indexed = Datajournal.session_entries(session, datalake=datalake,
+                                                  storage_options=storage_options or None)
+        seen = set(indexed)
+        return indexed + [str(p) for p in listed if str(p) not in seen]
 
 
 class ExecjournalFrame(pd.DataFrame):
@@ -386,13 +404,15 @@ class ExecjournalFrame(pd.DataFrame):
 
         dbx.journal(comment='nightly').dataentries()
     """
-    _metadata = ['storage_options']
+    _metadata = ['storage_options', 'datalake']
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, df: pd.DataFrame | None = None, *, storage_options: dict | None = None):
+    def __init__(self, df: pd.DataFrame | None = None, *, storage_options: dict | None = None,
+                 datalake: str | None = None):
         super().__init__(pd.DataFrame() if df is None else df)
         self.storage_options = storage_options or {}
+        self.datalake = datalake
 
     def __call__(self, entry):
         return self.get(entry, dropna=True)
@@ -404,7 +424,7 @@ class ExecjournalFrame(pd.DataFrame):
         row = self.loc[entry]
         if dropna:
             row = row.dropna()
-        return ExecjournalEntry(row, storage_options=self.storage_options)
+        return ExecjournalEntry(row, storage_options=self.storage_options, datalake=self.datalake)
 
     def dataentries(self, *, n_workers: int | None = None) -> list:
         """The block journal entries every command here wrote: row by row, each in the order written."""
@@ -427,7 +447,12 @@ class ExecjournalFrame(pd.DataFrame):
     # 4. Helpers -----------------------------------------------------------
 
     def _written_paths_(self) -> list:
-        return [p for _, row in self.iterrows() for p in ExecjournalEntry._written_paths_(row)]
+        """Every row's, in row order: once each, since rows that share a session share them."""
+        paths = {}
+        for _, row in self.iterrows():
+            for p in ExecjournalEntry._written_paths_(row, self.datalake, self.storage_options):
+                paths.setdefault(p, None)
+        return list(paths)
 
 
 #: The exec journal's columns in the order a frame shows them: the command first
@@ -522,11 +547,11 @@ def read_exec_journal(
         else:
             raise KeyError(f"Column {index!r} not found in journal DataFrame")
 
-    frame = ExecjournalFrame(df, storage_options=storage_options)
+    frame = ExecjournalFrame(df, storage_options=storage_options, datalake=dbx_url)
     if loc is not None:
         return frame.get(loc, dropna=True)
     elif iloc is not None:
-        return ExecjournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options)
+        return ExecjournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options, datalake=dbx_url)
     return frame
 
 
@@ -1702,6 +1727,14 @@ def one_datalake(datalake, url, what):
 _PROCESS_DATAJOURNALS = []
 
 
+#: How a command session reaches a process dbx did not start: ``dbx.exec``
+#: exports them for as long as the command runs, and a process that finds them
+#: set at import makes that session its default -- its blocks, and any
+#: ``dbx.exec`` it runs, are the command's. See `Datajournal.command_session`.
+JOURNAL_SESSION_ENV = 'DBX_JOURNAL_SESSION'
+JOURNAL_DATALAKE_ENV = 'DBX_JOURNAL_DATALAKE'
+
+
 _PROCESS_DATAJOURNALS_LOCK = threading.Lock()
 
 
@@ -1743,6 +1776,15 @@ class Datajournal:
     (:meth:`carry`); a multithreading executor does the same for its threads.
     A session is operational, like ``tree``: nothing about it reaches a
     block's identity.
+
+    A COMMAND session -- the one a ``dbx.exec`` runs under, see
+    :meth:`command_session` -- also indexes what is written under it, in
+    storage: one marker per entry, under
+    ``{datalake}/.journal/sessions/{session}/``, where the exec journal is. It
+    is written by whichever process writes the entry, so it holds what a
+    worker wrote even when that worker never returned -- killed, or started by
+    something other than a dbx executor -- and :meth:`session_entries` reads
+    it back.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -1751,21 +1793,26 @@ class Datajournal:
         self._session = str(uuid.uuid4())
         self._written = {}      # entry path -> None: a set that keeps write order
         self._written_lock = threading.Lock()
+        # Where this session's index goes; None for a session that keeps none.
+        # Set by command_session(), and pinned then: a worker must index where
+        # the command's exec journal is, not where its own environment says.
+        self._datalake = None
 
     def __repr__(self):
         return f"dbx.Datajournal(session={self._session!r})"
 
     def __getstate__(self):
-        # The session and nothing else: a handle crosses process boundaries
-        # with the work an executor sends out, and the copy that arrives is
-        # the same journal session, not a new one -- otherwise one command
-        # would be written under many. Its written paths stay here: the copy
-        # collects its own, and the executor brings them back (collect()).
-        return {'session': self._session}
+        # The session and where it is indexed: a handle crosses process
+        # boundaries with the work an executor sends out, and the copy that
+        # arrives is the same journal session, not a new one -- otherwise one
+        # command would be written under many. Its written paths stay here: the
+        # copy collects its own, and the executor brings them back (collect()).
+        return {'session': self._session, 'datalake': self._datalake}
 
     def __setstate__(self, state):
         self.__init__()
         self._session = state.get('session') or self._session
+        self._datalake = state.get('datalake')
 
     def __enter__(self):
         stack = self._stack_()
@@ -1808,6 +1855,73 @@ class Datajournal:
             if _PROCESS_DATAJOURNALS:
                 return _PROCESS_DATAJOURNALS[-1]
         return DEFAULT_DATAJOURNAL
+
+    @classmethod
+    def command_session(cls) -> 'Datajournal':
+        """The session a ``dbx.exec`` command runs under: the one open, or a new one.
+
+        Joined, not opened, when a session other than an unindexed default is
+        current: an exec inside an exec, a command in a worker a dbx executor
+        sent it to, or one in a process whose default is a command's (see
+        `JOURNAL_SESSION_ENV`). Either way it is indexed from here on, under
+        the datalake the exec journal is written to.
+        """
+        dj = cls.current()
+        if dj is DEFAULT_DATAJOURNAL and dj._datalake is None:
+            dj = cls()
+        if dj._datalake is None:
+            dj._datalake = default_datalake() or './dbx'
+        return dj
+
+    @contextlib.contextmanager
+    def exported(self):
+        """While open, this session is the default of every process started from this one.
+
+        Through the environment -- `JOURNAL_SESSION_ENV` and
+        `JOURNAL_DATALAKE_ENV` -- which a subprocess, a Slurm job and a
+        spawned worker inherit. What was set before is restored on exit.
+        """
+        saved = {k: os.environ.get(k) for k in (JOURNAL_SESSION_ENV, JOURNAL_DATALAKE_ENV)}
+        os.environ[JOURNAL_SESSION_ENV] = self._session
+        if self._datalake is not None:
+            os.environ[JOURNAL_DATALAKE_ENV] = self._datalake
+        try:
+            yield self
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    @classmethod
+    def session_entries(cls, session: str, *, datalake: str | None = None,
+                        storage_options: dict | None = None) -> list:
+        """The entry paths indexed under *session*, in the order first written; empty where there is no index.
+
+        Every process's, from the index a command session keeps in storage --
+        what `written_entries` cannot see in another process. *datalake* is
+        where the exec journal is: ``DBX_DATALAKE`` by default.
+        """
+        datalake = datalake or default_datalake() or './dbx'
+        fs, _ = fsspec.url_to_fs(datalake, **(storage_options if storage_options is not None
+                                              else default_storage_options()))
+        index = cls._index_dirpath_(datalake, session)
+        try:
+            markers = fs.glob(os.path.join(index, '*.txt'))
+        except FileNotFoundError:
+            return []
+        if not markers:
+            return []
+
+        def read_marker(path):
+            with fs.open(path, 'r') as f:
+                dt, _, entry = f.read().partition('\n')
+            return dt, entry.strip()
+
+        with ThreadPoolExecutor(max_workers=min(8, len(markers))) as ex:
+            rows = list(ex.map(read_marker, markers))
+        return [entry for _, entry in sorted(rows) if entry]
 
     @classmethod
     def read(cls, anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None,
@@ -2064,7 +2178,8 @@ class Datajournal:
         }])
         with block.fs.open(journal_path, 'wb') as f:
             df.to_parquet(f)
-        dj._record_(journal_path)
+        if dj._record_(journal_path):
+            dj._index_(block, journal_path, dt)
         
         tagstr = f"with tag {repr(block.tag)} " if block.tag is not None else ""
         block.log.debug(f"WROTE JOURNAL entry {entry_id} for event {repr(event)} {tagstr}"
@@ -2181,10 +2296,36 @@ class Datajournal:
         assert block.fs.exists(path), f"scopepath {path} does not exist after writing"
         block.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
-    def _record_(self, path):
-        """Add *path* to :meth:`written_entries`, where it was not already."""
+    def _record_(self, path) -> bool:
+        """Add *path* to :meth:`written_entries`; True when it was not there already."""
         with self._written_lock:
-            self._written.setdefault(path, None)
+            if path in self._written:
+                return False
+            self._written[path] = None
+            return True
+
+    def _index_(self, block, path, dt):
+        """Drop this session's marker for entry *path*, first written at *dt*: nothing, for a session that keeps no index.
+
+        One file per entry, named by the path, so concurrent writers never
+        share one and an instance rewriting its entry rewrites its marker. A
+        failure is a warning: the build it records has already succeeded.
+        """
+        if self._datalake is None:
+            return
+        marker = os.path.join(self._index_dirpath_(self._datalake, self._session),
+                              hashlib.sha256(path.encode('utf-8')).hexdigest()[:32] + '.txt')
+        try:
+            fs, _ = fsspec.url_to_fs(self._datalake, **default_storage_options())
+            fs.makedirs(os.path.dirname(marker), exist_ok=True)
+            with fs.open(marker, 'w') as f:
+                f.write(f"{dt}\n{path}")
+        except Exception as exc:
+            block.log.warning(f"Journal session index: could not write {marker}: {exc}")
+
+    @staticmethod
+    def _index_dirpath_(datalake, session):
+        return os.path.join(datalake, '.journal', 'sessions', session)
 
     @staticmethod
     def _stack_() -> list:
@@ -2356,6 +2497,11 @@ class JournaledResult:
         self.datajournal_entries = list(datajournal_entries)
 
 
-#: The journal a block uses when it is given none: one per process, so its
-#: `session` is the process's and `written_entries()` everything it wrote.
+#: The session an entry goes under when no ``with`` is open: one per process,
+#: and the bottom of every stack. Keeps no index -- it is no command's -- unless
+#: this process was started while a command ran, and so is part of it.
 DEFAULT_DATAJOURNAL = Datajournal()
+if os.environ.get(JOURNAL_SESSION_ENV):
+    # A process started while a command ran: its default is the command's.
+    DEFAULT_DATAJOURNAL._session = os.environ[JOURNAL_SESSION_ENV]
+    DEFAULT_DATAJOURNAL._datalake = os.environ.get(JOURNAL_DATALAKE_ENV) or default_datalake() or './dbx'

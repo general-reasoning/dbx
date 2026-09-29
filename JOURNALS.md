@@ -7,9 +7,10 @@ dbx keeps two journals, both as Parquet files under the datalake:
 | **exec journal** | one `dbx.exec` / `dbx.pprint` command | `dbx.execjournal()` | `ExecjournalFrame` / `ExecjournalEntry` |
 | **data journal** | one journal entry of one block (`build:end`, a note, …) | `dbx.datajournal(anchor)` | `DatajournalFrame` / `DatajournalEntry` |
 
-They are linked: every block a command writes a journal entry for does so
-under the command's `session`, and the command's exec-journal row lists those
-entries' paths in `datajournal_entries`. The methods below follow that link.
+They are linked by the command's `session`. Every journal entry written while
+a command runs is written under its session, and the session keeps an index of
+those entries in storage, under `<datalake>/.journal/sessions/<session>/`,
+next to the exec journal. The methods below follow that link.
 
 All the frames are pandas DataFrames, and all the entries are pandas Series,
 so ordinary pandas works on every one of them.
@@ -60,7 +61,7 @@ Columns:
 | `exec:end:datetime` | when it finished, including when it raised |
 | `id` | row's uuid |
 | `session` | `Datajournal` session every block in the command wrote under |
-| `datajournal_entries` | paths of the block journal entries the command wrote, in the order first written |
+| `datajournal_entries` | paths of the block journal entries the command's own process wrote or got back from its workers, in the order first written (the session index is the complete list) |
 | `comment` | trailing `# comment` alone: what the command was *for* |
 
 ```python
@@ -105,7 +106,7 @@ dbx.execjournal(date='2026-09-28').constructed()      # {anchor: DatajournalFram
 
 | call | returns |
 |---|---|
-| `e.dataentries()` | Python **list** of `DatajournalEntry`, one per path in `datajournal_entries`, in the order written |
+| `e.dataentries()` | Python **list** of `DatajournalEntry`, one per entry written under the command's session, in the order written |
 | `e.datajournal()` | `DatajournalFrame` of the **same records**, one row each: row *i* is `e.dataentries()[i]`, numbered 0..N-1, plus an `entry_path` column naming the file each row was read from |
 | `e.anchors()` | sorted list of the anchors the command wrote entries for |
 | `e.constructed()` | `{anchor: DatajournalFrame}` of what the command **constructed**, for every anchor that has any |
@@ -138,9 +139,10 @@ the command's entries or its `constructed()`. That holds with `deep=True`
 too: `deep` makes `build_tree()` go into subtrees that are already valid, but
 each valid block's own `build()` still skips without writing.
 
-**Reads are live.** The entries are read from `datajournal_entries` at call
+**Reads are live.** The entries are read from the session index at call
 time, so `.dataentries()` shows what is in those files *now*, and a path that has
-since been cleared is skipped with a warning.
+since been cleared is skipped with a warning. A row written before the index
+existed falls back to its `datajournal_entries`.
 
 **One entry per block instance.** A block instance rewrites its one entry
 file. So a `build()` appears as its final event: `build:end`,
@@ -154,13 +156,27 @@ holds only the last var's `end`.
 **A command that raises is still recorded**, together with the entries it had
 written before the exception.
 
-**Worker processes are included.** A block that a stack builds on a
-`multiprocessing`, `torch_multiprocessing` or `ray` executor writes under the
-command's session, and its entry is listed here. The executor sends the
-command's `Datajournal` handle out with the work and brings the written paths
-back with the results. Worker threads are included the same way. The
-exception is **a process you start yourself** (outside a dbx executor): it
-writes under its own session and isn't listed.
+**Other threads and processes are included.** Whatever writes an entry also
+writes its index marker, so the command's rows list it however it got there:
+- **A dbx executor's workers** (`multithreading`, `multiprocessing`,
+  `torch_multiprocessing`, `ray`): the executor sends the command's session
+  out with the work, and brings the written paths back with the results.
+- **A process started while the command runs** (a subprocess, a Slurm job):
+  `dbx.exec` exports the session in `DBX_JOURNAL_SESSION` and
+  `DBX_JOURNAL_DATALAKE`, and a process that starts with them set writes under
+  it. A `dbx.exec` in that process joins the session, so its rows and the
+  parent's share their entries.
+- **A worker that dies before returning:** its entries are listed anyway,
+  because it wrote their markers itself.
+
+What still isn't listed:
+- **A remote process outside dbx's executors** that doesn't inherit the
+  environment, such as a Ray actor you create and call yourself.
+- **Entries written inside a `with Datajournal()` you open yourself** within
+  the command, which is a session of its own.
+
+A worker on another host must also be able to write to the command's datalake
+for its markers to land.
 
 `rerun()` first prints the shell line that would run the same command,
 `dbx.pprint "…"`, and then runs it as a **new** command, which gets its own

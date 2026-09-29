@@ -793,3 +793,94 @@ class TestAcrossProcesses:
         with Datajournal():
             assert callable_executor('multithreading', n_workers=2).exec_callables(
                 [lambda: 1, lambda: 2]) == [1, 2]
+
+
+_CHILD_BUILDS = """
+import os
+from dataclasses import dataclass
+import dbx
+from dbx.datablocks import Datablock
+
+class Child(Datablock):
+    TOPICS = {'output': 'output.txt'}
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        x: int = 1
+
+    def __build__(self):
+        with open(self.path('output', ensure_dirpath=True), 'w') as f:
+            f.write('child')
+
+%s
+"""
+
+
+def _run_child(body):
+    """A process dbx did not start: a plain subprocess, inheriting the environment."""
+    import subprocess
+    import sys
+    subprocess.run([sys.executable, '-c', _CHILD_BUILDS % body], check=True,
+                   env={**os.environ, 'DBX_USE_WORK_REPO': 'False', 'DBX_DIRTY_REPO_OK': 'True'})
+
+
+def _dies_after_building():
+    """Top level, for a spawned worker: builds, then exits without a word -- as a killed worker does."""
+    _built_under_the_scope(7)
+    os._exit(1)
+
+
+class TestSessionIndex:
+    """A command session indexes what is written under it, in storage, from whichever process wrote it."""
+
+    @pytest.fixture(autouse=True)
+    def lake(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+
+    def test_a_command_indexes_its_entries(self, tmp_path):
+        b = dbx.exec("b = Built(datalake=root, spec={'x': 1}); b.build(); b", Built=Built, root=str(tmp_path))
+        row = dbx.execjournal(iloc=0)
+        entry_path = b.journal(loc=0)['entry_path']
+        assert Datajournal.session_entries(row['session'], datalake=str(tmp_path)) == [entry_path]
+
+    def test_nothing_is_indexed_outside_a_command(self, tmp_path):
+        block(tmp_path).build()
+        with Datajournal():
+            block(tmp_path, x=2).build()
+        assert not os.path.exists(os.path.join(str(tmp_path), '.journal', 'sessions'))
+
+    def test_a_process_the_command_started_is_part_of_it(self, tmp_path):
+        dbx.exec("run(\"Child(datalake=os.environ['DBX_ROOT']).build()\")", run=_run_child)
+        row = dbx.execjournal(iloc=0)
+        frame = row.datajournal()
+        assert list(frame['anchor']) == ['__main__.Child']
+        assert list(frame['session']) == [row['session']]
+
+    def test_a_command_run_in_that_process_joins_the_session(self, tmp_path):
+        dbx.exec("run(\"dbx.exec('Child(datalake=os.environ[\\\\'DBX_ROOT\\\\']).build()', Child=Child)\")",
+                 run=_run_child)
+        rows = dbx.execjournal()
+        assert rows['session'].nunique() == 1 and len(rows) == 2
+        outer = rows[rows['exec'].str.startswith('run(')].iloc[0]
+        assert list(dbx.execjournal(id=outer['id'], iloc=0).datajournal()['anchor']) == ['__main__.Child']
+
+    def test_a_worker_that_never_returned(self, tmp_path):
+        from dbx.dataparts import callable_executor
+        with pytest.raises(Exception):
+            dbx.exec("ex.exec_callables([die])", ex=callable_executor('multiprocessing', n_workers=1),
+                     die=_dies_after_building)
+        row = dbx.execjournal(iloc=0)
+        assert list(row['datajournal_entries']) == []           # it never came back
+        frame = row.datajournal()                                # but its index did
+        assert list(frame['hash']) == [block(tmp_path, x=107).hash]
+
+    def test_the_environment_is_restored(self):
+        from dbx.journals import JOURNAL_DATALAKE_ENV, JOURNAL_SESSION_ENV
+        dbx.exec("1 + 1")
+        assert JOURNAL_SESSION_ENV not in os.environ and JOURNAL_DATALAKE_ENV not in os.environ
+
+    def test_a_row_from_before_the_index(self, tmp_path):
+        import shutil
+        dbx.exec("Built(datalake=root, spec={'x': 1}).build()", Built=Built, root=str(tmp_path))
+        shutil.rmtree(os.path.join(str(tmp_path), '.journal', 'sessions'))
+        assert len(dbx.execjournal(iloc=0).dataentries()) == 1

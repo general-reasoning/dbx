@@ -810,19 +810,17 @@ def exec(s=None, **kwargs):
                 except (NameError, SyntaxError):
                     kwargs[k] = v
     
-    # Every block the command builds -- however deep in whatever it calls, and
-    # in the workers a dbx executor hands it to -- writes under one session. An
-    # exec inside an exec joins the session already open rather than starting
-    # one; the process's default is no command's, so it is never joined.
-    from .journals import DEFAULT_DATAJOURNAL, Datajournal, write_exec_journal
-    dj = Datajournal.current()
-    if dj is DEFAULT_DATAJOURNAL:
-        dj = Datajournal()
+    # Every block the command builds -- however deep in whatever it calls, in
+    # the workers a dbx executor hands it to, and in any process started while
+    # it runs -- writes under one session, indexed where the exec journal is.
+    # An exec inside an exec joins the session already open.
+    from .journals import Datajournal, write_exec_journal
+    dj = Datajournal.command_session()
     # ONE row, written when the command is over -- in `finally`, so a command
     # that raises is recorded too, with what it wrote before it did. Stamped
     # with the time it started, which is when it ran.
     dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-    with dj:
+    with dj, dj.exported():
         written_before = len(dj.written_entries())
         try:
             return _exec_statements_(s, kwargs)

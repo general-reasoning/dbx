@@ -2072,6 +2072,19 @@ class DatatablePart(Datatable):
         real_idx = self.tab_indices[idx]
         return self.var.partition.datapoint_table._check_tab_path_(real_idx)
 
+    _check_block_path_ = _check_tab_path_
+
+    def _read_tab_path_(self, idx: int) -> str | None:
+        real_idx = self.tab_indices[idx]
+        return self.var.partition.datapoint_table._read_tab_path_(real_idx)
+
+    _read_block_path_ = _read_tab_path_
+
+    def _built_block_set_(self) -> set[int]:
+        table = self.var.partition.datapoint_table
+        table_set = table._built_block_set_()
+        return {i for i, real_idx in enumerate(self.tab_indices) if real_idx in table_set}
+
     def _remove_tab_path_(self, idx: int):
         real_idx = self.tab_indices[idx]
         return self.var.partition.datapoint_table._remove_tab_path_(real_idx)

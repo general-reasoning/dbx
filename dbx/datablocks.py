@@ -1902,6 +1902,14 @@ class Datablock:
         if specs is None:
             specs = state.get('SPECIALIZATION')
         self._SPECIALIZATIONS_ = self._specialization_records_(specs)
+        tab_specs = state.get('TAB_SPECIALIZATIONS')
+        if tab_specs is None:
+            tab_specs = state.get('TAB_SPECIALIZATION')
+        if tab_specs is None:
+            tab_specs = state.get('BLOCK_SPECIALIZATIONS')
+        if tab_specs is None:
+            tab_specs = state.get('BLOCK_SPECIALIZATION')
+        self._TAB_SPECIALIZATIONS_ = self._specialization_records_(tab_specs)
         self.validate_vars = state.get('validate_vars', True)
         self._paths_ = None
 
@@ -1953,6 +1961,16 @@ class Datablock:
             # After __post_init__, so the instance's own win over any a class
             # computes there, as they win over the class's.
             self.SPECIALIZATIONS = [self.Specialization.from_record(r) for r in self._SPECIALIZATIONS_]
+        if getattr(self, '_TAB_SPECIALIZATIONS_', None) is not None:
+            tab_cls = getattr(self, 'TAB', None) or getattr(self, 'BLOCK', None)
+            spec_cls = getattr(tab_cls, 'Specialization', self.Specialization) if tab_cls else self.Specialization
+            inst_tab_specs = [spec_cls.from_record(r) for r in self._TAB_SPECIALIZATIONS_]
+            if 'TAB_SPECIALIZATIONS' in state or hasattr(self, 'TAB_SPECIALIZATIONS'):
+                self.TAB_SPECIALIZATIONS = inst_tab_specs
+            elif 'BLOCK_SPECIALIZATIONS' in state or hasattr(self, 'BLOCK_SPECIALIZATIONS'):
+                self.BLOCK_SPECIALIZATIONS = inst_tab_specs
+            else:
+                self.TAB_SPECIALIZATIONS = inst_tab_specs
         if specialization_journal is None:
             specialization_journal = _forming_journal_(self.anchor, self.datalake)
         if specialization_journal is not None:
@@ -1991,7 +2009,10 @@ class Datablock:
         #TODO: why does 'log' end up in self.parameters?
         for k in self.parameters:
             if k not in self.__explicit_params__() and k != 'log' and hasattr(self, k):
-                _state[k] = getattr(self, k)
+                if k in ('TAB_SPECIALIZATIONS', 'TAB_SPECIALIZATION', 'BLOCK_SPECIALIZATIONS', 'BLOCK_SPECIALIZATION') and getattr(self, '_TAB_SPECIALIZATIONS_', None) is not None:
+                    _state[k] = self._TAB_SPECIALIZATIONS_
+                else:
+                    _state[k] = getattr(self, k)
         return _state
 
     @staticmethod
@@ -5068,7 +5089,16 @@ class Datablock:
         if given is None:
             return None
         if isinstance(given, str):
-            given = ast.literal_eval(given)     # as a quote() renders them, read back as text
+            try:
+                given = ast.literal_eval(given)     # as a quote() renders them, read back as text
+            except Exception:
+                import builtins, dbx
+                cxt = dict(vars(dbx))
+                spec_cls = getattr(cls, 'Specialization', Datablock.Specialization)
+                cxt['Specialization'] = spec_cls
+                cxt.setdefault('SAME', SAME)
+                cxt.setdefault('ABSENT', ABSENT)
+                given = builtins.eval(given, cxt)
         if isinstance(given, (Datablock.Specialization, dict)):
             given = [given]
         if not isinstance(given, (list, tuple)):
@@ -5927,7 +5957,7 @@ class Datablock:
             # mentioned the feature says -- and saying it out loud in every
             # quote() would move the recorded text of blocks that have nothing
             # to do with specializations.
-            and not (k in ('use_specializations', 'SPECIALIZATIONS') and v is None)
+            and not (k in ('use_specializations', 'SPECIALIZATIONS', 'TAB_SPECIALIZATIONS', 'BLOCK_SPECIALIZATIONS') and v is None)
         }
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
@@ -7047,6 +7077,20 @@ class Datastack(Datablock):
         # and owes no topics has nothing to build unless deep=True forces it.
         if not deep and self.valid() and not self.owedtopics():
             return super().build(*args, deep=deep, **kwargs)
+        # If all blocks are already marked built/valid, or the stack is already valid,
+        # there is no need to read the build journal and specialize blocks.
+        all_blocks_valid = False
+        if self._block_paths_topic_():
+            try:
+                all_blocks_valid = (len(self._built_block_set_()) == self.n_blocks)
+            except Exception:
+                pass
+        elif self.valid() and not self.owedtopics():
+            all_blocks_valid = True
+
+        if all_blocks_valid:
+            return super().build(*args, deep=deep, _specialized_=True, **kwargs)
+
         # The blocks adopt what their specializations resolve to FIRST. A stack
         # whose own build is then elided -- itself adopted whole -- or skipped
         # as valid never forms its blocks, and blocks that moved to identities
@@ -7343,6 +7387,12 @@ class Datastack(Datablock):
                     return pd.Series([None] * n, dtype=object)
             except Exception:
                 pass
+        elif self.valid() and not self.owedtopics():
+            self.log.info(
+                f"{self.__class__.__name__}: stack already valid, "
+                f"skipping specialization adoption"
+            )
+            return pd.Series([None] * n, dtype=object)
 
         shared = journal if journal is not None else self._build_journal_()
         if shared is None:
@@ -8037,9 +8087,16 @@ class Datastack(Datablock):
         if specs is None:
             specs = getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
         if specs is not None:
+            block_cls = self._block_class_()
+            spec_cls = getattr(block_cls, 'Specialization', Datablock.Specialization) if block_cls else Datablock.Specialization
+            if isinstance(specs, str):
+                records = self._specialization_records_(specs)
+                return [spec_cls.from_record(r) for r in (records or [])]
             if isinstance(specs, (Datablock.Specialization, dict)):
-                return [specs]
-            return list(specs)
+                specs = [specs]
+            else:
+                specs = list(specs)
+            return [spec_cls.from_record(sp) if isinstance(sp, dict) else sp for sp in specs]
         block_cls = self._block_class_()
         return getattr(block_cls, 'SPECIALIZATIONS', None) or []
 
@@ -8109,6 +8166,16 @@ class Datastack(Datablock):
         kind = self._block_kind_()
         item_label = 'tabs' if kind == 'TAB' else 'blocks'
         n_items = getattr(self, 'n_tabs', self.n_blocks)
+
+        if self._block_paths_topic_():
+            try:
+                if len(self._built_block_set_()) == n_items:
+                    return None
+            except Exception:
+                pass
+        elif self.valid() and not self.owedtopics():
+            return None
+
         anchor = block_cls.anchor
         self.log.info(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
                       f"for {n_items} {item_label} to resolve against...")

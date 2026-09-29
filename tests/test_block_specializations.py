@@ -290,5 +290,39 @@ class TestSpecializeMethod:
         with tab0.fs.open(tab0.path('rows'), 'r') as f:
             assert f.read() == "rows-1\n"
 
+    def test_tab_specializations_from_string_representation(self, grown):
+        spec_str = (
+            "[Specialization(spec={}, topics={'rows': 'SLICETOPIC'}, "
+            "anchor='old.RowTab', legacy=['all'], note='Legacy build')]"
+        )
+        table = v1table(grown, spec={'n': 3}, TAB_SPECIALIZATIONS=spec_str)
+        specs = table._block_specializations_()
+        assert len(specs) == 1
+        assert isinstance(specs[0], Datablock.Specialization)
+        assert specs[0].anchor == 'old.RowTab'
+
+        # Also test that quote() produces evaluable TAB_SPECIALIZATIONS records
+        q = table.quote()
+        assert "TAB_SPECIALIZATIONS=" in q
+
+    def test_stack_already_valid_skips_install_block_specializations(self, grown, monkeypatch):
+        table = v1table(grown, spec={'n': 3}, tag='already_valid_test')
+        table.build()
+        assert table.valid()
+
+        # Reconstructed table that is already valid
+        t2 = v1table(grown, spec={'n': 3}, tag='already_valid_test')
+        assert t2.valid()
+
+        def fail_blocks_journal(*args, **kwargs):
+            raise AssertionError("_blocks_journal_ should not be called when stack is already valid!")
+        monkeypatch.setattr(t2, '_blocks_journal_', fail_blocks_journal)
+
+        res = t2._install_block_specializations_()
+        assert res is not None
+        assert len(res) == 3
+        assert all(x is None for x in res)
+
+
 
 

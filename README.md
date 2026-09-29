@@ -231,30 +231,21 @@ entry = j.get(0)               # DatajournalEntry (Series subclass)
 print(entry.hash, entry.anchor, entry.revision)
 ```
 
-A block writes and reads its journal through a `Datajournal` — a handle,
-not the records. Pass one to a block (it is handed down the build tree) to
-keep track of what a run wrote:
+Blocks don't choose where their journal entries go. Every entry is written
+under the current `Datajournal` session. To keep track of what a piece of code
+wrote, open one around it:
 
 ```python
-dj = Datajournal()             # reads nothing; dj.session is fixed for its lifetime
-block = MyBlock(spec=..., datajournal=dj)
-block.build()
-dj.written_entries()           # every entry path dj wrote, each tagged with dj.session
-dj.read('my.module.MyBlock', event='build:end')   # read any anchor's journal
+with Datajournal() as dj:      # reads nothing; dj.session is fixed for its lifetime
+    run_pipeline()             # every block it builds, however deep, and on dbx executors' workers
+dj.written_entries()           # every entry path written under dj.session
+Datajournal.read('my.module.MyBlock', event='build:end')   # read any anchor's journal
 ```
 
-Or open one as a scope: every block that writes while it is open, however deep
-in whatever it calls, and from any thread, writes through it (the next scope
-out, or the default, once it has closed):
-
-```python
-with Datajournal() as dj:
-    run_pipeline()
-```
-
-Without either, a block uses `DEFAULT_DATAJOURNAL`, one per process. Each
-`dbx.exec` command runs inside such a scope, so all of its blocks share one
-session. Its exec-journal row records that `session` and the
+The innermost `with` wins. A `with` opened in the main thread is seen by every
+thread; one opened in another thread is that thread's own. With none open,
+entries go under `DEFAULT_DATAJOURNAL`, one per process. Each `dbx.exec`
+command runs inside its own scope, so all of its blocks share one session. Its exec-journal row records that `session` and the
 `datajournal_entries` the command produced; `dbx.execjournal(iloc=0).datajournal()`
 reads them back as a `DatajournalFrame`, `.constructed()` just the blocks it
 built, redirected or copied in (by anchor), and `.rerun()` runs the command again.
@@ -265,6 +256,8 @@ is given an anchor.
 
 Filter values are patterns: a substring, a regex (`id='^a6'`), or a glob
 (`id='*a6*'`, `id='a6*'`).
+
+See [JOURNALS.md](JOURNALS.md).
 
 ## CLI
 

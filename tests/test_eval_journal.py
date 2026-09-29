@@ -16,7 +16,10 @@ class Built(Datablock):
         x: int = 1
 
     def __build__(self):
-        self._write_str_('output', 'hello')
+        outdir = self.path('output')
+        os.makedirs(outdir, exist_ok=True)
+        with open(os.path.join(outdir, 'output.txt'), 'w') as f:
+            f.write('hello')
 
 
 class TestDatajournalEntryMethods:

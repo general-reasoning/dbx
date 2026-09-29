@@ -59,11 +59,11 @@ def _count_full_reads(monkeypatch):
     reads = []
     original = Datajournal.read
 
-    def counting(self, anchor, *args, **kwargs):
+    def counting(anchor, *args, **kwargs):
         reads.append(anchor)
-        return original(self, anchor, *args, **kwargs)
+        return original(anchor, *args, **kwargs)
 
-    monkeypatch.setattr(Datajournal, 'read', counting)
+    monkeypatch.setattr(Datajournal, 'read', staticmethod(counting))
     return reads
 
 

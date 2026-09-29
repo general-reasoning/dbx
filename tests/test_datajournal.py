@@ -57,52 +57,46 @@ class Stack(Datastack):
         return Built(datalake=self.url, spec={'x': idx})
 
 
-class TestAHandleIsNotTheRecords:
+class TestReadingIsAQuery:
+    """Reading a journal is a query over storage: it takes no handle, and a handle reads nothing."""
 
     def test_construction_reads_nothing(self, tmp_path):
         """A root that does not exist is only an error once something reads it."""
-        dj = Datajournal(str(tmp_path / 'nowhere'))
+        Datajournal()
         with pytest.raises(FileNotFoundError):
-            dj.read('some.Anchor')
+            Datajournal.read('some.Anchor', datalake=str(tmp_path / 'nowhere'))
 
     def test_read_returns_the_frame(self, tmp_path):
         b = block(tmp_path)
         b.build()
-        frame = Datajournal(str(tmp_path)).read(b.anchor)
+        frame = Datajournal.read(b.anchor, datalake=str(tmp_path))
         assert isinstance(frame, DatajournalFrame) and len(frame) == 1
-        assert isinstance(Datajournal(str(tmp_path)).read(b.anchor, loc=0), DatajournalEntry)
+        assert isinstance(Datajournal.read(b.anchor, loc=0, datalake=str(tmp_path)), DatajournalEntry)
 
-    def test_the_block_url_wins_over_the_handles(self, tmp_path):
-        """A block reads and writes under its own url, whatever its handle's default is."""
-        b = block(tmp_path / 'lake', datajournal=Datajournal(str(tmp_path / 'elsewhere')))
+    def test_a_block_reads_under_its_own_datalake(self, tmp_path, monkeypatch):
+        """Whatever the default datalake is."""
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'elsewhere'))
+        b = block(tmp_path / 'lake')
         b.build()
         assert len(b.journal()) == 1
 
 
-class TestTheBlockWritesThroughIt:
+class TestABlockHasNoJournalOfItsOwn:
+    """Which session an entry goes under is the open ``with``'s to say, never a block's."""
 
-    def test_default_is_the_process_journal(self, tmp_path):
-        assert block(tmp_path).datajournal is DEFAULT_DATAJOURNAL
+    def test_datajournal_is_not_an_argument(self, tmp_path):
+        with pytest.raises(TypeError, match=r"with dbx\.Datajournal\(\)"):
+            block(tmp_path, datajournal=Datajournal())
 
-    def test_a_given_journal_is_used(self, tmp_path):
-        dj = Datajournal()
-        b = block(tmp_path, datajournal=dj)
+    def test_with_no_scope_open_the_process_default(self, tmp_path):
+        assert Datajournal.current() is DEFAULT_DATAJOURNAL
+        b = block(tmp_path)
         b.build()
-        assert b.datajournal is dj
-        assert dj.written_entries() == [b.journal(loc=0)['entry_path']]
+        assert b.journal(loc=0).block.session == DEFAULT_DATAJOURNAL.session
 
-    def test_it_is_handed_down_not_copied(self, tmp_path):
-        """.set() deep-copies a block's state, which is how _adopt_() hands it to a child."""
+    def test_a_handle_is_shared_not_copied(self):
         dj = Datajournal()
-        b = block(tmp_path, datajournal=dj)
-        assert b.set(tag='t').datajournal is dj
-        assert copy.deepcopy(dj) is dj
-
-    def test_a_stack_hands_it_to_its_blocks(self, tmp_path):
-        dj = Datajournal()
-        stack = Stack(datalake=str(tmp_path), datajournal=dj)
-        assert all(stack.block(i).datajournal is dj for i in range(stack.n_blocks))
-
+        assert copy.copy(dj) is dj and copy.deepcopy(dj) is dj
 
 
 def _identity(b):
@@ -124,18 +118,20 @@ class TestAJournalIsNotIdentity:
     def test_every_way_of_getting_one_leaves_identity_alone(self, tmp_path, cls, spec):
         url = str(tmp_path)
         ref = _identity(cls(url=url, spec=spec))
-        explicit = cls(url=url, spec=spec, datajournal=Datajournal('memory://elsewhere', n_workers=3))
-        for b in (explicit, explicit.set(tag=None), pickle.loads(pickle.dumps(explicit))):
-            assert _identity(b) == ref
-        with Datajournal() as dj:
-            scoped = cls(url=url, spec=spec)
-            assert scoped.datajournal is dj and _identity(scoped) == ref
+        # Two sessions -- two commands -- and a block carried across each way it travels.
+        for dj in (Datajournal(), Datajournal()):
+            with dj:
+                scoped = cls(url=url, spec=spec)
+                assert Datajournal.current() is dj
+                for b in (scoped, scoped.set(tag=None), pickle.loads(pickle.dumps(scoped))):
+                    assert _identity(b) == ref
 
     def test_nor_that_of_the_blocks_it_is_handed_to(self, tmp_path):
         plain = Stack(url=str(tmp_path))
-        given = Stack(url=str(tmp_path), datajournal=Datajournal())
-        for i in range(plain.n_blocks):
-            assert _identity(given.block(i)) == _identity(plain.block(i))
+        with Datajournal():
+            scoped = Stack(url=str(tmp_path))
+            for i in range(plain.n_blocks):
+                assert _identity(scoped.block(i)) == _identity(plain.block(i))
 
     def test_the_guard_distinct_blocks_stay_distinct(self, tmp_path):
         """So the parity above cannot pass by everything collapsing to one value."""
@@ -150,41 +146,43 @@ class TestSession:
         assert Datajournal().session != dj.session
 
     def test_written_to_every_entry(self, tmp_path):
-        dj = Datajournal()
-        b = block(tmp_path, datajournal=dj)
-        b.write_journal_entry(event='note', journal_prefix='a-')
-        b.write_journal_entry(event='note', journal_prefix='b-')
+        with Datajournal() as dj:
+            b = block(tmp_path)
+            b.write_journal_entry(event='note', journal_prefix='a-')
+            b.write_journal_entry(event='note', journal_prefix='b-')
         j = b.journal()
         assert list(j['session']) == [dj.session] * 2
         assert b.journal(loc=0).block.session == dj.session
 
     def test_distinct_from_the_tree(self, tmp_path):
-        dj = Datajournal()
-        b = block(tmp_path, datajournal=dj, tree='TREE')
-        b.write_journal_entry(event='note')
-        entry = b.journal(loc=0).block
+        with Datajournal() as dj:
+            block(tmp_path, tree='TREE').write_journal_entry(event='note')
+        entry = block(tmp_path).journal(loc=0).block
         assert (entry.tree, entry.session) == ('TREE', dj.session)
 
     def test_survives_pickling(self):
-        dj = Datajournal(n_workers=3)
+        """The session crosses; the written paths are the copy's own to collect."""
+        with Datajournal() as dj:
+            dj._record_('/some/entry.parquet')
         again = pickle.loads(pickle.dumps(dj))
-        assert again.session == dj.session and again.n_workers == 3
+        assert again.session == dj.session and again.written_entries() == []
 
     def test_a_filter(self, tmp_path):
-        mine, theirs = Datajournal(), Datajournal()
-        block(tmp_path, x=1, datajournal=mine).build()
-        block(tmp_path, x=2, datajournal=theirs).build()
+        with Datajournal() as mine:
+            block(tmp_path, x=1).build()
+        with Datajournal():
+            block(tmp_path, x=2).build()
         assert len(block(tmp_path).journal(session=mine.session)) == 1
 
 
 class TestWrittenEntries:
 
     def test_every_entry_path_once_in_write_order(self, tmp_path):
-        dj = Datajournal()
-        b = block(tmp_path, datajournal=dj)
-        b.write_journal_entry(event='note', journal_prefix='a-')
-        b.write_journal_entry(event='note', journal_prefix='b-')
-        b.write_journal_entry(event='note', journal_prefix='a-')   # rewrites a-
+        with Datajournal() as dj:
+            b = block(tmp_path)
+            b.write_journal_entry(event='note', journal_prefix='a-')
+            b.write_journal_entry(event='note', journal_prefix='b-')
+            b.write_journal_entry(event='note', journal_prefix='a-')   # rewrites a-
         paths = dj.written_entries()
         assert [os.path.basename(p)[:2] for p in paths] == ['a-', 'b-']
         assert all(os.path.exists(p) for p in paths)
@@ -203,9 +201,9 @@ class TestLegacySessionColumn:
     """
 
     def test_old_and_new_rows_in_one_journal(self, tmp_path):
-        dj = Datajournal()
-        b = block(tmp_path, datajournal=dj, tree='NEW-TREE')
-        b.write_journal_entry(event='note')
+        with Datajournal() as dj:
+            b = block(tmp_path, tree='NEW-TREE')
+            b.write_journal_entry(event='note')
         new_path = b.journal(loc=0)['entry_path']
         old = pd.read_parquet(new_path).drop(columns=['tree', 'session', 'id'])
         old['session'] = 'OLD-TREE'
@@ -219,13 +217,15 @@ class TestLegacySessionColumn:
 
 
 class TestWithScope:
-    """``with Datajournal()`` is the journal of every block that writes while it is open."""
+    """``with Datajournal()`` is the session of every entry written while it is open."""
 
-    def test_blocks_inside_use_it(self, tmp_path):
+    def test_entries_inside_go_under_it(self, tmp_path):
         with Datajournal() as dj:
+            assert Datajournal.current() is dj
             b = block(tmp_path)
-            assert b.datajournal is dj
-        assert b.datajournal is DEFAULT_DATAJOURNAL
+            b.build()
+        assert Datajournal.current() is DEFAULT_DATAJOURNAL
+        assert dj.written_entries() == [b.journal(loc=0)['entry_path']]
 
     def test_decided_when_it_writes_not_when_it_was_made(self, tmp_path):
         """Built after the inner ``with`` closed: the next one out, and nothing to the closed one."""
@@ -243,34 +243,48 @@ class TestWithScope:
         assert dj.written_entries() == []
         assert b.journal(loc=0).block.session == DEFAULT_DATAJOURNAL.session
 
-    def test_the_innermost_wins_and_nesting_unwinds(self, tmp_path):
-        b = block(tmp_path)
+    def test_the_innermost_wins_and_nesting_unwinds(self):
         with Datajournal() as outer:
             with Datajournal() as inner:
-                assert b.datajournal is inner
-            assert b.datajournal is outer
-        assert Datajournal.current() is None
+                assert Datajournal.current() is inner
+            assert Datajournal.current() is outer
+        assert Datajournal.current() is DEFAULT_DATAJOURNAL
 
-    def test_an_explicit_one_wins(self, tmp_path):
-        mine = Datajournal()
-        with Datajournal():
-            assert block(tmp_path, datajournal=mine).datajournal is mine
-
-    def test_threads_see_it(self, tmp_path):
-        """Why it is process-wide and not a ContextVar: a thread pool's callables construct blocks too."""
+    def test_threads_see_the_main_threads(self, tmp_path):
+        """Why it is process-wide and not a ContextVar: a thread pool's callables build blocks too."""
         from concurrent.futures import ThreadPoolExecutor
         with Datajournal() as dj:
             with ThreadPoolExecutor(2) as ex:
-                seen = list(ex.map(lambda i: block(tmp_path, x=i).datajournal, range(2)))
+                seen = list(ex.map(lambda i: Datajournal.current(), range(2)))
         assert all(j is dj for j in seen)
 
-    def test_dfn_yaml_stays_safe_to_load(self, tmp_path):
+    def test_a_threads_own_is_its_own(self):
+        """A ``with`` opened in a thread is that thread's: its siblings, and the main thread, do not see it."""
+        import threading
+        opened, release, seen = threading.Event(), threading.Event(), {}
+
+        def worker():
+            with Datajournal() as mine:
+                seen['worker'], seen['mine'] = Datajournal.current(), mine
+                opened.set()
+                release.wait(10)
+            seen['after'] = Datajournal.current()
+
+        with Datajournal() as dj:
+            t = threading.Thread(target=worker)
+            t.start()
+            opened.wait(10)
+            seen['main'] = Datajournal.current()
+            release.set()
+            t.join(10)
+        assert seen['worker'] is seen['mine'] and seen['main'] is dj
+        assert seen['after'] is dj
+
+    def test_dfn_yaml_carries_no_journal(self, tmp_path):
         from dbx.dataparts import read_yaml
-        dj = Datajournal(n_workers=3)
-        b = block(tmp_path, datajournal=dj)
+        b = block(tmp_path)
         b.build()
-        dfn = read_yaml(b.journal(loc=0)['dfn'], safe=True)
-        assert dfn['datajournal'] == repr(dj)
+        assert 'datajournal' not in read_yaml(b.journal(loc=0)['dfn'], safe=True)
 
 
 class TestExec:
@@ -291,7 +305,7 @@ class TestExec:
         session = row['session']
         assert session != DEFAULT_DATAJOURNAL.session
         # The command is over, so its scope is closed and they write elsewhere now.
-        assert a.datajournal is b.datajournal is DEFAULT_DATAJOURNAL
+        assert Datajournal.current() is DEFAULT_DATAJOURNAL
         entries = [blk.journal(hash=blk.hash, loc=0) for blk in (a, b)]
         assert sorted(row['datajournal_entries']) == sorted(e['entry_path'] for e in entries)
         assert {e.block.session for e in entries} == {session}
@@ -324,7 +338,7 @@ class TestExec:
 
     def test_the_scope_closes_with_the_command(self, tmp_path):
         dbx.exec("1 + 1")
-        assert Datajournal.current() is None
+        assert Datajournal.current() is DEFAULT_DATAJOURNAL
 
     def test_a_nested_exec_joins_the_session(self, tmp_path):
         outer = dbx.exec("dbx.exec('Built(datalake=root, spec={\"x\": 3})', Built=Built, root=root)",
@@ -387,13 +401,13 @@ class TestRepr:
     """``repr()``: every kwarg, where ``quote()`` keeps only what reconstructs a block."""
 
     def test_it_carries_what_quote_leaves_out(self, tmp_path):
-        b = block(tmp_path, tree='T-1', datajournal=Datajournal(n_workers=3))
+        b = block(tmp_path, tree='T-1')
         r, q = b.repr(), b.quote()
-        for text in ("tree='T-1'", "datajournal=dbx.Datajournal(n_workers=3)", 'use_specializations=None'):
+        for text in ("tree='T-1'", 'use_specializations=None'):
             assert text in r and text not in q
 
     def test_every_dfn_key_is_rendered(self, tmp_path):
-        b = block(tmp_path, datajournal=Datajournal())
+        b = block(tmp_path)
         r = b.repr()
         # url and anchor as quote() renders them: only when given, so that a
         # block rooted by DBX_ROOT stays relocatable.
@@ -405,10 +419,9 @@ class TestRepr:
         assert f"tree={b.tree!r}" in b.repr()
 
     def test_evaluable_back_to_the_same_block(self, tmp_path):
-        b = block(tmp_path, tag='t', datajournal=Datajournal(n_workers=3))
+        b = block(tmp_path, tag='t')
         again = dbx.eval(b.repr())
         assert (again.hash, again.tree, again.repr()) == (b.hash, b.tree, b.repr())
-        assert isinstance(again.datajournal, Datajournal) and again.datajournal.n_workers == 3
 
     def test_a_nested_block_renders_as_its_own_repr(self, tmp_path):
         inner = block(tmp_path, tree='INNER')
@@ -425,7 +438,7 @@ class TestRepr:
         assert repr(inner.quote()) in outer.quote()
 
     def test_recorded_in_the_journal_and_read_back(self, tmp_path):
-        b = block(tmp_path, datajournal=Datajournal())
+        b = block(tmp_path)
         b.build()
         entry = b.journal(loc=0)
         assert entry.block.repr() == b.repr()
@@ -756,13 +769,15 @@ class TestAcrossProcesses:
         assert hashes == [block(tmp_path, x=100 + i).hash for i in range(2)]
         assert len(dj.written_entries()) == 2
 
-    def test_no_scope_nothing_carried(self, tmp_path):
+    def test_with_no_scope_open_the_process_default_is_carried(self, tmp_path):
+        """The default is the bottom of every stack: a worker writes under the dispatcher's, not its own."""
         from dbx.dataparts import callable_executor
-        before = DEFAULT_DATAJOURNAL.written_entries()
         hashes = callable_executor('multiprocessing', n_workers=1).exec_callables(
             [functools.partial(_built_under_the_scope, 0)])
-        assert hashes == [block(tmp_path, x=100).hash]
-        assert DEFAULT_DATAJOURNAL.written_entries() == before
+        entry = block(tmp_path, x=100).journal(iloc=0)
+        assert hashes == [entry.block.hash]
+        assert entry.block.session == DEFAULT_DATAJOURNAL.session
+        assert entry['entry_path'] in DEFAULT_DATAJOURNAL.written_entries()
 
     def test_a_stream_keeps_what_arrived_after_a_failure(self, tmp_path):
         from dbx.dataparts import callable_executor

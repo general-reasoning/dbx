@@ -158,11 +158,9 @@ written before the exception.
 `multiprocessing`, `torch_multiprocessing` or `ray` executor writes under the
 command's session, and its entry is listed here. The executor sends the
 command's `Datajournal` handle out with the work and brings the written paths
-back with the results. There are two exceptions:
-- **A process you start yourself** (outside a dbx executor) writes under its
-  own session and isn't listed.
-- **A block given `datajournal=` explicitly** writes to that handle rather
-  than the command's.
+back with the results. Worker threads are included the same way. The
+exception is **a process you start yourself** (outside a dbx executor): it
+writes under its own session and isn't listed.
 
 `rerun()` first prints the shell line that would run the same command,
 `dbx.pprint "…"`, and then runs it as a **new** command, which gets its own

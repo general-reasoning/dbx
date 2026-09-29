@@ -810,11 +810,14 @@ def exec(s=None, **kwargs):
                 except (NameError, SyntaxError):
                     kwargs[k] = v
     
-    # Every block the command constructs -- however deep in whatever it calls
-    # -- writes through one Datajournal, under one session. An exec inside an
-    # exec joins the journal already open rather than starting a session.
-    from .journals import Datajournal, write_exec_journal
-    dj = Datajournal.current() or Datajournal()
+    # Every block the command builds -- however deep in whatever it calls, and
+    # in the workers a dbx executor hands it to -- writes under one session. An
+    # exec inside an exec joins the session already open rather than starting
+    # one; the process's default is no command's, so it is never joined.
+    from .journals import DEFAULT_DATAJOURNAL, Datajournal, write_exec_journal
+    dj = Datajournal.current()
+    if dj is DEFAULT_DATAJOURNAL:
+        dj = Datajournal()
     # ONE row, written when the command is over -- in `finally`, so a command
     # that raises is recorded too, with what it wrote before it did. Stamped
     # with the time it started, which is when it ran.
@@ -1038,22 +1041,23 @@ def _with_payloads_(exc, payloads):
 class _CarriesDatajournal_:
     """An executor's public entry points, carrying the open `Datajournal` scope to its workers.
 
-    A ``with Datajournal()`` scope -- the one every ``dbx.exec`` command runs
-    in -- is its process's, and a worker process has none: a block built
-    there would write under that process's own session, and the command's
-    exec-journal row would list none of it. So an executor whose workers are
-    other processes (``CROSSES_PROCESSES``) sends each callable out in the
-    scope's handle (`Datajournal.carry`) and takes back what it wrote
-    (`Datajournal.collect`) before a caller sees the result. The results
-    themselves are unchanged. With no scope open, or workers that are threads
-    of this process, the callables go out as they are.
+    Every entry is written under `Datajournal.current()` -- in a ``dbx.exec``
+    command, the command's session. A worker process has a stack of its own,
+    so a block built there would write under that process's default session,
+    and the command's exec-journal row would list none of it; a worker thread
+    sees the main thread's stack, but not a ``with`` the dispatching thread
+    opened itself. So an executor with workers (``CARRIES_DATAJOURNAL``)
+    sends each callable out in the current session (`Datajournal.carry`) and
+    takes back what it wrote (`Datajournal.collect`) before a caller sees the
+    result. The results themselves are unchanged. The inline executor runs
+    in the caller's thread, and sends nothing.
 
     Subclasses implement the dispatch: ``_exec_callables_`` and
     ``_exec_callables_streaming_``, with these methods' signatures and results.
     """
 
-    #: True for an executor whose workers are other processes.
-    CROSSES_PROCESSES = False
+    #: True for an executor whose workers are other processes or threads.
+    CARRIES_DATAJOURNAL = False
 
     # 2. Declared API ------------------------------------------------------
 
@@ -1065,9 +1069,9 @@ class _CarriesDatajournal_:
         try:
             payloads = self._exec_callables_(callables, *ctx_args, **ctx_kwargs)
         except BaseException as exc:
-            dj.collect_raised(exc)
+            self._collect_raised_(dj, exc)
             raise
-        return [dj.collect(p) for p in payloads]
+        return [dj.collect(self._journaled_(p)) for p in payloads]
 
     def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute callables and yield their results in input order: in lists of *batch_size*, when it is over 1."""
@@ -1079,22 +1083,32 @@ class _CarriesDatajournal_:
         batched = self.batch_size is not None and self.batch_size > 1
         try:
             for out in stream:
-                yield [dj.collect(p) for p in out] if batched else dj.collect(out)
+                yield ([dj.collect(self._journaled_(p)) for p in out] if batched
+                       else dj.collect(self._journaled_(out)))
         except BaseException as exc:
-            dj.collect_raised(exc)
+            self._collect_raised_(dj, exc)
             raise
 
     # 4. Helpers -----------------------------------------------------------
 
     def _carry_datajournal_(self, callables):
-        """*callables* as they go out, and the handle to collect into -- None when there is nothing to carry."""
-        if not self.CROSSES_PROCESSES:
+        """*callables* as they go out, and the session to collect into -- None when there is nothing to carry."""
+        if not self.CARRIES_DATAJOURNAL:
             return callables, None
         from .journals import Datajournal
         dj = Datajournal.current()
-        if dj is None:
-            return callables, None
         return dj.carry(callables), dj
+
+    def _journaled_(self, payload):
+        """*payload* as the `JournaledResult` a carried callable returned, for an executor that returns it otherwise."""
+        return payload
+
+    def _collect_raised_(self, dj, exc):
+        """`Datajournal.collect_raised`, over the payloads *exc* carries as this executor returns them."""
+        payloads = getattr(exc, 'executor_payloads', None)
+        if payloads:
+            _with_payloads_(exc, [self._journaled_(p) for p in payloads])
+        dj.collect_raised(exc)
 
 
 class _CallableExecutorBase_(_CarriesDatajournal_):
@@ -1759,6 +1773,8 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
+    CARRIES_DATAJOURNAL = True
+
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, *, n_workers: int, batch_size: int = None, tag: str = "",
@@ -1825,7 +1841,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
-    CROSSES_PROCESSES = True
+    CARRIES_DATAJOURNAL = True
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -1905,7 +1921,7 @@ class RayCallableExecutor(_CarriesDatajournal_):
         Label for the progress bar.
     """
 
-    CROSSES_PROCESSES = True
+    CARRIES_DATAJOURNAL = True
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -2084,6 +2100,19 @@ class RayCallableExecutor(_CarriesDatajournal_):
         else:
             return
             yield # make it a generator
+
+    def _journaled_(self, payload):
+        """A `Remote` proxy of the `JournaledResult` taken apart: its paths by value, its value as `Remote` returns one.
+
+        A remote worker returns anything that is not a primitive as a proxy,
+        and every carried callable returns a `JournaledResult`. Its paths are a
+        list, and come back by value; its value comes back exactly as the
+        callable's own would have -- by value, or as a proxy.
+        """
+        if isinstance(payload, Remote):
+            from .journals import JournaledResult
+            return JournaledResult(payload.value, payload.datajournal_entries)
+        return payload
 
     @staticmethod
     def _drain_successes_(result_queue, keep):

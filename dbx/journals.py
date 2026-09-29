@@ -319,8 +319,8 @@ class ExecjournalEntry(pd.Series):
 
     def dataentries(self, *, n_workers: int | None = None) -> list:
         """The `DatajournalEntry` of every block journal entry this command wrote, in the order written."""
-        return Datajournal(storage_options=self.storage_options or None).read_entries(
-            ExecjournalEntry._written_paths_(self), n_workers=n_workers)
+        return Datajournal.read_entries(
+            ExecjournalEntry._written_paths_(self), storage_options=self.storage_options or None, n_workers=n_workers)
 
     def datajournal(self, *, n_workers: int | None = None):
         """The block journal entries this command wrote, as one `DatajournalFrame`.
@@ -329,8 +329,8 @@ class ExecjournalEntry(pd.Series):
         legacy columns resolved, filterable the same way -- one row per entry,
         in the order written.
         """
-        return Datajournal(storage_options=self.storage_options or None).read_frame(
-            ExecjournalEntry._written_paths_(self), n_workers=n_workers)
+        return Datajournal.read_frame(
+            ExecjournalEntry._written_paths_(self), storage_options=self.storage_options or None, n_workers=n_workers)
 
     def anchors(self) -> list:
         """Every anchor this command wrote a block journal entry for, sorted."""
@@ -408,13 +408,13 @@ class ExecjournalFrame(pd.DataFrame):
 
     def dataentries(self, *, n_workers: int | None = None) -> list:
         """The block journal entries every command here wrote: row by row, each in the order written."""
-        return Datajournal(storage_options=self.storage_options or None).read_entries(
-            self._written_paths_(), n_workers=n_workers)
+        return Datajournal.read_entries(
+            self._written_paths_(), storage_options=self.storage_options or None, n_workers=n_workers)
 
     def datajournal(self, *, n_workers: int | None = None):
         """What :meth:`dataentries` reads, as one `DatajournalFrame`."""
-        return Datajournal(storage_options=self.storage_options or None).read_frame(
-            self._written_paths_(), n_workers=n_workers)
+        return Datajournal.read_frame(
+            self._written_paths_(), storage_options=self.storage_options or None, n_workers=n_workers)
 
     def anchors(self) -> list:
         """Every anchor the commands here wrote a block journal entry for, sorted."""
@@ -1695,99 +1695,92 @@ def one_datalake(datalake, url, what):
     return datalake if datalake is not None else url
 
 
-#: The Datajournals whose ``with`` blocks are open, innermost last. Process-wide
-#: rather than a ContextVar, on purpose: a thread does not inherit context
-#: variables, and a pipeline that constructs blocks inside a thread pool would
-#: then write them under a different session -- silently.
-_ACTIVE_DATAJOURNALS = []
+#: The Datajournals opened by ``with`` in the MAIN thread, innermost last. Every
+#: thread's scope unless it opened one of its own, and process-wide for that
+#: reason: a thread does not inherit context variables, and the blocks a thread
+#: pool builds would otherwise write under another session -- silently.
+_PROCESS_DATAJOURNALS = []
 
 
-_ACTIVE_DATAJOURNALS_LOCK = threading.Lock()
+_PROCESS_DATAJOURNALS_LOCK = threading.Lock()
+
+
+#: The Datajournals opened by ``with`` in any OTHER thread: ``.stack``, that
+#: thread's own. A thread that opens one does not change what its siblings see.
+_THREAD_DATAJOURNALS = threading.local()
 
 
 class Datajournal:
-    """Where a block's journal lives: how entries are written to it and read back.
+    """The block journal: how its entries are written and read, and the sessions they are written under.
 
-    A handle, not the records -- constructing one touches no storage. The
-    records are what :meth:`read` returns (a `DatajournalFrame`, or one
-    `DatajournalEntry`), and :meth:`write` is how a block adds one.
-
-    Both halves keep to ONE on-disk layout, which is why they live together:
-    an entry of block B is ::
+    Reading and writing are class-level: :meth:`read`, :meth:`read_frame` and
+    :meth:`read_entries` query storage, and :meth:`write` is how a block adds
+    an entry. Both keep to ONE on-disk layout, which is why they live
+    together: an entry of block B is ::
 
         {B.anchorkeypath}/.journal/{fqcn}/journal/{hash}/{fqcn}-journal-{hash}-{dt}.parquet
 
     with its side files (spec, dfn, kwargs, quote, cite, repr, signature, type,
     note) beside it under ``.journal/{fqcn}/{x}/{hash}/`` -- see :meth:`path` --
-    and :meth:`read` globs for exactly that under ``{url}/{anchor}``.
+    and :meth:`read` globs for exactly that under ``{datalake}/{anchor}``.
 
-    A block writes every entry through one, and hands one it was given down
-    its build tree as it hands down ``tree``. Which one, decided at each read
-    and write: the ``datajournal=`` it was given or inherited; else the
-    innermost ``with Datajournal()`` open at that moment -- the next one out
-    once an inner one has closed; else the process-wide DEFAULT_DATAJOURNAL.
-    So ::
+    An INSTANCE is a session: a ``session`` id written to every entry made
+    under it, and the paths of those entries (:meth:`written_entries`).
+    Constructing one touches no storage. Which session an entry goes under is
+    never a block's to say -- a block has no journal of its own -- but
+    :meth:`current`'s: the innermost ``with Datajournal()`` open for this
+    thread; else the innermost the main thread has open; else
+    `DEFAULT_DATAJOURNAL`, one per process, the bottom of every stack. So ::
 
         with Datajournal() as dj:
-            run_pipeline()          # every block it constructs, however deep
+            run_pipeline()          # every block it builds, however deep
         dj.written_entries()        # ... wrote here, under dj.session
 
     which is how ``dbx.exec`` puts one command's blocks under one session.
-    The scope is the process, threads included. Another process has none of
-    its own: a block pickled into one writes to that process's default unless
-    it was given a journal explicitly -- or was sent there by a dbx executor
-    (multiprocessing, torch_multiprocessing, ray), which carries the scope's
-    handle with the work and brings its written entries back (:meth:`carry`). It is operational, like ``tree``: not part
-    of the signature, and never rendered into ``quote()`` or ``cite()``.
-
-    *url*, *storage_options*, *log* and *n_workers* are the defaults
-    :meth:`read` uses when not given its own. A block always passes its own url
-    and storage options, so for a block they only matter when read directly::
-
-        Datajournal('abfss://lake@acct.dfs.core.windows.net').read('my.Block', event='build:end')
+    Another process has a stack of its own, and a dbx executor that sends
+    work there (multiprocessing, torch_multiprocessing, ray) opens the
+    current session around it and brings its written entries back
+    (:meth:`carry`); a multithreading executor does the same for its threads.
+    A session is operational, like ``tree``: nothing about it reaches a
+    block's identity.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, datalake: str | None = None, *, storage_options: dict | None = None,
-                 log: 'Logger | None' = None, n_workers: int | None = 8, url: str | None = None):
-        self.datalake = one_datalake(datalake, url, 'Datajournal')
-        self.storage_options = storage_options
-        self.log = log
-        self.n_workers = n_workers
+    def __init__(self):
         self._session = str(uuid.uuid4())
         self._written = {}      # entry path -> None: a set that keeps write order
         self._written_lock = threading.Lock()
 
     def __repr__(self):
-        args = [f"{k}={v!r}" for k, v, default in (
-            ('datalake', self.datalake, None),
-            ('storage_options', self.storage_options, None),
-            ('n_workers', self.n_workers, 8)) if v != default]
-        # Qualified, so that a repr() carrying it is evaluable as a specline.
-        return f"dbx.Datajournal({', '.join(args)})"
+        return f"dbx.Datajournal(session={self._session!r})"
 
     def __getstate__(self):
-        # The configuration and the session, not the logger: a handle crosses
-        # process boundaries (a pickled block, a .set() deepcopy) and lands in
-        # dfn.yaml. The session goes with it, because a copy made on the way
-        # to a worker or a child block is the same journal session, not a new
-        # one -- otherwise one build tree would be written under many.
-        return {'datalake': self.datalake, 'storage_options': self.storage_options,
-                'n_workers': self.n_workers, 'session': self._session}
+        # The session and nothing else: a handle crosses process boundaries
+        # with the work an executor sends out, and the copy that arrives is
+        # the same journal session, not a new one -- otherwise one command
+        # would be written under many. Its written paths stay here: the copy
+        # collects its own, and the executor brings them back (collect()).
+        return {'session': self._session}
+
+    def __setstate__(self, state):
+        self.__init__()
+        self._session = state.get('session') or self._session
 
     def __enter__(self):
-        with _ACTIVE_DATAJOURNALS_LOCK:
-            _ACTIVE_DATAJOURNALS.append(self)
+        stack = self._stack_()
+        with _PROCESS_DATAJOURNALS_LOCK:
+            stack.append(self)
         return self
 
     def __exit__(self, *exc):
-        with _ACTIVE_DATAJOURNALS_LOCK:
+        stack = self._stack_()
+        with _PROCESS_DATAJOURNALS_LOCK:
             # The innermost entry of THIS handle: nesting one handle in itself
             # is legal, and exits out of order must not pop someone else's.
-            for i in range(len(_ACTIVE_DATAJOURNALS) - 1, -1, -1):
-                if _ACTIVE_DATAJOURNALS[i] is self:
-                    del _ACTIVE_DATAJOURNALS[i]
+            for i in range(len(stack) - 1, -1, -1):
+                if stack[i] is self:
+                    del stack[i]
                     break
         return False
 
@@ -1795,45 +1788,39 @@ class Datajournal:
         return self
 
     def __deepcopy__(self, memo):
-        # One handle per journal session, shared rather than copied: .set()
-        # deep-copies a block's state, and _adopt_() hands the handle to every
-        # child that way. A copy would split the session's written_entries()
-        # across objects nobody holds.
+        # One handle per journal session, shared rather than copied: a copy
+        # would split the session's written_entries() across objects nobody
+        # holds.
         return self
-
-    def __setstate__(self, state):
-        state = dict(state)
-        if 'url' in state:                      # pickled before the rename
-            state['datalake'] = state.pop('url')
-        session = state.pop('session', None)
-        self.__init__(**state)
-        if session is not None:
-            self._session = session
 
     # 2. Declared API ------------------------------------------------------
 
     @staticmethod
-    def current() -> 'Datajournal | None':
-        """The innermost ``with Datajournal()`` open in this process, or None."""
-        with _ACTIVE_DATAJOURNALS_LOCK:
-            return _ACTIVE_DATAJOURNALS[-1] if _ACTIVE_DATAJOURNALS else None
+    def current() -> 'Datajournal':
+        """The session an entry written NOW goes under: this thread's innermost ``with``, the main thread's, or the default.
 
-    def read(self, anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None,
+        Never None: `DEFAULT_DATAJOURNAL` is the bottom of every stack.
+        """
+        own = getattr(_THREAD_DATAJOURNALS, 'stack', None)
+        with _PROCESS_DATAJOURNALS_LOCK:
+            if own:
+                return own[-1]
+            if _PROCESS_DATAJOURNALS:
+                return _PROCESS_DATAJOURNALS[-1]
+        return DEFAULT_DATAJOURNAL
+
+    @classmethod
+    def read(cls, anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None,
              log=None, n_workers=None, index=None, unnormalized: bool = False, url=None, desc=None, **filter_kwargs):
         """Read *anchor*'s journal under *url*: every entry, newest first, then filtered.
 
         Returns a `DatajournalFrame`, or the one `DatajournalEntry` at *loc*
-        (a label) or *iloc* (a position). *url*, *storage_options*, *log* and
-        *n_workers* default to this handle's, and *datalake* then to
-        ``DBX_DATALAKE``, ``DBX_ROOT``, ``DBX_URL``.
+        (a label) or *iloc* (a position). *datalake* (``url``, its old name)
+        defaults to ``DBX_DATALAKE``, ``DBX_ROOT``, ``DBX_URL``.
         """
-        log = log or self.log or Logger()
-        n_workers = n_workers or self.n_workers or 8
+        log = log or Logger()
+        n_workers = n_workers or 8
         url = one_datalake(datalake, url, 'Datajournal.read')
-        if url is None:
-            url = self.datalake
-        if storage_options is None:
-            storage_options = self.storage_options
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         if url is None:
@@ -1909,7 +1896,8 @@ class Datajournal:
             result = frame
         return result
 
-    def read_frame(self, paths, *, storage_options=None, log=None, n_workers=None) -> 'DatajournalFrame':
+    @classmethod
+    def read_frame(cls, paths, *, storage_options=None, log=None, n_workers=None) -> 'DatajournalFrame':
         """The entries at *paths* -- journal entry files, as :meth:`written_entries` lists them.
 
         One row per path, numbered in the order given, and read exactly as
@@ -1921,10 +1909,8 @@ class Datajournal:
         paths = [str(p) for p in paths]
         if not paths:
             return DatajournalFrame(None)
-        log = log or self.log or Logger()
-        n_workers = n_workers or self.n_workers or 8
-        if storage_options is None:
-            storage_options = self.storage_options
+        log = log or Logger()
+        n_workers = n_workers or 8
         if storage_options is None:
             storage_options = default_storage_options()
         fs, _ = fsspec.url_to_fs(paths[0], **storage_options)
@@ -1941,15 +1927,17 @@ class Datajournal:
         df = df.sort_values('__order__').drop(columns=['__order__']).reset_index(drop=True)
         return DatajournalFrame(df, storage_options=storage_options)
 
-    def read_entries(self, paths, *, storage_options=None, log=None, n_workers=None) -> 'list[DatajournalEntry]':
+    @classmethod
+    def read_entries(cls, paths, *, storage_options=None, log=None, n_workers=None) -> 'list[DatajournalEntry]':
         """What :meth:`read_frame` reads, one `DatajournalEntry` per path, in the order given."""
-        frame = self.read_frame(paths, storage_options=storage_options, log=log, n_workers=n_workers)
+        frame = cls.read_frame(paths, storage_options=storage_options, log=log, n_workers=n_workers)
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
-    def write(self, block, event: str, *, note: str = None, inline_note: bool = False,
+    @classmethod
+    def write(cls, block, event: str, *, note: str = None, inline_note: bool = False,
               message: str = None, inline_message: bool = False, journal_prefix: str = '',
               redirection: 'str | dict | None' = None):
-        """Write one journal entry for *event*, and return its ``entry_code``.
+        """Write one journal entry for *event*, under :meth:`current`'s session, and return its ``entry_code``.
 
         ``entry_code`` is a fresh uuid per call, and it is the only field that
         identifies a *row*.  Everything else on an entry describes the block
@@ -1996,42 +1984,38 @@ class Datajournal:
         # A dict goes in as str(dict), the way 'paths' and 'topics' do -- one
         # parquet column cannot hold both a string and a mapping.
         redirection_value = redirection if (redirection is None or isinstance(redirection, str)) else str(redirection)
+        dj = cls.current()
         entry_id = uuid.uuid4().hex[:16] if getattr(block, '_uuid16_', False) else str(uuid.uuid4())
         dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
         code_seed = f"{block.hash}:{block.tree}:{dt}:{event}:{entry_id}"
         code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
 
-        self._write_dict_(block, 'spec', block.spec)
-        dfn = block.dfn
-        if dfn.get('datajournal') is not None:
-            # Its repr, not the object: a python/object tag is not something
-            # read_yaml(safe=True) can load, and the session is in its own column.
-            dfn = {**dfn, 'datajournal': repr(dfn['datajournal'])}
-        self._write_dict_(block, 'dfn', dfn)
-        self._write_dict_(block, 'kwargs', block.kwargs)
-        self._write_text_(block, 'quote', block.quote())
-        self._write_text_(block, 'cite', block.cite())
-        self._write_text_(block, 'repr', block.repr())
-        self._write_text_(block, 'signature', block.signaturestr())
-        self._write_text_(block, 'type', block.typestr())
+        cls._write_dict_(block, 'spec', block.spec)
+        cls._write_dict_(block, 'dfn', block.dfn)
+        cls._write_dict_(block, 'kwargs', block.kwargs)
+        cls._write_text_(block, 'quote', block.quote())
+        cls._write_text_(block, 'cite', block.cite())
+        cls._write_text_(block, 'repr', block.repr())
+        cls._write_text_(block, 'signature', block.signaturestr())
+        cls._write_text_(block, 'type', block.typestr())
         if note is not None and not inline_note:
-            self._write_text_(block, 'note', note)
+            cls._write_text_(block, 'note', note)
 
-        spec_path = self.path(block, 'spec', 'yaml')
-        dfn_path = self.path(block, 'dfn', 'yaml')
-        kwargs_path = self.path(block, 'kwargs', 'yaml')
-        quote_path = self.path(block, 'quote', 'txt')
-        cite_path = self.path(block, 'cite', 'txt')
-        signature_path = self.path(block, 'signature', 'txt')
-        repr_path = self.path(block, 'repr', 'txt')
-        type_path = self.path(block, 'type', 'txt')
+        spec_path = cls.path(block, 'spec', 'yaml')
+        dfn_path = cls.path(block, 'dfn', 'yaml')
+        kwargs_path = cls.path(block, 'kwargs', 'yaml')
+        quote_path = cls.path(block, 'quote', 'txt')
+        cite_path = cls.path(block, 'cite', 'txt')
+        signature_path = cls.path(block, 'signature', 'txt')
+        repr_path = cls.path(block, 'repr', 'txt')
+        type_path = cls.path(block, 'type', 'txt')
         if note is not None and not inline_note:
-            note_path = self.path(block, 'note', 'txt')
+            note_path = cls.path(block, 'note', 'txt')
             note_val = note_path
         else:
             note_val = note
         #
-        logpath = self.path(block, 'log', ensure_dirpath=True)
+        logpath = cls.path(block, 'log', ensure_dirpath=True)
         if logpath is not None:
             has_log = block.fs.exists(logpath)
         else:
@@ -2043,7 +2027,7 @@ class Datajournal:
                        else {topic: datablocks.DIRTOPIC for topic in block.topics()})
         paths_dict = block.paths()
         #
-        journal_path = self.path(block, 'journal', 'parquet', ensure_dirpath=True, filename_prefix=journal_prefix)
+        journal_path = cls.path(block, 'journal', 'parquet', ensure_dirpath=True, filename_prefix=journal_prefix)
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build:start:datetime': block._build_start_dt,
                                          'build:end:datetime': block._build_end_dt,
@@ -2058,7 +2042,7 @@ class Datajournal:
                                          'anchorkeypath': block.anchorkeypath,
                                          'code': block.code,
                                          'tree': block.tree,
-                                         'session': self.session,
+                                         'session': dj.session,
                                          'id': entry_id,
                                          'tag': block.tag,
                                          'topics': str(topics_dict),
@@ -2080,8 +2064,7 @@ class Datajournal:
         }])
         with block.fs.open(journal_path, 'wb') as f:
             df.to_parquet(f)
-        with self._written_lock:
-            self._written[journal_path] = None
+        dj._record_(journal_path)
         
         tagstr = f"with tag {repr(block.tag)} " if block.tag is not None else ""
         block.log.debug(f"WROTE JOURNAL entry {entry_id} for event {repr(event)} {tagstr}"
@@ -2089,25 +2072,25 @@ class Datajournal:
         return entry_id
 
     def written_entries(self):
-        """Every journal entry path this handle has written, in the order first written.
+        """Every journal entry path written under this session, in the order first written.
 
         A path appears once however often it was written: an instance
         rewrites its one entry file (see :meth:`write`), so the file holds the
-        latest entry and the path is listed where it first appeared. Only this
-        object's writes -- a block pickled into another process writes through
-        a copy, which keeps the session but collects its own list. A callable
-        sent there by an executor brings its copy's list back: see :meth:`carry`.
+        latest entry and the path is listed where it first appeared. In
+        another process the session is a copy, which collects its own list;
+        work sent there by a dbx executor brings that list back: see :meth:`carry`.
         """
         with self._written_lock:
             return list(self._written)
 
     def carry(self, callables) -> list:
-        """*callables* wrapped to run under this handle in another process: `JournaledCallable`\\ s.
+        """*callables* wrapped to run under this session in a worker: `JournaledCallable`\\ s.
 
-        For an executor about to send work out of this process, which a
-        ``with`` scope does not reach. Each wrapper runs its callable inside
-        this handle -- the session crosses with it, as a pickled handle's does
-        -- and returns its value with the entry paths it wrote, a
+        For an executor about to hand work to another process, which this
+        one's stack does not reach, or to another thread, which may have
+        opened a ``with`` of its own. Each wrapper runs its callable inside
+        this handle -- in another process, a copy with the same session --
+        and returns its value with the entry paths it wrote, a
         `JournaledResult`, for :meth:`collect` to take back here.
         """
         return [JournaledCallable(c, self) for c in callables]
@@ -2120,9 +2103,8 @@ class Datajournal:
         """
         if not isinstance(payload, JournaledResult):
             return payload
-        with self._written_lock:
-            for path in payload.datajournal_entries:
-                self._written.setdefault(path, None)
+        for path in payload.datajournal_entries:
+            self._record_(path)
         return payload.value
 
     def collect_raised(self, exc: BaseException) -> None:
@@ -2139,66 +2121,80 @@ class Datajournal:
         for payload in getattr(exc, 'executor_payloads', None) or []:
             self.collect(payload)
 
-    def path(self, block, x, ext=None, *, ensure_dirpath: bool = True, filename_prefix: str = ''):
+    @staticmethod
+    def path(block, x, ext=None, *, ensure_dirpath: bool = True, filename_prefix: str = ''):
         """The file *block*'s artefact *x* is written to: ``.journal/{fqcn}/{x}/{hash}/``, per instance.
 
         Named by ``block.dt``, which is fixed per live instance -- so every
         write of *x* from one instance lands on the same file.
         """
-        xdir = self.dirpath(block, x)
+        xdir = Datajournal.dirpath(block, x)
         if ensure_dirpath:
             block.fs.makedirs(xdir, exist_ok=True)
         if ext is None:
             ext = x
         return os.path.join(xdir, f'{filename_prefix}{block.fqcn}-{x}-{block.hash}-{block.dt}.{ext}')
 
-    def dirpath(self, block, x='journal'):
+    @staticmethod
+    def dirpath(block, x='journal'):
         """The directory holding *block*'s artefact *x* -- for ``'journal'``, this block's entries and no others."""
         return os.path.join(block.anchorkeypath, ".journal", block.fqcn, x, block.hash)
 
     # 3. Accessors ---------------------------------------------------------
 
     @property
-    def url(self):
-        """The name `datalake` had first."""
-        return self.datalake
-
-    @property
     def session(self):
         """This handle's session: generated when it is constructed, and fixed for its lifetime.
 
-        Written to every entry this handle writes, so a journal can be cut by
-        the process -- or by whoever built their own handle -- that wrote it,
-        across build trees. Survives pickling and copying with the handle.
+        Written to every entry made under it, so a journal can be cut by the
+        command -- or whoever opened the ``with`` -- that wrote it, across
+        build trees and processes. Survives pickling and copying with the handle.
         """
         return self._session
 
     # 4. Helpers -----------------------------------------------------------
 
-    def _write_dict_(self, block, name, data, *, add_credentials: bool = False):
+    @staticmethod
+    def _write_dict_(block, name, data, *, add_credentials: bool = False):
         if add_credentials:
             data = copy.deepcopy(data)
             data['hash'] = block.hash
             data['datetime'] = block.dt
         #
-        ypath = self.path(block, name, 'yaml')
+        ypath = Datajournal.path(block, name, 'yaml')
         write_yaml(data, ypath, storage_options=block.storage_options)
         assert block.fs.exists(ypath), f"path {ypath} does not exist after writing"
         block.log.detailed(f"WROTE: {name.upper()}: yaml: {ypath}")
         #
-        pqpath = self.path(block, name, 'parquet')
+        pqpath = Datajournal.path(block, name, 'parquet')
         df = pd.DataFrame.from_records([{k: repr(v) for k, v in data.items()}])
         with block.fs.open(pqpath, 'wb') as f:
             df.to_parquet(f)
         assert block.fs.exists(pqpath), f"pqpath {pqpath} does not exist after writing"
         block.log.detailed(f"WROTE: {name.upper()}: parquet: {pqpath}")
 
-    def _write_text_(self, block, name, text):
+    @staticmethod
+    def _write_text_(block, name, text):
         #
-        path = self.path(block, name, 'txt')
+        path = Datajournal.path(block, name, 'txt')
         write_str(text, path, storage_options=block.storage_options)
         assert block.fs.exists(path), f"scopepath {path} does not exist after writing"
         block.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
+
+    def _record_(self, path):
+        """Add *path* to :meth:`written_entries`, where it was not already."""
+        with self._written_lock:
+            self._written.setdefault(path, None)
+
+    @staticmethod
+    def _stack_() -> list:
+        """The stack a ``with`` opened in THIS thread goes on: the process's in the main thread, else the thread's own."""
+        if threading.current_thread() is threading.main_thread():
+            return _PROCESS_DATAJOURNALS
+        stack = getattr(_THREAD_DATAJOURNALS, 'stack', None)
+        if stack is None:
+            stack = _THREAD_DATAJOURNALS.stack = []
+        return stack
 
     @staticmethod
     def _read_files_(fs, files, *, n_workers, log, desc=None):
@@ -2307,11 +2303,11 @@ class Datajournal:
 
 
 class JournaledCallable:
-    """A callable sent to another process with the `Datajournal` it was dispatched under.
+    """A callable handed to a worker with the `Datajournal` session it was dispatched under.
 
-    A ``with Datajournal()`` scope is its process's, threads included, and a
-    worker process has none: a block built there writes to that process's
-    default -- another session, and paths nobody in the parent lists. Made by
+    A worker process has a stack of its own, and a worker thread sees the main
+    thread's but not the dispatching thread's: a block built there would write
+    under another session -- and to paths nobody in the dispatcher lists. Made by
     `Datajournal.carry`, this runs the callable inside the handle it carries
     and returns a `JournaledResult` -- its value, and the entry paths the call
     wrote -- for `Datajournal.collect` to take back into the handle it came

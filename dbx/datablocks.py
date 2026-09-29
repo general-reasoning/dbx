@@ -1657,10 +1657,6 @@ class Datablock:
         # block's own identity does not depend on it, so it stays out of the
         # signature; it is how the journal groups the entries of a tree.
         tree: str | None = None,
-        # The Datajournal every entry of this block is written through, handed
-        # down the build tree with `tree`. None means DEFAULT_DATAJOURNAL. Like
-        # `tree`, operational: never in the signature or in quote().
-        datajournal: 'Datajournal | None' = None,
         # When a read fails, follow a redirection recorded by UNSAFE_redirect()
         # and read from the entry it names instead. See :meth:`read`.
         redirect: bool = True,
@@ -1693,6 +1689,14 @@ class Datablock:
         local_must_exist: bool = False,
         **kwargs,
     ):
+        if 'datajournal' in kwargs:
+            # Left to **kwargs it would be kept as a dynamic parameter and do
+            # nothing: which session an entry goes under is the open
+            # `with Datajournal()`'s to say, never a block's.
+            raise TypeError(
+                f"{type(self).__name__}: datajournal= is not a Datablock argument; "
+                f"open `with dbx.Datajournal():` around the code that builds instead"
+            )
         if SPECIALIZATIONS is None and SPECIALIZATION is not None:
             SPECIALIZATIONS = SPECIALIZATION
         # Initialize early logger for __post_init__ if needed, though usually hash is needed
@@ -1722,7 +1726,6 @@ class Datablock:
             'keyby': keyby,
             'uuid16': uuid16,
             'tree': tree,
-            'datajournal': datajournal,
             'redirect': redirect,
             'use_specializations': use_specializations,
             'SPECIALIZATIONS': SPECIALIZATIONS,
@@ -1876,13 +1879,6 @@ class Datablock:
         self._tree_ = _unquote(state.get('tree'))
         if self._tree_ == 'None':
             self._tree_ = None
-        datajournal = state.get('datajournal')
-        if isinstance(datajournal, str):
-            # As repr() renders one -- `dbx.Datajournal(...)` -- which a block
-            # constructor receives from dbx.eval as TEXT, or as a specline.
-            # Resolved here, as a specline url is.
-            datajournal = eval(datajournal if self.is_specline(datajournal) else f'${datajournal}')
-        self._datajournal_ = datajournal
         # Redirection config: dict(code=..., filter=..., paths=...) or legacy bool
         self.redirect = state.get('redirect')
         # The value as given, so __getstate__ reproduces it: None means "ask
@@ -3593,7 +3589,7 @@ class Datablock:
         """An evaluable ``$fqcn(...)`` specline carrying EVERY constructor kwarg.
 
         :meth:`quote` renders what reconstructs a working block, and leaves out
-        what belongs to one run (``tree``, ``datajournal``); :meth:`cite`
+        what belongs to one run (``tree``); :meth:`cite`
         renders for reading. This renders the whole of :attr:`dfn`: spec and
         every other parameter, operational ones included -- what the block WAS,
         down to the run it was part of. ``url`` and ``anchor`` are rendered as
@@ -4553,24 +4549,24 @@ class Datablock:
     def write_journal_entry(self, event: str, *, note: str = None, inline_note: bool = False,
                             message: str = None, inline_message: bool = False, journal_prefix: str = '',
                             redirection: 'str | dict | None' = None):
-        """Write one journal entry for *event* through :attr:`datajournal`. See `Datajournal.write`."""
-        return self.datajournal.write(self, event, note=note, inline_note=inline_note,
-                                      message=message, inline_message=inline_message,
-                                      journal_prefix=journal_prefix, redirection=redirection)
+        """Write one journal entry for *event*, under the current `Datajournal` session. See `Datajournal.write`."""
+        return Datajournal.write(self, event, note=note, inline_note=inline_note,
+                                 message=message, inline_message=inline_message,
+                                 journal_prefix=journal_prefix, redirection=redirection)
 
     @staticmethod
     def Journal(anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, url=None, **filter_kwargs):
-        """*anchor*'s journal, read by a default `Datajournal`. See `Datajournal.read`."""
-        return Datajournal().read(anchor, loc, iloc=iloc, datalake=one_datalake(datalake, url, 'Journal'),
-                                  storage_options=storage_options,
-                                  log=log, n_workers=n_workers, index=index,
-                                  unnormalized=unnormalized, **filter_kwargs)
+        """*anchor*'s journal. See `Datajournal.read`."""
+        return Datajournal.read(anchor, loc, iloc=iloc, datalake=one_datalake(datalake, url, 'Journal'),
+                                storage_options=storage_options,
+                                log=log, n_workers=n_workers, index=index,
+                                unnormalized=unnormalized, **filter_kwargs)
 
     def journal(self, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=None, index: str | None = None, unnormalized: bool = False, url=None, **filter_kwargs):
-        """This block's anchor's journal, read through :attr:`datajournal`. See `Datajournal.read`."""
+        """This block's anchor's journal, under this block's datalake. See `Datajournal.read`."""
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-        return self.datajournal.read(
+        return Datajournal.read(
             self.anchor,
             loc=loc,
             iloc=iloc,
@@ -4655,18 +4651,6 @@ class Datablock:
             self._tree_ = (uuid.uuid4().hex[:16]
                            if getattr(self, '_uuid16_', False) else str(uuid.uuid4()))
         return self._tree_
-
-    @property
-    def datajournal(self) -> 'Datajournal':
-        """The `Datajournal` this block writes its entries through and reads its journal with.
-
-        The one it was given or inherited from its parent; else the innermost
-        ``with Datajournal()`` open NOW -- asked on every read and write, so a
-        block built after a ``with`` closes writes to the next one out -- else
-        the process-wide DEFAULT_DATAJOURNAL. See `Datajournal`.
-        """
-        given = getattr(self, '_datajournal_', None)
-        return given if given is not None else (Datajournal.current() or DEFAULT_DATAJOURNAL)
 
     @property
     def revision(self):
@@ -5551,7 +5535,7 @@ class Datablock:
 
     def _journal_hashdirpath_(self):
         """The directory holding THIS block's journal entries, and no others."""
-        return self.datajournal.dirpath(self, 'journal')
+        return Datajournal.dirpath(self, 'journal')
 
     def _recorded_redirection_(self, journal=None):
         """The latest redirection recorded for this block's hash, or None.
@@ -5879,8 +5863,6 @@ class Datablock:
         that only overrides ``__block__`` never has to think about it.
         """
         kw = {'tree': self.tree}
-        if self._datajournal_ is not None:
-            kw['datajournal'] = self._datajournal_
         if keyby:
             keyby_val = getattr(self, 'keyby', None)
             if keyby_val is not None:
@@ -5920,8 +5902,7 @@ class Datablock:
             for k, v in state.items()
             # 'tree' groups a build tree's journal entries; pinning one into a
             # recorded quote would have inst() rejoin a tree that is over.
-            # 'datajournal' says where entries are written, not what a block is.
-            if k not in ['datalake', 'url', 'anchor', 'hash', 'spec', 'tree', 'datajournal',
+            if k not in ['datalake', 'url', 'anchor', 'hash', 'spec', 'tree',
                          '__redirected_paths__']
             # None means "ask the class", which is what every block that never
             # mentioned the feature says -- and saying it out loud in every
@@ -6515,7 +6496,7 @@ class Datablock:
         cache = self.__dict__.setdefault('__anchor_journals__', {})
         if anchor not in cache:
             try:
-                cache[anchor] = self.datajournal.read(
+                cache[anchor] = Datajournal.read(
                     anchor, datalake=self.datalake, storage_options=self.storage_options, log=self.log)
             except FileNotFoundError:
                 cache[anchor] = None
@@ -6685,12 +6666,10 @@ class Datablock:
         return _dbxanchorpathx_
 
     def _dbxanchorhashpathx_(self, x, ext=None, *, ensure_dirpath: bool = True, filename_prefix: str = ''):
-        return self.datajournal.path(self, x, ext, ensure_dirpath=ensure_dirpath, filename_prefix=filename_prefix)
+        return Datajournal.path(self, x, ext, ensure_dirpath=ensure_dirpath, filename_prefix=filename_prefix)
 
 
     #LOG LEVEL: END
-    def _write_str_(self, name, text):
-        self.datajournal._write_text_(self, name, text)
 
 def UNSAFE_clear_block_callable(block, topics=(), clear_dirpath=False, *, stack=None, idx=None, **kwargs):
     """Module-level callable for UNSAFE_clear_blocks (must be picklable)."""
@@ -8056,8 +8035,8 @@ class Datastack(Datablock):
                 try:
                     read_kwargs = dict(kwargs)
                     read_kwargs.setdefault('desc', f"Reading {a} ({kind}) journal files")
-                    frames.append(self.datajournal.read(a, datalake=lake, storage_options=self.storage_options,
-                                                        log=self.log, **read_kwargs))
+                    frames.append(Datajournal.read(a, datalake=lake, storage_options=self.storage_options,
+                                                   log=self.log, **read_kwargs))
                 except FileNotFoundError:
                     if a == anchor and not others:
                         raise

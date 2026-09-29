@@ -740,14 +740,7 @@ class BipolarFeaturetab(UpstreamTabSlices, Datatab):
     def __len__(self) -> int:
         return len(self.featuretab)
 
-    # 2. Declared API ------------------------------------------------------
-
-    def available_slices(self) -> tuple[str, ...]:
-        own = tuple(self.slices())
-        upstream = tuple(self.featuretab.slices()) if self.featuretab is not None else ()
-        return own + upstream
-
-    # 3. Accessors ---------------------------------------------------------
+    # 2. Accessors ---------------------------------------------------------
 
     @property
     def featuretab(self) -> Featuretab:
@@ -795,14 +788,7 @@ class BipolarFeaturetable(UpstreamTabSlices, Datatable):
     def __block__(self, idx: int, **kwargs) -> BipolarFeaturetab:
         return self.__tab__(idx, **kwargs)
 
-    # 2. Declared API ------------------------------------------------------
-
-    def available_slices(self) -> tuple[str, ...]:
-        own = tuple(self.slices())
-        upstream = tuple(self.featuretable.slices()) if self.featuretable is not None else ()
-        return own + upstream
-
-    # 3. Accessors ---------------------------------------------------------
+    # 2. Accessors ---------------------------------------------------------
 
     @property
     def featuretable(self) -> Featuretable:

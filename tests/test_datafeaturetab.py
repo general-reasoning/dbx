@@ -165,14 +165,17 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
         "bipolar_features",
         "tab_bipolar_features",
         "features",
+        "samples",
+        "labels",
     }
 
     # Test reading data across bipolar, raw features, and original sample labels
-    b_data = bipolar_tab.data("bipolar_features", ("features", "final"))
+    b_data = bipolar_tab.data("bipolar_features", ("features", "final"), "labels")
     bipolar = b_data["bipolar_features"]["bipolar_features"]
     assert bipolar.shape == (10, 8)
     assert set(np.unique(bipolar)).issubset({-1, 1})
     assert b_data["features"]["final"].shape == (10, 8)
+    assert len(b_data["labels"]["labels"]) == 10
 
 
 def test_datafeature_table_and_bipolar_table(tmp_path):
@@ -224,11 +227,14 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
         "bipolar_features",
         "tab_bipolar_features",
         "features",
+        "samples",
+        "labels",
     }
 
-    b_tbl_data = bipolar_table.data("bipolar_features", ("features", "final"))
+    b_tbl_data = bipolar_table.data("bipolar_features", ("features", "final"), "labels")
     assert b_tbl_data["bipolar_features"]["bipolar_features"].shape == (10, 8)
     assert b_tbl_data["features"]["final"].shape == (10, 8)
+    assert len(b_tbl_data["labels"]["labels"]) == 10
 
 
 def test_custom_features_mapping(tmp_path):

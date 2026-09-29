@@ -924,6 +924,24 @@ class UpstreamTabSlices:
                 return block
         return None
 
+    def available_slices(self) -> tuple[str, ...]:
+        """All slice names available on this block and its upstream chain."""
+        return tuple(self.slices()) + tuple(self._upstream_slices_().keys())
+
+    def _upstream_slices_(self) -> dict:
+        """Map of slice_name -> owner_block for all available slices across the upstream chain."""
+        owners = {}
+        curr = self._upstream_block_()
+        while curr is not None:
+            for s in curr.slices():
+                if s not in owners:
+                    owners[s] = curr
+            if hasattr(curr, '_upstream_block_'):
+                curr = curr._upstream_block_()
+            else:
+                break
+        return owners
+
     @staticmethod
     def _norm_items_(slice_columns):
         """``*slice_columns`` as an ordered ``[(slice, columns | None)]`` list, as `slice_spec` reads each."""
@@ -938,21 +956,21 @@ class UpstreamTabSlices:
     def _route_(self, slice_columns, upstream=None):
         """Resolve a request into an ordered ``[(block, slice, columns)]`` list.
 
-        Raises when the upstream block declares a slice this block also owns.
+        Raises when an upstream block declares a slice this block also owns.
         Rows are keyed by slice name, so two blocks claiming one name have no
         way to both appear in a row -- and silently preferring either one is
         how a caller ends up reading features while believing it asked for
         samples.
         """
         what = self.__class__.__name__
-        block = self._upstream_block_()
         own = tuple(self.slices())
-        up = tuple(block.slices()) if block is not None else ()
+        up_owners = self._upstream_slices_()
+        up = tuple(up_owners.keys())
 
         clash = sorted(set(own) & set(up))
         if clash:
             raise KeyError(
-                f"{what}: upstream {type(block).__name__} declares slice(s) "
+                f"{what}: upstream declares slice(s) "
                 f"{clash}, which this block also owns ({list(own)}). A row is "
                 f"keyed by slice name and cannot hold both -- rename the "
                 f"upstream slice."
@@ -967,8 +985,8 @@ class UpstreamTabSlices:
         for s_name, cols in items:
             if s_name in own:
                 owner = self
-            elif s_name in up:
-                owner = block
+            elif s_name in up_owners:
+                owner = up_owners[s_name]
             else:
                 raise KeyError(
                     f"{what}: unknown slice {s_name!r}; "

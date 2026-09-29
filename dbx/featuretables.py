@@ -772,6 +772,8 @@ class BipolarFeaturetable(UpstreamTabSlices, Datatable):
 
     def __tab__(self, idx: int, tag=None, **kwargs) -> BipolarFeaturetab:
         featuretab = self.var.featuretable.tab(idx)
+        tab_specs = (getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
+                     or getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None))
         return self.TAB(
             datalake=self._datalake_,
             storage_options=self.storage_options,
@@ -785,6 +787,7 @@ class BipolarFeaturetable(UpstreamTabSlices, Datatable):
                 threshold=self.var.threshold,
                 ternarize=self.var.ternarize,
             ),
+            SPECIALIZATIONS=tab_specs,
             revision=self.revision,
             tag=tag if tag is not None else featuretab.tag,
         )

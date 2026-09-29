@@ -1484,7 +1484,8 @@ class Datablock:
             super().__init__(*args, **kwargs)
             sp = self.get('specialization')
             if sp is not None:
-                for f in ('spec', 'topics', 'version', 'anchor', 'legacy', 'UNSAFE_redirect_all_topics', 'note'):
+                for f in ('spec', 'topics', 'version', 'anchor', 'legacy', 'UNSAFE_redirect_all_topics',
+                          'redirect_topics', 'redirect_vars', 'note'):
                     object.__setattr__(self, f, getattr(sp, f, None))
 
         def __getattr__(self, name):
@@ -3785,7 +3786,8 @@ class Datablock:
             import pprint
             return pprint.pformat(
                 self.signature(legacy_typing=legacy_typing, legacy_signature=norm,
-                                   deslash=deslash), indent=2, width=120)
+                                   deslash=deslash, omit=omit, redirect_vars=redirect_vars),
+                indent=2, width=120)
         if legacy_typing:
             #CAUTION! This branch is what already-built blocks hashed with, and
             # is the pre-change code verbatim. The NORM flag alone decides root
@@ -3918,7 +3920,7 @@ class Datablock:
     def signature(self, *, legacy: 'bool | None' = None,
                       legacy_typing: 'bool | None' = None,
                       legacy_signature: 'bool | None' = None,
-                      deslash: bool = False) -> dict:
+                      deslash: bool = False, omit=(), redirect_vars=None) -> dict:
         """The signature as a nested dict of correctly-typed values.
 
         Built from ``var`` via `_typed_specdict_`, so an ``int`` field comes
@@ -3935,9 +3937,10 @@ class Datablock:
             legacy_signature = legacy
         if self._legacy_typing_(legacy_typing):
             parsed = Datablock._parse_signature_(self.signaturestr(
-                legacy_typing=True, legacy_signature=legacy_signature, deslash=deslash))
+                legacy_typing=True, legacy_signature=legacy_signature, deslash=deslash,
+                omit=omit, redirect_vars=redirect_vars))
             return {k: self._structure_from_signature_text_(v) for k, v in parsed.items()}
-        return {'spec': self._typed_specdict_(legacy=False)}
+        return {'spec': self._typed_specdict_(legacy=False, omit=omit, redirect_vars=redirect_vars)}
 
     def sig(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
         return self.signature(legacy=legacy, deslash=deslash)

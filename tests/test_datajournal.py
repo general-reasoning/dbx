@@ -490,11 +490,12 @@ class TestExecOutcome:
         assert row['exception'] == 'ZeroDivisionError: division by zero'
         assert 'ZeroDivisionError' in row['traceback'] and '<dbx.exec>' in row['traceback']
 
-    def test_the_columns_follow_the_end_time(self, tmp_path):
+    def test_the_columns_follow_the_end_time_and_success_is_last(self, tmp_path):
         dbx.exec("1 + 1")
         cols = list(dbx.execjournal().columns)
         i = cols.index('exec:end:datetime')
-        assert cols[i + 1:i + 4] == ['success', 'exception', 'traceback']
+        assert cols[i + 1:i + 3] == ['exception', 'traceback']
+        assert cols[-2:] == ['comment', 'success']
 
     def test_filtered_by(self, tmp_path):
         dbx.exec("1 + 1")
@@ -513,7 +514,8 @@ class TestExecOutcome:
         dbx.exec("2 + 2")
         cols = list(dbx.execjournal().columns)
         i = cols.index('exec:end:datetime')
-        assert cols[i + 1:i + 4] == ['success', 'exception', 'traceback']
+        assert cols[i + 1:i + 3] == ['exception', 'traceback']
+        assert cols[-2:] == ['comment', 'success']
 
 
 class TestJournalIndex:
@@ -557,10 +559,10 @@ class TestExecjournalShape:
     def lake(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_ROOT', str(tmp_path))
 
-    def test_exec_first_comment_last(self, tmp_path):
+    def test_when_then_exec_first_comment_and_success_last(self, tmp_path):
         dbx.exec("1 + 1  # why")
         cols = list(dbx.journal().columns)
-        assert cols[0] == 'exec' and cols[-1] == 'comment'
+        assert cols[:2] == ['datetime', 'exec'] and cols[-2:] == ['comment', 'success']
         assert 'datajournal_entries' in cols and 'written_entries' not in cols
 
     def test_a_row_under_the_old_column_name_still_reads(self, tmp_path):

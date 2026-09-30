@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`ExecjournalFrame` displays compactly and keeps every value.** Ids and
+  sessions show as 8 characters, timestamps to the second, and path lists as
+  counts. The `id` column is hidden when it only repeats the index,
+  `exec:start:datetime` when it equals `datetime`, and `traceback` always. The
+  repr uses the terminal's width and wraps columns rather than hiding them.
+  `ej.show(width=, max_colwidth=, max_rows=, full=)` prints it wider, or
+  exactly as held. `ej.get()`, `ej(...)` and `execjournal(loc=...)` accept any
+  prefix of exactly one id, including the displayed `976f41ea…`. `.loc` stays
+  exact.
+- **A frame derived from a journal frame keeps its class.** Column
+  selections, filters, sorts and `head()` of an `ExecjournalFrame` or a
+  `DatajournalFrame` used to come back as plain DataFrames, which lost
+  `.get()`, `.datajournal()` and the datalake. They are wrapped as they are:
+  re-running `__init__` would renormalize a block journal selection, adding
+  back the `type` and `signature` columns it had left out.
 - **Output capture belongs to the command: `dbx.exec(..., capture_output=True)`,
   and `--capture-output` for `dbx`, `dbx.exec`, `dbx.print` and `dbx.pprint`.**
   The process that runs the command tees fd 1 and 2 to a master
@@ -199,6 +214,9 @@ All notable changes to this project will be documented in this file.
   when the redirection is total, and otherwise builds the rest.
 
 ### Changed
+- **Exec journal columns: `datetime` and `exec` first, `comment` and `success`
+  last.** `exception` and `traceback` follow `exec:end:datetime`; columns the
+  list doesn't name go before `comment`.
 - **A block no longer captures output itself.** Its journal entry's `log` is
   the path of the capture open around its build, taken from
   `OutputCapture.current()`, and None when there is none.

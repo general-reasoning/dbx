@@ -22,6 +22,7 @@ import functools
 import hashlib
 import os
 import re
+import shutil
 import socket
 import sys
 import tempfile
@@ -317,8 +318,8 @@ class ExecjournalEntry(pd.Series):
     """One `dbx.exec` command, as the exec journal recorded it.
 
     The counterpart of `DatajournalEntry` for the exec journal: its columns
-    are `EXEC_JOURNAL_COLUMNS`, from ``exec`` to ``comment`` by way of
-    ``success``, ``exception`` and ``traceback``; :meth:`dataentries` and :meth:`datajournal`
+    are `EXEC_JOURNAL_COLUMNS`, from ``datetime`` and ``exec`` to ``comment``
+    and ``success``; :meth:`dataentries` and :meth:`datajournal`
     follow the command's session to the block journal entries written under
     it -- through the session's index, in every process that wrote one, and
     ``datajournal_entries`` for a row from before the index.
@@ -499,6 +500,17 @@ class ExecjournalFrame(pd.DataFrame):
     ``.dataentries()`` goes on to what they wrote::
 
         dbx.journal(comment='nightly').dataentries()
+
+    It DISPLAYS compactly, and holds everything: an id or session is shown as
+    its first 8 characters, a timestamp to the second, a list of paths as how
+    many there are; ``id`` is not repeated beside the index, nor
+    ``exec:start:datetime`` beside an equal ``datetime``, and ``traceback`` --
+    whose last line is ``exception`` -- is left out. It takes the terminal's
+    width, however narrow ``display.width`` is. :meth:`show` prints it wider,
+    or as it is. A short id is enough to :meth:`get` a row by.
+
+    A frame pandas derives from this one -- a column selection, a slice, a
+    sort -- is an `ExecjournalFrame` too, with this one's datalake.
     """
     _metadata = ['storage_options', 'datalake']
 
@@ -513,11 +525,46 @@ class ExecjournalFrame(pd.DataFrame):
     def __call__(self, entry):
         return self.get(entry, dropna=True)
 
+    def __repr__(self):
+        with pd.option_context(*self._display_options_()):
+            return repr(self._display_frame_(self))
+
+    def _repr_html_(self):
+        with pd.option_context(*self._display_options_()):
+            return self._display_frame_(self)._repr_html_()
+
+    @property
+    def _constructor(self):
+        return self._derived_
+
     # 2. Declared API ------------------------------------------------------
 
+    def show(self, *, width: int | None = None, max_colwidth: int | None = None,
+             max_rows: int | None = None, full: bool = False) -> None:
+        """Print this frame: compactly, as its repr does, or *full* -- every column, every value as it is.
+
+        *width* (default: the terminal's) is how wide a line may be before
+        pandas wraps the columns onto another block; *max_colwidth* (default:
+        pandas' ``display.max_colwidth``) truncates a long value, the ``exec``
+        string above all; *max_rows* (default: pandas') how many rows before it
+        elides the middle, and 0 for every row.
+        """
+        frame = pd.DataFrame(self) if full else self._display_frame_(self)
+        options = list(self._display_options_(width))
+        if max_colwidth is not None:
+            options += ['display.max_colwidth', max_colwidth]
+        if max_rows is not None:
+            options += ['display.max_rows', max_rows or None]
+        with pd.option_context(*options):
+            print(frame)
+
     def get(self, entry, *, dropna: bool = False) -> ExecjournalEntry:
-        """The command at LABEL *entry* (``.loc``). As `DatajournalFrame.get`."""
-        row = self.loc[entry]
+        """The command at LABEL *entry* (``.loc``). As `DatajournalFrame.get`.
+
+        Where the index is ``id``, a label is also any prefix of one that no
+        other id shares -- the short id the frame displays, ``…`` and all.
+        """
+        row = self.loc[self._label_(entry)]
         if dropna:
             row = row.dropna()
         return ExecjournalEntry(row, storage_options=self.storage_options, datalake=self.datalake)
@@ -553,6 +600,65 @@ class ExecjournalFrame(pd.DataFrame):
 
     # 4. Helpers -----------------------------------------------------------
 
+    @classmethod
+    def _derived_(cls, *args, **kwargs) -> 'ExecjournalFrame':
+        """A frame pandas made out of one of these -- wrapped, as `__init__` would not take its arguments."""
+        return _derived_frame_(cls, {'storage_options': {}, 'datalake': None}, args, kwargs)
+
+    def _label_(self, entry):
+        """*entry* as a label of this frame's index: itself, or the one label it is a prefix of."""
+        if not isinstance(entry, str) or entry in self.index:
+            return entry
+        prefix = entry.rstrip('…')
+        matches = list(dict.fromkeys(l for l in self.index if isinstance(l, str) and l.startswith(prefix)))
+        if len(matches) == 1:
+            return matches[0]
+        raise KeyError(f"{entry!r} is not a label, nor a prefix of exactly one: it is of {len(matches)}"
+                       + (f": {[m[:12] + '…' for m in matches[:5]]}" if matches else ""))
+
+    @staticmethod
+    def _display_options_(width: int | None = None) -> tuple:
+        """pandas options for a display: the terminal's width at least, and every column, wrapped rather than elided."""
+        if width is None:
+            width = max(pd.get_option('display.width') or 0, shutil.get_terminal_size().columns)
+        return ('display.width', width, 'display.max_columns', None)
+
+    @staticmethod
+    def _display_frame_(frame) -> pd.DataFrame:
+        """What a display of *frame* shows: see the class docstring. A plain DataFrame, and never the data itself."""
+        df = pd.DataFrame(frame).copy()
+
+        def short(v):
+            return f"{v[:8]}…" if isinstance(v, str) and len(v) > 9 else v
+
+        def to_the_second(v):
+            if isinstance(v, str):
+                return v.split('.')[0]
+            if isinstance(v, datetime.datetime):
+                return v.strftime('%Y-%m-%dT%H-%M-%S')
+            return v
+
+        def count(v):
+            return f"[{len(v)}]" if isinstance(v, (list, tuple, np.ndarray)) else v
+
+        if df.index.name == 'id':
+            if 'id' in df.columns and (df['id'].astype(object).values == df.index.values).all():
+                df = df.drop(columns=['id'])
+            df.index = pd.Index([short(v) for v in df.index], name='id')
+        for c in ('id', 'session'):
+            if c in df.columns:
+                df[c] = df[c].map(short)
+        if 'exec:start:datetime' in df.columns and 'datetime' in df.columns and \
+                (df['exec:start:datetime'].astype(object).values == df['datetime'].astype(object).values).all():
+            df = df.drop(columns=['exec:start:datetime'])
+        for c in ('datetime', 'exec:start:datetime', 'exec:end:datetime'):
+            if c in df.columns:
+                df[c] = df[c].map(to_the_second)
+        for c in ('datajournal_entries', 'output_captures'):
+            if c in df.columns:
+                df[c] = df[c].map(count)
+        return df.drop(columns=['traceback'], errors='ignore')
+
     def _written_paths_(self, datalake=None) -> list:
         """Every row's, in row order: once each, since rows that share a session share them."""
         paths = {}
@@ -560,6 +666,23 @@ class ExecjournalFrame(pd.DataFrame):
             for p in ExecjournalEntry._written_paths_(row, datalake or self.datalake, self.storage_options):
                 paths.setdefault(p, None)
         return list(paths)
+
+
+def _derived_frame_(cls, defaults, args, kwargs):
+    """A *cls* frame out of what pandas hands a ``_constructor``, bypassing *cls*'s own ``__init__``.
+
+    A journal frame's ``__init__`` takes a frame that is still to be read into
+    one -- normalized, filtered, indexed -- and a frame pandas derives from it
+    already has been: run again, `normalize_journal_frame` would add ``type``
+    and ``signature`` columns to a selection that left them out, and copy the
+    whole of it to do so. *defaults* are the ``_metadata`` attributes until
+    pandas copies the originating frame's over (``__finalize__``).
+    """
+    obj = cls.__new__(cls)
+    pd.DataFrame.__init__(obj, *args, **kwargs)
+    for name, value in defaults.items():
+        setattr(obj, name, value)
+    return obj
 
 
 def _written_datajournal_(paths, anchor, loc, iloc, *, storage_options, log, n_workers, index,
@@ -584,18 +707,22 @@ def _written_datajournal_(paths, anchor, loc, iloc, *, storage_options, log, n_w
     return frame
 
 
-#: The exec journal's columns in the order a frame shows them: the command first
-#: and what it was FOR last, with what it did between.
-EXEC_JOURNAL_COLUMNS = ['exec', 'datetime', 'exec:start:datetime', 'exec:end:datetime',
-                        'success', 'exception', 'traceback',
-                        'id', 'session', 'datajournal_entries', 'output_captures', 'comment']
+#: The exec journal's columns in the order a frame shows them: when, then the
+#: command, then what it did; what it was FOR and whether it succeeded last,
+#: where a glance down the right-hand edge finds them.
+EXEC_JOURNAL_COLUMNS = ['datetime', 'exec', 'exec:start:datetime', 'exec:end:datetime',
+                        'exception', 'traceback',
+                        'id', 'session', 'datajournal_entries', 'output_captures', 'comment', 'success']
+
+#: The columns that stay at the right-hand edge, after any the list does not name.
+_EXEC_JOURNAL_TAIL_ = ('comment', 'success')
 
 
 def _exec_journal_columns_(df: pd.DataFrame) -> pd.DataFrame:
     """Legacy column names resolved, and the columns in `EXEC_JOURNAL_COLUMNS` order.
 
     Any column it does not name goes after the ones it does, and before
-    ``comment``. The order is set here rather than taken from the files,
+    ``comment`` and ``success``. The order is set here rather than taken from the files,
     because a journal read in any order concatenates rows from before a
     column existed with rows after, and pandas puts a new column last.
     """
@@ -607,9 +734,9 @@ def _exec_journal_columns_(df: pd.DataFrame) -> pd.DataFrame:
         else:
             df = df.rename(columns={'written_entries': 'datajournal_entries'})
         df = df.drop(columns=['written_entries'], errors='ignore')
-    known = [c for c in EXEC_JOURNAL_COLUMNS if c in df.columns and c != 'comment']
+    known = [c for c in EXEC_JOURNAL_COLUMNS if c in df.columns and c not in _EXEC_JOURNAL_TAIL_]
     other = [c for c in df.columns if c not in EXEC_JOURNAL_COLUMNS]
-    return df[known + other + [c for c in ('comment',) if c in df.columns]]
+    return df[known + other + [c for c in _EXEC_JOURNAL_TAIL_ if c in df.columns]]
 
 
 def read_exec_journal(
@@ -1794,6 +1921,10 @@ class DatajournalFrame(pd.DataFrame):
     def __call__(self, entry:int):
         return self.get(entry, dropna=True)
 
+    @property
+    def _constructor(self):
+        return self._derived_
+
     # 2. Declared API ------------------------------------------------------
 
     def get(self, entry:int, *, dropna: bool = False):
@@ -1849,6 +1980,13 @@ class DatajournalFrame(pd.DataFrame):
         if sortby is not None and sortby in thingsframe.columns:
             thingsframe = thingsframe.sort_values(sortby, ascending=ascending).set_index(sortby).reset_index() # force sortby to be the first column
         return thingsframe
+
+    # 4. Helpers -----------------------------------------------------------
+
+    @classmethod
+    def _derived_(cls, *args, **kwargs) -> 'DatajournalFrame':
+        """A frame pandas made out of one of these -- wrapped, not read again: it already was."""
+        return _derived_frame_(cls, {'storage_options': {}, 'logger': Logger()}, args, kwargs)
 
 
 def one_datalake(datalake, url, what):

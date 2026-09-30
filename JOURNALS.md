@@ -49,21 +49,24 @@ writes every command, whatever datalake the command's blocks use.
 
 The result is an `ExecjournalFrame`, **newest first**, indexed by the
 command's `id` (pass `index=None` to number the rows 0..N-1 instead). With
-`loc=` (an id) or `iloc=` (a position), it returns that one row as an
-`ExecjournalEntry`.
+`loc=` (an id, or a prefix of exactly one id) or `iloc=` (a position), it
+returns that one row as an `ExecjournalEntry`.
 
-Columns:
+Columns, in the order the frame holds them:
 
 | column | holds |
 |---|---|
-| `exec` | command **verbatim**, trailing `# comment` included |
 | `datetime`, `exec:start:datetime` | when it started (a string, `2026-09-28T22-22-09.418165`) |
+| `exec` | command **verbatim**, trailing `# comment` included |
 | `exec:end:datetime` | when it finished, including when it raised |
+| `exception` | what it raised, as `'<Type>: <message>'`; None if it returned |
+| `traceback` | where it raised, as Python prints it; None if it returned |
 | `id` | row's uuid |
 | `session` | `Datajournal` session every block in the command wrote under |
 | `datajournal_entries` | paths of the block journal entries the command's own process wrote or got back from its workers, in the order first written (the session index is the complete list) |
 | `output_captures` | paths of the command's captured stdout/stderr, the master capture first; empty unless it ran with `capture_output=True` / `--capture-output` (see [Captured output](#captured-output)) |
 | `comment` | trailing `# comment` alone: what the command was *for* |
+| `success` | whether it returned rather than raised |
 
 ```python
 dbx.exec("a = Apple(spec={'n': 1}); b = Apple(spec={'n': 2}); a.build(); b.build()  # two apples")
@@ -76,6 +79,7 @@ ej[['exec', 'comment']]
 # 976f41ea-…  Apple(spec={'n': 1}).build()  # again                            again
 # f20351c5-…  a = Apple(spec={'n': 1}); b = Apple(spec={'n': 2}); …            two apples
 
+ej.get('976f41ea')                                  # the displayed id is enough
 e = dbx.execjournal(comment='two apples', iloc=0)   # ExecjournalEntry
 e['exec'], e['session'], len(e['datajournal_entries'])   # (..., '692e946a-…', 2)
 ```
@@ -84,8 +88,9 @@ e['exec'], e['session'], len(e['datajournal_entries'])   # (..., '692e946a-…',
 
 | call | returns |
 |---|---|
-| `ej.get(id)` | `ExecjournalEntry` at label `id` (`.loc`) |
+| `ej.get(id)` | `ExecjournalEntry` at label `id`: the full id, or a prefix no other id shares, such as the short id the frame displays |
 | `ej(id)` | same, with null columns dropped |
+| `ej.show(width=, max_colwidth=, max_rows=, full=False)` | prints the frame wider than its repr does, or with `full=True` every column and value exactly as held |
 | `ej.dataentries()` | Python **list** of `DatajournalEntry`, one per block journal entry that any command in the frame wrote: the first command's entries in written order, then the next command's |
 | `ej.datajournal()` | `DatajournalFrame` of the **same records**, one row each: row *i* is `ej.dataentries()[i]` |
 | `ej.anchors()` | sorted list of the anchors those entries belong to |
@@ -95,6 +100,27 @@ e['exec'], e['session'], len(e['datajournal_entries'])   # (..., '692e946a-…',
 with one entry at a time (`e.dataentries()[0].block.paths()`), and the frame to
 work with columns (`e.datajournal()[['anchor', 'event', 'hash']]`,
 `e.datajournal()['hash'].tolist()`).
+
+**What a frame displays is not what it holds.** The repr shows:
+- ids and sessions as their first 8 characters, `976f41ea…`;
+- timestamps to the second;
+- `datajournal_entries` and `output_captures` as counts, `[2]`.
+
+It leaves out:
+- the `id` column, when it only repeats the index;
+- `exec:start:datetime`, when it equals `datetime`;
+- `traceback`, whose last line is `exception` anyway.
+
+The data keeps every value in full, so indexing, filtering and `.loc` see
+full ids. The repr takes the terminal's width even if pandas'
+`display.width` is narrower, and it wraps columns onto further blocks rather
+than hiding any. For a wider line, a longer `exec`, or everything exactly as
+held, use `ej.show(width=250, max_colwidth=120)` or `ej.show(full=True)`.
+
+**A frame derived from one is still an `ExecjournalFrame`.** A column
+selection, a boolean filter, a sort or `head()` all come back as
+`ExecjournalFrame`s with the same datalake, so they display the same way and
+keep `.get()` and `.datajournal()`. The same holds for a `DatajournalFrame`.
 
 To pick commands with a filter and then look at what they wrote:
 

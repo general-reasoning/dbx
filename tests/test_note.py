@@ -51,7 +51,7 @@ class TestNoteDatajournalEntry:
     def test_note_creates_journal_entry(self, tmp_path):
         b = _make(tmp_path)
         b.note("hello", event="flag")
-        j = b.journal()
+        j = b.datajournal()
         rows = j[j['event'] == 'flag']
         assert len(rows) == 1
 
@@ -59,26 +59,26 @@ class TestNoteDatajournalEntry:
         """note('msg') without explicit event should use event='note'."""
         b = _make(tmp_path)
         b.note("default event test")
-        j = b.journal()
+        j = b.datajournal()
         assert 'note' in j['event'].values
 
     def test_note_custom_event(self, tmp_path):
         b = _make(tmp_path)
         b.note("test msg", event="myevent")
-        j = b.journal()
+        j = b.datajournal()
         assert 'myevent' in j['event'].values
 
     def test_note_records_hash(self, tmp_path):
         b = _make(tmp_path)
         b.note("check hash", event="flag")
-        j = b.journal()
+        j = b.datajournal()
         row = j[j['event'] == 'flag'].iloc[-1]
         assert row['hash'] == b.hash
 
     def test_note_review_event(self, tmp_path):
         b = _make(tmp_path)
         b.note("needs review", event="review")
-        j = b.journal()
+        j = b.datajournal()
         rows = j[j['event'] == 'review']
         assert len(rows) == 1
 
@@ -144,7 +144,7 @@ class TestNoteMessageNotInline:
     def test_message_is_file_path(self, tmp_path):
         b = _make(tmp_path)
         b.note("stored in file", event="flag")
-        j = b.journal()
+        j = b.datajournal()
         row = j[j['event'] == 'flag'].iloc[-1]
         msg = row['note']
         assert msg is not None
@@ -155,7 +155,7 @@ class TestNoteMessageNotInline:
     def test_message_file_contains_message(self, tmp_path):
         b = _make(tmp_path)
         b.note("payload text", event="flag")
-        j = b.journal()
+        j = b.datajournal()
         row = j[j['event'] == 'flag'].iloc[-1]
         with open(row['note']) as f:
             assert f.read().strip() == "payload text"
@@ -167,14 +167,14 @@ class TestNoteMessageInline:
     def test_message_is_literal_message(self, tmp_path):
         b = _make(tmp_path)
         b.note("inline msg", event="flag", inline=True)
-        j = b.journal()
+        j = b.datajournal()
         row = j[j['event'] == 'flag'].iloc[-1]
         assert row['note'] == "inline msg"
 
     def test_no_message_file_written_for_inline(self, tmp_path):
         b = _make(tmp_path)
         b.note("no file", event="flag", inline=True)
-        j = b.journal()
+        j = b.datajournal()
         row = j[j['event'] == 'flag'].iloc[-1]
         msg = row['note']
         # The value is the raw string, not a path that exists on disk
@@ -187,7 +187,7 @@ class TestNoteNoMessage:
     def test_no_message(self, tmp_path):
         b = _make(tmp_path)
         b.note(event="ping")
-        j = b.journal()
+        j = b.datajournal()
         row = j[j['event'] == 'ping'].iloc[-1]
         import pandas as pd
         assert pd.isna(row.get('message', None)) or row.get('note') is None
@@ -195,7 +195,7 @@ class TestNoteNoMessage:
     def test_no_message_default_event(self, tmp_path):
         b = _make(tmp_path)
         b.note()
-        j = b.journal()
+        j = b.datajournal()
         row = j[j['event'] == 'note'].iloc[-1]
         import pandas as pd
         assert pd.isna(row.get('message', None)) or row.get('note') is None
@@ -209,7 +209,7 @@ class TestNoteMultipleInstances:
         for msg in ("first", "second", "third"):
             b = _make(tmp_path)
             b.note(msg, event="flag")
-        j = _make(tmp_path).journal()
+        j = _make(tmp_path).datajournal()
         flag_rows = j[j['event'] == 'flag']
         assert len(flag_rows) == 3
 
@@ -220,7 +220,7 @@ class TestNoteMultipleInstances:
         b2 = _make(tmp_path)
         b2.note("inline-msg", event="flag", inline=True)
 
-        j = _make(tmp_path).journal()
+        j = _make(tmp_path).datajournal()
         rows = j[j['event'] == 'flag'].sort_values('datetime').reset_index(drop=True)
         assert len(rows) == 2
         # First: file path

@@ -710,15 +710,15 @@ class TestOneJournalReadForAWholeTable:
 
     @staticmethod
     def _counting(monkeypatch):
-        """Every Datablock.journal() call, in order."""
+        """Every Datablock.datajournal() call, in order."""
         seen = []
-        original = Datablock.journal
+        original = Datablock.datajournal
 
         def counting(self, *args, **kwargs):
             seen.append(self.anchor)
             return original(self, *args, **kwargs)
 
-        monkeypatch.setattr(Datablock, 'journal', counting)
+        monkeypatch.setattr(Datablock, 'datajournal', counting)
         return seen
 
     @staticmethod
@@ -794,7 +794,7 @@ class TestOneJournalReadForAWholeTable:
         self._grow_the_tab(monkeypatch)
 
         table = v1table(tmp_path, spec={'n': 2})
-        shared = table.child_specialization_journal()
+        shared = table.child_specialization_datajournal()
         assert shared is not None
 
         # In memory, so the first to install records nothing the second reads.
@@ -814,9 +814,9 @@ class TestOneJournalReadForAWholeTable:
         v1table(tmp_path, spec={'n': 2}).build()          # narrow, first
         self._grow_the_tab(monkeypatch)
         table = v1table(tmp_path, spec={'n': 2})
-        assert table.child_specialization_journal() is not None
-        assert table.child_specialization_journal() is \
-            table.child_specialization_journal()          # read once, kept
+        assert table.child_specialization_datajournal() is not None
+        assert table.child_specialization_datajournal() is \
+            table.child_specialization_datajournal()          # read once, kept
 
 
 class TestTheSpecializationRow:

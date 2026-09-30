@@ -260,7 +260,7 @@ class TestJournalFilters:
     def test_entry_path_rejects_extra_filters(self, tmp_path):
         a = self.Solo(datalake=str(tmp_path), spec={'x': 1})
         a.build()
-        entry_path = a.journal()['entry_path'].iloc[-1]
+        entry_path = a.datajournal()['entry_path'].iloc[-1]
         with pytest.raises(ValueError, match='entry_path'):
             a.diffsubsig(journal={'entry_path': entry_path, 'event': 'build:end'})
 

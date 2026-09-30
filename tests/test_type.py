@@ -82,7 +82,7 @@ class TestSignatureMethod:
 class TestSignatureInJournal:
 
     def test_build_writes_type_txt(self, built):
-        entry = built.journal(iloc=-1)
+        entry = built.datajournal(iloc=-1)
         # The COLUMN is a path to the type file; Block.typestr() resolves it to
         # the type TEXT, as Datablock.typestr() does.
         assert entry.get('type') is not None, "journal has no type column"
@@ -91,7 +91,7 @@ class TestSignatureInJournal:
         assert entry.read('type') == built.typestr()
 
     def test_build_writes_signature_txt(self, built):
-        entry = built.journal(iloc=-1)
+        entry = built.datajournal(iloc=-1)
         assert entry.block.signaturestr() is not None
         assert entry.read('signature') == built.signaturestr()
 
@@ -132,7 +132,7 @@ class TestPreRenameJournals:
 
     def test_a_real_mixed_era_journal_reads_both_rows(self, built):
         """End to end: an old row and a new row concatenated into one frame."""
-        new_row = built.journal(iloc=-1)
+        new_row = built.datajournal(iloc=-1)
         old_row = pd.Series({**dict(new_row), 'type': None,
                              'signature': None,
                              'subsignature': None,
@@ -161,7 +161,7 @@ class TestStrAndStructuredForms:
         assert block.sig() == block.signature() and block.tp() == block.type()
 
     def test_journal_block_matches_the_live_one(self, built):
-        recorded = built.journal(event='build:end', loc=0).block
+        recorded = built.datajournal(event='build:end', loc=0).block
         assert recorded.signaturestr() == built.signaturestr()
         assert recorded.typestr() == built.typestr()
         assert recorded.signature() == built.signature()

@@ -55,7 +55,7 @@ class TestEveryCallGetsItsOwnCode:
     def test_a_build_stamps_its_entry(self, tmp_path):
         b = block(tmp_path)
         b.build()
-        entry = b.journal(loc=0)
+        entry = b.datajournal(loc=0)
         assert entry.block.id
         assert not hasattr(entry, 'entry_code')
         assert not hasattr(entry, 'subhash')
@@ -67,7 +67,7 @@ class TestTheCodeIsRecorded:
     def test_column_is_written(self, tmp_path):
         b = block(tmp_path)
         b.write_journal_entry(event='note')
-        cols = block(tmp_path).journal().columns
+        cols = block(tmp_path).datajournal().columns
         assert 'id' in cols
         assert 'code' in cols
         assert 'entry_code' not in cols
@@ -76,19 +76,19 @@ class TestTheCodeIsRecorded:
 
     def test_the_recorded_code_is_the_returned_one(self, tmp_path):
         code = block(tmp_path).write_journal_entry(event='note')
-        assert block(tmp_path).journal(loc=0).id == code
+        assert block(tmp_path).datajournal(loc=0).id == code
 
     def test_the_journal_can_be_filtered_by_it(self, tmp_path):
         block(tmp_path).write_journal_entry(event='wanted')
         code = block(tmp_path).write_journal_entry(event='also-wanted')
-        entry = block(tmp_path).journal(id=code, loc=0)
+        entry = block(tmp_path).datajournal(id=code, loc=0)
         assert isinstance(entry, DatajournalEntry)
         assert entry.get('event') == 'also-wanted'
 
     def test_codes_are_unique_across_the_whole_journal(self, tmp_path):
         for x in (1, 2, 3):
             block(tmp_path, x=x).build()
-        codes = list(block(tmp_path).journal()['id'])
+        codes = list(block(tmp_path).datajournal()['id'])
         assert len(codes) == 3
         assert len(set(codes)) == 3
 
@@ -107,7 +107,7 @@ class TestDistinctFromTheTree:
         b = block(tmp_path)
         first = b.write_journal_entry(event='one', journal_prefix='a-')
         second = b.write_journal_entry(event='two', journal_prefix='b-')
-        journal = block(tmp_path).journal()
+        journal = block(tmp_path).datajournal()
         assert len(journal) == 2
         assert set(journal['id']) == {first, second}
         assert journal['tree'].nunique() == 1
@@ -115,12 +115,12 @@ class TestDistinctFromTheTree:
     def test_tree_accessor_reads_the_column(self, tmp_path):
         b = block(tmp_path)
         b.write_journal_entry(event='note')
-        assert block(tmp_path).journal(loc=0).block.tree == b.tree
+        assert block(tmp_path).datajournal(loc=0).block.tree == b.tree
 
     def test_a_tree_can_be_given(self, tmp_path):
         b = block(tmp_path, tree='RUN-7')
         b.write_journal_entry(event='note')
-        assert block(tmp_path).journal(loc=0).block.tree == 'RUN-7'
+        assert block(tmp_path).datajournal(loc=0).block.tree == 'RUN-7'
 
     def test_a_tree_does_not_change_identity(self, tmp_path):
         """Which run built a block cannot change what the block IS."""
@@ -134,7 +134,7 @@ class TestOverwriteWithinOneInstance:
         b = block(tmp_path)
         first = b.write_journal_entry(event='one')
         second = b.write_journal_entry(event='two')
-        journal = block(tmp_path).journal()
+        journal = block(tmp_path).datajournal()
         assert len(journal) == 1
         assert list(journal['id']) == [second]
         assert first not in set(journal['id'])
@@ -145,7 +145,7 @@ class TestOverwriteWithinOneInstance:
         instance writes again."""
         b = block(tmp_path)
         b.build()
-        assert list(block(tmp_path).journal()['event']) == ['build:end']
+        assert list(block(tmp_path).datajournal()['event']) == ['build:end']
 
 
 class TestLegacyJournals:
@@ -154,7 +154,7 @@ class TestLegacyJournals:
         """An entry from a journal written before the field existed."""
         b = block(tmp_path)
         b.write_journal_entry(event='note')
-        entry = b.journal(loc=0)
+        entry = b.datajournal(loc=0)
         assert DatajournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).block.id is None
 
     @pytest.mark.parametrize('legacy', ['session', 'uuid'])
@@ -162,7 +162,7 @@ class TestLegacyJournals:
         """``tree`` was ``session``, and before that ``uuid``."""
         b = block(tmp_path, tree='RUN-7')
         b.write_journal_entry(event='note')
-        entry = b.journal(loc=0)
+        entry = b.datajournal(loc=0)
         # A row as it was written then: no `tree`, and no Datajournal session.
         old = DatajournalEntry(entry.drop(['tree', 'session']).copy())
         old[legacy] = 'RUN-7'

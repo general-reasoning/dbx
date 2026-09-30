@@ -213,28 +213,28 @@ class TestJournalOnMemory:
     def test_journal_entry_written_on_build(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
         block.build()
-        j = block.journal()
+        j = block.datajournal()
         assert isinstance(j, DatajournalFrame)
         assert len(j) >= 1
 
     def test_journal_entry_has_correct_url(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
         block.build()
-        j = block.journal()
+        j = block.datajournal()
         entry = j.get(0)
         assert entry.block.url == mem_url
 
     def test_journal_entry_has_correct_hash(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
         block.build()
-        j = block.journal()
+        j = block.datajournal()
         entry = j.get(0)
         assert entry.block.hash == block.hash
 
     def test_static_journal_on_memory(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
         block.build()
-        j = Datablock.Journal(block.anchor, datalake=mem_url)
+        j = Datablock.Datajournal(block.anchor, datalake=mem_url)
         assert isinstance(j, DatajournalFrame)
         assert len(j) >= 1
 
@@ -307,7 +307,7 @@ class TestDatajournalEntryPaths:
         """DatajournalEntry produced by a real build has correct anchorkeypath."""
         block = MemSingleTopic(datalake=mem_url)
         block.build()
-        j = block.journal()
+        j = block.datajournal()
         entry = j.get(0)
         # Entry should have url, not root
         assert entry.block.url == mem_url

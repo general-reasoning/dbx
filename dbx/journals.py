@@ -564,7 +564,7 @@ class ExecjournalFrame(pd.DataFrame):
         Where the index is ``id``, a label is also any prefix of one that no
         other id shares -- the short id the frame displays, ``…`` and all.
         """
-        row = self.loc[self._label_(entry)]
+        row = self.loc[_index_label_(self.index, entry)]
         if dropna:
             row = row.dropna()
         return ExecjournalEntry(row, storage_options=self.storage_options, datalake=self.datalake)
@@ -604,17 +604,6 @@ class ExecjournalFrame(pd.DataFrame):
     def _derived_(cls, *args, **kwargs) -> 'ExecjournalFrame':
         """A frame pandas made out of one of these -- wrapped, as `__init__` would not take its arguments."""
         return _derived_frame_(cls, {'storage_options': {}, 'datalake': None}, args, kwargs)
-
-    def _label_(self, entry):
-        """*entry* as a label of this frame's index: itself, or the one label it is a prefix of."""
-        if not isinstance(entry, str) or entry in self.index:
-            return entry
-        prefix = entry.rstrip('…')
-        matches = list(dict.fromkeys(l for l in self.index if isinstance(l, str) and l.startswith(prefix)))
-        if len(matches) == 1:
-            return matches[0]
-        raise KeyError(f"{entry!r} is not a label, nor a prefix of exactly one: it is of {len(matches)}"
-                       + (f": {[m[:12] + '…' for m in matches[:5]]}" if matches else ""))
 
     @staticmethod
     def _display_options_(width: int | None = None) -> tuple:
@@ -666,6 +655,26 @@ class ExecjournalFrame(pd.DataFrame):
             for p in ExecjournalEntry._written_paths_(row, datalake or self.datalake, self.storage_options):
                 paths.setdefault(p, None)
         return list(paths)
+
+
+def _index_label_(index, entry):
+    """*entry* as a label of a journal frame's *index*: itself, or the one label it is a PREFIX of.
+
+    What ``loc=`` means to `datajournal`, `execjournal` and a block's
+    ``datajournal()``, and a label to `DatajournalFrame.get` and
+    `ExecjournalFrame.get`: an id is long, and its first few characters -- the
+    8 an `ExecjournalFrame` displays, ``…`` and all -- are enough when no other
+    label starts with them. A label that is not a string, as in a numbered
+    frame, is only ever itself. Raises KeyError unless exactly one label matches.
+    """
+    if not isinstance(entry, str) or entry in index:
+        return entry
+    prefix = entry.rstrip('…')
+    matches = list(dict.fromkeys(l for l in index if isinstance(l, str) and l.startswith(prefix)))
+    if len(matches) == 1:
+        return matches[0]
+    raise KeyError(f"{entry!r} is not a label, nor a prefix of exactly one: it is of {len(matches)}"
+                   + (f": {[m[:12] + '…' for m in matches[:5]]}" if matches else ""))
 
 
 def _derived_frame_(cls, defaults, args, kwargs):
@@ -929,7 +938,13 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):
-        return DatajournalFrame(cls_anchor_or_df, storage_options=storage_options, index=index, unnormalized=unnormalized, **filter_kwargs)
+        frame = DatajournalFrame(cls_anchor_or_df, storage_options=storage_options, index=index,
+                                 unnormalized=unnormalized, **filter_kwargs)
+        if loc is not None:
+            return frame.get(loc, dropna=True)
+        if iloc is not None:
+            return DatajournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
+        return frame
     else:
         anchor = _anchor_of_(cls_anchor_or_df)
         if not isinstance(cls_anchor_or_df, (str, type)) and hasattr(cls_anchor_or_df, 'anchor'):
@@ -939,7 +954,7 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage
                 storage_options = cls_anchor_or_df.storage_options
             if log is None and hasattr(cls_anchor_or_df, 'log'):
                 log = cls_anchor_or_df.log
-        return datablocks.Datablock.Journal(anchor, loc=loc, iloc=iloc, datalake=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
+        return datablocks.Datablock.Datajournal(anchor, loc=loc, iloc=iloc, datalake=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
 
 
 def _anchor_of_(cls_or_anchor) -> str:
@@ -1851,7 +1866,7 @@ class DatajournalEntry(pd.Series):
         """The first present value along *name*'s rename chain, or None.
 
         The way to read ANY column, rename chain or not. An entry is a Series
-        built with `dropna` (see `Datablock.Journal`), so a column that was
+        built with `dropna` (see `Datablock.Datajournal`), so a column that was
         recorded null is not merely None on the row -- its label is gone, and
         ``entry.name`` raises AttributeError where the reader expected None.
         """
@@ -1933,11 +1948,12 @@ class DatajournalFrame(pd.DataFrame):
         What a label is depends on how the frame was indexed. `dbx.datajournal`
         indexes by ``id`` by default, so there *entry* is an entry's id.
         So does `ExecjournalEntry.datajournal`. ``index=None`` and
-        `Datablock.journal` number the frame 0..N-1, and there
+        `Datablock.datajournal` number the frame 0..N-1, and there
         a label is also a position. For a frame you sliced yourself, use
-        ``.iloc`` for a position.
+        ``.iloc`` for a position. A string label may be given by any prefix of it
+        that no other label shares: see `_index_label_`.
         """
-        entry = self.loc[entry]
+        entry = self.loc[_index_label_(self.index, entry)]
         if dropna:
             entry = entry.dropna()
         return DatajournalEntry(entry, storage_options=self.storage_options)
@@ -2280,7 +2296,8 @@ class Datajournal:
         frame = DatajournalFrame(df, storage_options=storage_options, index=index,
                               unnormalized=unnormalized, **filter_kwargs)
         if loc is not None:
-            result = DatajournalEntry(frame.loc[loc].dropna(), storage_options=storage_options)
+            result = DatajournalEntry(frame.loc[_index_label_(frame.index, loc)].dropna(),
+                                      storage_options=storage_options)
         elif iloc is not None:
             result = DatajournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options)
         else:
@@ -2345,7 +2362,7 @@ class Datajournal:
         holding an ``entry_code`` can address exactly the row it wrote:
 
             code = block.write_journal_entry(event='note')
-            entry = block.journal(entry_code=code, loc=0)
+            entry = block.datajournal(entry_code=code, loc=0)
 
         With one caveat that is a property of where entries live rather than
         of the code.  A journal *file* is per live instance -- its path is

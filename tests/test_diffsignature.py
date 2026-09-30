@@ -76,12 +76,12 @@ class TestJournalSelectors:
 
     def test_loc(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        loc = a.journal().index[-1]
+        loc = a.datajournal().index[-1]
         assert b.diffsubsig(journal={'loc': loc}) == {'spec': {'x': (2, 1)}}
 
     def test_entry_path(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        entry_path = a.journal()['entry_path'].iloc[-1]
+        entry_path = a.datajournal()['entry_path'].iloc[-1]
         assert b.diffsubsig(journal={'entry_path': entry_path}) == {'spec': {'x': (2, 1)}}
 
     def test_self_against_own_entry(self, tmp_path):

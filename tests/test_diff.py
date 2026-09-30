@@ -231,7 +231,7 @@ class TestDifftopicsOtherSides:
 
     def test_a_journal_entry_passed_directly(self, tmp_path):
         block(Block, tmp_path).build()
-        entry = block(Block, tmp_path).journal(loc=0)
+        entry = block(Block, tmp_path).datajournal(loc=0)
         assert block(Renamed, tmp_path).difftopics(entry) == {'out': ('renamed.txt', 'out.txt')}
 
     def test_an_other_side_is_required(self, tmp_path):

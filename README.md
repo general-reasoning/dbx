@@ -226,7 +226,7 @@ results = executor.execute(list_of_callables)
 Every `build()` writes journal entries (Parquet) recording the timestamp, git revision, config, and hash. Query them later:
 
 ```python
-j = block.journal()            # DatajournalFrame (DataFrame subclass)
+j = block.datajournal()            # DatajournalFrame (DataFrame subclass)
 entry = j.get(0)               # DatajournalEntry (Series subclass)
 print(entry.hash, entry.anchor, entry.revision)
 ```

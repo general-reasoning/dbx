@@ -102,7 +102,7 @@ class TestClearRedirection:
         # Recorded: a fresh instance, specializations off, is not redirected either.
         again = v1table(grown, spec={'n': 3}, use_tab_specializations=False).tab(0)
         assert not again.redirected() and again.get_redirection() is None
-        assert again.journal(event='^UNSAFE_clear_redirection$', index=None)['hash'].tolist() == [tab.hash]
+        assert again.datajournal(event='^UNSAFE_clear_redirection$', index=None)['hash'].tolist() == [tab.hash]
         # And nothing that was built is gone.
         assert v1table(grown, spec={'n': 3}, use_tab_specializations=False).valid()
 
@@ -116,7 +116,7 @@ class TestClearRedirection:
         cleared = table.UNSAFE_clear_tab_redirections(OVERRIDE=True, parallelization='inline')
         assert cleared.tolist() == [True, True, True]
         assert _redirected(v1table(grown, spec={'n': 3}, use_tab_specializations=False)) == [False, False, False]
-        assert v1table(grown, spec={'n': 3}).block_journal(event='^UNSAFE_clear_redirection$', index=None) is not None
+        assert v1table(grown, spec={'n': 3}).block_datajournal(event='^UNSAFE_clear_redirection$', index=None) is not None
 
     def test_without_override_it_does_nothing(self, grown, monkeypatch):
         monkeypatch.setattr('builtins.input', lambda *_: 'n')
@@ -294,8 +294,8 @@ class TestSpecializeMethod:
         assert t2.valid()
 
         def fail_blocks_journal(*args, **kwargs):
-            raise AssertionError("_blocks_journal_ should not be called when stack is already valid!")
-        monkeypatch.setattr(t2, '_blocks_journal_', fail_blocks_journal)
+            raise AssertionError("_blocks_datajournal_ should not be called when stack is already valid!")
+        monkeypatch.setattr(t2, '_blocks_datajournal_', fail_blocks_journal)
 
         res = t2._install_block_specializations_()
         assert res is not None
@@ -447,8 +447,8 @@ class TestCombineSpecializations:
 
         # Test passing journal as dict
         j_dict = {
-            SourceA.anchor: sa.journal(),
-            SourceB.anchor: sb.journal(),
+            SourceA.anchor: sa.datajournal(),
+            SourceB.anchor: sb.datajournal(),
         }
         target_dict = Target(datalake=lake, tag="multi_j", use_specializations=True)
         res = target_dict._install_specialization_(journal=j_dict)
@@ -458,7 +458,7 @@ class TestCombineSpecializations:
         assert target_dict._redirected_paths_['tb'] == sb.path('tb')
 
         # Test passing journal as list (corresponding to SPECIALIZATIONS order)
-        j_list = [sa.journal(), sb.journal()]
+        j_list = [sa.datajournal(), sb.datajournal()]
         target_list = Target(datalake=lake, tag="multi_j_list", use_specializations=True)
         res_list = target_list._install_specialization_(journal=j_list)
         assert res_list is not None

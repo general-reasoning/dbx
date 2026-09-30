@@ -78,7 +78,7 @@ class TestReadingIsAQuery:
         monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'elsewhere'))
         b = block(tmp_path / 'lake')
         b.build()
-        assert len(b.journal()) == 1
+        assert len(b.datajournal()) == 1
 
 
 class TestABlockHasNoJournalOfItsOwn:
@@ -92,7 +92,7 @@ class TestABlockHasNoJournalOfItsOwn:
         assert Datajournal.current() is DEFAULT_DATAJOURNAL
         b = block(tmp_path)
         b.build()
-        assert b.journal(loc=0).block.session == DEFAULT_DATAJOURNAL.session
+        assert b.datajournal(loc=0).block.session == DEFAULT_DATAJOURNAL.session
 
     def test_a_handle_is_shared_not_copied(self):
         dj = Datajournal()
@@ -150,14 +150,14 @@ class TestSession:
             b = block(tmp_path)
             b.write_journal_entry(event='note', journal_prefix='a-')
             b.write_journal_entry(event='note', journal_prefix='b-')
-        j = b.journal()
+        j = b.datajournal()
         assert list(j['session']) == [dj.session] * 2
-        assert b.journal(loc=0).block.session == dj.session
+        assert b.datajournal(loc=0).block.session == dj.session
 
     def test_distinct_from_the_tree(self, tmp_path):
         with Datajournal() as dj:
             block(tmp_path, tree='TREE').write_journal_entry(event='note')
-        entry = block(tmp_path).journal(loc=0).block
+        entry = block(tmp_path).datajournal(loc=0).block
         assert (entry.tree, entry.session) == ('TREE', dj.session)
 
     def test_survives_pickling(self):
@@ -172,7 +172,7 @@ class TestSession:
             block(tmp_path, x=1).build()
         with Datajournal():
             block(tmp_path, x=2).build()
-        assert len(block(tmp_path).journal(session=mine.session)) == 1
+        assert len(block(tmp_path).datajournal(session=mine.session)) == 1
 
 
 class TestWrittenEntries:
@@ -204,13 +204,13 @@ class TestLegacySessionColumn:
         with Datajournal() as dj:
             b = block(tmp_path, tree='NEW-TREE')
             b.write_journal_entry(event='note')
-        new_path = b.journal(loc=0)['entry_path']
+        new_path = b.datajournal(loc=0)['entry_path']
         old = pd.read_parquet(new_path).drop(columns=['tree', 'session', 'id'])
         old['session'] = 'OLD-TREE'
         old['datetime'] = '2020-01-01T00-00-00.000000'
         old.to_parquet(new_path.replace('-journal-', '-journal-old-'))
 
-        j = b.journal()
+        j = b.datajournal()
         new_row, old_row = j.iloc[0], j.iloc[1]
         assert (new_row['tree'], new_row['session']) == ('NEW-TREE', dj.session)
         assert old_row['tree'] == 'OLD-TREE' and pd.isna(old_row['session'])
@@ -225,7 +225,7 @@ class TestWithScope:
             b = block(tmp_path)
             b.build()
         assert Datajournal.current() is DEFAULT_DATAJOURNAL
-        assert dj.written_entries() == [b.journal(loc=0)['entry_path']]
+        assert dj.written_entries() == [b.datajournal(loc=0)['entry_path']]
 
     def test_decided_when_it_writes_not_when_it_was_made(self, tmp_path):
         """Built after the inner ``with`` closed: the next one out, and nothing to the closed one."""
@@ -234,14 +234,14 @@ class TestWithScope:
                 b = block(tmp_path)
             b.build()
         assert inner.written_entries() == []
-        assert outer.written_entries() == [b.journal(loc=0)['entry_path']]
+        assert outer.written_entries() == [b.datajournal(loc=0)['entry_path']]
 
     def test_with_none_left_the_default(self, tmp_path):
         with Datajournal() as dj:
             b = block(tmp_path)
         b.build()
         assert dj.written_entries() == []
-        assert b.journal(loc=0).block.session == DEFAULT_DATAJOURNAL.session
+        assert b.datajournal(loc=0).block.session == DEFAULT_DATAJOURNAL.session
 
     def test_the_innermost_wins_and_nesting_unwinds(self):
         with Datajournal() as outer:
@@ -284,7 +284,7 @@ class TestWithScope:
         from dbx.dataparts import read_yaml
         b = block(tmp_path)
         b.build()
-        assert 'datajournal' not in read_yaml(b.journal(loc=0)['dfn'], safe=True)
+        assert 'datajournal' not in read_yaml(b.datajournal(loc=0)['dfn'], safe=True)
 
 
 class TestExec:
@@ -306,7 +306,7 @@ class TestExec:
         assert session != DEFAULT_DATAJOURNAL.session
         # The command is over, so its scope is closed and they write elsewhere now.
         assert Datajournal.current() is DEFAULT_DATAJOURNAL
-        entries = [blk.journal(hash=blk.hash, loc=0) for blk in (a, b)]
+        entries = [blk.datajournal(hash=blk.hash, loc=0) for blk in (a, b)]
         assert sorted(row['datajournal_entries']) == sorted(e['entry_path'] for e in entries)
         assert {e.block.session for e in entries} == {session}
 
@@ -440,7 +440,7 @@ class TestRepr:
     def test_recorded_in_the_journal_and_read_back(self, tmp_path):
         b = block(tmp_path)
         b.build()
-        entry = b.journal(loc=0)
+        entry = b.datajournal(loc=0)
         assert entry.block.repr() == b.repr()
         assert entry.read('repr') == b.repr()
         d = entry.block.to_dict()
@@ -536,7 +536,7 @@ class TestJournalIndex:
     def test_a_block_journal_by_default(self, tmp_path):
         b = block(tmp_path)
         b.build()
-        entry_id = b.journal(iloc=0)['id']
+        entry_id = b.datajournal(iloc=0)['id']
         assert dbx.journal(Built, datalake=str(tmp_path), loc=entry_id).block.id == entry_id
 
     def test_none_numbers_it(self, tmp_path):
@@ -626,10 +626,10 @@ class TestFilterPatterns:
     def test_the_block_journal(self, tmp_path):
         b = block(tmp_path)
         b.build()
-        entry_id = b.journal(iloc=0)['id']
-        assert len(b.journal(id=f'^{entry_id[:4]}')) == 1
-        assert len(b.journal(id=f'*{entry_id[2:6]}*')) == 1
-        assert len(b.journal(id='^nomatch')) == 0
+        entry_id = b.datajournal(iloc=0)['id']
+        assert len(b.datajournal(id=f'^{entry_id[:4]}')) == 1
+        assert len(b.datajournal(id=f'*{entry_id[2:6]}*')) == 1
+        assert len(b.datajournal(id='^nomatch')) == 0
 
     def test_the_exec_journal(self, tmp_path):
         dbx.exec("1 + 1")
@@ -873,7 +873,7 @@ class TestAcrossProcesses:
         from dbx.dataparts import callable_executor
         hashes = callable_executor('multiprocessing', n_workers=1).exec_callables(
             [functools.partial(_built_under_the_scope, 0)])
-        entry = block(tmp_path, x=100).journal(iloc=0)
+        entry = block(tmp_path, x=100).datajournal(iloc=0)
         assert hashes == [entry.block.hash]
         assert entry.block.session == DEFAULT_DATAJOURNAL.session
         assert entry['entry_path'] in DEFAULT_DATAJOURNAL.written_entries()
@@ -885,7 +885,7 @@ class TestAcrossProcesses:
                 [functools.partial(_fails_after, 3.0), functools.partial(_built_under_the_scope, 0, 6.0)])
             with pytest.raises(RuntimeError, match="boom"):
                 list(stream)
-        assert dj.written_entries() == [block(tmp_path, x=100).journal(iloc=0)['entry_path']]
+        assert dj.written_entries() == [block(tmp_path, x=100).datajournal(iloc=0)['entry_path']]
 
     def test_threads_are_not_wrapped(self):
         from dbx.dataparts import callable_executor
@@ -939,7 +939,7 @@ class TestSessionIndex:
     def test_a_command_indexes_its_entries(self, tmp_path):
         b = dbx.exec("b = Built(datalake=root, spec={'x': 1}); b.build(); b", Built=Built, root=str(tmp_path))
         row = dbx.execjournal(iloc=0)
-        entry_path = b.journal(loc=0)['entry_path']
+        entry_path = b.datajournal(loc=0)['entry_path']
         assert Datajournal.session_entries(row['session'], datalake=str(tmp_path)) == [entry_path]
 
     def test_nothing_is_indexed_outside_a_command(self, tmp_path):
@@ -983,3 +983,62 @@ class TestSessionIndex:
         dbx.exec("Built(datalake=root, spec={'x': 1}).build()", Built=Built, root=str(tmp_path))
         shutil.rmtree(os.path.join(str(tmp_path), '.journal', 'sessions'))
         assert len(dbx.execjournal(iloc=0).dataentries()) == 1
+
+
+class TestAPrefixIsEnough:
+    """``loc=`` -- and a frame's ``get`` -- take any prefix of exactly one id, where the frame is indexed by id."""
+
+    @pytest.fixture
+    def frame(self, tmp_path):
+        block(tmp_path, x=1).build()
+        block(tmp_path, x=2).build()
+        return dbx.datajournal(Built, datalake=str(tmp_path))
+
+    def test_datajournal_loc(self, frame, tmp_path):
+        full = frame.index[0]
+        assert dbx.datajournal(Built, datalake=str(tmp_path), loc=full[:8])['id'] == full
+
+    def test_a_blocks_datajournal_indexed_by_id(self, frame, tmp_path):
+        full = frame.index[1]
+        assert block(tmp_path, x=1).datajournal(index='id', loc=full[:6])['id'] == full
+
+    def test_get_takes_the_displayed_form(self, frame):
+        full = frame.index[0]
+        assert frame.get(f"{full[:8]}…")['id'] == full
+
+    def test_a_wrapped_frame_takes_loc_and_iloc(self, frame):
+        full = frame.index[0]
+        raw = pd.DataFrame(frame).reset_index(drop=True)
+        assert dbx.datajournal(raw, index='id', loc=full[:8])['id'] == full
+        assert dbx.datajournal(raw, iloc=0)['id'] == full
+
+    def test_not_exactly_one_is_an_error(self, frame, tmp_path):
+        with pytest.raises(KeyError, match='of 2'):
+            dbx.datajournal(Built, datalake=str(tmp_path), loc='')
+        with pytest.raises(KeyError, match='of 0'):
+            dbx.datajournal(Built, datalake=str(tmp_path), loc='zzzz')
+
+    def test_a_numbered_frame_takes_positions_only(self, frame, tmp_path):
+        numbered = block(tmp_path, x=1).datajournal()
+        assert numbered.get(0)['id'] == numbered['id'].iloc[0]
+        with pytest.raises(KeyError):
+            numbered.get(numbered['id'].iloc[0][:8])
+
+
+class TestDatajournalBuildersAreNamedForIt:
+    """What builds a Datajournal or DatajournalFrame is called ``datajournal``, ``Datajournal``, ``*_datajournal``."""
+
+    def test_the_new_names(self):
+        assert callable(Datablock.datajournal) and callable(Datablock.Datajournal)
+        assert callable(Datastack.block_datajournal) and callable(Datastack.child_specialization_datajournal)
+        assert callable(dbx.Datatable.tab_datajournal)
+
+    @pytest.mark.parametrize('old', ['journal', 'Journal', 'block_journal', 'child_specialization_journal'])
+    def test_the_old_names_are_gone(self, old):
+        assert not hasattr(Datastack, old)
+
+    @pytest.mark.parametrize('old', ['journal', 'Journal', 'block_journal', 'tab_journal',
+                                     'child_specialization_journal'])
+    def test_a_subclass_defining_an_old_name_is_refused(self, old):
+        with pytest.raises(TypeError, match=f'{old} -> '):
+            type('Old', (Datablock,), {old: lambda self: None})

@@ -98,7 +98,7 @@ def grown(tmp_path, monkeypatch):
 
 def test_the_record_carries_the_paths(grown):
     tab = adopted(v1table(grown, spec={'n': 3}).tab(0))  # installs, and records
-    entry = tab.journal(event='^UNSAFE_redirect$', hash=tab.hash, iloc=0, index=None)
+    entry = tab.datajournal(event='^UNSAFE_redirect$', hash=tab.hash, iloc=0, index=None)
     assert 'paths' in entry.block.redirection
 
 
@@ -133,10 +133,10 @@ def test_an_older_record_without_paths_answers_from_the_marker(grown, monkeypatc
 def test_a_redirected_tab_formed_again_records_nothing_more(grown):
     table = v1table(grown, spec={'n': 3})
     tab = adopted(table.tab(0))
-    before = len(tab.journal(event='^UNSAFE_redirect$', hash=tab.hash, index=None))
+    before = len(tab.datajournal(event='^UNSAFE_redirect$', hash=tab.hash, index=None))
     for _ in range(3):
         adopted(v1table(grown, spec={'n': 3}).tab(0))   # finds the marker: installs nothing
-    after = len(tab.journal(event='^UNSAFE_redirect$', hash=tab.hash, index=None))
+    after = len(tab.datajournal(event='^UNSAFE_redirect$', hash=tab.hash, index=None))
     assert after == before == 1
 
 
@@ -185,7 +185,7 @@ def test_a_table_carries_no_journal_in_its_state(tmp_path):
     import copy
     Table(datalake=str(tmp_path), spec={'n': 2}).build()
     table = Table(datalake=str(tmp_path), spec={'n': 2})
-    table.child_specialization_journal()               # read, and cached on the instance
+    table.child_specialization_datajournal()               # read, and cached on the instance
     assert '__child_journal__' in table.__dict__
     state = table.__getstate__()
     assert not any('journal' in k for k in state if k.startswith('__'))
@@ -204,8 +204,8 @@ def test_a_copy_reads_the_journal_once_when_it_needs_it(tmp_path, monkeypatch):
     for i in range(4):
         twin.tab(i)
     assert reads == [], "forming tabs resolves nothing, so reads nothing"
-    assert twin.child_specialization_journal() is not None
-    twin.child_specialization_journal()
+    assert twin.child_specialization_datajournal() is not None
+    twin.child_specialization_datajournal()
     assert len([a for a in reads if a == Tab.anchor]) == 1
 
 

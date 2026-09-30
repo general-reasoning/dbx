@@ -91,7 +91,7 @@ class TestDIRTOPICInTheJournal:
     def test_journal_records_the_dir_topic_as_none(self, tmp_path):
         b = WithDIR(datalake=str(tmp_path))
         b.build()
-        entry = b.journal(iloc=-1)
+        entry = b.datajournal(iloc=-1)
         assert entry.block.TOPICS['checkpoints'] is None
         assert entry.block.TOPICS['logs'] == 'train.log'
         assert entry.block._is_dir_topic_('checkpoints')

@@ -46,7 +46,7 @@ def test_exec_writes_journal_entry_for_datablock(tmp_path, monkeypatch):
     assert isinstance(res, ExecSampleBlock)
     res.build()
     # Datablock journal should NOT contain note string
-    j_block = res.journal()
+    j_block = res.datajournal()
     if not j_block.empty and 'event' in j_block.columns:
         assert 'dbx:exec' not in j_block['event'].values
 

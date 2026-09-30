@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`loc=` takes an id prefix in `datajournal()` too.** `dbx.datajournal(...,
+  loc=...)` and `DatajournalFrame.get()` accept any prefix of exactly one id,
+  as `execjournal()` and `ExecjournalFrame.get()` already did, and raise
+  `KeyError` if no id or several ids match. The prefix is matched against the
+  index, so a numbered frame, such as a block's `datajournal()` by default,
+  still takes row numbers only.
 - **`ExecjournalFrame` displays compactly and keeps every value.** Ids and
   sessions show as 8 characters, timestamps to the second, and path lists as
   counts. The `id` column is hidden when it only repeats the index,
@@ -214,6 +220,15 @@ All notable changes to this project will be documented in this file.
   when the redirection is total, and otherwise builds the rest.
 
 ### Changed
+- **Breaking: what builds a `Datajournal` or `DatajournalFrame` is named for it.**
+  `Datablock.journal()` is now `Datablock.datajournal()`, `Datablock.Journal()`
+  is `Datablock.Datajournal()`, `Datastack.block_journal()` is
+  `block_datajournal()`, `Datatable.tab_journal()` is `tab_datajournal()`, and
+  `Datastack.child_specialization_journal()` is
+  `child_specialization_datajournal()`. No aliases are kept. A subclass that
+  still defines one of the old names raises `TypeError` at class definition,
+  because nothing calls the old names and an override would be ignored.
+  `dbx.journal()`, which dispatches to either journal, is unchanged.
 - **Exec journal columns: `datetime` and `exec` first, `comment` and `success`
   last.** `exception` and `traceback` follow `exec:end:datetime`; columns the
   list doesn't name go before `comment`.
@@ -601,6 +616,9 @@ All notable changes to this project will be documented in this file.
 - **`Datablock.format_diffnorm(diff)`** — renders a `diffnorm` dict as text.
 
 ### Fixed
+- **`dbx.datajournal(frame, loc=..., iloc=...)` ignored `loc` and `iloc`**
+  when handed a DataFrame to wrap, and returned the whole frame. It now returns
+  the one entry, as it does for an anchor.
 - **`OutputTee.close()` no longer hangs on a process that outlives it.** A
   process started while the tee was open, such as multiprocessing's resource
   tracker or a Ray raylet, inherited the pipe, and `close()` waited for an

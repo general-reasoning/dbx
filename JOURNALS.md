@@ -284,12 +284,15 @@ dbx.datajournal(what, loc=None, *, iloc=None, datalake=None, index=..., unnormal
 
 This reads every entry under `<datalake>/<anchor>/`, for every hash and tag.
 The result is a `DatajournalFrame`, **newest first**, indexed by the entry's
-`id`. With `loc=` (an id) or `iloc=` (a position), it returns one
-`DatajournalEntry`. An anchor with no journal directory raises
-`FileNotFoundError`.
+`id`. With `loc=` (an id, or a prefix of exactly one id) or `iloc=` (a
+position), it returns one `DatajournalEntry`. A prefix that matches no id or
+several ids raises `KeyError`, listing the matches. An anchor with no journal
+directory raises `FileNotFoundError`.
 
-`block.journal(**filters)` reads the same journal through the block's own
-`Datajournal`, but its frame is numbered rather than indexed by id.
+`block.datajournal(**filters)` reads the same journal through the block's own
+`Datajournal`, but its frame is numbered rather than indexed by id, so its
+`loc=` is a row number. Pass `index='id'` to look an entry up by id or id
+prefix instead. `frame.get(...)` takes the same labels, prefixes included.
 
 ```python
 dbx.datajournal(Apple)                                  # every Apple entry

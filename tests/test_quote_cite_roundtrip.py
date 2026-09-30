@@ -281,7 +281,7 @@ class TestCiteInJournal:
         return b
 
     def test_build_writes_cite_txt(self, built):
-        entry = built.journal(iloc=-1)
+        entry = built.datajournal(iloc=-1)
         assert entry.get('cite') is not None, "journal has no cite column"
         assert '-cite-' in entry['cite'] and entry['cite'].endswith('.txt')
         assert entry.read('cite') == built.cite()

@@ -264,4 +264,4 @@ class TestEnvInJournalUrl:
         monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path))
         built = EnvBlock(datalake=env('JOURNAL_ROOT'), spec=dict(label="'y'"))
         built.build()
-        assert len(dbx.journal(built.anchor, datalake=built._url_)) == len(built.journal())
+        assert len(dbx.journal(built.anchor, datalake=built._url_)) == len(built.datajournal())

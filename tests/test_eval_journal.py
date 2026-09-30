@@ -73,7 +73,7 @@ class TestEvalJournal:
         assert isinstance(res, Datablock)
 
         # Verify no note eval string injection in block journal
-        j_block = block.journal()
+        j_block = block.datajournal()
         if 'note' in j_block.columns:
             notes = j_block['note'].dropna().tolist()
             assert expr not in notes

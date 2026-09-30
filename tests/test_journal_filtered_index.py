@@ -1,6 +1,6 @@
 """A filtered DatajournalFrame must be renumbered 0..N-1, not keep its old labels.
 
-``Datablock.Journal`` sorts the concatenated journal newest-first and resets the
+``Datablock.Datajournal`` sorts the concatenated journal newest-first and resets the
 index, so a label is also a position. But ``DatajournalFrame.__init__`` applied its
 ``filter_kwargs`` *after* that reset without renumbering, so a filtered journal
 kept the labels its rows had in the full journal -- while ``loc=`` and
@@ -54,11 +54,11 @@ def newest_is_another_event(tmp_path):
 class TestFilteredIndexIsRenumbered:
 
     def test_unfiltered_journal_is_still_zero_based(self, newest_is_another_event):
-        j = newest_is_another_event.journal()
+        j = newest_is_another_event.datajournal()
         assert list(j.index) == list(range(len(j)))
 
     def test_filtered_journal_is_renumbered(self, newest_is_another_event):
-        j = newest_is_another_event.journal(event='build:end')
+        j = newest_is_another_event.datajournal(event='build:end')
         assert len(j) == 1
         assert list(j.index) == [0], "filtered journal kept its old labels"
 
@@ -67,13 +67,13 @@ class TestFilteredIndexIsRenumbered:
         # returns early and writes no second build:end.
         for x in (1, 2, 3):
             Built(datalake=str(tmp_path), spec={'x': x}).build()
-        j = Built(datalake=str(tmp_path), spec={'x': 1}).journal(event='build:end')
+        j = Built(datalake=str(tmp_path), spec={'x': 1}).datajournal(event='build:end')
         assert len(j) == 3
         times = list(j['datetime'])
         assert times == sorted(times, reverse=True)
 
     def test_get_and_loc_agree_with_position(self, newest_is_another_event):
-        j = newest_is_another_event.journal(event='build:end')
+        j = newest_is_another_event.datajournal(event='build:end')
         assert j.get(0).get('event') == 'build:end'
         assert j.iloc[0]['event'] == 'build:end'
 
@@ -91,7 +91,7 @@ class TestLastbuilt:
             Built(datalake=str(tmp_path), spec={'x': x}).build()
         block = Built(datalake=str(tmp_path), spec={'x': 1})
         entry = block.lastbuilt()
-        newest = block.journal(event='build:end')['datetime'].max()
+        newest = block.datajournal(event='build:end')['datetime'].max()
         assert entry.get('datetime') == newest
 
     def test_returns_none_when_nothing_was_built(self, tmp_path):
@@ -103,13 +103,13 @@ class TestLocSelectorWithFilters:
     """``journal(event=..., loc=0)`` was broken the same way ``lastbuilt`` was."""
 
     def test_loc_zero_selects_the_first_filtered_row(self, newest_is_another_event):
-        entry = newest_is_another_event.journal(event='build:end', loc=0)
+        entry = newest_is_another_event.datajournal(event='build:end', loc=0)
         assert entry.get('event') == 'build:end'
 
     def test_loc_and_iloc_agree_on_a_filtered_journal(self, newest_is_another_event):
         block = newest_is_another_event
-        by_loc = block.journal(event='build:end', loc=0)
-        by_iloc = block.journal(event='build:end', iloc=0)
+        by_loc = block.datajournal(event='build:end', loc=0)
+        by_iloc = block.datajournal(event='build:end', iloc=0)
         assert by_loc.get('datetime') == by_iloc.get('datetime')
 
 
@@ -122,7 +122,7 @@ class TestUserSlicingKeepsPandasSemantics:
     """
 
     def test_boolean_slice_keeps_original_labels(self, newest_is_another_event):
-        j = newest_is_another_event.journal()
+        j = newest_is_another_event.datajournal()
         sliced = j[j['event'] == 'build:end']
         assert list(sliced.index) == [1], "a user slice was renumbered"
 
@@ -133,6 +133,6 @@ class TestUserSlicingKeepsPandasSemantics:
 
     def test_datajournal_built_from_a_frame_without_filters_is_untouched(
             self, newest_is_another_event):
-        j = newest_is_another_event.journal()
+        j = newest_is_another_event.datajournal()
         raw = j[j['event'] == 'build:end']
         assert list(DatajournalFrame(raw).index) == [1]

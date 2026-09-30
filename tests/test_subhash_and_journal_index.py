@@ -60,14 +60,14 @@ def test_journal_writing_and_indexing(tmp_path):
     block.build()
 
     # Test standard journal call without index
-    j_default = block.journal()
+    j_default = block.datajournal()
     assert isinstance(j_default, DatajournalFrame)
     assert 'code' in j_default.columns
     assert 'signature' in j_default.columns
     assert 'superhash' not in j_default.columns
 
     # Test journal with index='hash'
-    j_indexed_hash = block.journal(index='hash')
+    j_indexed_hash = block.datajournal(index='hash')
     assert j_indexed_hash.index.name == 'hash'
     assert block.hash in j_indexed_hash.index
 
@@ -82,4 +82,4 @@ def test_invalid_index_raises_keyerror(tmp_path):
     block.build()
 
     with pytest.raises(KeyError):
-        block.journal(index='non_existent_column')
+        block.datajournal(index='non_existent_column')

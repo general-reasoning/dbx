@@ -7391,8 +7391,11 @@ class Datastack(Datablock):
         # read once for the whole build -- see `_build_journal_`.
         self.__dict__['__building__'] = True
         validation = self._validation_()
+        # deep=True takes no short cut: not the stack's validity, nor the manifest's -- every block is asked.
+        if deep and validation == 'cross_check':
+            validation = 'valid'
         try:
-            _, invalid, failed, paths = self._adopt_block_specializations_()
+            _, invalid, failed, paths = self._adopt_block_specializations_(validation=validation)
             # Data that is there and fails validate() is repaired by nothing a build does.
             if failed:
                 raise InvalidBlocksError(self, list(failed), validation=validation, reasons=failed)

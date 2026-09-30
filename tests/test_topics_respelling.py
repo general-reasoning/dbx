@@ -129,17 +129,22 @@ def test_the_stats_probe_hashes_its_per_column_topics(tmp_path):
 
 
 def test_a_table_on_the_base_topics_built_before_the_respelling_is_found(tmp_path, monkeypatch):
-    """Every table that inherits Datatable's TOPICS moved; the base's specialization reaches back."""
+    """A table on TAB_PATHS_TOPICS -- the base's, while they included tab_paths -- moved with their
+    respelling; TAB_PATHS_SPECIALIZATIONS reach back."""
     from dbx.datatables import Datatable
     from test_datapointtable import LetterTable
 
+    class TabPathsLetterTable(LetterTable):
+        TOPICS = Datatable.TAB_PATHS_TOPICS
+        SPECIALIZATIONS = Datatable.TAB_PATHS_SPECIALIZATIONS
+
     def table():
-        return LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=2, per_tab=2))
+        return TabPathsLetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=2, per_tab=2))
 
     from dbx.datablocks import Datastack
     with monkeypatch.context() as m:
-        m.setattr(Datatable, 'TOPICS', {'tab_paths': DIRTOPIC, 'done': 'done'})
-        m.setattr(Datatable, 'SPECIALIZATIONS', [])
+        m.setattr(TabPathsLetterTable, 'TOPICS', {'tab_paths': DIRTOPIC, 'done': 'done'})
+        m.setattr(TabPathsLetterTable, 'SPECIALIZATIONS', [])
         # ... and before a table's type named its TAB.
         m.setattr(Datastack, '_type_entries_', lambda self, specialization=None, **kw: {})
         old = table().build()
@@ -157,21 +162,28 @@ def test_a_table_declaring_its_own_topics_does_not_inherit_the_bases_past(tmp_pa
     from dbx.datablocks import DATADIR, DATAFILE
     from dbx.datatables import Datatable
 
-    class Own(Datatable):
+    class TabPaths(Datatable):
+        TOPICS = Datatable.TAB_PATHS_TOPICS
+        SPECIALIZATIONS = Datatable.TAB_PATHS_SPECIALIZATIONS
+
+    class Own(TabPaths):
         TOPICS = {'tabs': DATADIR, 'tab_paths': DATADIR, 'done': DATAFILE('done')}
 
-    class Declared(Datatable):
-        SPECIALIZATIONS = [*Datatable.SPECIALIZATIONS]
+    class Declared(TabPaths):
+        SPECIALIZATIONS = [*Datatable.TAB_PATHS_SPECIALIZATIONS]
 
-    assert Own.SPECIALIZATIONS == [] and Datatable.SPECIALIZATIONS
-    assert Declared.SPECIALIZATIONS == Datatable.SPECIALIZATIONS
+    assert Own.SPECIALIZATIONS == [] and TabPaths.SPECIALIZATIONS
+    assert Declared.SPECIALIZATIONS == Datatable.TAB_PATHS_SPECIALIZATIONS
+    # The base's TOPICS are `done` alone, which nothing was built under before: no past to reach.
+    assert Datatable.SPECIALIZATIONS == []
 
 
 def test_leaving_out_the_bases_specializations_warns():
     from dbx.datablocks import Datablock
     from dbx.datatables import Datatable
-    with pytest.warns(UserWarning, match=r"\[\*Datatable.SPECIALIZATIONS"):
+    with pytest.warns(UserWarning, match=r"\[\*Datatable.TAB_PATHS_SPECIALIZATIONS"):
         class Forgot(Datatable):
+            TOPICS = Datatable.TAB_PATHS_TOPICS
             SPECIALIZATIONS = [Datablock.Specialization(spec={}, topics={'done': 'done'})]
 
 

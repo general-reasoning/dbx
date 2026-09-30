@@ -1,9 +1,10 @@
 """
 Failing loudly, clearly and early: at the cause, not far from it.
 
-Stale proxies vouch for nothing; a block says why it is not valid; a probe
-refuses, before any worker starts, to read tabs that are not valid; and a
-VAR field that fails to evaluate says which field of which block it was.
+A manifest recorded under other identities vouches for nothing; a stack's
+validation is its user's to choose; a block says why it is not valid; a
+probe refuses, before any worker starts, to read tabs that are not valid;
+and a VAR field that fails to evaluate says which field of which block.
 """
 import os
 import shutil
@@ -14,6 +15,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 from test_block_specializations import grown, nomarkers, rekeyed  # noqa: E402,F401
+from test_specializations import RowTab  # noqa: E402
 from test_probes import DummyModelEvaluatorFactory, DummySampleTable  # noqa: E402
 from test_specializations import v1table  # noqa: E402
 
@@ -28,27 +30,85 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class TestStaleProxies:
+class TestTheManifest:
 
-    def test_markers_of_tabs_that_moved_vouch_for_nothing(self, grown):
-        # Built with markers; then every tab re-keyed. The markers name the old tabs.
+    def test_tabs_that_moved_are_not_vouched_for(self, grown):
+        # Built, with its manifest; then every tab re-keyed.
         table = v1table(grown, spec={'n': 3})
-        assert table._built_tab_set_() == set()
+        assert table._read_blocks_manifest_() is not None
+        assert not table._blocks_cross_checked_()
         assert not table.valid_tabs(parallelization='inline').any()
 
-    def test_a_record_under_other_identities_vouches_for_nothing(self, rekeyed):
-        # Built, and so vouched for, before the tabs were re-keyed.
+    def test_a_manifest_under_other_identities_vouches_for_nothing(self, rekeyed):
         table = nomarkers(rekeyed)
-        assert os.path.exists(table._blocks_fingerprint_path_())
-        assert not table._blocks_vouched_()
+        assert os.path.exists(table._blocks_manifest_path_())
+        assert not table._blocks_cross_checked_()
 
-    def test_clearing_blocks_forgets_the_record(self, rekeyed):
+    def test_clearing_blocks_forgets_the_manifest(self, rekeyed):
         nomarkers(rekeyed).build_blocks()
         table = nomarkers(rekeyed)
-        assert table._blocks_vouched_()
+        assert table._blocks_cross_checked_()
         table.UNSAFE_clear_blocks(indices=[1], clear_done=False, OVERRIDE=True)
-        assert not nomarkers(rekeyed)._blocks_vouched_()
+        assert not nomarkers(rekeyed)._blocks_cross_checked_()
         assert nomarkers(rekeyed).valid_tabs(parallelization='inline').tolist() == [True, False, True]
+
+    def test_the_sample_is_block_0_and_the_rest_at_random(self, rekeyed, monkeypatch):
+        nomarkers(rekeyed).build_blocks()
+        formed = []
+        table = nomarkers(rekeyed, cross_check_blocks=2, cross_check_seed=7)
+        orig = type(table).block
+        monkeypatch.setattr(type(table), 'block', lambda self, i: formed.append(i) or orig(self, i))
+        assert table._blocks_cross_checked_()
+        assert formed[0] == 0 and len(formed) == 2 and formed[1] in (1, 2)
+
+    def test_a_mismatch_anywhere_in_the_sample_is_caught(self, rekeyed):
+        nomarkers(rekeyed).build_blocks()
+        table = nomarkers(rekeyed, cross_check_blocks=3)
+        path = table._blocks_manifest_path_()
+        lines = open(path).read().splitlines()
+        lines[3] = lines[3] + '-moved'          # block 2, as the manifest records it
+        open(path, 'w').write('\n'.join(lines) + '\n')
+        assert not table._blocks_cross_checked_()
+
+
+class TestValidation:
+
+    def test_it_is_the_stacks_and_not_its_identity(self, rekeyed):
+        assert nomarkers(rekeyed, validation='validate').hash == nomarkers(rekeyed).hash
+        with pytest.raises(ValueError, match="validation must be one of"):
+            nomarkers(rekeyed, validation='thorough')
+
+    def test_valid_asks_every_block_behind_the_manifest(self, rekeyed):
+        nomarkers(rekeyed).build_blocks()
+        os.remove(nomarkers(rekeyed).tab(1).path('rows'))    # behind the stack's back
+        assert nomarkers(rekeyed).valid_tabs(parallelization='inline').all()          # cross_check cannot see it
+        assert nomarkers(rekeyed, validation='valid').valid_tabs(parallelization='inline').tolist() == [True, False, True]
+
+    def test_validate_fails_the_build_and_names_the_remedy(self, rekeyed, monkeypatch):
+        nomarkers(rekeyed).build_blocks()
+        monkeypatch.setattr(RowTab, '__validate__', lambda self, **kw: self.var.tab_idx != 1)
+        with pytest.raises(InvalidBlocksError, match=r"(?s)1 of 3 blocks.*fails validate\(\).*UNSAFE_clear_blocks\(indices=\[1\]"):
+            nomarkers(rekeyed, validation='validate').build()
+        with pytest.raises(InvalidBlocksError, match="fails validate"):
+            nomarkers(rekeyed, validation='validate').specialize_tabs(parallelization='inline')
+
+    def test_validate_undoes_an_adoption_that_fails_it(self, rekeyed, monkeypatch):
+        # The tabs owe `extra`, so let them owe nothing: adopted, they are valid -- and then fail validate().
+        monkeypatch.setattr(RowTab, 'TOPICS', {'rows': 'rows.txt'})
+        monkeypatch.setattr(RowTab, 'VERSION', 2)
+        monkeypatch.setattr(RowTab, 'SPECIALIZATIONS', [
+            Datablock.Specialization(spec={}, topics={'rows': 'rows.txt'}, version=1, note='v1')])
+        monkeypatch.setattr(RowTab, '__validate__', lambda self, **kw: False)
+        with pytest.raises(InvalidBlocksError,
+                           match=r"(?s)resolves to fails validate\(\), and was not adopted.*without their specializations"):
+            nomarkers(rekeyed, validation='validate').specialize_tabs(parallelization='inline')
+        assert not nomarkers(rekeyed).tabs_redirected(parallelization='inline').any()
+        # The remedy it names: built, not adopted -- and so passing validate(), were it not always False.
+        monkeypatch.setattr(RowTab, '__validate__', lambda self, **kw: self.valid())
+        nomarkers(rekeyed, use_block_specializations=False).build_blocks([0, 1, 2])
+        table = nomarkers(rekeyed)
+        assert not table.tabs_redirected(parallelization='inline').any()
+        assert table.valid_tabs(parallelization='inline', validation='validate').all()
 
 
 class TestWhyInvalid:

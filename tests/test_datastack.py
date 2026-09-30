@@ -346,16 +346,16 @@ class TestDatastackClearBlocks(unittest.TestCase):
         tbl = MinimalTable(datalake=os.path.join(self.tmpdir, 'tbl')).build()
         self.assertTrue(tbl.valid_tab(0))
         self.assertTrue(tbl.valid_block(0))
-        self.assertTrue(tbl._check_tab_path_(0))
+        self.assertTrue(os.path.exists(tbl._blocks_manifest_path_()))
 
         tbl.UNSAFE_clear_tab(0, OVERRIDE=True)
-        self.assertFalse(tbl._check_tab_path_(0))
+        self.assertFalse(os.path.exists(tbl._blocks_manifest_path_()))
         self.assertFalse(tbl.valid_tab(0))
         self.assertFalse(tbl.valid_block(0))
         self.assertTrue(tbl.valid_tab(1))
 
-    def test_validate_block_updates_sentinel_path(self):
-        """validate_block updates on-disk .path sentinel file (writes on pass, removes on fail)."""
+    def test_a_failing_validate_block_forgets_the_manifest(self):
+        """validate_block failing forgets the manifest, which vouched for every block."""
         from dbx.datapoints import DatapointTable, DatapointTab, SLICETOPIC
 
         class ValidatableTab(DatapointTab):
@@ -376,24 +376,20 @@ class TestDatastackClearBlocks(unittest.TestCase):
                 return 2
 
         tbl = ValidatableTable(datalake=os.path.join(self.tmpdir, 'val_tbl')).build()
-        self.assertTrue(tbl._check_tab_path_(0))
+        self.assertTrue(os.path.exists(tbl._blocks_manifest_path_()))
 
-        # Invalidate tab 0 data directly
+        # Tab 0's data removed behind the stack's back: the manifest still
+        # vouches under 'cross_check' -- what it cannot see -- and 'valid' asks.
         tbl.tab(0).UNSAFE_clear(OVERRIDE=True)
-        # Force sentinel presence to simulate stale sentinel
-        tbl._write_tab_path_(0)
-        self.assertTrue(tbl._check_tab_path_(0))
-        # validate_block should return False and remove the sentinel path
+        self.assertTrue(tbl.valid_tab(0))
+        self.assertFalse(tbl.valid_tab(0, validation='valid'))
+        # validate_block fails, and forgets the manifest.
         self.assertFalse(tbl.validate_block(0))
-        self.assertFalse(tbl._check_tab_path_(0))
+        self.assertFalse(os.path.exists(tbl._blocks_manifest_path_()))
+        self.assertFalse(ValidatableTable(datalake=os.path.join(self.tmpdir, 'val_tbl')).valid_tab(0))
 
-        # Now rebuild tab 0, and remove sentinel manually
         tbl.tab(0).build()
-        tbl._remove_tab_path_(0)
-        self.assertFalse(tbl._check_tab_path_(0))
-        # validate_block should return True and write the sentinel path
         self.assertTrue(tbl.validate_block(0))
-        self.assertTrue(tbl._check_tab_path_(0))
 
     def test_returns_self(self):
         """UNSAFE_clear_blocks should return the stack itself."""

@@ -1215,7 +1215,7 @@ class Datatable(DatatabBase, Datastack):
     """A table of DatapointTabs, sliced the same way as its tabs.
 
     A table's TOPICS only contains what the table itself owns: the structural
-    topics (``tab_paths``, ``done``) and any extra file topics the subclass
+    topic ``done`` and any extra file topics the subclass
     declares (such as ``bag_lens``). The tab's slice topics are NOT merged into
     the table's TOPICS -- they belong to the tab, not the table.
 
@@ -1263,7 +1263,12 @@ class Datatable(DatatabBase, Datastack):
     #: table rather than inside it. A subclass that wants its tabs nested still
     #: declares ``tabs`` itself and roots them there -- which is what it always
     #: was, an addressable location rather than something the machinery used.
-    TOPICS = {'tab_paths': DATADIR, 'done': DATAFILE('done')}
+    TOPICS = {'done': DATAFILE('done')}
+
+    #: The TOPICS a table had while ``tab_paths`` -- one marker per built tab --
+    #: stood in for its tabs' validity; the stack's manifest does that now.
+    #: Kept by the tables that declare it, so that their identities do not move.
+    TAB_PATHS_TOPICS = {'tab_paths': DATADIR, 'done': DATAFILE('done')}
 
     @dataclass(frozen=True, repr=False, eq=False)   # the base's repr (note last) and equality
     class Specialization(Datablock.Specialization):
@@ -1288,11 +1293,18 @@ class Datatable(DatatabBase, Datastack):
             return self.TAB
 
     #: Every table built before the respelling: the base's sentinels, and the
-    #: TAB's slices the sentinel era added to a table's identity. A subclass
-    #: declaring SPECIALIZATIONS of its own includes these -- see __init_subclass__.
-    SPECIALIZATIONS = [Specialization(
+    #: TAB's slices the sentinel era added to a table's identity -- for a table
+    #: declaring TAB_PATHS_TOPICS. One declaring SPECIALIZATIONS of its own
+    #: includes these -- see __init_subclass__.
+    TAB_PATHS_SPECIALIZATIONS = [Specialization(
         spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, TAB=None,
         note="respelled only: DATADIR and DATAFILE for the sentinels; built before a table's type named its TAB")]
+
+    #: None: a table spelled with the base's TOPICS, built while they included
+    #: ``tab_paths``, is out of reach -- a specialization describes a block
+    #: that declared fewer topics, never one that declared more. The tables
+    #: that had them keep TAB_PATHS_TOPICS, and TAB_PATHS_SPECIALIZATIONS.
+    SPECIALIZATIONS = []
 
     Tab = staticmethod(DatapointTableTab)
 
@@ -1323,7 +1335,7 @@ class Datatable(DatatabBase, Datastack):
             tbl = table if table is not None else self.table
             # Formed -- by __block__, then again by _adopt_'s .set() -- against the
             # journal the table read once and the executor handed this worker.
-            with forming_with_journal(journal):
+            with forming_with_journal(journal), tbl._block_specializations_in_force_():
                 if tbl is not None and tbl.valid_tab(self.idx):
                     return {'tab_idx': self.idx, 'skipped': True}
                 tab = tbl.__block__(self.idx, **self.kwargs)
@@ -1337,10 +1349,6 @@ class Datatable(DatatabBase, Datastack):
                     validated = tab.validate()
                 if not validated:
                     raise ValueError(f"Tab {self.idx} of {tbl} failed to validate")
-                if hasattr(tbl, '_write_tab_path_'):
-                    tbl._write_tab_path_(self.idx)
-                elif hasattr(tbl, '_write_tab_built'):
-                    tbl._write_tab_built(self.idx)
             result = {'tab_idx': self.idx, 'skipped': skipped}
             del tab
             gc.collect()
@@ -1355,21 +1363,25 @@ class Datatable(DatatabBase, Datastack):
         """
         super().__init_subclass__(**kwargs)
         own = cls.__dict__.get('SPECIALIZATIONS')
-        if own is None and 'TOPICS' in cls.__dict__ and cls.SPECIALIZATIONS is Datatable.SPECIALIZATIONS:
+        inherited = (Datatable.SPECIALIZATIONS, Datatable.TAB_PATHS_SPECIALIZATIONS)
+        if own is None and 'TOPICS' in cls.__dict__ and any(cls.SPECIALIZATIONS is sp for sp in inherited):
             # Datatable's describe a table spelled with Datatable's TOPICS. One
             # declaring its own is another identity -- the specialization names
             # topics it may not have, or reads as a narrower block of it -- so
             # it starts with none, and declares what reaches its own past.
             cls.SPECIALIZATIONS = []
-        if own is not None and cls.TOPICS is Datatable.TOPICS:
+        for topics, base, name in ((Datatable.TOPICS, Datatable.SPECIALIZATIONS, 'SPECIALIZATIONS'),
+                                   (Datatable.TAB_PATHS_TOPICS, Datatable.TAB_PATHS_SPECIALIZATIONS,
+                                    'TAB_PATHS_SPECIALIZATIONS')):
+            if own is None or cls.TOPICS is not topics:
+                continue
             keys = {sp.key for sp in own}
-            missing = [sp for sp in Datatable.SPECIALIZATIONS if sp.key not in keys]
+            missing = [sp for sp in base if sp.key not in keys]
             if missing:
                 warnings.warn(
-                    f"{cls.__qualname__} inherits Datatable's TOPICS but declares SPECIALIZATIONS "
-                    f"of its own without Datatable's: a table built before the TOPICS were "
-                    f"respelled will not be found. Include them -- SPECIALIZATIONS = "
-                    f"[*Datatable.SPECIALIZATIONS, ...].",
+                    f"{cls.__qualname__} declares Datatable's TOPICS but SPECIALIZATIONS of its own "
+                    f"without Datatable's: a table built before the TOPICS were respelled will not "
+                    f"be found. Include them -- SPECIALIZATIONS = [*Datatable.{name}, ...].",
                     stacklevel=2)
         tab = cls.__dict__.get('TAB')
         if tab is None:
@@ -1432,15 +1444,14 @@ class Datatable(DatatabBase, Datastack):
         return self.__tab__(idx)
 
     def __split__(self, *args, **kwargs):
-        topic_name = self._tab_paths_topic_()
-        # Only when the sentinels are THIS table's to write. Under a partial
-        # redirection covering `tab_paths` -- what a specialization installs --
-        # they are another block's, `path(ensure_dirpath=True)` refuses to
-        # create a directory inside its data, and this call is the first thing
-        # a split does: the whole tab machinery was unreachable for a
-        # specialized table, rather than merely unnecessary for it.
-        if topic_name and topic_name in self.ownedtopics():
-            self.path(topic_name, ensure_dirpath=True)
+        # A table still declaring `tab_paths` -- TAB_PATHS_TOPICS, kept for its
+        # identity -- gets the directory, empty: a topic declared and never
+        # there would read, to anything resolving a specialization of this
+        # table later, as a build that has been cleared. Only when it is THIS
+        # table's: under a redirection covering it, `path(ensure_dirpath=True)`
+        # refuses to create a directory inside another block's data.
+        if 'tab_paths' in self.topics() and 'tab_paths' in self.ownedtopics():
+            self.path('tab_paths', ensure_dirpath=True)
         n = self.n_tabs
         self.log.info(
             "%s: %d tabs x %d slices %s",
@@ -1543,13 +1554,12 @@ class Datatable(DatatabBase, Datastack):
             topic_str = '/'.join(topicpath)
             if topic_str in self.slices():
                 return self.data(topic_str)
-        topic_name = self._tab_paths_topic_()
-        if topic_name and topicpath == (topic_name,):
-            return self.path(topic_name)
+        if topicpath == ('tab_paths',) and 'tab_paths' in self.topics():
+            return self.path('tab_paths')
         if topicpath == ('done',):
             return self.valid()
         raise NotImplementedError(
-            f"{self.__class__.__name__}.__read__ answers only slices, 'built_tabs', 'tab_paths' and 'done'; "
+            f"{self.__class__.__name__}.__read__ answers only slices, 'tab_paths' and 'done'; "
             f"override it to read {'/'.join(topicpath)!r}"
         )
 
@@ -1593,14 +1603,9 @@ class Datatable(DatatabBase, Datastack):
             return self.__read__(*topicpath)
         return super().read(*topicpath)
 
-    def valid_tab(self, i: int, proxies: bool = True) -> bool:
-        """Whether tab *i* is valid; *proxies* as in `Datastack.valid_blocks`."""
-        if proxies:
-            if self._blocks_vouched_():
-                return True
-            if self._tab_paths_topic_() and self._check_tab_path_(i):
-                return True
-        return self.tab(i).valid()
+    def valid_tab(self, i: int, validation: str | None = None) -> bool:
+        """Whether tab *i* is valid: `Datastack.valid_block`, by tab."""
+        return Datastack.valid_block(self, i, validation=validation)
 
     valid_block = valid_tab
 
@@ -1610,9 +1615,9 @@ class Datatable(DatatabBase, Datastack):
 
     redirected_block = redirected_tab
 
-    def valid_tabs(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, proxies: bool = True, **kwargs) -> pd.Series:
+    def valid_tabs(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, validation: str | None = None, **kwargs) -> pd.Series:
         """Return a pandas Series of booleans, one per tab, indicating validity (parallelized): `Datastack.valid_blocks`, by tab."""
-        return self.valid_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, proxies=proxies, **kwargs)
+        return self.valid_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, validation=validation, **kwargs)
 
     def tabs_redirected(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
         """Whether each tab is redirected: `Datastack.blocks_redirected`, by tab."""
@@ -1732,118 +1737,6 @@ class Datatable(DatatabBase, Datastack):
 
     # 4. Helpers -----------------------------------------------------------
 
-    def _tab_paths_topic_(self) -> str | None:
-        topics = self.topics()
-        if 'tab_paths' in topics:
-            return 'tab_paths'
-        if 'built_tabs' in topics:
-            return 'built_tabs'
-        return None
-
-    def _write_tab_path_(self, i: int):
-        topic_name = self._tab_paths_topic_()
-        if not topic_name:
-            return
-        if topic_name not in self.ownedtopics():
-            # Redirected: the sentinels are the other block's, and they name
-            # the same tabs -- a redirection that did not re-key the TAB is the
-            # only kind that can cover `tab_paths` at all. Writing ours in
-            # there would be writing into its data, which `path()` refuses.
-            self.log.detailed(
-                "%s: %r is redirected; not writing a sentinel for tab %d",
-                self.__class__.__name__, topic_name, i,
-            )
-            return
-        tab_dir = self.path(topic_name, ensure_dirpath=True)
-        sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
-        anchorkeypath = self.tab(i).anchorkeypath
-        with self.fs.open(sentinel_path, 'w') as f:
-            f.write(anchorkeypath)
-        if hasattr(self, '_built_tab_set_cache'):
-            self._built_tab_set_cache.add(i)
-
-    _write_tab_built = _write_tab_path_
-    _write_block_path_ = _write_tab_path_
-
-    def _built_tab_set_(self) -> set[int]:
-        if not hasattr(self, '_built_tab_set_cache'):
-            topic_name = self._tab_paths_topic_()
-            if not topic_name:
-                self._built_tab_set_cache = set()
-            else:
-                try:
-                    tab_dir = self.path(topic_name)
-                    if not self.fs.exists(tab_dir):
-                        self._built_tab_set_cache = set()
-                    else:
-                        files = self.fs.ls(tab_dir, detail=False)
-                        indices = set()
-                        for f in files:
-                            fname = os.path.basename(f)
-                            if fname.startswith('tab_') and fname.endswith('.path'):
-                                try:
-                                    idx = int(fname.removeprefix('tab_').removesuffix('.path'))
-                                    indices.add(idx)
-                                except ValueError:
-                                    pass
-                        self._built_tab_set_cache = self._current_markers_(indices)
-                except Exception:
-                    self._built_tab_set_cache = set()
-        return self._built_tab_set_cache
-
-    _built_block_set_ = _built_tab_set_
-
-    def _check_tab_path_(self, i: int) -> bool:
-        topic_name = self._tab_paths_topic_()
-        if not topic_name:
-            return False
-        if i in self._built_tab_set_():
-            return True
-        if not self.__dict__.get('_markers_current_cache', True):
-            return False
-        try:
-            tab_dir = self.path(topic_name)
-            sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
-            return self.fs.exists(sentinel_path)
-        except Exception:
-            return False
-
-    _check_block_path_ = _check_tab_path_
-    _block_paths_topic_ = _tab_paths_topic_
-
-    def _read_tab_path_(self, i: int) -> str | None:
-        topic_name = self._tab_paths_topic_()
-        if not topic_name:
-            return None
-        try:
-            tab_dir = self.path(topic_name)
-            for prefix in ('tab_', 'block_'):
-                sentinel_path = os.path.join(tab_dir, f"{prefix}{i}.path")
-                if self.fs.exists(sentinel_path):
-                    with self.fs.open(sentinel_path, 'r') as f:
-                        return f.read().strip()
-        except Exception:
-            pass
-        return None
-
-    _read_block_path_ = _read_tab_path_
-
-    def _remove_tab_path_(self, i: int):
-        topic_name = self._tab_paths_topic_()
-        if not topic_name:
-            return
-        try:
-            tab_dir = self.path(topic_name)
-            for prefix in ('tab_', 'block_'):
-                sentinel_path = os.path.join(tab_dir, f"{prefix}{i}.path")
-                if self.fs.exists(sentinel_path):
-                    self.fs.rm(sentinel_path)
-        except Exception:
-            pass
-        if hasattr(self, '_built_tab_set_cache') and self._built_tab_set_cache is not None:
-            self._built_tab_set_cache.discard(i)
-        self._forget_blocks_fingerprint_()
-    _remove_block_path_ = _remove_tab_path_
 
     def _topics_signature_(self, topics=None, *, declared=None):
         """Own TOPICS segments -- plus, in a sentinel declaration, the TAB's slices.
@@ -2028,11 +1921,14 @@ class DatatablePart(Datatable):
         real_idx = self.tab_indices[idx]
         return self.var.partition.datapoint_table.tab(real_idx)
 
-    def valid_tab(self, idx: int, proxies: bool = True) -> bool:
-        if proxies and self._blocks_vouched_():
+    def valid_tab(self, idx: int, validation: str | None = None) -> bool:
+        """Whether tab *idx* is valid: this part's manifest, or its table's tab -- see `Datastack.valid_blocks`."""
+        validation = self._validation_(validation)
+        if validation == 'cross_check' and self._blocks_cross_checked_():
             return True
         real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table.valid_tab(real_idx, proxies=proxies)
+        full = 'validate' if validation == 'validate' else 'valid'
+        return self.var.partition.datapoint_table.valid_tab(real_idx, validation=full)
 
     valid_block = valid_tab
 
@@ -2101,35 +1997,6 @@ class DatatablePart(Datatable):
 
     # 4. Helpers -----------------------------------------------------------
 
-    def _write_tab_path_(self, idx: int):
-        real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table._write_tab_path_(real_idx)
-
-    _write_tab_built = _write_tab_path_
-    _write_block_path_ = _write_tab_path_
-
-    def _check_tab_path_(self, idx: int) -> bool:
-        real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table._check_tab_path_(real_idx)
-
-    _check_block_path_ = _check_tab_path_
-
-    def _read_tab_path_(self, idx: int) -> str | None:
-        real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table._read_tab_path_(real_idx)
-
-    _read_block_path_ = _read_tab_path_
-
-    def _built_block_set_(self) -> set[int]:
-        table = self.var.partition.datapoint_table
-        table_set = table._built_block_set_()
-        return {i for i, real_idx in enumerate(self.tab_indices) if real_idx in table_set}
-
-    def _remove_tab_path_(self, idx: int):
-        real_idx = self.tab_indices[idx]
-        self._forget_blocks_fingerprint_()
-        return self.var.partition.datapoint_table._remove_tab_path_(real_idx)
-    _remove_block_path_ = _remove_tab_path_
 
     def _read_slice_(self, slice, *, tabs=None, **kwargs):
         if tabs is None:

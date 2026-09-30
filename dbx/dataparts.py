@@ -817,16 +817,24 @@ def exec(s=None, **kwargs):
     from .journals import Datajournal, write_exec_journal
     dj = Datajournal.command_session()
     # ONE row, written when the command is over -- in `finally`, so a command
-    # that raises is recorded too, with what it wrote before it did. Stamped
-    # with the time it started, which is when it ran.
+    # that raises is recorded too, with what it wrote before it did and what it
+    # raised. Caught only to be recorded: it is raised on, since a caller -- or
+    # the shell, by the exit status -- has to know the command failed.
+    # BaseException, so an interrupted command is recorded as not succeeding.
+    # Stamped with the time it started, which is when it ran.
     dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
     with dj, dj.exported():
         written_before = len(dj.written_entries())
+        exception = traceback = None
         try:
             return _exec_statements_(s, kwargs)
+        except BaseException as e:
+            exception, traceback = f"{type(e).__name__}: {e}", tb.format_exc()
+            raise
         finally:
             end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
             write_exec_journal(s, session=dj.session, dt=dt, end_dt=end_dt,
+                               success=exception is None, exception=exception, traceback=traceback,
                                datajournal_entries=dj.written_entries()[written_before:])
 
 

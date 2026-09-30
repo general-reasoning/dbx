@@ -469,6 +469,53 @@ class TestExecTimes:
         assert row['exec:start:datetime'] and row['exec:end:datetime']
 
 
+class TestExecOutcome:
+    """``success``, ``exception`` and ``traceback``: whether a command raised, what, and where."""
+
+    @pytest.fixture(autouse=True)
+    def lake(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+
+    def test_a_command_that_returned(self, tmp_path):
+        dbx.exec("1 + 1")
+        row = dbx.execjournal(index=None).iloc[0]
+        assert row['success'] == True
+        assert row['exception'] is None and row['traceback'] is None
+
+    def test_a_command_that_raised_is_recorded_and_still_raises(self, tmp_path):
+        with pytest.raises(ZeroDivisionError):
+            dbx.exec("1/0")
+        row = dbx.execjournal(index=None).iloc[0]
+        assert row['success'] == False
+        assert row['exception'] == 'ZeroDivisionError: division by zero'
+        assert 'ZeroDivisionError' in row['traceback'] and '<dbx.exec>' in row['traceback']
+
+    def test_the_columns_follow_the_end_time(self, tmp_path):
+        dbx.exec("1 + 1")
+        cols = list(dbx.execjournal().columns)
+        i = cols.index('exec:end:datetime')
+        assert cols[i + 1:i + 4] == ['success', 'exception', 'traceback']
+
+    def test_filtered_by(self, tmp_path):
+        dbx.exec("1 + 1")
+        with pytest.raises(ZeroDivisionError):
+            dbx.exec("1/0")
+        assert list(dbx.execjournal(success=False)['exec']) == ['1/0']
+        assert list(dbx.execjournal(success=True)['exec']) == ['1 + 1']
+        assert list(dbx.execjournal(exception='ZeroDivision')['exec']) == ['1/0']
+
+    def test_a_row_from_before_the_columns_still_reads_first(self, tmp_path):
+        dbx.exec("1 + 1")
+        exec_dir = os.path.join(str(tmp_path), '.journal', 'exec')
+        [f] = os.listdir(exec_dir)
+        path = os.path.join(exec_dir, f)
+        pd.read_parquet(path).drop(columns=['success', 'exception', 'traceback']).to_parquet(path)
+        dbx.exec("2 + 2")
+        cols = list(dbx.execjournal().columns)
+        i = cols.index('exec:end:datetime')
+        assert cols[i + 1:i + 4] == ['success', 'exception', 'traceback']
+
+
 class TestJournalIndex:
     """`dbx.journal()` indexes by ``id`` by default; ``index=None`` numbers it."""
 
@@ -658,6 +705,56 @@ class TestConstructed:
         dbx.exec("Built(datalake=root, spec={'x': 9}).build()", Built=Built, root=str(tmp_path))
         got = dbx.journal().constructed()
         assert len(got[a.anchor]) == 3 and len(got[o.anchor]) == 1
+
+
+class TestExecjournalDatajournalParameters:
+    """`ExecjournalEntry.datajournal` / `ExecjournalFrame.datajournal` take what `dbx.datajournal` takes."""
+
+    @pytest.fixture(autouse=True)
+    def lake(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path))
+
+    def _run(self, tmp_path):
+        return dbx.exec(
+            "a = Built(datalake=root, spec={'x': 1}); o = Other(datalake=root); a.build(); o.build(); "
+            "n = Built(datalake=root, spec={'x': 3}); n.write_journal_entry(event='note'); (a, o, n)",
+            Built=Built, Other=Other, root=str(tmp_path))
+
+    def test_indexed_by_id_as_datajournal_is(self, tmp_path):
+        a, o, n = self._run(tmp_path)
+        frame = dbx.execjournal(iloc=0).datajournal()
+        assert list(frame.index) == list(frame['id'])
+        assert list(dbx.execjournal(iloc=0).datajournal(index=None).index) == [0, 1, 2]
+
+    def test_by_anchor_class_string_or_block(self, tmp_path):
+        a, o, n = self._run(tmp_path)
+        e = dbx.execjournal(iloc=0)
+        for anchor in (Built, Built.anchor, a):
+            assert sorted(e.datajournal(anchor)['hash']) == sorted([a.hash, n.hash])
+        assert list(e.datajournal(Other)['hash']) == [o.hash]
+        assert list(dbx.execjournal().datajournal(Other)['hash']) == [o.hash]
+
+    def test_an_anchor_is_exact_not_a_pattern(self, tmp_path):
+        self._run(tmp_path)
+        assert len(dbx.execjournal(iloc=0).datajournal(Built.anchor[:-1])) == 0
+
+    def test_filters(self, tmp_path):
+        a, o, n = self._run(tmp_path)
+        e = dbx.execjournal(iloc=0)
+        assert list(e.datajournal(event='note')['hash']) == [n.hash]
+        assert list(e.datajournal(Built, event='build:end')['hash']) == [a.hash]
+        assert list(dbx.execjournal().datajournal(event='note')['hash']) == [n.hash]
+        assert [x.hash for x in e.dataentries(Built, event='build:end')] == [a.hash]
+
+    def test_loc_and_iloc(self, tmp_path):
+        a, o, n = self._run(tmp_path)
+        e = dbx.execjournal(iloc=0)
+        first = e.datajournal(iloc=0)
+        assert isinstance(first, DatajournalEntry) and first['hash'] == a.hash
+        assert e.datajournal(loc=first['id'])['hash'] == a.hash
+        assert e.datajournal(Other, iloc=0)['hash'] == o.hash
+        with pytest.raises(ValueError):
+            e.datajournal(loc=first['id'], iloc=0)
 
 
 class TestTwoJournals:

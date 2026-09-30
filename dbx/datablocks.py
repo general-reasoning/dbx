@@ -8325,14 +8325,14 @@ class Datastack(Datablock):
                 pass
 
         anchor = block_cls.anchor
-        self.log.info(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
-                      f"for {n_items} {item_label} to resolve against...")
+        self.log.verbose(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
+                         f"for {n_items} {item_label} to resolve against...")
         try:
             journal, anchor, lake = self._blocks_journal_()
         except FileNotFoundError:
             return None
-        self.log.info(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
-                      f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
+        self.log.verbose(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
+                         f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
         journal = BlocksJournal(journal, anchor, lake)
         if self.__dict__.get('__building__'):
             self.__dict__['__build_journal__'] = journal
@@ -8449,14 +8449,14 @@ class Datastack(Datablock):
         item_label = 'tabs' if kind == 'TAB' else 'blocks'
         n_items = getattr(self, 'n_tabs', self.n_blocks)
         anchor = block_cls.anchor
-        self.log.info(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
-                      f"for {n_items} {item_label} to resolve against...")
+        self.log.verbose(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
+                         f"for {n_items} {item_label} to resolve against...")
         try:
             journal, anchor, lake = self._blocks_journal_()
         except FileNotFoundError:
             return None                 # nothing to share: each block reads its own
-        self.log.info(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
-                      f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
+        self.log.verbose(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
+                         f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
         return BlocksJournal(journal, anchor, lake)
 
 

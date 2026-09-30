@@ -7212,46 +7212,48 @@ class Datastack(Datablock):
     def specialize(self, journal=None, parallelization: str | None = None,
                    n_workers: int | None = None, **kwargs):
         """Install block and stack specializations without building any unspecialized topics."""
-        build_journal = journal if journal is not None else self._build_journal_()
-        self._install_block_specializations_(journal=build_journal,
-                                            parallelization=parallelization,
-                                            n_workers=n_workers, **kwargs)
+        # The blocks' journal is read by the adoption, and only if a block needs it.
+        self.specialize_blocks(journal=journal, parallelization=parallelization,
+                               n_workers=n_workers, **kwargs)
         stack_journal = None if isinstance(journal, BlocksJournal) else journal
         super().specialize(journal=stack_journal)
         return self
 
+    def specialize_blocks(self, parallelization: str | None = None, n_workers: int | None = None,
+                          journal=None, **kwargs) -> pd.Series | None:
+        """Install the specialization each block that is not valid resolves -- building nothing (parallelized).
+
+        The block half of :meth:`specialize`, whatever the stack's own state:
+        every block is asked whether it is valid, and those that are not
+        adopt what their specializations resolve to. Returns the installed
+        `Specialization`s by block index, or None when BLOCK declares none.
+        """
+        return self._install_block_specializations_(parallelization=parallelization,
+                                                    n_workers=n_workers, journal=journal, **kwargs)
+
     def build(self, *args, deep: bool = False, **kwargs):
-        # A stack that is completely redirected answers from elsewhere;
-        # its build is elided regardless of deep.
-        if self._redirected_paths_ is not None and not self.ownedtopics():
-            return super().build(*args, deep=deep, **kwargs)
-        # An unredirected (or partially redirected) stack that is already valid
-        # and owes no topics has nothing to build unless deep=True forces it.
-        if not deep and self.valid() and not self.owedtopics():
-            return super().build(*args, deep=deep, **kwargs)
-        # If all blocks are already marked built/valid, or the stack is already valid,
-        # there is no need to read the build journal and specialize blocks.
-        all_blocks_valid = False
-        if self._block_paths_topic_():
-            try:
-                all_blocks_valid = (len(self._built_block_set_()) == self.n_blocks)
-            except Exception:
-                pass
-        elif self.valid() and not self.owedtopics():
-            all_blocks_valid = True
-
-        if all_blocks_valid:
-            return super().build(*args, deep=deep, _specialized_=True, **kwargs)
-
-        # The blocks adopt what their specializations resolve to FIRST. A stack
-        # whose own build is then elided -- itself adopted whole -- or skipped
-        # as valid never forms its blocks, and blocks that moved to identities
-        # of their own would be left unadopted, reading as unbuilt.
-        self.__dict__['__build_journal__'] = self._build_journal_()
+        # The blocks adopt what their specializations resolve to FIRST, before
+        # the stack's own state is consulted. A stack whose build is then
+        # elided -- itself adopted whole -- or skipped as valid says nothing
+        # about blocks that moved to identities of their own; left unadopted,
+        # they would read as unbuilt. The journal, when a block needs it, is
+        # read once for the whole build -- see `_build_journal_`.
+        self.__dict__['__building__'] = True
         try:
-            self.specialize(journal=self.__dict__['__build_journal__'])
+            self._install_block_specializations_()
+            # A stack that is completely redirected answers from elsewhere;
+            # its build is elided regardless of deep.
+            if self._redirected_paths_ is not None and not self.ownedtopics():
+                return super().build(*args, deep=deep, _specialized_=True, **kwargs)
+            # An unredirected (or partially redirected) stack that is already valid
+            # and owes no topics has nothing to build unless deep=True forces it.
+            if not deep and self.valid() and not self.owedtopics():
+                return super().build(*args, deep=deep, _specialized_=True, **kwargs)
+            # The stack's own specialization; its blocks' are installed above.
+            Datablock.specialize(self)
             return super().build(*args, deep=deep, _specialized_=True, **kwargs)
         finally:
+            self.__dict__.pop('__building__', None)
             self.__dict__.pop('__build_journal__', None)
 
     def __build__(self, *args, **kwargs):
@@ -7515,7 +7517,12 @@ class Datastack(Datablock):
                                         n_workers: int | None = None, journal=None, **kwargs):
         """Install, block by block, the specialization each resolves -- only when BLOCK declares any.
 
-        The journal is read once, here, and handed to every callable. Returns the
+        Which blocks need one is asked of the blocks themselves, through
+        :meth:`valid_blocks` -- never of the stack. A stack's own validity
+        says nothing about its blocks when it is redirected: its topics are
+        then an older build's, and blocks that moved to identities of their
+        own are still unbuilt. The journal is read only when some block is
+        not valid, once, here, and handed to every callable. Returns the
         installed `Specialization`s by block index, or None when there is
         nothing to install.
         """
@@ -7527,21 +7534,11 @@ class Datastack(Datablock):
         kind = self._block_kind_()
         item_label = 'tabs' if kind == 'TAB' else 'blocks'
 
-        # If all blocks are already marked built/valid, nothing to specialize.
-        if self._block_paths_topic_():
-            try:
-                built_set = self._built_block_set_()
-                if len(built_set) == n:
-                    self.log.info(
-                        f"{self.__class__.__name__}: all {n} {item_label} already valid, "
-                        f"skipping specialization adoption"
-                    )
-                    return pd.Series([None] * n, dtype=object)
-            except Exception:
-                pass
-        elif self.valid() and not self.owedtopics():
+        invalid = list(self.valid_blocks(parallelization=parallelization, n_workers=n_workers,
+                                         false_only=True).index)
+        if not invalid:
             self.log.info(
-                f"{self.__class__.__name__}: stack already valid, "
+                f"{self.__class__.__name__}: all {n} {item_label} already valid, "
                 f"skipping specialization adoption"
             )
             return pd.Series([None] * n, dtype=object)
@@ -7549,25 +7546,25 @@ class Datastack(Datablock):
         shared = journal if journal is not None else self._build_journal_()
         if shared is None:
             return None
-        tag = f"CHECKING VALIDITY & SPECIALIZING {n} {item_label} [{self.__class__.__name__}]"
+        tag = f"SPECIALIZING {len(invalid)} of {n} {item_label} [{self.__class__.__name__}]"
         results = self._exec_over_blocks_(
-            [self.DatablockSpecializationInstaller(i) for i in range(n)], journal=shared,
+            [self.DatablockSpecializationInstaller(i) for i in invalid], journal=shared,
             tag=tag,
             parallelization=parallelization, n_workers=n_workers, **kwargs)
 
-        specializations = []
-        n_already_valid = 0
+        specializations = [None] * n
+        n_already_valid = n - len(invalid)
         n_specialized = 0
-        for r in results:
+        for i, r in zip(invalid, results):
             if isinstance(r, tuple) and len(r) == 2:
                 sp, was_valid = r
-                specializations.append(sp)
+                specializations[i] = sp
                 if was_valid:
                     n_already_valid += 1
                 elif sp is not None:
                     n_specialized += 1
             else:
-                specializations.append(r)
+                specializations[i] = r
                 if r is not None:
                     n_specialized += 1
 
@@ -8319,14 +8316,13 @@ class Datastack(Datablock):
         item_label = 'tabs' if kind == 'TAB' else 'blocks'
         n_items = getattr(self, 'n_tabs', self.n_blocks)
 
+        # Not the stack's own validity: see `_install_block_specializations_`.
         if self._block_paths_topic_():
             try:
                 if len(self._built_block_set_()) == n_items:
                     return None
             except Exception:
                 pass
-        elif self.valid() and not self.owedtopics():
-            return None
 
         anchor = block_cls.anchor
         self.log.info(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
@@ -8337,7 +8333,10 @@ class Datastack(Datablock):
             return None
         self.log.info(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
                       f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
-        return BlocksJournal(journal, anchor, lake)
+        journal = BlocksJournal(journal, anchor, lake)
+        if self.__dict__.get('__building__'):
+            self.__dict__['__build_journal__'] = journal
+        return journal
 
     def _with_build_journal_(self, callables, callable_kwargs):
         """*callable_kwargs*, with the build's journal -- when the callables take one.

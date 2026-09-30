@@ -1622,6 +1622,12 @@ class Datatable(DatatabBase, Datastack):
         return self.find_block_specializations(parallelization=parallelization, n_workers=n_workers,
                                                journal=journal, found_only=found_only, **kwargs)
 
+    def specialize_tabs(self, parallelization: str | None = None, n_workers: int | None = None,
+                        journal=None, **kwargs) -> pd.Series | None:
+        """`Datastack.specialize_blocks`, by tab."""
+        return self.specialize_blocks(parallelization=parallelization, n_workers=n_workers,
+                                      journal=journal, **kwargs)
+
     def UNSAFE_clear_tab_redirections(self, *, OVERRIDE: bool = False, parallelization: str | None = None,
                                       n_workers: int | None = None, **kwargs) -> pd.Series:
         """`Datastack.UNSAFE_clear_block_redirections`, by tab."""

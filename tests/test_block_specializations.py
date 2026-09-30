@@ -8,7 +8,9 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from test_specializations import RowTab, TestOneJournalReadForAWholeTable, adopted, v1, v1table  # noqa: E402
+from test_specializations import (  # noqa: E402
+    TABLE_ANCHOR, RowTab, RowTableV1, TestOneJournalReadForAWholeTable, adopted, v1, v1table,
+)
 
 from dbx.datablocks import Datablock  # noqa: E402
 
@@ -509,7 +511,48 @@ class TestCombineSpecializations:
         assert target_list._redirected_paths_['tb'] == sb.path('tb')
 
 
+class RowTableNoMarkers(RowTableV1):
+    """RowTableV1 without `tab_paths`: which of its tabs are built is known only by asking them."""
+
+    TOPICS = {'summary': 'summary.txt', 'done': 'done'}
 
 
+def nomarkers(url, **kw):
+    spec = kw.pop('spec', {'n': 3})
+    return RowTableNoMarkers(datalake=str(url), anchor=TABLE_ANCHOR, spec=spec, **kw)
 
 
+@pytest.fixture
+def rekeyed(tmp_path, monkeypatch):
+    """A table without `tab_paths`, built; then its TAB grown a topic, re-keying every tab.
+
+    The table's own identity does not move, so it is still valid over tabs that are not.
+    """
+    nomarkers(tmp_path).build()
+    TestOneJournalReadForAWholeTable._grow_the_tab(monkeypatch)
+    table = nomarkers(tmp_path)
+    assert table.valid()
+    assert not table.valid_tabs(parallelization='inline').any()
+    return tmp_path
+
+
+class TestAValidStackSpecializesItsTabs:
+    """A stack's own validity says nothing about tabs that moved to identities of their own."""
+
+    def test_build_adopts_the_tabs_of_a_valid_stack(self, rekeyed):
+        nomarkers(rekeyed).build()
+        table = nomarkers(rekeyed)
+        assert table.tabs_redirected(parallelization='inline').all()
+        assert table.tab(1).read('rows') == "rows-1\n"
+
+    def test_specialize_tabs_adopts_them_and_builds_nothing(self, rekeyed):
+        found = nomarkers(rekeyed).specialize_tabs(parallelization='inline')
+        assert [sp is not None for sp in found] == [True, True, True]
+        table = nomarkers(rekeyed)
+        assert table.tabs_redirected(parallelization='inline').all()
+        assert not any(table.tab(i).validtopic('extra') for i in range(3)), "adopting builds nothing"
+
+    def test_again_it_finds_nothing_to_do(self, rekeyed):
+        nomarkers(rekeyed).specialize_tabs(parallelization='inline')
+        again = nomarkers(rekeyed).specialize_tabs(parallelization='inline')
+        assert [sp is None for sp in again] == [True, True, True]

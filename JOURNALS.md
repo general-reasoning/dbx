@@ -62,6 +62,7 @@ Columns:
 | `id` | row's uuid |
 | `session` | `Datajournal` session every block in the command wrote under |
 | `datajournal_entries` | paths of the block journal entries the command's own process wrote or got back from its workers, in the order first written (the session index is the complete list) |
+| `output_captures` | paths of the command's captured stdout/stderr, the master capture first; empty unless it ran with `capture_output=True` / `--capture-output` (see [Captured output](#captured-output)) |
 | `comment` | trailing `# comment` alone: what the command was *for* |
 
 ```python
@@ -114,6 +115,8 @@ dbx.execjournal(date='2026-09-28').constructed()      # {anchor: DatajournalFram
 | `e.constructed(anchor, **filters)` | same, further filtered, e.g. `hash='^3c29'` |
 | `e.constructed(event=None)` | drops the default event filter, which leaves every entry the command wrote, grouped by anchor |
 | `e.rerun(**kwargs)` | runs `exec` again through `dbx.exec` and returns its value (below) |
+| `e.output(idx=0)` | prints `output_captures[idx]` to stdout; 0 is the master capture |
+| `e.output(basename='…')` | prints the one capture whose file name the regex matches at its start (below) |
 
 "Constructed" means an entry whose `event` is one of `CONSTRUCTED_EVENTS`:
 `build:end`, `UNSAFE_redirect` or `UNSAFE_copy_from:END`, matched exactly. The
@@ -184,6 +187,62 @@ exec-journal row and session. It runs against the code as it is **now**: it
 does not check out the revision the original ran under. Pass the names the
 original was given as keyword arguments, e.g. `e.rerun(Apple=Apple)`.
 
+### Captured output
+
+A command run with `capture_output=True`, or `--capture-output` on the
+command line, tees its stdout and stderr to files under its session:
+
+```bash
+dbx.pprint --capture-output "my.Stack(spec={'n': 8}).build()  # nightly"
+```
+
+```python
+dbx.exec("my.Stack(spec={'n': 8}).build()", capture_output=True)
+```
+
+`dbx`, `dbx.exec`, `dbx.print` and `dbx.pprint` all take the flag. It is a
+flag and not a `capture_output=True` argument because every `k=v` argument
+binds a name for the statements. `dbx.pprint` opens the capture itself, so the
+printed result is captured too. The capture works on file descriptors 1 and 2,
+so it holds what C extensions and subprocesses write as well as Python's
+output, and everything still reaches the terminal.
+
+- **The master capture**, `output_captures[0]`, is the process that ran the
+  command. It opens when the command starts and closes when it finishes.
+  Worker **threads** write here, because every thread in a process shares
+  its file descriptors.
+- **A worker process** that a dbx executor sends work to (`multiprocessing`,
+  `torch_multiprocessing`, `ray`) runs each callable inside a capture of its
+  own. The executor brings its path back with the result, including when
+  the callable raised, and it is appended to `output_captures`. A spawned or
+  forked worker inherits its parent's descriptors, so its output is in the
+  master capture too. A Ray worker's output isn't.
+- **A nested `dbx.exec`** joins the capture that is already open, and its row
+  lists the same master.
+
+The files live in `<datalake>/.journal/sessions/<session>/output/` and are
+named `master-<host>-<pid>-<datetime>.log` or
+`worker-<host>-<pid>-<datetime>.log`.
+
+```python
+e = dbx.execjournal(comment='nightly', iloc=0)
+e.output()                              # the master capture
+e.output(2)                             # output_captures[2]
+e.output(basename='worker-node3')       # a prefix of the file name…
+e.output(basename=r'worker-.*-4242-')   # …or a regex, matched at its start
+```
+
+`basename=` must match exactly one capture, or it raises `LookupError` and
+lists the names. It searches every capture in the session directory, not only
+the ones the row lists, so it also finds the capture of a worker that died
+before it could send its path back.
+
+A block doesn't capture anything itself. Its journal entry's `log` column is
+the path of the capture open in the process that built it. That file is
+shared with everything else the process printed, and it is only written once
+the capture closes. `Datablock(capture_output=...)` is still accepted, so
+that recorded dfns still reconstruct, but it is ignored and not recorded.
+
 ## `dbx.datajournal()`
 
 ```python
@@ -222,6 +281,7 @@ The main columns:
 - `session`, `tree`: the command, and the build tree within it
 - `id`, `code`: identify the row
 - `topics`, `paths`: the recorded `{topic: filename}` and `{topic: path}`
+- `log`: path of the output capture open while the block was built, or None (see [Captured output](#captured-output))
 - `spec`, `quote`, `cite`, `repr`, `signature`, `type`, `note`: **paths** to the files holding each rendering
 
 Rows from older eras have their `type` and `signature` columns resolved per

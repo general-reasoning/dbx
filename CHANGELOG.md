@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Output capture belongs to the command: `dbx.exec(..., capture_output=True)`,
+  and `--capture-output` for `dbx`, `dbx.exec`, `dbx.print` and `dbx.pprint`.**
+  The process that runs the command tees fd 1 and 2 to a master
+  `OutputCapture` from start to finish. Every worker process a dbx executor
+  sends work to runs each callable inside a capture of its own, and its path
+  comes back with the result, the same way the journal entries it wrote do.
+  Worker threads share the master, because descriptors belong to the process.
+  The exec journal records the paths in a new `output_captures` column, placed
+  after `datajournal_entries`, with the master always at index 0.
+  `ExecjournalEntry.output(idx)` prints one to stdout, and
+  `.output(basename=...)` finds one by a prefix or regex matched at the start
+  of its file name. `dbx.pprint` opens the capture around its own printing,
+  and the pinned-revision runner does the same, so the printed result is
+  captured too.
+
 - **`dbx.exec` takes a sequence of statements, and a comment.** The CLI
   argument was a single expression, evaluated with `eval` -- so anything that
   needed a name to be bound first needed a script, and a one-liner could not
@@ -184,6 +199,12 @@ All notable changes to this project will be documented in this file.
   when the redirection is total, and otherwise builds the rest.
 
 ### Changed
+- **A block no longer captures output itself.** Its journal entry's `log` is
+  the path of the capture open around its build, taken from
+  `OutputCapture.current()`, and None when there is none.
+  `Datablock(capture_output=...)` is still accepted, because every recorded
+  dfn spells it, but it is ignored: it logs a warning when True, and it is no
+  longer part of `dfn`, `quote()` or a pickle.
 - **A redirection is no longer part of a block's identity.** `type()` used to
   append `_redirected_paths_=...` once a redirection was installed, so `hash`
   depended on *when* it was first called — before the redirection or after —
@@ -562,6 +583,12 @@ All notable changes to this project will be documented in this file.
 - **`Datablock.format_diffnorm(diff)`** — renders a `diffnorm` dict as text.
 
 ### Fixed
+- **`OutputTee.close()` no longer hangs on a process that outlives it.** A
+  process started while the tee was open, such as multiprocessing's resource
+  tracker or a Ray raylet, inherited the pipe, and `close()` waited for an
+  end-of-file that never came. `close()` now logs what is already in the pipe
+  and stops logging. Anything such a process writes afterwards still reaches
+  the terminal.
 - **`entry.inst()` raised `AttributeError` on any entry journaled without a git
   repo.** An entry is a Series built with `dropna()`, so a column recorded null
   loses its LABEL, and attribute access — which a Series answers out of its index —

@@ -22,6 +22,9 @@ import functools
 import hashlib
 import os
 import re
+import socket
+import sys
+import tempfile
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,6 +38,7 @@ import tqdm
 from . import dataparts
 from .dataparts import (
     Logger,
+    OutputTee,
     Remote,
     default_datalake,
     default_storage_options,
@@ -68,7 +72,7 @@ JOURNAL_DATETIME_FORMAT = '%Y-%m-%dT%H-%M-%S.%f'
 
 def write_exec_journal(s: str, datalake: str | None = None, storage_options: dict | None = None, *,
                        comment: str | None = None, session: str | None = None,
-                       datajournal_entries=None, dt: str | None = None,
+                       datajournal_entries=None, output_captures=None, dt: str | None = None,
                        end_dt: str | None = None, success: bool | None = None,
                        exception: str | None = None, traceback: str | None = None,
                        url: str | None = None) -> dict:
@@ -83,7 +87,9 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
 
     ``session`` is the `Datajournal` session the command ran under, and
     ``datajournal_entries`` the block journal entries it wrote -- the keys from
-    this row to what the command did. *dt* is when the command started --
+    this row to what the command did. ``output_captures`` are the paths of
+    its `OutputCapture`\\ s, the master first: empty for a command that
+    captured nothing. *dt* is when the command started --
     ``datetime`` and ``exec:start:datetime`` -- and *end_dt* when it finished,
     ``exec:end:datetime``: `exec` records the row once it is over.
 
@@ -113,6 +119,7 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
         'id': id,
         'session': session,
         'datajournal_entries': list(datajournal_entries or []),
+        'output_captures': list(output_captures or []),
         'comment': comment if comment is not None else exec_comment(s),
     }
     df = pd.DataFrame([entry_data])
@@ -397,7 +404,71 @@ class ExecjournalEntry(pd.Series):
         print(f'dbx.pprint "{_shell_double_quoted_(self["exec"])}"', flush=True)
         return exec(self['exec'], **kwargs)
 
+    def output(self, idx: int | None = None, *, basename: str | None = None,
+               storage_options: dict | None = None) -> None:
+        """Print one of this command's captured outputs to stdout: ``output_captures[idx]``, or the one *basename* names.
+
+        *idx* defaults to 0, the master capture -- the process that ran the
+        command. *basename* is a regular expression matched at the START of
+        each capture's file name, so a plain prefix is one too: ``'master'``,
+        ``'worker-node3'``, ``'worker-.*-4242-'``. It is matched against every
+        capture the command's session holds, not only those the row lists --
+        a worker that was killed never sent its path home, but its capture is
+        there -- and exactly one must match.
+        """
+        if idx is not None and basename is not None:
+            raise ValueError("Specify at most one of 'idx' and 'basename', not both.")
+        storage_options = (storage_options if storage_options is not None
+                           else self.storage_options or default_storage_options())
+        listed = ExecjournalEntry._output_captures_(self)
+        if basename is None:
+            idx = 0 if idx is None else idx
+            if not listed:
+                raise LookupError(f"Command {self.get('id')!r} captured no output: run it with capture_output=True, "
+                                  f"or --capture-output")
+            try:
+                path = listed[idx]
+            except IndexError:
+                raise IndexError(f"output_captures has {len(listed)} captures; there is no {idx}") from None
+        else:
+            # By file name, the listed spelling first: a capture's name is
+            # unique in its session, and a glob spells its path its own way.
+            candidates = {}
+            for p in listed + ExecjournalEntry._session_captures_(self, storage_options):
+                candidates.setdefault(os.path.basename(p), p)
+            matches = [p for name, p in candidates.items() if re.match(basename, name)]
+            if len(matches) != 1:
+                names = [os.path.basename(p) for p in matches] or list(candidates)
+                raise LookupError(f"basename={basename!r} matches {len(matches)} captures, not 1: "
+                                  f"{'these' if matches else 'there are'}: {names}")
+            path = matches[0]
+        fs, _ = fsspec.url_to_fs(path, **storage_options)
+        with fs.open(path, 'r') as f:
+            sys.stdout.write(f.read())
+        sys.stdout.flush()
+
     # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _output_captures_(row) -> list:
+        """*row*'s ``output_captures``, as a list: empty for a command that captured nothing, or one from before the column."""
+        listed = row.get('output_captures')
+        if listed is None or (isinstance(listed, float) and pd.isna(listed)):
+            return []
+        return [str(p) for p in listed]
+
+    @staticmethod
+    def _session_captures_(row, storage_options) -> list:
+        """Every capture under *row*'s session, sorted: what a worker wrote whether or not it returned."""
+        session, datalake = row.get('session'), row.datalake or default_datalake() or './dbx'
+        if not isinstance(session, str) or not session:
+            return []
+        dirpath = OutputCapture.dirpath(datalake, session)
+        fs, _ = fsspec.url_to_fs(dirpath, **storage_options)
+        try:
+            return sorted(fs_full_path(fs, p) for p in fs.glob(os.path.join(dirpath, '*.log')))
+        except FileNotFoundError:
+            return []
 
     @staticmethod
     def _written_paths_(row, datalake, storage_options) -> list:
@@ -517,7 +588,7 @@ def _written_datajournal_(paths, anchor, loc, iloc, *, storage_options, log, n_w
 #: and what it was FOR last, with what it did between.
 EXEC_JOURNAL_COLUMNS = ['exec', 'datetime', 'exec:start:datetime', 'exec:end:datetime',
                         'success', 'exception', 'traceback',
-                        'id', 'session', 'datajournal_entries', 'comment']
+                        'id', 'session', 'datajournal_entries', 'output_captures', 'comment']
 
 
 def _exec_journal_columns_(df: pd.DataFrame) -> pd.DataFrame:
@@ -2202,12 +2273,10 @@ class Datajournal:
             note_val = note_path
         else:
             note_val = note
-        #
-        logpath = cls.path(block, 'log', ensure_dirpath=True)
-        if logpath is not None:
-            has_log = block.fs.exists(logpath)
-        else:
-            has_log = False
+        # The capture this process's output is going to, if any -- a block
+        # does no capturing of its own. Its path is recorded before it exists:
+        # a capture is uploaded when it closes, after the build that wrote here.
+        capture = OutputCapture.current()
         #
         _TOPICS = getattr(block, 'TOPICS', None)
         topics_dict = ({name: copy.deepcopy(node) for name, node in _TOPICS.items()}
@@ -2235,7 +2304,7 @@ class Datajournal:
                                          'tag': block.tag,
                                          'topics': str(topics_dict),
                                          'paths': str(paths_dict),
-                                         'log': logpath if has_log else None,
+                                         'log': capture.path if capture is not None else None,
                                          'event': event,
                                          'redirection': redirection_value,
                                          'spec': spec_path,
@@ -2272,7 +2341,7 @@ class Datajournal:
         with self._written_lock:
             return list(self._written)
 
-    def carry(self, callables) -> list:
+    def carry(self, callables, output_capture: 'OutputCapture | None' = None) -> list:
         """*callables* wrapped to run under this session in a worker: `JournaledCallable`\\ s.
 
         For an executor about to hand work to another process, which this
@@ -2281,8 +2350,13 @@ class Datajournal:
         this handle -- in another process, a copy with the same session --
         and returns its value with the entry paths it wrote, a
         `JournaledResult`, for :meth:`collect` to take back here.
+
+        *output_capture*, the `OutputCapture` open here, if any, goes with
+        them: a call that lands in another process runs inside a capture of
+        its own, and its result carries that capture's path home too, for
+        `OutputCapture.collect`.
         """
-        return [JournaledCallable(c, self) for c in callables]
+        return [JournaledCallable(c, self, output_capture) for c in callables]
 
     def collect(self, payload):
         """The value a :meth:`carry` wrapper returned, its written paths added to this handle's.
@@ -2517,6 +2591,222 @@ class Datajournal:
         return df
 
 
+#: The OutputCaptures open in this process, innermost last. One stack for the
+#: whole process, not one per thread as `Datajournal` keeps: a capture
+#: redirects file descriptors 1 and 2, and every thread writes through those.
+_PROCESS_CAPTURES = []
+_PROCESS_CAPTURES_LOCK = threading.RLock()
+
+
+class OutputCapture:
+    """One process's share of a command's stdout and stderr: tee'd to a local file while open, uploaded to :attr:`path` on close.
+
+    ``dbx.exec(..., capture_output=True)`` -- ``--capture-output`` on the
+    command line -- opens the MASTER capture, in the process that runs the
+    command, and closes it when the command is over. Capturing is at the file
+    descriptor level (`OutputTee`), so it mirrors rather than swallows, and
+    holds what C extensions and subprocesses write as well as Python's own.
+
+    Descriptors belong to a process, so there is one capture open at a time
+    per process, and :meth:`current` answers for every thread in it. A worker
+    thread's output is in the master capture; a worker PROCESS gets a capture
+    of its own around each callable a dbx executor sends it -- a
+    `JournaledCallable` opens it -- and the executor brings its path back
+    (:meth:`collect`), as it brings back the journal entries the call wrote.
+    A worker's descriptors are often its parent's (fork, spawn), in which case
+    what it prints is in the master capture too; a Ray worker's are not, and
+    its capture is the only record.
+
+    Every capture of a command is written under its session,
+    ``{datalake}/.journal/sessions/{session}/output/``, named by its role, host
+    and pid: ``master-{host}-{pid}-{dt}.log``, ``worker-{host}-{pid}-{dt}.log``.
+    :meth:`paths` is this one's path followed by every capture collected into
+    it, in the order collected: what the exec journal records as
+    ``output_captures``, with the master at index 0.
+
+    A block records :meth:`current`'s path in its journal entry, as ``log``: it
+    does not capture anything itself.
+    """
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __init__(self, path, *, storage_options: dict | None = None):
+        self._path_ = path
+        self._storage_options_ = storage_options
+        # Which process opened it: a capture carried to a worker is opened
+        # there as a new one, never reopened -- see _is_this_process_().
+        self._host = socket.gethostname()
+        self._pid = os.getpid()
+        self._collected = {}    # worker capture path -> None: a set that keeps order
+        self._collected_lock = threading.Lock()
+        self._depth = 0         # re-entries: a nested exec joins, and does not reopen
+        self._tee = None
+        self._local = None
+
+    def __repr__(self):
+        return f"dbx.OutputCapture(path={self._path_!r})"
+
+    def __getstate__(self):
+        # Where it goes and who opened it: a carried capture names the
+        # directory a worker's goes in. Never the tee, which is this process's.
+        return {'path': self._path_, 'storage_options': self._storage_options_,
+                'host': self._host, 'pid': self._pid}
+
+    def __setstate__(self, state):
+        self.__init__(state['path'], storage_options=state.get('storage_options'))
+        self._host = state.get('host', self._host)
+        self._pid = state.get('pid', self._pid)
+
+    def __enter__(self):
+        with _PROCESS_CAPTURES_LOCK:
+            if self._depth == 0:
+                self._open_()
+                _PROCESS_CAPTURES.append(self)
+            self._depth += 1
+        return self
+
+    def __exit__(self, *exc):
+        with _PROCESS_CAPTURES_LOCK:
+            self._depth -= 1
+            if self._depth > 0:
+                return False
+            for i in range(len(_PROCESS_CAPTURES) - 1, -1, -1):
+                if _PROCESS_CAPTURES[i] is self:
+                    del _PROCESS_CAPTURES[i]
+                    break
+        self._close_()
+        return False
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        return self
+
+    # 2. Declared API ------------------------------------------------------
+
+    @staticmethod
+    def current() -> 'OutputCapture | None':
+        """The capture open in this process, innermost; None when nothing is being captured."""
+        with _PROCESS_CAPTURES_LOCK:
+            return _PROCESS_CAPTURES[-1] if _PROCESS_CAPTURES else None
+
+    @classmethod
+    def command_capture(cls, datajournal: 'Datajournal') -> 'OutputCapture':
+        """The capture a ``dbx.exec`` command runs under: the one open in this process, or a new master under *datajournal*'s session.
+
+        Joined, not opened, when one is open: an exec inside an exec, or a
+        command inside :meth:`command`, which ``dbx.pprint`` opens so that
+        what it prints of the result is captured too.
+        """
+        capture = cls.current()
+        if capture is not None:
+            return capture
+        datalake = datajournal._datalake or default_datalake() or './dbx'
+        return cls(os.path.join(cls.dirpath(datalake, datajournal.session), cls._basename_('master')))
+
+    @classmethod
+    @contextlib.contextmanager
+    def command(cls):
+        """Open the command session and its capture, for a caller with more of the command to capture than ``dbx.exec`` runs.
+
+        ``dbx.pprint`` prints the result after `exec` has returned; opened
+        around both, this is the capture `exec` joins::
+
+            with dbx.OutputCapture.command():
+                r = dbx.exec(s, capture_output=True)
+                print(r)
+        """
+        dj = Datajournal.command_session()
+        with dj, cls.command_capture(dj) as capture:
+            yield capture
+
+    def _worker_capture_(self) -> 'OutputCapture':
+        """A new capture for a worker process this one's command sent work to: beside this one, named for that process."""
+        return type(self)(os.path.join(os.path.dirname(self._path_), self._basename_('worker')),
+                          storage_options=self._storage_options_)
+
+    def _is_this_process_(self) -> bool:
+        """Whether this capture was opened by -- or for -- the process asking; False for a copy carried to a worker."""
+        return (self._host, self._pid) == (socket.gethostname(), os.getpid())
+
+    def collect(self, payload):
+        """Add the capture paths a :meth:`Datajournal.carry` wrapper returned to this one's; anything else is ignored."""
+        if isinstance(payload, JournaledResult):
+            for path in getattr(payload, 'output_captures', None) or []:
+                self._record_(path)
+
+    def collect_raised(self, exc: BaseException) -> None:
+        """Add the capture paths behind an executor's *exc* to this one's: the failed call's, and its siblings'.
+
+        As `Datajournal.collect_raised`: the failed call's are on the exception,
+        as ``output_captures``, and those of the calls that succeeded before it
+        on its ``executor_payloads``.
+        """
+        for path in getattr(exc, 'output_captures', None) or []:
+            self._record_(path)
+        for payload in getattr(exc, 'executor_payloads', None) or []:
+            self.collect(payload)
+
+    def collected(self) -> list:
+        """Every worker capture collected into this one, in the order collected."""
+        with self._collected_lock:
+            return list(self._collected)
+
+    def paths(self) -> list:
+        """This capture's path, then every one collected into it: what the exec journal records as ``output_captures``."""
+        return [self._path_] + self.collected()
+
+    @staticmethod
+    def dirpath(datalake, session) -> str:
+        """Where the captures of *session* are written: beside its journal index."""
+        return os.path.join(Datajournal._index_dirpath_(datalake, session), 'output')
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def path(self) -> str:
+        """Where this capture is uploaded when it closes -- fixed when it is made, so it can be recorded before."""
+        return self._path_
+
+    # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _basename_(role) -> str:
+        dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
+        return f"{role}-{socket.gethostname()}-{os.getpid()}-{dt}.log"
+
+    def _record_(self, path) -> None:
+        with self._collected_lock:
+            self._collected.setdefault(path, None)
+
+    def _open_(self):
+        # Written locally and uploaded on close: a remote filesystem cannot be
+        # relied on to take a streaming write.
+        self._local = tempfile.NamedTemporaryFile(mode='w', suffix='.log', prefix='dbx_capture_',
+                                                  delete=False, encoding='utf-8')
+        self._tee = OutputTee(self._local)
+
+    def _close_(self):
+        try:
+            self._tee.close()
+        finally:
+            self._local.close()
+            self._tee = None
+            try:
+                storage_options = (self._storage_options_ if self._storage_options_ is not None
+                                   else default_storage_options())
+                fs, _ = fsspec.url_to_fs(self._path_, **storage_options)
+                fs.makedirs(os.path.dirname(self._path_), exist_ok=True)
+                fs.put(self._local.name, self._path_)
+            except Exception as exc:
+                # The command it recorded has run: losing its output is a warning.
+                Logger(name='OutputCapture').warning(f"Could not upload captured output to {self._path_}: {exc}")
+            finally:
+                os.unlink(self._local.name)
+                self._local = None
+
+
 class JournaledCallable:
     """A callable handed to a worker with the `Datajournal` session it was dispatched under.
 
@@ -2532,24 +2822,40 @@ class JournaledCallable:
 
     A call that raises sends its paths home on the exception, as
     ``datajournal_entries``, for `Datajournal.collect_raised`.
+
+    With an *output_capture* -- the `OutputCapture` open where it was
+    dispatched -- a call that runs in another process runs inside a new
+    capture of that process's (`OutputCapture._worker_capture_`), and sends its
+    path home with the entries, as ``output_captures``: the worker capture's,
+    then any it collected from workers of its own. In a thread of the
+    dispatching process there is nothing to open -- the capture there already
+    has what the thread writes -- and nothing to send.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, fn, datajournal: 'Datajournal'):
+    def __init__(self, fn, datajournal: 'Datajournal', output_capture: 'OutputCapture | None' = None):
         self.fn = fn
         self.datajournal = datajournal
+        self.output_capture = output_capture
 
     def __call__(self, *args, **kwargs):
         dj = self.datajournal
         before = len(dj.written_entries())
-        with dj:
+        capture = self.output_capture
+        if capture is not None and capture._is_this_process_():
+            capture = None
+        elif capture is not None:
+            capture = capture._worker_capture_()
+        with dj, (capture if capture is not None else contextlib.nullcontext()):
             try:
                 value = self.fn(*args, **kwargs)
             except BaseException as exc:
                 exc.datajournal_entries = dj.written_entries()[before:]
+                exc.output_captures = capture.paths() if capture is not None else []
                 raise
-        return JournaledResult(value, dj.written_entries()[before:])
+        return JournaledResult(value, dj.written_entries()[before:],
+                               capture.paths() if capture is not None else [])
 
     # 2. Declared API ------------------------------------------------------
 
@@ -2562,13 +2868,14 @@ class JournaledCallable:
 
 
 class JournaledResult:
-    """What a `JournaledCallable` returns: the call's *value*, and the *datajournal_entries* it wrote."""
+    """What a `JournaledCallable` returns: the call's *value*, the *datajournal_entries* it wrote, and its *output_captures*."""
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, value, datajournal_entries):
+    def __init__(self, value, datajournal_entries, output_captures=()):
         self.value = value
         self.datajournal_entries = list(datajournal_entries)
+        self.output_captures = list(output_captures)
 
 
 #: The session an entry goes under when no ``with`` is open: one per process,

@@ -68,7 +68,6 @@ from .dataparts import (
     LogVolume,
     MultiprocessingCallableExecutor,
     MultithreadingCallableExecutor,
-    OutputTee,
     RayCallableExecutor,
     Remote,
     TorchMultiprocessingCallableExecutor,
@@ -1156,7 +1155,7 @@ class Datablock:
     #: `dfn`, `quote()`, `cite()` and the journal record -- because a block
     #: reconstructed from any of those must come back the same block, and one
     #: that came back carrying a stale journal would not.
-    TRANSIENT_PARAMS = ('specialization_journal', 'url')
+    TRANSIENT_PARAMS = ('specialization_journal', 'url', 'capture_output')
 
     #: VAR field names exempt from :meth:`VAR.LazyLoader._check_renderable_` --
     #: the check that a value can be rendered into the identity deterministically.
@@ -1666,7 +1665,10 @@ class Datablock:
         verbose: bool = None,
         debug: bool = None,
         detailed: bool = None,
-        capture_output: bool = False,
+        # Accepted, never recorded: every dfn journalled before capture moved to
+        # `dbx.exec(capture_output=True)` spells it. A block captures nothing;
+        # its journal entry records the capture open around its build.
+        capture_output: bool = None,
         revision: str = None,
         keyby: str = 'tag_version_shorthash',
         uuid16: bool = False,
@@ -1725,6 +1727,10 @@ class Datablock:
             info=info,
             # stack_depth=2 (default) is correct for both _print_ (stack[2]) and selected (_getframe(1))
         )
+        if capture_output:
+            self.log.warning(f"{type(self).__name__}: capture_output=True is ignored: a block captures nothing "
+                             f"of its own. Run the command under dbx.exec(..., capture_output=True), "
+                             f"or --capture-output, and its entries record that capture.")
         self._working_params_ = []
         self._uuid16_ = uuid16
         self._uuid = uuid.uuid4().hex[:16] if uuid16 else str(uuid.uuid4())  # unique per live instance, not preserved across serialization
@@ -1738,7 +1744,6 @@ class Datablock:
             'verbose': verbose,
             'debug': debug,
             'detailed': detailed,
-            'capture_output': capture_output,
             'revision': revision,
             'keyby': keyby,
             'uuid16': uuid16,
@@ -1788,6 +1793,9 @@ class Datablock:
 
         # `validate_cfg` was renamed `validate_vars`. State pickled before the
         # rename carries only the old key; pop it so it is never re-serialized.
+        # `capture_output` is a command's now, not a block's -- see __init__.
+        # State pickled before carries it; pop it so it is never re-serialized.
+        state.pop('capture_output', None)
         legacy_validate = state.pop('validate_cfg', None)
         if legacy_validate is not None and state.get('validate_vars') is None:
             state['validate_vars'] = legacy_validate
@@ -1884,7 +1892,6 @@ class Datablock:
         self._revision_ = _unquote(state.get('revision'))
         if self._revision_ == 'None':
             self._revision_ = None
-        self.capture_output = bool(_unquote(state.get('capture_output', False)))
         self.keyby = _unquote(state.get('keyby', 'tag_version_shorthash'))
         if self.keyby not in (None, 'hash', 'code', 'subhash', 'superhash', 'norm', 'signature', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
             raise ValueError(f"keyby must be None, 'hash', 'code', 'signature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
@@ -2573,16 +2580,6 @@ class Datablock:
                 f"BUILD PARTIAL: {self.anchorkeypath} reads {self.redirected_topics()} "
                 f"through a redirection and builds {self.ownedtopics()}."
             )
-        if self.capture_output:
-            logpath = self._dbxanchorhashpathx_('log', ext='log', ensure_dirpath=True)
-            self.log.verbose(f"-------------------- Capturing stdout/stderr to {logpath} ------------------")
-
-            # Write to a local temp file; upload to remote logpath at the end.
-            _local_log = tempfile.NamedTemporaryFile(
-                mode='w', suffix='.log', prefix='dbx_capture_', delete=False, encoding='utf-8',
-            )
-            _output_tee = OutputTee(_local_log)
-        _log_uploaded = False
         try:
             # `owedtopics()` as well as `valid()`: a PARTIALLY redirected block
             # can be valid() by its own definition and still owe topics that
@@ -2599,62 +2596,15 @@ class Datablock:
                 self.__pre_build__(*args, **kwargs)
                 self.__build__(*args, **kwargs)
                 self._build_end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
-                # Upload the captured log BEFORE __post_build__ writes the
-                # journal entry, so that the journal's fs.exists(logpath)
-                # check finds the file and records the path.
-                if self.capture_output:
-                    _output_tee.close()
-                    _local_log.close()
-                    _log_uploaded = True
-                    try:
-                        self.fs.put(_local_log.name, logpath)
-                        self.log.verbose(f"Captured output uploaded to {logpath}")
-                    except Exception as upload_exc:
-                        self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
-                    finally:
-                        os.unlink(_local_log.name)
                 self.__post_build__(*args, **kwargs)
             else:
                 self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
         except KeyboardInterrupt as e:
-            if self.capture_output and not _log_uploaded:
-                _output_tee.close()
-                _local_log.close()
-                _log_uploaded = True
-                try:
-                    self.fs.put(_local_log.name, logpath)
-                    self.log.verbose(f"Captured output uploaded to {logpath}")
-                except Exception as upload_exc:
-                    self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
-                finally:
-                    os.unlink(_local_log.name)
             self.__post_build__(*args, event="build:keyboard_interrupt", **kwargs)
             raise(e)
         except Exception as e:
-            if self.capture_output and not _log_uploaded:
-                _output_tee.close()
-                _local_log.close()
-                _log_uploaded = True
-                try:
-                    self.fs.put(_local_log.name, logpath)
-                    self.log.verbose(f"Captured output uploaded to {logpath}")
-                except Exception as upload_exc:
-                    self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
-                finally:
-                    os.unlink(_local_log.name)
             self.__post_build__(*args, event="build:exception", **kwargs)
             raise(e)
-        finally:
-            if self.capture_output and not _log_uploaded:
-                _output_tee.close()
-                _local_log.close()
-                try:
-                    self.fs.put(_local_log.name, logpath)
-                    self.log.verbose(f"Captured output uploaded to {logpath}")
-                except Exception as upload_exc:
-                    self.log.verbose(f"Failed to upload captured output to {logpath}: {upload_exc}")
-                finally:
-                    os.unlink(_local_log.name)
         return self
 
     def pull(self, src, dest, *, show_progress: bool = False):

@@ -61,9 +61,10 @@ class TestDfn:
         """dfn should include explicit params even when left at their defaults."""
         block = SimpleBlock(datalake='/tmp/test')
         d = block.dfn
-        # anchor defaults to None, capture_output to False, keyby to 'tag_version_shorthash'
+        # anchor defaults to None, keyby to 'tag_version_shorthash'
         assert d['anchor'] is None
-        assert d['capture_output'] is False
+        # capture_output is accepted and never recorded: a command's, not a block's.
+        assert 'capture_output' not in d
         assert d['keyby'] == 'tag_version_shorthash'
 
     def test_dfn_matches_getstate(self):

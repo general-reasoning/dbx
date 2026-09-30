@@ -109,3 +109,55 @@ class TestRestoration:
             cap.close()
         after = (os.fstat(1).st_ino, os.fstat(2).st_ino)
         assert before == after
+
+
+LINGERING = textwrap.dedent("""
+    import subprocess, sys, time
+    from dbx.dataparts import OutputTee
+
+    logname = sys.argv[1]
+    with open(logname, 'w') as lf:
+        cap = OutputTee(lf)
+        print("BEFORE", flush=True)
+        # Inherits the tee's pipe as its stdout, and outlives the tee -- as
+        # multiprocessing's resource tracker, or a Ray raylet, does.
+        child = subprocess.Popen([sys.executable, "-c",
+                                  "import time; time.sleep(1.5); print('AFTER', flush=True)"])
+        start = time.monotonic()
+        cap.close()
+        print(f"CLOSED IN {time.monotonic() - start:.2f}", flush=True)
+        child.wait()
+""")
+
+
+class TestAProcessThatOutlivesTheTee:
+    """close() must not wait for the pipe to reach end-of-file: a descendant holding it would hang it."""
+
+    @pytest.fixture
+    def run_lingering(self, tmp_path):
+        script = tmp_path / 'lingering.py'
+        script.write_text(LINGERING)
+        logname = tmp_path / 'captured.log'
+        env = dict(os.environ, DBX_DIRTY_REPO_OK='1')
+        env.pop('DBX_USE_WORK_REPO', None)
+        proc = subprocess.run(
+            [sys.executable, str(script), str(logname)],
+            capture_output=True, text=True, env=env, timeout=60,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        )
+        assert proc.returncode == 0, proc.stderr
+        return proc, logname.read_text()
+
+    def test_close_does_not_wait_for_it(self, run_lingering):
+        proc, _ = run_lingering
+        closed_in = float(proc.stdout.split('CLOSED IN ')[1].split()[0])
+        assert closed_in < 1.0
+
+    def test_what_came_before_is_logged(self, run_lingering):
+        _, log = run_lingering
+        assert 'BEFORE' in log
+
+    def test_what_it_writes_after_still_reaches_the_terminal(self, run_lingering):
+        proc, log = run_lingering
+        assert 'AFTER' in proc.stdout
+        assert 'AFTER' not in log

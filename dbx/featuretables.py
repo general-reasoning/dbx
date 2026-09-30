@@ -637,7 +637,6 @@ class Featuretable(UpstreamTabSlices, Datatable):
         return self.TAB(
             datalake=self._datalake_,
             storage_options=self.storage_options,
-            capture_output=self.capture_output,
             cache=getattr(self, 'cache', None),
             cache_limit=getattr(self, 'cache_limit', None),
             verbose=False,
@@ -770,7 +769,6 @@ class BipolarFeaturetable(UpstreamTabSlices, Datatable):
         return self.TAB(
             datalake=self._datalake_,
             storage_options=self.storage_options,
-            capture_output=self.capture_output,
             cache=getattr(self, 'cache', None),
             cache_limit=getattr(self, 'cache_limit', None),
             verbose=False,

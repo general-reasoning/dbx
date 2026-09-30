@@ -1180,10 +1180,19 @@ class Datatab(DatatabBase):
         return slices
 
     def _read_slice_(self, slice, **kwargs):
-        return read_mds_shard(
-            self.path(*slice.split('/')), self.fs,
-            tmpdir=kwargs.pop('cache', None) or self._ensure_cacheroot_(), **kwargs,
-        )
+        try:
+            return read_mds_shard(
+                self.path(*slice.split('/')), self.fs,
+                tmpdir=kwargs.pop('cache', None) or self._ensure_cacheroot_(), **kwargs,
+            )
+        except FileNotFoundError as e:
+            # A missing shard says where, not why: say why, when it is that this tab is not valid.
+            why = self.why_invalid()
+            if why is None:
+                raise
+            raise FileNotFoundError(
+                f"{self.anchorkeypath}: cannot read slice {slice!r}: this tab is not valid: {why}"
+            ) from e
 
     def _upload_slice_(self, local_dir, target_dir):
         names = sorted(os.listdir(local_dir))
@@ -1584,11 +1593,13 @@ class Datatable(DatatabBase, Datastack):
             return self.__read__(*topicpath)
         return super().read(*topicpath)
 
-    def valid_tab(self, i: int) -> bool:
-        if self._tab_paths_topic_():
-            if self._check_tab_path_(i):
+    def valid_tab(self, i: int, proxies: bool = True) -> bool:
+        """Whether tab *i* is valid; *proxies* as in `Datastack.valid_blocks`."""
+        if proxies:
+            if self._blocks_vouched_():
                 return True
-            return self.tab(i).valid()
+            if self._tab_paths_topic_() and self._check_tab_path_(i):
+                return True
         return self.tab(i).valid()
 
     valid_block = valid_tab
@@ -1599,9 +1610,9 @@ class Datatable(DatatabBase, Datastack):
 
     redirected_block = redirected_tab
 
-    def valid_tabs(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
-        """Return a pandas Series of booleans, one per tab, indicating validity (parallelized)."""
-        return self.valid_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, **kwargs)
+    def valid_tabs(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, proxies: bool = True, **kwargs) -> pd.Series:
+        """Return a pandas Series of booleans, one per tab, indicating validity (parallelized): `Datastack.valid_blocks`, by tab."""
+        return self.valid_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, proxies=proxies, **kwargs)
 
     def tabs_redirected(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
         """Whether each tab is redirected: `Datastack.blocks_redirected`, by tab."""
@@ -1775,7 +1786,7 @@ class Datatable(DatatabBase, Datastack):
                                     indices.add(idx)
                                 except ValueError:
                                     pass
-                        self._built_tab_set_cache = indices
+                        self._built_tab_set_cache = self._current_markers_(indices)
                 except Exception:
                     self._built_tab_set_cache = set()
         return self._built_tab_set_cache
@@ -1788,6 +1799,8 @@ class Datatable(DatatabBase, Datastack):
             return False
         if i in self._built_tab_set_():
             return True
+        if not self.__dict__.get('_markers_current_cache', True):
+            return False
         try:
             tab_dir = self.path(topic_name)
             sentinel_path = os.path.join(tab_dir, f"tab_{i}.path")
@@ -1829,6 +1842,7 @@ class Datatable(DatatabBase, Datastack):
             pass
         if hasattr(self, '_built_tab_set_cache') and self._built_tab_set_cache is not None:
             self._built_tab_set_cache.discard(i)
+        self._forget_blocks_fingerprint_()
     _remove_block_path_ = _remove_tab_path_
 
     def _topics_signature_(self, topics=None, *, declared=None):
@@ -2014,9 +2028,11 @@ class DatatablePart(Datatable):
         real_idx = self.tab_indices[idx]
         return self.var.partition.datapoint_table.tab(real_idx)
 
-    def valid_tab(self, idx: int) -> bool:
+    def valid_tab(self, idx: int, proxies: bool = True) -> bool:
+        if proxies and self._blocks_vouched_():
+            return True
         real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table.valid_tab(real_idx)
+        return self.var.partition.datapoint_table.valid_tab(real_idx, proxies=proxies)
 
     valid_block = valid_tab
 
@@ -2111,6 +2127,7 @@ class DatatablePart(Datatable):
 
     def _remove_tab_path_(self, idx: int):
         real_idx = self.tab_indices[idx]
+        self._forget_blocks_fingerprint_()
         return self.var.partition.datapoint_table._remove_tab_path_(real_idx)
     _remove_block_path_ = _remove_tab_path_
 

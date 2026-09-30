@@ -1006,7 +1006,14 @@ class Datablock:
             def __call__(self):
                 if self.value is self._UNSET:
                     if isinstance(self.term, str):
-                        self.value = dataparts.eval(self.term)
+                        try:
+                            self.value = dataparts.eval(self.term)
+                        except Exception as e:
+                            # Evaluated lazily -- often deep inside computing an
+                            # identity -- so say which field of which block.
+                            e.add_note(f"while evaluating {self.owner or ''}.VAR.{self.name or '<field>'} "
+                                       f"= {self.term!r}")
+                            raise
                     else:
                         # from_datablockable passes raw Python objects
                         self.value = self.term
@@ -2045,6 +2052,28 @@ class Datablock:
         red = self.redirection
         entry = red.entry if red is not None else None
         return self.__valid__(path=entry.block.anchorkeypath if entry is not None else None)
+
+    def why_invalid(self) -> str | None:
+        """Why this block is not valid, and what makes it so -- or None when it is.
+
+        What a failure to read it should say, rather than name a missing file.
+        Reads the journal when the block is neither built nor redirected, to
+        say whether a specialization resolves for it.
+        """
+        return self._invalidity_()[1]
+
+    def _invalidity_(self) -> tuple[str | None, str | None]:
+        """``(kind, why)``: *kind* 'owes', 'unadopted' or 'unbuilt' -- or ``(None, None)`` when valid."""
+        owed = self.owedtopics()
+        if self.valid() and not owed:
+            return None, None
+        if self.redirected():
+            return 'owes', (f"it reads {self.redirected_topics()} through a redirection, "
+                            f"but owes {owed}, which only its build produces")
+        if self.find_specialization() is not None:
+            return 'unadopted', ("it was never built, but a specialization resolves for it and was "
+                                 "never adopted: its specialize(), or its stack's specialize_blocks(), adopts it")
+        return 'unbuilt', "it was never built, and no specialization resolves for it: its build() builds it"
 
     def __valid__(self, path: str|None = None):
         """Whether this block's data is there; override to decide differently.
@@ -6026,7 +6055,9 @@ class Datablock:
                 getter = eval(term)
             replacements[field.name] = getter
         var = replace(var, **replacements)
-        self.log.detailed(f"Made {var=} from {spec=}")
+        # Guarded: rendering VAR evaluates every lazy field, which is no business of a log line.
+        if self.log.ist('detailed'):
+            self.log.detailed(f"Made {var=} from {spec=}")
         return var
 
     def _adopt_(self, child, *, keyby: bool = False):
@@ -6897,11 +6928,12 @@ def UNSAFE_copy_block_from_callable(block, anchorkeypath, overwrite=False, topic
 class DatablockValidityChecker:
     """Lightweight callable that checks if a block at index `idx` is valid."""
 
-    def __init__(self, idx: int):
+    def __init__(self, idx: int, proxies: bool = True):
         self.idx = idx
+        self.proxies = proxies
 
     def __call__(self, stack):
-        return stack.valid_block(self.idx)
+        return stack.valid_block(self.idx, proxies=self.proxies)
 
 
 def _shared_journal_(caller, block):
@@ -6966,6 +6998,7 @@ class DatablockSpecializationInstaller:
         self.idx = idx
 
     def __call__(self, stack, *, journal=None):
+        """``(specialization | None, was_valid, is_valid)`` -- *is_valid* after any installing."""
         with forming_with_journal(journal):
             block = stack._form_block_(self.idx)
         red_yaml = os.path.join(block.anchorkeypath, '.redirection', 'paths.yaml')
@@ -6973,11 +7006,14 @@ class DatablockSpecializationInstaller:
         if (is_recorded and block.valid()) or block.__valid__(path=None) or (block.valid() and not getattr(block, 'SPECIALIZATIONS', None)):
             if stack._block_paths_topic_() and not stack._check_block_path_(self.idx):
                 stack._write_block_path_(self.idx)
-            return (None, True)
+            return (None, True, True)
         sp = block._install_specialization_(journal=_shared_journal_(journal, block))
-        if sp is not None and stack._block_paths_topic_():
+        # Adopted is not built: a specialization that leaves topics owed leaves
+        # the block invalid, and a marker would vouch for it anyway.
+        is_valid = sp is not None and block.valid()
+        if is_valid and stack._block_paths_topic_():
             stack._write_block_path_(self.idx)
-        return (sp, False)
+        return (sp, False, is_valid)
 
 
 class DatablockRedirectionClearer:
@@ -7041,6 +7077,45 @@ class DatablockSignatureMatcher:
             if not stack._matches_path_clauses_(paths, self.path_clauses):
                 return False
         return True
+
+
+class InvalidBlocksError(RuntimeError):
+    """Blocks of a stack that are not valid, found before anything fails reading them.
+
+    Raised by `Datastack.build` for a stack that is valid, or reads an older
+    build, over blocks that are not -- rather than returning a stack whose
+    blocks would fail later, far from here, when something reads them -- and
+    by whatever is about to read such blocks, before it starts. *invalid* is
+    the indices of the blocks that are not valid; *state* says what the stack
+    claims, *reader* who was about to read them.
+    """
+
+    #: How many of the invalid blocks the message names.
+    SHOWN = 5
+
+    def __init__(self, stack, invalid, *, state: str | None = None, reader: str | None = None):
+        self.stack = stack
+        self.invalid = list(invalid)
+        n, k = stack.n_blocks, len(self.invalid)
+        lines, resolvable = [], False
+        for i in self.invalid[:self.SHOWN]:
+            try:
+                block = stack.block(i)
+                kind, why = block._invalidity_()
+                resolvable = resolvable or kind == 'unadopted'
+                lines.append(f"  block {i}: {block.anchorkeypath}: {why}")
+            except Exception as e:
+                lines.append(f"  block {i}: cannot say why: {type(e).__name__}: {e}")
+        if k > self.SHOWN:
+            lines.append(f"  ... and {k - self.SHOWN} more")
+        remedy = ("stack.specialize_blocks() adopts what resolves; " if resolvable else "") + \
+            "stack.build_blocks() adopts what resolves and builds the rest, and none of the stack's own topics."
+        super().__init__(
+            (f"{reader}: " if reader else "")
+            + f"{stack.anchorkeypath}: {k} of {n} blocks are not valid"
+            + (f", but the stack {state}" if state else "") + ":\n"
+            + "\n".join(lines) + f"\n{remedy}"
+        )
 
 
 class Datastack(Datablock):
@@ -7240,21 +7315,79 @@ class Datastack(Datablock):
         # read once for the whole build -- see `_build_journal_`.
         self.__dict__['__building__'] = True
         try:
-            self._install_block_specializations_()
+            _, invalid = self._adopt_block_specializations_()
             # A stack that is completely redirected answers from elsewhere;
-            # its build is elided regardless of deep.
-            if self._redirected_paths_ is not None and not self.ownedtopics():
-                return super().build(*args, deep=deep, _specialized_=True, **kwargs)
-            # An unredirected (or partially redirected) stack that is already valid
-            # and owes no topics has nothing to build unless deep=True forces it.
-            if not deep and self.valid() and not self.owedtopics():
+            # its build is elided regardless of deep. An unredirected (or
+            # partially redirected) stack that is already valid and owes no
+            # topics has nothing to build unless deep=True forces it. Either
+            # way, it is done -- and so must its blocks be: one that is not
+            # would fail whatever reads it, far from here.
+            # A stack with no topics of its own claims nothing by being
+            # valid, which it is vacuously: its build is its blocks'.
+            redirected = self._redirected_paths_ is not None and not self.ownedtopics()
+            if not self.topics():
+                self.build_blocks(invalid)
+                invalid = []
+            if redirected or (not deep and self.valid() and not self.owedtopics()):
+                if invalid:
+                    raise InvalidBlocksError(self, invalid, state=self._claim_(redirected))
                 return super().build(*args, deep=deep, _specialized_=True, **kwargs)
             # The stack's own specialization; its blocks' are installed above.
+            # Adopted whole, it elides the build that would have built them.
             Datablock.specialize(self)
-            return super().build(*args, deep=deep, _specialized_=True, **kwargs)
+            if invalid and self._redirected_paths_ is not None and not self.ownedtopics():
+                raise InvalidBlocksError(self, invalid, state=self._claim_(True))
+            result = super().build(*args, deep=deep, _specialized_=True, **kwargs)
+            # Datablock.build skips a valid stack, deep or not, and its blocks with it.
+            invalid = [i for i in invalid if not self.valid_block(i, proxies=False)]
+            if invalid:
+                raise InvalidBlocksError(self, invalid, state=self._claim_(False))
+            if self.valid():
+                self._record_blocks_fingerprint_()
+            return result
         finally:
             self.__dict__.pop('__building__', None)
             self.__dict__.pop('__build_journal__', None)
+
+    @staticmethod
+    def _claim_(redirected: bool) -> str:
+        """What a stack that declines to build claims, for `InvalidBlocksError`."""
+        return ("reads an older build (it is redirected), whose blocks are not these" if redirected
+                else "is valid")
+
+    def build_blocks(self, indices=None, **kwargs):
+        """Build the blocks that are not valid -- or those at *indices* -- and none of this stack's own topics.
+
+        What a stack that is valid, or reads an older build, cannot do in its
+        own build: that one declines, being done, and would leave such blocks
+        to fail whatever reads them -- see `InvalidBlocksError`. The blocks
+        adopt what their specializations resolve to first, and the rest are
+        built as `__build__` builds them, by the stack's executor.
+        """
+        # Within a build(), that build's: its journal read is shared, and it clears it.
+        owns_build = '__building__' not in self.__dict__
+        self.__dict__['__building__'] = True
+        try:
+            if indices is None:
+                _, indices = self._adopt_block_specializations_()
+            indices = [int(i) for i in indices]
+            if not indices:
+                self.log.verbose(f"{self.anchorkeypath}: build_blocks: every block is valid")
+                return self
+            callables, callable_kwargs = self.__split__(**kwargs)
+            callables = [callables[i] for i in indices]
+            self.log.info(f"{self.anchorkeypath}: building {len(indices)} of {self.n_blocks} blocks")
+            executor = self.executor_cls(**self._executor_kwargs_(
+                tag=f"BUILDING {len(indices)} of {self.n_blocks} blocks [{self.__class__.__name__}]"))
+            callable_kwargs = self._with_build_journal_(callables, callable_kwargs)
+            executor.exec_callables(callables, self, **callable_kwargs)
+            if self.valid() and self.valid_blocks(false_only=True, proxies=False).empty:
+                self._record_blocks_fingerprint_()
+            return self
+        finally:
+            if owns_build:
+                self.__dict__.pop('__building__', None)
+                self.__dict__.pop('__build_journal__', None)
 
     def __build__(self, *args, **kwargs):
         """Build all blocks using BlockMaker + the configured executor.
@@ -7381,10 +7514,12 @@ class Datastack(Datablock):
         self.__dict__['__child_journal__'] = journal
         return journal
 
-    def valid_block(self, idx: int) -> bool:
-        """Return whether the block at index *idx* is valid."""
-        if self._block_paths_topic_():
-            if self._check_block_path_(idx):
+    def valid_block(self, idx: int, proxies: bool = True) -> bool:
+        """Return whether the block at index *idx* is valid; *proxies* as in `valid_blocks`."""
+        if proxies:
+            if self._blocks_vouched_():
+                return True
+            if self._block_paths_topic_() and self._check_block_path_(idx):
                 return True
         return self.block(idx).valid()
 
@@ -7392,20 +7527,33 @@ class Datastack(Datablock):
         """Return whether the block at index *idx* is redirected."""
         return self.block(idx).redirected()
 
-    def valid_blocks(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
-        """Return a pandas Series of booleans, one per block, indicating validity (parallelized)."""
+    def valid_blocks(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, proxies: bool = True, **kwargs) -> pd.Series:
+        """Return a pandas Series of booleans, one per block, indicating validity (parallelized).
+
+        With *proxies*, what vouches for the blocks is taken as their answer
+        when it is current: the record that every block was valid, or the
+        block-path markers -- see `_blocks_vouched_` and `_current_markers_`.
+        Without, every block is asked. When every block is valid, and so is
+        this stack, that is recorded, to vouch for them next time.
+        """
         if false_only and true_only:
             raise ValueError("false_only and true_only are mutually exclusive")
         n = self.n_blocks
         if n == 0:
             return pd.Series([], dtype=bool)
-        if self._block_paths_topic_():
+
+        def all_valid():
+            if false_only:
+                return pd.Series([], dtype=bool)
+            return pd.Series(True, index=pd.RangeIndex(n), dtype=bool)
+
+        if proxies and self._blocks_vouched_():
+            return all_valid()
+        if proxies and self._block_paths_topic_():
             try:
                 built_set = self._built_block_set_()
                 if len(built_set) == n:
-                    if false_only:
-                        return pd.Series([], dtype=bool)
-                    return pd.Series(True, index=pd.RangeIndex(n), dtype=bool)
+                    return all_valid()
             except Exception:
                 pass
         executors = self._get_executors_()
@@ -7428,9 +7576,11 @@ class Datastack(Datablock):
             **kwargs,
         )
         executor = executor_cls(**exec_kwargs)
-        checkers = [self.DatablockValidityChecker(i) for i in range(n)]
+        checkers = [self.DatablockValidityChecker(i, proxies=proxies) for i in range(n)]
         results = executor.exec_callables(checkers, self)
         series = pd.Series(results, dtype=bool)
+        if series.all() and self.valid():
+            self._record_blocks_fingerprint_()
         if false_only:
             return series[~series]
         if true_only:
@@ -7517,35 +7667,50 @@ class Datastack(Datablock):
                                         n_workers: int | None = None, journal=None, **kwargs):
         """Install, block by block, the specialization each resolves -- only when BLOCK declares any.
 
+        Returns the installed `Specialization`s by block index, or None when
+        there is nothing to install. See `_adopt_block_specializations_`.
+        """
+        if self.n_blocks == 0 or self._block_class_() is None or not self._block_specializations_():
+            return None
+        return self._adopt_block_specializations_(parallelization=parallelization, n_workers=n_workers,
+                                                  journal=journal, **kwargs)[0]
+
+    def _adopt_block_specializations_(self, parallelization: str | None = None,
+                                      n_workers: int | None = None, journal=None, **kwargs):
+        """The blocks that are not valid adopt what their specializations resolve to: ``(specializations, invalid)``.
+
         Which blocks need one is asked of the blocks themselves, through
         :meth:`valid_blocks` -- never of the stack. A stack's own validity
         says nothing about its blocks when it is redirected: its topics are
         then an older build's, and blocks that moved to identities of their
         own are still unbuilt. The journal is read only when some block is
-        not valid, once, here, and handed to every callable. Returns the
-        installed `Specialization`s by block index, or None when there is
-        nothing to install.
+        not valid, once, here, and handed to every callable.
+
+        *specializations* is the installed `Specialization`s by block index,
+        or None when BLOCK declares none or there is no journal to resolve
+        against; *invalid* is the indices of the blocks STILL not valid --
+        unresolved, or adopted with topics left owed.
         """
         n = self.n_blocks
-        block_cls = self._block_class_()
-        block_specs = self._block_specializations_()
-        if n == 0 or block_cls is None or not block_specs:
-            return None
+        if n == 0:
+            return None, []
         kind = self._block_kind_()
         item_label = 'tabs' if kind == 'TAB' else 'blocks'
 
         invalid = list(self.valid_blocks(parallelization=parallelization, n_workers=n_workers,
                                          false_only=True).index)
+        if self._block_class_() is None or not self._block_specializations_():
+            return None, invalid
         if not invalid:
-            self.log.info(
+            self.log.verbose(
                 f"{self.__class__.__name__}: all {n} {item_label} already valid, "
                 f"skipping specialization adoption"
             )
-            return pd.Series([None] * n, dtype=object)
+            return pd.Series([None] * n, dtype=object), []
 
         shared = journal if journal is not None else self._build_journal_()
         if shared is None:
-            return None
+            return None, invalid
         tag = f"SPECIALIZING {len(invalid)} of {n} {item_label} [{self.__class__.__name__}]"
         results = self._exec_over_blocks_(
             [self.DatablockSpecializationInstaller(i) for i in invalid], journal=shared,
@@ -7553,27 +7718,27 @@ class Datastack(Datablock):
             parallelization=parallelization, n_workers=n_workers, **kwargs)
 
         specializations = [None] * n
+        still_invalid = []
         n_already_valid = n - len(invalid)
         n_specialized = 0
-        for i, r in zip(invalid, results):
-            if isinstance(r, tuple) and len(r) == 2:
-                sp, was_valid = r
-                specializations[i] = sp
-                if was_valid:
-                    n_already_valid += 1
-                elif sp is not None:
-                    n_specialized += 1
-            else:
-                specializations[i] = r
-                if r is not None:
-                    n_specialized += 1
+        for i, (sp, was_valid, is_valid) in zip(invalid, results):
+            specializations[i] = sp
+            if was_valid:
+                n_already_valid += 1
+            elif sp is not None:
+                n_specialized += 1
+            if not is_valid:
+                still_invalid.append(i)
 
         n_unresolved = n - n_already_valid - n_specialized
         self.log.info(
             f"{self.__class__.__name__}: specialization adoption complete for {n} {item_label}: "
-            f"{n_already_valid} already valid, {n_specialized} specialized, {n_unresolved} unresolved"
+            f"{n_already_valid} already valid, {n_specialized} specialized, {n_unresolved} unresolved; "
+            f"{len(still_invalid)} still not valid"
         )
-        return pd.Series(specializations, dtype=object)
+        if not still_invalid and self.valid():
+            self._record_blocks_fingerprint_()
+        return pd.Series(specializations, dtype=object), still_invalid
 
     def validate_block(self, idx: int, **kwargs) -> bool:
         """Return whether the block at index *idx* validates."""
@@ -7739,6 +7904,8 @@ class Datastack(Datablock):
         """
         if not UNSAFE_allowed("UNSAFE_clear_blocks", OVERRIDE=OVERRIDE):
             return self
+        # They may leave a block invalid: nothing vouches for the blocks until they are asked again.
+        self._forget_blocks_fingerprint_()
 
         if indices is not None:
             idx_list = [int(i) for i in indices]
@@ -7780,6 +7947,8 @@ class Datastack(Datablock):
         """
         if not UNSAFE_allowed("UNSAFE_clear_block_redirections", OVERRIDE=OVERRIDE):
             return pd.Series([], dtype=bool)
+        # They may leave a block invalid: nothing vouches for the blocks until they are asked again.
+        self._forget_blocks_fingerprint_()
         n = self.n_blocks
         if n == 0:
             return pd.Series([], dtype=bool)
@@ -7811,6 +7980,8 @@ class Datastack(Datablock):
         """
         if not UNSAFE_allowed("UNSAFE_copy_blocks_from", OVERRIDE=OVERRIDE):
             return self
+        # They may leave a block invalid: nothing vouches for the blocks until they are asked again.
+        self._forget_blocks_fingerprint_()
 
         block_list = self.blocks()
         work_stealing_state = getattr(self, 'work_stealing', False)
@@ -7884,6 +8055,8 @@ class Datastack(Datablock):
         total = len(block_list)
         if not allowed:
             return 0, total
+        # They may leave a block invalid: nothing vouches for the blocks until they are asked again.
+        self._forget_blocks_fingerprint_()
 
         par = parallelization if parallelization is not None else getattr(self, 'parallelization', None)
         nw = n_workers if n_workers is not None else getattr(self, 'n_workers', 1)
@@ -8172,6 +8345,7 @@ class Datastack(Datablock):
             pass
         if hasattr(self, '_built_block_set_cache') and self._built_block_set_cache is not None:
             self._built_block_set_cache.discard(i)
+        self._forget_blocks_fingerprint_()
 
     def _built_block_set_(self) -> set[int]:
         if not hasattr(self, '_built_block_set_cache'):
@@ -8194,7 +8368,7 @@ class Datastack(Datablock):
                                     indices.add(idx)
                                 except ValueError:
                                     pass
-                        self._built_block_set_cache = indices
+                        self._built_block_set_cache = self._current_markers_(indices)
                 except Exception:
                     self._built_block_set_cache = set()
         return self._built_block_set_cache
@@ -8205,6 +8379,8 @@ class Datastack(Datablock):
             return False
         if i in self._built_block_set_():
             return True
+        if not self.__dict__.get('_markers_current_cache', True):
+            return False
         try:
             block_dir = self.path(topic_name)
             sentinel_path = os.path.join(block_dir, f"block_{i}.path")
@@ -8225,6 +8401,88 @@ class Datastack(Datablock):
         except Exception:
             pass
         return None
+
+    def _current_markers_(self, indices: set[int]) -> set[int]:
+        """*indices*, the blocks the markers name -- or none of them, when the markers are stale.
+
+        A marker records the path of the block it vouches for. When the blocks
+        have moved to identities of their own -- BLOCK renamed, its TOPICS or
+        VERSION changed, the stack redirected to an older build that marked
+        blocks of its own -- the markers name blocks that are no longer these,
+        and trusting them would report as built blocks that never were. Every
+        such move moves every block, so one is compared: the lowest marked.
+        """
+        self._markers_current_cache = True
+        if not indices:
+            return indices
+        k = min(indices)
+        recorded = self._read_block_path_(k)
+        current = self.block(k).anchorkeypath
+        if recorded is not None and recorded.rstrip('/') == current.rstrip('/'):
+            return indices
+        self._markers_current_cache = False
+        self.log.warning(
+            f"{self.anchorkeypath}: the {len(indices)} {self._block_paths_topic_()!r} markers are "
+            f"stale -- block {k} is marked as {recorded!r} but is {current!r} now -- so they vouch "
+            f"for nothing; asking the blocks instead"
+        )
+        return set()
+
+    def _blocks_fingerprint_path_(self) -> str:
+        """Where the record that vouches for this stack's blocks is: in its OWN directory, never redirected."""
+        return os.path.join(self.anchorkeypath, '.blocks', 'fingerprint')
+
+    def _blocks_fingerprint_(self) -> str:
+        """The identities this stack's blocks have now: their number and the first one's path.
+
+        Whatever moves the blocks to identities of their own -- BLOCK renamed,
+        its TOPICS or VERSION changed -- moves every block, and so the first.
+        """
+        n = self.n_blocks
+        first = self.block(0).anchorkeypath if n else ''
+        return f"n_blocks={n}\nblock_0={first}\n"
+
+    def _blocks_vouched_(self) -> bool:
+        """Whether a record says every block was valid, under the identities the blocks have now.
+
+        The cheap answer to "are all the blocks valid?", and a safe one: a
+        record made under other identities -- or none at all -- vouches for
+        nothing, and the blocks are asked. What it cannot see is a block's data
+        removed behind the stack's back; ``valid_blocks(proxies=False)`` asks
+        every block regardless.
+        """
+        if '_blocks_vouched_cache' not in self.__dict__:
+            vouched = False
+            try:
+                path = self._blocks_fingerprint_path_()
+                if self.fs.exists(path):
+                    with self.fs.open(path, 'r') as f:
+                        vouched = f.read() == self._blocks_fingerprint_()
+            except Exception as e:
+                self.log.verbose(f"{self.anchorkeypath}: cannot read the blocks' fingerprint: {e}")
+            self.__dict__['_blocks_vouched_cache'] = vouched
+        return self.__dict__['_blocks_vouched_cache']
+
+    def _record_blocks_fingerprint_(self):
+        """Record that every block is valid, under the identities the blocks have now."""
+        path = self._blocks_fingerprint_path_()
+        try:
+            ensure_path(os.path.dirname(path), storage_options=self.storage_options)
+            with self.fs.open(path, 'w') as f:
+                f.write(self._blocks_fingerprint_())
+            self.__dict__['_blocks_vouched_cache'] = True
+        except Exception as e:
+            self.log.warning(f"{self.anchorkeypath}: could not record the blocks' fingerprint at {path}: {e}")
+
+    def _forget_blocks_fingerprint_(self):
+        """Stop vouching for the blocks: something may have made one of them invalid."""
+        self.__dict__['_blocks_vouched_cache'] = False
+        try:
+            path = self._blocks_fingerprint_path_()
+            if self.fs.exists(path):
+                self.fs.rm(path)
+        except Exception as e:
+            self.log.warning(f"{self.anchorkeypath}: could not remove the blocks' fingerprint: {e}")
 
     def _block_class_(self):
         """The class this stack's blocks are: its BLOCK, or None when it declares none."""

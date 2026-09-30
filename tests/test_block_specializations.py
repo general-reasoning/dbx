@@ -12,7 +12,7 @@ from test_specializations import (  # noqa: E402
     TABLE_ANCHOR, RowTab, RowTableV1, TestOneJournalReadForAWholeTable, adopted, v1, v1table,
 )
 
-from dbx.datablocks import Datablock  # noqa: E402
+from dbx.datablocks import Datablock, InvalidBlocksError  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -356,7 +356,8 @@ class TestSpecializeMethod:
             with table.fs.open(sentinel_file, 'w') as f:
                 f.write("/nonexistent/path")
 
-            assert table._check_block_path_(0) is True
+            # A marker naming another block than tab 0 is now stale -- it vouches for nothing.
+            assert table._check_block_path_(0) is False
 
             # The block itself is invalid
             assert table.tab(0).valid() is False
@@ -364,8 +365,8 @@ class TestSpecializeMethod:
             # Installer should NOT return (None, True) since block is invalid
             installer = table.DatablockSpecializationInstaller(0)
             res = installer(table)
-            # Either it tries to specialize and fails/succeeds, but it must NOT return (None, True)
-            assert res != (None, True)
+            # Either it tries to specialize and fails/succeeds, but it must NOT report tab 0 valid
+            assert res[1:] != (True, True)
 
     def test_read_mds_shard_raises_on_missing_index(self, tmp_path):
         import fsspec
@@ -540,10 +541,25 @@ class TestAValidStackSpecializesItsTabs:
     """A stack's own validity says nothing about tabs that moved to identities of their own."""
 
     def test_build_adopts_the_tabs_of_a_valid_stack(self, rekeyed):
-        nomarkers(rekeyed).build()
+        # Adopted, the tabs still owe `extra`: a valid stack over them is not done, and says so.
+        with pytest.raises(InvalidBlocksError, match=r"(?s)3 of 3 blocks are not valid.*owes \['extra'\].*build_blocks\(\)"):
+            nomarkers(rekeyed).build()
         table = nomarkers(rekeyed)
         assert table.tabs_redirected(parallelization='inline').all()
         assert table.tab(1).read('rows') == "rows-1\n"
+
+    def test_build_blocks_builds_what_the_adopted_tabs_owe_and_vouches_for_them(self, rekeyed):
+        nomarkers(rekeyed).build_blocks()
+        table = nomarkers(rekeyed)
+        assert table.valid_tabs(parallelization='inline', proxies=False).all()
+        assert table._blocks_vouched_()
+        nomarkers(rekeyed).build()      # done, and quiet about it
+
+    def test_a_rekeyed_tab_moves_the_fingerprint(self, rekeyed, monkeypatch):
+        nomarkers(rekeyed).build_blocks()
+        assert nomarkers(rekeyed)._blocks_vouched_()
+        monkeypatch.setattr(RowTab, 'VERSION', 2)
+        assert not nomarkers(rekeyed)._blocks_vouched_()
 
     def test_specialize_tabs_adopts_them_and_builds_nothing(self, rekeyed):
         found = nomarkers(rekeyed).specialize_tabs(parallelization='inline')

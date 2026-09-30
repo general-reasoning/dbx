@@ -18,7 +18,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 
 import dbx
-from dbx.datablocks import DATADICT, DATAFILE, Datablock
+from dbx.datablocks import DATADICT, DATAFILE, Datablock, InvalidBlocksError
 from dbx.featuretables import Featuretable, Featuretab, Datacollator
 from dbx.dataparts import (
     Logger,
@@ -293,6 +293,32 @@ def label_vector(collator: Datacollator, data: dict, *, allow_none: bool = False
     return y.ravel()
 
 
+def check_probe_inputs(probe) -> None:
+    """Raise `InvalidBlocksError` here, in the parent, before any worker starts, when a tab a probe will read is not valid.
+
+    A worker reading an invalid tab fails far from the cause -- a missing shard
+    index, one traceback per worker -- and says nothing of why. The tables
+    asked are the ones the collator's slices are read from: the feature
+    table's own, and the upstream ones its slices route to.
+    """
+    table = probe.var.feature_table
+    collator = getattr(probe.var, 'collator', None)
+    owners = {}
+    if collator is not None and hasattr(table, '_route_'):
+        for owner, s_name, _ in table._route_(collator.slices()):
+            owners.setdefault(id(owner), (owner, []))[1].append(s_name)
+    else:
+        owners[id(table)] = (table, list(collator.slices()) if collator is not None else [])
+    for owner, slices in owners.values():
+        if not hasattr(owner, 'valid_blocks') or not (getattr(owner, 'n_tabs', 0) or 0):
+            continue
+        invalid = list(owner.valid_blocks(parallelization=probe.parallelization, n_workers=probe.n_workers,
+                                          false_only=True).index)
+        if invalid:
+            raise InvalidBlocksError(owner, invalid,
+                                     reader=f"{probe.anchorkeypath}: reading {slices} from its tabs")
+
+
 class TabAffineLogisticCallable:
     """Worker callable that loads one tab's concatenated signal matrix and labels."""
 
@@ -546,6 +572,7 @@ class FeatureAffineLogisticProbe(Datablock):
     # 4. Helpers -----------------------------------------------------------
 
     def _tab_results_(self, tag: str, make_callable):
+        check_probe_inputs(self)
         table = self.var.feature_table
         n_tabs = getattr(table, 'n_tabs', 0) or 0
         executor_kwargs = dict(n_workers=self.n_workers,
@@ -719,6 +746,7 @@ class FeatureStatsProbe(Datablock):
 
     def __build__(self):
         self.log.verbose(f"FeatureStatsProbe.__build__: BEGIN {self.anchorkeypath}")
+        check_probe_inputs(self)
         table = self.var.feature_table
 
         n_tabs = getattr(table, 'n_tabs', 0) or 0

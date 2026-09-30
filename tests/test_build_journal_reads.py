@@ -237,10 +237,20 @@ def test_already_built_table_shortcircuits_build_and_build_tree(tmp_path, monkey
     assert reads == [], "build_tree() on an already-valid table must not read tab journals"
 
 
-def test_build_tree_deep_forces_build(tmp_path, monkeypatch):
+def test_build_tree_deep_asks_every_tab(tmp_path, monkeypatch):
+    """deep=True takes no short cut -- neither the table's validity nor its manifest's: every tab is asked.
+
+    And reads no journal for it: every tab being valid, none has a specialization to resolve.
+    """
     Table(datalake=str(tmp_path), spec={'n': 4}).build()
     reads = _count_full_reads(monkeypatch)
-    table = Table(datalake=str(tmp_path), spec={'n': 4})
-    table.build_tree(deep=True)
-    tab_reads = [a for a in reads if a == Tab.anchor]
-    assert len(tab_reads) >= 1, "build_tree(deep=True) must force build"
+    asked = []
+    original = Tab.valid
+    monkeypatch.setattr(Tab, 'valid', lambda self: asked.append(self.var.tab_idx) or original(self))
+
+    Table(datalake=str(tmp_path), spec={'n': 4}).build_tree()
+    assert asked == [], "the manifest vouches for the tabs of a built table"
+
+    Table(datalake=str(tmp_path), spec={'n': 4}).build_tree(deep=True)
+    assert sorted(set(asked)) == [0, 1, 2, 3], "build_tree(deep=True) must ask every tab"
+    assert [a for a in reads if a == Tab.anchor] == []

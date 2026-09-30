@@ -2636,10 +2636,12 @@ class Datajournal:
                 return pd.read_parquet(f, engine='pyarrow')
 
         desc = desc or 'Reading journal files'
+        # Progress on reading a journal is VERBOSE detail, as its log lines are.
+        quiet = not (hasattr(log, 'ist') and log.ist('verbose'))
         results = [None] * len(files)
         with ThreadPoolExecutor(max_workers=max(1, min(n_workers, len(files)))) as ex:
             futures = {ex.submit(read_entry_file, file): i for i, file in enumerate(files)}
-            for future in tqdm.tqdm(as_completed(futures), desc=desc, total=len(files)):
+            for future in tqdm.tqdm(as_completed(futures), desc=desc, total=len(files), disable=quiet):
                 i = futures[future]
                 try:
                     _df = future.result()

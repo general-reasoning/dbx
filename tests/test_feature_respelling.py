@@ -102,7 +102,7 @@ def test_a_feature_tab_built_under_the_sentinel_is_read_under_the_marker(tmp_pat
         old = _features(url, ef).build()
         old_final = old.data(('features', 'final'))['features']['final']
         bipolar_old = BipolarFeaturetab(datalake=url, tag='bipolar', spec=dict(
-            featuretab=old, layer='final', threshold=0.3)).build()
+            featuretab=old, feature='final', threshold=0.3)).build()
         old_bipolar = bipolar_old.data('bipolar_features')['bipolar_features']['bipolar_features']
 
     tab = _features(url, ef)
@@ -114,7 +114,7 @@ def test_a_feature_tab_built_under_the_sentinel_is_read_under_the_marker(tmp_pat
     assert tab.declared_columns('features') == {'final': 'ndarray:float32'}
 
     bipolar = BipolarFeaturetab(datalake=url, tag='bipolar', spec=dict(
-        featuretab=tab, layer='final', threshold=0.3)).build()
+        featuretab=tab, feature='final', threshold=0.3)).build()
     assert sorted(bipolar.redirected_topics()) == ['bipolar_features', 'tab_bipolar_features']
     assert bipolar.valid()
     got = bipolar.data('bipolar_features')['bipolar_features']['bipolar_features']

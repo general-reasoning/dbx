@@ -567,6 +567,9 @@ class Featuretable(UpstreamTabSlices, Datatable):
     TAB = Featuretab
     UPSTREAM_TABS = ('datapoint_table',)
     VERSION = 1
+    #: The TOPICS it had while Datatable's included ``tab_paths``: kept, so that its identity does not move.
+    TOPICS = Datatable.TAB_PATHS_TOPICS
+    SPECIALIZATIONS = Datatable.TAB_PATHS_SPECIALIZATIONS
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -752,6 +755,9 @@ class BipolarFeaturetable(UpstreamTabSlices, Datatable):
     TAB = BipolarFeaturetab
     UPSTREAM_TABS = ('featuretable',)
     VERSION = 1
+    #: The TOPICS it had while Datatable's included ``tab_paths``: kept, so that its identity does not move.
+    TOPICS = Datatable.TAB_PATHS_TOPICS
+    SPECIALIZATIONS = Datatable.TAB_PATHS_SPECIALIZATIONS
 
     @dataclass
     class VAR(Datatable.VAR):

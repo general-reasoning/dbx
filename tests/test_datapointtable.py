@@ -134,7 +134,8 @@ class TestTopicsFromSlices:
         assert 'numbers' not in LetterTable.TOPICS
 
     def test_table_keeps_its_inherited_topics(self):
-        assert LetterTable.TOPICS['tab_paths'] is DATADIR
+        # Datatable's own is `done` alone: its tabs' validity is its manifest's, not a topic's.
+        assert 'tab_paths' not in LetterTable.TOPICS
         assert LetterTable.TOPICS['done'].filename == 'done'
         assert 'tabs' not in LetterTable.TOPICS
 
@@ -913,21 +914,18 @@ class TestTableSampler:
 
 class TestValidTabAndSentinels:
 
-    def test_sentinels_written_on_build(self, tmp_path):
+    def test_manifest_written_on_build(self, tmp_path):
         tbl = LetterTable(datalake=str(tmp_path / "sentinel_test"), spec=dict(n_tabs_=3))
         for i in range(3):
             assert not tbl.valid_tab(i)
-            assert not tbl._check_tab_path_(i)
-        
+        assert tbl._read_blocks_manifest_() is None
+
         tbl.build()
-        
-        for i in range(3):
-            assert tbl._check_tab_path_(i)
-            assert tbl.valid_tab(i)
-            sentinel_path = os.path.join(tbl.path('tab_paths'), f"tab_{i}.path")
-            assert os.path.exists(sentinel_path)
-            with open(sentinel_path) as f:
-                assert f.read().strip() == tbl.tab(i).anchorkeypath
+
+        again = LetterTable(datalake=str(tmp_path / "sentinel_test"), spec=dict(n_tabs_=3))
+        assert again._read_blocks_manifest_() == [again.tab(i).anchorkeypath for i in range(3)]
+        assert again._blocks_cross_checked_()
+        assert all(again.valid_tab(i) for i in range(3))
 
     def test_fallback_when_tab_paths_topic_missing(self, tmp_path):
         class NoTabPathsTable(LetterTable):
@@ -992,9 +990,7 @@ class TestValidTabAndSentinels:
         )
         # Manually build tab 0 and tab 2
         tbl.tab(0).build()
-        tbl._write_tab_path_(0)
         tbl.tab(2).build()
-        tbl._write_tab_path_(2)
 
         assert tbl.valid_tab(0)
         assert not tbl.valid_tab(1)
@@ -1005,7 +1001,6 @@ class TestValidTabAndSentinels:
         tbl.build()
         for i in range(4):
             assert tbl.valid_tab(i)
-            assert tbl._check_tab_path_(i)
 
     def test_filter_built_tabs_option(self, tmp_path):
         tbl_default = LetterTable(datalake=str(tmp_path / "filter_default"), spec=dict(n_tabs_=2))
@@ -1031,9 +1026,7 @@ class TestValidTabAndSentinels:
         assert tbl.valid_tabs(n_workers=1).tolist() == [False, False, False, False]
 
         tbl.tab(0).build()
-        tbl._write_tab_path_(0)
         tbl.tab(2).build()
-        tbl._write_tab_path_(2)
 
         assert tbl.valid_tabs().tolist() == [True, False, True, False]
         assert tbl.valid_blocks().tolist() == [True, False, True, False]
@@ -1146,7 +1139,6 @@ class TestValidTabAndSentinels:
             spec=dict(n_tabs_=4),
         )
         dst_tbl.tab(0).build()
-        dst_tbl._write_tab_path_(0)
         dst_tbl.tab(2).UNSAFE_redirect(paths=src_tbl.tab(2).paths(), OVERRIDE=True)
 
         partition = DatapointPartition(

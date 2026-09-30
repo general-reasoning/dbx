@@ -135,3 +135,5 @@ def test_datastack_devices_passed_to_executor(tmp_path):
     # Test build execution with devices present
     res = stack.build()
     assert res is stack
+    # A stack with no topics of its own is valid vacuously: its build is its blocks'.
+    assert all(stack.block(i).valid() for i in range(stack.n_blocks))

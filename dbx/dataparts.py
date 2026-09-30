@@ -1375,8 +1375,8 @@ class _CallableExecutorBase_(_CarriesDatajournal_):
                 # Announced, because nothing else is on screen from here: the
                 # bar is full, and a worker with a large result still has to
                 # finish writing it and exit.
-                self.log.info(f"{self.tag}: {done_count}/{len(callables)} results received; "
-                              f"stopping {len(workers)} worker(s)")
+                self.log.verbose(f"{self.tag}: {done_count}/{len(callables)} results received; "
+                                 f"stopping {len(workers)} worker(s)")
                 for _ in workers:
                     done_queue.put(None)
                 # Keeping what arrives, not merely unblocking the writer: the
@@ -1386,7 +1386,7 @@ class _CallableExecutorBase_(_CarriesDatajournal_):
                 self.log.debug("Joining workers")
                 for w in workers:
                     w.join()
-                self.log.info(f"{self.tag}: workers stopped")
+                self.log.verbose(f"{self.tag}: workers stopped")
             if pexc is not None:
                 self.log.verbose("Reraising exception from worker")
                 raise _with_payloads_(pexc, payloads)

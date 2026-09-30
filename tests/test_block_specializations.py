@@ -8,9 +8,11 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from test_specializations import RowTab, TestOneJournalReadForAWholeTable, adopted, v1, v1table  # noqa: E402
+from test_specializations import (  # noqa: E402
+    TABLE_ANCHOR, RowTab, RowTableV1, TestOneJournalReadForAWholeTable, adopted, v1, v1table,
+)
 
-from dbx.datablocks import Datablock  # noqa: E402
+from dbx.datablocks import Datablock, InvalidBlocksError  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -267,29 +269,6 @@ class TestSpecializeMethod:
         assert len(valid_res) == 3
         assert valid_res.all()
 
-    def test_tab_adopts_redirected_sentinel_path(self, grown):
-        # Build table
-        table = v1table(grown, spec={'n': 3}, tag='sentinel_adopt')
-        table.build()
-        assert table.valid()
-
-        # Point tab 0 sentinel to tab 1's path
-        topic_name = table._tab_paths_topic_()
-        sentinel_0 = os.path.join(table.path(topic_name), 'tab_0.path')
-        sentinel_1 = os.path.join(table.path(topic_name), 'tab_1.path')
-        with table.fs.open(sentinel_1, 'r') as f:
-            target_path = f.read().strip()
-        with table.fs.open(sentinel_0, 'w') as f:
-            f.write(target_path)
-
-        # Reconstruct table with redirected paths (as when adopted whole) and access tab(0)
-        t2 = v1table(grown, spec={'n': 3}, tag='sentinel_adopt')
-        t2._redirected_paths_ = {'tab_paths': table.path(topic_name), 'done': table.path('done')}
-        tab0 = t2.tab(0)
-        assert tab0.valid_topic('rows')
-        with tab0.fs.open(tab0.path('rows'), 'r') as f:
-            assert f.read() == "rows-1\n"
-
     def test_tab_specializations_from_string_representation(self, grown):
         spec_str = (
             "[Specialization(spec={}, topics={'rows': 'SLICETOPIC'}, "
@@ -343,27 +322,6 @@ class TestSpecializeMethod:
         assert b_a._redirected_paths_['spectra'] == c_path
         with b_a.fs.open(b_a.path('spectra'), 'r') as f:
             assert f.read() == "spectra-16000"
-
-    def test_installer_does_not_skip_invalid_block_on_stale_sentinel(self, grown):
-        table = v1table(grown, spec={'n': 2}, tag='installer_sentinel_test')
-        # Simulate a stale sentinel existing for tab 0 when tab 0 is not actually valid
-        topic_name = table._block_paths_topic_()
-        if topic_name:
-            sentinel_dir = table.path(topic_name, ensure_dirpath=True)
-            sentinel_file = os.path.join(sentinel_dir, "tab_0.path")
-            with table.fs.open(sentinel_file, 'w') as f:
-                f.write("/nonexistent/path")
-
-            assert table._check_block_path_(0) is True
-
-            # The block itself is invalid
-            assert table.tab(0).valid() is False
-
-            # Installer should NOT return (None, True) since block is invalid
-            installer = table.DatablockSpecializationInstaller(0)
-            res = installer(table)
-            # Either it tries to specialize and fails/succeeds, but it must NOT return (None, True)
-            assert res != (None, True)
 
     def test_read_mds_shard_raises_on_missing_index(self, tmp_path):
         import fsspec
@@ -509,7 +467,63 @@ class TestCombineSpecializations:
         assert target_list._redirected_paths_['tb'] == sb.path('tb')
 
 
+class RowTableNoMarkers(RowTableV1):
+    """RowTableV1 without `tab_paths`: which of its tabs are built is known only by asking them."""
+
+    TOPICS = {'summary': 'summary.txt', 'done': 'done'}
 
 
+def nomarkers(url, **kw):
+    spec = kw.pop('spec', {'n': 3})
+    return RowTableNoMarkers(datalake=str(url), anchor=TABLE_ANCHOR, spec=spec, **kw)
 
 
+@pytest.fixture
+def rekeyed(tmp_path, monkeypatch):
+    """A table without `tab_paths`, built; then its TAB grown a topic, re-keying every tab.
+
+    The table's own identity does not move, so it is still valid over tabs that are not.
+    """
+    nomarkers(tmp_path).build()
+    TestOneJournalReadForAWholeTable._grow_the_tab(monkeypatch)
+    table = nomarkers(tmp_path)
+    assert table.valid()
+    assert not table.valid_tabs(parallelization='inline').any()
+    return tmp_path
+
+
+class TestAValidStackSpecializesItsTabs:
+    """A stack's own validity says nothing about tabs that moved to identities of their own."""
+
+    def test_build_adopts_the_tabs_of_a_valid_stack(self, rekeyed):
+        # Adopted, the tabs still owe `extra`: a valid stack over them is not done, and says so.
+        with pytest.raises(InvalidBlocksError, match=r"(?s)3 of 3 blocks are not valid.*owes \['extra'\].*build_blocks\(\)"):
+            nomarkers(rekeyed).build()
+        table = nomarkers(rekeyed)
+        assert table.tabs_redirected(parallelization='inline').all()
+        assert table.tab(1).read('rows') == "rows-1\n"
+
+    def test_build_blocks_builds_what_the_adopted_tabs_owe_and_vouches_for_them(self, rekeyed):
+        nomarkers(rekeyed).build_blocks()
+        table = nomarkers(rekeyed)
+        assert table.valid_tabs(parallelization='inline', validation='valid').all()
+        assert table._blocks_cross_checked_()
+        nomarkers(rekeyed).build()      # done, and quiet about it
+
+    def test_a_rekeyed_tab_fails_the_cross_check(self, rekeyed, monkeypatch):
+        nomarkers(rekeyed).build_blocks()
+        assert nomarkers(rekeyed)._blocks_cross_checked_()
+        monkeypatch.setattr(RowTab, 'VERSION', 2)
+        assert not nomarkers(rekeyed)._blocks_cross_checked_()
+
+    def test_specialize_tabs_adopts_them_and_builds_nothing(self, rekeyed):
+        found = nomarkers(rekeyed).specialize_tabs(parallelization='inline')
+        assert [sp is not None for sp in found] == [True, True, True]
+        table = nomarkers(rekeyed)
+        assert table.tabs_redirected(parallelization='inline').all()
+        assert not any(table.tab(i).validtopic('extra') for i in range(3)), "adopting builds nothing"
+
+    def test_again_it_finds_nothing_to_do(self, rekeyed):
+        nomarkers(rekeyed).specialize_tabs(parallelization='inline')
+        again = nomarkers(rekeyed).specialize_tabs(parallelization='inline')
+        assert [sp is None for sp in again] == [True, True, True]

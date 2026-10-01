@@ -50,7 +50,7 @@ class TestRemote(unittest.TestCase):
         r = remote()
         self.assertIsNotNone(r)
         # Verify we can access an attribute from the remote dbx module
-        self.assertIsNotNone(r.Logger)
+        self.assertIsNotNone(r.Datalog)
 
     def test_remote_apply(self):
         """Verify executing a local function on a remote actor via r.run()."""

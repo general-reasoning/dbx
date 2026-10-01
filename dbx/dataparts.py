@@ -3,7 +3,7 @@ Standalone utility functions and classes for dbx.
 
 This module contains components that do **not** depend on ``Datablock``
 (the dependency runs one way: ``datablocks`` imports from here, never back):
-Logger, OutputTee, I/O helpers, term evaluator, callable executors, etc.
+OutputTee, I/O helpers, term evaluator, callable executors, etc.
 """
 import ast
 import atexit
@@ -159,175 +159,37 @@ def env(key: str, default: str|None = None) -> str:
     return f"$dbx.getenv('{key}', '{default}')"
 
 
-class Logger:
-    """Lightweight, printf-style logger with level gating.
+def _datalog_(name: Optional[str] = None, **kwargs) -> 'Datalog':
+    """A `Datalog` view, made from these arguments when it is first written to.
 
-    Levels (from most to least severe): ``ERROR``, ``WARNING``, ``INFO``,
-    ``VERBOSE``, ``SELECTED``, ``DEBUG``, ``DETAILED``.
-
-    Each level can be enabled via constructor keyword, environment
-    variable (``DBX_LOG_<LEVEL>``), or built-in default.
-
-    Parameters
-    ----------
-    name : str, optional
-        Prefix printed before every message.
-    warning, info, verbose, debug, selected, detailed : bool, optional
-        Override the default enable/disable for each level.
-    selection : str or list[str], optional
-        Fully-qualified function names that ``selected()`` should emit
-        for.  Comma-separated string or list.  Falls back to
-        ``DBX_LOG_SELECTION``.
-    datetime : bool
-        Include ISO-8601 timestamp in output (default ``True``).
-    stack_depth : int
-        Caller-frame offset for function-name tagging (default ``2``).
+    What this module's functions take for ``log=`` by default, and log through
+    when they make their own. `Datalog` lives in `journals`, which imports this
+    module at the top: so it is not there when a default here is made, and is
+    looked up on first use instead.
     """
+    return _DeferredDatalog_(name, kwargs)
+
+
+class _DeferredDatalog_:
+    """A `Datalog` view, made on first use -- see `_datalog_`."""
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(
-        self,
-        name: Optional[str] = None,
-        *,
-        warning: bool = None,
-        info: bool = None,
-        verbose: bool = None,
-        debug: bool = None,
-        selected: bool = None,
-        detailed: bool = None,
-        selection: Union[str, Sequence[str]] = None,
-        datetime: bool = True,
-        stack_depth: int = 2,
-    ):
-        self.stack_depth = stack_depth
-        self.name = name
-        self.datetime = datetime
-        self.allowed = ["ERROR"]
-        
-        _defaults_ = {
-            'warning': True,
-            'info': True,
-            'verbose': False,
-            'selected': True,
-            'debug': False,
-            'detailed': False,
-            'selection': None,
-        }
-        def set_arg(name, locals):
-            """Prioritize kwarg value, fall back to env var, then to default."""
-            # Get kwarg value from local scope
-            kwarg_value = locals.get(name)
-            if kwarg_value is not None:
-                result = kwarg_value
-            else:
-                # Generate env key: 'warning' -> 'DBX_LOG_WARNING'
-                env_key = f'DBX_LOG_{name.upper()}'
-                env_val = os.environ.get(env_key)
-                if env_val is not None:
-                    try:
-                        result = __eval__(env_val)
-                    except (NameError, SyntaxError):
-                        result = env_val
-                else:
-                    result = _defaults_[name]
-            setattr(self, f'_{name}_', result)
-            if result and name != 'selection':
-                self.allowed.append(name.upper())
-        
-        for argname in _defaults_.keys():
-            set_arg(argname, locals())
-        
-        if self._selection_ is None:
-            self._selection_ = []
-        elif isinstance(self._selection_, str):
-            self._selection_ = [s.strip() for s in self._selection_.split(',')]
-        if len(self._selection_) == 0:
-            self._selection_ = os.environ.get('DBX_LOG_SELECTION')
-            if self._selection_ is not None:
-                self._selection_ = [s.strip() for s in self._selection_.split(',')]
+    def __init__(self, name, kwargs):
+        self._args = (name, kwargs)
+        self._log = None
 
-    # 2. Declared API ------------------------------------------------------
-
-    def get(self, key):
-        return getattr(self, f"_{key}_")
-
-    def ist(self, key):
-        return getattr(self, f"_{key}_")
-
-    def error(self, msg, *args, **kwargs):
-        self._print_("ERROR", self._fmt_(msg, args))
-
-    def warning(self, msg, *args, **kwargs):
-        self._print_("WARNING", self._fmt_(msg, args))
-
-    def warn(self, msg, *args, **kwargs):
-        self._print_("WARNING", self._fmt_(msg, args))
-
-    def info(self, msg, *args, **kwargs):
-        self._print_("INFO", self._fmt_(msg, args))
-
-    def debug(self, msg, *args, **kwargs):
-        self._print_("DEBUG", self._fmt_(msg, args))
-
-    def verbose(self, msg, *args, **kwargs):
-        self._print_("VERBOSE", self._fmt_(msg, args))
-
-    def selected(self, msg, *args, **kwargs):
-        if not self._selection_:
-            return
-        frame = sys._getframe(self.stack_depth - 1)
-        module = frame.f_globals.get('__name__')
-        qualname = frame.f_code.co_qualname  # e.g. "MyClass.tag" (Python 3.11+)
-        function = frame.f_code.co_name      # e.g. "tag"
-        fqn_full  = f"{module}.{qualname}"   # "pkg.mod.MyClass.tag"
-        fqn_short = f"{module}.{function}"   # "pkg.mod.tag"
-        if fqn_full not in self._selection_ and fqn_short not in self._selection_:
-            return
-        self._print_("SELECTED", self._fmt_(msg, args))
-
-    def detailed(self, msg, *args, **kwargs):
-        self._print_("DETAILED", self._fmt_(msg, args))
-
-    def silent(self, msg, *args, **kwargs):
-        pass
-
-    # 4. Helpers -----------------------------------------------------------
-
-    def _print_(self, prefix, msg):
-        """
-        #TODO: figure out why the next line causes things to hang sometimes
-        stack = inspect.stack() 
-        if self.stack_depth is None or self.stack_depth >= len(stack):
-            func = None
-        else:
-            frame = stack[self.stack_depth]
-            func = frame.function
-        """
-        func = None
-        
-        if self.name is None:
-            if func is None:
-                tag = ""
-            else:
-                tag = f"{func}: "
-        else:
-            if func is None:
-                tag = f"{self.name}: "
-            else:
-                tag = f"{self.name}: {func}: "
-        if prefix in self.allowed:
-            dt = f"{datetime.datetime.now().isoformat()}: " if self.datetime else ""
-            print(f"{prefix}: {dt}{tag}{msg}")
-
-    def _fmt_(self, msg, args):
-        """Format message stdlib-style: msg % args when args are provided."""
-        if args:
-            try:
-                return msg % args
-            except (TypeError, ValueError):
-                return f"{msg} {args}"
-        return msg
+    def __getattr__(self, attr):
+        # Only what a Datalog answers: a dunder looked up on an instance
+        # unpickling -- before __init__ has run -- must not reach for one.
+        if attr.startswith('__'):
+            raise AttributeError(attr)
+        log = self.__dict__.get('_log')
+        if log is None:
+            from .journals import Datalog
+            name, kwargs = self.__dict__['_args']
+            log = self._log = Datalog(name, **kwargs)
+        return getattr(log, attr)
 
 
 class OutputTee:
@@ -689,7 +551,7 @@ def eval(name):
             argkwargstr = name[lb + 1 : rb]
         return funcstr, argkwargstr
 
-    Logger("eval").detailed(f" ====================> Evaluating term {repr(name)}")
+    _datalog_("eval").detailed(f" ====================> Evaluating term {repr(name)}")
     if isinstance(name, dict):
         term = {k: eval(v) for k, v in name.items()}
     elif isinstance(name, Iterable) and not isinstance(name, str):
@@ -958,14 +820,14 @@ def pprint(argstr=None, *, capture_output: bool = False, **kwargs):
             _pprint_.pprint(r)
 
 
-def write_str(text, path, *, storage_options=None, log=Logger(), debug: bool = False):
+def write_str(text, path, *, storage_options=None, log=_datalog_(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "w") as f:
         f.write(text)
         log.detailed(f"WROTE {path}")
 
 
-def read_str(path, *, storage_options=None, log=Logger(), debug: bool = False):
+def read_str(path, *, storage_options=None, log=_datalog_(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "r") as f:
         text = f.read()
@@ -973,14 +835,14 @@ def read_str(path, *, storage_options=None, log=Logger(), debug: bool = False):
     return text
 
 
-def write_yaml(data, path, *, storage_options=None, log=Logger(), debug: bool = False):
+def write_yaml(data, path, *, storage_options=None, log=_datalog_(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "w") as f:
         yaml.dump(data, f)
         log.detailed(f"WROTE {path}")
 
 
-def read_yaml(path, *, storage_options=None, log=Logger(), safe: bool = False, debug: bool = False):
+def read_yaml(path, *, storage_options=None, log=_datalog_(), safe: bool = False, debug: bool = False):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "r") as f:
         data = yaml.load(f, Loader=yaml.BaseLoader) if safe else yaml.load(f, Loader=yaml.UnsafeLoader)
@@ -988,14 +850,14 @@ def read_yaml(path, *, storage_options=None, log=Logger(), safe: bool = False, d
     return data
 
 
-def write_json(data, path, *, storage_options=None, log=Logger(), debug: bool = False):
+def write_json(data, path, *, storage_options=None, log=_datalog_(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "w") as f:
         json.dump(data, f)
         log.detailed(f"WROTE {path}")
 
 
-def read_json(path, *, storage_options=None, log=Logger(), debug: bool = False):
+def read_json(path, *, storage_options=None, log=_datalog_(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "r") as f:
         data = json.load(f)
@@ -1003,7 +865,7 @@ def read_json(path, *, storage_options=None, log=Logger(), debug: bool = False):
     return data
 
 
-def write_tensor(tensor, path, *, storage_options=None, log=Logger(), debug: bool = False):
+def write_tensor(tensor, path, *, storage_options=None, log=_datalog_(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     array = tensor.numpy()
     with fs.open(path, "wb") as f:
@@ -1011,7 +873,7 @@ def write_tensor(tensor, path, *, storage_options=None, log=Logger(), debug: boo
         log.detailed(f"WROTE {path}")
 
 
-def read_tensor(path, *, storage_options=None, log=Logger(), debug: bool = False):
+def read_tensor(path, *, storage_options=None, log=_datalog_(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "rb") as f:
         array = np.load(f)
@@ -1020,25 +882,25 @@ def read_tensor(path, *, storage_options=None, log=Logger(), debug: bool = False
     return tensor
 
 
-def write_tensors(path, *, log=Logger(), debug: bool = False, **tensors):
+def write_tensors(path, *, log=_datalog_(), debug: bool = False, **tensors):
     arrays = {k: v.numpy() for k, v in tensors.items()}
     return write_npz(path, log=log, debug=debug, **arrays)
 
 
-def read_tensors(path, *keys, log=Logger(), debug: bool = False):
+def read_tensors(path, *keys, log=_datalog_(), debug: bool = False):
     arrays = read_npz(path, *keys, log=log, debug=debug)
     tensors = {k: torch.from_numpy(v) for k, v in arrays.items()}
     return tensors
 
 
-def write_npz(path, *, storage_options=None, log=Logger(), debug: bool = False, **kwargs):
+def write_npz(path, *, storage_options=None, log=_datalog_(), debug: bool = False, **kwargs):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "wb") as f:
         np.savez(f, **kwargs)
         log.detailed(f"WROTE {list(kwargs.keys())} to {path}")
 
 
-def read_npz(path, *keys, storage_options=None, log=Logger(), debug: bool = False):
+def read_npz(path, *keys, storage_options=None, log=_datalog_(), debug: bool = False):
     fs, _ = fsspec.url_to_fs(path, **(storage_options or {}))
     with fs.open(path, "rb") as f:
         data = np.load(f, allow_pickle=True)
@@ -1061,7 +923,7 @@ def read_pickle(path, *, storage_options=None):
         return pickle.load(f)
 
 
-def write_frame(frame: pd.DataFrame, path, *, storage_options=None, log=Logger(), **kwargs):
+def write_frame(frame: pd.DataFrame, path, *, storage_options=None, log=_datalog_(), **kwargs):
     """Write a pandas DataFrame to *path* (any fsspec URL).
 
     The serialisation format is chosen by the file extension:
@@ -1082,7 +944,7 @@ def write_frame(frame: pd.DataFrame, path, *, storage_options=None, log=Logger()
     log.detailed(f"WROTE frame {frame.shape} to {path}")
 
 
-def read_frame(path, *, storage_options=None, log=Logger(), **kwargs) -> pd.DataFrame:
+def read_frame(path, *, storage_options=None, log=_datalog_(), **kwargs) -> pd.DataFrame:
     """Read a pandas DataFrame from *path* (any fsspec URL).
 
     Format is inferred from the file extension (see :func:`write_frame`).
@@ -1218,7 +1080,7 @@ class _CallableExecutorBase_(_CarriesDatajournal_):
         _n_workers_  → int
         _make_queue_()   → a Queue-like object
         _make_event_()   → an Event-like object
-        _make_worker_(target, args) → a Thread/Process-like object with .start()/.join()
+        _make_worker_(target, args, idx) → a Thread/Process-like object with .start()/.join(), worker *idx*
         _after_start_(items, workers) → called after workers are started (default: no-op)
     """
 
@@ -1302,6 +1164,7 @@ class _CallableExecutorBase_(_CarriesDatajournal_):
                         target=self._run_items_stealing_,
                         args=(work_queue, ctx_args, ctx_kwargs, idx,
                               result_queue, done_queue, abort_event),
+                        idx=idx,
                     )
                     for idx in range(self._n_workers_)
                 ]
@@ -1314,6 +1177,7 @@ class _CallableExecutorBase_(_CarriesDatajournal_):
                         target=self._run_items_,
                         args=(cl, ctx_args, ctx_kwargs, off, idx,
                               result_queue, done_queue, abort_event),
+                        idx=idx,
                     )
                     for idx, (cl, off) in enumerate(zip(callable_lists, callable_offsets))
                 ]
@@ -1427,6 +1291,7 @@ class _CallableExecutorBase_(_CarriesDatajournal_):
                         target=self._run_items_stealing_,
                         args=(work_queue, ctx_args, ctx_kwargs, idx,
                               result_queue, done_queue, abort_event),
+                        idx=idx,
                     )
                     for idx in range(self._n_workers_)
                 ]
@@ -1439,6 +1304,7 @@ class _CallableExecutorBase_(_CarriesDatajournal_):
                         target=self._run_items_,
                         args=(cl, ctx_args, ctx_kwargs, off, idx,
                               result_queue, done_queue, abort_event),
+                        idx=idx,
                     )
                     for idx, (cl, off) in enumerate(zip(callable_lists, callable_offsets))
                 ]
@@ -1560,7 +1426,7 @@ class _CallableExecutorBase_(_CarriesDatajournal_):
     def _make_event_(self):
         raise NotImplementedError
 
-    def _make_worker_(self, target, args):
+    def _make_worker_(self, target, args, idx):
         raise NotImplementedError
 
     def _after_start_(self, items, workers):
@@ -1877,7 +1743,7 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
                  devices: list | None = None,
-                 log: Logger = Logger()):
+                 log: 'Datalog' = _datalog_()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
@@ -1900,8 +1766,9 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
     def _make_event_(self):
         return threading.Event()
 
-    def _make_worker_(self, target, args):
-        return threading.Thread(target=target, args=args)
+    def _make_worker_(self, target, args, idx):
+        # Named for the worker: what its `Datalog` lines lead with, under the dispatcher's.
+        return threading.Thread(target=target, args=args, name=f"t{idx}")
 
     def _worker_label_(self, worker_idx) -> str:
         return f"thread {worker_idx}"
@@ -1945,7 +1812,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
                  devices: list | None = None,
-                 log: Logger = Logger()):
+                 log: 'Datalog' = _datalog_()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
@@ -1976,10 +1843,11 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
     def _make_event_(self):
         return self._mp.Event()
 
-    def _make_worker_(self, target, args):
+    def _make_worker_(self, target, args, idx):
         # Pass target and args explicitly so the module-level _mp_worker_fn_
         # can be pickled by name (required for spawn/forkserver start methods).
-        return self._mp.Process(target=_mp_worker_fn_, args=(target, args))
+        # Named for the worker: what its `Datalog` lines lead with, under the dispatcher's.
+        return self._mp.Process(target=_mp_worker_fn_, args=(target, args), name=f"p{idx}")
 
     def _worker_label_(self, worker_idx) -> str:
         return f"process {worker_idx}"
@@ -2024,7 +1892,7 @@ class RayCallableExecutor(_CarriesDatajournal_):
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
                  devices: list | None = None,
-                 log: Logger = Logger()):
+                 log: 'Datalog' = _datalog_()):
         if workers is not None:
             self.workers = workers
             self.n_workers = len(workers)
@@ -2299,7 +2167,7 @@ class InlineCallableExecutor:
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
                  devices: list | None = None,
-                 log: Logger = Logger()):
+                 log: 'Datalog' = _datalog_()):
         self.n_workers = n_workers
         self.batch_size = batch_size
         self.tag = tag
@@ -2424,7 +2292,7 @@ class _TorchCallableExecutorMixin_:
                  batch_size: int = None,
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
-                 tag: str = "", log: Logger = Logger()):
+                 tag: str = "", log: 'Datalog' = _datalog_()):
         if not _TORCH_AVAILABLE:
             raise ImportError(
                 "torch is required for TorchMulti*CallableExecutor. "
@@ -2753,7 +2621,7 @@ def _qualified_name_(fn) -> str:
 
 
 def quotefn(fn, *args, tag="$", **kwargs):
-    log = Logger()
+    log = _datalog_()
     if callable(fn):
         fn = _qualified_name_(fn)
     def quote_arg(arg):
@@ -2770,7 +2638,7 @@ def quotefn(fn, *args, tag="$", **kwargs):
 
 
 def quote(obj, *args, tag="$", **kwargs):
-    log = Logger()
+    log = _datalog_()
     if not isinstance(obj, type) and hasattr(obj, 'quote') and callable(obj.quote):
         # An INSTANCE that quotes itself renders itself -- asked before
         # callable(), because being callable does not make it a function: a
@@ -2842,7 +2710,7 @@ def dbx_versions(version):
 
 def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     if log is None:
-        log = Logger(name="gitwrkreposetup")
+        log = _datalog_(name="gitwrkreposetup")
     global DBX_GIT_REPO
     global DBX_USE_WORK_REPO
     global DBX_WORK_ROOT
@@ -2954,7 +2822,7 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
         # Clear finder caches so the import machinery sees the new files.
         importlib.invalidate_caches()
 
-def gitrevision(*, log=Logger()):
+def gitrevision(*, log=_datalog_()):
     repopath = DBX_USE_WORK_REPO if DBX_USE_WORK_REPO is not None else DBX_GIT_REPO
     if repopath is not None:
         d_repo, project_repo = dbx_repos(repopath)
@@ -3041,7 +2909,7 @@ def pintrampoline(printer=None, log=None):
     old formatting.
     """
     if log is None:
-        log = Logger(name="pintrampoline")
+        log = _datalog_(name="pintrampoline")
     if os.environ.get('DBX_PINNED_REVISION'):
         return                                  # phase 2: already where we need to be
 
@@ -3106,7 +2974,7 @@ def pinshimdir(log=None):
     filesystem. A few KB.
     """
     if log is None:
-        log = Logger(name="pinshimdir")
+        log = _datalog_(name="pinshimdir")
     holder = tempfile.TemporaryDirectory(prefix='dbx-pinshim-')
     _DBX_PIN_ROOTS.append(holder)
     src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '_pinshim_.py')
@@ -3156,7 +3024,7 @@ def gitpinrepos(revision, *, gitrepo=None, pin_root=None, log=None):
         path on shared storage regardless of where Ray itself runs.
     """
     if log is None:
-        log = Logger(name="gitpinrepos")
+        log = _datalog_(name="gitpinrepos")
     dbx_repo, project_repo = dbx_repos(gitrepo)
     dbx_rev, project_rev = dbx_revisions(revision)
 
@@ -3196,7 +3064,7 @@ class SlurmRayCluster:
     Manages a Ray cluster running inside a Slurm job.
     """
 
-    def __init__(self, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log=Logger()):
+    def __init__(self, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log=_datalog_()):
         self.log = log
         self.job_id = None
         self.ray_address = None
@@ -3514,7 +3382,7 @@ class Remote:
 
 def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=None,
            pin_root=None, pin_mode='auto', pin_source=None, gitrepo=None,
-           working_dir='auto', log: Logger = Logger()):
+           working_dir='auto', log: 'Datalog' = _datalog_()):
     """
     Instantiate a remote dbx interpreter and return a Remote handle to it.
 
@@ -3721,7 +3589,7 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
     log.verbose(f"INSTANTIATING Remote with env: {dbx_env}, revision: {revision}, slurm: {bool(slurm)}, conda: {conda}")
     return Remote(revision=worker_revision, slurm=slurm)
 
-def slurm_remote(*, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger()):
+def slurm_remote(*, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: 'Datalog' = _datalog_()):
     """
     Start a Slurm job with a Ray cluster and return a Remote handle to it.
     """
@@ -3729,7 +3597,7 @@ def slurm_remote(*, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partiti
     return remote(revision=revision, slurm=cluster, conda=conda, log=log)
 
 
-def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
+def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: 'Datalog' = _datalog_(), **kwargs):
     if s is None:
         if len(sys.argv) < 2:
             raise ValueError(f"Too few args: {sys.argv}")
@@ -3763,7 +3631,7 @@ def slurm_exec(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, p
                  r._slurm = None
 
 
-def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: Logger = Logger(), **kwargs):
+def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1, partition=None, nodes=1, nodelist=None, time='01:00:00', log: 'Datalog' = _datalog_(), **kwargs):
     _pprint_.pprint(slurm_exec(s, revision=revision, conda=conda, gpus=gpus, mem=mem, cpus=cpus, partition=partition, nodes=nodes, nodelist=nodelist, time=time, log=log, **kwargs))
 
 

@@ -13,7 +13,7 @@ Quick start::
 Key modules
 -----------
 dataparts
-    Standalone utilities: :class:`Logger`, I/O helpers (``read_frame``,
+    Standalone utilities: I/O helpers (``read_frame``,
     ``write_tensor``, …), callable executors for threading / multiprocessing /
     Ray parallelism.
 datablocks
@@ -23,7 +23,7 @@ journals
     :class:`Datajournal` and the build records it reads and writes
     (:class:`DatajournalFrame`, :class:`DatajournalEntry`); the exec journal
     (:func:`execjournal`, :class:`ExecjournalFrame`); the filters both are
-    queried with.
+    queried with; and the log, :class:`Datalog`.
 
 Modules NOT imported here
 -------------------------

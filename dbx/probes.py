@@ -20,8 +20,8 @@ from sklearn.metrics import classification_report
 import dbx
 from dbx.datablocks import DATADICT, DATAFILE, Datablock, InvalidBlocksError
 from dbx.featuretables import Featuretable, Featuretab, Datacollator
+from dbx.journals import Datalog
 from dbx.dataparts import (
-    Logger,
     callable_executor,
     read_npz,
     read_pickle,
@@ -90,8 +90,8 @@ class FeatureAffineLogisticProber:
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, log: Logger | None = None):
-        self.log = log or Logger()
+    def __init__(self, log: Datalog | None = None):
+        self.log = log or Datalog()
 
     # 2. Declared API ------------------------------------------------------
 
@@ -136,11 +136,11 @@ class FeatureAffineLogisticProber:
         training_fraction: float = 0.8,
         fit_intercept: bool = True,
         tags: tuple[str, str] = ("(1)", "(2)"),
-        log: Logger | None = None,
+        log: Datalog | None = None,
     ) -> tuple[str, str]:
         """Evaluate two feature sets side-by-side."""
         import datetime
-        log = log or Logger()
+        log = log or Datalog()
         label1, label2 = tags
         log.verbose(f"EVALUATING features: {label1}: started at {datetime.datetime.now()}")
         report1 = FeatureAffineLogisticProber.evaluate_features(

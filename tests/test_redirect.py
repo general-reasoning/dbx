@@ -15,7 +15,7 @@ import pytest
 from dataclasses import dataclass
 from unittest.mock import patch
 
-from dbx.datablocks import DIRTOPIC, Datablock, DatajournalEntry, Logger, LogVolume
+from dbx.datablocks import DIRTOPIC, Datablock, DatajournalEntry, LogVolume
 
 
 @pytest.fixture(autouse=True)

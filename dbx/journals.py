@@ -1,4 +1,4 @@
-"""Journals: what was built (Datajournal) and what was run (Execjournal).
+"""Journals: what was built (Datajournal), what was run (Execjournal), and what was said (Datalog).
 
 - :class:`Datajournal` -- the handle a block writes its build records through,
   and reads them back with; :class:`DatajournalFrame` / :class:`DatajournalEntry`
@@ -8,6 +8,8 @@
   the record of each ``dbx.exec()`` run, written by :func:`write_exec_journal`.
 - :func:`filter_journal_frame` -- the column filters (regex, glob, dates) both
   journals are queried with.
+- :class:`Datalog` -- the log: level-gated lines, led by the worker that
+  wrote them, and the build-tree banners that nest across workers.
 
 Imports ``datablocks`` as a module and only uses it at call time: ``datablocks``
 imports from here at the top, so the names in it are not there yet when this
@@ -21,6 +23,7 @@ import fnmatch
 import functools
 import hashlib
 import os
+import multiprocessing
 import re
 import shutil
 import socket
@@ -29,7 +32,7 @@ import tempfile
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
+from typing import Optional, Sequence
 
 import fsspec
 import numpy as np
@@ -38,7 +41,6 @@ import tqdm
 
 from . import dataparts
 from .dataparts import (
-    Logger,
     OutputTee,
     Remote,
     default_datalake,
@@ -69,6 +71,367 @@ __eval__ = __builtins__['eval']
 #: date separator and raises -- so every parse of a journal ``datetime`` has to
 #: name it. That is what `_journal_datetimes_` is for.
 JOURNAL_DATETIME_FORMAT = '%Y-%m-%dT%H-%M-%S.%f'
+
+
+#: The Datalogs a ``with`` opened in the main thread: every thread's scope,
+#: under the ones its own ``with`` opened.
+_PROCESS_DATALOGS = []
+
+
+_PROCESS_DATALOGS_LOCK = threading.Lock()
+
+
+#: Per thread: ``.stack``, the Datalogs a ``with`` in it opened (any but the
+#: main thread); ``.depth``, how many subtrees deep its build is; ``.worker``,
+#: the name its lines lead with, once a carried Datalog has set it; and
+#: ``.restore``, what that Datalog's exit puts back.
+_THREAD_DATALOGS = threading.local()
+
+
+#: ``{pid: worker}``: what this process was named by the carried Datalog that
+#: first entered its main thread -- which a thread it starts on its own, with
+#: nothing carried, is named under. Keyed by pid, so a forked child does not
+#: take its parent's name for its own.
+_PROCESS_WORKERS = {}
+
+
+class Datalog:
+    """dbx's log: printf-style lines gated by level, led by the worker that wrote them and when.
+
+    Levels, most to least severe: ``ERROR`` (always on), ``WARNING``, ``INFO``,
+    ``VERBOSE``, ``SELECTED``, ``DEBUG``, ``DETAILED``. A line reads ::
+
+        main:        2026-10-01T12:03:44.123456: VERBOSE: anchor/key: message
+
+    An instance is a named VIEW of the log: its *name* leads its messages, and
+    a level it is given wins over everything else. A level it is not given is
+    the current scope's -- the innermost ``with Datalog(...)`` open in this
+    thread that sets it, then the main thread's -- else ``DBX_LOG_<LEVEL>``,
+    else :attr:`DEFAULTS`. It is looked up when a line is written, not when the
+    view is made, so a ``log=`` default made at import still hears ::
+
+        with dbx.Datalog(verbose=True):
+            stack.build_tree()      # every block's VERBOSE lines, however deep
+
+    `Datablock.log` is such a view: named for the block, with the block's own
+    ``info``/``verbose``/``debug``/``detailed`` over the scope's.
+
+    :meth:`subtree` brackets the build of a subtree. Its banners carry no level
+    and no name -- only the worker and the time, which are the same width on
+    every line -- so they line up, and indent with the nesting ::
+
+        main:        2026-...: ------------>>>--- BUILDING SUBTREE at a
+        main:        2026-...: ------------------>>>--- BUILDING SUBTREE at b
+        main:        2026-...: ------------------<<<--- BUILDING SUBTREE at b
+        main:        2026-...: ------------<<<--- BUILDING SUBTREE at a
+
+    The scope and the nesting are per thread, and a dbx executor sends them to
+    its workers with the work (:meth:`_carry_`, through `JournaledCallable`), as
+    it sends the `Datajournal` session. A worker is ``main`` in the process and
+    thread a command runs in, and a dbx executor's are named under the one that
+    dispatched to them: ``main/t0`` is its thread 0, ``main/p3`` its process 3,
+    ``main/p3/t1`` a thread of that.
+
+    Parameters
+    ----------
+    name : str, optional
+        Printed before every message.
+    warning, info, verbose, selected, debug, detailed : bool, optional
+        This view's level: None takes the scope's, the environment's, or the default.
+    selection : str or list[str], optional
+        Fully-qualified function names that :meth:`selected` emits for.
+        Comma-separated string or list. None takes the scope's, else
+        ``DBX_LOG_SELECTION``.
+    datetime : bool
+        Include an ISO-8601 timestamp (default True).
+    stack_depth : int
+        Caller-frame offset :meth:`selected` names the caller by (default 2).
+    """
+
+    LEVELS = ('warning', 'info', 'verbose', 'selected', 'debug', 'detailed')
+
+    #: Where a level no view, scope or ``DBX_LOG_<LEVEL>`` sets stands.
+    DEFAULTS = {'warning': True, 'info': True, 'verbose': False,
+                'selected': True, 'debug': False, 'detailed': False}
+
+    #: The width a worker's name is padded to, so lines -- banners above all --
+    #: line up across workers.
+    WORKER_WIDTH = 12
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __init__(
+        self,
+        name: Optional[str] = None,
+        *,
+        warning: bool = None,
+        info: bool = None,
+        verbose: bool = None,
+        debug: bool = None,
+        selected: bool = None,
+        detailed: bool = None,
+        selection: 'str | Sequence[str] | None' = None,
+        datetime: bool = True,
+        stack_depth: int = 2,
+    ):
+        self.name = name
+        self.datetime = datetime
+        self.stack_depth = stack_depth
+        given = dict(warning=warning, info=info, verbose=verbose,
+                     debug=debug, selected=selected, detailed=detailed)
+        self._levels = {k: v for k, v in given.items() if v is not None}
+        self._selection = self._selection_list_(selection)
+        # Set by _carry_() only: (depth, worker, pid, thread ident) where it was made.
+        self._carried = None
+
+    def __repr__(self):
+        levels = ', '.join(f"{k}={v!r}" for k, v in self._levels.items())
+        return f"dbx.Datalog({self.name!r}{', ' + levels if levels else ''})"
+
+    def __enter__(self):
+        stack = self._stack_()
+        with _PROCESS_DATALOGS_LOCK:
+            stack.append(self)
+        if self._carried is not None:
+            depth, worker, pid, ident = self._carried
+            self._thread_list_('restore').append(
+                (Datalog.depth(), getattr(_THREAD_DATALOGS, 'worker', None)))
+            _THREAD_DATALOGS.depth = depth
+            _THREAD_DATALOGS.worker = self._worker_under_(worker, pid, ident)
+        return self
+
+    def __exit__(self, *exc):
+        if self._carried is not None:
+            _THREAD_DATALOGS.depth, _THREAD_DATALOGS.worker = self._thread_list_('restore').pop()
+        stack = self._stack_()
+        with _PROCESS_DATALOGS_LOCK:
+            # The innermost entry of THIS handle, as `Datajournal.__exit__`.
+            for i in range(len(stack) - 1, -1, -1):
+                if stack[i] is self:
+                    del stack[i]
+                    break
+        return False
+
+    # 2. Declared API ------------------------------------------------------
+
+    def ist(self, level: str) -> bool:
+        """Whether *level* is on for this view: its own, else the scope's, else ``DBX_LOG_<LEVEL>``, else the default."""
+        v = self._levels.get(level)
+        if v is None:
+            for scope in reversed(self._scopes_()):
+                v = scope._levels.get(level)
+                if v is not None:
+                    break
+        if v is None:
+            v = self._env_(f"DBX_LOG_{level.upper()}")
+        if v is None:
+            v = self.DEFAULTS[level]
+        return bool(v)
+
+    def error(self, msg, *args, **kwargs):
+        self._print_("ERROR", self._fmt_(msg, args))
+
+    def warning(self, msg, *args, **kwargs):
+        self._print_("WARNING", self._fmt_(msg, args))
+
+    def warn(self, msg, *args, **kwargs):
+        self._print_("WARNING", self._fmt_(msg, args))
+
+    def info(self, msg, *args, **kwargs):
+        self._print_("INFO", self._fmt_(msg, args))
+
+    def debug(self, msg, *args, **kwargs):
+        self._print_("DEBUG", self._fmt_(msg, args))
+
+    def verbose(self, msg, *args, **kwargs):
+        self._print_("VERBOSE", self._fmt_(msg, args))
+
+    def selected(self, msg, *args, **kwargs):
+        selection = self._selection_names_()
+        if not selection:
+            return
+        frame = sys._getframe(self.stack_depth - 1)
+        module = frame.f_globals.get('__name__')
+        qualname = frame.f_code.co_qualname  # e.g. "MyClass.tag" (Python 3.11+)
+        function = frame.f_code.co_name      # e.g. "tag"
+        fqn_full  = f"{module}.{qualname}"   # "pkg.mod.MyClass.tag"
+        fqn_short = f"{module}.{function}"   # "pkg.mod.tag"
+        if fqn_full not in selection and fqn_short not in selection:
+            return
+        self._print_("SELECTED", self._fmt_(msg, args))
+
+    def detailed(self, msg, *args, **kwargs):
+        self._print_("DETAILED", self._fmt_(msg, args))
+
+    def silent(self, msg, *args, **kwargs):
+        pass
+
+    @contextlib.contextmanager
+    def subtree(self, at):
+        """Bracket the build of the subtree *at* in VERBOSE banners, everything built inside one level deeper.
+
+        The closing banner is written however the body ends, and the depth put
+        back, so a failed subtree leaves no level behind it.
+        """
+        self._banner_('>>>', f"BUILDING SUBTREE at {at}")
+        depth = Datalog.depth()
+        _THREAD_DATALOGS.depth = depth + 1
+        try:
+            yield self
+        finally:
+            _THREAD_DATALOGS.depth = depth
+            self._banner_('<<<', f"BUILDING SUBTREE at {at}")
+
+    def skip_subtree(self, at, why: str):
+        """The VERBOSE banner of a subtree *at* not built, and *why*, where its :meth:`subtree` banners would be."""
+        self._banner_('xxx', f"SKIPPING SUBTREE at {at}: {why}")
+
+    @staticmethod
+    def depth() -> int:
+        """How many subtrees deep this thread's build is: 0 outside any :meth:`subtree`."""
+        return getattr(_THREAD_DATALOGS, 'depth', 0)
+
+    @staticmethod
+    def worker() -> str:
+        """The name this thread's lines lead with: the one a carried Datalog gave it, else its own.
+
+        Its own is ``main`` in the main thread of a process no dbx executor
+        started; in another process, the name a carried Datalog gave that
+        process, else the process's name, else ``p<pid>``; and in a thread
+        other than its process's main one, that, ``/`` the thread's name.
+        """
+        worker = getattr(_THREAD_DATALOGS, 'worker', None)
+        if worker is not None:
+            return worker
+        pid = os.getpid()
+        proc = _PROCESS_WORKERS.get(pid)
+        if proc is None:
+            proc = 'main' if multiprocessing.parent_process() is None else Datalog._process_label_()
+        thread = threading.current_thread()
+        return proc if thread is threading.main_thread() else f"{proc}/{thread.name}"
+
+    # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _carry_() -> 'Datalog':
+        """The scope open here, the nesting and the worker, as a Datalog to enter around work sent to another worker.
+
+        Its levels and selection are the scope's, innermost first, as they
+        stand now; entering it in a worker opens them there, and sets the
+        worker's depth to this one's and its name to this one's, ``/`` the
+        worker's own -- until it exits.
+        """
+        carried = Datalog()
+        for scope in Datalog._scopes_():
+            carried._levels.update(scope._levels)
+            if scope._selection is not None:
+                carried._selection = scope._selection
+        carried._carried = (Datalog.depth(), Datalog.worker(), os.getpid(), threading.get_ident())
+        return carried
+
+    @staticmethod
+    def _worker_under_(worker, pid, ident) -> str:
+        """This thread's name under *worker*, which dispatched to it from process *pid*, thread *ident*."""
+        if os.getpid() != pid:
+            name = f"{worker}/{Datalog._process_label_()}"
+            thread = threading.current_thread()
+            if thread is threading.main_thread():
+                _PROCESS_WORKERS.setdefault(os.getpid(), name)
+                return name
+            return f"{name}/{thread.name}"
+        if threading.get_ident() != ident:
+            return f"{worker}/{threading.current_thread().name}"
+        return worker
+
+    @staticmethod
+    def _process_label_() -> str:
+        """This process's name -- an executor names its workers ``p<i>`` -- or ``p<pid>`` for one nobody named."""
+        name = multiprocessing.current_process().name
+        return f"p{os.getpid()}" if name == 'MainProcess' else name
+
+    @staticmethod
+    def _scopes_() -> list:
+        """The Datalogs open for this thread, outermost first: the main thread's, then its own."""
+        scopes = list(_PROCESS_DATALOGS)
+        if threading.current_thread() is not threading.main_thread():
+            scopes += getattr(_THREAD_DATALOGS, 'stack', [])
+        return scopes
+
+    @staticmethod
+    def _stack_() -> list:
+        """The stack a ``with`` opened in THIS thread goes on: the process's in the main thread, else the thread's own."""
+        if threading.current_thread() is threading.main_thread():
+            return _PROCESS_DATALOGS
+        return Datalog._thread_list_('stack')
+
+    @staticmethod
+    def _thread_list_(attr) -> list:
+        lst = getattr(_THREAD_DATALOGS, attr, None)
+        if lst is None:
+            lst = []
+            setattr(_THREAD_DATALOGS, attr, lst)
+        return lst
+
+    def _selection_names_(self):
+        if self._selection is not None:
+            return self._selection
+        for scope in reversed(self._scopes_()):
+            if scope._selection is not None:
+                return scope._selection
+        return self._selection_list_(os.environ.get('DBX_LOG_SELECTION'))
+
+    @staticmethod
+    def _selection_list_(selection):
+        """*selection* as a list of names; None when it names none."""
+        if isinstance(selection, str):
+            selection = [s.strip() for s in selection.split(',')]
+        return list(selection) if selection else None
+
+    @staticmethod
+    def _env_(key):
+        val = os.environ.get(key)
+        return None if val is None else Datalog._parse_env_(val)
+
+    @staticmethod
+    @functools.lru_cache(maxsize=None)
+    def _parse_env_(val):
+        try:
+            return __eval__(val)
+        except (NameError, SyntaxError):
+            return val
+
+    def _lead_(self) -> str:
+        """What a line leads with: the worker, padded to :attr:`WORKER_WIDTH`, and the time -- the same width on every line of one worker."""
+        lead = f"{Datalog.worker() + ':':<{self.WORKER_WIDTH + 1}} "
+        if self.datetime:
+            lead += f"{datetime.datetime.now().isoformat(timespec='microseconds')}: "
+        return lead
+
+    def _print_(self, level, msg):
+        if level != 'ERROR' and not self.ist(level.lower()):
+            return
+        tag = "" if self.name is None else f"{self.name}: "
+        self._write_(f"{self._lead_()}{level}: {tag}{msg}")
+
+    def _banner_(self, marker, text):
+        if not self.ist('verbose'):
+            return
+        self._write_(f"{self._lead_()}{'------' * (Datalog.depth() + 2)}{marker}--- {text}")
+
+    @staticmethod
+    def _write_(line):
+        # One write, newline included: print() writes the line and its end
+        # separately, and another worker thread's line can land between them.
+        sys.stdout.write(f"{line}\n")
+
+    def _fmt_(self, msg, args):
+        """Format message stdlib-style: msg % args when args are provided."""
+        if args:
+            try:
+                return msg % args
+            except (TypeError, ValueError):
+                return f"{msg} {args}"
+        return msg
 
 
 def write_exec_journal(s: str, datalake: str | None = None, storage_options: dict | None = None, *,
@@ -755,7 +1118,7 @@ def read_exec_journal(
     iloc: int | None = None,
     filter: dict | None = None,
     storage_options: dict | None = None,
-    log: Logger | None = None,
+    log: Datalog | None = None,
     n_workers: int = 8,
     index: str | None = None,
     url: str | None = None,
@@ -908,8 +1271,8 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage
         ``DBX_DATALAKE``, then ``DBX_ROOT``, then ``DBX_URL``.
     storage_options : dict, optional
         Storage options for fsspec.  Defaults to ``default_storage_options()``.
-    log : Logger, optional
-        Logger instance.
+    log : Datalog, optional
+        Datalog view.
     n_workers : int, default 8
         Number of workers for reading journal files.
     index : str or None, default: ``'id'`` where the journal has one
@@ -1686,7 +2049,7 @@ class DatajournalEntry(pd.Series):
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, series: pd.Series, *, storage_options: dict = None,
-                 logger: Logger = Logger(name="DatajournalEntry")):
+                 logger: Datalog = Datalog(name="DatajournalEntry")):
         super().__init__(series)
         self.storage_options = storage_options or {}
         self.logger = logger
@@ -1898,7 +2261,7 @@ class DatajournalFrame(pd.DataFrame):
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, df: pd.DataFrame|None, *, storage_options: dict = None,
-                 parse_datetimes: bool = True, logger: Logger = Logger(),
+                 parse_datetimes: bool = True, logger: Datalog = Datalog(),
                  index: str | None = None, unnormalized: bool = False, **filter_kwargs):
         
         # Guard against an empty journal (no parquet files written yet), or unwrap BlocksJournal.
@@ -2002,7 +2365,7 @@ class DatajournalFrame(pd.DataFrame):
     @classmethod
     def _derived_(cls, *args, **kwargs) -> 'DatajournalFrame':
         """A frame pandas made out of one of these -- wrapped, not read again: it already was."""
-        return _derived_frame_(cls, {'storage_options': {}, 'logger': Logger()}, args, kwargs)
+        return _derived_frame_(cls, {'storage_options': {}, 'logger': Datalog()}, args, kwargs)
 
 
 def one_datalake(datalake, url, what):
@@ -2225,7 +2588,7 @@ class Datajournal:
         (a label) or *iloc* (a position). *datalake* (``url``, its old name)
         defaults to ``DBX_DATALAKE``, ``DBX_ROOT``, ``DBX_URL``.
         """
-        log = log or Logger()
+        log = log or Datalog()
         n_workers = n_workers or 8
         url = one_datalake(datalake, url, 'Datajournal.read')
         if loc is not None and iloc is not None:
@@ -2321,7 +2684,7 @@ class Datajournal:
         if not paths:
             return DatajournalFrame(None, storage_options=storage_options, index=index,
                                     unnormalized=unnormalized, **filter_kwargs)
-        log = log or Logger()
+        log = log or Datalog()
         n_workers = n_workers or 8
         if storage_options is None:
             storage_options = default_storage_options()
@@ -2958,7 +3321,7 @@ class OutputCapture:
                 fs.put(self._local.name, self._path_)
             except Exception as exc:
                 # The command it recorded has run: losing its output is a warning.
-                Logger(name='OutputCapture').warning(f"Could not upload captured output to {self._path_}: {exc}")
+                Datalog(name='OutputCapture').warning(f"Could not upload captured output to {self._path_}: {exc}")
             finally:
                 os.unlink(self._local.name)
                 self._local = None
@@ -2980,6 +3343,11 @@ class JournaledCallable:
     A call that raises sends its paths home on the exception, as
     ``datajournal_entries``, for `Datajournal.collect_raised`.
 
+    The `Datalog` scope goes out with it too, made where the callable was
+    wrapped (`Datalog._carry_`): the call runs at the levels set there, as
+    many subtrees deep, and its lines are led by that worker's name ``/`` its
+    own. Nothing of it comes back.
+
     With an *output_capture* -- the `OutputCapture` open where it was
     dispatched -- a call that runs in another process runs inside a new
     capture of that process's (`OutputCapture._worker_capture_`), and sends its
@@ -2995,6 +3363,7 @@ class JournaledCallable:
         self.fn = fn
         self.datajournal = datajournal
         self.output_capture = output_capture
+        self.datalog = Datalog._carry_()
 
     def __call__(self, *args, **kwargs):
         dj = self.datajournal
@@ -3004,7 +3373,7 @@ class JournaledCallable:
             capture = None
         elif capture is not None:
             capture = capture._worker_capture_()
-        with dj, (capture if capture is not None else contextlib.nullcontext()):
+        with self.datalog, dj, (capture if capture is not None else contextlib.nullcontext()):
             try:
                 value = self.fn(*args, **kwargs)
             except BaseException as exc:

@@ -1,12 +1,12 @@
 import os
 import pytest
-from dbx.datablocks import Datablock, Logger
+from dbx.datablocks import Datablock
+from dbx.journals import Datalog
 
-# Mock Logger to capture calls
-class MockLogger(Logger):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.calls = []
+# Mock Datalog to capture calls. `Datablock.log` makes a new view on each
+# access, so the calls are kept on the class, not on any one view.
+class MockDatalog(Datalog):
+    calls = []
 
     def verbose(self, msg):
         self.calls.append(('verbose', msg))
@@ -25,11 +25,12 @@ class MyBlock(Datablock):
 def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_ROOT', '/tmp/dbx')
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
-    # Patch Logger in dbx.datablocks module
-    monkeypatch.setattr('dbx.datablocks.Logger', MockLogger)
+    # Patch Datalog in dbx.datablocks module
+    monkeypatch.setattr('dbx.datablocks.Datalog', MockDatalog)
+    monkeypatch.setattr(MockDatalog, 'calls', [])
 
 def _calls(block, level):
-    return [msg for lvl, msg in block.log.calls
+    return [msg for lvl, msg in MockDatalog.calls
             if lvl == level and 'Forming var from spec' in msg]
 
 def test_verbose_var_false():

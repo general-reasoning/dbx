@@ -413,7 +413,7 @@ class TestPinnedGuard:
         monkeypatch.setenv('DBX_PINNED_REVISION', 'dbxsha:projsha')
         monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', None)
         monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', repos.gitrepo)
-        log = dbxmod.Logger(name='t')
+        log = dbxmod.Datalog(name='t')
         monkeypatch.setattr(log, 'warning', lambda m, *a, **k: warnings.append(m))
         dataparts_mod.gitwrkreposetup(revision='other:other', log=log)
         assert dataparts_mod.DBX_USE_WORK_REPO is None

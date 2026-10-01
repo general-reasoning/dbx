@@ -2,10 +2,10 @@
 import os
 import pytest
 import sys
-from dbx.datablocks import Logger
+from dbx.journals import Datalog
 
-# Custom Logger that captures whether _print_ was called
-class CaptureLogger(Logger):
+# Custom Datalog that captures whether _print_ was called
+class CaptureLogger(Datalog):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.printed = False
@@ -97,7 +97,7 @@ def test_logger_selected_stack_depth_none_breaks():
 
 
 def test_datablock_logger_has_working_stack_depth(monkeypatch, tmp_path):
-    """Datablock's Logger should have a valid stack_depth so selected() works."""
+    """Datablock's log should have a valid stack_depth so selected() works."""
     from dbx.datablocks import Datablock
 
     monkeypatch.setenv('DBX_ROOT', str(tmp_path))

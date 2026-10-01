@@ -16,7 +16,7 @@ except ImportError:
 
 import dbx
 from dbx.datablocks import Datablock, Datastack
-from dbx.dataparts import Logger
+from dbx.journals import Datalog
 from dbx.datastreams import (
     ZipStreamingDataset,
     ZipIterableStreamingDatasets,
@@ -36,8 +36,8 @@ class ModelEvaluator:
         Preprocessing transform applied to inputs before forward pass.
     device : str
         Target device string (default ``"cuda"``).
-    log : Logger
-        Logger instance.
+    log : Datalog
+        Datalog view.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -50,10 +50,10 @@ class ModelEvaluator:
         capture_final: bool = True,
         transform=None,
         device: str = "cuda",
-        log: Logger | None = None,
+        log: Datalog | None = None,
     ):
         self.device = device
-        self.log = log or Logger(stack_depth=3)
+        self.log = log or Datalog(stack_depth=3)
         self._model = model
         self.transform = transform if transform is not None else (lambda x: x)
 
@@ -175,7 +175,7 @@ class ModelEvaluatorBuilder(Datablock):
 
     # 2. Declared API ------------------------------------------------------
 
-    def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> ModelEvaluator:
+    def evaluator(self, *, device: str = "cuda", log: Datalog | None = None) -> ModelEvaluator:
         """Create a live `ModelEvaluator`.
 
         The result is cached per device so that repeated calls with
@@ -252,8 +252,8 @@ class TransformerEvaluator(ModelEvaluator):
         Preprocessing transform applied to inputs before forward pass.
     device : str
         Target device string (default ``"cuda"``).
-    log : Logger
-        Logger instance.
+    log : Datalog
+        Datalog view.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -268,7 +268,7 @@ class TransformerEvaluator(ModelEvaluator):
         cls_token_only: bool = False,
         transform=None,
         device: str = "cuda",
-        log: Logger | None = None,
+        log: Datalog | None = None,
     ):
         super().__init__(
             model,
@@ -385,7 +385,7 @@ class TransformerEvaluatorBuilder(ModelEvaluatorBuilder):
     def __init__(self, *args, capture_blocks=None, capture_layers=None, capture_final=True, cls_token_only=False, **kwargs):
         super().__init__(*args, capture_layers=capture_layers, capture_final=capture_final, capture_blocks=capture_blocks, cls_token_only=cls_token_only, **kwargs)
 
-    def evaluator(self, *, device: str = "cuda", log: Logger | None = None) -> TransformerEvaluator:
+    def evaluator(self, *, device: str = "cuda", log: Datalog | None = None) -> TransformerEvaluator:
         """Create a live `TransformerEvaluator`.
 
         The result is cached per device so that repeated calls with

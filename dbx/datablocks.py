@@ -65,7 +65,6 @@ from . import dataparts
 from .dataparts import (
     default_datalake,
     InlineCallableExecutor,
-    Logger,
     LogVolume,
     MultiprocessingCallableExecutor,
     MultithreadingCallableExecutor,
@@ -104,6 +103,7 @@ from .journals import (
     DatajournalFrame,
     one_datalake,
     Datajournal,
+    Datalog,
     DEFAULT_DATAJOURNAL,
     JOURNAL_DATETIME_FORMAT,
     execjournal,
@@ -1745,15 +1745,10 @@ class Datablock:
             )
         if SPECIALIZATIONS is None and SPECIALIZATION is not None:
             SPECIALIZATIONS = SPECIALIZATION
-        # Initialize early logger for __post_init__ if needed, though usually hash is needed
-        self.log = Logger(
-            f"{self.fqcn}",
-            debug=debug,
-            verbose=verbose,
-            detailed=detailed,
-            info=info,
-            # stack_depth=2 (default) is correct for both _print_ (stack[2]) and selected (_getframe(1))
-        )
+        # What `log` is named, and the levels it sets over the scope's, until
+        # __setstate__ knows the block's key.
+        self._log_name = self.fqcn
+        self._log_levels = dict(info=info, verbose=verbose, debug=debug, detailed=detailed)
         if capture_output:
             self.log.warning(f"{type(self).__name__}: capture_output=True is ignored: a block captures nothing "
                              f"of its own. Run the command under dbx.exec(..., capture_output=True), "
@@ -1792,15 +1787,13 @@ class Datablock:
 
     def __setstate__(self, state):
         """NB: state keys should match __init__'s keyword arguments, with extra args properly captured in state."""
-        # Early logger for unpickling path (__setstate__ is called without __init__)
-        if not hasattr(self, 'log'):
-            self.log = Logger(
-                f"{self.__class__.__name__}",
-                debug=state.get('debug', False),
-                verbose=state.get('verbose', False),
-                detailed=state.get('detailed', False),
-                info=state.get('info', True),
-            )
+        # What `log` sets over the scope's: None there defers to it.
+        self._log_levels = dict(
+            info=state.get('info', True),
+            verbose=state.get('verbose', False),
+            debug=state.get('debug', False),
+            detailed=state.get('detailed', False),
+        )
         self._working_params_ = []
         self._resolve_legacy_CONFIG_()
 
@@ -1985,25 +1978,18 @@ class Datablock:
         self._build_start_dt = None
         self._build_end_dt = None
         
-        # Redefine logger with hash (and tag if present)
-        self.log = Logger(
-            name=self._log_name_(),
-            debug=state.get('debug', False),
-            verbose=state.get('verbose', False),
-            detailed=state.get('detailed', False),
-            info=state.get('info', True),
-            # stack_depth=2 (default) is correct for both _print_ (stack[2]) and selected (_getframe(1))
-        )
+        # Named with the hash (and tag if present) from here on.
+        self._log_name = self._log_name_()
         if isinstance(self.redirect, dict):
             self._process_redirect_()
         self.__post_init__()
         if 'TOPICS' in self.__dict__:
             # TOPICS computed here are identity like any others -- but the
-            # logger's name above asked for the key, so the hash was taken, and
+            # log's name above asked for the key, so the hash was taken, and
             # cached, from the class's TOPICS before these existed. Taken again.
             for cached in ('_hash', '_specialized_hashes_'):
                 self.__dict__.pop(cached, None)
-            self.log.name = self._log_name_()
+            self._log_name = self._log_name_()
         if self._SPECIALIZATIONS_ is not None:
             # After __post_init__, so the instance's own win over any a class
             # computes there, as they win over the class's.
@@ -2916,20 +2902,20 @@ class Datablock:
         return self
 
     def build_tree(self, *args, exclude_self: bool = False, deep: bool = False, **kwargs):
-        self.log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
+        log = self.log
+        log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
         def skip_cb(s):
-            self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s} (TREE_SKIP_BUILDING) --------")
+            log.skip_subtree(s, "TREE_SKIP_BUILDING")
         
         for s, c in self._iter_var_blocks_('TREE_SKIP_BUILDING', skip_callback=skip_cb):
             if not deep and c.valid():
-                self.log.verbose(f"------------------------ SKIPPING SUBTREE at {s}: already valid --------")
+                log.skip_subtree(s, "already valid")
                 continue
             self.write_journal_entry(event=f"build_tree:{s}:begin")
-            self.log.verbose(f">>>>>>>>>>>>>>>>>>>>>>>> BUILDING SUBTREE at {s}: BEGIN >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-            # A child built as part of this tree belongs to this run. VAR is
-            # where it was constructed, which is too early to know that.
-            self._adopt_(c).build_tree(*args, deep=deep, **kwargs)
-            self.log.verbose(f"<<<<<<<<<<<<<<<<<<<<<<<< BUILDING SUBTREE at {s}: END <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<")
+            with log.subtree(s):
+                # A child built as part of this tree belongs to this run. VAR is
+                # where it was constructed, which is too early to know that.
+                self._adopt_(c).build_tree(*args, deep=deep, **kwargs)
             self.write_journal_entry(event=f"build_tree:{s}:end")
         if not exclude_self:
             self.build(*args, deep=deep, **kwargs)
@@ -4940,6 +4926,23 @@ class Datablock:
     #PATHS: END
 
     #LOG LEVEL: BEGIN
+    @property
+    def log(self) -> Datalog:
+        """This block's view of the current `Datalog`: named for the block, its own levels over the scope's.
+
+        A view looks its levels up when it is written to, so the one kept here
+        hears whatever ``with Datalog(...)`` is open then. A level the block
+        was not given -- None -- is the scope's, then the environment's. Made
+        again only when the block's name or levels have moved; never pickled.
+        """
+        d = self.__dict__
+        name, levels = d.get('_log_name') or type(self).__name__, d.get('_log_levels', {})
+        log = d.get('_log')
+        if log is None or log.name != name or d.get('_log_made_from') != levels:
+            log = d['_log'] = Datalog(name, **levels)
+            d['_log_made_from'] = dict(levels)
+        return log
+
     @property
     def info(self):
         return self.log.ist('info')

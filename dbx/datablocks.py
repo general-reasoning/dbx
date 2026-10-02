@@ -8231,6 +8231,39 @@ class Datastack(Datablock):
 
         full = 'validate' if validation == 'validate' else 'valid'
         specs = self._block_class_() is not None and self._block_specializations_()
+        # FIX(adoption stall): don't read the anchor's whole journal here; let each
+        # block resolve its own past by hash, in the workers.
+        #
+        # Seen 2026-10-02 adopting the CPTAC bipolar clips (2269 BipolarDeepFeatureBags;
+        # exec journal "ADOPT 602020 bipolar TRAIN clip ... [cc:7c557fbf]"): about 10 min
+        # of parent CPU between the validity pass and the first adoption, with no output.
+        # Measured, warm file cache:
+        #   * _build_journal_() below reads every entry under the BLOCK's anchor -- all
+        #     its blocks' journals, thousands of parquet files -- in 87 s;
+        #   * the result pickles to 72 MB, sent once per worker as the executor's ctx
+        #     (see _exec_over_blocks_). Spawned workers start one at a time, the parent
+        #     blocked writing each payload (py-spy: popen_spawn_posix._launch), at ~7 s
+        #     per worker with dbx's import -- ~2 min for 16.
+        # The rest of the 10 min is presumably that read on a cold cache: inferred, not
+        # measured.
+        #
+        # The fix: when *journal* is not given, pass none. Each
+        # DatablockSpecializationInstaller then resolves through _hash_journal_ ->
+        # Datajournal.read_hash, which lists only the directories the reconstructed
+        # hash can be filed in (~0.01 s a candidate; see read_hash's docstring) and
+        # falls back to the whole anchor journal only for a block filed elsewhere.
+        # Per block that is |candidates| small reads, done in parallel in the workers,
+        # instead of one serial read of everything plus 72 MB per worker.
+        #
+        # Mind the next line: `install` is decided by whether a journal was read, so
+        # passing none as it stands silently turns adoption into classification.
+        # Decide it by `specs` instead -- whether BLOCK declares specializations --
+        # and keep "no journal anywhere" (FileNotFoundError in _hash_journal_ /
+        # _shared_blocks_journal_) meaning unresolved, per block. Keep the shared
+        # read for a caller that hands *journal* in -- a table building many stacks
+        # over one anchor -- and check DatablockSpecializationInstaller and
+        # _shared_journal_ take journal=None (they should: it is the single-block
+        # path). Then time the bipolar TRAIN adoption again, cold.
         shared = (journal if journal is not None else self._build_journal_()) if specs else None
         install = shared is not None
         tag = (f"SPECIALIZING {len(invalid)} of {n} {item_label} [{self.__class__.__name__}]" if install

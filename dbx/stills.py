@@ -123,6 +123,51 @@ def is_intact_archive(path) -> bool:
         return False
 
 
+class _GoneClass_:
+    """Stands in, on unpickling, for a class no longer importable -- see `read_checkpoint`."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __setstate__(self, state):
+        self.__dict__['_state_'] = state
+
+
+def _tolerant_pickle_module_(gone: list):
+    """A pickle module whose Unpickler stands `_GoneClass_` in for a class it cannot find, noting it in *gone*."""
+    import pickle
+    import types
+
+    class Unpickler(pickle.Unpickler):
+        def find_class(self, mod_name, name):
+            try:
+                return super().find_class(mod_name, name)
+            except (AttributeError, ModuleNotFoundError, ImportError):
+                gone.append(f"{mod_name}.{name}")
+                return type(name, (_GoneClass_,), {'__module__': mod_name})
+
+    return types.SimpleNamespace(Unpickler=Unpickler, load=pickle.load, __name__='pickle')
+
+
+def read_checkpoint(path, *, log=None) -> dict:
+    """*path*'s checkpoint dict, on the CPU -- readable when a class it pickled is gone from the code.
+
+    A Lightning checkpoint pickles more than tensors: the module's saved
+    hyperparameters may hold any object -- a logger, say -- of a class since
+    renamed or removed, and ``torch.load`` then fails on that class and the
+    weights with it. Here such a class unpickles as a stand-in, named in a
+    warning, and the rest -- ``state_dict`` above all -- reads as written.
+    What used a stand-in is not to be trusted; the tensors are untouched.
+    """
+    gone = []
+    checkpoint = torch.load(path, map_location='cpu', weights_only=False,
+                            pickle_module=_tolerant_pickle_module_(gone))
+    if gone and log is not None:
+        log.warning(f"read_checkpoint: {path} pickled {len(set(gone))} class(es) the code no longer has, "
+                    f"read as stand-ins: {sorted(set(gone))}")
+    return checkpoint
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # What a Still's VAR accepts — the Datablocks it delegates to
 # ═══════════════════════════════════════════════════════════════════════
@@ -2353,7 +2398,7 @@ class Still(CheckpointBuilder):
         costs nothing and is what makes the checkpoint portable.
         """
         self.log.info("Loading weights only (%s) from %s", why, ckpt)
-        checkpoint = torch.load(ckpt, map_location='cpu', weights_only=False)
+        checkpoint = read_checkpoint(ckpt, log=self.log)
         if "state_dict" not in checkpoint:
             raise KeyError(
                 f"{ckpt} has no 'state_dict' to warm-start from "

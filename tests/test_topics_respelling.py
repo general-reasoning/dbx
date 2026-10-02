@@ -91,7 +91,7 @@ def test_a_partition(tmp_path, monkeypatch):
 def _feature_table(url):
     pytest.importorskip("torch")
     from dbx import Datacollator, Featuretable
-    from test_datafeaturetab import DummyModelEvaluatorFactory, DummySampleTable
+    from test_featuretab import DummyModelEvaluatorFactory, DummySampleTable
     samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag='samples')
     return Featuretable(datalake=url, tag='features', devices=['cpu'], spec=dict(
         datapoint_table=samples,

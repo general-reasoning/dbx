@@ -7,15 +7,15 @@ import torch
 import torch.nn as nn
 
 import dbx
-from dbx.datafeatures import Datacollator
+from dbx.featuretables import Datacollator
 from dbx import (
     DATADIR,
     DIRTOPIC,
     SLICETOPIC,
-    DatafeatureTab,
-    DatafeatureTable,
-    DatapointTab,
-    DatapointTable,
+    Featuretab,
+    Featuretable,
+    Datatab,
+    Datatable,
     ModelEvaluator,
     ModelEvaluatorBuilder,
     FeatureAffineLogisticProbe,
@@ -25,11 +25,11 @@ from dbx import (
 )
 
 
-class DummySampleTab(DatapointTab):
+class DummySampleTab(Datatab):
     TOPICS = {"samples": SLICETOPIC, "labels": SLICETOPIC}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         samples_per_tab: int = 5
 
     def __build__(self):
@@ -47,15 +47,15 @@ class DummySampleTab(DatapointTab):
         return self
 
 
-class DummySampleTable(DatapointTable):
+class DummySampleTable(Datatable):
     TAB = DummySampleTab
 
     #: This table roots its tabs inside itself -- see __tab__ -- so it declares
     #: the directory to root them in. The base no longer does.
-    TOPICS = {'tabs': DATADIR, **DatapointTable.TOPICS}
+    TOPICS = {'tabs': DATADIR, **Datatable.TOPICS}
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datatable.VAR):
         samples_per_tab: int = 5
 
     @property
@@ -114,7 +114,7 @@ def test_normalize_features():
     assert np.array_equal(sgn_np, sgn_th.numpy())
 
 
-def test_datafeature_affine_logistic_probe(tmp_path):
+def test_feature_affine_logistic_probe(tmp_path):
     url = str(tmp_path)
 
     sampletable = DummySampleTable(
@@ -125,7 +125,7 @@ def test_datafeature_affine_logistic_probe(tmp_path):
 
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -178,7 +178,7 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
 
     sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5),
                                    tag="sample_table_multi").build()
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -217,7 +217,7 @@ def test_affine_logistic_probe_refuses_a_missing_signal_column(tmp_path):
     url = str(tmp_path)
     sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5),
                                    tag="sample_table_bad").build()
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -246,7 +246,7 @@ def test_affine_logistic_probe_refuses_a_missing_signal_column(tmp_path):
         probe.build()
 
 
-def test_datafeature_stats_probe(tmp_path):
+def test_feature_stats_probe(tmp_path):
     url = str(tmp_path)
 
     sampletable = DummySampleTable(
@@ -257,7 +257,7 @@ def test_datafeature_stats_probe(tmp_path):
 
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -327,7 +327,7 @@ def test_stats_probe_describes_every_declared_pair(tmp_path):
     url = str(tmp_path)
     sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5),
                                    tag="sample_table_all").build()
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -359,7 +359,7 @@ def test_stats_probe_describes_every_declared_pair(tmp_path):
     assert probe.stat('mean', ('labels', 'labels')).shape == (1,)
 
 
-def test_datafeature_stats_probe_parallel(tmp_path):
+def test_feature_stats_probe_parallel(tmp_path):
     url = str(tmp_path)
 
     sampletable = DummySampleTable(
@@ -370,7 +370,7 @@ def test_datafeature_stats_probe_parallel(tmp_path):
 
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -404,7 +404,7 @@ def test_datafeature_stats_probe_parallel(tmp_path):
     assert stats_probe.stat('mean', ('features', 'final'), per_tab=True).shape == (2, 8)
 
 
-def test_datafeature_affine_logistic_probe_parallel(tmp_path):
+def test_feature_affine_logistic_probe_parallel(tmp_path):
     url = str(tmp_path)
 
     sampletable = DummySampleTable(
@@ -415,7 +415,7 @@ def test_datafeature_affine_logistic_probe_parallel(tmp_path):
 
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -492,7 +492,7 @@ class UnevenSampleTable(DummySampleTable):
         )
 
 
-def test_datafeature_stats_probe_over_tabs_of_different_sizes(tmp_path):
+def test_feature_stats_probe_over_tabs_of_different_sizes(tmp_path):
     """``tab_norm`` is one value per ROW, so uneven tabs do not stack.
 
     The build died on exactly that -- ``np.stack`` over per-tab norms of 3 and
@@ -502,7 +502,7 @@ def test_datafeature_stats_probe_over_tabs_of_different_sizes(tmp_path):
     """
     url = str(tmp_path)
     sampletable = UnevenSampleTable(datalake=url, tag="uneven_samples").build()
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -531,7 +531,7 @@ def test_datafeature_stats_probe_over_tabs_of_different_sizes(tmp_path):
 def test_tab_aggregation_refuses_a_tab_whose_rows_disagree(tmp_path):
     url = str(tmp_path)
     sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag="agg_samples").build()
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -557,7 +557,7 @@ def test_tab_aggregation_refuses_a_tab_whose_rows_disagree(tmp_path):
 
 def _feature_table_(url, tag, n=4):
     sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=n), tag=f"{tag}_samples").build()
-    return DatafeatureTable(
+    return Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,

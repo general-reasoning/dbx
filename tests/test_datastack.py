@@ -324,11 +324,11 @@ class TestDatastackClearBlocks(unittest.TestCase):
         self.assertFalse(stack.valid_block(1))
         self.assertTrue(stack.valid_block(2))
 
-    def test_datapoint_table_clear_tab_removes_sentinel(self):
-        """UNSAFE_clear_tab/block on DatapointTable removes .path file so valid_tab/block returns False."""
-        from dbx.datapoints import DatapointTable, DatapointTab, SLICETOPIC
+    def test_datatable_clear_tab_removes_sentinel(self):
+        """UNSAFE_clear_tab/block on Datatable removes .path file so valid_tab/block returns False."""
+        from dbx.datatables import Datatable, Datatab, SLICETOPIC
 
-        class MinimalTab(DatapointTab):
+        class MinimalTab(Datatab):
             VERSION = 1
             TOPICS = {'data': SLICETOPIC}
             COLUMNS = {'data': {'x': 'int'}}
@@ -336,7 +336,7 @@ class TestDatastackClearBlocks(unittest.TestCase):
                 with self.slice_writers(self.COLUMNS) as writers:
                     writers['data'].write({'x': 1})
 
-        class MinimalTable(DatapointTable):
+        class MinimalTable(Datatable):
             VERSION = 1
             TAB = MinimalTab
             @property
@@ -356,9 +356,9 @@ class TestDatastackClearBlocks(unittest.TestCase):
 
     def test_a_failing_validate_block_forgets_the_manifest(self):
         """validate_block failing forgets the manifest, which vouched for every block."""
-        from dbx.datapoints import DatapointTable, DatapointTab, SLICETOPIC
+        from dbx.datatables import Datatable, Datatab, SLICETOPIC
 
-        class ValidatableTab(DatapointTab):
+        class ValidatableTab(Datatab):
             VERSION = 1
             TOPICS = {'data': SLICETOPIC}
             COLUMNS = {'data': {'x': 'int'}}
@@ -368,7 +368,7 @@ class TestDatastackClearBlocks(unittest.TestCase):
             def validate(self, **kwargs):
                 return self.valid()
 
-        class ValidatableTable(DatapointTable):
+        class ValidatableTable(Datatable):
             VERSION = 1
             TAB = ValidatableTab
             @property

@@ -993,20 +993,3 @@ for _marker in (FeatureStatsProbe.PER_FEATURE_DATADICT, FeatureStatsProbe.PER_TA
         raise RuntimeError(f"{_marker!r} declares {tuple(_marker.schema)}, "
                            f"but SAMPLE_REDUCTIONS computes {tuple(SAMPLE_REDUCTIONS)}")
 del _marker
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The names these classes used to have
-# ═══════════════════════════════════════════════════════════════════════
-
-#: This file was ``dbx/dataprobes.py``, which still resolves as an alias onto
-#: this module object -- see the note in ``dbx/__init__.py``. The ``Feature``
-#: prefix matches `FeatureTab` / `FeatureTable` in :mod:`dbx.featuretables`,
-#: which is what these probe.
-#:
-#: As in :mod:`dbx.backbones`, the class aliases are for source and not for
-#: identity: nothing was ever built as one of these -- the probes in soundworld
-#: are subclasses, reporting their own fqcn.
-DatafeatureAffineLogisticProber = FeatureAffineLogisticProber
-DatafeatureAffineLogisticProbe = FeatureAffineLogisticProbe
-DatafeatureStatsProbe = FeatureStatsProbe

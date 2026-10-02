@@ -1,12 +1,12 @@
-"""A DatapointTab reached two ways from a DatafeatureTable must be one block.
+"""A Datatab reached two ways from a Featuretable must be one block.
 
 Every test here is `@pytest.mark.pinned`: each states an invariant rather than
 the shape the code currently has. If one fails, the code is wrong -- changing
 the test to agree with the new behaviour would erase the only record that the
 invariant was ever meant to hold.
 
-A DatafeatureTable holds the DatapointTable it was built over, and each of its
-DatafeatureTabs holds the DatapointTab it was built over. So the same upstream
+A Featuretable holds the Datatable it was built over, and each of its
+Featuretabs holds the Datatab it was built over. So the same upstream
 tab is reachable by two routes::
 
     table.var.datapoint_table.tab(i)      # down the table, then to the tab
@@ -17,7 +17,7 @@ that both are built from the same configuration. If the two ever diverge, a
 feature block reads its inputs from one place and the table believes they came
 from another -- silently, because both are valid blocks.
 
-`DatafeatureTable.validate_tab` checks the signature at build time. These tests
+`Featuretable.validate_tab` checks the signature at build time. These tests
 pin the rest of the chain, because signature parity does not imply identity
 parity: ``type()`` adds the version and the topic list, and ``hash`` is
 ``sha256(type())``. Two tabs can agree on their spec and still address
@@ -30,12 +30,12 @@ from dataclasses import dataclass
 
 from dbx import (
     SLICETOPIC,
-    DatapointTab,
-    DatapointTable,
+    Datatab,
+    Datatable,
     ModelEvaluatorBuilder,
-    DatafeatureTable,
+    Featuretable,
 )
-from dbx.datafeatures import Datacollator
+from dbx.featuretables import Datacollator
 
 
 #: A source path assembled at read time from the environment -- the shape the
@@ -52,11 +52,11 @@ def sample_collator(**spec):
     ))
 
 
-class DummySampleTab(DatapointTab):
+class DummySampleTab(Datatab):
     TOPICS = {"samples": SLICETOPIC, "labels": SLICETOPIC}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         n_samples: int = 10
         #: Carries a SPECLINE in the real pipelines -- a source path built from
         #: the environment. var.source is the resolved value and spec['source']
@@ -76,11 +76,11 @@ class DummySampleTab(DatapointTab):
         return self
 
 
-class DummySampleTable(DatapointTable):
+class DummySampleTable(Datatable):
     TAB = DummySampleTab
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datatable.VAR):
         samples_per_tab: int = 10
 
     @property
@@ -121,7 +121,7 @@ def lake(monkeypatch):
 @pytest.fixture
 def featuretable(tmp_path):
     url = str(tmp_path)
-    return DatafeatureTable(
+    return Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=DummySampleTable(datalake=url,

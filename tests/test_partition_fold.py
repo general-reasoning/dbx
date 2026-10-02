@@ -1,4 +1,4 @@
-"""Unit tests for DatapointPartition and DatapointFold."""
+"""Unit tests for DatatablePartition and DatatablePart."""
 
 import os
 from dataclasses import dataclass
@@ -6,19 +6,19 @@ import numpy as np
 import pytest
 
 from dbx import (
-    DatapointTab,
-    DatapointTable,
-    DatapointPartition,
-    DatapointFold,
+    Datatab,
+    Datatable,
+    DatatablePartition,
+    DatatablePart,
     SLICETOPIC,
 )
 
 
-class DummyTab(DatapointTab):
+class DummyTab(Datatab):
     TOPICS = {'numbers': SLICETOPIC, 'letters': SLICETOPIC}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         n: int = 3
         base: int = 0
 
@@ -35,11 +35,11 @@ class DummyTab(DatapointTab):
                 writers['letters'].write({'idx': k, 'lbl': f"item_{k}"})
 
 
-class DummyTable(DatapointTable):
+class DummyTable(Datatable):
     TAB = DummyTab
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datatable.VAR):
         tab_sizes: tuple[int, ...] = (5, 3, 2, 4)
 
     @property
@@ -66,8 +66,8 @@ def table(tmp_path):
     return tbl
 
 
-def test_datapoint_partition_and_fold(table, tmp_path):
-    partition = DatapointPartition(
+def test_datatable_partition_and_fold(table, tmp_path):
+    partition = DatatablePartition(
         datalake=str(tmp_path / 'partition'),
         spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0),
     ).build()
@@ -86,7 +86,7 @@ def test_datapoint_partition_and_fold(table, tmp_path):
     fold0 = partition.fold(0)
     fold1 = partition.fold(1)
 
-    assert isinstance(fold0, DatapointFold)
+    assert isinstance(fold0, DatatablePart)
     assert not hasattr(fold0.var, 'datapoint_table')
     assert not hasattr(fold0.var, 'datapoints_per_row')
     assert fold0.var.partition.datapoint_table == table
@@ -108,13 +108,13 @@ def test_datapoint_partition_and_fold(table, tmp_path):
 
 
 def test_partition_slice_parameter(table, tmp_path):
-    p_by_str = DatapointPartition(
+    p_by_str = DatatablePartition(
         datalake=str(tmp_path / 'partition_str'),
         spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice='letters'),
     ).build()
     assert p_by_str.valid()
 
-    p_by_int = DatapointPartition(
+    p_by_int = DatatablePartition(
         datalake=str(tmp_path / 'partition_int'),
         spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=1),
     ).build()
@@ -124,7 +124,7 @@ def test_partition_slice_parameter(table, tmp_path):
 
 def test_a_part_resolves_its_tabs_redirections_through_the_table(table, tmp_path):
     """A part's tab i is the table's tab tab_indices[i]; so is its redirection."""
-    partition = DatapointPartition(
+    partition = DatatablePartition(
         datalake=str(tmp_path / 'partition_r'),
         spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0),
     ).build()

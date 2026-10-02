@@ -23,7 +23,7 @@ import pytest
 
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datapoints import SLICETOPIC, DatapointTab, DatapointTable
+from dbx.datatables import SLICETOPIC, Datatab, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -31,14 +31,14 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class TwoSlices(DatapointTab):
+class TwoSlices(Datatab):
     """Writes ``n`` items into two slices, optionally skipping one item of 'b'."""
 
     VERSION = 1
     TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         n: int = 4
         skip: int = None
         flush_every: int = None
@@ -121,7 +121,7 @@ class TestASingleSliceTabIsUnaffected:
     """The count costs an increment per write and answers vacuously here."""
 
     def test_it_builds_and_reads(self, tmp_path):
-        class OneSlice(DatapointTab):
+        class OneSlice(Datatab):
             TOPICS = {'only': SLICETOPIC}
 
             def __build__(self):
@@ -137,7 +137,7 @@ class TestASingleSliceTabIsUnaffected:
 class TestATableRefusesARaggedTab:
 
     def test_the_build_stops_at_the_tab_that_did_it(self, tmp_path):
-        class RaggedTable(DatapointTable):
+        class RaggedTable(Datatable):
             VERSION = 1
             TAB = TwoSlices
 

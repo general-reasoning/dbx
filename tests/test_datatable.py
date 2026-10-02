@@ -1,4 +1,4 @@
-"""Tests for the :class:`~dbx.datapoints.DatapointTab` / :class:`~dbx.datapoints.DatapointTable`
+"""Tests for the :class:`~dbx.datatables.Datatab` / :class:`~dbx.datatables.Datatable`
 scaffolding.
 
 Covers TOPICS synthesis from SLICETOPIC entries, where a tab's shards land relative to
@@ -23,14 +23,14 @@ import pytest
 pytest.importorskip("torch", reason="torch is an optional dependency")
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datapoints import (
+from dbx.datatables import (
     DATADIR,
     DATASLICE,
     DIRTOPIC,
     SLICETOPIC,
-    DatapointTab,
-    DatapointTable,
-    DatapointPartition,
+    Datatab,
+    Datatable,
+    DatatablePartition,
 )
 from dbx.datastreams import (
     ZipIterableStreamingDatasets,
@@ -47,14 +47,14 @@ def setup_env(monkeypatch):
 # A minimal tab/table pair
 # ---------------------------------------------------------------------------
 
-class LetterTab(DatapointTab):
+class LetterTab(Datatab):
     """Writes ``n`` items into two lockstep slices, plus a non-slice topic."""
 
     VERSION = 1
     TOPICS = {'numbers': SLICETOPIC, 'letters': SLICETOPIC, 'note': 'note.txt'}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         n: int = 3
         base: int = 0
         fail: bool = False
@@ -80,12 +80,12 @@ class LetterTab(DatapointTab):
         return {'n_samples': len(next(iter(cols.values())))}
 
 
-class LetterTable(DatapointTable):
+class LetterTable(Datatable):
     VERSION = 1
     TAB = LetterTab
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datatable.VAR):
         n_tabs_: int = 3
         per_tab: int = 3
         fail: bool = False
@@ -140,7 +140,7 @@ class TestTopicsFromSlices:
         assert 'tabs' not in LetterTable.TOPICS
 
     def test_docstring_example_subclass_extends_topics_and_slices(self, tmp_path):
-        """The DatapointTab docstring's DebuggableFrameTab example."""
+        """The Datatab docstring's DebuggableFrameTab example."""
         class Debuggable(LetterTab):
             TOPICS = {'debug': {'plots': DIRTOPIC}, 'depth': SLICETOPIC}
 
@@ -149,7 +149,7 @@ class TestTopicsFromSlices:
 
     def test_topics_do_not_accumulate_down_the_hierarchy(self):
         """A subclass declaring TOPICS does not accumulate parent TOPICS unless explicitly specified."""
-        class BaseTab(DatapointTab):
+        class BaseTab(Datatab):
             TOPICS = {'samples': SLICETOPIC, 'meta': 'meta.json'}
 
         class SubTab(BaseTab):
@@ -436,7 +436,7 @@ class TestDatasetMode:
 # flush_every: shard boundaries that coincide across slices
 # ---------------------------------------------------------------------------
 
-class SizedTab(DatapointTab):
+class SizedTab(Datatab):
     """Two slices whose samples differ wildly in size, so that a byte-driven
     shard boundary in one lands nowhere near the other's."""
 
@@ -444,7 +444,7 @@ class SizedTab(DatapointTab):
     TOPICS = {'small': SLICETOPIC, 'big': SLICETOPIC}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         n: int = 24
         width: int = 400
         flush_every: int = None
@@ -465,12 +465,12 @@ class SizedTab(DatapointTab):
                 writers['big'].write({'idx': -1, 'payload': 'extra'})
 
 
-class SizedTable(DatapointTable):
+class SizedTable(Datatable):
     VERSION = 1
     TAB = SizedTab
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datatable.VAR):
         n: int = 24
         width: int = 400
         flush_every: int = None
@@ -574,7 +574,7 @@ class TestScaffoldingErrors:
     LONE = dict()
 
     def test_build_names_the_slices_to_write(self, tmp_path):
-        class Bare(DatapointTab):
+        class Bare(Datatab):
             TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
         # __build__ directly, not build(): build() journals first, and
@@ -584,8 +584,8 @@ class TestScaffoldingErrors:
             Bare(datalake=str(tmp_path), spec=dict(self.LONE)).__build__()
 
     def test_missing_tab_class(self, tmp_path):
-        class NoTab(DatapointTable):
-            TOPICS = {'a': DATASLICE, **DatapointTable.TOPICS}
+        class NoTab(Datatable):
+            TOPICS = {'a': DATASLICE, **Datatable.TOPICS}
 
             @property
             def n_tabs(self):
@@ -595,14 +595,14 @@ class TestScaffoldingErrors:
             NoTab(datalake=str(tmp_path)).build()
 
     def test_missing_n_tabs(self, tmp_path):
-        class NoCount(DatapointTable):
+        class NoCount(Datatable):
             TAB = LetterTab
 
         with pytest.raises(NotImplementedError, match='n_tabs'):
             NoCount(datalake=str(tmp_path)).build()
 
     def test_slice_writers_requires_every_slice(self, tmp_path):
-        class Partial(DatapointTab):
+        class Partial(Datatab):
             TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
             def __build__(self):
@@ -1141,7 +1141,7 @@ class TestValidTabAndSentinels:
         dst_tbl.tab(0).build()
         dst_tbl.tab(2).UNSAFE_redirect(paths=src_tbl.tab(2).paths(), OVERRIDE=True)
 
-        partition = DatapointPartition(
+        partition = DatatablePartition(
             datalake=str(tmp_path / "partition"),
             validate_vars=False,
             spec=dict(

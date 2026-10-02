@@ -6,9 +6,9 @@ by the author.  Which columns two slices hold in common is a fact about how
 they were WRITTEN: the caller is the wrong party to know it, and every caller of
 one table needs the same answer.
 
-So a `DatapointTab` or `DatapointTable` declares ``shared_slice_columns``, and a
-block reading an upstream block's slices alongside its own -- a `DatafeatureTab`
-over its `DatapointTab` -- declares ``shared_upstream_column`` for the column
+So a `Datatab` or `Datatable` declares ``shared_slice_columns``, and a
+block reading an upstream block's slices alongside its own -- a `Featuretab`
+over its `Datatab` -- declares ``shared_upstream_column`` for the column
 that answers the question spanning the two: is feature row *i* the features OF
 sample row *i*?
 
@@ -26,7 +26,7 @@ import pytest
 
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datapoints import SLICETOPIC, DatapointTab, DatapointTable
+from dbx.datatables import SLICETOPIC, Datatab, Datatable
 from dbx.datatables import DataslicesUpstream
 
 
@@ -35,14 +35,14 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class Samples(DatapointTab):
+class Samples(Datatab):
     """Two slices carrying one bookkeeping column, written in lockstep."""
 
     VERSION = 1
     TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         n: int = 4
 
     def __build__(self):
@@ -53,7 +53,7 @@ class Samples(DatapointTab):
                 writers['b'].write({'idx': i, 'y': i * 100})
 
 
-class SampleTable(DatapointTable):
+class SampleTable(Datatable):
     VERSION = 1
     TAB = Samples
 
@@ -62,8 +62,8 @@ class SampleTable(DatapointTable):
         return 2
 
 
-class Derived(DataslicesUpstream, DatapointTab):
-    """The shape a `DatafeatureTab` has: own slice plus an upstream block's.
+class Derived(DataslicesUpstream, Datatab):
+    """The shape a `Featuretab` has: own slice plus an upstream block's.
 
     Carries the upstream's bookkeeping column through, which is what makes the
     cross-block alignment checkable at all.
@@ -74,7 +74,7 @@ class Derived(DataslicesUpstream, DatapointTab):
     UPSTREAM_TABS = ('source',)
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         source: Samples = None
         offset: int = 0
 

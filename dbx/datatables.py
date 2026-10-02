@@ -1013,7 +1013,7 @@ class Datatab(_Database_):
             self.fs.put_file(local_path, target_path)
 
 
-def DatapointTableTab(table, idx, tag=None, **spec):
+def DatatableTab(table, idx, tag=None, **spec):
     if isinstance(table, str) and (table.startswith('$') or table.startswith('@') or table.startswith('#')):
         from .dataparts import eval as dbx_eval
         table = dbx_eval(table)
@@ -1021,7 +1021,7 @@ def DatapointTableTab(table, idx, tag=None, **spec):
 
 
 class Datatable(_Database_, Datastack):
-    """A table of DatapointTabs, sliced the same way as its tabs.
+    """A table of Datatabs, sliced the same way as its tabs.
 
     A table's TOPICS only contains what the table itself owns: the structural
     topic ``done`` and any extra file topics the subclass
@@ -1101,7 +1101,7 @@ class Datatable(_Database_, Datastack):
     #: specializations.
     SPECIALIZATIONS = []
 
-    Tab = staticmethod(DatapointTableTab)
+    Tab = staticmethod(DatatableTab)
 
 
     @dataclass
@@ -1656,6 +1656,9 @@ class DatatablePartition(Datablock):
     }
     SPECIALIZATIONS = [
         Datablock.Specialization(
+            spec={}, topics=SAME, anchor='dbx.datapoints.DatatablePartition',
+            note="this very block, stored under its class's old module name, dbx.datapoints, until 2026-10-02"),
+        Datablock.Specialization(
             spec={'method': 'largest_first', 'seed': 0, 'groupby': None, 'stratifyby': None, 'balance': 'rows'},
             topics={'tabs': DATAFILE('tabs.json', 'one list of tab indices per fold')},
             note="the partition from before method/seed/groupby/stratifyby/balance: largest_first, by rows"),
@@ -1870,6 +1873,10 @@ class DatatablePartition(Datablock):
 
 class DatatablePart(Datatable):
     """A subset of a `Datatable` defined by tab_indices for a fold."""
+
+    SPECIALIZATIONS = [Datatable.Specialization(
+        spec={}, topics=SAME, anchor='dbx.datapoints.DatatablePart',
+        note="this very block, stored under its class's old module name, dbx.datapoints, until 2026-10-02")]
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -2198,65 +2205,3 @@ class DataslicesUpstream:
         for owner, s_name, cols in routed:
             owner._check_column_keys_(s_name, cols)
         return routed
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The names these classes used to have
-# ═══════════════════════════════════════════════════════════════════════
-
-#: Aliases, kept so code written against the old names goes on working -- and
-#: deliberately assignments rather than subclasses: the alias IS the class, so
-#: ``DatapointTab is Datatab``, and there is no second VAR, no second MRO and
-#: no way for the two spellings to drift.
-#:
-#: The hash does not move: it is sha256 of ``typestr()``, which is signature +
-#: version + topics and names no class at all. What DOES move is `fqcn`, the
-#: one place a class name is recorded -- the storage path and the journal
-#: directory of a block of that very class. A subclass records its own name,
-#: so ``class Cell(Datatab)`` and ``class Cell(DatapointTab)`` are the same
-#: block at the same path; but a DatatablePartition, or the DatatablePart it
-#: builds, is now stored under its new name, and what was built under the old
-#: one is reached through a specialization, not found in place.
-DatapointBase = _Database_
-#: Its name until it took the leading underscore of a base never built itself.
-DatatabBase = _Database_
-#: Its name until the slices it routes, not the tabs, named it.
-UpstreamTabSlices = DataslicesUpstream
-#: Its name until the tab, the more basic of the two, named the base. Never
-#: built itself, so its fqcn is no directory on disk and moving it moved nothing.
-DatatableBase = _Database_
-DatapointTab = Datatab
-DatapointTable = Datatable
-DatapointPartition = DatatablePartition
-DatapointFold = DatatablePart
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The module this file used to be
-# ═══════════════════════════════════════════════════════════════════════
-
-#: This file was ``dbx/datapoints.py``, and a module name is not cosmetic here:
-#: `fqcn` is ``__module__`` + ``__name__``, `anchor` falls back to it, and
-#: `anchorkeypath` and the journal directory are built from that -- so every
-#: artifact ever built by one of these classes is stored under a path spelling
-#: the OLD module. Worse, `quotefn` renders ``fn.__module__`` into a specline,
-#: and a specline stands in a spec as text, so a spec naming one of these would
-#: hash differently under a new module name.
-#:
-#: Hence: the names below keep the module they were defined in before the
-#: rename. `dbx/datapoints.py` remains as a shim so the string still resolves,
-#: and the pair of them is what makes the rename cost nothing. Setting
-#: ``__module__`` rather than special-casing `fqcn` also fixes pickle and
-#: `quotefn` at the same time, and cannot be inherited: Python gives every
-#: class the module it was defined in, so a subclass elsewhere is unaffected.
-_LEGACY_MODULE = 'dbx.datapoints'
-for _obj in (
-    _Database_,
-    Datatab,
-    Datatable,
-    DatatablePartition,
-    DatatablePart,
-    DatapointTableTab,
-):
-    _obj.__module__ = _LEGACY_MODULE
-del _obj

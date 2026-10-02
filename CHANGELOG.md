@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- **The old module and class names.** `dbx.datapoints`, `dbx.datafeatures`,
+  `dbx.datamodels`, `dbx.dataprobes` and `dbx.databackbones` no longer import,
+  and the aliases `DatapointTab`, `DatapointTable`, `DatapointPartition`,
+  `DatapointFold`, `DatatabBase`, `UpstreamTabSlices`, `DatafeatureTab(le)`,
+  `FeatureTab(le)`, `BipolarDatafeatureTab(le)`, `Datafeature*Probe(r)`,
+  `Datamodel*`, `Dataformer*`, `Datastill`, `Datalightning` and `Dataweights`
+  are gone; `DatapointTableTab` is `DatatableTab`. Classes record their real
+  module (`dbx.datatables.DatatablePartition`), which moves the anchor of a
+  block of a dbx class used directly; hashes do not move. `DatatablePartition`
+  and `DatatablePart` declare specializations to their `dbx.datapoints.*`
+  anchors, so what was built there is adopted.
+
 ### Added
 - **`loc=` takes an id prefix in `datajournal()` too.** `dbx.datajournal(...,
   loc=...)` and `DatajournalFrame.get()` accept any prefix of exactly one id,

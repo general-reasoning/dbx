@@ -2399,19 +2399,3 @@ class Still(CheckpointBuilder):
                 "banner announced a resume from %s but none could be fetched; "
                 "starting at step 0 instead", resume_plan,
             )
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The names these classes used to have
-# ═══════════════════════════════════════════════════════════════════════
-
-#: This file was ``dbx/datastills.py``. It gets no module alias, unlike
-#: ``dbx.backbones`` and ``dbx.probes``: it is a week old, has never been
-#: released, and no artifact anywhere is stored under a ``dbx.datastills.*``
-#: anchor -- and a recorded string that resolves is the only thing a module
-#: alias buys.
-#:
-#: The class names are aliased for source that already imports them.
-Datastill = Still
-Datalightning = LightningBuilder
-Dataweights = Weights

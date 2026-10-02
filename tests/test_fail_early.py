@@ -21,8 +21,8 @@ from test_specializations import v1table  # noqa: E402
 
 from dbx import FeatureAffineLogisticProbe  # noqa: E402
 from dbx.datablocks import Datablock, InvalidBlocksError  # noqa: E402
-from dbx.datafeatures import Datacollator  # noqa: E402
-from dbx import DatafeatureTable  # noqa: E402
+from dbx.featuretables import Datacollator  # noqa: E402
+from dbx import Featuretable  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -131,7 +131,7 @@ class TestWhyInvalid:
 
 def _probe(url):
     sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag="sample_table").build()
-    featuretable = DatafeatureTable(
+    featuretable = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,

@@ -22,8 +22,8 @@ from dataclasses import dataclass
 pytest.importorskip("torch", reason="torch is an optional dependency")
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx import datapoints
-from dbx.datapoints import SLICETOPIC, DatapointTab, DatapointTable
+from dbx import datatables
+from dbx.datatables import SLICETOPIC, Datatab, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -31,12 +31,12 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class Tab(DatapointTab):
+class Tab(Datatab):
     VERSION = 1
     TOPICS = {'numbers': SLICETOPIC}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         n: int = 2
 
     def __build__(self):
@@ -45,12 +45,12 @@ class Tab(DatapointTab):
                 writers['numbers'].write({'idx': i})
 
 
-class Table(DatapointTable):
+class Table(Datatable):
     VERSION = 1
     TAB = Tab
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datatable.VAR):
         n_tabs_: int = 2
 
     @property
@@ -90,7 +90,7 @@ def opened(monkeypatch):
         def __init__(self, **kwargs):
             calls.append(kwargs)
 
-    monkeypatch.setattr(datapoints, 'StreamingDataset', Recorder)
+    monkeypatch.setattr(datatables, 'StreamingDataset', Recorder)
     return calls
 
 

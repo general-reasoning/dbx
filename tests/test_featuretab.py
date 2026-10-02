@@ -1,4 +1,4 @@
-"""test_datafeaturetab.py — Unit tests for DatafeatureTab/Table and BipolarDatafeatureTab/Table."""
+"""test_featuretab.py — Unit tests for Featuretab/Table and BipolarFeaturetab/Table."""
 
 import pytest
 import numpy as np
@@ -8,16 +8,16 @@ from dataclasses import dataclass
 
 from dbx import (
     SLICETOPIC,
-    DatapointTab,
-    DatapointTable,
+    Datatab,
+    Datatable,
     ModelEvaluator,
     ModelEvaluatorBuilder,
-    DatafeatureTab,
-    DatafeatureTable,
-    BipolarDatafeatureTab,
-    BipolarDatafeatureTable,
+    Featuretab,
+    Featuretable,
+    BipolarFeaturetab,
+    BipolarFeaturetable,
 )
-from dbx.datafeatures import Datacollator
+from dbx.featuretables import Datacollator
 
 
 def sample_collator(**spec):
@@ -34,11 +34,11 @@ def sample_collator(**spec):
     ))
 
 
-class DummySampleTab(DatapointTab):
+class DummySampleTab(Datatab):
     TOPICS = {"samples": SLICETOPIC, "labels": SLICETOPIC}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         n_samples: int = 10
 
     def __build__(self):
@@ -55,11 +55,11 @@ class DummySampleTab(DatapointTab):
         return self
 
 
-class DummySampleTable(DatapointTable):
+class DummySampleTable(Datatable):
     TAB = DummySampleTab
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datatable.VAR):
         samples_per_tab: int = 10
 
     @property
@@ -89,7 +89,7 @@ class DummyModelEvaluatorFactory(ModelEvaluatorBuilder):
         return DummyModel()
 
 
-def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
+def test_featuretab_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
     # 1. Build upstream sample tab
@@ -100,7 +100,7 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     # 2. Build feature tab
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab = DatafeatureTab(
+    featuretab = Featuretab(
         datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
@@ -148,7 +148,7 @@ def _stats_probe(url, feature_block, tag, *, signals=(("features", "final"),), n
 
 def _feature_table(url, tag, **spec):
     sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag=f"{tag}_samples").build()
-    return DatafeatureTable(
+    return Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -161,13 +161,13 @@ def _feature_table(url, tag, **spec):
     ).build()
 
 
-def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
+def test_bipolar_featuretab_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
     sampletab = DummySampleTab(datalake=url, tag="samples_1").build()
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab = DatafeatureTab(
+    featuretab = Featuretab(
         datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
@@ -179,7 +179,7 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     ).build()
     stats = _stats_probe(url, featuretab, "stats_1").build()
 
-    bipolar_tab = BipolarDatafeatureTab(
+    bipolar_tab = BipolarFeaturetab(
         datalake=url,
         spec=dict(featuretab=featuretab, stats_probe=stats),
         tag="bipolar_1",
@@ -201,7 +201,7 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     assert len(b_data["labels"]["labels"]) == 10
 
 
-def test_datafeature_table_and_bipolar_table(tmp_path):
+def test_featuretable_and_bipolar_table(tmp_path):
     url = str(tmp_path)
     featuretable = _feature_table(url, "feature_table")
 
@@ -215,7 +215,7 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
     assert len(label_data["labels"]["labels"]) == 10
 
     stats = _stats_probe(url, featuretable, "stats_table").build()
-    bipolar_table = BipolarDatafeatureTable(
+    bipolar_table = BipolarFeaturetable(
         datalake=url,
         spec=dict(featuretable=featuretable, stats_probe=stats),
         devices=["cpu"],
@@ -241,7 +241,7 @@ def test_bipolar_thresholds_against_the_calibration_not_the_tabs_own_median(tmp_
     url = str(tmp_path)
     featuretable = _feature_table(url, "calib_features")
     stats = _stats_probe(url, featuretable, "calib_stats").build()
-    bipolar_table = BipolarDatafeatureTable(
+    bipolar_table = BipolarFeaturetable(
         datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="calib_bipolar",
     ).build()
 
@@ -260,7 +260,7 @@ def test_bipolar_normalizes_as_its_stats_probe_did(tmp_path):
     url = str(tmp_path)
     featuretable = _feature_table(url, "norm_features")
     stats = _stats_probe(url, featuretable, "norm_stats", normalization="l2").build()
-    bipolar_table = BipolarDatafeatureTable(
+    bipolar_table = BipolarFeaturetable(
         datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="norm_bipolar",
     ).build()
 
@@ -276,11 +276,11 @@ def test_bipolar_encodes_every_feature_column_or_the_ones_named(tmp_path):
     stats = _stats_probe(url, featuretable, "two_stats",
                          signals=(("features", "a"), ("features", "b"))).build()
 
-    every = BipolarDatafeatureTable(
+    every = BipolarFeaturetable(
         datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="every")
     assert every.tab(0).declared_columns("bipolar") == {"a": "ndarray:int8", "b": "ndarray:int8"}
 
-    only_b = BipolarDatafeatureTable(
+    only_b = BipolarFeaturetable(
         datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats, features=["b"]),
         tag="only_b").build()
     assert only_b.tab(0).declared_columns("bipolar") == {"b": "ndarray:int8"}
@@ -288,7 +288,7 @@ def test_bipolar_encodes_every_feature_column_or_the_ones_named(tmp_path):
     assert only_b.hash != every.hash
 
     with pytest.raises(ValueError, match="not columns"):
-        BipolarDatafeatureTable(
+        BipolarFeaturetable(
             datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats, features=["c"]),
             tag="nope").tab(0)
 
@@ -298,7 +298,7 @@ def test_bipolar_refuses_a_stats_probe_without_the_median_it_needs(tmp_path):
     featuretable = _feature_table(url, "short_features")
     stats = _stats_probe(url, featuretable, "short_stats", signals=(("samples", "samples"),))
     with pytest.raises(ValueError, match="has no median for feature column"):
-        BipolarDatafeatureTable(
+        BipolarFeaturetable(
             datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="short").tab(0)
 
 
@@ -306,7 +306,7 @@ def test_bipolar_refuses_to_build_against_an_unbuilt_stats_probe(tmp_path):
     url = str(tmp_path)
     featuretable = _feature_table(url, "unbuilt_features")
     stats = _stats_probe(url, featuretable, "unbuilt_stats")
-    tab = BipolarDatafeatureTable(
+    tab = BipolarFeaturetable(
         datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="unbuilt").tab(0)
     # build() asks its VAR blocks before building, and names the one that is not.
     with pytest.raises(ValueError, match="'stats_probe': False"):
@@ -318,7 +318,7 @@ def test_custom_features_mapping(tmp_path):
     sampletab = DummySampleTab(datalake=url, tag="samples_cust").build()
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab = DatafeatureTab(
+    featuretab = Featuretab(
         datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
@@ -340,7 +340,7 @@ def test_signal_selection(tmp_path):
     sampletab = DummySampleTab(datalake=url, tag="samples_sig").build()
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab = DatafeatureTab(
+    featuretab = Featuretab(
         datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
@@ -357,7 +357,7 @@ def test_signal_selection(tmp_path):
 
 
 def test_datacollator():
-    from dbx.datafeatures import Datacollator
+    from dbx.featuretables import Datacollator
 
     collator = Datacollator(
         spec=dict(
@@ -419,7 +419,7 @@ def test_datacollator():
 
 def test_datacollator_without_labels():
     """``labels`` defaults to None: a collator of signals alone reads no label slice."""
-    from dbx.datafeatures import Datacollator
+    from dbx.featuretables import Datacollator
 
     rows = [{"samples": {"samples": np.ones((5, 4), dtype=np.float32) * i}} for i in range(2)]
     for c in (Datacollator(spec=dict(signals=[("samples", "samples")])),
@@ -435,7 +435,7 @@ def test_datacollator_without_labels():
 
 def test_a_labelless_collator_is_refused_by_a_classifier():
     """A probe that fits labels says so, rather than fitting nothing."""
-    from dbx.datafeatures import Datacollator
+    from dbx.featuretables import Datacollator
     from dbx.probes import label_vector
 
     c = Datacollator(spec=dict(signals=[("samples", "samples")]))
@@ -447,7 +447,7 @@ def test_datacollator_slices_are_deterministic():
     """`slices` is splatted into dataset()/data(), where position decides the
     zip order, so it must not come from a set: str hashing is seeded per
     process and the order would differ between workers and between reruns."""
-    from dbx.datafeatures import Datacollator
+    from dbx.featuretables import Datacollator
 
     collator = Datacollator(
         spec=dict(
@@ -461,7 +461,7 @@ def test_datacollator_slices_are_deterministic():
 def test_datacollator_refuses_a_missing_column():
     """No silent fallback: a wrong column name used to select an arbitrary
     array via next(iter(...)) and the build wrote it as the real feature."""
-    from dbx.datafeatures import Datacollator
+    from dbx.featuretables import Datacollator
 
     collator = Datacollator(spec=dict(signals=[("samples", "nope")], labels=[]))
     rows = [{"samples": {"samples": np.ones((2, 2), dtype=np.float32)}}]
@@ -469,13 +469,13 @@ def test_datacollator_refuses_a_missing_column():
         collator(rows)
 
 
-def test_datafeature_tab_streaming(tmp_path):
+def test_featuretab_streaming(tmp_path):
     url = str(tmp_path)
     sampletab = DummySampleTab(datalake=url, tag="samples_str").build()
 
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab_bulk = DatafeatureTab(
+    featuretab_bulk = Featuretab(
         datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
@@ -487,7 +487,7 @@ def test_datafeature_tab_streaming(tmp_path):
         tag="features_bulk",
     ).build()
 
-    featuretab_stream = DatafeatureTab(
+    featuretab_stream = Featuretab(
         datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
@@ -509,7 +509,7 @@ def test_datafeature_tab_streaming(tmp_path):
     np.testing.assert_allclose(np.squeeze(data_stream), np.squeeze(data_bulk))
 
 
-def test_datafeature_table_streaming(tmp_path):
+def test_featuretable_streaming(tmp_path):
     url = str(tmp_path)
     sampletable = DummySampleTable(
         datalake=url,
@@ -519,7 +519,7 @@ def test_datafeature_table_streaming(tmp_path):
 
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretable_stream = DatafeatureTable(
+    featuretable_stream = Featuretable(
         datalake=url,
         spec=dict(
             datapoint_table=sampletable,
@@ -544,7 +544,7 @@ def test_datafeature_table_streaming(tmp_path):
 
 class FeaturesNamedSampleTab(DummySampleTab):
     """A sample tab whose own slice is called 'features' -- the one name a
-    DatafeatureTab cannot borrow, because it owns that name itself."""
+    Featuretab cannot borrow, because it owns that name itself."""
 
     TOPICS = {"features": SLICETOPIC, "labels": SLICETOPIC}
 
@@ -568,7 +568,7 @@ def test_an_upstream_slice_named_features_is_refused(tmp_path):
     url = str(tmp_path)
     sampletab = FeaturesNamedSampleTab(datalake=url, tag="clash_samples").build()
 
-    featuretab = DatafeatureTab(
+    featuretab = Featuretab(
         datalake=url,
         spec=dict(
             datapoint_tab=sampletab,
@@ -601,7 +601,7 @@ def test_a_collator_quotes_as_a_block_not_as_a_function():
     died before building anything.
     """
     import dbx
-    from dbx.datafeatures import Datacollator
+    from dbx.featuretables import Datacollator
 
     c = Datacollator(spec=dict(signals=[("features", "feature_final")]))
     assert callable(c)
@@ -610,7 +610,7 @@ def test_a_collator_quotes_as_a_block_not_as_a_function():
     # ... and as an argument to a quoted call, which goes through quote() too.
     assert c.quote() in dbx.quotefn("some.pipeline", collator=c).replace('\\"', '"')
     # A CLASS still renders as the call it names.
-    assert dbx.quote(Datacollator, spec={}).startswith("$dbx.datafeatures.Datacollator(")
+    assert dbx.quote(Datacollator, spec={}).startswith("$dbx.featuretables.Datacollator(")
 
 
 def test_a_callable_instance_that_cannot_quote_itself_is_refused_by_name():

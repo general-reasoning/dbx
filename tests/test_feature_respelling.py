@@ -21,7 +21,7 @@ from dbx.featuretables import (
     BipolarFeaturetab, BipolarFeaturetable, Featuretab, Featuretable)
 
 sys.path.insert(0, os.path.dirname(__file__))
-from test_datafeaturetab import (  # noqa: E402
+from test_featuretab import (  # noqa: E402
     DummyModelEvaluatorFactory, DummySampleTab, DummySampleTable, sample_collator)
 
 
@@ -37,7 +37,7 @@ class SeededEvaluatorFactory(DummyModelEvaluatorFactory):
     @property
     def model(self):
         import torch
-        from test_datafeaturetab import DummyModel
+        from test_featuretab import DummyModel
         torch.manual_seed(0)
         return DummyModel()
 

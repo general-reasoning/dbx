@@ -15,7 +15,7 @@ renders as its value, and a filename renders quoted where the older spelling
 renders it bare.  So adopting the markers re-keys a block, and every block
 spelled the older way keeps its rendering, and its hashes, exactly.
 
-The other half: a ``DatapointTable`` spelled with the markers stops carrying its
+The other half: a ``Datatable`` spelled with the markers stops carrying its
 TAB's slice topics in its own signature.  Another block's topics were never its
 identity to hold, and the TAB is already part of the table.
 """
@@ -40,7 +40,7 @@ from dbx.datablocks import (
 
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datapoints import DATASLICE, SLICETOPIC, DatapointTab, DatapointTable
+from dbx.datatables import DATASLICE, SLICETOPIC, Datatab, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -72,12 +72,12 @@ class Sentinels(Datablock):
         pass
 
 
-class MarkedTab(DatapointTab):
+class MarkedTab(Datatab):
     VERSION = 1
     TOPICS = {'numbers': DATASLICE(idx='int', square='int'), 'note': 'note.txt'}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         n: int = 3
 
     def __build__(self):
@@ -88,13 +88,13 @@ class MarkedTab(DatapointTab):
             f.write("tab note")
 
 
-class MarkedTable(DatapointTable):
+class MarkedTable(Datatable):
     VERSION = 1
     TAB = MarkedTab
     TOPICS = {'tab_paths': DIR, 'done': 'done'}
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datatable.VAR):
         n_tabs_: int = 2
 
     @property
@@ -167,7 +167,7 @@ class TestTheDeclarationDecidesTheEra:
             block(Mixed, tmp_path).path('data', 'frames')
 
     def test_the_two_slice_spellings_are_a_mixture_too(self, tmp_path):
-        class Mixed(DatapointTab):
+        class Mixed(Datatab):
             TOPICS = {'a': DATASLICE(idx='int'), 'b': SLICETOPIC}
 
             def __build__(self):
@@ -195,7 +195,7 @@ class TestMarkersRenderAsThemselves:
         assert "topic:numbers=DATASLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).typestr()
 
     def test_a_bare_slice_renders_as_the_bare_marker(self, tmp_path):
-        class Bare(DatapointTab):
+        class Bare(Datatab):
             TOPICS = {'numbers': DATASLICE}
 
             def __build__(self):
@@ -264,7 +264,7 @@ class TestAMarkerIsNotItsName:
         )
 
     def test_a_parameterised_marker_and_the_string_of_its_call(self, tmp_path):
-        class Both(DatapointTab):
+        class Both(Datatab):
             TOPICS = {'numbers': DATASLICE(idx='int'), 'x': "DATASLICE(idx='int')"}
 
             def __build__(self):
@@ -303,7 +303,7 @@ class TestASlicesColumnsAreItsIdentity:
     """
 
     def _tab(self, tmp_path, columns):
-        class Tab(DatapointTab):
+        class Tab(Datatab):
             TOPICS = {'numbers': DATASLICE(**columns)}
 
             def __build__(self):
@@ -344,7 +344,7 @@ class TestTheDeclarationIsWhatGetsWritten:
     """
 
     def test_columns_that_disagree_are_refused(self, tmp_path):
-        class Disagreeing(DatapointTab):
+        class Disagreeing(Datatab):
             TOPICS = {'numbers': DATASLICE(idx='int')}
 
             def __build__(self):
@@ -355,7 +355,7 @@ class TestTheDeclarationIsWhatGetsWritten:
             block(Disagreeing, tmp_path).build()
 
     def test_a_reordering_is_a_disagreement(self, tmp_path):
-        class Reordered(DatapointTab):
+        class Reordered(Datatab):
             TOPICS = {'numbers': DATASLICE(idx='int', square='int')}
 
             def __build__(self):
@@ -366,7 +366,7 @@ class TestTheDeclarationIsWhatGetsWritten:
             block(Reordered, tmp_path).build()
 
     def test_a_restatement_is_allowed(self, tmp_path):
-        class Restated(DatapointTab):
+        class Restated(Datatab):
             TOPICS = {'numbers': DATASLICE(idx='int')}
 
             def __build__(self):
@@ -387,7 +387,7 @@ class TestSliceWritersTakesTheDeclaration:
         assert t.data('numbers')['numbers']['square'] == [0, 1, 4]
 
     def test_a_bare_slice_still_needs_its_columns_passed(self, tmp_path):
-        class Bare(DatapointTab):
+        class Bare(Datatab):
             TOPICS = {'numbers': DATASLICE}
 
             def __build__(self):
@@ -398,7 +398,7 @@ class TestSliceWritersTakesTheDeclaration:
             block(Bare, tmp_path).build()
 
     def test_the_sentinel_is_unaffected(self, tmp_path):
-        class Sentinel(DatapointTab):
+        class Sentinel(Datatab):
             TOPICS = {'numbers': SLICETOPIC}
 
             def __build__(self):
@@ -411,7 +411,7 @@ class TestSliceWritersTakesTheDeclaration:
         assert b.data('numbers') == {'numbers': {'idx': [0]}}
 
     def test_a_missing_slice_is_still_refused(self, tmp_path):
-        class TwoSlices(DatapointTab):
+        class TwoSlices(Datatab):
             TOPICS = {'numbers': SLICETOPIC, 'letters': SLICETOPIC}
 
             def __build__(self):
@@ -458,13 +458,13 @@ class TestAMarkedTableCarriesOnlyItsOwnTopics:
         assert not any('numbers' in segment for segment in segments)
 
     def test_a_table_spelled_the_older_way_still_carries_them(self, tmp_path):
-        class LegacyTab(DatapointTab):
+        class LegacyTab(Datatab):
             TOPICS = {'numbers': SLICETOPIC}
 
             def __build__(self):
                 pass
 
-        class LegacyTable(DatapointTable):
+        class LegacyTable(Datatable):
             TAB = LegacyTab
             # Spelled as the base was before it took the markers.
             TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}

@@ -16,7 +16,7 @@ import pytest
 pytest.importorskip("streaming")
 
 sys.path.insert(0, os.path.dirname(__file__))
-from test_datafeaturetab import DummySampleTab  # noqa: E402
+from test_featuretab import DummySampleTab  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

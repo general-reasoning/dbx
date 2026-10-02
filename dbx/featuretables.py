@@ -27,7 +27,7 @@ from dbx.datatables import (
     DataslicesUpstream,
     Datatab,
     Datatable,
-    DatapointTableTab,
+    DatatableTab,
     DIRTOPIC,
     SLICETOPIC,
 )
@@ -894,38 +894,3 @@ class BipolarFeaturetable(DataslicesUpstream, Datatable):
     @property
     def n_tabs(self) -> int:
         return self.featuretable.n_tabs
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The names these classes used to have
-# ═══════════════════════════════════════════════════════════════════════
-
-#: The names these classes used to have, as aliases -- plain assignments, so
-#: the alias is the class itself. See the note at the foot of
-#: :mod:`dbx.datatables`: the hash does not move, but a block of one of these
-#: classes is now stored under its new name.
-DatafeatureTab = FeatureTab = Featuretab
-DatafeatureTable = FeatureTable = Featuretable
-BipolarDatafeatureTab = BipolarFeaturetab
-BipolarDatafeatureTable = BipolarFeaturetable
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The module this file used to be
-# ═══════════════════════════════════════════════════════════════════════
-
-#: This file was ``dbx/datafeatures.py``. See the note at the foot of
-#: :mod:`dbx.datatables` for why a module name reaches identity; it matters
-#: most here, since these are the classes configured by spec and built
-#: directly, so it is their own `fqcn` -- not a subclass's -- that every
-#: feature artifact is stored under.
-_LEGACY_MODULE = 'dbx.datafeatures'
-for _obj in (
-    Datacollator,
-    Featuretab,
-    Featuretable,
-    BipolarFeaturetab,
-    BipolarFeaturetable,
-):
-    _obj.__module__ = _LEGACY_MODULE
-del _obj

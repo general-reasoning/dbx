@@ -8,16 +8,13 @@ Both live in `dbx.datatables`, which needs `torch` and `mosaicml-streaming`
 at import time:
 
 ```python
-from dbx.datatables import Datatab, Datatable            # or DatapointTab, DatapointTable
+from dbx.datatables import Datatab, Datatable
 ```
 
-`DatapointTab`/`DatapointTable`, the names these classes used to have, are
-aliases of `Datatab`/`Datatable` — the same classes, so neither spelling
-changes a hash, and a subclass is stored where it always was.  (A block of one
-of these classes *itself* — a `DatatablePartition` or the `DatatablePart` it
-builds — is stored under its new name.)  `dbx.datapoints` also still
-resolves, and is not going away: a class's module name is part of the path its
-artifacts are stored under, so the old name is recorded on disk.
+A class is recorded under the module it is defined in: a `DatatablePartition`
+or the `DatatablePart` it builds is stored under `dbx.datatables.*`. Builds from
+before 2026-10-02, stored under the old module name `dbx.datapoints.*`, are
+reached by those classes' specializations.
 
 ## Why slices
 

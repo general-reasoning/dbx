@@ -37,13 +37,13 @@ class OldTable(Datatable):
     TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
 
 
-from dbx.datablocks import DIR, DATAFILE  # noqa: E402
+from dbx.datablocks import DATADIR, DATAFILE  # noqa: E402
 
 
 class NewTable(Datatable):
     """Respelled with the markers; its own identity no longer carries the TAB's slices."""
     TAB = NewTab
-    TOPICS = {'tab_paths': DIR, 'done': DATAFILE('done')}
+    TOPICS = {'tab_paths': DATADIR, 'done': DATAFILE('done')}
     SPECIALIZATIONS = [Datatable.Specialization(
         spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, TAB=None,
         note="respelled only; built before a table's type named its TAB")]

@@ -19,7 +19,7 @@ import pytest
 from dataclasses import dataclass
 
 from dbx.datablocks import Datablock
-from dbx.datapoints import DIRTOPIC, DatapointTab, DatapointTable
+from dbx.datatables import DIRTOPIC, Datatab, Datatable
 
 ANCHOR = 'Spectra'
 
@@ -405,7 +405,7 @@ class TestTheIdentityIsNotTheRedirection:
 # ---------------------------------------------------------------------------
 #
 # Everything above is a plain Datablock, whose `valid()` is `valid_topics()`
-# and which writes nowhere but its own topics. A DatapointTable is neither:
+# and which writes nowhere but its own topics. A Datatable is neither:
 # its `valid()` is the `done` MARKER, and its split ensures the `tab_paths`
 # directory before it does anything else. Both are reasonable on their own and
 # both break under a partial redirection, so this is the shape a specialization
@@ -416,14 +416,14 @@ class TestTheIdentityIsNotTheRedirection:
 TABLE_ANCHOR = 'Rows'
 
 
-class RowTab(DatapointTab):
+class RowTab(Datatab):
     """One tab, one file. No slices: this is about the TABLE's topics."""
 
     VERSION = 1
     TOPICS = {'rows': 'rows.txt'}
 
     @dataclass
-    class VAR(DatapointTab.VAR):
+    class VAR(Datatab.VAR):
         tab_idx: int = 0
 
     def __build__(self):
@@ -436,7 +436,7 @@ class RowTab(DatapointTab):
             return f.read()
 
 
-class RowTableV1(DatapointTable):
+class RowTableV1(Datatable):
     """The table before it grew a topic."""
 
     VERSION = 1
@@ -444,7 +444,7 @@ class RowTableV1(DatapointTable):
     TOPICS = {'summary': 'summary.txt', 'tab_paths': DIRTOPIC, 'done': 'done'}
 
     @dataclass
-    class VAR(DatapointTable.VAR):
+    class VAR(Datatable.VAR):
         n: int = 2
 
     @property
@@ -528,7 +528,7 @@ class TestASpecializedTable:
     def test_a_marker_valid_does_not_skip_the_build(self, tmp_path, built_table):
         """The failure this exists to stop, and it was SILENT.
 
-        `DatapointTable.valid()` is `valid_topic('done')`, and `done` is one of
+        `Datatable.valid()` is `valid_topic('done')`, and `done` is one of
         the topics the specialization redirects -- so the table reports itself
         built, off another build's marker, before `report` exists. `build()`
         used to ask `valid()` and nothing else, skip, and return a table that
@@ -550,7 +550,7 @@ class TestASpecializedTable:
 
         `path(ensure_dirpath=True)` on a redirected topic raises -- correctly,
         since it would be creating a directory inside another block's data --
-        and `DatapointTable.__split__` called exactly that on `tab_paths`
+        and `Datatable.__split__` called exactly that on `tab_paths`
         before doing anything else. The tab machinery was therefore not merely
         unnecessary for a specialized table, it was unreachable.
         """

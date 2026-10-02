@@ -445,26 +445,3 @@ class TransformerEvaluatorBuilder(ModelEvaluatorBuilder):
         if hasattr(self, '_evaluators') and self._evaluators:
             return next(iter(self._evaluators.values())).layer_names
         return self.evaluator(device="cpu").layer_names
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  The names these classes used to have
-# ═══════════════════════════════════════════════════════════════════════
-
-#: This file was ``dbx/databackbones.py`` (and ``dbx/datamodels.py`` before
-#: that), and the classes carried a ``Data`` prefix that said nothing: an
-#: evaluator is not a datablock, and the two Factories are Builders in every
-#: other corner of this codebase. Both old module paths still resolve, as
-#: aliases onto this one module object -- see the note in ``dbx/__init__.py``.
-#:
-#: The class names below are aliases in the other direction, for source that
-#: imports them. Unlike the module aliases they are a courtesy and nothing
-#: more: a rename moves `fqcn`, so it would move the storage path of any block
-#: built AS one of these -- but nothing ever was. Every builder in soundworld
-#: is a subclass, which reports its own module and its own name, and there is
-#: no ``dbx.*`` anchor in any root. Renaming a base costs nothing; what would
-#: cost is renaming the subclass.
-DatamodelEvaluator = ModelEvaluator
-DatamodelEvaluatorFactory = ModelEvaluatorBuilder
-DataformerEvaluator = TransformerEvaluator
-DataformerEvaluatorFactory = TransformerEvaluatorBuilder

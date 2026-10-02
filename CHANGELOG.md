@@ -25,6 +25,25 @@ All notable changes to this project will be documented in this file.
   specializations reach the partitions built before.
 
 ### Added
+- **`DatatablePartition` splits a tab holding several values of a partition
+  column.** Such a tab -- several patients in one bag, tiles annotated one by
+  one -- used to raise `NotImplementedError`. It is now split into pieces, one
+  per combination of its groupby/stratifyby values, each a `DatatabPiece`: the
+  rows of that tab holding those values, every slice written with the same
+  rows. A piece is dealt as a tab is, with its group and within its stratum;
+  in `tabs` it is a record, `{"tab": i, "groupby": v, "stratifyby": v}`, beside
+  the indices of the tabs dealt whole, and its tag is `<tab tag>#<value>...`.
+  The fold builds its pieces, in parallel: `partition.fold(k).build()`. Rows of
+  a mixed tab holding no value are a piece that is skipped, and recorded in
+  `summary` with their count. Only mixed tabs are split, so a partition of
+  constant tabs -- its hash, `tabs`, folds and summary -- is unchanged. Not for
+  a table reading upstream (a `Featuretable`): a mixed tab of one still raises
+  `NotImplementedError`.
+- **Probes read folds holding pieces.** `check_probe_inputs` asks a fold about
+  its own blocks, pieces included, and says to build the fold when a piece is
+  missing; `_check_disjoint_` tells pieces apart by tag. Stratifying a
+  partition by the label column turns a tab whose rows carry two labels into
+  pieces carrying one each, which `tab_aggregation='mean'` takes as samples.
 - **Specializations compose through nested blocks.** A nested block renders in
   its container's identity, so a rename inside it used to strand every build
   of the container. Each block now also looks for its past with its nested
@@ -38,6 +57,10 @@ All notable changes to this project will be documented in this file.
   and drops a nested block's field that did not exist then.
 
 ### Removed
+- **`FeatureAffineLogisticProber`.** Its `evaluate_features(2)` split rows at
+  random, unseeded, and with no regard for patients; nothing called it, and
+  `FeatureAffineLogisticProbe` only constructed one it never used. A fit/eval
+  split is two folds of a `DatatablePartition` -- now for mixed tabs too.
 - **The old module and class names.** `dbx.datapoints`, `dbx.datafeatures`,
   `dbx.datamodels`, `dbx.dataprobes` and `dbx.databackbones` no longer import,
   and the aliases `DatapointTab`, `DatapointTable`, `DatapointPartition`,

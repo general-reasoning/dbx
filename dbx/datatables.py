@@ -1889,8 +1889,22 @@ def _value_key_(value) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
+PARTITION_ROLES = ('groupby', 'stratifyby')
+
+
+def _piece_tag_(tag, values: dict) -> str:
+    """A piece's tag: its source tab's, and the value of each role, ``'#'``-joined -- what a probe tells pieces apart by."""
+    return '#'.join([str(tag)] + [v if isinstance(v, str) else _value_key_(v) for v in values.values()])
+
+
 class TabPartitionScanCallable:
-    """Worker callable: one tab's row count and the single value each partition column holds in it."""
+    """Worker callable: one tab's row count and the values each partition column holds in it.
+
+    A tab holding one value per role reports that value. A tab holding several -- mixed --
+    also reports its PIECES: each distinct combination of the role values, and how many rows
+    hold it. Counts and not rows: a tab may hold millions of rows, and a piece re-selects its
+    own from the value when it is built, so nothing row by row comes back to the partition.
+    """
 
     def __init__(self, partition, idx: int):
         self.partition = partition
@@ -1902,14 +1916,25 @@ class TabPartitionScanCallable:
         out = {'idx': self.idx, 'tag': tab.tag, 'rows': None, 'values': {}}
         if part.var.balance == 'rows' or part.var.method == 'largest_first':
             out['rows'] = int(tab.n_rows(part._partition_slice_name_))
-        for name in ('groupby', 'stratifyby'):
+        columns = {}
+        for name in PARTITION_ROLES:
             spec = part.column_spec(name)
             if spec is None:
                 continue
+            columns[name] = _column_values_(tab, tuple(spec))
             distinct = {}
-            for value in _column_values_(tab, tuple(spec)):
+            for value in columns[name]:
                 distinct.setdefault(_value_key_(value), value)
             out['values'][name] = list(distinct.values())
+        if any(len(vals) > 1 for vals in out['values'].values()):
+            out['column_rows'] = {name: len(vals) for name, vals in columns.items()}
+            out['slice_rows'] = {s: int(tab.n_rows(s)) for s in tab.slices()}
+            pieces = {}
+            for row in zip(*columns.values()):
+                values = dict(zip(columns, row))
+                piece = pieces.setdefault(_value_key_(values), {'values': values, 'rows': 0})
+                piece['rows'] += 1
+            out['pieces'] = [pieces[k] for k in sorted(pieces)]
         return out
 
 
@@ -1941,12 +1966,23 @@ class DatatablePartition(Datablock):
     *seed* -- the order units are dealt in. Within each stratum, the units are
     shuffled with it, then each goes to the fold furthest below its target.
 
-    A *groupby* or *stratifyby* column must hold one value throughout each tab:
-    the partition reads it whole, and a tab holding several raises
-    `NotImplementedError` -- dealing a tab's rows to different folds is a
-    capability for the future, repacking them. A tab holding none is skipped:
-    in no fold, said loudly, and recorded in ``summary``. A group must lie in
-    one stratum.
+    A tab whose *groupby* or *stratifyby* column holds one value throughout is
+    dealt whole. A tab holding several -- several patients in one bag, tiles
+    annotated one by one -- is split: into PIECES, one per combination of its
+    values, each a `DatatabPiece` -- the rows of that tab holding those values.
+    A piece is dealt as a tab is: with every tab and piece of its group, within
+    its stratum. Only mixed tabs are split, so a partition of tabs that are all
+    constant is what it always was, and its folds copy nothing. Stratifying by
+    the label column turns a tab whose rows carry two labels into two pieces
+    carrying one each: what a probe's ``tab_aggregation='mean'`` needs of every
+    sample.
+
+    A tab or a piece holding no value is skipped: in no fold, said loudly, and
+    recorded in ``summary`` -- a piece with the rows it leaves out. A group must
+    lie in one stratum. A table that reads slices upstream
+    (`DataslicesUpstream`, a `Featuretable`) is not split: a piece of it would
+    have to be the same piece of its upstream too, which is not implemented,
+    and a mixed tab of one raises `NotImplementedError`.
 
     *method* ``'largest_first'`` is the partition from before these choices:
     tabs in descending order of rows, each to the fold with the largest deficit
@@ -1954,8 +1990,15 @@ class DatatablePartition(Datablock):
     specialization, and it takes none of the four.
 
     Topics: ``tabs`` -- one list of tab indices per fold, which the folds read;
-    ``summary`` -- per fold its tags and counts (tabs, rows, per stratum), and
-    the tabs skipped and why.
+    a piece among them is a record, ``{"tab": i, "groupby": value, "stratifyby":
+    value}`` with the roles the collator sets, its values as read -- see
+    `tabs_indices`; ``summary`` -- per fold its tags and counts (tabs, rows, per
+    stratum), and the tabs and pieces skipped and why.
+
+    The folds build the pieces: ``partition.fold(k).build()`` builds them, in
+    parallel, as a table builds its tabs, and the whole tabs among them are
+    already built. A probe reading a fold whose pieces are not built says so
+    before it starts. The partition itself stays an index: it writes no rows.
     """
 
     VERSION = 1
@@ -2053,14 +2096,38 @@ class DatatablePartition(Datablock):
     def n_folds(self) -> int:
         return len(self.var.fractions)
 
-    def tabs_indices(self, fold: int | str) -> list[int]:
+    def tabs_indices(self, fold: int | str) -> list:
+        """Fold *fold*'s entries: a table's tab index, or -- for a piece of a mixed tab -- its record.
+
+        A record is ``{"tab": i, <role>: value, ...}``: the source tab, and the
+        value of each role its rows hold, as read. Ints only, as ever, when no
+        tab was split. `tab` turns either into the block it names.
+        """
         data = json.loads(self.fs.cat(self.path('tabs')))
         return data[int(fold)]
 
     def tabs(self, fold: int | str) -> list[Datatab]:
-        indices = self.tabs_indices(fold)
+        return [self.tab(entry) for entry in self.tabs_indices(fold)]
+
+    def tab(self, entry: 'int | dict') -> Datatab:
+        """The block an entry of ``tabs`` names: the table's tab, or the `DatatabPiece` of it."""
         table = self.var.datatable
-        return [table.tab(i) for i in indices]
+        if not isinstance(entry, dict):
+            return table.tab(int(entry))
+        source = table.tab(int(entry['tab']))
+        values = {role: entry[role] for role in PARTITION_ROLES if role in entry}
+        return DatatabPiece(
+            # Where the partition is, as its folds are: a piece is derived from
+            # the partition, and the table's lake may be one nothing writes to.
+            datalake=self._datalake_,
+            storage_options=self.storage_options,
+            cache=getattr(source, 'cache', None),
+            cache_limit=getattr(source, 'cache_limit', None),
+            verbose=False,
+            tag=_piece_tag_(source.tag, values),
+            spec=dict(datapoints_per_row=source.var.datapoints_per_row, tab=source,
+                      columns={role: tuple(self.column_spec(role)) for role in values}, values=values),
+        )
 
     def fold(self, fold: int | str) -> DatatablePart:
         return DatatablePart(
@@ -2094,23 +2161,77 @@ class DatatablePartition(Datablock):
     # 4. Helpers -----------------------------------------------------------
 
     def _scan_(self) -> list[dict]:
-        """Each tab's rows and partition-column values, read in parallel; raise for a tab holding several."""
+        """Each tab's rows and partition-column values, read in parallel; a mixed tab's pieces too.
+
+        A mixed tab is checked here, before anything is dealt: its pieces are
+        selected by row, so every slice of it must have as many rows as its
+        partition columns have values -- or row i of one slice is not row i of
+        another, and a piece would pair one row's columns with another's.
+        """
         table = self.var.datatable
         executor = callable_executor(
             getattr(self, 'parallelization', None) or 'inline',
             n_workers=getattr(self, 'n_workers', 1) or 1,
             tag=f"SCANNING {table.n_tabs} tabs [{type(self).__name__}]")
         scans = executor.exec_callables([TabPartitionScanCallable(self, i) for i in range(table.n_tabs)])
-        mixed = [(s['tag'], name, vals) for s in scans for name, vals in s['values'].items() if len(vals) > 1]
-        if mixed:
-            shown = "\n".join(f"  {tag}: {name} holds {len(vals)} values, e.g. {vals[:3]!r}"
-                              for tag, name, vals in mixed[:5])
+        mixed = [s for s in scans if 'pieces' in s]
+        if not mixed:
+            return scans
+        shown = "\n".join(f"  {s['tag']}: " + ", ".join(f"{name} holds {len(vals)} values, e.g. {vals[:3]!r}"
+                                                         for name, vals in s['values'].items() if len(vals) > 1)
+                          for s in mixed[:5])
+        if isinstance(table, DataslicesUpstream):
             raise NotImplementedError(
-                f"{type(self).__name__}: {len(mixed)} tab(s) hold more than one value of a partition column:\n"
-                f"{shown}\n"
-                f"A tab is dealt to one fold whole, so its groupby and stratifyby values must be one per tab. "
-                f"Dealing a tab's rows to different folds -- repacking them -- is not implemented yet.")
+                f"{type(self).__name__}: {len(mixed)} tab(s) of {type(table).__name__} hold more than one value "
+                f"of a partition column:\n{shown}\n"
+                f"A mixed tab is split into pieces, one per value, and that is implemented for a plain Datatab "
+                f"table only: a piece of a table that reads slices upstream ({type(table).__name__} is a "
+                f"DataslicesUpstream) would have to be the same piece of its upstream tab too. Partition the "
+                f"upstream table, whose tabs hold the rows, or give this one tabs that each hold one value.")
+        uneven = [s for s in mixed if len(set(s['column_rows'].values()) | set(s['slice_rows'].values())) > 1]
+        if uneven:
+            s = uneven[0]
+            raise ValueError(
+                f"{type(self).__name__}: {len(uneven)} mixed tab(s) have slices or partition columns of "
+                f"different lengths, e.g. {s['tag']}: slices {s['slice_rows']}, partition columns "
+                f"{s['column_rows']}. A mixed tab is split by row, so row i must be row i of every slice; "
+                f"rebuild the tab with its slices written in lockstep.")
+        n_pieces = sum(len(s['pieces']) for s in mixed)
+        self.log.warning(
+            f"{type(self).__name__}: splitting {len(mixed)} of {len(scans)} tabs, which hold more than one "
+            f"value of a partition column, into {n_pieces} pieces, one per value -- dealt as tabs are, and "
+            f"built by the folds (fold.build()):\n{shown}" + ("\n  ..." if len(mixed) > 5 else ""))
         return scans
+
+    def _items_(self, scans) -> list[dict]:
+        """What is dealt, in scan order: each constant tab, and each piece of a mixed one.
+
+        An item's *entry* is what ``tabs`` records for it -- a tab index, or a
+        piece's record -- and its *values* the value of each role, None where
+        it holds none.
+        """
+        roles = [r for r in PARTITION_ROLES if self.column_spec(r) is not None]
+        items = []
+        for s in scans:
+            if 'pieces' not in s:
+                values = {r: (s['values'][r][0] if s['values'][r] else None) for r in roles}
+                items.append({'idx': s['idx'], 'entry': s['idx'], 'tag': s['tag'], 'rows': s['rows'],
+                              'values': values})
+                continue
+            for p in s['pieces']:
+                items.append({'idx': s['idx'], 'entry': {'tab': s['idx'], **p['values']},
+                              'tag': _piece_tag_(s['tag'], p['values']), 'rows': p['rows'], 'values': p['values']})
+        return items
+
+    @staticmethod
+    def _entry_key_(entry) -> 'int | str':
+        """An entry of ``tabs`` as a dict key: a tab index is itself, a piece its record's `_value_key_`."""
+        return _value_key_(entry) if isinstance(entry, dict) else entry
+
+    @staticmethod
+    def _entry_order_(entry) -> tuple:
+        """The order a fold lists its entries in: by source tab, a tab's pieces by value -- ints alone as sorted()."""
+        return (entry['tab'], _value_key_(entry)) if isinstance(entry, dict) else (entry, '')
 
     def _largest_first_(self, scans) -> list[list[int]]:
         """The partition from before: tabs by descending rows, each to the fold with the largest deficit."""
@@ -2127,28 +2248,43 @@ class DatatablePartition(Datablock):
             fold_rows[best] += tab_rows[t_idx]
         return [sorted(f) for f in folds_tabs]
 
-    def _deal_(self, scans) -> tuple[list[list[int]], list[dict]]:
-        """Units -- groups of tabs -- dealt within each stratum, in seeded order, to the fold furthest below target."""
+    def _deal_(self, scans) -> tuple[list[list], list[dict]]:
+        """Units -- groups of tabs and pieces -- dealt within each stratum, in seeded order, to the fold furthest below target.
+
+        A piece is dealt exactly as a tab is, weighing its rows or 1: a group's
+        unit collects every tab and piece holding its value, whichever tabs the
+        pieces came from. Without a groupby, each tab is its own unit, and so
+        is each piece.
+        """
         fractions = [f / sum(self.var.fractions) for f in self.var.fractions]
+        items = self._items_(scans)
         skipped, units = [], {}
-        for s in scans:
-            missing = [name for name in ('groupby', 'stratifyby')
-                       if self.column_spec(name) is not None and s['values'][name] in ([], [None])]
+        for item in items:
+            missing = [name for name, value in item['values'].items() if value is None]
             if missing:
-                skipped.append({'idx': s['idx'], 'tag': s['tag'], 'why': f"no {' or '.join(missing)} value"})
+                why = f"no {' or '.join(missing)} value"
+                skipped.append({'idx': item['idx'], 'tag': item['tag'], 'why': why} if not isinstance(item['entry'], dict)
+                               else {'idx': item['idx'], 'tag': item['tag'], 'piece': item['entry'],
+                                     'rows': item['rows'], 'why': f"{why} in {item['rows']} of its rows"})
                 continue
-            group = _value_key_(s['values']['groupby'][0]) if self.column_spec('groupby') is not None else f"tab:{s['idx']}"
-            stratum = _value_key_(s['values']['stratifyby'][0]) if self.column_spec('stratifyby') is not None else ''
+            values = item['values']
+            group = (_value_key_(values['groupby']) if 'groupby' in values else
+                     f"tab:{item['idx']}" if not isinstance(item['entry'], dict) else
+                     f"tab:{item['idx']}#{_value_key_(values)}")
+            stratum = _value_key_(values['stratifyby']) if 'stratifyby' in values else ''
             unit = units.setdefault(group, {'tabs': [], 'strata': set(), 'weight': 0})
-            unit['tabs'].append(s['idx'])
+            unit['tabs'].append(item['entry'])
             unit['strata'].add(stratum)
-            unit['weight'] += s['rows'] if self.var.balance == 'rows' else 1
+            unit['weight'] += item['rows'] if self.var.balance == 'rows' else 1
         if skipped:
+            n_rows = sum(s['rows'] for s in skipped if 'piece' in s)
             self.log.warning(
-                f"{type(self).__name__}: skipping {len(skipped)} of {len(scans)} tabs, which hold no "
-                f"{'/'.join(n for n in ('groupby', 'stratifyby') if self.column_spec(n) is not None)} "
+                f"{type(self).__name__}: skipping {len(skipped)} of {len(items)} "
+                f"{'tabs' if len(items) == len(scans) else 'tabs and pieces'}, which hold no "
+                f"{'/'.join(n for n in PARTITION_ROLES if self.column_spec(n) is not None)} "
                 f"value -- they are in no fold: {[s['tag'] for s in skipped[:10]]}"
-                + (" ..." if len(skipped) > 10 else ""))
+                + (" ..." if len(skipped) > 10 else "")
+                + (f"; the pieces among them leave out {n_rows} rows" if n_rows else ""))
         straddling = {g: u['strata'] for g, u in units.items() if len(u['strata']) > 1}
         if straddling:
             g, strata = next(iter(straddling.items()))
@@ -2171,38 +2307,50 @@ class DatatablePartition(Datablock):
                         key=lambda k: (target[k] - have[k]) / target[k] if target[k] > 0 else -np.inf)
                 folds_tabs[k].extend(unit['tabs'])
                 have[k] += unit['weight']
-        return [sorted(f) for f in folds_tabs], skipped
+        return [sorted(f, key=self._entry_order_) for f in folds_tabs], skipped
 
     def _summary_(self, scans, folds_tabs, skipped) -> dict:
-        """What each fold holds -- tags, tabs, rows, per stratum -- and what was left out."""
-        by_idx = {s['idx']: s for s in scans}
+        """What each fold holds -- tags, tabs, rows, per stratum -- and what was left out.
 
-        def stratum(s):
-            vals = s['values'].get('stratifyby')
-            return None if not vals else vals[0]
+        A piece counts as a tab -- it is one of its fold's -- with its own rows.
+        ``pieces`` and ``n_pieces`` say how many, and appear only when a tab was
+        split, so the summary of a partition of constant tabs is what it was.
+        """
+        by_entry = {self._entry_key_(item['entry']): item for item in self._items_(scans)}
+        split = any('pieces' in s for s in scans)
 
         folds = []
-        for k, idxs in enumerate(folds_tabs):
+        for k, entries in enumerate(folds_tabs):
+            fold_items = [by_entry[self._entry_key_(e)] for e in entries]
             strata = {}
-            for i in idxs:
-                st = strata.setdefault(str(stratum(by_idx[i])), {'tabs': 0, 'rows': 0})
+            for item in fold_items:
+                st = strata.setdefault(str(item['values'].get('stratifyby')), {'tabs': 0, 'rows': 0})
                 st['tabs'] += 1
-                st['rows'] += by_idx[i]['rows'] or 0
+                st['rows'] += item['rows'] or 0
             folds.append({
                 'fold': k,
                 'fraction': self.var.fractions[k],
-                'tabs': len(idxs),
-                'rows': sum(by_idx[i]['rows'] or 0 for i in idxs) if self.var.balance == 'rows' or self.var.method == 'largest_first' else None,
+                'tabs': len(fold_items),
+                **({'pieces': sum(isinstance(e, dict) for e in entries)} if split else {}),
+                'rows': sum(item['rows'] or 0 for item in fold_items) if self.var.balance == 'rows' or self.var.method == 'largest_first' else None,
                 'strata': dict(sorted(strata.items())) if self.column_spec('stratifyby') is not None else None,
-                'tags': [by_idx[i]['tag'] for i in idxs],
+                'tags': [item['tag'] for item in fold_items],
             })
         return {'method': self.var.method, 'balance': self.var.balance, 'seed': self.var.seed,
                 'groupby': self.column_spec('groupby'), 'stratifyby': self.column_spec('stratifyby'),
-                'n_tabs': len(scans), 'folds': folds, 'skipped': skipped}
+                'n_tabs': len(scans), **({'n_pieces': sum(len(s['pieces']) for s in scans if 'pieces' in s)} if split else {}),
+                'folds': folds, 'skipped': skipped}
 
 
 class DatatablePart(Datatable):
-    """A subset of a `Datatable` defined by tab_indices for a fold."""
+    """A subset of a `Datatable` defined by tab_indices for a fold.
+
+    A fold's tabs are its table's own, and pieces of them: a `DatatabPiece`
+    for each entry of ``tab_indices`` that is a piece's record -- see
+    `DatatablePartition`. The table's tabs are built where they are; the
+    pieces are this part's to build, and its build() builds them, in parallel,
+    as any table builds its tabs, skipping the ones already built.
+    """
 
     SPECIALIZATIONS = [Datatable.Specialization(
         spec={}, topics=SAME, anchor='dbx.datapoints.DatatablePart',
@@ -2233,29 +2381,39 @@ class DatatablePart(Datatable):
         return self.datatable.slices(recursive=recursive)
 
     def tab(self, idx: int) -> Datatab:
-        real_idx = self.tab_indices[idx]
-        return self.datatable.tab(real_idx)
+        """Tab *idx* of this part: its table's tab, or -- for a piece's entry -- the `DatatabPiece`."""
+        entry = self.tab_indices[idx]
+        if isinstance(entry, dict):
+            return self.var.partition.tab(entry)
+        return self.datatable.tab(entry)
 
     def valid_tab(self, idx: int, validation: str | None = None) -> bool:
-        """Whether tab *idx* is valid: this part's manifest, or its table's tab -- see `Datastack.valid_blocks`."""
+        """Whether tab *idx* is valid: this part's manifest, or its table's tab, or the piece -- see `Datastack.valid_blocks`."""
         validation = self._validation_(validation)
         if validation == 'cross_check' and self._blocks_cross_checked_():
             return True
-        real_idx = self.tab_indices[idx]
+        entry = self.tab_indices[idx]
+        if isinstance(entry, dict):
+            piece = self.tab(idx)
+            return bool(piece.validate() if validation == 'validate' else piece.valid())
         full = 'validate' if validation == 'validate' else 'valid'
-        return self.datatable.valid_tab(real_idx, validation=full)
+        return self.datatable.valid_tab(entry, validation=full)
 
     valid_block = valid_tab
 
     def redirected_tab(self, idx: int) -> bool:
-        real_idx = self.tab_indices[idx]
-        return self.datatable.redirected_tab(real_idx)
+        entry = self.tab_indices[idx]
+        if isinstance(entry, dict):
+            return self.tab(idx).redirected()
+        return self.datatable.redirected_tab(entry)
 
     redirected_block = redirected_tab
 
     def validate_tab(self, idx: int, **kwargs) -> bool:
-        real_idx = self.tab_indices[idx]
-        return self.datatable.validate_tab(real_idx, **kwargs)
+        entry = self.tab_indices[idx]
+        if isinstance(entry, dict):
+            return Datastack.validate_block(self, idx, **kwargs)
+        return self.datatable.validate_tab(entry, **kwargs)
 
     validate_block = validate_tab
 
@@ -2287,7 +2445,8 @@ class DatatablePart(Datatable):
     # 3. Accessors ---------------------------------------------------------
 
     @functools.cached_property
-    def tab_indices(self) -> list[int]:
+    def tab_indices(self) -> list:
+        """The partition's entries for this fold: tab indices, and the records of pieces -- see `DatatablePartition.tabs_indices`."""
         return self.var.partition.tabs_indices(self.var.fold)
 
     @property
@@ -2332,11 +2491,142 @@ class DatatablePart(Datatable):
         """A part's tabs are its table's, and are stored where they are."""
         return self.datatable._blocks_datalake_()
 
+    def _form_block_(self, idx: int, *, use_specializations='stack'):
+        """As `Datastack._form_block_`, and a piece passes for the TAB it is a piece of.
+
+        A part's BLOCK is its table's TAB, and is in its hash, so it stays that
+        for a part holding pieces; a piece is a `DatatabPiece` of a tab of that
+        class, and is checked as one.
+        """
+        if not isinstance(self.tab_indices[idx], dict):
+            return super()._form_block_(idx, use_specializations=use_specializations)
+        with self._block_specializations_in_force_(use_specializations):
+            piece = self._adopt_(self.__block__(idx), keyby=True)
+        declared = self._block_class_()
+        if declared is not None and not isinstance(piece.var.tab, declared):
+            raise TypeError(
+                f"{self.__class__.__name__}.block({idx}) is a piece of a {type(piece.var.tab).__name__}, "
+                f"not of the {declared.__name__} its BLOCK declares"
+            )
+        return piece
+
     def _block_class_(self):
         """A part's tabs are its table's, and so is its BLOCK."""
         table = getattr(getattr(self, 'var', None), 'partition', None)
         table = getattr(table, 'datatable', None)
         return table._block_class_() if table is not None else None
+
+class DatatabPiece(Datatab):
+    """The rows of one tab holding one value of each partition column: a piece of a mixed tab.
+
+    What a `DatatablePartition` deals in place of a tab whose *groupby* or
+    *stratifyby* column holds several values. A piece is defined by its value,
+    not by a list of rows: *tab* is the source tab, *columns* the column spec
+    of each role, ``{role: (slice, column[, key, ...])}``, and *values* the
+    value each role holds in the piece's rows, as read. So its identity is
+    readable -- these rows of that tab -- stable whatever the deal, and small,
+    however many rows it holds; its build re-reads the columns and selects the
+    rows itself.
+
+    Its slices are the source tab's, declared as the source declares them, and
+    it writes every one of them with the same rows, in the same order, so row
+    i of each is still row i of the others. Only the slices: a topic of the
+    source that is not a slice is the tab's, not of any subset of its rows.
+
+    A piece of a tab that reads slices upstream (`DataslicesUpstream`, a
+    `Featuretab`) is not implemented: it would have to be the same piece of
+    its upstream tab too, and nothing says row i of the one is row i of the
+    other (see the TODO on `Featuretab` about ``shared_upstream_column``).
+    """
+
+    @dataclass
+    class VAR(Datatab.VAR):
+        tab: Datatab = None
+        columns: dict = None
+        values: dict = None
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        var = self.var
+        if var.tab is None or not var.columns or var.values is None:
+            raise ValueError(f"{type(self).__name__}: VAR.tab, VAR.columns and VAR.values are required")
+        if sorted(var.columns) != sorted(var.values):
+            raise ValueError(f"{type(self).__name__}: columns name the roles {sorted(var.columns)}, "
+                             f"values {sorted(var.values)}: each role's value is read from its column")
+        if isinstance(var.tab, DataslicesUpstream):
+            raise NotImplementedError(
+                f"{type(self).__name__}: a piece of a {type(var.tab).__name__}, which reads slices upstream, "
+                f"is not implemented -- it would have to be the same piece of its upstream tab too. Split the "
+                f"upstream tab, which holds the rows.")
+
+    def __build__(self):
+        source, rows = self.var.tab, self._rows_()
+        columns = {s: self.declared_columns(s) or self._source_columns_(s) for s in self.slices()}
+        # A slice at a time, so only one is held whole; the writers count, and refuse
+        # a build that wrote the slices unequally.
+        with self.slice_writers(columns) as writers:
+            for s in self.slices():
+                data = source._read_slice_(s)
+                for i in rows:
+                    writers[s].write(data[i])
+                del data
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @forward_property({})
+    def TOPICS(self):
+        """The source tab's slices, declared as it declares them -- and nothing else of its topics.
+
+        On the class, with no tab to ask, ``{}``.
+        """
+        source, topics = self.var.tab, {}
+        for name in source.slices():
+            *head, leaf = name.split('/')
+            node = topics
+            for h in head:
+                node = node.setdefault(h, {})
+            node[leaf] = source._topicnode_(*name.split('/'))
+        return topics
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _rows_(self) -> list[int]:
+        """The indices of the source's rows holding every role's value -- raising when they cannot be what was dealt."""
+        source, var = self.var.tab, self.var
+        lengths = {s: int(source.n_rows(s)) for s in source.slices()}
+        if len(set(lengths.values())) > 1:
+            raise ValueError(f"{type(self).__name__}: {source.tag}'s slices have different lengths, {lengths}; "
+                             f"a piece selects rows by index, so row i must be row i of every slice. Rebuild "
+                             f"the tab with its slices written in lockstep.")
+        n = next(iter(lengths.values()), 0)
+        hits = [True] * n
+        for role, spec in var.columns.items():
+            values = _column_values_(source, tuple(spec))
+            if len(values) != n:
+                raise ValueError(f"{type(self).__name__}: {source.tag}'s {role} column {tuple(spec)} has "
+                                 f"{len(values)} values for its {n} rows")
+            want = _value_key_(var.values[role])
+            hits = [h and _value_key_(v) == want for h, v in zip(hits, values)]
+        rows = [i for i, h in enumerate(hits) if h]
+        if not rows:
+            raise ValueError(
+                f"{type(self).__name__}: no row of {source.tag} holds {var.values}: the piece cannot be "
+                f"recovered from its tab. Was the tab rebuilt since it was partitioned? Build the partition "
+                f"again over the table as it is now.")
+        return rows
+
+    def _source_columns_(self, slice) -> dict:
+        """The columns *slice* was written with, read off the source's index -- for a slice that declares none."""
+        source = self.var.tab
+        with source.fs.open(source.slice_index_path(slice), 'r') as f:
+            shards = json.load(f)['shards']
+        if not shards:
+            raise ValueError(f"{type(self).__name__}: {source.tag}'s slice {slice!r} has no shards, and "
+                             f"declares no columns: there is nothing to write it with")
+        return dict(zip(shards[0]['column_names'], shards[0]['column_encodings']))
+
 
 class DataslicesUpstream:
     """Slice routing for a tab or table that reads its own slices and an upstream one's.

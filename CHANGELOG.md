@@ -25,6 +25,15 @@ All notable changes to this project will be documented in this file.
   specializations reach the partitions built before.
 
 ### Added
+- **`TernaryFeaturetab` / `TernaryFeaturetable`: a bipolar tab's rows, kept where
+  their bag is sure of the sign.** Per dimension, the bag's mean bipolar value
+  `m = 2p - 1` is the estimate; its sign is decided where `|m| >= bag_threshold`
+  and 0 otherwise. A row keeps its value where the sign is decided and it
+  agrees, else 0. Topics: a `ternary` slice, and `bag/<column>` (`mean`,
+  `sign`, `n_rows`).
+- **`dbx.stills.read_checkpoint`** reads a checkpoint whose pickled extras
+  name a class since renamed, standing in for it with a warning; warm starts
+  read through it.
 - **Specializations compose through nested blocks.** A nested block renders in
   its container's identity, so a rename inside it used to strand every build
   of the container. Each block now also looks for its past with its nested

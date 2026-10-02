@@ -60,12 +60,32 @@ def test_still(tmp_path, monkeypatch):
 
 
 def test_a_partition(tmp_path, monkeypatch):
-    from dbx.datatables import DatatablePartition
+    """The partition from before method/seed/groupby/stratifyby/balance -- and before its topic was
+    respelled -- is reached by a partition built with method='largest_first', the one it computed."""
+    from dataclasses import dataclass
+    from dbx.datablocks import Datablock
+    from dbx.datatables import Datatable, DatatablePartition
     from test_build_journal_reads import Table
     table = Table(datalake=str(tmp_path / 't'), spec={'n': 4})
-    _reconstructs(lambda: DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
-        datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0)),
-        DatatablePartition, {'tabs': 'tabs.json'}, monkeypatch)
+
+    def partition(**spec):
+        return DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
+            datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0, **spec))
+
+    @dataclass
+    class OldVAR(Datablock.VAR):
+        datapoint_table: Datatable
+        fractions: list
+        partition_slice: int | str
+
+    with monkeypatch.context() as m:
+        m.setattr(DatatablePartition, 'VAR', OldVAR)
+        m.setattr(DatatablePartition, 'TOPICS', {'tabs': 'tabs.json'})
+        m.setattr(DatatablePartition, 'SPECIALIZATIONS', [])
+        m.setattr(DatatablePartition, '__post_init__', Datablock.__post_init__)
+        old_hash = partition().hash
+    assert old_hash in partition(method='largest_first').specialization_hashes()
+    assert old_hash != partition().hash, "method='random' is another computation"
 
 
 def _feature_table(url):
@@ -80,17 +100,11 @@ def _feature_table(url):
                                         labels=[("labels", "labels")]))))
 
 
-def test_the_affine_logistic_probe(tmp_path, monkeypatch):
-    from dbx import Datacollator
+def test_the_affine_logistic_probe_reaches_nothing_built_before():
+    """Version 3 fits one table and scores another; the ones before split one table inside --
+    another computation, which no specialization reaches."""
     from dbx.probes import FeatureAffineLogisticProbe
-    table = _feature_table(str(tmp_path))
-    _reconstructs(lambda: FeatureAffineLogisticProbe(datalake=str(tmp_path), spec=dict(
-        feature_table=table, collator=Datacollator(spec=dict(
-            signals=[("features", "final")], labels=[("labels", "labels")])))),
-        FeatureAffineLogisticProbe, {
-            'labels': 'labels.npz', 'features': 'features.npy', 'columns': 'columns.pkl',
-            'evaluation_report': 'evaluation_report.pkl', 'coef': 'coef.npy',
-            'intercept': 'intercept.npy', 'classes': 'classes.npz'}, monkeypatch)
+    assert not FeatureAffineLogisticProbe.SPECIALIZATIONS
 
 
 def test_topics_computed_per_instance_are_in_the_hash(tmp_path):
@@ -124,67 +138,20 @@ def test_the_stats_probe_hashes_its_per_column_topics(tmp_path):
     probe = FeatureStatsProbe(datalake=str(tmp_path), spec=dict(
         feature_table=table, collator=Datacollator(spec=dict(
             signals=[("features", "final")], labels=[("samples", "samples")]))))
-    assert "DATADICT('stat.npz'" in probe.typestr()
+    # The per-feature DATADICT, statistics spelled out, under each column's path.
+    assert ("DATADICT('stats.npz', mean='ndarray', std='ndarray', median='ndarray', "
+            "min='ndarray', max='ndarray')") in probe.typestr()
     assert probe.hash == hashlib.sha256(probe.typestr().encode()).hexdigest()
 
 
-def test_a_table_on_the_base_topics_built_before_the_respelling_is_found(tmp_path, monkeypatch):
-    """A table on TAB_PATHS_TOPICS -- the base's, while they included tab_paths -- moved with their
-    respelling; TAB_PATHS_SPECIALIZATIONS reach back."""
+def test_a_table_reaches_its_tabs_past_not_its_own():
+    """A table's own topics are markers over its tabs, written again in a moment; its tabs are
+    what is worth reaching, and each is, by its TAB's specializations."""
     from dbx.datatables import Datatable
-    from test_datapointtable import LetterTable
-
-    class TabPathsLetterTable(LetterTable):
-        TOPICS = Datatable.TAB_PATHS_TOPICS
-        SPECIALIZATIONS = Datatable.TAB_PATHS_SPECIALIZATIONS
-
-    def table():
-        return TabPathsLetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=2, per_tab=2))
-
-    from dbx.datablocks import Datastack
-    with monkeypatch.context() as m:
-        m.setattr(TabPathsLetterTable, 'TOPICS', {'tab_paths': DIRTOPIC, 'done': 'done'})
-        m.setattr(TabPathsLetterTable, 'SPECIALIZATIONS', [])
-        # ... and before a table's type named its TAB.
-        m.setattr(Datastack, '_type_entries_', lambda self, specialization=None, **kw: {})
-        old = table().build()
-        old_hash = old.hash
-    new = table()
-    assert new.hash != old_hash
-    assert old_hash in new.specialization_hashes()
-    assert not new.valid(), "constructing it adopts nothing"
-    new.build()                                 # adopts both topics: nothing left to build
-    assert sorted(new.redirected_topics()) == ['done', 'tab_paths']
-    assert new.valid()
-
-
-def test_a_table_declaring_its_own_topics_does_not_inherit_the_bases_past(tmp_path):
-    from dbx.datablocks import DATADIR, DATAFILE
-    from dbx.datatables import Datatable
-
-    class TabPaths(Datatable):
-        TOPICS = Datatable.TAB_PATHS_TOPICS
-        SPECIALIZATIONS = Datatable.TAB_PATHS_SPECIALIZATIONS
-
-    class Own(TabPaths):
-        TOPICS = {'tabs': DATADIR, 'tab_paths': DATADIR, 'done': DATAFILE('done')}
-
-    class Declared(TabPaths):
-        SPECIALIZATIONS = [*Datatable.TAB_PATHS_SPECIALIZATIONS]
-
-    assert Own.SPECIALIZATIONS == [] and TabPaths.SPECIALIZATIONS
-    assert Declared.SPECIALIZATIONS == Datatable.TAB_PATHS_SPECIALIZATIONS
-    # The base's TOPICS are `done` alone, which nothing was built under before: no past to reach.
-    assert Datatable.SPECIALIZATIONS == []
-
-
-def test_leaving_out_the_bases_specializations_warns():
-    from dbx.datablocks import Datablock
-    from dbx.datatables import Datatable
-    with pytest.warns(UserWarning, match=r"\[\*Datatable.TAB_PATHS_SPECIALIZATIONS"):
-        class Forgot(Datatable):
-            TOPICS = Datatable.TAB_PATHS_TOPICS
-            SPECIALIZATIONS = [Datablock.Specialization(spec={}, topics={'done': 'done'})]
+    from dbx.featuretables import Featuretable
+    assert Datatable.SPECIALIZATIONS == [] and not Featuretable.SPECIALIZATIONS
+    assert Featuretable.TOPICS is Datatable.TOPICS
+    assert not hasattr(Datatable, 'TAB_PATHS_TOPICS') and not hasattr(Datatable, 'TAB_PATHS_SPECIALIZATIONS')
 
 
 def test_a_legacy_spelling_warns_and_a_canonical_one_does_not():

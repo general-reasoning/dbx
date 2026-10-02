@@ -141,12 +141,15 @@ def _probe(url):
         devices=["cpu"],
         tag="feature_table",
     ).build()
+    from dbx.datatables import DatatablePartition
+    split = DatatablePartition(datalake=url, tag="split", spec=dict(
+        datapoint_table=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tabs')).build()
     probe = FeatureAffineLogisticProbe(
         datalake=url,
         spec=dict(
-            feature_table=featuretable,
+            fit_table=split.fold(0).build(),
+            eval_table=split.fold(1).build(),
             collator=Datacollator(spec=dict(signals=[("features", "final")], labels=[("labels", "labels")])),
-            training_fraction=0.8,
         ),
         tag="log_probe",
     )

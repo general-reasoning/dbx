@@ -254,3 +254,60 @@ def test_build_tree_deep_asks_every_tab(tmp_path, monkeypatch):
     Table(datalake=str(tmp_path), spec={'n': 4}).build_tree(deep=True)
     assert sorted(set(asked)) == [0, 1, 2, 3], "build_tree(deep=True) must ask every tab"
     assert [a for a in reads if a == Tab.anchor] == []
+
+
+# ---------------------------------------------------------------------------
+# One block, on its own: it reads its narrower block's entries, not the anchor's.
+# ---------------------------------------------------------------------------
+
+class Grown(Datablock):
+    """A block that grew a topic; its narrower self is reachable by specialization."""
+    TOPICS = {'rows': 'rows.txt', 'extra': 'extra.txt'}
+    SPECIALIZATIONS = [Datablock.Specialization(spec={}, topics={'rows': 'rows.txt'}, note='extra is new')]
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        n: int = 0
+
+    def __build__(self):
+        for topic in self.ownedtopics():
+            with open(self.path(topic, ensure_dirpath=True), 'w') as f:
+                f.write(topic)
+
+
+class Narrow(Datablock):
+    TOPICS = {'rows': 'rows.txt'}
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        n: int = 0
+
+    def __build__(self):
+        with open(self.path('rows', ensure_dirpath=True), 'w') as f:
+            f.write('rows')
+
+
+def _built_narrow(tmp_path, tag, n):
+    Narrow(datalake=str(tmp_path), anchor='Grown', tag=tag, spec={'n': n}).build()
+
+
+def test_a_block_on_its_own_reads_only_its_narrower_blocks_entries(tmp_path, monkeypatch):
+    for n in range(5):                          # other blocks' entries, under the same anchor
+        _built_narrow(tmp_path, f't{n}', n)
+    reads = _count_full_reads(monkeypatch)
+    block = Grown(datalake=str(tmp_path), anchor='Grown', tag='t3', spec={'n': 3})
+    row = block.find_specialization()
+    assert row is not None and sorted(row.paths) == ['rows']
+    assert reads == [], "found by its directory: the anchor's whole journal is never read"
+    block.build()                               # adopts `rows`, builds `extra`
+    assert block.valid() and block.redirected_topics() == ['rows']
+    assert reads == []
+
+
+def test_one_filed_under_another_tag_is_still_found(tmp_path, monkeypatch):
+    """A specialization resolves to any build of the narrower hash, whatever its tag: then the whole journal is read."""
+    _built_narrow(tmp_path, 'elsewhere', 7)
+    reads = _count_full_reads(monkeypatch)
+    block = Grown(datalake=str(tmp_path), anchor='Grown', tag='here', spec={'n': 7})
+    assert block.find_specialization() is not None
+    assert reads == ['Grown']

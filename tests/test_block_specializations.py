@@ -495,13 +495,21 @@ def rekeyed(tmp_path, monkeypatch):
 class TestAValidStackSpecializesItsTabs:
     """A stack's own validity says nothing about tabs that moved to identities of their own."""
 
-    def test_build_adopts_the_tabs_of_a_valid_stack(self, rekeyed):
-        # Adopted, the tabs still owe `extra`: a valid stack over them is not done, and says so.
-        with pytest.raises(InvalidBlocksError, match=r"(?s)3 of 3 blocks are not valid.*owes \['extra'\].*build_blocks\(\)"):
-            nomarkers(rekeyed).build()
+    def test_build_adopts_the_tabs_of_a_valid_stack_and_builds_what_they_owe(self, rekeyed):
+        # Adopted, the tabs still owe `extra`: the stack is done, its tabs are not -- so its build builds them.
+        nomarkers(rekeyed).build()
         table = nomarkers(rekeyed)
         assert table.tabs_redirected(parallelization='inline').all()
-        assert table.tab(1).read('rows') == "rows-1\n"
+        assert table.tab(1).read('rows') == "rows-1\n", "adopted"
+        assert table.tab(1).read('extra') == "extra-1\n", "built"
+        assert table.valid_tabs(parallelization='inline', validation='valid').all()
+        assert table._blocks_cross_checked_()
+
+    def test_a_tab_its_build_leaves_invalid_is_an_error(self, rekeyed, monkeypatch):
+        # Said by the tab's own build, where it failed -- not by the stack after the fact.
+        monkeypatch.setattr(RowTab, '__build__', lambda self: None)      # writes nothing
+        with pytest.raises(ValueError, match=r"Tab 0 of .*failed to validate"):
+            nomarkers(rekeyed).build()
 
     def test_build_blocks_builds_what_the_adopted_tabs_owe_and_vouches_for_them(self, rekeyed):
         nomarkers(rekeyed).build_blocks()

@@ -2668,6 +2668,54 @@ class Datajournal:
         return result
 
     @classmethod
+    def read_hash(cls, anchor, hash: str, *, tag: str | None = None, version=None, datalake=None,
+                  storage_options=None, log=None, n_workers=None) -> 'DatajournalFrame | None':
+        """The entries *anchor*'s journal holds for one block hash -- read from where that block's are filed.
+
+        `read` reads every entry under *anchor* -- a walk of every block's
+        directory -- and is then filtered. A block resolving its own
+        specialization wants one hash's entries, and the path says where those
+        are: ``<anchor>/.dbx/<anchor>/journal/<hash>/`` (where they were filed
+        first) and the block's own ``<anchor>/<tag>/version=<version>/<hash...>
+        /.journal/<anchor>/journal/<hash>/``. Those directories, and no others,
+        are listed here.
+
+        None when none of them holds an entry -- the block was built under
+        another tag, say, as a specialization allows -- and the caller reads
+        the whole journal instead.
+        """
+        log = log or Datalog()
+        if storage_options is None:
+            storage_options = default_storage_options()
+        url = datalake if datalake is not None else default_datalake()
+        if datablocks.Datablock.is_specline(url):
+            url = eval(url)
+        fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
+        base = fs_full_path(fs, os.path.join(root, anchor))
+        tagdir = os.path.join(base, tag) if tag else base
+        blockdirs = ([os.path.join(tagdir, f"version={version}")] if version is not None else []) + [tagdir]
+        # Expanded a level at a time, listing only where a level is a wildcard:
+        # fs.glob walks everything under a pattern's last literal directory --
+        # all of `.dbx/`, every block's journal -- to match a handful of files.
+        patterns = [(base, [".dbx", "*", "journal", hash, "*.parquet"])] + [
+            (d, [f"{hash[:8]}*", ".journal", "*", "journal", hash, "*.parquet"]) for d in blockdirs]
+        files = []
+        for prefix, levels in patterns:
+            try:
+                files.extend(f for f in _expand_levels_(fs, prefix, levels) if f not in files)
+            except Exception as e:
+                log.detailed(f"Datajournal.read_hash: {prefix}/{'/'.join(levels)}: {e}")
+        if not files:
+            return None
+        log.detailed(f"Datajournal.read_hash: {anchor} {hash[:8]}: {len(files)} file(s)")
+        dfs = [d for d in cls._read_files_(fs, files, n_workers=n_workers or 8, log=log,
+                                           desc=f"Reading {anchor} journal for {hash[:8]}") if d is not None]
+        if not dfs:
+            return None
+        df = cls._normalize_columns_(pd.concat(dfs, ignore_index=True))
+        return DatajournalFrame(df, storage_options=storage_options, hash=hash)
+
+    @classmethod
     def read_frame(cls, paths, *, storage_options=None, log=None, n_workers=None,
                    index: str | None = None, unnormalized: bool = False,
                    **filter_kwargs) -> 'DatajournalFrame':
@@ -3412,3 +3460,26 @@ if os.environ.get(JOURNAL_SESSION_ENV):
     # A process started while a command ran: its default is the command's.
     DEFAULT_DATAJOURNAL._session = os.environ[JOURNAL_SESSION_ENV]
     DEFAULT_DATAJOURNAL._datalake = os.environ.get(JOURNAL_DATALAKE_ENV) or default_datalake() or './dbx'
+
+
+def _expand_levels_(fs, prefix: str, levels: list[str]) -> list[str]:
+    """The paths under *prefix* matching *levels*, one path component each -- listing a directory only for a wildcard."""
+    import fnmatch
+    paths = [prefix]
+    for level in levels:
+        nxt = []
+        for path in paths:
+            if any(c in level for c in '*?['):
+                try:
+                    entries = fs.ls(path, detail=False)
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                nxt.extend(e for e in entries if fnmatch.fnmatchcase(os.path.basename(e.rstrip('/')), level))
+            else:
+                candidate = os.path.join(path, level)
+                if fs.exists(candidate):
+                    nxt.append(candidate)
+        paths = nxt
+        if not paths:
+            break
+    return paths

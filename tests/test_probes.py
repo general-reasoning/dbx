@@ -88,6 +88,15 @@ class DummyModelEvaluatorFactory(ModelEvaluatorBuilder):
         return DummyModel()
 
 
+
+def _fit_eval_(url, featuretable, tag='split'):
+    """Two folds of the feature table -- one tab each -- as a probe's fit_table and eval_table."""
+    from dbx.datatables import DatatablePartition
+    split = DatatablePartition(datalake=url, tag=tag, spec=dict(
+        datapoint_table=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tabs')).build()
+    return dict(fit_table=split.fold(0).build(), eval_table=split.fold(1).build())
+
+
 def test_normalize_features():
     x_numpy = np.array([[3.0, 4.0], [-1.0, 1.0]])
     x_torch = torch.tensor(x_numpy, dtype=torch.float32)
@@ -133,20 +142,21 @@ def test_datafeature_affine_logistic_probe(tmp_path):
     probe = FeatureAffineLogisticProbe(
         datalake=url,
         spec=dict(
-            feature_table=featuretable,
+            **_fit_eval_(url, featuretable),
             collator=Datacollator(spec=dict(
                 signals=[("features", "final")],
                 labels=[("labels", "labels")],
             )),
-            training_fraction=0.8,
         ),
         tag="log_probe",
     ).build()
 
     assert probe.valid()
-    assert probe.read('features').shape == (10, 8)
-    assert probe.read(['features']).shape == (10, 8)
-    assert len(probe.read('labels')) == 10
+    # Fitted on one tab, scored on the other: 5 rows each.
+    assert probe.read('fit', 'features').shape == (5, 8)
+    assert probe.read(['eval', 'features']).shape == (5, 8)
+    assert len(probe.read('fit', 'labels')) == 5
+    assert set(probe.read('eval')) == {'labels', 'features'}
     assert probe.read('coef').shape[1] == 8
     assert isinstance(probe.read('evaluation_report'), str)
 
@@ -185,19 +195,18 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
     probe = FeatureAffineLogisticProbe(
         datalake=url,
         spec=dict(
-            feature_table=featuretable,
+            **_fit_eval_(url, featuretable),
             # 'final' is 8 wide, the upstream 'samples' column is 4.
             collator=Datacollator(spec=dict(
                 signals=[("features", "final"), ("samples", "samples")],
                 labels=[("labels", "labels")],
             )),
-            training_fraction=0.8,
         ),
         tag="log_probe_multi",
     ).build()
 
     assert probe.read('columns') == [('features', 'final', 8), ('samples', 'samples', 4)]
-    assert probe.read('features').shape == (10, 12)
+    assert probe.read('fit', 'features').shape == (5, 12)
     assert probe.read('coef').shape[1] == 12
     # Column 8 is the first of the second pair.
     assert probe.feature_columns()[8] == ('samples', 'samples', 0)
@@ -225,12 +234,11 @@ def test_affine_logistic_probe_refuses_a_missing_signal_column(tmp_path):
     probe = FeatureAffineLogisticProbe(
         datalake=url,
         spec=dict(
-            feature_table=featuretable,
+            **_fit_eval_(url, featuretable),
             collator=Datacollator(spec=dict(
                 signals=[("features", "nope")],
                 labels=[("labels", "labels")],
             )),
-            training_fraction=0.8,
         ),
         tag="log_probe_bad",
     )
@@ -277,33 +285,39 @@ def test_datafeature_stats_probe(tmp_path):
 
     assert stats_probe.valid()
 
-    # A statistic is a topic; the columns live underneath it, keyed by pair
-    # exactly as dataset()/data() key the data being described.
-    means = stats_probe.read('mean')
-    assert isinstance(means, dict)
-    assert set(means) == {'features.final', 'samples.samples'}
-    assert means['features.final'].shape == (8,)
-    assert means['samples.samples'].shape == (4,)
+    # Each column lives under its own path, the pair's names one level each,
+    # exactly as dataset()/data() address the data being described; the file
+    # there holds every statistic, as PER_FEATURE_DATADICT declares.
+    stats = stats_probe.read('stats', 'features', 'final')
+    assert set(stats) == set(FeatureStatsProbe.PER_FEATURE_DATADICT.schema) \
+        == {'mean', 'std', 'median', 'min', 'max'}
+    assert all(v.shape == (8,) for v in stats.values())
+    assert stats_probe.read(('stats', 'features', 'final'))['median'].shape == (8,)
 
-    assert stats_probe.read('mean', 'features.final').shape == (8,)
-    assert stats_probe.read(['mean', 'features.final']).shape == (8,)
-    assert stats_probe.read(('mean', 'features.final')).shape == (8,)
+    every = stats_probe.read('stats')
+    assert set(every) == {('features', 'final'), ('samples', 'samples')}
+    assert every[('samples', 'samples')]['mean'].shape == (4,)
 
-    for name in ('std', 'median', 'min', 'max'):
-        assert stats_probe.read(name, 'features.final').shape == (8,)
-    assert stats_probe.read('norm', 'features.final').shape == (10,)
+    for name in ('mean', 'std', 'median', 'min', 'max'):
+        assert stats_probe.stat(name, ('features', 'final')).shape == (8,)
+    np.testing.assert_array_equal(stats_probe.stat('median', ('features', 'final')), stats['median'])
+    assert stats_probe.stat('norm', ('features', 'final')).shape == (10,)
 
     # Per-tab counterparts stack over the 2 tabs.
-    assert stats_probe.read('tab_mean', 'features.final').shape == (2, 8)
-    assert stats_probe.read('tab_max', 'samples.samples').shape == (2, 4)
+    assert stats_probe.stat('mean', ('features', 'final'), per_tab=True).shape == (2, 8)
+    assert stats_probe.stat('max', ('samples', 'samples'), per_tab=True).shape == (2, 4)
+    assert set(stats_probe.read('tab_stats', 'features', 'final')) == {'mean', 'std', 'median', 'min', 'max'}
 
     assert stats_probe.count == 10
-    assert stats_probe.columns == ['features.final', 'samples.samples']
+    assert stats_probe.columns == [('features', 'final'), ('samples', 'samples')]
 
-    # TOPICS names the columns, so an unknown one is refused by topic-path
-    # validation before any file is opened.
-    with pytest.raises(KeyError, match='features.nope'):
-        stats_probe.read('mean', 'features.nope')
+    # TOPICS names the columns, so an unknown one is refused before any file is opened.
+    with pytest.raises(KeyError, match='nope'):
+        stats_probe.read('stats', 'features', 'nope')
+    with pytest.raises(KeyError, match='nope'):
+        stats_probe.stat('median', ('features', 'nope'))
+    with pytest.raises(KeyError, match='no statistic'):
+        stats_probe.stat('mode', ('features', 'final'))
 
 
 def test_stats_probe_describes_every_declared_pair(tmp_path):
@@ -339,10 +353,10 @@ def test_stats_probe_describes_every_declared_pair(tmp_path):
         tag="stats_probe_all",
     ).build()
 
-    assert set(probe.read('mean')) == {
-        'features.final', 'samples.samples', 'labels.labels',
+    assert set(probe.read('stats')) == {
+        ('features', 'final'), ('samples', 'samples'), ('labels', 'labels'),
     }
-    assert probe.read('mean', 'labels.labels').shape == (1,)
+    assert probe.stat('mean', ('labels', 'labels')).shape == (1,)
 
 
 def test_datafeature_stats_probe_parallel(tmp_path):
@@ -386,8 +400,8 @@ def test_datafeature_stats_probe_parallel(tmp_path):
     ).build()
 
     assert stats_probe.valid()
-    assert stats_probe.read('mean', 'features.final').shape == (8,)
-    assert stats_probe.read('tab_mean', 'features.final').shape == (2, 8)
+    assert stats_probe.stat('mean', ('features', 'final')).shape == (8,)
+    assert stats_probe.stat('mean', ('features', 'final'), per_tab=True).shape == (2, 8)
 
 
 def test_datafeature_affine_logistic_probe_parallel(tmp_path):
@@ -418,12 +432,11 @@ def test_datafeature_affine_logistic_probe_parallel(tmp_path):
     probe = FeatureAffineLogisticProbe(
         datalake=url,
         spec=dict(
-            feature_table=featuretable,
+            **_fit_eval_(url, featuretable),
             collator=Datacollator(spec=dict(
                 signals=[("features", "final")],
                 labels=[("labels", "labels")],
             )),
-            training_fraction=0.8,
         ),
         parallelization='multithreading',
         n_workers=2,
@@ -454,14 +467,14 @@ def test_table_stats_by_band_equal_the_stats_of_the_concatenation(band_bytes, mo
     monkeypatch.setattr(probes, 'TABLE_STATS_BAND_BYTES', band_bytes)
     rng = np.random.default_rng(0)
     tabs = [rng.normal(size=(n, 7)) for n in (5, 0, 11, 3)]
-    results = [{'columns': {'s.c': t}, 'stats': {'s.c': probes.column_stats(t) if len(t) else
-                                                 {'norm': np.zeros(0)}}} for t in tabs]
+    results = [{'columns': {('s', 'c'): t}, 'stats': {('s', 'c'): probes.column_stats(t) if len(t) else
+                                                     {'norm': np.zeros(0)}}} for t in tabs]
 
     class Probe:
-        column_keys = ['s.c']
+        column_paths = [('s', 'c')]
         _table_stats_ = probes.FeatureStatsProbe._table_stats_
 
-    got = Probe()._table_stats_(results)['s.c']
+    got = Probe()._table_stats_(results)[('s', 'c')]
     want = probes.column_stats(np.concatenate(tabs, axis=0))
     assert set(got) == set(want)
     for name in want:
@@ -508,22 +521,71 @@ def test_datafeature_stats_probe_over_tabs_of_different_sizes(tmp_path):
     ).build()
 
     assert probe.count == 10
-    norms = probe.read('tab_norm', 'features.final')
+    norms = probe.stat('norm', ('features', 'final'), per_tab=True)
     assert [len(n) for n in norms] == [3, 7]
-    np.testing.assert_allclose(np.concatenate(norms), probe.read('norm', 'features.final'))
+    np.testing.assert_allclose(np.concatenate(norms), probe.stat('norm', ('features', 'final')))
     # The reductions still stack: one row per tab.
-    assert probe.read('tab_mean', 'features.final').shape == (2, 8)
+    assert probe.stat('mean', ('features', 'final'), per_tab=True).shape == (2, 8)
 
 
-def test_per_tab_arrays_round_trip(tmp_path):
-    from dbx.dataparts import write_npz
-    even = [np.arange(3.0), np.arange(3.0) + 1]
-    uneven = [np.arange(3.0), np.arange(5.0), np.zeros(0)]
-    for per_tab in (even, uneven):
-        path = str(tmp_path / f"stat{len(per_tab)}.npz")
-        write_npz(path, **FeatureStatsProbe._per_tab_arrays_(per_tab))
-        got = FeatureStatsProbe._read_stat_(path)
-        if per_tab is even:
-            assert isinstance(got, np.ndarray) and got.shape == (2, 3)
-        else:
-            assert [a.tolist() for a in got] == [a.tolist() for a in per_tab]
+def test_tab_aggregation_refuses_a_tab_whose_rows_disagree(tmp_path):
+    url = str(tmp_path)
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag="agg_samples").build()
+    featuretable = DatafeatureTable(
+        datalake=url,
+        spec=dict(
+            datapoint_table=sampletable,
+            evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+            collator=Datacollator(spec=dict(signals=[("samples", "samples")], labels=[("labels", "labels")])),
+        ),
+        devices=["cpu"],
+        tag="agg_features",
+    ).build()
+    probe = FeatureAffineLogisticProbe(
+        datalake=url,
+        spec=dict(
+            **_fit_eval_(url, featuretable),
+            collator=Datacollator(spec=dict(signals=[("features", "final")], labels=[("labels", "labels")])),
+            tab_aggregation='mean',
+        ),
+        tag="agg_probe",
+    )
+    # The dummy tabs label their rows 0, 1, 0, ...: one tab, two labels.
+    with pytest.raises(ValueError, match="can carry only one label"):
+        probe.build()
+
+
+def _feature_table_(url, tag, n=4):
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=n), tag=f"{tag}_samples").build()
+    return DatafeatureTable(
+        datalake=url,
+        spec=dict(
+            datapoint_table=sampletable,
+            evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+            collator=Datacollator(spec=dict(signals=[("samples", "samples")], labels=[("labels", "labels")])),
+        ),
+        devices=["cpu"],
+        tag=tag,
+    ).build()
+
+
+def test_a_probe_refuses_fit_and_eval_tables_that_share_a_tab(tmp_path):
+    url = str(tmp_path)
+    featuretable = _feature_table_(url, "shared_features")
+    probe = FeatureAffineLogisticProbe(datalake=url, tag="shared_probe", spec=dict(
+        fit_table=featuretable, eval_table=_fit_eval_(url, featuretable)['eval_table'],
+        collator=Datacollator(spec=dict(signals=[("features", "final")], labels=[("labels", "labels")]))))
+    with pytest.raises(ValueError, match="share 1 tab"):
+        probe.build()
+
+
+def test_max_rows_per_tab_samples_each_tab_the_same_way_every_time(tmp_path):
+    url = str(tmp_path)
+    featuretable = _feature_table_(url, "rows_features", n=10)
+    def probe(tag):
+        return FeatureAffineLogisticProbe(datalake=url, tag=tag, spec=dict(
+            **_fit_eval_(url, featuretable), max_rows_per_tab=4,
+            collator=Datacollator(spec=dict(signals=[("features", "final")], labels=[("labels", "labels")])))).build()
+    one = probe("rows_a").read('fit', 'features')
+    assert one.shape == (4, 8)
+    np.testing.assert_array_equal(one, probe("rows_b").read('fit', 'features'))

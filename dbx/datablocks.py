@@ -249,7 +249,7 @@ class TopicMarkerMeta(type):
 
 
 class TOPICMARKER(metaclass=TopicMarkerMeta):
-    """Base of the topic markers: :class:`DIR`, :class:`SYNTHETIC`, ``DATASLICE``.
+    """Base of the topic markers: :class:`DATADIR`, :class:`SYNTHETIC`, ``DATAFILE``, ``DATASLICE``.
 
     A marker says what a topic IS.  The sentinels say it by what value they
     happen to be -- :data:`DIRTOPIC` is ``None`` and :data:`SYNTOPIC` the empty
@@ -326,32 +326,32 @@ class SYNTHETIC(TOPICMARKER, metaclass=_NotedMarkerMeta_):
     note = None
 
 
-class DIR(TOPICMARKER):
+class DATADIR(TOPICMARKER, metaclass=_NotedMarkerMeta_):
     """A directory topic: the topic IS the directory.  :data:`DIRTOPIC` as a marker.
 
     A location, unlike :class:`SYNTHETIC` -- a real directory that merely has no
-    filename inside it.
-    """
-
-
-class DATADIR(DIR, metaclass=_NotedMarkerMeta_):
-    """A directory topic that may say what is in it::
+    filename inside it -- and it may say what is in it::
 
         TOPICS = {'masks': DATADIR('one PNG per frame')}
 
-    A :class:`DIR`, so every test that asks whether a topic is a directory
-    answers for it without knowing what a note is -- the same way
-    ``DATASLICE`` is one.
-
-    A DISTINCT class from ``DIR`` rather than a rename of it, because the two
-    render as their own names and the rendering is the identity: aliasing them
-    would re-key every block that ever declared ``DIR``.  ``DIR`` stays exactly
-    as it is and goes on rendering ``DIR``; a block adopting ``DATADIR``
-    re-keys itself, which is what adopting a spelling means here.
+    The base of every directory marker: ``DATASLICE`` is one, because a slice
+    IS a directory, and so is the deprecated :class:`DIR`. Every test that asks
+    whether a topic is a directory asks ``is_topicmarker(node, DATADIR)``.
     """
 
     #: Unset on the bare marker, and set by the call that parameterises it.
     note = None
+
+
+class DIR(DATADIR):
+    """Deprecated: :class:`DATADIR`, under the name it had first.
+
+    A subclass that renders as ``DIR``, not an alias: the rendering is the
+    identity, so ``DIR = DATADIR`` would re-key every block that ever declared
+    ``DIR``. A class declaring it is warned (`LegacyTopicsWarning`); respell it
+    ``DATADIR`` and keep ``DIR`` in a ``Specialization(spec={}, topics=...)`` to
+    reach what was built under it.
+    """
 
 
 class _DataFileMeta_(TopicMarkerMeta):
@@ -514,6 +514,149 @@ TopicNode = Union[type[TOPICMARKER], str, None, tuple[()], dict[str, 'TopicNode'
 
 #: A TOPICS declaration: ``{topic name: TopicNode}``.
 Topics = dict[str, TopicNode]
+
+
+class forward_property:
+    """A class attribute declared forward: what every instance is, refined per instance.
+
+    On the class it is *classvalue*, the forward declaration: what a caller
+    holding only the class can be told, and a promise every instance keeps. On
+    an instance it is the decorated method's value, which may say more --
+    computed once, checked against the promise, and cached in the instance's
+    ``__dict__`` under its own name, as with `functools.cached_property`.
+
+    Made for a TOPICS the instance declares. A table reads its TAB's slice
+    NAMES off the TAB class, before any tab exists; a tab's full declaration --
+    the slice's columns -- follows from its VAR::
+
+        @forward_property({'features': DATASLICE})
+        def TOPICS(self):
+            return {'features': DATASLICE({c: 'ndarray:float32' for c in self.feature_for_column})}
+
+    The class says "a ``features`` slice"; each tab says which columns. A plain
+    `property` cannot: on the class it is the property object, and a table
+    reading one finds no slices and says nothing.
+
+    The promise, as `refines` checks it -- raising here, when the instance's
+    value is computed, rather than wherever it would otherwise fail:
+
+    - a class (a topic marker included): the instance's value is it, a
+      subclass of it, or an instance of it -- ``DATASLICE(final='ndarray:float32')``
+      refines ``DATASLICE``, a part's ``Featuretab`` refines ``Datatab``, and
+      ``'final'`` refines ``str``;
+    - a dict: every key it declares is the instance's too, each refined in
+      turn; the instance may declare more;
+    - None: no promise;
+    - anything else: equal, by value or as rendered.
+
+    A non-data descriptor -- no ``__set__`` -- so assigning the attribute on an
+    instance replaces it, as it would a cached_property. It is not pickled with
+    the block (`Datablock.__getstate__` keeps the explicit parameters only), so
+    an unpickled block computes it again from its own VAR.
+    """
+
+    def __init__(self, classvalue):
+        self.classvalue = classvalue
+        self.func = None
+        self.name = None
+
+    def __call__(self, func):
+        self.func = func
+        self.__doc__ = func.__doc__
+        return self
+
+    def __set_name__(self, owner, name):
+        self.name = name
+
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            return self.classvalue
+        if self.func is None:
+            raise TypeError(f"forward_property {self.name!r} decorates no method")
+        value = self.func(obj)
+        broken = refines(value, self.classvalue)
+        if broken is not None:
+            path, why = broken
+            raise TypeError(
+                f"{type(obj).__qualname__}.{self.name}{''.join(f'[{k!r}]' for k in path)}: {why}. "
+                f"The class declares {self.name} = {self.classvalue!r} forward -- a promise every "
+                f"instance keeps -- and this instance computed {value!r}."
+            )
+        obj.__dict__[self.name] = value
+        return value
+
+    def named(self, name: str) -> 'forward_property':
+        """The same declaration under another attribute name -- as a table's TAB is its BLOCK."""
+        other = forward_property(self.classvalue)(self.func)
+        other.__set_name__(None, name)
+        return other
+
+
+def refines(value, promise, _path=()):
+    """None when *value* keeps the forward declaration *promise*; else ``(path, why)``.
+
+    See `forward_property` for what each kind of promise asks.
+    """
+    if promise is None:
+        return None
+    if isinstance(promise, dict):
+        if not isinstance(value, dict):
+            return _path, f"is {value!r}, where a dict is declared"
+        for key, sub in promise.items():
+            if key not in value:
+                return _path, f"lacks {key!r}, which is declared"
+            broken = refines(value[key], sub, _path + (key,))
+            if broken is not None:
+                return broken
+        return None
+    if isinstance(promise, type):
+        if value is promise or (isinstance(value, type) and issubclass(value, promise)) \
+                or isinstance(value, promise) or str(value) == str(promise):
+            return None
+        return _path, f"is {value!r}, which is not a {promise!r}"
+    if value == promise or str(value) == str(promise):
+        return None
+    return _path, f"is {value!r}, not the declared {promise!r}"
+
+
+def class_declaration(cls, name: str):
+    """What *cls* itself declares under *name*, a `forward_property` read as its class value."""
+    value = cls.__dict__.get(name)
+    return value.classvalue if isinstance(value, forward_property) else value
+
+
+def _check_forward_override_(cls, name: str) -> None:
+    """Refuse a class that repeats an inherited `forward_property`'s class value as a plain attribute.
+
+    Python finds an attribute on the class before its bases', so a plain one on
+    a subclass hides the descriptor -- for the class AND for every instance. A
+    copy of the forward declaration therefore replaces each instance's own
+    value with the placeholder, and nothing says so: for a `Featuretab`, every
+    tab then declares a ``features`` slice without columns, its hash moves, and
+    whatever reads the columns fails far from here. A DIFFERENT value is taken
+    as a deliberate override, and stands.
+    """
+    own = cls.__dict__.get(name)
+    if own is None or isinstance(own, forward_property):
+        return
+    for base in cls.__mro__[1:]:
+        inherited = base.__dict__.get(name)
+        if inherited is None:
+            continue
+        if isinstance(inherited, forward_property) and str(own) == str(inherited.classvalue):
+            raise TypeError(
+                f"{cls.__qualname__}.{name} = {own!r} only repeats {base.__qualname__}.{name}'s "
+                f"forward declaration, and hides it.\n"
+                f"  {base.__qualname__}.{name} is a forward_property: {own!r} is what it says on "
+                f"the class, while each instance computes its own, fuller value"
+                + (f" -- {inherited.__doc__.strip().splitlines()[0].rstrip('.')}" if inherited.__doc__ else "") + ".\n"
+                f"  A plain attribute here is found before {base.__qualname__}'s, on the class and on "
+                f"every instance, so each {cls.__qualname__} would read the placeholder instead -- "
+                f"changing its identity and losing what the instance would declare.\n"
+                f"  Delete the line: {cls.__qualname__} inherits the declaration. To declare "
+                f"something else, assign a different value, or a forward_property of its own."
+            )
+        return
 
 
 def is_topicmarker(node, kind=TOPICMARKER):
@@ -1234,7 +1377,10 @@ class Datablock:
         spec: dict
         #: The narrower block's TOPICS declaration, ``{name: TopicNode}``, in its
         #: own spelling -- or, read back from a record, that rendered as text.
-        topics: Topics | str
+        #: SAME when it declared exactly what this block does, as after a pure
+        #: VAR rename (`redirect_vars`) -- which a block whose TOPICS it computes
+        #: per instance has no other way to say.
+        topics: Topics | str | SAME
         #: The narrower block's VERSION, or ABSENT to take this class's.
         version: int | str | None | ABSENT = ABSENT
         #: The anchor whose journal the narrower block is looked for in: SAME
@@ -1304,9 +1450,13 @@ class Datablock:
             object.__setattr__(self, 'legacy', leg)
             object.__setattr__(self, 'UNSAFE_redirect_all_topics', self.UNSAFE_redirect_all_topics)
             topics = self.topics
-            if isinstance(topics, str):
+            if topics is SAME or topics == 'SAME':      # the record form of SAME -- see to_dict
+                topics = SAME
+            elif isinstance(topics, str):
                 topics = literal_topics(topics)         # the record form -- see to_dict
-            if isinstance(topics, (list, tuple)) and self.legacy:
+            if topics is SAME:
+                pass
+            elif isinstance(topics, (list, tuple)) and self.legacy:
                 topics = tuple(topics)
             elif not isinstance(topics, dict):
                 raise TypeError(
@@ -1319,7 +1469,7 @@ class Datablock:
             # are still mine; their nodes, and so the era they are spelled in,
             # are its -- which is what a migration from the sentinels to the
             # markers changes and a list of names cannot say.
-            object.__setattr__(self, 'topics', topics if isinstance(topics, tuple) else dict(topics))
+            object.__setattr__(self, 'topics', topics if topics is SAME or isinstance(topics, tuple) else dict(topics))
             if self.anchor is not SAME and not (isinstance(self.anchor, str) and self.anchor):
                 raise TypeError(f"Specialization anchor= is SAME or an anchor string, got {self.anchor!r}")
             rv = self.redirect_vars
@@ -1359,7 +1509,7 @@ class Datablock:
             """The record form: literal, so it round-trips through the journal -- see `from_record`."""
             # The declaration as its rendering, which literal_topics reads back:
             # a marker is not a literal, and a record has to be.
-            d = {'spec': dict(self.spec), 'topics': str(self.topics)}
+            d = {'spec': dict(self.spec), 'topics': 'SAME' if self.topics is SAME else str(self.topics)}
             if self.version is not ABSENT:
                 d['version'] = self.version
             if self.anchor is not SAME:
@@ -1443,7 +1593,7 @@ class Datablock:
             identities, and one would otherwise be served the other's hash.
             """
             return (tuple(sorted(self.spec.items(), key=lambda kv: kv[0])),
-                    tuple(self.topics), self.version, str(self.topics),
+                    ('SAME',) if self.topics is SAME else tuple(self.topics), self.version, str(self.topics),
                     None if self.anchor is SAME else self.anchor,
                     self.legacy,
                     self.UNSAFE_redirect_all_topics,
@@ -1649,7 +1799,8 @@ class Datablock:
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        legacy = _legacy_topics_(cls.__dict__.get('TOPICS', {}))
+        _check_forward_override_(cls, 'TOPICS')
+        legacy = _legacy_topics_(class_declaration(cls, 'TOPICS') or {})
         if legacy:
             warnings.warn(
                 f"{cls.__qualname__}.TOPICS declares {', '.join(legacy)} in the pre-marker "
@@ -3140,7 +3291,7 @@ class Datablock:
             elif getattr(specialization, 'redirect_topics', None) is not None:
                 topics = list(specialization.redirect_topics) if topics is None else list(topics)
             else:
-                topics = list(specialization.topics) if topics is None else list(topics)
+                topics = list(self._specialization_topics_(specialization)) if topics is None else list(topics)
             if journal is not None:
                 journal = self._specialization_journal_(journal, specialization)
 
@@ -3199,7 +3350,7 @@ class Datablock:
             target_paths, entry = resolved
             target_paths = self._chase_redirected_paths_(target_paths)
             sp_topics = list(topics) if topics is not None else (
-                None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(specialization.topics))
+                None if getattr(specialization, 'UNSAFE_redirect_all_topics', False) else list(self._toplevel_topics_(self._specialization_topics_(specialization)))
             )
             redirect_record = {
                 'filter': {'hash': self.get_hash(specialization)},
@@ -3975,8 +4126,8 @@ class Datablock:
             **self._type_entries_(specialization, with_block=with_block),
             'version': version,
             'paths': getattr(self, '_paths_', None),
-            'topics': self._topics_signature_(list(specialization.topics),
-                                              declared=specialization.topics),
+            'topics': self._topics_signature_(list(self._specialization_topics_(specialization)),
+                                              declared=self._specialization_topics_(specialization)),
         }
 
     def tp(self, *, deslash: bool = False, legacy: 'bool | None' = None) -> dict:
@@ -4149,7 +4300,7 @@ class Datablock:
         reconstructing a stack built then needs. See :meth:`_type_entries_`.
         """
         omit, topics = ((), None) if specialization is None else (
-            tuple(specialization.spec), list(specialization.topics))
+            tuple(specialization.spec), list(self._specialization_topics_(specialization)))
         redirect_vars = getattr(specialization, 'redirect_vars', None) if specialization is not None else None
         version = self.version
         if specialization is not None and specialization.version is not ABSENT:
@@ -4191,7 +4342,7 @@ class Datablock:
         parts.extend(f"{k}={v}" for k, v in self._type_entries_(specialization, with_block=with_block).items())
         parts.append(f"version={version}")
         parts.extend(self._topics_signature_(
-            topics, declared=None if specialization is None else specialization.topics))
+            topics, declared=None if specialization is None else self._specialization_topics_(specialization)))
         tp = os.path.join(*parts)
         if deslash:
             tp = tp.replace('\\', '')
@@ -4295,7 +4446,7 @@ class Datablock:
             elif getattr(sp, 'redirect_topics', None) is not None:
                 named = list(self._toplevel_topics_(sp.redirect_topics))
             else:
-                named = self._toplevel_topics_(sp.topics)
+                named = self._toplevel_topics_(self._specialization_topics_(sp))
             row = self.SpecializationRow(
                 specialization=sp, hash=None, matches=False, why=None,
                 entry=None, paths=None, topics=named,
@@ -4353,7 +4504,7 @@ class Datablock:
             elif getattr(sp, 'redirect_topics', None) is not None:
                 named = list(self._toplevel_topics_(sp.redirect_topics))
             else:
-                named = list(self._toplevel_topics_(sp.topics))
+                named = list(self._toplevel_topics_(self._specialization_topics_(sp)))
             return self.SpecializationRow(
                 specialization=sp,
                 hash=self.get_hash(sp),
@@ -5435,12 +5586,13 @@ class Datablock:
 
     @staticmethod
     def _node_is_dirtopic_(node):
-        """True when node is :data:`DIRTOPIC` or the :class:`DIR` marker.
+        """True when node is :data:`DIRTOPIC` or a :class:`DATADIR` marker.
 
         A parameterised marker is a subclass of the one it parameterises, so
-        ``DATASLICE(idx='int')`` -- a slice IS a directory -- lands here too.
+        ``DATASLICE(idx='int')`` -- a slice IS a directory -- lands here too,
+        and so does the deprecated :class:`DIR`.
         """
-        return node is DIRTOPIC or is_topicmarker(node, DIR)
+        return node is DIRTOPIC or is_topicmarker(node, DATADIR)
 
     def _is_dir_topic_(self, *topicpath):
         """True when the topic resolves to a directory rather than a file.
@@ -6535,6 +6687,10 @@ class Datablock:
                     if isinstance(evaluated, Datablock) else value)
         return self._coerce_to_annotation_(value, self.VAR.__dataclass_fields__[key].type)
 
+    def _specialization_topics_(self, specialization) -> 'Topics | tuple':
+        """The narrower block's TOPICS declaration: its own, or -- for ``topics=SAME`` -- this block's."""
+        return self.TOPICS if specialization.topics is SAME else specialization.topics
+
     def _specialization_mismatch_(self, specialization):
         """Why *specialization* does not describe this block, or None if it does.
 
@@ -6551,7 +6707,7 @@ class Datablock:
                 f"{unknown}, which {self.VAR.__name__} does not declare. A pin names a "
                 f"VAR field this class has and the narrower block did not."
             )
-        self._topic_leaves_(specialization.topics)   # raises on a topic we do not declare
+        self._topic_leaves_(self._specialization_topics_(specialization))   # raises on a topic we do not declare
         typed = self._typed_specdict_()
         for k, v in specialization.spec.items():
             mine, pinned = typed[k], self._specialization_pin_(k, v)
@@ -6637,7 +6793,7 @@ class Datablock:
             elif getattr(specialization, 'redirect_topics', None) is not None:
                 wanted = list(self._toplevel_topics_(specialization.redirect_topics))
             else:
-                wanted = self._toplevel_topics_(specialization.topics)
+                wanted = self._toplevel_topics_(self._specialization_topics_(specialization))
             paths = {t: recorded[t] for t in wanted if t in recorded}
             if len(paths) < len(wanted):
                 missing = sorted(set(wanted) - set(paths))
@@ -6676,6 +6832,23 @@ class Datablock:
     def _specialization_anchor_(self, specialization):
         """The anchor whose journal *specialization*'s narrower block is looked for in."""
         return self.anchor if specialization.anchor is SAME else specialization.anchor
+
+    def _hash_journal_(self, specialization):
+        """*specialization*'s narrower block's journal entries, for a block with no journal handed down.
+
+        Read from that block's own directory -- `Datajournal.read_hash` --
+        rather than the whole of its anchor's journal, every block's entries,
+        which is what one block resolving its specialization used to read. The
+        whole journal, read once per instance, when that block is not filed
+        where its tag and version say.
+        """
+        anchor = self._specialization_anchor_(specialization)
+        version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
+        j = Datajournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
+                                  datalake=self.datalake, storage_options=self.storage_options, log=self.log)
+        if j is not None:
+            return j
+        return self._journal_under_(anchor)
 
     def _journal_under_(self, anchor, journal=None, **filter_kwargs):
         """The entries journalled under *anchor*, from *journal* when it holds any.
@@ -6765,7 +6938,7 @@ class Datablock:
                 self.log.detailed(f"specialization: {sp!r} does not apply: {why}")
                 continue
             # Per specialization, over the topics IT covers -- see `_unbuilt_`.
-            cov_topics = sp.redirect_topics if getattr(sp, 'redirect_topics', None) is not None else sp.topics
+            cov_topics = sp.redirect_topics if getattr(sp, 'redirect_topics', None) is not None else self._specialization_topics_(sp)
             if not self._unbuilt_(cov_topics):
                 self.log.detailed(
                     f"specialization: {sp!r} does not apply: this block has data of "
@@ -6775,13 +6948,16 @@ class Datablock:
                 )
                 continue
             sp_j = self._specialization_journal_(memo.get('journal'), sp)
-            if sp_j is None and memo.get('journal') is None and not memo.get('read'):
-                memo['read'] = True
-                try:
-                    memo['journal'] = self.datajournal()
-                    sp_j = memo['journal']
-                except FileNotFoundError:
-                    pass
+            if sp_j is None and memo.get('journal') is None:
+                # No journal handed down: this one specialization's entries,
+                # from the narrower block's own directory -- kept for the redirect.
+                key = ('hash_journal', sp.key)
+                if key not in memo:
+                    try:
+                        memo[key] = self._hash_journal_(sp)
+                    except FileNotFoundError:
+                        memo[key] = None
+                sp_j = memo[key]
             resolved = self._specialization_paths_(sp, journal=sp_j)
             if resolved is None:
                 self.log.verbose(
@@ -6821,7 +6997,9 @@ class Datablock:
             if not offered:
                 continue
             if self.use_specializations != 'memory':
-                sp_j = self._specialization_journal_(memo.get('journal'), sp)
+                sp_j = memo.get(('hash_journal', sp.key))
+                if sp_j is None:
+                    sp_j = self._specialization_journal_(memo.get('journal'), sp)
                 if self.UNSAFE_redirect(specialization=sp, topics=list(offered.keys()), journal=sp_j, OVERRIDE=True, merge=True):
                     installed.append(sp)
                     needed -= set(offered.keys())
@@ -7138,8 +7316,8 @@ class InvalidBlocksError(RuntimeError):
                     f"use_block_specializations=False, then its build_blocks({adopted!r})."] if adopted else []))
         else:
             remedy = (("stack.specialize_blocks() adopts what resolves; " if 'unadopted' in kinds else "")
-                      + "stack.build_blocks() adopts what resolves and builds the rest, "
-                        "and none of the stack's own topics.")
+                      + "stack.build() adopts what resolves and builds the rest -- "
+                        "stack.build_blocks() the same, without the stack's own topics.")
         super().__init__(
             (f"{reader}: " if reader else "")
             + f"{stack.anchorkeypath}: {k} of {n} blocks are not valid"
@@ -7374,36 +7552,56 @@ class Datastack(Datablock):
             # A stack that is completely redirected answers from elsewhere;
             # its build is elided regardless of deep. An unredirected (or
             # partially redirected) stack that is already valid and owes no
-            # topics has nothing to build unless deep=True forces it. Either
-            # way, it is done -- and so must its blocks be: one that is not
-            # would fail whatever reads it, far from here.
+            # topics has nothing of its OWN to build unless deep=True forces
+            # it. Either way, it is done -- and so must its blocks be: those
+            # that are not are built here, as build_blocks() builds them, and
+            # the stack's own topics are left as they are. A block still not
+            # valid after that is an error, said here rather than by whatever
+            # reads it, far from here.
             # A stack with no topics of its own claims nothing by being
             # valid, which it is vacuously: its build is its blocks'.
             redirected = self._redirected_paths_ is not None and not self.ownedtopics()
             if not self.topics():
-                self.build_blocks(invalid)
+                self._build_owed_blocks_(invalid, validation, state=None)
                 invalid = []
             if redirected or (not deep and self.valid() and not self.owedtopics()):
-                if invalid:
-                    raise InvalidBlocksError(self, invalid, state=self._claim_(redirected), validation=validation)
+                self._build_owed_blocks_(invalid, validation, state=self._claim_(redirected))
                 return super().build(*args, deep=deep, _specialized_=True, **kwargs)
             # The stack's own specialization; its blocks' are installed above.
             # Adopted whole, it elides the build that would have built them.
             Datablock.specialize(self)
             if invalid and self._redirected_paths_ is not None and not self.ownedtopics():
-                raise InvalidBlocksError(self, invalid, state=self._claim_(True), validation=validation)
+                self._build_owed_blocks_(invalid, validation, state=self._claim_(True))
+                return super().build(*args, deep=deep, _specialized_=True, **kwargs)
             result = super().build(*args, deep=deep, _specialized_=True, **kwargs)
             # Datablock.build skips a valid stack, deep or not, and its blocks with it.
             full = 'validate' if validation == 'validate' else 'valid'
             invalid = [i for i in invalid if not self.valid_block(i, validation=full)]
-            if invalid:
-                raise InvalidBlocksError(self, invalid, state=self._claim_(False), validation=validation)
+            self._build_owed_blocks_(invalid, validation, state=self._claim_(False))
             if self.valid() and paths is not None:
                 self._record_blocks_manifest_(paths)
             return result
         finally:
             self.__dict__.pop('__building__', None)
             self.__dict__.pop('__build_journal__', None)
+
+    def _build_owed_blocks_(self, invalid, validation, *, state):
+        """Build the blocks at *invalid* -- none of this stack's own topics -- and raise for any still not valid.
+
+        What a stack's build does for blocks its own build will not reach: the
+        stack is valid, or reads an older build, and so is done, but these are
+        not. *state* is what the stack claims, for the error.
+        """
+        if not invalid:
+            return
+        self.log.info(f"{self.anchorkeypath}: the stack {state or 'has no topics of its own'}; "
+                      f"building the {len(invalid)} of its {self.n_blocks} blocks that are not valid")
+        self.build_blocks(invalid, validation=validation)
+        full = 'validate' if validation == 'validate' else 'valid'
+        still = [i for i in invalid if not self.valid_block(i, validation=full)]
+        if still:
+            raise InvalidBlocksError(self, still, state=f"{state}, and they were built" if state else
+                                     "built them", validation=validation)
 
     @staticmethod
     def _claim_(redirected: bool) -> str:
@@ -7414,11 +7612,11 @@ class Datastack(Datablock):
     def build_blocks(self, indices=None, validation: str | None = None, **kwargs):
         """Build the blocks that are not valid -- or those at *indices* -- and none of this stack's own topics.
 
-        What a stack that is valid, or reads an older build, cannot do in its
-        own build: that one declines, being done, and would leave such blocks
-        to fail whatever reads them -- see `InvalidBlocksError`. The blocks
-        adopt what their specializations resolve to first, and the rest are
-        built as `__build__` builds them, by the stack's executor. Raises
+        `build` does this too, for a stack that is valid or reads an older
+        build -- done itself, but not its blocks; this is the same without the
+        stack's own state consulted at all. The blocks adopt what their
+        specializations resolve to first, and the rest are built as
+        `__build__` builds them, by the stack's executor. Raises
         `InvalidBlocksError` for blocks that fail validate(), which a build
         does not repair.
         """

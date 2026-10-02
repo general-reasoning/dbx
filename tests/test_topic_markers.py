@@ -722,7 +722,7 @@ class TestADatadirIsADirectory:
             VERSION = 1
             TOPICS = {'masks': DATADIR('per-frame masks')}
 
-        assert issubclass(DATADIR, DIR)
+        assert issubclass(DIR, DATADIR), "DIR is the deprecated DATADIR, still rendering 'DIR'"
         assert block(B, tmp_path)._is_dir_topic_('masks') is True
 
     def test_the_note_renders(self):

@@ -27,7 +27,7 @@ import pytest
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
 from dbx.datapoints import SLICETOPIC, DatapointTab, DatapointTable
-from dbx.datafeatures import UpstreamTabSlices
+from dbx.datatables import DataslicesUpstream
 
 
 @pytest.fixture(autouse=True)
@@ -62,7 +62,7 @@ class SampleTable(DatapointTable):
         return 2
 
 
-class Derived(UpstreamTabSlices, DatapointTab):
+class Derived(DataslicesUpstream, DatapointTab):
     """The shape a `DatafeatureTab` has: own slice plus an upstream block's.
 
     Carries the upstream's bookkeeping column through, which is what makes the

@@ -54,8 +54,8 @@ from dbx import backbones, datatables, featuretables, probes
 #: name and is recovered through a specialization, not found in place. The
 #: MODULE did not move, and these are the names recorded from then on.
 LEGACY_FQCNS = [
-    # Renamed from DatatableBase: never built itself, so no artifact is stored under either name.
-    (datatables.DatatabBase, 'dbx.datapoints.DatatabBase'),
+    # Renamed from DatatableBase, then DatatabBase: never built itself, so no artifact is stored under any name.
+    (datatables._Database_, 'dbx.datapoints._Database_'),
     (datatables.Datatab, 'dbx.datapoints.Datatab'),
     (datatables.Datatable, 'dbx.datapoints.Datatable'),
     (datatables.DatatablePartition, 'dbx.datapoints.DatatablePartition'),
@@ -137,10 +137,11 @@ class TestTheOldModulePathsAreTheSameModule:
         assert dbx.datapoints.Datatab is datatables.Datatab
         assert dbx.datafeatures.FeatureTab is featuretables.FeatureTab
 
-    def test_the_upstream_mixin_resolves_from_either(self):
-        """`UpstreamTabSlices` moved to datatables and is imported by name from datafeatures."""
-        assert dbx.datafeatures.UpstreamTabSlices is datatables.UpstreamTabSlices
-        assert dbx.datapoints.UpstreamTabSlices is datatables.UpstreamTabSlices
+    def test_the_upstream_mixin_keeps_its_old_name(self):
+        """`UpstreamTabSlices` is now `DataslicesUpstream`; the old name is an alias in datatables only."""
+        assert datatables.UpstreamTabSlices is datatables.DataslicesUpstream
+        assert dbx.datapoints.UpstreamTabSlices is datatables.DataslicesUpstream
+        assert dbx.datapoints.DatatabBase is datatables._Database_
 
     def test_a_module_constant_resolves(self):
         assert dbx.datapoints.SLICETOPIC is datatables.SLICETOPIC

@@ -10,7 +10,6 @@ import os
 import shutil
 import tempfile
 import urllib.parse
-import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -38,15 +37,17 @@ from .datablocks import (
     SAME,
     DATADIR,
     DATAFILE,
-    DIR,
     DIRTOPIC,
     Datablock,
     DatajournalFrame,
     Datastack,
     TopicMarkerMeta,
+    _NotedMarkerMeta_,
+    forward_property,
     forming_with_journal,
     is_topicmarker,
 )
+from .dataparts import callable_executor
 from .datastreams import (
     ChunkShuffleSampler,
     SharedMemoryManager,
@@ -70,13 +71,20 @@ from .datastreams import (
 SLICETOPIC = 'SLICETOPIC'
 
 
-class _DataSliceMeta_(TopicMarkerMeta):
+class _DataSliceMeta_(_NotedMarkerMeta_):
     """Makes ``DATASLICE(idx='int')`` a marker carrying those columns.
 
     A call returns a SUBCLASS rather than an instance, so everything a TOPICS
     declaration holds is a class and one test -- :func:`is_topicmarker` --
     recognises the lot of them.
+
+    Derived from `DATADIR`'s metaclass because `DATASLICE` is a `DATADIR`. A
+    slice is declared by its columns and not by a note, so the call and the
+    rendering are the columns', as `TopicMarkerMeta` renders them.
     """
+
+    __repr__ = TopicMarkerMeta.__repr__
+    __str__ = TopicMarkerMeta.__repr__
 
     def __call__(cls, *mapping, **typed):
         if mapping and (typed or len(mapping) > 1 or not isinstance(mapping[0], dict)):
@@ -91,10 +99,10 @@ class _DataSliceMeta_(TopicMarkerMeta):
         return _DataSliceMeta_(cls.__name__, (cls,), {'columns': columns})
 
 
-class DATASLICE(DIR, metaclass=_DataSliceMeta_):
+class DATASLICE(DATADIR, metaclass=_DataSliceMeta_):
     """One independently-readable MDS stream directory.  ``SLICETOPIC`` as a marker.
 
-    A :class:`~dbx.datablocks.DIR`, because a slice IS a directory -- so every
+    A :class:`~dbx.datablocks.DATADIR`, because a slice IS a directory -- so every
     test that asks whether a topic is one answers for a slice without knowing
     what a slice is.
 
@@ -159,7 +167,7 @@ class DATASLICE(DIR, metaclass=_DataSliceMeta_):
                 )
 
 
-class DatatabBase(Datablock):
+class _Database_(Datablock):
     """Base class for sliced datapoint blocks (Datatab and Datatable).
 
     A **slice** is one independently-readable MDS stream directory inside a block.
@@ -232,7 +240,7 @@ class DatatabBase(Datablock):
         an instance overriding TOPICS -- as :class:`DatatablePart` does -- is
         read through.
         """
-        return DatatabBase._find_slice_topics_(getattr(self, 'TOPICS', None))
+        return _Database_._find_slice_topics_(getattr(self, 'TOPICS', None))
 
     def declared_columns(self, slice) -> 'dict | None':
         """The columns *slice* declares, as ``{column: mds_type}``, or None.
@@ -687,7 +695,7 @@ class DatatabBase(Datablock):
     def _node_is_dirtopic_(node):
         """True when node is a directory topic, :data:`SLICETOPIC` included.
 
-        A :class:`DATASLICE` is a :class:`~dbx.datablocks.DIR`, so the base test
+        A :class:`DATASLICE` is a :class:`~dbx.datablocks.DATADIR`, so the base test
         already covers the marker.  What this adds is the sentinel, which is a
         string and would otherwise read as a file named ``SLICETOPIC``.
         """
@@ -803,210 +811,11 @@ class DatatabBase(Datablock):
             if is_topicmarker(val, DATASLICE) or val == SLICETOPIC:
                 slice_topics.append('/'.join(current) if len(current) > 1 else key)
             elif isinstance(val, dict):
-                slice_topics.extend(DatatabBase._find_slice_topics_(val, current))
+                slice_topics.extend(_Database_._find_slice_topics_(val, current))
         return tuple(slice_topics)
 
 
-class UpstreamTabSlices:
-    """Slice routing for a tab or table that reads its own slices and an upstream one's.
-
-    A mixin, ahead of `Datatab` or `Datatable` in the bases. `Featuretab` owns
-    ``features`` and borrows the sample slices of the `Datatab` it was built
-    from; `Featuretable` does the same over a `Datatable`. Both answer
-    `dataset()` and `data()` for either, so both need the same three things:
-    work out which block owns a requested slice, keep the caller's order, and
-    refuse a name that two blocks both claim.
-
-    The upstream is found in the VAR field ``UPSTREAM_TABS`` names -- a tab or
-    a table, whichever the block was built from.
-    """
-
-    #: The VAR field(s) that may hold the upstream tab or table, most specific
-    #: first; the first one set is the upstream.
-    UPSTREAM_TABS: tuple[str, ...] = ()
-
-    # 1. Protocol and hooks ------------------------------------------------
-
-    def __post_init__(self):
-        super().__post_init__()
-        # As DatatabBase does for shared_slice_columns, and for the same
-        # reason: a bare str is iterable, so 'idx' left unnormalised would be
-        # read as four one-letter columns.
-        self.shared_upstream_column = self._norm_shared_columns_(
-            getattr(self, 'shared_upstream_column', None)
-        )
-
-    # 2. Declared API ------------------------------------------------------
-
-    def dataset(self, *slices, upstream: list | None = None, mode='map',
-                nested=True, columns=None, shared=None, validate_shared=None,
-                skip_none=True, zip_validator=None, **kwargs):
-        """The requested slices -- this block's and the upstream block's -- zipped.
-
-        Keyed exactly as `DatatabBase.dataset()`, so a row is
-        ``{'features': {layer: value}, sample_slice: {column: value}, ...}``.
-
-        *shared* defaults to this block's ``shared_upstream_column``, and
-        *validate_shared* to True when it does -- so whether the features are
-        still paired with the samples they were computed from is settled by
-        whoever built the block, once, rather than by every consumer of it. A
-        column only one of the sources read carries is refused: it would be
-        compared against nothing and read as checked.
-        """
-        if mode not in ('map', 'iter'):
-            raise ValueError(
-                f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}"
-            )
-        routed = self._route_(slices, upstream)
-        shared, validate_shared = self._shared_defaults_(shared, validate_shared)
-        datasets = [owner.datastream(s_name, **kwargs) for owner, s_name, _ in routed]
-        names = [s_name for _, s_name, _ in routed]
-        per_slice_columns = [cols for _, _, cols in routed]
-        if all(c is None for c in per_slice_columns):
-            per_slice_columns = columns
-
-        zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
-        return zip_cls(
-            *datasets,
-            names=names,
-            nested=nested,
-            columns=per_slice_columns,
-            shared=shared,
-            validate_shared=validate_shared,
-            skip_none=skip_none,
-            zip_validator=zip_validator,
-        )
-
-    def data(self, *slices, upstream: list | None = None, nested=True,
-             concat=True, **kwargs):
-        """The requested slices read whole, keyed as `dataset()` keys one row.
-
-        A table reads its own slice through `Datatable._read_slice_`,
-        which already runs over every tab, so nothing here concatenates tabs
-        by hand.
-        """
-        routed = self._route_(slices, upstream)
-        out = {}
-        for owner, s_name, cols in routed:
-            spec = (s_name, cols) if cols else s_name
-            out[s_name] = DatatabBase.data(owner, spec, concat=concat, **kwargs)[s_name]
-        if nested:
-            return out
-        return {(s_name, c): vals
-                for s_name, cols in out.items()
-                for c, vals in cols.items()}
-
-    # 4. Helpers -----------------------------------------------------------
-
-    def _shared_defaults_(self, shared, validate_shared):
-        """As `DatatabBase._shared_defaults_`, from `shared_upstream_column` first.
-
-        This block's alignment question spans two blocks -- is feature row *i*
-        the features OF sample row *i*? -- so the column that answers it is one
-        the upstream slice holds and this block carried through when it was
-        built. That is a different declaration from the columns this block's own
-        slices share, and it takes precedence over it, since a zip that reaches
-        across the two blocks is the one where drift is possible.
-        """
-        declared = getattr(self, 'shared_upstream_column', None)
-        if shared is None and declared is not None:
-            shared = declared
-            if validate_shared is None:
-                validate_shared = True
-        return super()._shared_defaults_(shared, validate_shared)
-
-    def _upstream_block_(self):
-        for attr in self.UPSTREAM_TABS:
-            block = getattr(self.var, attr, None)
-            if block is None:
-                block = getattr(self, attr, None)
-            if block is not None:
-                return block
-        return None
-
-    def available_slices(self) -> tuple[str, ...]:
-        """All slice names available on this block and its upstream chain."""
-        return tuple(self.slices()) + tuple(self._upstream_slices_().keys())
-
-    def _upstream_slices_(self) -> dict:
-        """Map of slice_name -> owner_block for all available slices across the upstream chain."""
-        owners = {}
-        curr = self._upstream_block_()
-        while curr is not None:
-            for s in curr.slices():
-                if s not in owners:
-                    owners[s] = curr
-            if hasattr(curr, '_upstream_block_'):
-                curr = curr._upstream_block_()
-            else:
-                break
-        return owners
-
-    @staticmethod
-    def _norm_items_(slice_columns):
-        """``*slice_columns`` as an ordered ``[(slice, columns | None)]`` list, as `slice_spec` reads each."""
-        items = list(slice_columns)
-        if len(items) == 1 and isinstance(items[0], (list, tuple)):
-            first = items[0]
-            # One tuple is one request -- (slice, ...) -- and one list several.
-            if isinstance(first, list) or not (len(first) >= 2 and isinstance(first[0], str)):
-                items = list(first)
-        return [slice_spec(item) for item in items]
-
-    def _route_(self, slice_columns, upstream=None):
-        """Resolve a request into an ordered ``[(block, slice, columns)]`` list.
-
-        Raises when an upstream block declares a slice this block also owns.
-        Rows are keyed by slice name, so two blocks claiming one name have no
-        way to both appear in a row -- and silently preferring either one is
-        how a caller ends up reading features while believing it asked for
-        samples.
-        """
-        what = self.__class__.__name__
-        own = tuple(self.slices())
-        up_owners = self._upstream_slices_()
-        up = tuple(up_owners.keys())
-
-        clash = sorted(set(own) & set(up))
-        if clash:
-            raise KeyError(
-                f"{what}: upstream declares slice(s) "
-                f"{clash}, which this block also owns ({list(own)}). A row is "
-                f"keyed by slice name and cannot hold both -- rename the "
-                f"upstream slice."
-            )
-
-        items = self._norm_items_(slice_columns) or [(s, None) for s in own]
-        if upstream:
-            asked = {s for s, _ in items}
-            items = items + [(str(s), None) for s in upstream if str(s) not in asked]
-
-        routed, seen = [], {}
-        for s_name, cols in items:
-            if s_name in own:
-                owner = self
-            elif s_name in up_owners:
-                owner = up_owners[s_name]
-            else:
-                raise KeyError(
-                    f"{what}: unknown slice {s_name!r}; "
-                    f"available slices are {list(own) + list(up)}"
-                )
-            if s_name in seen:
-                pos = seen[s_name]
-                _, _, prev = routed[pos]
-                merged = None if (prev is None or cols is None) else \
-                    merge_column_specs(prev + cols)
-                routed[pos] = (owner, s_name, merged)
-            else:
-                seen[s_name] = len(routed)
-                routed.append((owner, s_name, None if cols is None else merge_column_specs(cols)))
-        for owner, s_name, cols in routed:
-            owner._check_column_keys_(s_name, cols)
-        return routed
-
-
-class Datatab(DatatabBase):
+class Datatab(_Database_):
     """One tab of a `Datatable`: a Datablock writing MDS slices."""
 
     @dataclass
@@ -1033,7 +842,7 @@ class Datatab(DatatabBase):
         copy or redirection, or whose upload stopped half way -- and `TabMaker`
         calls it after every build and refuses the tab if it says no.
 
-        On the tab and not on `DatatabBase`: a table's `shard_sizes()` opens
+        On the tab and not on `_Database_`: a table's `shard_sizes()` opens
         the index of every tab, so the same override on the table would turn one
         validate() into a read per tab per slice. It needs no such thing -- a
         table is valid only when every tab of it validated.
@@ -1211,7 +1020,7 @@ def DatapointTableTab(table, idx, tag=None, **spec):
     return table(idx, tag=tag, **spec)
 
 
-class Datatable(DatatabBase, Datastack):
+class Datatable(_Database_, Datastack):
     """A table of DatapointTabs, sliced the same way as its tabs.
 
     A table's TOPICS only contains what the table itself owns: the structural
@@ -1265,11 +1074,6 @@ class Datatable(DatatabBase, Datastack):
     #: was, an addressable location rather than something the machinery used.
     TOPICS = {'done': DATAFILE('done')}
 
-    #: The TOPICS a table had while ``tab_paths`` -- one marker per built tab --
-    #: stood in for its tabs' validity; the stack's manifest does that now.
-    #: Kept by the tables that declare it, so that their identities do not move.
-    TAB_PATHS_TOPICS = {'tab_paths': DATADIR, 'done': DATAFILE('done')}
-
     @dataclass(frozen=True, repr=False, eq=False)   # the base's repr (note last) and equality
     class Specialization(Datablock.Specialization):
         """A Datablock's Specialization, and the TAB the narrower table's type names.
@@ -1292,18 +1096,9 @@ class Datatable(DatatabBase, Datastack):
         def _block_(self):
             return self.TAB
 
-    #: Every table built before the respelling: the base's sentinels, and the
-    #: TAB's slices the sentinel era added to a table's identity -- for a table
-    #: declaring TAB_PATHS_TOPICS. One declaring SPECIALIZATIONS of its own
-    #: includes these -- see __init_subclass__.
-    TAB_PATHS_SPECIALIZATIONS = [Specialization(
-        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, TAB=None,
-        note="respelled only: DATADIR and DATAFILE for the sentinels; built before a table's type named its TAB")]
-
-    #: None: a table spelled with the base's TOPICS, built while they included
-    #: ``tab_paths``, is out of reach -- a specialization describes a block
-    #: that declared fewer topics, never one that declared more. The tables
-    #: that had them keep TAB_PATHS_TOPICS, and TAB_PATHS_SPECIALIZATIONS.
+    #: None: a table's own topics are markers over its tabs, cheaply written
+    #: again; what is worth reaching are its tabs, each by the TAB's own
+    #: specializations.
     SPECIALIZATIONS = []
 
     Tab = staticmethod(DatapointTableTab)
@@ -1362,29 +1157,13 @@ class Datatable(DatatabBase, Datastack):
         A table may still name a BLOCK of its own, and then its TAB must be one.
         """
         super().__init_subclass__(**kwargs)
-        own = cls.__dict__.get('SPECIALIZATIONS')
-        inherited = (Datatable.SPECIALIZATIONS, Datatable.TAB_PATHS_SPECIALIZATIONS)
-        if own is None and 'TOPICS' in cls.__dict__ and any(cls.SPECIALIZATIONS is sp for sp in inherited):
-            # Datatable's describe a table spelled with Datatable's TOPICS. One
-            # declaring its own is another identity -- the specialization names
-            # topics it may not have, or reads as a narrower block of it -- so
-            # it starts with none, and declares what reaches its own past.
-            cls.SPECIALIZATIONS = []
-        for topics, base, name in ((Datatable.TOPICS, Datatable.SPECIALIZATIONS, 'SPECIALIZATIONS'),
-                                   (Datatable.TAB_PATHS_TOPICS, Datatable.TAB_PATHS_SPECIALIZATIONS,
-                                    'TAB_PATHS_SPECIALIZATIONS')):
-            if own is None or cls.TOPICS is not topics:
-                continue
-            keys = {sp.key for sp in own}
-            missing = [sp for sp in base if sp.key not in keys]
-            if missing:
-                warnings.warn(
-                    f"{cls.__qualname__} declares Datatable's TOPICS but SPECIALIZATIONS of its own "
-                    f"without Datatable's: a table built before the TOPICS were respelled will not "
-                    f"be found. Include them -- SPECIALIZATIONS = [*Datatable.{name}, ...].",
-                    stacklevel=2)
         tab = cls.__dict__.get('TAB')
         if tab is None:
+            return
+        if isinstance(tab, forward_property):
+            # Declared forward, its TAB is each instance's -- and so is its BLOCK.
+            if 'BLOCK' not in cls.__dict__:
+                cls.BLOCK = tab.named('BLOCK')
             return
         if 'BLOCK' in cls.__dict__ and cls.BLOCK is not None:
             if not (isinstance(tab, type) and issubclass(tab, cls.BLOCK)):
@@ -1443,8 +1222,8 @@ class Datatable(DatatabBase, Datastack):
         return self.__tab__(idx)
 
     def __split__(self, *args, **kwargs):
-        # A table still declaring `tab_paths` -- TAB_PATHS_TOPICS, kept for its
-        # identity -- gets the directory, empty: a topic declared and never
+        # A table that declares `tab_paths` in its own TOPICS -- the table
+        # topic from before the manifest -- gets the directory, empty: a topic declared and never
         # there would read, to anything resolving a specialization of this
         # table later, as a build that has been cleared. Only when it is THIS
         # table's: under a redirection covering it, `path(ensure_dirpath=True)`
@@ -1580,13 +1359,13 @@ class Datatable(DatatabBase, Datastack):
         `valid_slice()`) working.
 
         Falls back to its own TOPICS when TAB is unset or is not a
-        `DatatabBase` -- as for :class:`DatatablePart`, which overrides
+        `_Database_` -- as for :class:`DatatablePart`, which overrides
         TOPICS per instance and computes its TAB dynamically.
         """
         tab = getattr(self, 'TAB', None)
-        if isinstance(tab, type) and issubclass(tab, DatatabBase):
-            return DatatabBase._find_slice_topics_(getattr(tab, 'TOPICS', None))
-        return DatatabBase._find_slice_topics_(getattr(self, 'TOPICS', None))
+        if isinstance(tab, type) and issubclass(tab, _Database_):
+            return _Database_._find_slice_topics_(getattr(tab, 'TOPICS', None))
+        return _Database_._find_slice_topics_(getattr(self, 'TOPICS', None))
 
     def read(self, *topicpath):
         """As `Datablock.read()`, but slice names bypass the TOPICS guard.
@@ -1762,13 +1541,13 @@ class Datatable(DatatabBase, Datastack):
             return own
         # Then the TAB's slice topics, in the same format Datastack uses.
         tab = self.TAB
-        if isinstance(tab, type) and issubclass(tab, DatatabBase):
+        if isinstance(tab, type) and issubclass(tab, _Database_):
             # TAB is a class here, and slices() is an instance method as
             # topics() is, so the shared helper does the work rather than an
             # unbound call.
             slice_segments = tuple(
                 f"topic:{name}=SLICETOPIC"
-                for name in DatatabBase._find_slice_topics_(getattr(tab, 'TOPICS', None))
+                for name in _Database_._find_slice_topics_(getattr(tab, 'TOPICS', None))
             )
         else:
             slice_segments = ()
@@ -1785,74 +1564,160 @@ class Datatable(DatatabBase, Datastack):
         return datapoints
 
 
-class DatatablePartition(Datablock):
-    """Partitions a `Datatable`'s tabs into folds according to target fractions.
+#: How `DatatablePartition` deals tabs to folds -- see its docstring.
+PARTITION_METHODS = ('random', 'largest_first')
 
-    Uses the Longest Processing Time First (LPT) / Worst-Fit Decreasing (WFD)
-    greedy heuristic for multiway number partitioning (an NP-complete problem).
-    Tabs are sorted in descending order of row count and greedily assigned to the
-    fold with the largest remaining capacity deficit.
+
+def _column_values_(tab, spec) -> list:
+    """Every row's value of *spec* -- ``(slice, column, key, ...)`` -- in *tab*; None where a row has none."""
+    s_name, column, *keys = spec
+    # Row by row: concatenated, a dict column comes back by key, and a row that is None has no keys.
+    values = tab.data((s_name, column), concat=False)[s_name][column]
+    out = []
+    for value in values:
+        for key in keys:
+            value = value.get(key) if isinstance(value, dict) else None
+        out.append(value)
+    return out
+
+
+def _value_key_(value) -> str:
+    """A value as a sortable, hashable string: what two rows' values are compared by."""
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+class TabPartitionScanCallable:
+    """Worker callable: one tab's row count and the single value each partition column holds in it."""
+
+    def __init__(self, partition, idx: int):
+        self.partition = partition
+        self.idx = idx
+
+    def __call__(self):
+        part = self.partition
+        tab = part.var.datapoint_table.tab(self.idx)
+        out = {'idx': self.idx, 'tag': tab.tag, 'rows': None, 'values': {}}
+        if part.var.balance == 'rows' or part.var.method == 'largest_first':
+            out['rows'] = int(tab.n_rows(part._partition_slice_name_))
+        for name in ('groupby', 'stratifyby'):
+            spec = getattr(part.var, name)
+            if spec is None:
+                continue
+            distinct = {}
+            for value in _column_values_(tab, tuple(spec)):
+                distinct.setdefault(_value_key_(value), value)
+            out['values'][name] = list(distinct.values())
+        return out
+
+
+class DatatablePartition(Datablock):
+    """Partitions a `Datatable`'s tabs into folds according to target *fractions*.
+
+    Whole tabs are dealt to folds; nothing is repacked, and a fold
+    (`DatatablePart`) is a view of the table's own tabs. Four choices decide
+    how, each answering one question:
+
+    *groupby* -- which tabs must land in the SAME fold? A column spec,
+    ``(slice, column[, key, ...])``: tabs sharing its value (a patient's
+    slides, say) are dealt as one unit. Default: each tab alone.
+
+    *stratifyby* -- within which categories must the fractions hold? A column
+    spec: the fractions are met within each of its values (each cancer type,
+    say), not only overall. Default: overall only.
+
+    *balance* -- fractions of what? ``'rows'`` (the default): of rows, read
+    from *partition_slice*. ``'tabs'``: of tabs.
+
+    *seed* -- the order units are dealt in. Within each stratum, the units are
+    shuffled with it, then each goes to the fold furthest below its target.
+
+    A *groupby* or *stratifyby* column must hold one value throughout each tab:
+    the partition reads it whole, and a tab holding several raises
+    `NotImplementedError` -- dealing a tab's rows to different folds is a
+    capability for the future, repacking them. A tab holding none is skipped:
+    in no fold, said loudly, and recorded in ``summary``. A group must lie in
+    one stratum.
+
+    *method* ``'largest_first'`` is the partition from before these choices:
+    tabs in descending order of rows, each to the fold with the largest deficit
+    -- no groups, no strata, no seed. Its builds are reached by a
+    specialization, and it takes none of the four.
+
+    Topics: ``tabs`` -- one list of tab indices per fold, which the folds read;
+    ``summary`` -- per fold its tags and counts (tabs, rows, per stratum), and
+    the tabs skipped and why.
     """
 
-    TOPICS = {'tabs': DATAFILE('tabs.json', 'one list of tab indices per fold')}
-    SPECIALIZATIONS = [Datablock.Specialization(
-        spec={}, topics={'tabs': 'tabs.json'},
-        note="respelled only: DATAFILE for the bare filename")]
+    VERSION = 1
+
+    TOPICS = {
+        'tabs': DATAFILE('tabs.json', 'one list of tab indices per fold'),
+        'summary': DATAFILE('summary.json', 'per fold its tags and counts, and the tabs skipped'),
+    }
+    SPECIALIZATIONS = [
+        Datablock.Specialization(
+            spec={'method': 'largest_first', 'seed': 0, 'groupby': None, 'stratifyby': None, 'balance': 'rows'},
+            topics={'tabs': DATAFILE('tabs.json', 'one list of tab indices per fold')},
+            note="the partition from before method/seed/groupby/stratifyby/balance: largest_first, by rows"),
+        Datablock.Specialization(
+            spec={'method': 'largest_first', 'seed': 0, 'groupby': None, 'stratifyby': None, 'balance': 'rows'},
+            topics={'tabs': 'tabs.json'},
+            note="... and from before its topic was respelled DATAFILE"),
+    ]
 
     @dataclass
     class VAR(Datablock.VAR):
         datapoint_table: Datatable
         fractions: list[float]
         partition_slice: int | str
+        method: str = 'random'
+        seed: int = 0
+        groupby: tuple | list | None = None
+        stratifyby: tuple | list | None = None
+        balance: str = 'rows'
 
     # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        var = self.var
+        if var.method not in PARTITION_METHODS:
+            raise ValueError(f"{type(self).__name__}: unknown method {var.method!r}; expected one of {PARTITION_METHODS}")
+        if var.balance not in ('rows', 'tabs'):
+            raise ValueError(f"{type(self).__name__}: balance must be 'rows' or 'tabs', got {var.balance!r}")
+        for name in ('groupby', 'stratifyby'):
+            spec = getattr(var, name)
+            if spec is not None and not (isinstance(spec, (tuple, list)) and len(spec) >= 2
+                                         and all(isinstance(p, str) for p in spec)):
+                raise ValueError(f"{type(self).__name__}: {name} must be a column spec "
+                                 f"(slice, column[, key, ...]) of strings, got {spec!r}")
+        if var.method == 'largest_first' and (var.groupby is not None or var.stratifyby is not None
+                                              or var.balance != 'rows' or var.seed != 0):
+            raise ValueError(f"{type(self).__name__}: method='largest_first' takes no groupby, stratifyby, "
+                             f"balance or seed -- it is the partition from before them; use method='random'")
 
     def __build__(self):
         table = self.var.datapoint_table
         if table is None:
             raise ValueError(f"{self.__class__.__name__}: VAR.datapoint_table is required")
-        fractions = self.var.fractions
-        if not fractions:
+        if not self.var.fractions:
             raise ValueError(f"{self.__class__.__name__}: VAR.fractions is required")
-
-        p_slice = self.var.partition_slice
-        if isinstance(p_slice, int):
-            slice_name = table.slices()[p_slice]
+        scans = self._scan_()
+        if self.valid_topic('tabs'):
+            # Adopted -- a build from before the summary existed: its folds stand.
+            folds_tabs, skipped = json.loads(self.fs.cat(self.path('tabs'))), []
         else:
-            slice_name = p_slice
-
-        n_tabs = table.n_tabs
-        tab_rows = [table.tab(i).n_rows(slice_name) for i in range(n_tabs)]
-        total_rows = sum(tab_rows)
-
-        sum_frac = sum(fractions)
-        norm_fracs = [f / sum_frac for f in fractions]
-        target_rows = [total_rows * f for f in norm_fracs]
-        fold_rows = [0.0] * len(fractions)
-        folds_tabs = [[] for _ in range(len(fractions))]
-
-        # Longest Processing Time First (LPT) / Worst-Fit Decreasing heuristic:
-        # Sort tabs in descending order of row count to place largest tabs first,
-        # avoiding allocation bottlenecks later when remaining capacity is tight.
-        indexed_tabs = sorted(range(n_tabs), key=lambda i: tab_rows[i], reverse=True)
-        for t_idx in indexed_tabs:
-            t_rows = tab_rows[t_idx]
-            # Assign tab to the fold with the largest remaining target deficit (Worst-Fit)
-            deficits = [target_rows[k] - fold_rows[k] for k in range(len(fractions))]
-            best_fold = max(range(len(fractions)), key=lambda k: deficits[k])
-            folds_tabs[best_fold].append(t_idx)
-            fold_rows[best_fold] += t_rows
-
-        for k in range(len(folds_tabs)):
-            folds_tabs[k].sort()
-
-        with self.fs.open(self.path('tabs', ensure_dirpath=True), 'w') as f:
-            json.dump(folds_tabs, f)
+            folds_tabs, skipped = ((self._largest_first_(scans), []) if self.var.method == 'largest_first'
+                                   else self._deal_(scans))
+            with self.fs.open(self.path('tabs', ensure_dirpath=True), 'w') as f:
+                json.dump(folds_tabs, f)
+        with self.fs.open(self.path('summary', ensure_dirpath=True), 'w') as f:
+            json.dump(self._summary_(scans, folds_tabs, skipped), f, indent=1, default=str)
 
     def __read__(self, *topicpath):
         topicpath = self._normtopic_(topicpath)
-        if topicpath == ('tabs',):
-            return json.loads(self.fs.cat(self.path('tabs')))
+        if topicpath in (('tabs',), ('summary',)):
+            return json.loads(self.fs.cat(self.path(topicpath[0])))
         return super().__read__(*topicpath)
 
     # 2. Declared API ------------------------------------------------------
@@ -1887,6 +1752,120 @@ class DatatablePartition(Datablock):
     @property
     def datapoint_table(self) -> Datatable:
         return self.var.datapoint_table
+
+    @property
+    def _partition_slice_name_(self) -> str:
+        p_slice = self.var.partition_slice
+        return self.var.datapoint_table.slices()[p_slice] if isinstance(p_slice, int) else p_slice
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _scan_(self) -> list[dict]:
+        """Each tab's rows and partition-column values, read in parallel; raise for a tab holding several."""
+        table = self.var.datapoint_table
+        executor = callable_executor(
+            getattr(self, 'parallelization', None) or 'inline',
+            n_workers=getattr(self, 'n_workers', 1) or 1,
+            tag=f"SCANNING {table.n_tabs} tabs [{type(self).__name__}]")
+        scans = executor.exec_callables([TabPartitionScanCallable(self, i) for i in range(table.n_tabs)])
+        mixed = [(s['tag'], name, vals) for s in scans for name, vals in s['values'].items() if len(vals) > 1]
+        if mixed:
+            shown = "\n".join(f"  {tag}: {name} holds {len(vals)} values, e.g. {vals[:3]!r}"
+                              for tag, name, vals in mixed[:5])
+            raise NotImplementedError(
+                f"{type(self).__name__}: {len(mixed)} tab(s) hold more than one value of a partition column:\n"
+                f"{shown}\n"
+                f"A tab is dealt to one fold whole, so its groupby and stratifyby values must be one per tab. "
+                f"Dealing a tab's rows to different folds -- repacking them -- is not implemented yet.")
+        return scans
+
+    def _largest_first_(self, scans) -> list[list[int]]:
+        """The partition from before: tabs by descending rows, each to the fold with the largest deficit."""
+        fractions = self.var.fractions
+        tab_rows = [s['rows'] for s in scans]
+        total = sum(tab_rows)
+        norm = [f / sum(fractions) for f in fractions]
+        target = [total * f for f in norm]
+        fold_rows = [0.0] * len(fractions)
+        folds_tabs = [[] for _ in fractions]
+        for t_idx in sorted(range(len(tab_rows)), key=lambda i: tab_rows[i], reverse=True):
+            best = max(range(len(fractions)), key=lambda k: target[k] - fold_rows[k])
+            folds_tabs[best].append(t_idx)
+            fold_rows[best] += tab_rows[t_idx]
+        return [sorted(f) for f in folds_tabs]
+
+    def _deal_(self, scans) -> tuple[list[list[int]], list[dict]]:
+        """Units -- groups of tabs -- dealt within each stratum, in seeded order, to the fold furthest below target."""
+        fractions = [f / sum(self.var.fractions) for f in self.var.fractions]
+        skipped, units = [], {}
+        for s in scans:
+            missing = [name for name in ('groupby', 'stratifyby')
+                       if getattr(self.var, name) is not None and s['values'][name] in ([], [None])]
+            if missing:
+                skipped.append({'idx': s['idx'], 'tag': s['tag'], 'why': f"no {' or '.join(missing)} value"})
+                continue
+            group = _value_key_(s['values']['groupby'][0]) if self.var.groupby is not None else f"tab:{s['idx']}"
+            stratum = _value_key_(s['values']['stratifyby'][0]) if self.var.stratifyby is not None else ''
+            unit = units.setdefault(group, {'tabs': [], 'strata': set(), 'weight': 0})
+            unit['tabs'].append(s['idx'])
+            unit['strata'].add(stratum)
+            unit['weight'] += s['rows'] if self.var.balance == 'rows' else 1
+        if skipped:
+            self.log.warning(
+                f"{type(self).__name__}: skipping {len(skipped)} of {len(scans)} tabs, which hold no "
+                f"{'/'.join(n for n in ('groupby', 'stratifyby') if getattr(self.var, n) is not None)} "
+                f"value -- they are in no fold: {[s['tag'] for s in skipped[:10]]}"
+                + (" ..." if len(skipped) > 10 else ""))
+        straddling = {g: u['strata'] for g, u in units.items() if len(u['strata']) > 1}
+        if straddling:
+            g, strata = next(iter(straddling.items()))
+            raise ValueError(f"{type(self).__name__}: {len(straddling)} group(s) span more than one stratum, "
+                             f"e.g. group {g} in strata {sorted(strata)}: a group is dealt whole, so it must "
+                             f"lie in one stratum")
+        by_stratum = {}
+        for g in sorted(units):
+            by_stratum.setdefault(next(iter(units[g]['strata'])), []).append(g)
+        rng = np.random.default_rng(self.var.seed)
+        folds_tabs = [[] for _ in fractions]
+        for stratum in sorted(by_stratum):
+            groups = by_stratum[stratum]
+            total = sum(units[g]['weight'] for g in groups)
+            target = [total * f for f in fractions]
+            have = [0.0] * len(fractions)
+            for i in rng.permutation(len(groups)):
+                unit = units[groups[i]]
+                k = max(range(len(fractions)),
+                        key=lambda k: (target[k] - have[k]) / target[k] if target[k] > 0 else -np.inf)
+                folds_tabs[k].extend(unit['tabs'])
+                have[k] += unit['weight']
+        return [sorted(f) for f in folds_tabs], skipped
+
+    def _summary_(self, scans, folds_tabs, skipped) -> dict:
+        """What each fold holds -- tags, tabs, rows, per stratum -- and what was left out."""
+        by_idx = {s['idx']: s for s in scans}
+
+        def stratum(s):
+            vals = s['values'].get('stratifyby')
+            return None if not vals else vals[0]
+
+        folds = []
+        for k, idxs in enumerate(folds_tabs):
+            strata = {}
+            for i in idxs:
+                st = strata.setdefault(str(stratum(by_idx[i])), {'tabs': 0, 'rows': 0})
+                st['tabs'] += 1
+                st['rows'] += by_idx[i]['rows'] or 0
+            folds.append({
+                'fold': k,
+                'fraction': self.var.fractions[k],
+                'tabs': len(idxs),
+                'rows': sum(by_idx[i]['rows'] or 0 for i in idxs) if self.var.balance == 'rows' or self.var.method == 'largest_first' else None,
+                'strata': dict(sorted(strata.items())) if self.var.stratifyby is not None else None,
+                'tags': [by_idx[i]['tag'] for i in idxs],
+            })
+        return {'method': self.var.method, 'balance': self.var.balance, 'seed': self.var.seed,
+                'groupby': self.var.groupby, 'stratifyby': self.var.stratifyby,
+                'n_tabs': len(scans), 'folds': folds, 'skipped': skipped}
 
 
 class DatatablePart(Datatable):
@@ -1982,12 +1961,17 @@ class DatatablePart(Datatable):
     def datapoints_per_row(self) -> int:
         return getattr(self.var.partition.datapoint_table.var, 'datapoints_per_row')
 
-    @property
+    @forward_property(Datatab)
     def TAB(self):
+        """The partitioned table's TAB: on the class, `Datatab` -- what every part's tabs are."""
         return getattr(self.var.partition.datapoint_table, 'TAB', None)
 
-    @property
+    @forward_property({})
     def TOPICS(self):
+        """The partitioned table's TOPICS: a part is a view of its tabs, and declares nothing of its own.
+
+        On the class, with no table to ask, ``{}``.
+        """
         return self.var.partition.datapoint_table.TOPICS
 
     @property
@@ -2017,6 +2001,204 @@ class DatatablePart(Datatable):
         table = getattr(table, 'datapoint_table', None)
         return table._block_class_() if table is not None else None
 
+class DataslicesUpstream:
+    """Slice routing for a tab or table that reads its own slices and an upstream one's.
+
+    A mixin, ahead of `Datatab` or `Datatable` in the bases. `Featuretab` owns
+    ``features`` and borrows the sample slices of the `Datatab` it was built
+    from; `Featuretable` does the same over a `Datatable`. Both answer
+    `dataset()` and `data()` for either, so both need the same three things:
+    work out which block owns a requested slice, keep the caller's order, and
+    refuse a name that two blocks both claim.
+
+    The upstream is found in the VAR field ``UPSTREAM_TABS`` names -- a tab or
+    a table, whichever the block was built from.
+    """
+
+    #: The VAR field(s) that may hold the upstream tab or table, most specific
+    #: first; the first one set is the upstream.
+    UPSTREAM_TABS: tuple[str, ...] = ()
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        # As _Database_ does for shared_slice_columns, and for the same
+        # reason: a bare str is iterable, so 'idx' left unnormalised would be
+        # read as four one-letter columns.
+        self.shared_upstream_column = self._norm_shared_columns_(
+            getattr(self, 'shared_upstream_column', None)
+        )
+
+    # 2. Declared API ------------------------------------------------------
+
+    def dataset(self, *slices, upstream: list | None = None, mode='map',
+                nested=True, columns=None, shared=None, validate_shared=None,
+                skip_none=True, zip_validator=None, **kwargs):
+        """The requested slices -- this block's and the upstream block's -- zipped.
+
+        Keyed exactly as `_Database_.dataset()`, so a row is
+        ``{'features': {layer: value}, sample_slice: {column: value}, ...}``.
+
+        *shared* defaults to this block's ``shared_upstream_column``, and
+        *validate_shared* to True when it does -- so whether the features are
+        still paired with the samples they were computed from is settled by
+        whoever built the block, once, rather than by every consumer of it. A
+        column only one of the sources read carries is refused: it would be
+        compared against nothing and read as checked.
+        """
+        if mode not in ('map', 'iter'):
+            raise ValueError(
+                f"{self.__class__.__name__}.dataset: mode must be 'map' or 'iter', got {mode!r}"
+            )
+        routed = self._route_(slices, upstream)
+        shared, validate_shared = self._shared_defaults_(shared, validate_shared)
+        datasets = [owner.datastream(s_name, **kwargs) for owner, s_name, _ in routed]
+        names = [s_name for _, s_name, _ in routed]
+        per_slice_columns = [cols for _, _, cols in routed]
+        if all(c is None for c in per_slice_columns):
+            per_slice_columns = columns
+
+        zip_cls = ZipStreamingDataset if mode == 'map' else ZipIterableStreamingDatasets
+        return zip_cls(
+            *datasets,
+            names=names,
+            nested=nested,
+            columns=per_slice_columns,
+            shared=shared,
+            validate_shared=validate_shared,
+            skip_none=skip_none,
+            zip_validator=zip_validator,
+        )
+
+    def data(self, *slices, upstream: list | None = None, nested=True,
+             concat=True, **kwargs):
+        """The requested slices read whole, keyed as `dataset()` keys one row.
+
+        A table reads its own slice through `Datatable._read_slice_`,
+        which already runs over every tab, so nothing here concatenates tabs
+        by hand.
+        """
+        routed = self._route_(slices, upstream)
+        out = {}
+        for owner, s_name, cols in routed:
+            spec = (s_name, cols) if cols else s_name
+            out[s_name] = _Database_.data(owner, spec, concat=concat, **kwargs)[s_name]
+        if nested:
+            return out
+        return {(s_name, c): vals
+                for s_name, cols in out.items()
+                for c, vals in cols.items()}
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _shared_defaults_(self, shared, validate_shared):
+        """As `_Database_._shared_defaults_`, from `shared_upstream_column` first.
+
+        This block's alignment question spans two blocks -- is feature row *i*
+        the features OF sample row *i*? -- so the column that answers it is one
+        the upstream slice holds and this block carried through when it was
+        built. That is a different declaration from the columns this block's own
+        slices share, and it takes precedence over it, since a zip that reaches
+        across the two blocks is the one where drift is possible.
+        """
+        declared = getattr(self, 'shared_upstream_column', None)
+        if shared is None and declared is not None:
+            shared = declared
+            if validate_shared is None:
+                validate_shared = True
+        return super()._shared_defaults_(shared, validate_shared)
+
+    def _upstream_block_(self):
+        for attr in self.UPSTREAM_TABS:
+            block = getattr(self.var, attr, None)
+            if block is None:
+                block = getattr(self, attr, None)
+            if block is not None:
+                return block
+        return None
+
+    def available_slices(self) -> tuple[str, ...]:
+        """All slice names available on this block and its upstream chain."""
+        return tuple(self.slices()) + tuple(self._upstream_slices_().keys())
+
+    def _upstream_slices_(self) -> dict:
+        """Map of slice_name -> owner_block for all available slices across the upstream chain."""
+        owners = {}
+        curr = self._upstream_block_()
+        while curr is not None:
+            for s in curr.slices():
+                if s not in owners:
+                    owners[s] = curr
+            if hasattr(curr, '_upstream_block_'):
+                curr = curr._upstream_block_()
+            else:
+                break
+        return owners
+
+    @staticmethod
+    def _norm_items_(slice_columns):
+        """``*slice_columns`` as an ordered ``[(slice, columns | None)]`` list, as `slice_spec` reads each."""
+        items = list(slice_columns)
+        if len(items) == 1 and isinstance(items[0], (list, tuple)):
+            first = items[0]
+            # One tuple is one request -- (slice, ...) -- and one list several.
+            if isinstance(first, list) or not (len(first) >= 2 and isinstance(first[0], str)):
+                items = list(first)
+        return [slice_spec(item) for item in items]
+
+    def _route_(self, slice_columns, upstream=None):
+        """Resolve a request into an ordered ``[(block, slice, columns)]`` list.
+
+        Raises when an upstream block declares a slice this block also owns.
+        Rows are keyed by slice name, so two blocks claiming one name have no
+        way to both appear in a row -- and silently preferring either one is
+        how a caller ends up reading features while believing it asked for
+        samples.
+        """
+        what = self.__class__.__name__
+        own = tuple(self.slices())
+        up_owners = self._upstream_slices_()
+        up = tuple(up_owners.keys())
+
+        clash = sorted(set(own) & set(up))
+        if clash:
+            raise KeyError(
+                f"{what}: upstream declares slice(s) "
+                f"{clash}, which this block also owns ({list(own)}). A row is "
+                f"keyed by slice name and cannot hold both -- rename the "
+                f"upstream slice."
+            )
+
+        items = self._norm_items_(slice_columns) or [(s, None) for s in own]
+        if upstream:
+            asked = {s for s, _ in items}
+            items = items + [(str(s), None) for s in upstream if str(s) not in asked]
+
+        routed, seen = [], {}
+        for s_name, cols in items:
+            if s_name in own:
+                owner = self
+            elif s_name in up_owners:
+                owner = up_owners[s_name]
+            else:
+                raise KeyError(
+                    f"{what}: unknown slice {s_name!r}; "
+                    f"available slices are {list(own) + list(up)}"
+                )
+            if s_name in seen:
+                pos = seen[s_name]
+                _, _, prev = routed[pos]
+                merged = None if (prev is None or cols is None) else \
+                    merge_column_specs(prev + cols)
+                routed[pos] = (owner, s_name, merged)
+            else:
+                seen[s_name] = len(routed)
+                routed.append((owner, s_name, None if cols is None else merge_column_specs(cols)))
+        for owner, s_name, cols in routed:
+            owner._check_column_keys_(s_name, cols)
+        return routed
+
 
 # ═══════════════════════════════════════════════════════════════════════
 #  The names these classes used to have
@@ -2035,10 +2217,14 @@ class DatatablePart(Datatable):
 #: block at the same path; but a DatatablePartition, or the DatatablePart it
 #: builds, is now stored under its new name, and what was built under the old
 #: one is reached through a specialization, not found in place.
-DatapointBase = DatatabBase
+DatapointBase = _Database_
+#: Its name until it took the leading underscore of a base never built itself.
+DatatabBase = _Database_
+#: Its name until the slices it routes, not the tabs, named it.
+UpstreamTabSlices = DataslicesUpstream
 #: Its name until the tab, the more basic of the two, named the base. Never
 #: built itself, so its fqcn is no directory on disk and moving it moved nothing.
-DatatableBase = DatatabBase
+DatatableBase = _Database_
 DatapointTab = Datatab
 DatapointTable = Datatable
 DatapointPartition = DatatablePartition
@@ -2065,7 +2251,7 @@ DatapointFold = DatatablePart
 #: class the module it was defined in, so a subclass elsewhere is unaffected.
 _LEGACY_MODULE = 'dbx.datapoints'
 for _obj in (
-    DatatabBase,
+    _Database_,
     Datatab,
     Datatable,
     DatatablePartition,

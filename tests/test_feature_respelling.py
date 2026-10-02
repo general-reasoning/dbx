@@ -1,9 +1,9 @@
 """
 The feature blocks were respelled with the markers; what was built before is rescued.
 
-`Featuretab` and `BipolarFeaturetab` declared their slices with the SLICETOPIC
-sentinel, and `Featuretable` / `BipolarFeaturetable` inherited `Datatable`'s
-sentinel TOPICS -- which also added the TAB's slices to the table's identity.
+`Featuretab` declared its slice with the SLICETOPIC sentinel, and `Featuretable`
+inherited `Datatable`'s sentinel TOPICS -- which also added the TAB's slices to
+the table's identity.
 Respelled, all four are new identities, and each declares a Specialization that
 reconstructs the old one. These tests build under the OLD spelling -- the class
 respelled back in place, since a tab's anchor is its fqcn and a differently
@@ -47,16 +47,54 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
+def _the_old_name(monkeypatch):
+    """Featuretab and Featuretable as they were before feature_namemap was renamed feature_for_column."""
+    from dataclasses import dataclass
+    from dbx import Datablock, Datacollator
+    from dbx.backbones import ModelEvaluatorBuilder
+    from dbx.datatables import Datatab, Datatable
+    from dbx.featuretables import feature_map
+
+    @dataclass
+    class TabVAR(Datablock.VAR):
+        datapoint_tab: Datatab
+        evaluator_factory: ModelEvaluatorBuilder
+        collator: Datacollator
+        feature_namemap: dict | None = None
+        shard_size_limit_bytes: int = 1 << 26
+
+    @dataclass
+    class TableVAR(Datablock.VAR):
+        datapoint_table: Datatable
+        evaluator_factory: ModelEvaluatorBuilder
+        collator: Datacollator
+        feature_namemap: dict | None = None
+        shard_size_limit_bytes: int = 1 << 26
+
+    for cls, VAR in ((Featuretab, TabVAR), (Featuretable, TableVAR)):
+        monkeypatch.setattr(cls, 'VAR', VAR)
+        monkeypatch.setattr(cls, 'feature_for_column', property(
+            lambda self: feature_map(self.var.feature_namemap, self.var.evaluator_factory)))
+        monkeypatch.setattr(cls, 'SPECIALIZATIONS', [])
+    # A table hands its tabs the field under its new name.
+    init = Featuretab.__init__
+
+    def old_init(self, *args, spec=None, **kwargs):
+        if isinstance(spec, dict) and 'feature_for_column' in spec:
+            spec = {('feature_namemap' if k == 'feature_for_column' else k): v for k, v in spec.items()}
+        init(self, *args, spec=spec, **kwargs)
+
+    monkeypatch.setattr(Featuretab, '__init__', old_init)
+
+
 def _the_old_spelling(monkeypatch):
-    """Every feature class as it was declared before the respelling."""
+    """Every feature class as it was declared before the respelling -- and the rename."""
+    _the_old_name(monkeypatch)
     old_table_topics = {'tab_paths': DIRTOPIC, 'done': 'done'}
     monkeypatch.setattr(Featuretab, 'TOPICS', {'features': SLICETOPIC})
-    monkeypatch.setattr(BipolarFeaturetab, 'TOPICS',
-                        {'bipolar_features': SLICETOPIC, 'tab_bipolar_features': SLICETOPIC})
-    for cls in (Featuretab, BipolarFeaturetab, Featuretable, BipolarFeaturetable):
+    for cls in (Featuretab, Featuretable):
         monkeypatch.setattr(cls, 'SPECIALIZATIONS', [])
-    for cls in (Featuretable, BipolarFeaturetable):
-        monkeypatch.setattr(cls, 'TOPICS', old_table_topics)
+    monkeypatch.setattr(Featuretable, 'TOPICS', old_table_topics)
     # Featuretab declares its columns per instance; the old one declared none.
     post_init = Featuretab.__post_init__
 
@@ -67,9 +105,7 @@ def _the_old_spelling(monkeypatch):
     monkeypatch.setattr(Featuretab, '__post_init__', sentinel_post_init)
     # ... and the old builds handed the writers the columns nothing declared.
     old_columns = {
-        Featuretab: lambda self: {'features': {c: 'ndarray:float32' for c in self._feature_map}},
-        BipolarFeaturetab: lambda self: {'bipolar_features': {'bipolar_features': 'ndarray:int8'},
-                                         'tab_bipolar_features': {'tab_bipolar_features': 'ndarray:int8'}},
+        Featuretab: lambda self: {'features': {c: 'ndarray:float32' for c in self.feature_for_column}},
     }
     for cls, columns in old_columns.items():
         def slice_writers(self, slices=None, *, _writers=cls.slice_writers, _columns=columns, **kwargs):
@@ -91,7 +127,22 @@ def test_the_new_identities_reconstruct_the_old(tmp_path, monkeypatch):
         old = _features(url, ef)
         old_hash = old.hash
     assert new.hash != old_hash, "the respelling is a new identity"
-    assert new.specialization_hashes() == [old_hash]
+    assert old_hash in new.specialization_hashes()
+
+
+def test_a_feature_tab_built_before_the_rename_is_read_after_it(tmp_path, monkeypatch):
+    """topics=SAME: the rename alone, under the columns this very tab declares."""
+    url, ef = str(tmp_path), SeededEvaluatorFactory(spec=dict(capture_final=True))
+    DummySampleTab(datalake=url, tag='samples').build()
+    with monkeypatch.context() as m:
+        _the_old_name(m)
+        old = _features(url, ef).build()
+        old_hash = old.hash
+    tab = _features(url, ef)
+    assert tab.hash != old_hash
+    assert tab.specialization_hashes()[0] == old_hash
+    tab.build()                                 # adopts: nothing left to build
+    assert tab.redirected_topics() == ['features']
 
 
 def test_a_feature_tab_built_under_the_sentinel_is_read_under_the_marker(tmp_path, monkeypatch):
@@ -101,9 +152,6 @@ def test_a_feature_tab_built_under_the_sentinel_is_read_under_the_marker(tmp_pat
         _the_old_spelling(m)
         old = _features(url, ef).build()
         old_final = old.data(('features', 'final'))['features']['final']
-        bipolar_old = BipolarFeaturetab(datalake=url, tag='bipolar', spec=dict(
-            featuretab=old, feature='final', threshold=0.3)).build()
-        old_bipolar = bipolar_old.data('bipolar_features')['bipolar_features']['bipolar_features']
 
     tab = _features(url, ef)
     assert tab.redirected_topics() == [], "constructing it adopts nothing"
@@ -113,12 +161,12 @@ def test_a_feature_tab_built_under_the_sentinel_is_read_under_the_marker(tmp_pat
     assert (tab.data(('features', 'final'))['features']['final'] == old_final).all()
     assert tab.declared_columns('features') == {'final': 'ndarray:float32'}
 
-    bipolar = BipolarFeaturetab(datalake=url, tag='bipolar', spec=dict(
-        featuretab=tab, feature='final', threshold=0.3)).build()
-    assert sorted(bipolar.redirected_topics()) == ['bipolar_features', 'tab_bipolar_features']
-    assert bipolar.valid()
-    got = bipolar.data('bipolar_features')['bipolar_features']['bipolar_features']
-    assert (got == old_bipolar).all()
+
+def test_the_bipolar_blocks_reach_nothing_built_before():
+    """Their builds thresholded each tab against its OWN median, which erases
+    what sets one tab apart from another; nothing is to adopt them."""
+    assert not BipolarFeaturetab.SPECIALIZATIONS
+    assert not BipolarFeaturetable.SPECIALIZATIONS
 
 
 def test_a_feature_table_built_under_the_sentinel_is_read_under_the_marker(tmp_path, monkeypatch):
@@ -141,6 +189,8 @@ def test_a_feature_table_built_under_the_sentinel_is_read_under_the_marker(tmp_p
     # Adopts its own old build -- and, first, each tab's: the tabs moved too.
     new.build()
     assert new.valid()
+    assert all(new.tab(i).redirected_topics() == ['features'] for i in range(new.n_tabs)), \
+        "adopted, not rebuilt"
     got = new.data(('features', 'final'), concat=True)['features']['final']
     assert got.shape == old_final.shape == (10, 8)
     assert (got == old_final).all()

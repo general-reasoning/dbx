@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import functools
 import gc
 import math
 import warnings
@@ -19,12 +20,11 @@ except ImportError:
     torch = None
 
 import dbx
-from dbx.datablocks import DATADIR, DATAFILE, Datablock, Datastack, DIRTOPIC
+from dbx.datablocks import DATADIR, DATAFILE, SAME, Datablock, Datastack, DIRTOPIC, forward_property
 from dbx.backbones import ModelEvaluatorBuilder
 from dbx.datatables import (
     DATASLICE,
-    DatatabBase,
-    UpstreamTabSlices,
+    DataslicesUpstream,
     Datatab,
     Datatable,
     DatapointTableTab,
@@ -368,7 +368,24 @@ class Datacollator(Datablock):
             return np.concatenate(batch_items, axis=0)
 
 
-class Featuretab(UpstreamTabSlices, Datatab):
+def feature_map(feature_for_column, evaluator_factory) -> dict[str, str]:
+    """``{column: layer}``: which evaluator layer each ``features`` column holds.
+
+    See `Featuretab.VAR.feature_for_column`: a dict is the map itself; a list,
+    tuple or single string keeps just those layers, each under its own name;
+    None keeps every layer in ``evaluator_factory.layer_names``.
+    """
+    if feature_for_column is None:
+        layer_names = evaluator_factory.layer_names if evaluator_factory is not None else []
+        return {name: name for name in layer_names}
+    if isinstance(feature_for_column, dict):
+        return dict(feature_for_column)
+    if isinstance(feature_for_column, (list, tuple)):
+        return {str(k): str(k) for k in feature_for_column}
+    return {str(feature_for_column): str(feature_for_column)}
+
+
+class Featuretab(DataslicesUpstream, Datatab):
     """A tab storing multi-layer feature activations captured by an evaluator.
 
     Inherits access to the slices of the upstream `sampletab`. Calling `dataset()`
@@ -378,21 +395,32 @@ class Featuretab(UpstreamTabSlices, Datatab):
 
     UPSTREAM_TABS = ('datapoint_tab',)
     VERSION = 1
-    #: What a table sees of its TAB. An instance declares the columns -- one
-    #: ``ndarray:float32`` per feature, the evaluator's layers or
-    #: `feature_namemap` -- in __post_init__, since they are its spec's to say.
-    TOPICS = {'features': DATASLICE}
-    SPECIALIZATIONS = [Datablock.Specialization(
-        spec={}, topics={'features': SLICETOPIC},
-        note="respelled only: the sentinel for DATASLICE; the columns were the feature map's all along")]
+
+    @forward_property({'features': DATASLICE})
+    def TOPICS(self):
+        """One ``ndarray:float32`` column per feature: the evaluator's layers, or `feature_for_column`'s columns.
+
+        On the class -- what a table sees of its TAB -- the slice alone: the
+        columns are each tab's spec's to say.
+        """
+        return {'features': DATASLICE({column: 'ndarray:float32' for column in self.feature_for_column})}
+
+    SPECIALIZATIONS = [
+        Datablock.Specialization(
+            spec={}, topics=SAME, redirect_vars={'feature_for_column': 'feature_namemap'},
+            note="VAR field renamed from feature_namemap to feature_for_column"),
+        Datablock.Specialization(
+            spec={}, topics={'features': SLICETOPIC}, redirect_vars={'feature_for_column': 'feature_namemap'},
+            note="respelled: the sentinel for DATASLICE, and feature_namemap for feature_for_column"),
+    ]
 
     @dataclass
     class VAR(Datablock.VAR):
         datapoint_tab: Datatab
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
-        #: Which evaluator layers the `features` slice keeps, and under what
-        #: column names: ``{column: layer}``.  ``{"custom_output": "final"}``
+        #: The feature -- the evaluator layer -- for each column of the
+        #: `features` slice: ``{column: layer}``.  ``{"custom_output": "final"}``
         #: writes the evaluator's ``final`` layer as the column
         #: ``custom_output``.  None keeps every layer in
         #: ``evaluator_factory.layer_names``, each under its own name; a list,
@@ -402,7 +430,7 @@ class Featuretab(UpstreamTabSlices, Datatab):
         #: does not return is skipped at build time without complaint, so its
         #: column is declared but never written.  Being VAR, it is part of the
         #: block's identity: tabs differing only here are different blocks.
-        feature_namemap: dict[str, str] | None = None
+        feature_for_column: dict[str, str] | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -410,7 +438,7 @@ class Featuretab(UpstreamTabSlices, Datatab):
     # TODO: carry `shared_upstream_column` through into the features slice at
     # build time, so the cross-block alignment check has something to compare.
     #
-    # As it stands the features slice declares `_feature_map`'s columns and
+    # As it stands the features slice declares `feature_for_column`'s columns and
     # nothing else. A stock feature tab
     # therefore has no column in common with its upstream sample slices, and
     # setting shared_upstream_column= on one is refused at read time ("carried
@@ -461,20 +489,6 @@ class Featuretab(UpstreamTabSlices, Datatab):
         self.device_batch_size = getattr(self, 'device_batch_size', 64)
         self.streaming = getattr(self, 'streaming', False)
         self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
-        factory = self.var.evaluator_factory
-        layer_names = factory.layer_names if factory is not None else []
-        namemap = self.var.feature_namemap
-        if namemap is not None:
-            if isinstance(namemap, dict):
-                self._feature_map = dict(namemap)
-            elif isinstance(namemap, (list, tuple)):
-                self._feature_map = {str(k): str(k) for k in namemap}
-            else:
-                self._feature_map = {str(namemap): str(namemap)}
-        else:
-            self._feature_map = {name: name for name in layer_names}
-        self.TOPICS = {'features': DATASLICE(
-            {col_name: 'ndarray:float32' for col_name in self._feature_map})}
 
     def __build__(self):
         if self.streaming:
@@ -504,7 +518,7 @@ class Featuretab(UpstreamTabSlices, Datatab):
                 batch_len = n - m
                 batch_features = {
                     col_name: result[layer_name].cpu().numpy().astype(np.float32)
-                    for col_name, layer_name in self._feature_map.items()
+                    for col_name, layer_name in self.feature_for_column.items()
                     if layer_name in result
                 }
                 for i in range(batch_len):
@@ -543,7 +557,7 @@ class Featuretab(UpstreamTabSlices, Datatab):
                 batch_len = len(batch)
                 batch_features = {
                     col_name: result[layer_name].cpu().numpy().astype(np.float32)
-                    for col_name, layer_name in self._feature_map.items()
+                    for col_name, layer_name in self.feature_for_column.items()
                     if layer_name in result
                 }
                 for i in range(batch_len):
@@ -558,26 +572,35 @@ class Featuretab(UpstreamTabSlices, Datatab):
     def __len__(self) -> int:
         return len(self.var.datapoint_tab)
 
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def feature_columns(self) -> list[str]:
+        """The columns of the ``features`` slice, in declared order."""
+        return list(self.feature_for_column)
+
+    @functools.cached_property
+    def feature_for_column(self) -> dict[str, str]:
+        """``{column: layer}``, from `VAR.feature_for_column` and the evaluator's layers."""
+        return feature_map(self.var.feature_for_column, self.var.evaluator_factory)
+
     # 4. Helpers -----------------------------------------------------------
 
 
-class Featuretable(UpstreamTabSlices, Datatable):
+class Featuretable(DataslicesUpstream, Datatable):
     """A table of `Featuretab` blocks built across a `Datatable`."""
 
     TAB = Featuretab
     UPSTREAM_TABS = ('datapoint_table',)
     VERSION = 1
-    #: The TOPICS it had while Datatable's included ``tab_paths``: kept, so that its identity does not move.
-    TOPICS = Datatable.TAB_PATHS_TOPICS
-    SPECIALIZATIONS = Datatable.TAB_PATHS_SPECIALIZATIONS
 
     @dataclass
     class VAR(Datablock.VAR):
         datapoint_table: Datatable
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
-        #: Passed unchanged to every tab; see `Featuretab.VAR.feature_namemap`.
-        feature_namemap: dict | None = None
+        #: Passed unchanged to every tab; see `Featuretab.VAR.feature_for_column`.
+        feature_for_column: dict | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -613,18 +636,6 @@ class Featuretable(UpstreamTabSlices, Datatable):
         self.device_batch_size = getattr(self, 'device_batch_size', 64)
         self.devices = getattr(self, 'devices', None) or ["cpu"]
         self._devices = self.devices
-        factory = self.var.evaluator_factory
-        layer_names = factory.layer_names if factory is not None else []
-        namemap = self.var.feature_namemap
-        if namemap is not None:
-            if isinstance(namemap, dict):
-                self._feature_map = dict(namemap)
-            elif isinstance(namemap, (list, tuple)):
-                self._feature_map = {str(k): str(k) for k in namemap}
-            else:
-                self._feature_map = {str(namemap): str(namemap)}
-        else:
-            self._feature_map = {name: name for name in layer_names}
 
     def __tab__(self, idx: int, device: str | None = None, tag=None) -> Featuretab:
         datapoint_tab = self.var.datapoint_table.tab(idx)
@@ -632,7 +643,7 @@ class Featuretable(UpstreamTabSlices, Datatable):
             datapoint_tab=datapoint_tab.quote(),
             evaluator_factory=self.spec['evaluator_factory'],
             collator=self.spec.get('collator'),
-            feature_namemap=self.spec.get('feature_namemap'),
+            feature_for_column=self.spec.get('feature_for_column'),
             shard_size_limit_bytes=self.spec.get('shard_size_limit_bytes', 1 << 26),
         )
         tab_specs = (getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
@@ -678,95 +689,174 @@ class Featuretable(UpstreamTabSlices, Datatable):
     # 3. Accessors ---------------------------------------------------------
 
     @property
+    def feature_columns(self) -> list[str]:
+        """The columns of every tab's ``features`` slice, in declared order."""
+        return list(self.feature_for_column)
+
+    @functools.cached_property
+    def feature_for_column(self) -> dict[str, str]:
+        """``{column: layer}``, as each of its tabs has it."""
+        return feature_map(self.var.feature_for_column, self.var.evaluator_factory)
+
+    @property
     def n_tabs(self) -> int:
         return self.var.datapoint_table.n_tabs
 
 
-class BipolarFeaturetab(UpstreamTabSlices, Datatab):
-    """Bipolar (median-thresholded) encoding of a `Featuretab`.
+class BipolarFeaturetab(DataslicesUpstream, Datatab):
+    """Bipolar encoding of a `Featuretab`'s feature columns against a calibration.
 
-    Maps continuous features to ``{-1, +1}^d`` via ``sign(features - median)``,
-    and computes a tab-level bipolar signature ``{-1, 0, +1}^d`` by thresholding the mean.
+    Each column is mapped to ``{-1, +1}`` elementwise: ``+1`` where the value
+    is at or above the column's median, ``-1`` below it. The median is the
+    whole-table one in ``VAR.stats_probe`` -- a `FeatureStatsProbe` over a
+    calibration table, usually another fold than the one this tab is in -- and
+    the values are normalized first exactly as that probe normalized them
+    before taking it (`normalize_features` with its ``normalization``, one
+    column at a time), so value and median are in the same space.
+
+    Not the tab's own median. Centring every tab on itself makes each column
+    exactly half ``+1`` within every tab, which erases whatever sets one tab
+    apart from another -- for slides, the very signal a slide-level probe is
+    after -- and the encoding then describes only variation within a tab.
+
+    One ``bipolar`` column per encoded feature column, of the same name, so
+    ``('bipolar', c)`` is the encoding of ``('features', c)``. Every column of
+    the featuretab's ``features`` slice by default; ``VAR.features`` names a
+    subset. The columns are declared per instance, from the featuretab's own
+    declaration.
     """
 
     UPSTREAM_TABS = ('featuretab',)
-    VERSION = 1
-    TOPICS = {
-        'bipolar_features': DATASLICE(bipolar_features='ndarray:int8'),
-        'tab_bipolar_features': DATASLICE(tab_bipolar_features='ndarray:int8'),
-    }
-    SPECIALIZATIONS = [Datablock.Specialization(
-        spec={}, topics={'bipolar_features': SLICETOPIC, 'tab_bipolar_features': SLICETOPIC},
-        note="respelled only: the sentinels for the DATASLICEs the build always wrote")]
+    VERSION = 2
+
+    @forward_property({'bipolar': DATASLICE})
+    def TOPICS(self):
+        """One ``ndarray:int8`` column per encoded feature column, of the same name.
+
+        On the class -- what a table sees of its TAB -- the slice alone.
+        """
+        return {'bipolar': DATASLICE(**{c: 'ndarray:int8' for c in self.feature_columns})}
 
     @dataclass
     class VAR(Datablock.VAR):
         featuretab: Featuretab
-        feature: str = 'final'
-        threshold: float = 0.5
-        ternarize: bool = False
+        stats_probe: 'FeatureStatsProbe'
+        features: list | None = None
         datapoints_per_row: int = 1
 
     # 1. Protocol and hooks ------------------------------------------------
 
+    def __post_init__(self):
+        super().__post_init__()
+        self._check_stats_probe_()
+
     def __build__(self):
-        feature = self.var.feature
-        res = self.featuretab.data(('features', feature), concat=True)
-        raw_data = _extract_pair_data_(res, ('features', feature))
+        probe = self.stats_probe
+        mode = probe.var.normalization
+        columns = self.feature_columns
+        data = self.featuretab.data(('features', list(columns)), concat=True)['features']
 
-        if hasattr(raw_data, 'numpy'):
-            features = raw_data.numpy()
-        else:
-            features = np.array(raw_data)
+        from dbx.probes import normalize_features
+        bipolar, counts = {}, set()
+        for c in columns:
+            x = np.asarray(data[c]).astype(np.float64)
+            if mode is not None:
+                x = np.asarray(normalize_features(x, mode))
+            if x.ndim == 1:
+                x = x.reshape(-1, 1)
+            if np.isnan(x).any():
+                raise ValueError(f"{type(self).__name__}: column 'features.{c}' of {self.featuretab.tag!r} "
+                                 f"holds NaN, which is neither above nor below a median")
+            median = np.asarray(probe.stat('median', ('features', c)))
+            if median.shape != x.shape[1:]:
+                raise ValueError(
+                    f"{type(self).__name__}: column 'features.{c}' has samples of shape "
+                    f"{x.shape[1:]}, but the median in {probe.anchorkeypath} has shape "
+                    f"{median.shape}: the probe describes a different feature."
+                )
+            bipolar[c] = np.where(x >= median, 1, -1).astype(np.int8)
+            counts.add(len(x))
+        del data
 
-        median = np.median(features, axis=0)
-
-        _bipolar = np.sign(features - median).astype(np.int8)
-        _bipolar[_bipolar == 0] = 1
-
-        if self.var.ternarize:
-            tab_mean = _bipolar.astype(np.float32).mean(axis=0)
-            uncertain = (np.round(tab_mean).astype(np.int8) == 0)
-            _bipolar[:, uncertain] = 0
-
-        tab_mean = _bipolar.astype(np.float32).mean(axis=0)
-        thresh = self.var.threshold
-        tab_bipolar = np.where(np.abs(tab_mean) >= thresh, np.sign(tab_mean), 0).astype(np.int8)
-
+        if len(counts) != 1:
+            raise ValueError(f"{type(self).__name__}: feature columns disagree on row count: {sorted(counts)}")
         with self.slice_writers() as writers:
-            for i in range(len(_bipolar)):
-                writers['bipolar_features'].write({'bipolar_features': _bipolar[i]})
-                writers['tab_bipolar_features'].write({'tab_bipolar_features': tab_bipolar})
+            for i in range(counts.pop()):
+                writers['bipolar'].write({c: bipolar[c][i] for c in columns})
         return self
 
     def __len__(self) -> int:
         return len(self.featuretab)
 
-    # 2. Accessors ---------------------------------------------------------
+    # 3. Accessors ---------------------------------------------------------
 
     @property
     def featuretab(self) -> Featuretab:
         return self.var.featuretab
 
+    @property
+    def stats_probe(self):
+        return self.var.stats_probe
 
-class BipolarFeaturetable(UpstreamTabSlices, Datatable):
-    """A table of `BipolarFeaturetab` blocks built over a `Featuretable`."""
+    @property
+    def feature_columns(self) -> list[str]:
+        """The featuretab columns encoded here, in the featuretab's declared order."""
+        declared = self.featuretab.declared_columns('features')
+        if not declared:
+            raise ValueError(
+                f"{type(self).__name__}: {self.featuretab.anchorkeypath} declares no columns "
+                f"for its 'features' slice, so there is nothing to say which to encode. "
+                f"Encode a featuretab whose slice is a declared DATASLICE."
+            )
+        if self.var.features is None:
+            return list(declared)
+        unknown = [c for c in self.var.features if c not in declared]
+        if unknown:
+            raise ValueError(f"{type(self).__name__}: features {unknown} are not columns of "
+                             f"the featuretab's 'features' slice {list(declared)}")
+        return [c for c in declared if c in self.var.features]
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _check_stats_probe_(self) -> None:
+        """Refuse, at construction, a stats probe that cannot calibrate these columns."""
+        from dbx.probes import FeatureStatsProbe
+        probe = self.stats_probe
+        if not isinstance(probe, FeatureStatsProbe):
+            raise TypeError(f"{type(self).__name__}: stats_probe must be a FeatureStatsProbe, "
+                            f"got {type(probe).__name__}")
+        missing = [c for c in self.feature_columns if ('features', c) not in probe.column_paths]
+        if missing:
+            raise ValueError(
+                f"{type(self).__name__}: stats_probe {probe.anchorkeypath} has no median for "
+                f"feature column(s) {missing}; it describes {probe.column_paths}. Give it a "
+                f"collator whose signals include {[('features', c) for c in missing]}."
+            )
+
+
+class BipolarFeaturetable(DataslicesUpstream, Datatable):
+    """A table of `BipolarFeaturetab` blocks built over a `Featuretable`.
+
+    Every tab is calibrated by the one ``stats_probe``: that is what makes the
+    tabs' encodings comparable with each other.
+    """
 
     TAB = BipolarFeaturetab
     UPSTREAM_TABS = ('featuretable',)
-    VERSION = 1
-    #: The TOPICS it had while Datatable's included ``tab_paths``: kept, so that its identity does not move.
-    TOPICS = Datatable.TAB_PATHS_TOPICS
-    SPECIALIZATIONS = Datatable.TAB_PATHS_SPECIALIZATIONS
+    VERSION = 2
 
     @dataclass
     class VAR(Datatable.VAR):
         featuretable: Featuretable = None
-        feature: str = 'final'
-        threshold: float = 0.5
-        ternarize: bool = False
+        stats_probe: 'FeatureStatsProbe' = None
+        features: list | None = None
 
     # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.var.featuretable is None or self.var.stats_probe is None:
+            raise ValueError(f"{type(self).__name__}: VAR.featuretable and VAR.stats_probe are both required")
 
     def __tab__(self, idx: int, tag=None, **kwargs) -> BipolarFeaturetab:
         featuretab = self.var.featuretable.tab(idx)
@@ -780,9 +870,8 @@ class BipolarFeaturetable(UpstreamTabSlices, Datatable):
             verbose=False,
             spec=dict(
                 featuretab=dbx.quote(featuretab),
-                feature=self.var.feature,
-                threshold=self.var.threshold,
-                ternarize=self.var.ternarize,
+                stats_probe=dbx.quote(self.var.stats_probe),
+                features=self.var.features,
             ),
             SPECIALIZATIONS=tab_specs,
             revision=self.revision,
@@ -797,6 +886,10 @@ class BipolarFeaturetable(UpstreamTabSlices, Datatable):
     @property
     def featuretable(self) -> Featuretable:
         return self.var.featuretable
+
+    @property
+    def stats_probe(self):
+        return self.var.stats_probe
 
     @property
     def n_tabs(self) -> int:

@@ -132,6 +132,35 @@ def test_datafeature_tab_build_and_slice_inheritance(tmp_path):
     assert sample_0["features"]["final"].shape == (8,)
 
 
+def _stats_probe(url, feature_block, tag, *, signals=(("features", "final"),), normalization=None):
+    """The calibration a bipolar block thresholds against: a stats probe's medians."""
+    from dbx.probes import FeatureStatsProbe
+    return FeatureStatsProbe(
+        datalake=url,
+        spec=dict(
+            feature_table=feature_block,
+            collator=Datacollator(spec=dict(signals=list(signals))),
+            normalization=normalization,
+        ),
+        tag=tag,
+    )
+
+
+def _feature_table(url, tag, **spec):
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag=f"{tag}_samples").build()
+    return DatafeatureTable(
+        datalake=url,
+        spec=dict(
+            datapoint_table=sampletable,
+            evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+            collator=sample_collator(),
+            **spec,
+        ),
+        devices=["cpu"],
+        tag=tag,
+    ).build()
+
+
 def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
@@ -148,59 +177,33 @@ def test_bipolar_datafeature_tab_build_and_slice_inheritance(tmp_path):
         device="cpu",
         tag="features_1",
     ).build()
+    stats = _stats_probe(url, featuretab, "stats_1").build()
 
     bipolar_tab = BipolarDatafeatureTab(
         datalake=url,
-        spec=dict(
-            featuretab=featuretab,
-            feature="final",
-            threshold=0.3,
-        ),
+        spec=dict(featuretab=featuretab, stats_probe=stats),
         tag="bipolar_1",
     ).build()
 
     assert bipolar_tab.valid()
-    assert set(bipolar_tab.slices()) == {"bipolar_features", "tab_bipolar_features"}
-    assert set(bipolar_tab.available_slices()) == {
-        "bipolar_features",
-        "tab_bipolar_features",
-        "features",
-        "samples",
-        "labels",
-    }
+    assert set(bipolar_tab.slices()) == {"bipolar"}
+    assert bipolar_tab.declared_columns("bipolar") == {"final": "ndarray:int8"}
+    assert set(bipolar_tab.available_slices()) == {"bipolar", "features", "samples", "labels"}
 
-    # Test reading data across bipolar, raw features, and original sample labels
-    b_data = bipolar_tab.data("bipolar_features", ("features", "final"), "labels")
-    bipolar = b_data["bipolar_features"]["bipolar_features"]
+    # Reading across the encoding, the raw features, and the original labels.
+    b_data = bipolar_tab.data(("bipolar", "final"), ("features", "final"), "labels")
+    bipolar = b_data["bipolar"]["final"]
+    features = b_data["features"]["final"]
     assert bipolar.shape == (10, 8)
     assert set(np.unique(bipolar)).issubset({-1, 1})
-    assert b_data["features"]["final"].shape == (10, 8)
+    median = stats.stat("median", ("features", "final"))
+    np.testing.assert_array_equal(bipolar, np.where(features >= median, 1, -1))
     assert len(b_data["labels"]["labels"]) == 10
 
 
 def test_datafeature_table_and_bipolar_table(tmp_path):
     url = str(tmp_path)
-
-    # 1. Build sample table with 2 tabs
-    sampletable = DummySampleTable(
-        datalake=url,
-        spec=dict(samples_per_tab=5),
-        tag="sample_table",
-    ).build()
-
-    eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
-
-    # 2. Build feature table
-    featuretable = DatafeatureTable(
-        datalake=url,
-        spec=dict(
-            datapoint_table=sampletable,
-            evaluator_factory=eval_factory,
-            collator=sample_collator(),
-        ),
-        devices=["cpu"],
-        tag="feature_table",
-    ).build()
+    featuretable = _feature_table(url, "feature_table")
 
     assert featuretable.n_tabs == 2
     assert set(featuretable.slices()) == {"features"}
@@ -211,30 +214,103 @@ def test_datafeature_table_and_bipolar_table(tmp_path):
     label_data = featuretable.data("labels", concat=True)
     assert len(label_data["labels"]["labels"]) == 10
 
-    # 3. Build bipolar feature table
+    stats = _stats_probe(url, featuretable, "stats_table").build()
     bipolar_table = BipolarDatafeatureTable(
         datalake=url,
-        spec=dict(
-            featuretable=featuretable,
-            feature="final",
-        ),
+        spec=dict(featuretable=featuretable, stats_probe=stats),
         devices=["cpu"],
         tag="bipolar_table",
     ).build()
 
     assert bipolar_table.n_tabs == 2
-    assert set(bipolar_table.available_slices()) == {
-        "bipolar_features",
-        "tab_bipolar_features",
-        "features",
-        "samples",
-        "labels",
-    }
+    assert set(bipolar_table.available_slices()) == {"bipolar", "features", "samples", "labels"}
 
-    b_tbl_data = bipolar_table.data("bipolar_features", ("features", "final"), "labels")
-    assert b_tbl_data["bipolar_features"]["bipolar_features"].shape == (10, 8)
+    b_tbl_data = bipolar_table.data("bipolar", ("features", "final"), "labels")
+    assert b_tbl_data["bipolar"]["final"].shape == (10, 8)
     assert b_tbl_data["features"]["final"].shape == (10, 8)
     assert len(b_tbl_data["labels"]["labels"]) == 10
+
+
+def test_bipolar_thresholds_against_the_calibration_not_the_tabs_own_median(tmp_path):
+    """Every tab is encoded against the one table-wide median.
+
+    The samples grow with their index, so the table's two tabs sit on either
+    side of the table median. Against its own median each tab would come out
+    exactly half +1 in every column -- the difference between the tabs gone.
+    """
+    url = str(tmp_path)
+    featuretable = _feature_table(url, "calib_features")
+    stats = _stats_probe(url, featuretable, "calib_stats").build()
+    bipolar_table = BipolarDatafeatureTable(
+        datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="calib_bipolar",
+    ).build()
+
+    median = stats.stat("median", ("features", "final"))
+    tab_means = []
+    for i in range(2):
+        tab = bipolar_table.tab(i)
+        d = tab.data(("bipolar", "final"), ("features", "final"))
+        np.testing.assert_array_equal(d["bipolar"]["final"], np.where(d["features"]["final"] >= median, 1, -1))
+        tab_means.append(d["bipolar"]["final"].mean(axis=0))
+    assert not np.allclose(tab_means[0], tab_means[1]), "the tabs' encodings still tell them apart"
+
+
+def test_bipolar_normalizes_as_its_stats_probe_did(tmp_path):
+    from dbx.probes import normalize_features
+    url = str(tmp_path)
+    featuretable = _feature_table(url, "norm_features")
+    stats = _stats_probe(url, featuretable, "norm_stats", normalization="l2").build()
+    bipolar_table = BipolarDatafeatureTable(
+        datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="norm_bipolar",
+    ).build()
+
+    d = bipolar_table.data(("bipolar", "final"), ("features", "final"), concat=True)
+    x = normalize_features(d["features"]["final"].astype(np.float64), "l2")
+    median = stats.stat("median", ("features", "final"))
+    np.testing.assert_array_equal(d["bipolar"]["final"], np.where(x >= median, 1, -1))
+
+
+def test_bipolar_encodes_every_feature_column_or_the_ones_named(tmp_path):
+    url = str(tmp_path)
+    featuretable = _feature_table(url, "two_features", feature_for_column={"a": "final", "b": "final"})
+    stats = _stats_probe(url, featuretable, "two_stats",
+                         signals=(("features", "a"), ("features", "b"))).build()
+
+    every = BipolarDatafeatureTable(
+        datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="every")
+    assert every.tab(0).declared_columns("bipolar") == {"a": "ndarray:int8", "b": "ndarray:int8"}
+
+    only_b = BipolarDatafeatureTable(
+        datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats, features=["b"]),
+        tag="only_b").build()
+    assert only_b.tab(0).declared_columns("bipolar") == {"b": "ndarray:int8"}
+    assert only_b.data(("bipolar", "b"), concat=True)["bipolar"]["b"].shape == (10, 8)
+    assert only_b.hash != every.hash
+
+    with pytest.raises(ValueError, match="not columns"):
+        BipolarDatafeatureTable(
+            datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats, features=["c"]),
+            tag="nope").tab(0)
+
+
+def test_bipolar_refuses_a_stats_probe_without_the_median_it_needs(tmp_path):
+    url = str(tmp_path)
+    featuretable = _feature_table(url, "short_features")
+    stats = _stats_probe(url, featuretable, "short_stats", signals=(("samples", "samples"),))
+    with pytest.raises(ValueError, match="has no median for feature column"):
+        BipolarDatafeatureTable(
+            datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="short").tab(0)
+
+
+def test_bipolar_refuses_to_build_against_an_unbuilt_stats_probe(tmp_path):
+    url = str(tmp_path)
+    featuretable = _feature_table(url, "unbuilt_features")
+    stats = _stats_probe(url, featuretable, "unbuilt_stats")
+    tab = BipolarDatafeatureTable(
+        datalake=url, spec=dict(featuretable=featuretable, stats_probe=stats), tag="unbuilt").tab(0)
+    # build() asks its VAR blocks before building, and names the one that is not.
+    with pytest.raises(ValueError, match="'stats_probe': False"):
+        tab.build()
 
 
 def test_custom_features_mapping(tmp_path):
@@ -247,7 +323,7 @@ def test_custom_features_mapping(tmp_path):
         spec=dict(
             datapoint_tab=sampletab,
             evaluator_factory=eval_factory,
-            feature_namemap={"custom_output": "final"},
+            feature_for_column={"custom_output": "final"},
             collator=sample_collator(),
         ),
         device="cpu",
@@ -499,7 +575,7 @@ def test_an_upstream_slice_named_features_is_refused(tmp_path):
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
             collator=Datacollator(spec=dict(signals=[("features", "samples")],
                                             labels=[("labels", "labels")])),
-            feature_namemap={"final": "final"},
+            feature_for_column={"final": "final"},
         ),
         device="cpu",
         tag="clash_features",

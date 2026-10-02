@@ -25,6 +25,7 @@ import copy
 from dataclasses import dataclass, field, fields, asdict, replace
 import datetime
 import functools
+import itertools
 import gc
 import hashlib
 import inspect
@@ -1414,6 +1415,11 @@ class Datablock:
         #: reconstructs the historical identity under the old key name so
         #: the hash matches what was built before the rename.
         redirect_vars: dict | None = field(default=None, kw_only=True)
+        #: How this block's nested VAR blocks rendered then: ``{field: their
+        #: Specialization}``, each one of THAT block's own -- never written by
+        #: hand, but composed when a block looks for its past (see
+        #: `_specialization_variants_`). A field not named renders as it is now.
+        nested: dict | None = field(default=None, kw_only=True)
         #: Why the coincidence holds. Last -- and keyword-only, so that it is
         #: last in a subclass's constructor too, after its BLOCK or TAB.
         note: str = field(default='', kw_only=True)
@@ -1477,6 +1483,15 @@ class Datablock:
                 if not isinstance(rv, dict):
                     raise TypeError(f"Specialization redirect_vars= must be a dict or None, got {rv!r}")
                 object.__setattr__(self, 'redirect_vars', dict(rv))
+            nested = self.nested
+            if nested is not None:
+                if not isinstance(nested, dict):
+                    raise TypeError(f"Specialization nested= must be a dict or None, got {nested!r}")
+                nested = {str(k): (Datablock.Specialization.from_record(v) if isinstance(v, dict) else v)
+                          for k, v in nested.items()}
+                if not all(isinstance(v, Datablock.Specialization) for v in nested.values()):
+                    raise TypeError(f"Specialization nested= maps fields to Specializations, got {nested!r}")
+                object.__setattr__(self, 'nested', nested or None)
 
 
         def __hash__(self):
@@ -1500,6 +1515,7 @@ class Datablock:
                     + (f", legacy={list(self.legacy)!r}" if self.legacy is not None else "")
                     + (f", UNSAFE_redirect_all_topics={self.UNSAFE_redirect_all_topics!r}" if self.UNSAFE_redirect_all_topics else "")
                     + (f", redirect_vars={self.redirect_vars!r}" if self.redirect_vars else "")
+                    + (f", nested={self.nested!r}" if self.nested else "")
                     + ''.join(f", {n}={v!r}" for n, v in self._extra_fields_() if v is not SAME)
                     + (f", note={self.note!r}" if self.note else "") + ")")
 
@@ -1522,6 +1538,8 @@ class Datablock:
                 d['redirect_topics'] = list(self.redirect_topics)
             if self.redirect_vars is not None:
                 d['redirect_vars'] = dict(self.redirect_vars)
+            if self.nested:
+                d['nested'] = {k: v.to_dict() for k, v in self.nested.items()}
             d.update((n, v) for n, v in self._extra_fields_() if v is not SAME)
             if self.note:
                 d['note'] = self.note
@@ -1572,7 +1590,7 @@ class Datablock:
         #: Datastack's BLOCK, a Datatable's TAB -- are recorded and keyed too.
         _base_fields = frozenset({'spec', 'topics', 'version', 'note', 'anchor',
                                   'legacy', 'UNSAFE_redirect_all_topics', 'redirect_topics',
-                                  'redirect_vars'})
+                                  'redirect_vars', 'nested'})
 
         def _extra_fields_(self):
             """``(name, value)`` of the fields a subclass adds, in declaration order."""
@@ -1599,6 +1617,7 @@ class Datablock:
                     self.UNSAFE_redirect_all_topics,
                     tuple(self.redirect_topics) if self.redirect_topics is not None else None,
                     tuple(sorted(self.redirect_vars.items())) if self.redirect_vars is not None else None,
+                    tuple(sorted((k, v.key) for k, v in self.nested.items())) if self.nested else None,
                     # A subclass's field at SAME overrides nothing: that
                     # specialization IS the plain one, and keys as it.
                     tuple((n, v) for n, v in self._extra_fields_() if v is not SAME))
@@ -1652,7 +1671,7 @@ class Datablock:
             sp = self.get('specialization')
             if sp is not None:
                 for f in ('spec', 'topics', 'version', 'anchor', 'legacy', 'UNSAFE_redirect_all_topics',
-                          'redirect_topics', 'redirect_vars', 'note'):
+                          'redirect_topics', 'redirect_vars', 'nested', 'note'):
                     object.__setattr__(self, f, getattr(sp, f, None))
 
         def __getattr__(self, name):
@@ -3892,7 +3911,7 @@ class Datablock:
     def signaturestr(self, *, deslash: bool = False, legacy: bool | None = None,
                   legacy_typing: bool | None = None,
                   legacy_signature: bool | None = None, pretty: bool = False,
-                  omit=(), redirect_vars=None):
+                  omit=(), redirect_vars=None, nested=None):
         """The base identity string that `typestr` -- and hence `hash` and `code` -- is built from.
 
         Two independent opt-outs, because they were two different things
@@ -3922,13 +3941,16 @@ class Datablock:
             import pprint
             return pprint.pformat(
                 self.signature(legacy_typing=legacy_typing, legacy_signature=norm,
-                                   deslash=deslash, omit=omit, redirect_vars=redirect_vars),
+                                   deslash=deslash, omit=omit, redirect_vars=redirect_vars, nested=nested),
                 indent=2, width=120)
         if legacy_typing:
             #CAUTION! This branch is what already-built blocks hashed with, and
             # is the pre-change code verbatim. The NORM flag alone decides root
             # kwargs and quoting, exactly as before -- so a relocatable block
             # pinned for typing stays relocatable.
+            if nested:
+                raise ValueError(f"{type(self).__name__}: nested specializations compose only in the typed "
+                                 f"rendering, not the legacy one")
             sig_spec = self.__expand_spec__('signature', legacy=norm, legacy_typing=True)
             if omit:
                 sig_spec = {k: v for k, v in sig_spec.items() if k not in set(omit)}
@@ -3942,7 +3964,7 @@ class Datablock:
             # Root kwargs only on explicit opt-in: signature and hash are
             # relocatable, and nothing about typing changes that.
             root = ''.join(f"{k}={v!r}, " for k, v in self._identity_rootkwargs_.items()) if norm else ''
-            sig = f"({root}spec={self._typed_specdict_(legacy=False, omit=omit, redirect_vars=redirect_vars)!r})"
+            sig = f"({root}spec={self._typed_specdict_(legacy=False, omit=omit, redirect_vars=redirect_vars, nested=nested)!r})"
         if deslash:
             sig = sig.replace('\\', '')
         self.log.detailed(f"signature: ------------> legacy={legacy}")
@@ -4056,7 +4078,7 @@ class Datablock:
     def signature(self, *, legacy: 'bool | None' = None,
                       legacy_typing: 'bool | None' = None,
                       legacy_signature: 'bool | None' = None,
-                      deslash: bool = False, omit=(), redirect_vars=None) -> dict:
+                      deslash: bool = False, omit=(), redirect_vars=None, nested=None) -> dict:
         """The signature as a nested dict of correctly-typed values.
 
         Built from ``var`` via `_typed_specdict_`, so an ``int`` field comes
@@ -4076,7 +4098,7 @@ class Datablock:
                 legacy_typing=True, legacy_signature=legacy_signature, deslash=deslash,
                 omit=omit, redirect_vars=redirect_vars))
             return {k: self._structure_from_signature_text_(v) for k, v in parsed.items()}
-        return {'spec': self._typed_specdict_(legacy=False, omit=omit, redirect_vars=redirect_vars)}
+        return {'spec': self._typed_specdict_(legacy=False, omit=omit, redirect_vars=redirect_vars, nested=nested)}
 
     def sig(self, *, legacy: 'bool | None' = None, deslash: bool = False) -> dict:
         return self.signature(legacy=legacy, deslash=deslash)
@@ -4302,6 +4324,7 @@ class Datablock:
         omit, topics = ((), None) if specialization is None else (
             tuple(specialization.spec), list(self._specialization_topics_(specialization)))
         redirect_vars = getattr(specialization, 'redirect_vars', None) if specialization is not None else None
+        nested = getattr(specialization, 'nested', None) if specialization is not None else None
         version = self.version
         if specialization is not None and specialization.version is not ABSENT:
             version = specialization.version
@@ -4334,7 +4357,7 @@ class Datablock:
         # building the logger name out of self.key and caching _hash on the way.
         parts = [self.signaturestr(deslash=deslash, legacy_typing=legacy_typing,
                                 legacy_signature=legacy_signature, omit=omit,
-                                redirect_vars=redirect_vars)]
+                                redirect_vars=redirect_vars, nested=nested)]
         # The narrower block's version when the specialization names one, this
         # class's otherwise. Taking it from the class unconditionally was what
         # made VERSION unbumpable while a specialization was live: the
@@ -5157,7 +5180,7 @@ class Datablock:
         return value if isinstance(parsed, str) else parsed
 
     def _typed_specdict_(self, *, legacy: 'bool | None' = None, omit=(),
-                         redirect_vars=None) -> dict:
+                         redirect_vars=None, nested=None) -> dict:
         """The spec as real Python values -- ints as ints, blocks as sub-dicts.
 
         Built from ``self.var``, NOT by parsing the rendered signature. The
@@ -5171,10 +5194,20 @@ class Datablock:
         *redirect_vars*, when given, is a ``{current_name: historical_name}``
         mapping.  Each current field is emitted under its historical name, and
         the keys are sorted by historical name so the rendered spec matches the
-        identity of the build before the rename.
+        identity of the build before the rename. A DOTTED current name,
+        ``'columns.signals'``, names an entry inside a field's dict value: it is
+        moved out to the top level under its historical name -- a restructure,
+        such as fields gathered into one dict, rendered as before it. A field
+        left empty by the moves is dropped.
+
+        *nested*, when given, is ``{field: Specialization}``: that field's
+        block renders as that specialization -- one of the nested block's OWN --
+        says it rendered, recursively. See `_specialization_variants_`.
         """
         legacy = self._legacy_typing_(legacy)
-        renames = redirect_vars or {}
+        renames = {k: v for k, v in (redirect_vars or {}).items() if '.' not in k}
+        moves = {k: v for k, v in (redirect_vars or {}).items() if '.' in k}
+        nested = nested or {}
         fields = self.VAR.__dataclass_fields__
         keys = [f.name for f in fields.values()]
         if not legacy:
@@ -5193,7 +5226,12 @@ class Datablock:
             out_key = renames.get(k, k)
             value = getattr(self.var, k)
             raw = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else value
-            if isinstance(value, Datablock):
+            if k in nested:
+                block = value if isinstance(value, Datablock) else dataparts.eval(raw)
+                past = nested[k]
+                out[out_key] = block._typed_specdict_(legacy=legacy, omit=tuple(past.spec),
+                                                      redirect_vars=past.redirect_vars, nested=past.nested)
+            elif isinstance(value, Datablock):
                 out[out_key] = value._typed_specdict_(legacy=legacy)
             elif self.is_specline(raw):
                 # A specline standing for a block renders as that block, the
@@ -5209,6 +5247,26 @@ class Datablock:
                           if isinstance(evaluated, Datablock) else raw)
             else:
                 out[out_key] = self._coerce_to_annotation_(value, fields[k].type)
+        if moves:
+            # Moved out of a COPY: the dict a field renders as may be the very
+            # one this block's VAR holds, and the move must not reach it.
+            for head in {renames.get(p.split('.')[0], p.split('.')[0]) for p in moves}:
+                if isinstance(out.get(head), dict):
+                    out[head] = copy.deepcopy(out[head])
+            for path, historical in moves.items():
+                head, *rest = path.split('.')
+                holder = out.get(renames.get(head, head))
+                for part in rest[:-1]:
+                    holder = holder.get(part) if isinstance(holder, dict) else None
+                if not isinstance(holder, dict) or rest[-1] not in holder:
+                    raise KeyError(f"{type(self).__name__}: redirect_vars {path!r} names no entry of this block's spec")
+                out[historical] = holder.pop(rest[-1])
+            for path in moves:
+                head = renames.get(path.split('.')[0], path.split('.')[0])
+                if out.get(head) == {}:
+                    del out[head]
+            if not legacy:
+                out = dict(sorted(out.items()))
         return out
 
     def _legacy_norm_(self) -> bool:
@@ -6883,10 +6941,110 @@ class Datablock:
         return [tp[0] if isinstance(tp, (tuple, list)) else tp for tp in topics]
 
     def _specializing_(self):
-        """Whether this block may consult :attr:`SPECIALIZATIONS` at all."""
+        """Whether this block may consult its pasts at all: its :attr:`SPECIALIZATIONS`, or its nested blocks'."""
         return bool(getattr(self, 'redirect', False)
                     and getattr(self, 'use_specializations', False)
-                    and self.SPECIALIZATIONS)
+                    and self._specialization_variants_())
+
+    #: The most compositions `_composed_` makes of one specialization with its
+    #: nested blocks' pasts; past it, the rest are not tried, and that is said.
+    MAX_SPECIALIZATION_VARIANTS = 256
+
+    def _specialization_variants_(self) -> list:
+        """Every specialization this block looks for its past through, in the order it tries them.
+
+        Its declared :attr:`SPECIALIZATIONS` first, exactly as before -- then
+        each again with its nested blocks rendered as they were, and, when a
+        nested block has a past, this block's own fields as they are around
+        it. A nested block's past is ITS OWN business: its own specializations,
+        composed with its own nested blocks' in turn (`_nested_pasts_`). So a
+        rename is declared once, by the class whose field it is, and every
+        block holding one of its instances can find what it built before.
+        """
+        cached = self.__dict__.get('_specialization_variants_cache_')
+        if cached is not None:
+            return cached
+        declared = list(self.SPECIALIZATIONS or [])
+        variants, memo = list(declared), {}
+        for sp in [*declared, None]:
+            if sp is not None and sp.legacy:
+                continue
+            variants.extend(v for v in self._composed_(sp, memo) if v is not None and v.nested)
+        self.__dict__['_specialization_variants_cache_'] = variants
+        return variants
+
+    def _nested_var_blocks_(self) -> list:
+        """``(field, block)`` for each VAR field holding a block -- itself, or a specline that denotes one."""
+        out = []
+        spec = self.spec if isinstance(getattr(self, 'spec', None), dict) else {}
+        for k in self.VAR.__dataclass_fields__:
+            value = getattr(self.var, k)
+            if isinstance(value, Datablock):
+                out.append((k, value))
+            elif self.is_specline(spec.get(k, value)):
+                try:
+                    evaluated = dataparts.eval(spec.get(k, value))
+                except Exception:
+                    continue
+                if isinstance(evaluated, Datablock):
+                    out.append((k, evaluated))
+        return out
+
+    def _pins_match_(self, specialization) -> bool:
+        """Whether *specialization*'s pins hold for this block -- what decides that a past was this block's."""
+        fields, typed = self.VAR.__dataclass_fields__, self._typed_specdict_()
+        return all(k in fields and repr(typed[k]) == repr(self._specialization_pin_(k, v))
+                   for k, v in specialization.spec.items())
+
+    def _nested_pasts_(self, _memo=None) -> list:
+        """How this block rendered inside another before, besides as it is now: one Specialization each.
+
+        Its own specializations whose pins hold for it, each composed with its
+        nested blocks' pasts; and its own fields as they are, around a nested
+        block's past. Distinct renderings only, none the same as now -- a past
+        differing only in version or topics renders the same here, since a
+        nested block renders as its spec alone.
+        """
+        memo = {} if _memo is None else _memo
+        if id(self) in memo:
+            return memo[id(self)]
+        memo[id(self)] = []
+        if self._legacy_typing_():
+            return []
+        seen, pasts = {repr(self._typed_specdict_(legacy=False))}, []
+        own = [sp for sp in (self.SPECIALIZATIONS or []) if not sp.legacy and self._pins_match_(sp)]
+        for sp in [None, *own]:
+            for variant in self._composed_(sp, memo):
+                if variant is None:
+                    continue
+                text = repr(self._typed_specdict_(legacy=False, omit=tuple(variant.spec),
+                                                  redirect_vars=variant.redirect_vars, nested=variant.nested))
+                if text not in seen:
+                    seen.add(text)
+                    pasts.append(variant)
+        memo[id(self)] = pasts
+        return pasts
+
+    def _composed_(self, specialization, memo):
+        """*specialization* -- None for this block's own fields as they are -- with each choice of its nested blocks' pasts.
+
+        Yields None for "as it is now" with nothing nested changed.
+        """
+        if self._legacy_typing_():
+            yield specialization
+            return
+        choices = [(k, [None, *b._nested_pasts_(memo)]) for k, b in self._nested_var_blocks_()]
+        choices = [(k, c) for k, c in choices if len(c) > 1]
+        names = [k for k, _ in choices]
+        base = specialization if specialization is not None else self.Specialization(
+            spec={}, topics=SAME, note="this block as it is, its nested blocks as they were")
+        for n, combo in enumerate(itertools.product(*[c for _, c in choices])):
+            if n >= self.MAX_SPECIALIZATION_VARIANTS:
+                self.log.warning(f"{self.anchorkeypath}: more than {self.MAX_SPECIALIZATION_VARIANTS} compositions of "
+                                 f"{specialization!r} with its nested blocks' pasts; the rest are not tried")
+                return
+            nested = {k: p for k, p in zip(names, combo) if p is not None}
+            yield replace(base, nested=nested) if nested else specialization
 
     def _unbuilt_(self, topics=None):
         """True when NONE of the named topics are there, default all of them.
@@ -6932,7 +7090,7 @@ class Datablock:
         if isinstance(journal, BlocksJournal):
             journal = _shared_journal_(journal, self)
         memo = _memo if _memo is not None else {'journal': journal}
-        for sp in (self.SPECIALIZATIONS or []):
+        for sp in self._specialization_variants_():
             why = self._specialization_mismatch_(sp)
             if why is not None:
                 self.log.detailed(f"specialization: {sp!r} does not apply: {why}")
@@ -6983,7 +7141,7 @@ class Datablock:
         writes nothing, at the cost of resolving again next time.
         """
         # If the block is not specializing or already valid, do not install a redirection.
-        if not self._specializing_() or self.valid():
+        if self.valid() or not self._specializing_():
             return None
         if isinstance(journal, BlocksJournal):
             journal = _shared_journal_(journal, self)

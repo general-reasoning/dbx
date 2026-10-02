@@ -2,7 +2,8 @@
 `DatatablePartition`: whole tabs dealt to folds, by groupby / stratifyby / balance / seed.
 
 Each tab here is one "slide": `rows` rows, every one carrying the slide's
-patient and cohort in a `meta` slice -- the columns the partition reads.
+patient and cohort in a `meta` slice -- the columns the partition reads,
+named by its collator's groupby and stratifyby roles.
 """
 import json
 from dataclasses import dataclass
@@ -10,7 +11,8 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from dbx.datatables import DATASLICE, Datatab, Datatable, DatatablePartition
+from dbx.datablocks import Datablock
+from dbx.datatables import DATASLICE, Datacollator, Datatab, Datatable, DatatablePartition
 
 
 @pytest.fixture(autouse=True)
@@ -67,9 +69,16 @@ INFO = ('meta', 'info')
 PATIENT, COHORT = INFO + ('patient',), INFO + ('cohort',)
 
 
-def partition(tmp_path, tbl, **spec):
-    return DatatablePartition(datalake=str(tmp_path), spec=dict(
-        datapoint_table=tbl, fractions=[0.5, 0.5], partition_slice='meta', **spec)).build()
+def collator(groupby=None, stratifyby=None):
+    columns = {k: v for k, v in (('groupby', groupby), ('stratifyby', stratifyby)) if v is not None}
+    return Datacollator(spec=dict(columns=columns)) if columns else None
+
+
+def partition(tmp_path, tbl, groupby=None, stratifyby=None, build=True, **spec):
+    p = DatatablePartition(datalake=str(tmp_path), spec=dict(
+        datatable=tbl, fractions=[0.5, 0.5], partition_slice='meta',
+        collator=collator(groupby, stratifyby), **spec))
+    return p.build() if build else p
 
 
 def folds_of(p):
@@ -147,8 +156,8 @@ def test_a_group_spanning_strata_is_refused(tmp_path):
 def test_largest_first_takes_none_of_the_new_choices(tmp_path):
     with pytest.raises(ValueError, match="largest_first' takes no"):
         DatatablePartition(datalake=str(tmp_path), spec=dict(
-            datapoint_table=table(tmp_path), fractions=[0.5, 0.5], partition_slice='meta',
-            method='largest_first', stratifyby=COHORT))
+            datatable=table(tmp_path), fractions=[0.5, 0.5], partition_slice='meta',
+            method='largest_first', collator=collator(stratifyby=COHORT)))
 
 
 def test_largest_first_deals_as_before(tmp_path):
@@ -161,3 +170,40 @@ def test_largest_first_deals_as_before(tmp_path):
         want[k].append(i)
         have[k] += rows[i]
     assert p.read('tabs') == [sorted(w) for w in want]
+
+
+def test_a_collator_with_other_roles_is_refused(tmp_path):
+    c = Datacollator(spec=dict(columns={'groupby': PATIENT, 'signals': [INFO]}))
+    with pytest.raises(ValueError, match="declares \\['signals'\\] too"):
+        DatatablePartition(datalake=str(tmp_path), spec=dict(
+            datatable=table(tmp_path), fractions=[0.5, 0.5], partition_slice='meta', collator=c))
+
+
+@pytest.mark.parametrize('stratifyby', [COHORT, None])
+def test_the_partition_from_before_the_collator_is_reached(tmp_path, monkeypatch, stratifyby):
+    """Its table was datapoint_table, and groupby and stratifyby were fields of
+    its own -- as a collator holding them renders, under its old module name."""
+    tbl = table(tmp_path)
+
+    @dataclass
+    class OldVAR(Datablock.VAR):
+        datapoint_table: Datatable
+        fractions: list
+        partition_slice: int | str
+        method: str = 'random'
+        seed: int = 0
+        groupby: tuple | list | None = None
+        stratifyby: tuple | list | None = None
+        balance: str = 'rows'
+
+    with monkeypatch.context() as m:
+        m.setattr(DatatablePartition, 'VAR', OldVAR)
+        m.setattr(DatatablePartition, 'SPECIALIZATIONS', [])
+        m.setattr(DatatablePartition, '__post_init__', Datablock.__post_init__)
+        old = DatatablePartition(datalake=str(tmp_path), spec=dict(
+            datapoint_table=tbl, fractions=[0.5, 0.5], partition_slice='meta',
+            groupby=PATIENT, stratifyby=stratifyby, seed=3))
+        old_hash = old.hash
+    new = partition(tmp_path, tbl, groupby=PATIENT, stratifyby=stratifyby, seed=3, build=False)
+    assert new.hash != old_hash
+    assert old_hash in new.specialization_hashes()

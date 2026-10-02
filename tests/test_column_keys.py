@@ -14,7 +14,7 @@ import pytest
 from dbx.datablocks import Datablock
 from dbx.datatables import SLICETOPIC, Datatab
 from dbx.datastreams import column_spec, merge_column_specs, project_column
-from dbx.featuretables import Datacollator
+from dbx.datatables import Datacollator
 from dbx.probes import label_vector
 
 
@@ -90,8 +90,7 @@ class TestCollator:
     """A collator pair may be a triple -- which is what a probe's labels need."""
 
     def test_on_a_stacked_slice(self, tab):
-        c = Datacollator(spec=dict(signals=[('samples', 'x')],
-                                   labels=[('annotations', 'annotations', 'label')]))
+        c = Datacollator(spec=dict(columns={'signals': [('samples', 'x')], 'labels': [('annotations', 'annotations', 'label')]}))
         assert c.slices() == ['samples', 'annotations']
         data = tab.data(*c.slices(), concat=True)
         signals, labels = c(data)
@@ -100,19 +99,18 @@ class TestCollator:
         assert label_vector(c, data).tolist() == [0, 1, 0, 1]
 
     def test_on_rows(self, tab):
-        c = Datacollator(spec=dict(signals=[('samples', 'x')],
-                                   labels=[('annotations', 'annotations', 'label')]))
+        c = Datacollator(spec=dict(columns={'signals': [('samples', 'x')], 'labels': [('annotations', 'annotations', 'label')]}))
         ds = tab.dataset(*c.slices())
         _, labels = c([ds[i] for i in range(4)])
         assert labels.reshape(-1).tolist() == [0, 1, 0, 1]
 
     def test_a_list_of_keys_is_one_pair_per_key(self):
-        c = Datacollator(spec=dict(signals=[('annotations', 'annotations', ['label', 'area'])]))
+        c = Datacollator(spec=dict(columns={'signals': [('annotations', 'annotations', ['label', 'area'])]}))
         assert c.signal_pairs == (('annotations', 'annotations', 'label'),
                                   ('annotations', 'annotations', 'area'))
 
     def test_a_plain_pair_is_unchanged(self):
-        c = Datacollator(spec=dict(signals=[('samples', 'x')], labels=[('annotations', 'idx')]))
+        c = Datacollator(spec=dict(columns={'signals': [('samples', 'x')], 'labels': [('annotations', 'idx')]}))
         assert c.signal_pairs == (('samples', 'x'),) and c.label_pairs == (('annotations', 'idx'),)
 
 
@@ -351,9 +349,7 @@ class TestNested:
 
     def test_a_collator_path(self, tmp_path):
         t = DeepTab(datalake=str(tmp_path)).build()
-        c = Datacollator(spec=dict(
-            signals=[('annotations', 'annotations', ['label', ('site', 'geo', 'lat')])],
-            labels=[('annotations', 'annotations', ('site', 'code'))]))
+        c = Datacollator(spec=dict(columns={'signals': [('annotations', 'annotations', ['label', ('site', 'geo', 'lat')])], 'labels': [('annotations', 'annotations', ('site', 'code'))]}))
         assert c.signal_pairs == (('annotations', 'annotations', 'label'),
                                   ('annotations', 'annotations', ('site', 'geo', 'lat')))
         assert c.label_pairs == (('annotations', 'annotations', ('site', 'code')),)
@@ -388,10 +384,10 @@ class TestListsSideBySideTuplesDeeper:
         assert row['annotations']['annotations'] == {'site': {'geo': {'lat': 2.0, 'lon': -2.0}}}
 
     def test_a_collator_reads_pairs_the_same_way(self, tmp_path):
-        c = Datacollator(spec=dict(signals=[
+        c = Datacollator(spec=dict(columns={'signals': [
             ('annotations', 'annotations', 'site', 'geo', 'lat'),
             ('annotations', [('annotations', 'label'), 'idx']),
-        ]))
+        ]}))
         assert c.signal_pairs == (
             ('annotations', 'annotations', ('site', 'geo', 'lat')),
             ('annotations', 'annotations', 'label'),

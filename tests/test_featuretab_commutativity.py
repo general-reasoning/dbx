@@ -9,8 +9,8 @@ A Featuretable holds the Datatable it was built over, and each of its
 Featuretabs holds the Datatab it was built over. So the same upstream
 tab is reachable by two routes::
 
-    table.var.datapoint_table.tab(i)      # down the table, then to the tab
-    table.tab(i).var.datapoint_tab        # to the tab, then to what it holds
+    table.var.upstream.tab(i)     # down the table, then to the tab
+    table.tab(i).var.upstream     # to the tab, then to what it holds
 
 They are separately constructed objects, and nothing makes them agree except
 that both are built from the same configuration. If the two ever diverge, a
@@ -35,7 +35,7 @@ from dbx import (
     ModelEvaluatorBuilder,
     Featuretable,
 )
-from dbx.featuretables import Datacollator
+from dbx.datatables import Datacollator
 
 
 #: A source path assembled at read time from the environment -- the shape the
@@ -45,11 +45,7 @@ def tab_specline(idx):
 
 
 def sample_collator(**spec):
-    return Datacollator(spec=dict(
-        signals=[("samples", "samples")],
-        labels=[("labels", "labels")],
-        **spec,
-    ))
+    return Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]}, **spec))
 
 
 class DummySampleTab(Datatab):
@@ -124,7 +120,7 @@ def featuretable(tmp_path):
     return Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=DummySampleTable(datalake=url,
+            upstream=DummySampleTable(datalake=url,
                                              spec=dict(samples_per_tab=5),
                                              tag="sample_table"),
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
@@ -137,8 +133,8 @@ def featuretable(tmp_path):
 
 def _both_ways(featuretable, idx=0):
     """The same upstream tab, reached down each route."""
-    return (featuretable.var.datapoint_table.tab(idx),
-            featuretable.tab(idx).var.datapoint_tab)
+    return (featuretable.var.upstream.tab(idx),
+            featuretable.tab(idx).var.upstream)
 
 
 @pytest.mark.pinned
@@ -165,7 +161,7 @@ class TestIdentityCommutes:
         assert via_table.anchorkeypath == via_tab.anchorkeypath
 
     def test_every_tab_not_only_the_first(self, featuretable):
-        for idx in range(featuretable.var.datapoint_table.n_tabs):
+        for idx in range(featuretable.var.upstream.n_tabs):
             via_table, via_tab = _both_ways(featuretable, idx)
             assert via_table.typestr() == via_tab.typestr(), f"tab {idx}"
 

@@ -21,7 +21,7 @@ from test_specializations import v1table  # noqa: E402
 
 from dbx import FeatureAffineLogisticProbe  # noqa: E402
 from dbx.datablocks import Datablock, InvalidBlocksError  # noqa: E402
-from dbx.featuretables import Datacollator  # noqa: E402
+from dbx.datatables import Datacollator  # noqa: E402
 from dbx import Featuretable  # noqa: E402
 
 
@@ -134,22 +134,22 @@ def _probe(url):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
-            collator=Datacollator(spec=dict(signals=[("samples", "samples")], labels=[("labels", "labels")])),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="feature_table",
     ).build()
     from dbx.datatables import DatatablePartition
     split = DatatablePartition(datalake=url, tag="split", spec=dict(
-        datapoint_table=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tabs')).build()
+        datatable=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tabs')).build()
     probe = FeatureAffineLogisticProbe(
         datalake=url,
         spec=dict(
             fit_table=split.fold(0).build(),
             eval_table=split.fold(1).build(),
-            collator=Datacollator(spec=dict(signals=[("features", "final")], labels=[("labels", "labels")])),
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True)),
         ),
         tag="log_probe",
     )

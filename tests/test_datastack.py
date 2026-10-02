@@ -856,7 +856,7 @@ class TestBLOCK:
         from dbx.datatables import DatatablePartition
         table = DummyTable(datalake=str(tmp_path / 'table')).build()
         part = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
-            datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0)).build().fold(0)
+            datatable=table, fractions=[0.5, 0.5], partition_slice=0)).build().fold(0)
         assert part._block_class_() is DummyTable.BLOCK is DummyTable.TAB
         assert isinstance(part.block(0), DummyTable.TAB)
 

@@ -20,7 +20,8 @@ from sklearn.metrics import classification_report
 
 import dbx
 from dbx.datablocks import DATADICT, DATAFILE, Datablock, InvalidBlocksError, forward_property
-from dbx.featuretables import Featuretable, Featuretab, Datacollator
+from dbx.datatables import Datacollator
+from dbx.featuretables import Featuretable, Featuretab
 from dbx.datatables import DatatablePart
 from dbx.journals import Datalog
 from dbx.dataparts import (
@@ -310,13 +311,13 @@ def check_probe_inputs(probe, table=None) -> None:
     # indices, and are asked there -- those tabs only.
     indices = None
     if isinstance(table, DatatablePart):
-        indices, table = list(table.tab_indices), table.datapoint_table
+        indices, table = list(table.tab_indices), table.datatable
     owners = {}
     if collator is not None and hasattr(table, '_route_'):
-        for owner, s_name, _ in table._route_(collator.slices()):
+        for owner, s_name, _ in table._route_(collator.slices(table)):
             owners.setdefault(id(owner), (owner, []))[1].append(s_name)
     else:
-        owners[id(table)] = (table, list(collator.slices()) if collator is not None else [])
+        owners[id(table)] = (table, list(collator.slices(table)) if collator is not None else [])
     for owner, slices in owners.values():
         if not hasattr(owner, 'valid_blocks') or not (getattr(owner, 'n_tabs', 0) or 0):
             continue

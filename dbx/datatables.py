@@ -229,8 +229,12 @@ class _Database_(Datablock):
             self.verify_slice_row_counts_match()
         return result
 
-    def slices(self):
+    def slices(self, recursive: bool = False):
         """The names of this block's slice topics, in declaration order.
+
+        *recursive* adds the slices of the blocks upstream of this one, for a
+        block that has them (`DataslicesUpstream`); a block reading only its
+        own has nothing to add.
 
         A method rather than a property, mirroring :meth:`topics`, which it is
         the slice-only filter of.
@@ -1350,7 +1354,7 @@ class Datatable(_Database_, Datastack):
     # 2. Declared API ------------------------------------------------------
 
     #: Slices come from TAB, not from this table's own TOPICS.
-    def slices(self):
+    def slices(self, recursive: bool = False):
         """The TAB's slices: a table declares none of its own.
 
         Slice topics belong to the tab, so a table reads them off ``TAB``
@@ -1565,6 +1569,305 @@ class Datatable(_Database_, Datastack):
 
 
 #: How `DatatablePartition` deals tabs to folds -- see its docstring.
+class Datacollator(Datablock):
+    """Callable Datablock naming the columns a consumer reads from a table, by role, and collating them.
+
+    `Datacollator` has no `TOPICS` (it does not build or persist files).
+
+    ``columns`` maps a ROLE to the ``(slice, column)`` pairs that play it:
+    ``'signals'`` and ``'labels'`` for a model or a probe, ``'groupby'`` and
+    ``'stratifyby'`` for a `DatatablePartition` -- whatever its consumer reads.
+    A role's value is a list of pairs, or one pair as a bare tuple of strings.
+
+    When invoked as `collator(datapoints)`, it extracts the ``signals`` pairs --
+    and the ``labels`` pairs, when declared -- from each datapoint dict,
+    stacking signal tensors along a new dimension 1 for each datapoint, and
+    concatenating datapoints along dimension 0 (batch dimension). A collator
+    with no ``labels`` returns ``(signals,)``.
+
+    A pair may go deeper, into a column that holds a dict, read as `dataset()`
+    reads a request -- TUPLES are depth, LISTS are several side by side:
+    ``('annotations', 'annotations', 'label')`` is ``value['label']``,
+    ``('annotations', 'annotations', 'site', 'code')`` -- or
+    ``(..., ('site', 'code'))`` -- is ``value['site']['code']``, and a list of
+    keys, paths or columns is one pair per item. The entry is taken where the
+    value is picked, so it works on a row and on a stacked batch alike.
+
+    ``recursive`` says whether the slices may be the table's UPSTREAM ones --
+    a `Featuretab`'s samples, say, rather than its ``features``. Off unless
+    turned on: `slices(table)` refuses a slice the table only borrows, so
+    reading across blocks is something a collator declares, not something it
+    drifts into.
+    """
+
+    TOPICS = {}
+
+    SPECIALIZATIONS = [
+        Datablock.Specialization(
+            spec={'recursive': recursive}, topics=SAME,
+            redirect_vars={'columns.signals': 'signals', 'columns.labels': 'labels'},
+            note=f"signals and labels were fields of their own, before columns held them by role; "
+                 f"slices routed upstream unasked -- as recursive={recursive} reads them")
+        for recursive in (False, True)
+    ]
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        columns: dict[str, list]
+        recursive: bool = False
+        length: int | None = None
+        skip_missing: bool = False
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        columns = self.var.columns
+        if not isinstance(columns, dict) or not all(isinstance(r, str) for r in columns):
+            raise TypeError(f"{type(self).__name__}: columns must be a {{role: pairs}} dict, got {columns!r}")
+
+    def __call__(self, datapoints, *, signal_only: bool = False):
+        """Collate a batch of datapoint rows into signal (and label) arrays.
+
+        Parameters
+        ----------
+        datapoints : list[dict] | dict
+            Either one row per sample -- what a `DataLoader` over
+            `dataset()` yields -- or one already-stacked mapping per slice,
+            which is what `data(*collator.slices(), concat=True)` hands back.
+            Both are keyed ``{slice: {column: ...}}``; they are told apart by
+            whether the outer object is a list, not by a flag, because the
+            callers that pass a whole slice at a time (a feature build, a
+            probe fit) are the same ones that pass batches elsewhere.
+        signal_only : bool
+            Return the signal array bare, rather than a tuple.
+
+        Returns
+        -------
+        np.ndarray | tuple[np.ndarray, ...]
+            The signal array alone when *signal_only*; otherwise
+            ``(signals, labels)``, or ``(signals,)`` when no labels are
+            declared.
+        """
+        if not self.signal_pairs:
+            raise KeyError(f"{type(self).__name__}: no 'signals' to collate; its roles are {list(self.var.columns)}")
+        sig_arr = self._collate_pairs_(datapoints, self.signal_pairs)
+
+        length = self.var.length
+        if length is not None and getattr(sig_arr, 'ndim', 0) >= 1 and sig_arr.shape[-1] > length:
+            sig_arr = sig_arr[..., :length]
+
+        if signal_only:
+            return sig_arr
+
+        if not self.label_pairs:
+            return (sig_arr,)
+
+        lbl_arr = self._collate_pairs_(datapoints, self.label_pairs)
+        if length is not None and getattr(lbl_arr, 'ndim', 0) >= 1 and lbl_arr.shape[-1] > length:
+            lbl_arr = lbl_arr[..., :length]
+        return (sig_arr, lbl_arr)
+
+    # 2. Declared API ------------------------------------------------------
+
+    def slices(self, table=None) -> list[str]:
+        """The slices these pairs name, deduplicated, in declaration order.
+
+        Order-preserving rather than ``set``-derived: this is splatted into
+        ``dataset(*collator.slices())`` and ``data(*collator.slices())``, where
+        position decides the order sources are zipped in.
+
+        Given a *table*, each slice must be one it holds --
+        ``table.slices(recursive=self.var.recursive)`` -- or this raises.
+        """
+        seen = {}
+        for role in self.var.columns:
+            for pair in self.pairs(role):
+                seen[pair[0]] = None
+        names = list(seen)
+        if table is not None:
+            held = table.slices(recursive=self.var.recursive)
+            missing = [s for s in names if s not in held]
+            if missing:
+                upstream = [s for s in missing if s in table.slices(recursive=True)]
+                hint = (f"; {upstream} are upstream of it -- a collator reads those only with recursive=True"
+                        if upstream and not self.var.recursive else "")
+                raise KeyError(f"{type(self).__name__}: {table.__class__.__name__} {getattr(table, 'tag', None)!r} "
+                               f"holds no slice {missing}; it holds {list(held)}{hint}")
+        return names
+
+    def pairs(self, role: str) -> tuple[tuple[str, ...], ...]:
+        """The pairs playing *role*, each in full form; empty when the collator declares no such role.
+
+        A pair may be declared as a bare name or a one-element sequence, both
+        of which mean the column of the same name. A role's value may be one
+        pair as a bare tuple of strings -- a partition's ``groupby``, say.
+        """
+        value = self.var.columns.get(role) or ()
+        if isinstance(value, tuple) and value and all(isinstance(v, str) for v in value):
+            value = (value,)
+        return self._norm_pairs_(value)
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def roles(self) -> tuple[str, ...]:
+        return tuple(self.var.columns)
+
+    @property
+    def signal_pairs(self) -> tuple[tuple[str, ...], ...]:
+        """The ``'signals'`` pairs, as :meth:`pairs` gives them."""
+        return self.pairs('signals')
+
+    @property
+    def label_pairs(self) -> tuple[tuple[str, ...], ...]:
+        """The ``'labels'`` pairs, as :meth:`pairs` gives them; empty when there are none."""
+        return self.pairs('labels')
+
+    # 4. Helpers -----------------------------------------------------------
+
+    @classmethod
+    def _norm_pairs_(cls, pairs) -> tuple[tuple[str, ...], ...]:
+        """Every pair normalized, a triple naming several keys expanded to one per key."""
+        out = []
+        for pair in pairs:
+            deeper = isinstance(pair, (list, tuple)) and (
+                len(pair) > 2 or (len(pair) == 2 and isinstance(pair[1], (list, tuple))))
+            if not deeper:
+                out.append(cls._norm_pair_(pair))
+                continue
+            # Lists side by side, tuples deeper -- as dataset() reads a request.
+            s_name, specs = slice_spec(tuple(pair))
+            for column, keys in specs:
+                if keys is None:
+                    out.append((s_name, column))
+                    continue
+                for path in (keys if isinstance(keys, list) else [keys]):
+                    out.append((s_name, column, path[0] if len(path) == 1 else path))
+        return tuple(out)
+
+    @staticmethod
+    def _norm_pair_(pair: Any) -> tuple[str, str]:
+        if isinstance(pair, (list, tuple)):
+            if len(pair) >= 2:
+                return str(pair[0]), str(pair[1])
+            elif len(pair) == 1:
+                return str(pair[0]), str(pair[0])
+        return str(pair), str(pair)
+
+    @staticmethod
+    def _as_array_(val):
+        if val is None:
+            return None
+        if torch is not None and isinstance(val, torch.Tensor):
+            return val.detach().cpu().numpy()
+        arr = np.array(val)
+        if hasattr(arr, 'flags') and not arr.flags.writeable:
+            arr = np.copy(arr)
+        return arr
+
+    @classmethod
+    def _pick_pair_(cls, row, pair, what, allow_none: bool = False):
+        """The value a normalized pair -- or triple -- names in *row*."""
+        return cls._pick_(row, pair[0], pair[1], what, key=pair[2] if len(pair) > 2 else None, allow_none=allow_none)
+
+    @staticmethod
+    def _pick_(row, s_name, c_name, what, key=None, allow_none: bool = False):
+        """The value at ``(s_name, c_name)`` in one nested row, or a clear error.
+
+        Exact, with no fallbacks. The previous version walked the row with
+        ``next(iter(val.values()))`` when a name did not match, which meant a
+        misspelled column, a renamed slice, or a row that had lost its slice
+        level all silently produced *some* array -- an arbitrary one -- and
+        the build wrote it as if it were the requested feature.
+        """
+        try:
+            slice_row = row[s_name]
+        except (KeyError, TypeError):
+            if allow_none:
+                return None
+            raise KeyError(
+                f"{what}: row has no slice {s_name!r}; it provides "
+                f"{sorted(row) if isinstance(row, dict) else type(row).__name__}"
+            ) from None
+        try:
+            value = slice_row[c_name]
+        except (KeyError, TypeError):
+            if allow_none:
+                return None
+            raise KeyError(
+                f"{what}: slice {s_name!r} has no column {c_name!r}; it provides "
+                f"{sorted(slice_row) if isinstance(slice_row, dict) else type(slice_row).__name__}"
+            ) from None
+        return project_column(value, key, where=f"{what}: slice {s_name!r} column {c_name!r}", allow_none=allow_none)
+
+    def _collate_batch_(self, batch: dict, norm_pairs) -> np.ndarray:
+        """Collate a ``{slice: {column: values}}`` mapping already stacked over rows.
+
+        This is what ``data(*collator.slices(), concat=True)`` hands back, as
+        opposed to the list of per-row dicts a DataLoader yields.
+
+        One pair passes its array through untouched, so a single-signal
+        collation keeps the shape the slice was written with -- which is what
+        a model is then fed. Several are stacked along a new axis 1,
+        mirroring the signals axis of the per-sample form.
+        """
+        what = f"{self.__class__.__name__}._collate_batch_"
+        skip_missing = self.var.skip_missing
+        arrays = [self._as_array_(self._pick_pair_(batch, pair, what, allow_none=skip_missing)) for pair in norm_pairs]
+        if skip_missing and any(a is None for a in arrays):
+            if all(a is None for a in arrays):
+                return None
+        if len(arrays) == 1:
+            return arrays[0]
+        return np.stack(arrays, axis=1)
+
+    def _collate_pairs_(self, datapoints, pairs) -> np.ndarray:
+        if not pairs:
+            return np.array([])
+
+        norm_pairs = self._norm_pairs_(pairs)
+
+        if isinstance(datapoints, dict):
+            return self._collate_batch_(datapoints, norm_pairs)
+
+        what = f"{self.__class__.__name__}._collate_pairs_"
+        skip_missing = self.var.skip_missing
+        batch_items = []
+
+        for dp in datapoints:
+            dp_signals = [self._as_array_(self._pick_pair_(dp, pair, what, allow_none=skip_missing)) for pair in norm_pairs]
+            if skip_missing and any(s is None for s in dp_signals):
+                continue
+
+            norm_signals = []
+            for sig in dp_signals:
+                if sig.ndim == 0:
+                    norm_signals.append(sig.reshape(1, 1))
+                elif sig.ndim == 1:
+                    norm_signals.append(sig.reshape(1, -1))
+                else:
+                    norm_signals.append(sig)
+
+            if len(norm_signals) == 1 and norm_signals[0].ndim >= 3:
+                dp_tensor = norm_signals[0]
+            elif norm_signals[0].ndim == 2 and all(x.ndim == 2 for x in norm_signals):
+                try:
+                    dp_tensor = np.stack(norm_signals, axis=1)
+                except ValueError:
+                    dp_tensor = np.concatenate(norm_signals, axis=1)
+            else:
+                dp_tensor = np.stack(norm_signals, axis=1)
+
+            batch_items.append(dp_tensor)
+
+        try:
+            return np.stack(batch_items, axis=0)
+        except ValueError:
+            return np.concatenate(batch_items, axis=0)
+
+
+
 PARTITION_METHODS = ('random', 'largest_first')
 
 
@@ -1595,12 +1898,12 @@ class TabPartitionScanCallable:
 
     def __call__(self):
         part = self.partition
-        tab = part.var.datapoint_table.tab(self.idx)
+        tab = part.var.datatable.tab(self.idx)
         out = {'idx': self.idx, 'tag': tab.tag, 'rows': None, 'values': {}}
         if part.var.balance == 'rows' or part.var.method == 'largest_first':
             out['rows'] = int(tab.n_rows(part._partition_slice_name_))
         for name in ('groupby', 'stratifyby'):
-            spec = getattr(part.var, name)
+            spec = part.column_spec(name)
             if spec is None:
                 continue
             distinct = {}
@@ -1617,13 +1920,20 @@ class DatatablePartition(Datablock):
     (`DatatablePart`) is a view of the table's own tabs. Four choices decide
     how, each answering one question:
 
-    *groupby* -- which tabs must land in the SAME fold? A column spec,
-    ``(slice, column[, key, ...])``: tabs sharing its value (a patient's
-    slides, say) are dealt as one unit. Default: each tab alone.
+    The columns it reads are a *collator*'s: a `Datacollator` whose
+    ``columns`` hold one column spec, ``(slice, column[, key, ...])``, for
+    each of the roles
 
-    *stratifyby* -- within which categories must the fractions hold? A column
-    spec: the fractions are met within each of its values (each cancer type,
-    say), not only overall. Default: overall only.
+    *groupby* -- which tabs must land in the SAME fold? Tabs sharing its
+    value (a patient's slides, say) are dealt as one unit. Default: each tab
+    alone.
+
+    *stratifyby* -- within which categories must the fractions hold? The
+    fractions are met within each of its values (each cancer type, say), not
+    only overall. Default: overall only.
+
+    A column upstream of *datatable* -- a feature table's samples' -- is read
+    only with the collator's ``recursive=True``. No collator: neither role.
 
     *balance* -- fractions of what? ``'rows'`` (the default): of rows, read
     from *partition_slice*. ``'tabs'``: of tabs.
@@ -1655,28 +1965,36 @@ class DatatablePartition(Datablock):
         'summary': DATAFILE('summary.json', 'per fold its tags and counts, and the tabs skipped'),
     }
     SPECIALIZATIONS = [
+        *(Datablock.Specialization(
+            spec={'collator.recursive': recursive, 'collator.length': None, 'collator.skip_missing': False},
+            topics=SAME, anchor=anchor,
+            redirect_vars={'datatable': 'datapoint_table',
+                           'collator.columns.groupby': 'groupby', 'collator.columns.stratifyby': 'stratifyby'},
+            note=(f"stored under its class's old module name, dbx.datapoints, until 2026-10-02; " if anchor is not SAME else "")
+                 + f"its table was datapoint_table and groupby and stratifyby were fields of their own -- read "
+                   f"as a collator's with recursive={recursive}")
+          # Anchorless too: a subclass's partitions were stored under its own name all along.
+          for anchor in (SAME, 'dbx.datapoints.DatatablePartition') for recursive in (False, True)),
         Datablock.Specialization(
-            spec={}, topics=SAME, anchor='dbx.datapoints.DatatablePartition',
-            note="this very block, stored under its class's old module name, dbx.datapoints, until 2026-10-02"),
-        Datablock.Specialization(
-            spec={'method': 'largest_first', 'seed': 0, 'groupby': None, 'stratifyby': None, 'balance': 'rows'},
+            spec={'method': 'largest_first', 'seed': 0, 'collator': None, 'balance': 'rows'},
             topics={'tabs': DATAFILE('tabs.json', 'one list of tab indices per fold')},
+            redirect_vars={'datatable': 'datapoint_table'},
             note="the partition from before method/seed/groupby/stratifyby/balance: largest_first, by rows"),
         Datablock.Specialization(
-            spec={'method': 'largest_first', 'seed': 0, 'groupby': None, 'stratifyby': None, 'balance': 'rows'},
+            spec={'method': 'largest_first', 'seed': 0, 'collator': None, 'balance': 'rows'},
             topics={'tabs': 'tabs.json'},
+            redirect_vars={'datatable': 'datapoint_table'},
             note="... and from before its topic was respelled DATAFILE"),
     ]
 
     @dataclass
     class VAR(Datablock.VAR):
-        datapoint_table: Datatable
+        datatable: Datatable
         fractions: list[float]
         partition_slice: int | str
+        collator: Datacollator | None = None
         method: str = 'random'
         seed: int = 0
-        groupby: tuple | list | None = None
-        stratifyby: tuple | list | None = None
         balance: str = 'rows'
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -1688,21 +2006,28 @@ class DatatablePartition(Datablock):
             raise ValueError(f"{type(self).__name__}: unknown method {var.method!r}; expected one of {PARTITION_METHODS}")
         if var.balance not in ('rows', 'tabs'):
             raise ValueError(f"{type(self).__name__}: balance must be 'rows' or 'tabs', got {var.balance!r}")
-        for name in ('groupby', 'stratifyby'):
-            spec = getattr(var, name)
-            if spec is not None and not (isinstance(spec, (tuple, list)) and len(spec) >= 2
-                                         and all(isinstance(p, str) for p in spec)):
-                raise ValueError(f"{type(self).__name__}: {name} must be a column spec "
-                                 f"(slice, column[, key, ...]) of strings, got {spec!r}")
-        if var.method == 'largest_first' and (var.groupby is not None or var.stratifyby is not None
-                                              or var.balance != 'rows' or var.seed != 0):
-            raise ValueError(f"{type(self).__name__}: method='largest_first' takes no groupby, stratifyby, "
-                             f"balance or seed -- it is the partition from before them; use method='random'")
+        if var.collator is not None:
+            for name in ('groupby', 'stratifyby'):
+                spec = var.collator.var.columns.get(name)
+                if spec is not None and not (isinstance(spec, tuple) and len(spec) >= 2
+                                             and all(isinstance(p, str) for p in spec)):
+                    raise ValueError(f"{type(self).__name__}: the collator's {name} must be one column spec, "
+                                     f"a tuple (slice, column[, key, ...]) of strings, got {spec!r}")
+            other = [r for r in var.collator.roles if r not in ('groupby', 'stratifyby')]
+            if other:
+                raise ValueError(f"{type(self).__name__}: a partition reads the roles groupby and stratifyby; "
+                                 f"its collator declares {other} too")
+        if var.method == 'largest_first' and (var.collator is not None or var.balance != 'rows' or var.seed != 0):
+            raise ValueError(f"{type(self).__name__}: method='largest_first' takes no collator (no groupby, "
+                             f"stratifyby), balance or seed -- it is the partition from before them; "
+                             f"use method='random'")
 
     def __build__(self):
-        table = self.var.datapoint_table
+        table = self.var.datatable
         if table is None:
-            raise ValueError(f"{self.__class__.__name__}: VAR.datapoint_table is required")
+            raise ValueError(f"{self.__class__.__name__}: VAR.datatable is required")
+        if self.var.collator is not None:
+            self.var.collator.slices(table)       # raises for a column the table does not hold
         if not self.var.fractions:
             raise ValueError(f"{self.__class__.__name__}: VAR.fractions is required")
         scans = self._scan_()
@@ -1734,7 +2059,7 @@ class DatatablePartition(Datablock):
 
     def tabs(self, fold: int | str) -> list[Datatab]:
         indices = self.tabs_indices(fold)
-        table = self.var.datapoint_table
+        table = self.var.datatable
         return [table.tab(i) for i in indices]
 
     def fold(self, fold: int | str) -> DatatablePart:
@@ -1753,19 +2078,24 @@ class DatatablePartition(Datablock):
     # 3. Accessors ---------------------------------------------------------
 
     @property
-    def datapoint_table(self) -> Datatable:
-        return self.var.datapoint_table
+    def datatable(self) -> Datatable:
+        return self.var.datatable
+
+    def column_spec(self, role: str) -> 'tuple | None':
+        """The column spec playing *role* -- ``'groupby'`` or ``'stratifyby'`` -- or None."""
+        collator = self.var.collator
+        return None if collator is None else collator.var.columns.get(role)
 
     @property
     def _partition_slice_name_(self) -> str:
         p_slice = self.var.partition_slice
-        return self.var.datapoint_table.slices()[p_slice] if isinstance(p_slice, int) else p_slice
+        return self.var.datatable.slices()[p_slice] if isinstance(p_slice, int) else p_slice
 
     # 4. Helpers -----------------------------------------------------------
 
     def _scan_(self) -> list[dict]:
         """Each tab's rows and partition-column values, read in parallel; raise for a tab holding several."""
-        table = self.var.datapoint_table
+        table = self.var.datatable
         executor = callable_executor(
             getattr(self, 'parallelization', None) or 'inline',
             n_workers=getattr(self, 'n_workers', 1) or 1,
@@ -1803,12 +2133,12 @@ class DatatablePartition(Datablock):
         skipped, units = [], {}
         for s in scans:
             missing = [name for name in ('groupby', 'stratifyby')
-                       if getattr(self.var, name) is not None and s['values'][name] in ([], [None])]
+                       if self.column_spec(name) is not None and s['values'][name] in ([], [None])]
             if missing:
                 skipped.append({'idx': s['idx'], 'tag': s['tag'], 'why': f"no {' or '.join(missing)} value"})
                 continue
-            group = _value_key_(s['values']['groupby'][0]) if self.var.groupby is not None else f"tab:{s['idx']}"
-            stratum = _value_key_(s['values']['stratifyby'][0]) if self.var.stratifyby is not None else ''
+            group = _value_key_(s['values']['groupby'][0]) if self.column_spec('groupby') is not None else f"tab:{s['idx']}"
+            stratum = _value_key_(s['values']['stratifyby'][0]) if self.column_spec('stratifyby') is not None else ''
             unit = units.setdefault(group, {'tabs': [], 'strata': set(), 'weight': 0})
             unit['tabs'].append(s['idx'])
             unit['strata'].add(stratum)
@@ -1816,7 +2146,7 @@ class DatatablePartition(Datablock):
         if skipped:
             self.log.warning(
                 f"{type(self).__name__}: skipping {len(skipped)} of {len(scans)} tabs, which hold no "
-                f"{'/'.join(n for n in ('groupby', 'stratifyby') if getattr(self.var, n) is not None)} "
+                f"{'/'.join(n for n in ('groupby', 'stratifyby') if self.column_spec(n) is not None)} "
                 f"value -- they are in no fold: {[s['tag'] for s in skipped[:10]]}"
                 + (" ..." if len(skipped) > 10 else ""))
         straddling = {g: u['strata'] for g, u in units.items() if len(u['strata']) > 1}
@@ -1863,11 +2193,11 @@ class DatatablePartition(Datablock):
                 'fraction': self.var.fractions[k],
                 'tabs': len(idxs),
                 'rows': sum(by_idx[i]['rows'] or 0 for i in idxs) if self.var.balance == 'rows' or self.var.method == 'largest_first' else None,
-                'strata': dict(sorted(strata.items())) if self.var.stratifyby is not None else None,
+                'strata': dict(sorted(strata.items())) if self.column_spec('stratifyby') is not None else None,
                 'tags': [by_idx[i]['tag'] for i in idxs],
             })
         return {'method': self.var.method, 'balance': self.var.balance, 'seed': self.var.seed,
-                'groupby': self.var.groupby, 'stratifyby': self.var.stratifyby,
+                'groupby': self.column_spec('groupby'), 'stratifyby': self.column_spec('stratifyby'),
                 'n_tabs': len(scans), 'folds': folds, 'skipped': skipped}
 
 
@@ -1899,12 +2229,12 @@ class DatatablePart(Datatable):
 
     # 2. Declared API ------------------------------------------------------
 
-    def slices(self):
-        return self.var.partition.datapoint_table.slices()
+    def slices(self, recursive: bool = False):
+        return self.datatable.slices(recursive=recursive)
 
     def tab(self, idx: int) -> Datatab:
         real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table.tab(real_idx)
+        return self.datatable.tab(real_idx)
 
     def valid_tab(self, idx: int, validation: str | None = None) -> bool:
         """Whether tab *idx* is valid: this part's manifest, or its table's tab -- see `Datastack.valid_blocks`."""
@@ -1913,19 +2243,19 @@ class DatatablePart(Datatable):
             return True
         real_idx = self.tab_indices[idx]
         full = 'validate' if validation == 'validate' else 'valid'
-        return self.var.partition.datapoint_table.valid_tab(real_idx, validation=full)
+        return self.datatable.valid_tab(real_idx, validation=full)
 
     valid_block = valid_tab
 
     def redirected_tab(self, idx: int) -> bool:
         real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table.redirected_tab(real_idx)
+        return self.datatable.redirected_tab(real_idx)
 
     redirected_block = redirected_tab
 
     def validate_tab(self, idx: int, **kwargs) -> bool:
         real_idx = self.tab_indices[idx]
-        return self.var.partition.datapoint_table.validate_tab(real_idx, **kwargs)
+        return self.datatable.validate_tab(real_idx, **kwargs)
 
     validate_block = validate_tab
 
@@ -1961,17 +2291,17 @@ class DatatablePart(Datatable):
         return self.var.partition.tabs_indices(self.var.fold)
 
     @property
-    def datapoint_table(self) -> Datatable:
-        return self.var.partition.datapoint_table
+    def datatable(self) -> Datatable:
+        return self.var.partition.datatable
 
     @property
     def datapoints_per_row(self) -> int:
-        return getattr(self.var.partition.datapoint_table.var, 'datapoints_per_row')
+        return getattr(self.datatable.var, 'datapoints_per_row')
 
     @forward_property(Datatab)
     def TAB(self):
         """The partitioned table's TAB: on the class, `Datatab` -- what every part's tabs are."""
-        return getattr(self.var.partition.datapoint_table, 'TAB', None)
+        return getattr(self.datatable, 'TAB', None)
 
     @forward_property({})
     def TOPICS(self):
@@ -1979,7 +2309,7 @@ class DatatablePart(Datatable):
 
         On the class, with no table to ask, ``{}``.
         """
-        return self.var.partition.datapoint_table.TOPICS
+        return self.datatable.TOPICS
 
     @property
     def n_tabs(self) -> int:
@@ -2000,12 +2330,12 @@ class DatatablePart(Datatable):
 
     def _blocks_datalake_(self):
         """A part's tabs are its table's, and are stored where they are."""
-        return self.var.partition.datapoint_table._blocks_datalake_()
+        return self.datatable._blocks_datalake_()
 
     def _block_class_(self):
         """A part's tabs are its table's, and so is its BLOCK."""
         table = getattr(getattr(self, 'var', None), 'partition', None)
-        table = getattr(table, 'datapoint_table', None)
+        table = getattr(table, 'datatable', None)
         return table._block_class_() if table is not None else None
 
 class DataslicesUpstream:
@@ -2018,13 +2348,9 @@ class DataslicesUpstream:
     work out which block owns a requested slice, keep the caller's order, and
     refuse a name that two blocks both claim.
 
-    The upstream is found in the VAR field ``UPSTREAM_TABS`` names -- a tab or
-    a table, whichever the block was built from.
+    The upstream is the VAR field ``upstream``: a block of the same kind --
+    a tab's a tab, a table's a table -- that this one was built from.
     """
-
-    #: The VAR field(s) that may hold the upstream tab or table, most specific
-    #: first; the first one set is the upstream.
-    UPSTREAM_TABS: tuple[str, ...] = ()
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -2117,17 +2443,12 @@ class DataslicesUpstream:
         return super()._shared_defaults_(shared, validate_shared)
 
     def _upstream_block_(self):
-        for attr in self.UPSTREAM_TABS:
-            block = getattr(self.var, attr, None)
-            if block is None:
-                block = getattr(self, attr, None)
-            if block is not None:
-                return block
-        return None
+        return self.var.upstream
 
-    def available_slices(self) -> tuple[str, ...]:
-        """All slice names available on this block and its upstream chain."""
-        return tuple(self.slices()) + tuple(self._upstream_slices_().keys())
+    def slices(self, recursive: bool = False):
+        """This block's own slices; *recursive*, those of its upstream chain after them."""
+        own = super().slices()
+        return own if not recursive else tuple(own) + tuple(self._upstream_slices_())
 
     def _upstream_slices_(self) -> dict:
         """Map of slice_name -> owner_block for all available slices across the upstream chain."""

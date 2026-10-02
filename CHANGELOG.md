@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **One name for the block a feature block was built from: `upstream`.**
+  `Featuretab.VAR.datapoint_tab`, `Featuretable.VAR.datapoint_table`,
+  `BipolarFeaturetab.VAR.featuretab` and `BipolarFeaturetable.VAR.featuretable`
+  are all `VAR.upstream`, a block of the same kind. `UPSTREAM_TABS` and
+  `available_slices()` are gone; `slices(recursive=True)` gives a block's own
+  slices, then its upstream chain's. Each class declares its rename as a
+  specialization, so what was built before is adopted.
+- **`Datacollator` names columns by role, and reads upstream only when told.**
+  `VAR.signals` and `VAR.labels` are roles of `VAR.columns`, a
+  `{role: pairs}` dict, which a `DatatablePartition` reads as `groupby` and
+  `stratifyby`. `VAR.recursive` (default False) decides whether a column may
+  come from the table's upstream; `slices(table)` refuses one that does unless
+  it is set. `Datacollator` is in `dbx.datatables`.
+- **`DatatablePartition` takes its table as `datatable` and its columns from a
+  collator.** `VAR.datapoint_table`, `VAR.groupby` and `VAR.stratifyby` are
+  gone: `VAR.collator` holds `groupby` and `stratifyby`, with `recursive=True`
+  for columns upstream of the table (a feature table's annotations). Its
+  specializations reach the partitions built before.
+
+### Added
+- **Specializations compose through nested blocks.** A nested block renders in
+  its container's identity, so a rename inside it used to strand every build
+  of the container. Each block now also looks for its past with its nested
+  blocks rendered as THEIR own specializations say they were, recursively; a
+  rename is declared once, by the class whose field it is. Only pasts the
+  journal holds a build or adoption of are composed, which keeps the
+  combinations few.
+- **Dotted specialization fields.** `redirect_vars={'columns.signals':
+  'signals'}` moves a dict entry out to the field it used to be (an absent one
+  as None), and a dotted pin, `spec={'collator.recursive': False}`, matches
+  and drops a nested block's field that did not exist then.
+
 ### Removed
 - **The old module and class names.** `dbx.datapoints`, `dbx.datafeatures`,
   `dbx.datamodels`, `dbx.dataprobes` and `dbx.databackbones` no longer import,

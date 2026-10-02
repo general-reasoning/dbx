@@ -68,9 +68,9 @@ def test_a_partition(tmp_path, monkeypatch):
     from test_build_journal_reads import Table
     table = Table(datalake=str(tmp_path / 't'), spec={'n': 4})
 
-    def partition(**spec):
+    def partition(field='datatable', **spec):
         return DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
-            datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0, **spec))
+            {field: table}, fractions=[0.5, 0.5], partition_slice=0, **spec))
 
     @dataclass
     class OldVAR(Datablock.VAR):
@@ -83,7 +83,7 @@ def test_a_partition(tmp_path, monkeypatch):
         m.setattr(DatatablePartition, 'TOPICS', {'tabs': 'tabs.json'})
         m.setattr(DatatablePartition, 'SPECIALIZATIONS', [])
         m.setattr(DatatablePartition, '__post_init__', Datablock.__post_init__)
-        old_hash = partition().hash
+        old_hash = partition('datapoint_table').hash
     assert old_hash in partition(method='largest_first').specialization_hashes()
     assert old_hash != partition().hash, "method='random' is another computation"
 
@@ -94,10 +94,9 @@ def _feature_table(url):
     from test_featuretab import DummyModelEvaluatorFactory, DummySampleTable
     samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag='samples')
     return Featuretable(datalake=url, tag='features', devices=['cpu'], spec=dict(
-        datapoint_table=samples,
+        upstream=samples,
         evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
-        collator=Datacollator(spec=dict(signals=[("samples", "samples")],
-                                        labels=[("labels", "labels")]))))
+        collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]}))))
 
 
 def test_the_affine_logistic_probe_reaches_nothing_built_before():
@@ -136,8 +135,7 @@ def test_the_stats_probe_hashes_its_per_column_topics(tmp_path):
     from dbx.probes import FeatureStatsProbe
     table = _feature_table(str(tmp_path))
     probe = FeatureStatsProbe(datalake=str(tmp_path), spec=dict(
-        feature_table=table, collator=Datacollator(spec=dict(
-            signals=[("features", "final")], labels=[("samples", "samples")]))))
+        feature_table=table, collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("samples", "samples")]}))))
     # The per-feature DATADICT, statistics spelled out, under each column's path.
     assert ("DATADICT('stats.npz', mean='ndarray', std='ndarray', median='ndarray', "
             "min='ndarray', max='ndarray')") in probe.typestr()
@@ -146,10 +144,15 @@ def test_the_stats_probe_hashes_its_per_column_topics(tmp_path):
 
 def test_a_table_reaches_its_tabs_past_not_its_own():
     """A table's own topics are markers over its tabs, written again in a moment; its tabs are
-    what is worth reaching, and each is, by its TAB's specializations."""
+    what is worth reaching, and each is, by its TAB's specializations. A table declares only
+    its VAR renames -- what a block holding it, a partition say, renders it as."""
+    from dbx.datablocks import ABSENT, SAME
     from dbx.datatables import Datatable
-    from dbx.featuretables import Featuretable
-    assert Datatable.SPECIALIZATIONS == [] and not Featuretable.SPECIALIZATIONS
+    from dbx.featuretables import BipolarFeaturetable, Featuretable
+    assert Datatable.SPECIALIZATIONS == []
+    for cls in (Featuretable, BipolarFeaturetable):
+        assert cls.SPECIALIZATIONS and all(sp.spec == {} and sp.topics is SAME and sp.version is ABSENT
+                                           and sp.redirect_vars for sp in cls.SPECIALIZATIONS)
     assert Featuretable.TOPICS is Datatable.TOPICS
     assert not hasattr(Datatable, 'TAB_PATHS_TOPICS') and not hasattr(Datatable, 'TAB_PATHS_SPECIALIZATIONS')
 

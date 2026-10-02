@@ -69,7 +69,7 @@ def table(tmp_path):
 def test_datatable_partition_and_fold(table, tmp_path):
     partition = DatatablePartition(
         datalake=str(tmp_path / 'partition'),
-        spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0),
+        spec=dict(datatable=table, fractions=[0.5, 0.5], partition_slice=0),
     ).build()
 
     assert partition.valid()
@@ -87,10 +87,10 @@ def test_datatable_partition_and_fold(table, tmp_path):
     fold1 = partition.fold(1)
 
     assert isinstance(fold0, DatatablePart)
-    assert not hasattr(fold0.var, 'datapoint_table')
+    assert not hasattr(fold0.var, 'datatable')
     assert not hasattr(fold0.var, 'datapoints_per_row')
-    assert fold0.var.partition.datapoint_table == table
-    assert fold0.datapoint_table == table
+    assert fold0.var.partition.datatable == table
+    assert fold0.datatable == table
     assert fold0.datapoints_per_row == 1
     assert fold0.n_tabs == len(indices0)
     assert fold1.n_tabs == len(indices1)
@@ -110,13 +110,13 @@ def test_datatable_partition_and_fold(table, tmp_path):
 def test_partition_slice_parameter(table, tmp_path):
     p_by_str = DatatablePartition(
         datalake=str(tmp_path / 'partition_str'),
-        spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice='letters'),
+        spec=dict(datatable=table, fractions=[0.5, 0.5], partition_slice='letters'),
     ).build()
     assert p_by_str.valid()
 
     p_by_int = DatatablePartition(
         datalake=str(tmp_path / 'partition_int'),
-        spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=1),
+        spec=dict(datatable=table, fractions=[0.5, 0.5], partition_slice=1),
     ).build()
     assert p_by_int.valid()
     assert p_by_str.tabs_indices(0) == p_by_int.tabs_indices(0)
@@ -126,7 +126,7 @@ def test_a_part_resolves_its_tabs_redirections_through_the_table(table, tmp_path
     """A part's tab i is the table's tab tab_indices[i]; so is its redirection."""
     partition = DatatablePartition(
         datalake=str(tmp_path / 'partition_r'),
-        spec=dict(datapoint_table=table, fractions=[0.5, 0.5], partition_slice=0),
+        spec=dict(datatable=table, fractions=[0.5, 0.5], partition_slice=0),
     ).build()
     fold = partition.fold(0)
     real = fold.tab_indices[0]

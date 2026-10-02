@@ -1145,7 +1145,7 @@ class TestValidTabAndSentinels:
             datalake=str(tmp_path / "partition"),
             validate_vars=False,
             spec=dict(
-                datapoint_table=dst_tbl,
+                datatable=dst_tbl,
                 fractions=[0.5, 0.5],
                 partition_slice='letters',
             ),

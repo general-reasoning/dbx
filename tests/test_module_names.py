@@ -25,7 +25,7 @@ def setup_env(monkeypatch):
 @pytest.mark.parametrize('cls', [datatables.Datatab, datatables.Datatable, datatables.DatatablePartition,
                                  datatables.DatatablePart, featuretables.Featuretab, featuretables.Featuretable,
                                  featuretables.BipolarFeaturetab, featuretables.BipolarFeaturetable,
-                                 featuretables.Datacollator, probes.FeatureStatsProbe])
+                                 datatables.Datacollator, probes.FeatureStatsProbe])
 def test_a_class_is_recorded_under_its_own_module(cls):
     assert cls.__module__ in ('dbx.datatables', 'dbx.featuretables', 'dbx.probes')
     assert cls.__module__ == importlib.import_module(cls.__module__).__name__
@@ -47,7 +47,7 @@ def test_the_old_names_are_gone(name):
 
 
 class Rows(Datatab):
-    TOPICS = {'rows': DATASLICE(i='int')}
+    TOPICS = {'rows': DATASLICE(i='int', k='int')}
 
     @dataclass
     class VAR(Datatab.VAR):
@@ -56,7 +56,7 @@ class Rows(Datatab):
     def __build__(self):
         with self.slice_writers() as writers:
             for i in range(self.var.n):
-                writers['rows'].write({'i': i})
+                writers['rows'].write({'i': i, 'k': 0})
 
 
 class Table(Datatable):
@@ -67,20 +67,34 @@ class Table(Datatable):
         return 4
 
 
-def test_a_partition_stored_under_the_old_module_name_is_adopted(tmp_path, monkeypatch):
+def test_a_partition_stored_under_the_old_module_name_is_reached(tmp_path, monkeypatch):
+    """Under dbx.datapoints its table was datapoint_table, and groupby a field of its own."""
+    from dbx.datablocks import Datablock
+    from dbx.datatables import Datacollator
     table = Table(datalake=str(tmp_path)).build()
 
-    def partition():
-        return DatatablePartition(datalake=str(tmp_path), spec=dict(
-            datapoint_table=table, fractions=[0.5, 0.5], partition_slice='rows', balance='tabs'))
+    @dataclass
+    class OldVAR(Datablock.VAR):
+        datapoint_table: Datatable
+        fractions: list[float]
+        partition_slice: int | str
+        method: str = 'random'
+        seed: int = 0
+        groupby: tuple | list | None = None
+        stratifyby: tuple | list | None = None
+        balance: str = 'rows'
 
     with monkeypatch.context() as m:
         m.setattr(DatatablePartition, '__module__', 'dbx.datapoints')
-        old = partition().build()
-        old_tabs, old_anchor, old_hash = old.read('tabs'), old.anchor, old.hash
-    new = partition()
+        m.setattr(DatatablePartition, 'VAR', OldVAR)
+        m.setattr(DatatablePartition, '__post_init__', Datablock.__post_init__)
+        old = DatatablePartition(datalake=str(tmp_path), spec=dict(
+            datapoint_table=table, fractions=[0.5, 0.5], partition_slice='rows', groupby=('rows', 'k'), balance='tabs'))
+        old_anchor, old_hash = old.anchor, old.hash
+    new = DatatablePartition(datalake=str(tmp_path), spec=dict(
+        datatable=table, fractions=[0.5, 0.5], partition_slice='rows', balance='tabs',
+        collator=Datacollator(spec=dict(columns={'groupby': ('rows', 'k')}))))
     assert (old_anchor, new.anchor) == ('dbx.datapoints.DatatablePartition', 'dbx.datatables.DatatablePartition')
-    assert new.hash == old_hash, "the module is the anchor, not the identity"
-    new.build()                                   # adopts: nothing left to build
-    assert sorted(new.redirected_topics()) == ['summary', 'tabs']
-    assert new.read('tabs') == old_tabs
+    reached = [(new._specialization_anchor_(sp), new.get_hash(sp)) for sp in DatatablePartition.SPECIALIZATIONS
+               if new._pins_match_(sp)]
+    assert (old_anchor, old_hash) in reached

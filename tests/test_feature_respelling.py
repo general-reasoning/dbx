@@ -48,7 +48,11 @@ def setup_env(monkeypatch):
 
 
 def _the_old_name(monkeypatch):
-    """Featuretab and Featuretable as they were before feature_namemap was renamed feature_for_column."""
+    """Featuretab and Featuretable as they were before feature_namemap was renamed feature_for_column.
+
+    And before their upstream field was renamed ``upstream``: the code reads
+    ``var.upstream``, so the old VARs answer it under the old field.
+    """
     from dataclasses import dataclass
     from dbx import Datablock, Datacollator
     from dbx.backbones import ModelEvaluatorBuilder
@@ -63,6 +67,10 @@ def _the_old_name(monkeypatch):
         feature_namemap: dict | None = None
         shard_size_limit_bytes: int = 1 << 26
 
+        @property
+        def upstream(self):
+            return self.datapoint_tab
+
     @dataclass
     class TableVAR(Datablock.VAR):
         datapoint_table: Datatable
@@ -71,20 +79,25 @@ def _the_old_name(monkeypatch):
         feature_namemap: dict | None = None
         shard_size_limit_bytes: int = 1 << 26
 
+        @property
+        def upstream(self):
+            return self.datapoint_table
+
     for cls, VAR in ((Featuretab, TabVAR), (Featuretable, TableVAR)):
         monkeypatch.setattr(cls, 'VAR', VAR)
         monkeypatch.setattr(cls, 'feature_for_column', property(
             lambda self: feature_map(self.var.feature_namemap, self.var.evaluator_factory)))
         monkeypatch.setattr(cls, 'SPECIALIZATIONS', [])
-    # A table hands its tabs the field under its new name.
-    init = Featuretab.__init__
+    # Everything hands them the fields under their new names.
+    for cls, upstream in ((Featuretab, 'datapoint_tab'), (Featuretable, 'datapoint_table')):
+        old_name = {'feature_for_column': 'feature_namemap', 'upstream': upstream}
 
-    def old_init(self, *args, spec=None, **kwargs):
-        if isinstance(spec, dict) and 'feature_for_column' in spec:
-            spec = {('feature_namemap' if k == 'feature_for_column' else k): v for k, v in spec.items()}
-        init(self, *args, spec=spec, **kwargs)
+        def old_init(self, *args, spec=None, _init=cls.__init__, _old_name=old_name, **kwargs):
+            if isinstance(spec, dict):
+                spec = {_old_name.get(k, k): v for k, v in spec.items()}
+            _init(self, *args, spec=spec, **kwargs)
 
-    monkeypatch.setattr(Featuretab, '__init__', old_init)
+        monkeypatch.setattr(cls, '__init__', old_init)
 
 
 def _the_old_spelling(monkeypatch):
@@ -116,7 +129,7 @@ def _the_old_spelling(monkeypatch):
 def _features(url, evaluator):
     sampletab = DummySampleTab(datalake=url, tag='samples')
     return Featuretab(datalake=url, tag='features', device='cpu', spec=dict(
-        datapoint_tab=sampletab, evaluator_factory=evaluator, collator=sample_collator()))
+        upstream=sampletab, evaluator_factory=evaluator, collator=sample_collator()))
 
 
 def test_the_new_identities_reconstruct_the_old(tmp_path, monkeypatch):
@@ -130,7 +143,7 @@ def test_the_new_identities_reconstruct_the_old(tmp_path, monkeypatch):
     assert old_hash in new.specialization_hashes()
 
 
-def test_a_feature_tab_built_before_the_rename_is_read_after_it(tmp_path, monkeypatch):
+    """topics=SAME: the renames alone, under the columns this very tab declares."""
     """topics=SAME: the rename alone, under the columns this very tab declares."""
     url, ef = str(tmp_path), SeededEvaluatorFactory(spec=dict(capture_final=True))
     DummySampleTab(datalake=url, tag='samples').build()
@@ -140,7 +153,8 @@ def test_a_feature_tab_built_before_the_rename_is_read_after_it(tmp_path, monkey
         old_hash = old.hash
     tab = _features(url, ef)
     assert tab.hash != old_hash
-    assert tab.specialization_hashes()[0] == old_hash
+    # Both renames at once -- datapoint_tab and feature_namemap -- the second declared past.
+    assert tab.specialization_hashes()[1] == old_hash
     tab.build()                                 # adopts: nothing left to build
     assert tab.redirected_topics() == ['features']
 
@@ -162,11 +176,14 @@ def test_a_feature_tab_built_under_the_sentinel_is_read_under_the_marker(tmp_pat
     assert tab.declared_columns('features') == {'final': 'ndarray:float32'}
 
 
-def test_the_bipolar_blocks_reach_nothing_built_before():
-    """Their builds thresholded each tab against its OWN median, which erases
-    what sets one tab apart from another; nothing is to adopt them."""
-    assert not BipolarFeaturetab.SPECIALIZATIONS
-    assert not BipolarFeaturetable.SPECIALIZATIONS
+def test_the_bipolar_blocks_reach_nothing_built_before_version_2():
+    """Version 1 thresholded each tab against its OWN median, which erases what
+    sets one tab apart from another; nothing is to adopt it. Their pasts are the
+    field rename alone."""
+    from dbx.datablocks import ABSENT, SAME
+    for cls in (BipolarFeaturetab, BipolarFeaturetable):
+        assert all(sp.spec == {} and sp.topics is SAME and sp.version is ABSENT
+                   and set(sp.redirect_vars) == {'upstream'} for sp in cls.SPECIALIZATIONS)
 
 
 def test_a_feature_table_built_under_the_sentinel_is_read_under_the_marker(tmp_path, monkeypatch):
@@ -176,7 +193,7 @@ def test_a_feature_table_built_under_the_sentinel_is_read_under_the_marker(tmp_p
 
     def table():
         return Featuretable(datalake=url, tag='features', devices=['cpu'], spec=dict(
-            datapoint_table=samples, evaluator_factory=ef, collator=sample_collator()))
+            upstream=samples, evaluator_factory=ef, collator=sample_collator()))
 
     with monkeypatch.context() as m:
         _the_old_spelling(m)

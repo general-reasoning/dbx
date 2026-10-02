@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 import dbx
-from dbx.featuretables import Datacollator
+from dbx.datatables import Datacollator
 from dbx import (
     DATADIR,
     DIRTOPIC,
@@ -93,7 +93,7 @@ def _fit_eval_(url, featuretable, tag='split'):
     """Two folds of the feature table -- one tab each -- as a probe's fit_table and eval_table."""
     from dbx.datatables import DatatablePartition
     split = DatatablePartition(datalake=url, tag=tag, spec=dict(
-        datapoint_table=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tabs')).build()
+        datatable=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tabs')).build()
     return dict(fit_table=split.fold(0).build(), eval_table=split.fold(1).build())
 
 
@@ -128,12 +128,9 @@ def test_feature_affine_logistic_probe(tmp_path):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=eval_factory,
-            collator=Datacollator(spec=dict(
-                signals=[("samples", "samples")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="feature_table",
@@ -143,10 +140,7 @@ def test_feature_affine_logistic_probe(tmp_path):
         datalake=url,
         spec=dict(
             **_fit_eval_(url, featuretable),
-            collator=Datacollator(spec=dict(
-                signals=[("features", "final")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True)),
         ),
         tag="log_probe",
     ).build()
@@ -181,12 +175,9 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
-            collator=Datacollator(spec=dict(
-                signals=[("samples", "samples")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="feature_table_multi",
@@ -197,10 +188,7 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
         spec=dict(
             **_fit_eval_(url, featuretable),
             # 'final' is 8 wide, the upstream 'samples' column is 4.
-            collator=Datacollator(spec=dict(
-                signals=[("features", "final"), ("samples", "samples")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "final"), ("samples", "samples")], 'labels': [("labels", "labels")]}, recursive=True)),
         ),
         tag="log_probe_multi",
     ).build()
@@ -220,12 +208,9 @@ def test_affine_logistic_probe_refuses_a_missing_signal_column(tmp_path):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
-            collator=Datacollator(spec=dict(
-                signals=[("samples", "samples")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="feature_table_bad",
@@ -235,10 +220,7 @@ def test_affine_logistic_probe_refuses_a_missing_signal_column(tmp_path):
         datalake=url,
         spec=dict(
             **_fit_eval_(url, featuretable),
-            collator=Datacollator(spec=dict(
-                signals=[("features", "nope")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "nope")], 'labels': [("labels", "labels")]}, recursive=True)),
         ),
         tag="log_probe_bad",
     )
@@ -260,12 +242,9 @@ def test_feature_stats_probe(tmp_path):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=eval_factory,
-            collator=Datacollator(spec=dict(
-                signals=[("samples", "samples")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="feature_table_stats",
@@ -275,10 +254,7 @@ def test_feature_stats_probe(tmp_path):
         datalake=url,
         spec=dict(
             feature_table=featuretable,
-            collator=Datacollator(spec=dict(
-                signals=[("features", "final")],
-                labels=[("samples", "samples")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("samples", "samples")]}, recursive=True)),
         ),
         tag="stats_probe",
     ).build()
@@ -330,12 +306,9 @@ def test_stats_probe_describes_every_declared_pair(tmp_path):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
-            collator=Datacollator(spec=dict(
-                signals=[("samples", "samples")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="feature_table_all",
@@ -345,10 +318,7 @@ def test_stats_probe_describes_every_declared_pair(tmp_path):
         datalake=url,
         spec=dict(
             feature_table=featuretable,
-            collator=Datacollator(spec=dict(
-                signals=[("features", "final"), ("samples", "samples")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "final"), ("samples", "samples")], 'labels': [("labels", "labels")]}, recursive=True)),
         ),
         tag="stats_probe_all",
     ).build()
@@ -373,12 +343,9 @@ def test_feature_stats_probe_parallel(tmp_path):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=eval_factory,
-            collator=Datacollator(spec=dict(
-                signals=[("samples", "samples")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="feature_table_stats_par",
@@ -388,10 +355,7 @@ def test_feature_stats_probe_parallel(tmp_path):
         datalake=url,
         spec=dict(
             feature_table=featuretable,
-            collator=Datacollator(spec=dict(
-                signals=[("features", "final")],
-                labels=[("samples", "samples")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("samples", "samples")]}, recursive=True)),
         ),
         parallelization='multithreading',
         n_workers=2,
@@ -418,12 +382,9 @@ def test_feature_affine_logistic_probe_parallel(tmp_path):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=eval_factory,
-            collator=Datacollator(spec=dict(
-                signals=[("samples", "samples")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="feature_table_log_par",
@@ -433,10 +394,7 @@ def test_feature_affine_logistic_probe_parallel(tmp_path):
         datalake=url,
         spec=dict(
             **_fit_eval_(url, featuretable),
-            collator=Datacollator(spec=dict(
-                signals=[("features", "final")],
-                labels=[("labels", "labels")],
-            )),
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True)),
         ),
         parallelization='multithreading',
         n_workers=2,
@@ -505,10 +463,9 @@ def test_feature_stats_probe_over_tabs_of_different_sizes(tmp_path):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
-            collator=Datacollator(spec=dict(signals=[("samples", "samples")],
-                                            labels=[("labels", "labels")])),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="uneven_features",
@@ -516,7 +473,7 @@ def test_feature_stats_probe_over_tabs_of_different_sizes(tmp_path):
     probe = FeatureStatsProbe(
         datalake=url,
         spec=dict(feature_table=featuretable,
-                  collator=Datacollator(spec=dict(signals=[("features", "final")]))),
+                  collator=Datacollator(spec=dict(columns={'signals': [("features", "final")]}))),
         tag="uneven_stats",
     ).build()
 
@@ -534,9 +491,9 @@ def test_tab_aggregation_refuses_a_tab_whose_rows_disagree(tmp_path):
     featuretable = Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
-            collator=Datacollator(spec=dict(signals=[("samples", "samples")], labels=[("labels", "labels")])),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag="agg_features",
@@ -545,7 +502,7 @@ def test_tab_aggregation_refuses_a_tab_whose_rows_disagree(tmp_path):
         datalake=url,
         spec=dict(
             **_fit_eval_(url, featuretable),
-            collator=Datacollator(spec=dict(signals=[("features", "final")], labels=[("labels", "labels")])),
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True)),
             tab_aggregation='mean',
         ),
         tag="agg_probe",
@@ -560,9 +517,9 @@ def _feature_table_(url, tag, n=4):
     return Featuretable(
         datalake=url,
         spec=dict(
-            datapoint_table=sampletable,
+            upstream=sampletable,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
-            collator=Datacollator(spec=dict(signals=[("samples", "samples")], labels=[("labels", "labels")])),
+            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
         ),
         devices=["cpu"],
         tag=tag,
@@ -574,7 +531,7 @@ def test_a_probe_refuses_fit_and_eval_tables_that_share_a_tab(tmp_path):
     featuretable = _feature_table_(url, "shared_features")
     probe = FeatureAffineLogisticProbe(datalake=url, tag="shared_probe", spec=dict(
         fit_table=featuretable, eval_table=_fit_eval_(url, featuretable)['eval_table'],
-        collator=Datacollator(spec=dict(signals=[("features", "final")], labels=[("labels", "labels")]))))
+        collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True))))
     with pytest.raises(ValueError, match="share 1 tab"):
         probe.build()
 
@@ -585,7 +542,7 @@ def test_max_rows_per_tab_samples_each_tab_the_same_way_every_time(tmp_path):
     def probe(tag):
         return FeatureAffineLogisticProbe(datalake=url, tag=tag, spec=dict(
             **_fit_eval_(url, featuretable), max_rows_per_tab=4,
-            collator=Datacollator(spec=dict(signals=[("features", "final")], labels=[("labels", "labels")])))).build()
+            collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True)))).build()
     one = probe("rows_a").read('fit', 'features')
     assert one.shape == (4, 8)
     np.testing.assert_array_equal(one, probe("rows_b").read('fit', 'features'))

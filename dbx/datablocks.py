@@ -5197,8 +5197,15 @@ class Datablock:
         identity of the build before the rename. A DOTTED current name,
         ``'columns.signals'``, names an entry inside a field's dict value: it is
         moved out to the top level under its historical name -- a restructure,
-        such as fields gathered into one dict, rendered as before it. A field
-        left empty by the moves is dropped.
+        such as fields gathered into one dict, rendered as before it. An entry
+        the dict does not hold moves out as None: the historical field left at
+        its default, as a collator of signals alone had ``labels=None`` -- and
+        so does every entry of a field that is None, a nested block not given,
+        and the field itself is dropped. A dict left empty by the moves is
+        dropped.
+
+        *omit* may hold DOTTED names too: that entry is dropped after the moves,
+        as a dotted pin says a nested block's field did not exist then.
 
         *nested*, when given, is ``{field: Specialization}``: that field's
         block renders as that specialization -- one of the nested block's OWN --
@@ -5218,6 +5225,7 @@ class Datablock:
         # *omit* drops fields the class did not used to have, so what is left
         # renders exactly as the narrower block rendered it. Dropping keys
         # cannot reorder the rest, which is what makes the reconstruction exact.
+        deep_omit = [k for k in omit if '.' in k]
         if omit:
             keys = [k for k in keys if k not in set(omit)]
 
@@ -5247,27 +5255,60 @@ class Datablock:
                           if isinstance(evaluated, Datablock) else raw)
             else:
                 out[out_key] = self._coerce_to_annotation_(value, fields[k].type)
-        if moves:
-            # Moved out of a COPY: the dict a field renders as may be the very
-            # one this block's VAR holds, and the move must not reach it.
-            for head in {renames.get(p.split('.')[0], p.split('.')[0]) for p in moves}:
-                if isinstance(out.get(head), dict):
-                    out[head] = copy.deepcopy(out[head])
-            for path, historical in moves.items():
-                head, *rest = path.split('.')
-                holder = out.get(renames.get(head, head))
-                for part in rest[:-1]:
-                    holder = holder.get(part) if isinstance(holder, dict) else None
-                if not isinstance(holder, dict) or rest[-1] not in holder:
-                    raise KeyError(f"{type(self).__name__}: redirect_vars {path!r} names no entry of this block's spec")
-                out[historical] = holder.pop(rest[-1])
-            for path in moves:
-                head = renames.get(path.split('.')[0], path.split('.')[0])
-                if out.get(head) == {}:
-                    del out[head]
-            if not legacy:
-                out = dict(sorted(out.items()))
+        if moves or deep_omit:
+            out = self._restructured_specdict_(out, renames, moves, deep_omit, legacy)
         return out
+
+    def _restructured_specdict_(self, out, renames, moves, deep_omit, legacy) -> dict:
+        """*out* with the dotted *moves* moved out and the dotted *deep_omit* dropped -- see `_typed_specdict_`."""
+        what = type(self).__name__
+        head_of = lambda path: renames.get(path.split('.')[0], path.split('.')[0])
+        # On a COPY: the dict a field renders as may be the very one this
+        # block's VAR holds, and the restructure must not reach it.
+        for head in {head_of(p) for p in [*moves, *deep_omit]}:
+            if isinstance(out.get(head), dict):
+                out[head] = copy.deepcopy(out[head])
+
+        def holder_of(path):
+            """The dict holding *path*'s last entry -- {} when its field is None, a nested block not given."""
+            head, *rest = path.split('.')
+            if head_of(path) not in out:
+                raise KeyError(f"{what}: {path!r} names no field of this block's spec")
+            holder = out[head_of(path)]
+            if holder is None:
+                return {}, rest[-1]
+            for part in rest[:-1]:
+                holder = holder.get(part) if isinstance(holder, dict) else None
+            if not isinstance(holder, dict):
+                raise KeyError(f"{what}: {path!r} names no entry of this block's spec")
+            return holder, rest[-1]
+
+        for path, historical in moves.items():
+            holder, leaf = holder_of(path)
+            out[historical] = holder.pop(leaf, None)
+        for path in deep_omit:
+            holder, leaf = holder_of(path)
+            if out[head_of(path)] is not None and leaf not in holder:
+                raise KeyError(f"{what}: pin {path!r} names no entry of this block's spec")
+            holder.pop(leaf, None)
+        # A field holding no block had none of the entries now gathered in it.
+        for head in {head_of(p) for p in [*moves, *deep_omit]}:
+            if out.get(head, ...) is None:
+                del out[head]
+
+        # Drop what the restructure left empty -- along the paths it touched
+        # only, so an empty dict the spec holds of its own stays.
+        for path in [*moves, *deep_omit]:
+            head, *rest = path.split('.')
+            chain, d = [(out, head_of(path))], out.get(head_of(path))
+            for part in rest[:-1]:
+                chain.append((d, part))
+                d = d.get(part) if isinstance(d, dict) else None
+            for parent, key in reversed(chain):
+                # An earlier path may have emptied -- and dropped -- this one's head.
+                if isinstance(parent, dict) and parent.get(key) == {}:
+                    del parent[key]
+        return out if legacy else dict(sorted(out.items()))
 
     def _legacy_norm_(self) -> bool:
         """Whether the pre-LEGACY_NORM rendering applies: root kwargs, str()'d spec.
@@ -6743,7 +6784,21 @@ class Datablock:
                 evaluated = None
             return (evaluated._typed_specdict_()
                     if isinstance(evaluated, Datablock) else value)
+        if '.' in key:
+            # An entry of a nested block's spec: compared as given, since the
+            # annotation it would be coerced toward is the nested class's.
+            return value
         return self._coerce_to_annotation_(value, self.VAR.__dataclass_fields__[key].type)
+
+    @staticmethod
+    def _spec_entry_(typed: dict, key: str):
+        """The rendered value at *key* -- a field, or a dotted path into one -- or ABSENT."""
+        node = typed
+        for part in key.split('.'):
+            if not isinstance(node, dict) or part not in node:
+                return ABSENT
+            node = node[part]
+        return node
 
     def _specialization_topics_(self, specialization) -> 'Topics | tuple':
         """The narrower block's TOPICS declaration: its own, or -- for ``topics=SAME`` -- this block's."""
@@ -6758,7 +6813,7 @@ class Datablock:
         one failure this feature cannot afford.
         """
         fields = self.VAR.__dataclass_fields__
-        unknown = [k for k in specialization.spec if k not in fields]
+        unknown = [k for k in specialization.spec if k.split('.')[0] not in fields]
         if unknown:
             raise ValueError(
                 f"{self.__class__.__name__}.SPECIALIZATIONS: {specialization!r} pins "
@@ -6768,7 +6823,11 @@ class Datablock:
         self._topic_leaves_(self._specialization_topics_(specialization))   # raises on a topic we do not declare
         typed = self._typed_specdict_()
         for k, v in specialization.spec.items():
-            mine, pinned = typed[k], self._specialization_pin_(k, v)
+            mine, pinned = self._spec_entry_(typed, k), self._specialization_pin_(k, v)
+            if mine is ABSENT:
+                # A dotted pin into a nested block this one does not hold --
+                # a collator left None, say: a different block, not a bad pin.
+                return (f"it pins {k}={pinned!r}, and this block's spec holds no {k!r}")
             if repr(mine) != repr(pinned):
                 return (f"it is for {k}={pinned!r} and this block has {k}={mine!r}, "
                         f"so it describes a different block -- which is what a pin is "
@@ -6908,6 +6967,21 @@ class Datablock:
             return j
         return self._journal_under_(anchor)
 
+    def _past_recorded_(self, specialization) -> bool:
+        """Whether the journal holds any entry -- a build, an adoption -- for *specialization*'s identity of this block.
+
+        Read by hash alone (`Datajournal.read_hash`): a nested block's pasts
+        are many, and the whole of an anchor's journal is not read for each.
+        """
+        anchor = self._specialization_anchor_(specialization)
+        version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
+        try:
+            j = Datajournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
+                                      datalake=self.datalake, storage_options=self.storage_options, log=self.log)
+        except FileNotFoundError:
+            return False
+        return j is not None and len(j) > 0
+
     def _journal_under_(self, anchor, journal=None, **filter_kwargs):
         """The entries journalled under *anchor*, from *journal* when it holds any.
 
@@ -6993,7 +7067,8 @@ class Datablock:
     def _pins_match_(self, specialization) -> bool:
         """Whether *specialization*'s pins hold for this block -- what decides that a past was this block's."""
         fields, typed = self.VAR.__dataclass_fields__, self._typed_specdict_()
-        return all(k in fields and repr(typed[k]) == repr(self._specialization_pin_(k, v))
+        return all(k.split('.')[0] in fields
+                   and repr(self._spec_entry_(typed, k)) == repr(self._specialization_pin_(k, v))
                    for k, v in specialization.spec.items())
 
     def _nested_pasts_(self, _memo=None) -> list:
@@ -7006,9 +7081,12 @@ class Datablock:
         nested block renders as its spec alone.
         """
         memo = {} if _memo is None else _memo
-        if id(self) in memo:
-            return memo[id(self)]
-        memo[id(self)] = []
+        # By identity, not id(): the nested blocks asked are mostly evaluated
+        # from speclines and dropped, and a dropped block's id is soon another's.
+        key = (self.anchor, self.hash)
+        if key in memo:
+            return memo[key]
+        memo[key] = []
         if self._legacy_typing_():
             return []
         seen, pasts = {repr(self._typed_specdict_(legacy=False))}, []
@@ -7019,10 +7097,18 @@ class Datablock:
                     continue
                 text = repr(self._typed_specdict_(legacy=False, omit=tuple(variant.spec),
                                                   redirect_vars=variant.redirect_vars, nested=variant.nested))
-                if text not in seen:
-                    seen.add(text)
-                    pasts.append(variant)
-        memo[id(self)] = pasts
+                if text in seen:
+                    continue
+                if self.topics() and not self._past_recorded_(variant):
+                    # A block that stores something was built, or adopted,
+                    # under each identity it ever rendered as: one with no
+                    # entry is a combination of pasts that never was. Offered
+                    # anyway, every such combination multiplies with every
+                    # other nested block's, and the cap cuts off the real one.
+                    continue
+                seen.add(text)
+                pasts.append(variant)
+        memo[key] = pasts
         return pasts
 
     def _composed_(self, specialization, memo):
@@ -7033,7 +7119,12 @@ class Datablock:
         if self._legacy_typing_():
             yield specialization
             return
-        choices = [(k, [None, *b._nested_pasts_(memo)]) for k, b in self._nested_var_blocks_()]
+        # A field this specialization reaches into -- a dotted pin or move --
+        # renders as it is now: its past is the one the specialization spells.
+        reached = {p.split('.')[0] for p in [*(specialization.spec if specialization else ()),
+                                             *((specialization.redirect_vars or {}) if specialization else ())]
+                   if '.' in p}
+        choices = [(k, [None, *b._nested_pasts_(memo)]) for k, b in self._nested_var_blocks_() if k not in reached]
         choices = [(k, c) for k, c in choices if len(c) > 1]
         names = [k for k, _ in choices]
         base = specialization if specialization is not None else self.Specialization(
@@ -8868,7 +8959,7 @@ class Datastack(Datablock):
         if getattr(self, 'TAB', None) is not None:
             return 'TAB'
         table = getattr(getattr(self, 'var', None), 'partition', None)
-        table = getattr(table, 'datapoint_table', None)
+        table = getattr(table, 'datatable', None)
         if table is not None and getattr(table, 'TAB', None) is not None:
             return 'TAB'
         return 'BLOCK'

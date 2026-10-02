@@ -197,3 +197,59 @@ def test_rendering_a_past_leaves_the_block_as_it_is():
     first = leaf._typed_specdict_(omit=tuple(sp.spec), redirect_vars=sp.redirect_vars)
     assert leaf._typed_specdict_(omit=tuple(sp.spec), redirect_vars=sp.redirect_vars) == first
     assert leaf.var.columns == {'signals': SIGNALS, 'labels': LABELS}
+
+
+@pytest.mark.parametrize('labels', [[('labels', 'labels')], None])
+@pytest.mark.parametrize('recursive', [False, True])
+def test_the_real_collator_renders_as_before_its_roles(monkeypatch, labels, recursive):
+    """dbx's Datacollator: signals and labels were fields; a collator of signals alone had labels=None."""
+    from dbx.datatables import Datacollator
+
+    @dataclass
+    class OldVAR(Datablock.VAR):
+        signals: list
+        labels: list | None = None
+        length: int | None = None
+        skip_missing: bool = False
+
+    signals = [('features', 'final')]
+    with monkeypatch.context() as m:
+        m.setattr(Datacollator, 'VAR', OldVAR)
+        m.setattr(Datacollator, '__post_init__', Datablock.__post_init__)
+        old = repr(Datacollator(spec=dict(signals=signals, labels=labels))._typed_specdict_())
+    columns = {'signals': signals, **({'labels': labels} if labels is not None else {})}
+    new = Datacollator(spec=dict(columns=columns, recursive=recursive))
+    pasts = [repr(new._typed_specdict_(omit=tuple(p.spec), redirect_vars=p.redirect_vars, nested=p.nested))
+             for p in new._nested_pasts_()]
+    assert old in pasts
+
+
+def test_a_past_never_built_is_not_offered(tmp_path):
+    """A stored block's past counts only when the journal holds it: an unbuilt one is a combination that never was."""
+    url = str(tmp_path)
+    mid, _, _ = new_chain(url)
+    assert mid._nested_pasts_() == [], "nothing was built before"
+    old_chain(url)
+    mid, _, _ = new_chain(url)
+    assert [mid.get_hash(p) for p in mid._nested_pasts_()] == [old_chain(url)[0].hash]
+
+
+class MovedMid(Mid):
+    """Mid, whose old builds are under another anchor -- and whose anchorless past renders the same."""
+    SPECIALIZATIONS = [
+        Datablock.Specialization(spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_tab'}),
+        Datablock.Specialization(spec={}, topics=SAME, anchor='Mid', redirect_vars={'upstream': 'datapoint_tab'}),
+    ]
+
+
+def test_of_two_pasts_rendering_alike_the_recorded_one_is_offered(tmp_path):
+    """The first, under its own anchor, was never built; the second, under the old anchor, was."""
+    url = str(tmp_path)
+    old_mid, _, old_holder = old_chain(url)
+    src = Source(datalake=url, anchor='Source')
+    leaf = Leaf(datalake=url, anchor='Leaf', spec={'columns': {'signals': SIGNALS, 'labels': LABELS}})
+    mid = MovedMid(datalake=url, anchor='MovedMid', spec={'upstream': src, 'collator': leaf})
+    pasts = mid._nested_pasts_()
+    assert [p.anchor for p in pasts] == ['Mid'] and mid.get_hash(pasts[0]) == old_mid.hash
+    holder = Holder(datalake=url, anchor='Holder', spec={'mid': mid})
+    assert holder.find_specialization().hash == old_holder.hash

@@ -71,15 +71,14 @@ class Derived(DataslicesUpstream, Datatab):
 
     VERSION = 1
     TOPICS = {'d': SLICETOPIC}
-    UPSTREAM_TABS = ('source',)
 
     @dataclass
     class VAR(Datatab.VAR):
-        source: Samples = None
+        upstream: Samples = None
         offset: int = 0
 
     def __build__(self):
-        upstream = self.var.source.data(('a', ['idx']))['a']['idx']
+        upstream = self.var.upstream.data(('a', ['idx']))['a']['idx']
         with self.slice_writers({'d': {'idx': 'int', 'z': 'int'}}) as writers:
             for i in upstream:
                 writers['d'].write({'idx': int(i) + self.var.offset, 'z': int(i) ** 2})
@@ -193,7 +192,7 @@ class TestTheUpstreamDeclaration:
 
     @pytest.fixture
     def derived(self, samples, tmp_path):
-        d = Derived(datalake=str(tmp_path), spec=dict(source=samples),
+        d = Derived(datalake=str(tmp_path), spec=dict(upstream=samples),
                     shared_upstream_column='idx')
         d.build()
         return d
@@ -208,7 +207,7 @@ class TestTheUpstreamDeclaration:
     def test_a_shifted_derived_slice_is_caught(self, samples, tmp_path):
         """Exactly the fault the declaration exists for: the derived rows are
         no longer the ones computed from the samples they are paired with."""
-        shifted = Derived(datalake=str(tmp_path), spec=dict(source=samples, offset=1),
+        shifted = Derived(datalake=str(tmp_path), spec=dict(upstream=samples, offset=1),
                           shared_upstream_column='idx')
         shifted.build()
         with pytest.raises(ValueError, match='not aligned'):
@@ -217,7 +216,7 @@ class TestTheUpstreamDeclaration:
     def test_without_the_declaration_the_shift_reads_clean(self, samples, tmp_path):
         """What the default buys. Nothing raises, and every row pairs a derived
         value with the wrong sample."""
-        shifted = Derived(datalake=str(tmp_path), spec=dict(source=samples, offset=1))
+        shifted = Derived(datalake=str(tmp_path), spec=dict(upstream=samples, offset=1))
         shifted.build()
         assert shifted.dataset('d', 'a')[0] == {'d': {'idx': 1, 'z': 0}, 'a': {'idx': 0, 'x': 0}}
 
@@ -225,18 +224,32 @@ class TestTheUpstreamDeclaration:
         assert derived.shared_upstream_column == ('idx',)
 
     def test_it_takes_precedence_over_the_slice_declaration(self, samples, tmp_path):
-        d = Derived(datalake=str(tmp_path), spec=dict(source=samples),
+        d = Derived(datalake=str(tmp_path), spec=dict(upstream=samples),
                     shared_upstream_column='idx', shared_slice_columns='z')
         d.build()
         assert d.dataset('d', 'a').shared == {'idx'}
 
     def test_the_slice_declaration_still_applies_alone(self, samples, tmp_path):
-        d = Derived(datalake=str(tmp_path), spec=dict(source=samples),
+        d = Derived(datalake=str(tmp_path), spec=dict(upstream=samples),
                     shared_slice_columns='idx')
         d.build()
         assert d.dataset('d', 'a').shared == {'idx'}
 
     def test_it_is_not_in_the_identity(self, samples, tmp_path):
-        assert Derived(datalake=str(tmp_path), spec=dict(source=samples),
+        assert Derived(datalake=str(tmp_path), spec=dict(upstream=samples),
                        shared_upstream_column='idx').hash == \
-               Derived(datalake=str(tmp_path), spec=dict(source=samples)).hash
+               Derived(datalake=str(tmp_path), spec=dict(upstream=samples)).hash
+
+
+def test_a_collator_reads_upstream_only_when_recursive(samples, tmp_path):
+    from dbx.datatables import Datacollator
+    d = Derived(datalake=str(tmp_path), spec=dict(upstream=samples), tag='d')
+    assert tuple(d.slices()) == ('d',)
+    assert tuple(d.slices(recursive=True))[:1] == ('d',) and 'a' in d.slices(recursive=True)
+    own = Datacollator(spec=dict(columns={'signals': [('d', 'z')]}))
+    assert own.slices(d) == ['d']
+    across = Datacollator(spec=dict(columns={'signals': [('d', 'z')], 'labels': [('a', 'idx')]}))
+    with pytest.raises(KeyError, match="recursive=True"):
+        across.slices(d)
+    recursive = Datacollator(spec=dict(columns={'signals': [('d', 'z')], 'labels': [('a', 'idx')]}, recursive=True))
+    assert recursive.slices(d) == ['d', 'a']

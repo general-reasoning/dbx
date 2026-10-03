@@ -381,6 +381,31 @@ class Featuretable(DataslicesUpstream, Datatable):
         self.devices = getattr(self, 'devices', None) or ["cpu"]
         self._devices = self.devices
 
+    def build(self, *args, **kwargs):
+        """As `Datatable.build`, after checking that its *devices* exist here -- before anything else is done."""
+        self._check_devices_()
+        return super().build(*args, **kwargs)
+
+    def _check_devices_(self) -> None:
+        """Raise for a ``cuda:<i>`` this process cannot see.
+
+        Each worker takes one of *devices*; one naming a GPU the job was not
+        given fails as ``CUDA error: invalid device ordinal`` -- in a worker,
+        after the blocks are checked and the journal read, minutes in. Here it
+        fails first, saying how many devices there are.
+        """
+        cuda = [str(d) for d in self.devices if str(d).startswith('cuda')]
+        if not cuda:
+            return
+        if torch is None or not torch.cuda.is_available():
+            raise RuntimeError(f"{type(self).__name__}: devices={self.devices} asks for CUDA, and this process "
+                               f"has none (torch.cuda.is_available() is False)")
+        n = torch.cuda.device_count()
+        missing = [d for d in cuda if (int(d.split(':', 1)[1]) if ':' in d else 0) >= n]
+        if missing:
+            raise ValueError(f"{type(self).__name__}: devices={self.devices} names {missing}, but this process "
+                             f"sees {n} CUDA device(s), cuda:0..cuda:{n - 1} -- ask for no more than the job has")
+
     def __tab__(self, idx: int, device: str | None = None, tag=None) -> Featuretab:
         upstream = self.var.upstream.tab(idx)
         spec = dict(

@@ -649,3 +649,15 @@ def test_ternary_refuses_a_threshold_outside_the_unit_interval(tmp_path):
     bipolar = _bipolar_table(url)
     with pytest.raises(ValueError, match="bag_threshold"):
         TernaryFeaturetab(datalake=url, spec=dict(upstream=bipolar.tab(0), bag_threshold=0.0))
+
+
+def test_a_feature_table_refuses_devices_it_cannot_see_before_building(tmp_path):
+    """devices naming a GPU the process lacks fail at build(), first -- not in a worker, minutes in."""
+    url = str(tmp_path)
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag="devices_samples").build()
+    table = Featuretable(datalake=url, tag="devices", devices=["cuda:7"], spec=dict(
+        upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+        collator=sample_collator()))
+    with pytest.raises((RuntimeError, ValueError), match="devices="):
+        table.build()
+    assert not table.valid() and not table.valid_tab(0)

@@ -8267,8 +8267,12 @@ class Datastack(Datablock):
         # path). Then time the bipolar TRAIN adoption again, cold.
         shared = (journal if journal is not None else self._build_journal_()) if specs else None
         install = shared is not None
-        tag = (f"SPECIALIZING {len(invalid)} of {n} {item_label} [{self.__class__.__name__}]" if install
-               else f"CLASSIFYING {len(invalid)} of {n} invalid {item_label} [{self.__class__.__name__}]")
+        tag = (f"ATTEMPTING SPECIALIZATION of {len(invalid)} of {n} {item_label} [{self.__class__.__name__}]"
+               if install else f"CLASSIFYING {len(invalid)} of {n} invalid {item_label} [{self.__class__.__name__}]")
+        self.log.info(f"{self.anchorkeypath}: "
+                      + (f"ATTEMPTING SPECIALIZATION of {len(invalid)} {item_label}: each looks for an earlier "
+                         f"build of itself to adopt" if install else
+                         f"classifying {len(invalid)} invalid {item_label}"))
         results = self._exec_over_blocks_(
             [self.DatablockSpecializationInstaller(i, validation=full, install=install) for i in invalid],
             journal=shared, tag=tag, parallelization=parallelization, n_workers=n_workers, **kwargs)
@@ -8281,12 +8285,15 @@ class Datastack(Datablock):
         still_invalid = by_status.get('owes', []) + by_status.get('unresolved', [])
         failed = {i: status for status in ('fails_validation', 'adoption_fails_validation')
                   for i in by_status.get(status, [])}
+        adopted, owes, unresolved = (len(by_status.get(k, [])) for k in ('adopted', 'owes', 'unresolved'))
+        fails = len(by_status.get('fails_validation', [])) + len(by_status.get('adoption_fails_validation', []))
+        verdict = ("ALL ADOPTED" if adopted == len(invalid) else "NONE ADOPTED" if adopted == 0
+                   else f"{adopted} OF {len(invalid)} ADOPTED")
         self.log.info(
-            f"{self.__class__.__name__}: specialization adoption over {n} {item_label}: "
-            f"{n - len(invalid) + len(by_status.get('valid', []))} already valid, "
-            f"{len(by_status.get('adopted', []))} adopted, {len(by_status.get('owes', []))} adopted but owing, "
-            f"{len(by_status.get('unresolved', []))} unresolved, {len(by_status.get('fails_validation', []))} "
-            f"failing validate(), {len(by_status.get('adoption_fails_validation', []))} whose adoption failed it"
+            f"{self.anchorkeypath}: SPECIALIZATION {verdict} -- of {n} {item_label}: "
+            f"{n - len(invalid) + len(by_status.get('valid', []))} ALREADY VALID, {adopted} ADOPTED, "
+            f"{owes} ADOPTED BUT OWING, {unresolved} UNRESOLVED, {fails} FAILING VALIDATE(); "
+            f"{owes + unresolved} TO BE COMPUTED"
         )
         if not still_invalid and not failed and paths is not None and self.valid():
             self._record_blocks_manifest_(paths)

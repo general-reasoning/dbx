@@ -1753,3 +1753,13 @@ class TestClearingLeavesNothingBehind:
         still = self._built(tmp_path)
         still.UNSAFE_clear('logs', OVERRIDE=True)
         assert still.valid()
+
+
+def test_a_runs_logs_are_linked_by_anchor_and_key(tmp_path):
+    """TensorBoard sees ``<root>/<anchor>/<key>``: the class's name, not ``version=N/<hash>`` alone."""
+    base = make_still(tmp_path)
+    still = ToyStill(datalake=str(tmp_path), tag='toy', spec=base.spec, num_workers=0,
+                     tensorlogs_root=str(tmp_path / 'tb'))
+    still.linklogs()
+    link = tmp_path / 'tb' / still.anchor / still.key
+    assert link.is_symlink() and still.anchor.endswith('ToyStill')

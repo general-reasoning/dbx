@@ -1246,7 +1246,7 @@ class Still(CheckpointBuilder):
     def linklogs(self):
         """Symlink this run's local log dir under ``tensorlogs_root``.
 
-        So that one ``tensorboard --logdir`` sees every run, named by key,
+        So that one ``tensorboard --logdir`` sees every run, named by anchor and key,
         without the logs themselves moving out of the block's staging area.
         """
         return self.linklocal('logs', self._logslink_)
@@ -1846,9 +1846,15 @@ class Still(CheckpointBuilder):
 
     @property
     def _logslink_(self):
+        """``<tensorlogs_root>/<anchor>/<key>``: one TensorBoard tree, its runs named by class and identity.
+
+        The anchor, not the key alone: under the key alone every still class's
+        runs land side by side as ``version=N/<hash>``, and nothing in
+        TensorBoard says which model a curve belongs to.
+        """
         if self.tensorlogs_root is None:
             return None
-        return os.path.join(self.tensorlogs_root, self.key)
+        return os.path.join(self.tensorlogs_root, self.anchor, self.key)
 
     # ── UNSAFE_ helpers ────────────────────────────────────────────
     def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, ckpts: int = 0, **kwargs):

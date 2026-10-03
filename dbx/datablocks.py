@@ -30,6 +30,7 @@ import gc
 import hashlib
 import inspect
 import os
+import time
 import random
 import re
 import shutil
@@ -7789,6 +7790,7 @@ class Datastack(Datablock):
         # they would read as unbuilt. The journal, when a block needs it, is
         # read once for the whole build -- see `_build_journal_`.
         self.__dict__['__building__'] = True
+        self.log.info(f"{self.anchorkeypath}: building -- first, which of its {self.n_blocks} blocks are built")
         validation = self._validation_()
         # deep=True takes no short cut: not the stack's validity, nor the manifest's -- every block is asked.
         if deep and validation == 'cross_check':
@@ -8223,14 +8225,13 @@ class Datastack(Datablock):
         valid, paths = self._check_blocks_(validation, parallelization=parallelization, n_workers=n_workers)
         invalid = list(valid[~valid].index)
         if not invalid:
-            self.log.verbose(
-                f"{self.__class__.__name__}: all {n} {item_label} already valid, "
-                f"skipping specialization adoption"
-            )
+            self.log.info(f"{self.anchorkeypath}: all {n} {item_label} already valid")
             return pd.Series([None] * n, dtype=object), [], {}, paths
 
         full = 'validate' if validation == 'validate' else 'valid'
         specs = self._block_class_() is not None and self._block_specializations_()
+        self.log.info(f"{self.anchorkeypath}: {len(invalid)} of {n} {item_label} not valid"
+                      + ("; looking for earlier builds of them to adopt, before computing any" if specs else ""))
         # FIX(adoption stall): don't read the anchor's whole journal here; let each
         # block resolve its own past by hash, in the workers.
         #
@@ -9055,14 +9056,16 @@ class Datastack(Datablock):
         n_items = getattr(self, 'n_tabs', self.n_blocks)
 
         anchor = block_cls.anchor
-        self.log.verbose(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
-                         f"for {n_items} {item_label} to resolve against...")
+        self.log.info(f"{self.anchorkeypath}: reading the {anchor} journal, to find earlier builds its "
+                      f"{item_label} can adopt -- once for the whole build; over many blocks this takes minutes")
+        started = time.time()
         try:
             journal, anchor, lake = self._blocks_datajournal_()
         except FileNotFoundError:
+            self.log.info(f"{self.anchorkeypath}: no {anchor} journal: nothing to adopt")
             return None
-        self.log.verbose(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
-                         f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
+        self.log.info(f"{self.anchorkeypath}: read the {anchor} journal, {len(journal)} entries, "
+                      f"in {time.time() - started:.0f} s")
         journal = BlocksJournal(journal, anchor, lake)
         if self.__dict__.get('__building__'):
             self.__dict__['__build_journal__'] = journal

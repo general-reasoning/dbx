@@ -676,9 +676,27 @@ def get_dotted_cxt(node: ast.AST) -> dict:
         try:
             _, c = get_named_const_and_cxt(name)
         except Exception:
-            continue
+            # The modules a name is rooted in, even when its last attribute is
+            # missing: bound, ``pkg.mod.renamed_fn(...)`` then fails where it is
+            # used, as "module 'pkg.mod' has no attribute 'renamed_fn'". Left
+            # unbound, it failed as "name 'pkg' is not defined", which names
+            # neither the module nor what was asked of it.
+            c = _importable_prefix_(name)
         cxt.update(c)
     return cxt
+
+
+def _importable_prefix_(name: str) -> dict:
+    """``{modname: module}`` for each leading part of dotted *name* that imports, stopping at the first that does not."""
+    out, prefix = {}, None
+    for bit in name.split('.')[:-1]:
+        modname = bit if prefix is None else f"{prefix}.{bit}"
+        try:
+            out[modname] = sys.modules.get(modname) or importlib.import_module(modname)
+        except Exception:
+            break
+        prefix = modname
+    return out
 
 
 def exec(s=None, *, capture_output: bool = False, **kwargs):

@@ -19,7 +19,6 @@ from dbx import (
     ModelEvaluator,
     ModelEvaluatorBuilder,
     FeatureAffineLogisticProbe,
-    FeatureAffineLogisticProber,
     FeatureStatsProbe,
     normalize_features,
 )

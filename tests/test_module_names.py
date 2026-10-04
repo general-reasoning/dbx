@@ -25,7 +25,7 @@ def setup_env(monkeypatch):
 @pytest.mark.parametrize('cls', [datatables.Datatab, datatables.Datatable, datatables.DatatablePartition,
                                  datatables.DatatablePart, featuretables.Featuretab, featuretables.Featuretable,
                                  featuretables.BipolarFeaturetab, featuretables.BipolarFeaturetable,
-                                 datatables.Datacollator, probes.FeatureStatsProbe])
+                                 datatables.Datacollator, datatables.DatatabPiece, probes.FeatureStatsProbe])
 def test_a_class_is_recorded_under_its_own_module(cls):
     assert cls.__module__ in ('dbx.datatables', 'dbx.featuretables', 'dbx.probes')
     assert cls.__module__ == importlib.import_module(cls.__module__).__name__

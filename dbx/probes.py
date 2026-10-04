@@ -23,7 +23,6 @@ from dbx.datablocks import DATADICT, DATAFILE, Datablock, InvalidBlocksError, fo
 from dbx.datatables import Datacollator
 from dbx.featuretables import Featuretable, Featuretab
 from dbx.datatables import DatatablePart
-from dbx.journals import Datalog
 from dbx.dataparts import (
     callable_executor,
     read_npz,
@@ -81,84 +80,6 @@ def normalize_features(features: Any, mode: str | None) -> Any:
             return result
         else:
             raise ValueError(f"Unknown normalization mode {mode!r}")
-
-
-class FeatureAffineLogisticProber:
-    """Standalone logistic regression evaluator for data features.
-
-    Provides static `evaluate_features` and `evaluate_features2`
-    helpers that train/test a `LogisticRegression`
-    and return `classification_report` strings.
-    """
-
-    # 1. Protocol and hooks ------------------------------------------------
-
-    def __init__(self, log: Datalog | None = None):
-        self.log = log or Datalog()
-
-    # 2. Declared API ------------------------------------------------------
-
-    @staticmethod
-    def ndarray(X: Any) -> np.ndarray:
-        """Coerce X to a numpy ndarray."""
-        if isinstance(X, list):
-            return np.array(X)
-        elif torch is not None and isinstance(X, torch.Tensor):
-            return X.numpy()
-        elif isinstance(X, np.ndarray):
-            return X
-        else:
-            return np.array(X)
-
-    @staticmethod
-    def evaluate_features(Xy: tuple[Any, Any], *, training_fraction: float = 0.8,
-                          fit_intercept: bool = True) -> str:
-        """Train/test a LogisticRegression and return the classification report.
-
-        *training_fraction* is the share fitted on; the remainder is scored.
-        """
-        features, labels = Xy
-        features = FeatureAffineLogisticProber.ndarray(features)
-        labels = FeatureAffineLogisticProber.ndarray(labels)
-        N = len(labels)
-        ntrain = int(N * training_fraction)
-        perm = np.random.permutation(N)
-        X_train, y_train = features[perm[:ntrain]], labels[perm[:ntrain]]
-        X_test, y_test = features[perm[ntrain:]], labels[perm[ntrain:]]
-
-        clf = LogisticRegression(fit_intercept=fit_intercept)
-        clf.fit(X_train, y_train)
-        y_pred = clf.predict(X_test)
-        return classification_report(y_test, y_pred)
-
-    @staticmethod
-    def evaluate_features2(
-        Xy1: tuple[Any, Any],
-        Xy2: tuple[Any, Any],
-        *,
-        training_fraction: float = 0.8,
-        fit_intercept: bool = True,
-        tags: tuple[str, str] = ("(1)", "(2)"),
-        log: Datalog | None = None,
-    ) -> tuple[str, str]:
-        """Evaluate two feature sets side-by-side."""
-        import datetime
-        log = log or Datalog()
-        label1, label2 = tags
-        log.verbose(f"EVALUATING features: {label1}: started at {datetime.datetime.now()}")
-        report1 = FeatureAffineLogisticProber.evaluate_features(
-            Xy1, training_fraction=training_fraction, fit_intercept=fit_intercept
-        )
-        log.verbose(f"EVALUATING features: {label1}: finished at {datetime.datetime.now()}")
-        log.verbose(f"EVALUATING features: {label2}: started at {datetime.datetime.now()}")
-        report2 = FeatureAffineLogisticProber.evaluate_features(
-            Xy2, training_fraction=training_fraction, fit_intercept=fit_intercept
-        )
-        log.verbose(f"EVALUATING features: {label2}: finished at {datetime.datetime.now()}")
-
-        rstr = f"---------- {label1} ------------\n{report1}\n---------- {label2} ------------\n{report2}"
-        log.verbose(rstr)
-        return report1, report2
 
 
 def _pair_key_(pair: tuple[str, str]) -> str:
@@ -307,11 +228,12 @@ def check_probe_inputs(probe, table=None) -> None:
     """
     table = probe.var.feature_table if table is None else table
     collator = getattr(probe.var, 'collator', None)
-    # A fold routes no slices of its own: its tabs are its table's, at its
-    # indices, and are asked there -- those tabs only.
-    indices = None
-    if isinstance(table, DatatablePart):
-        indices, table = list(table.tab_indices), table.datatable
+    # A fold routes no slices of its own: it reads its table's. Its blocks --
+    # the table's tabs, and pieces of them, which are not the table's -- are
+    # asked of the fold itself; an upstream table's, at the fold's tab indices.
+    part = table if isinstance(table, DatatablePart) else None
+    if part is not None:
+        table = part.datatable
     owners = {}
     if collator is not None and hasattr(table, '_route_'):
         for owner, s_name, _ in table._route_(collator.slices(table)):
@@ -321,14 +243,20 @@ def check_probe_inputs(probe, table=None) -> None:
     for owner, slices in owners.values():
         if not hasattr(owner, 'valid_blocks') or not (getattr(owner, 'n_tabs', 0) or 0):
             continue
-        if indices is not None:
-            invalid = [i for i in indices if not owner.valid_block(i)]
+        if part is not None and owner is table:
+            owner = part
+            invalid = [i for i in range(part.n_tabs) if not part.valid_block(i)]
+        elif part is not None:
+            # A partition splits no tab of a table reading upstream, so these are whole tabs.
+            invalid = [i for i in part.tab_indices if not owner.valid_block(i)]
         else:
             invalid = list(owner.valid_blocks(parallelization=probe.parallelization, n_workers=probe.n_workers,
                                               false_only=True).index)
         if invalid:
+            pieces = owner is part and any(isinstance(part.tab_indices[i], dict) for i in invalid)
             raise InvalidBlocksError(owner, invalid,
-                                     reader=f"{probe.anchorkeypath}: reading {slices} from its tabs")
+                                     reader=f"{probe.anchorkeypath}: reading {slices} from its tabs"
+                                            + ("; a part's pieces are built by the part: part.build()" if pieces else ""))
 
 
 class TabAffineLogisticCallable:
@@ -429,7 +357,11 @@ class FeatureAffineLogisticProbe(Datablock):
     to a feature after the fact.
 
     A sample is a row, or with *tab_aggregation* ``'mean'`` a tab: the mean of
-    its rows, labelled by the one label they share. *max_rows_per_tab* reads at
+    its rows, labelled by the one label they share. A fold's tab may be a
+    piece of a tab (`DatatabPiece`), which is a sample of its own: a partition
+    stratified by the label column splits a tab whose rows carry several labels
+    into pieces carrying one each, which is what makes such a tab one sample
+    per label rather than a tab refused. *max_rows_per_tab* reads at
     most that many of a tab's rows, drawn with *seed* and the tab's tag -- a
     size for a fit, which moves no tab across the two tables.
 
@@ -499,7 +431,6 @@ class FeatureAffineLogisticProbe(Datablock):
         self.parallelization = getattr(self, 'parallelization', None) or 'inline'
         self.n_workers = getattr(self, 'n_workers', 1)
         self.work_stealing = getattr(self, 'work_stealing', getattr(self, 'works_stealing', False))
-        self._prober = FeatureAffineLogisticProber(log=self.log)
 
     def __build__(self):
         self.log.verbose(f"FeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")

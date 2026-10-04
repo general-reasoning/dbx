@@ -256,7 +256,7 @@ def check_probe_inputs(probe, table=None) -> None:
             pieces = owner is part and any(isinstance(part.tab_indices[i], dict) for i in invalid)
             raise InvalidBlocksError(owner, invalid,
                                      reader=f"{probe.anchorkeypath}: reading {slices} from its tabs"
-                                            + ("; pieces of a fold are built by the fold: fold.build()" if pieces else ""))
+                                            + ("; a part's pieces are built by the part: part.build()" if pieces else ""))
 
 
 class TabAffineLogisticCallable:

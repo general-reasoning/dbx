@@ -226,12 +226,12 @@ def test_a_partition_of_constant_tabs_is_what_it_was(tmp_path):
     p = partition(tmp_path / 'gs', tbl, groupby=PATIENT, stratifyby=COHORT)
     assert p.hash == '3318e720fcb934c1fd3b563c7dc3f36487c8f63733a4414fdd0c9bccecba6a57'
     assert p.read('tabs') == [[3, 6, 7, 9, 10, 11], [0, 1, 2, 4, 5, 8]]
-    assert p.fold(0).hash == 'c6c4a6c63b633cb4ffee9cc7e1ba5025653a53294314f7d87e1279b4fe4ce166'
+    assert p.part(0).hash == 'c6c4a6c63b633cb4ffee9cc7e1ba5025653a53294314f7d87e1279b4fe4ce166'
     assert 'n_pieces' not in p.read('summary')
     p = partition(tmp_path / 'none', tbl)
     assert p.hash == '1229ccb8cfc81d5dc775aea8d497d19339f0f2b3bf3413bcbf0575127b134dbc'
     assert p.read('tabs') == [[0, 2, 3, 4, 5, 7, 9, 11], [1, 6, 8, 10]]
-    assert p.fold(0).hash == '9aed45e329a46a642d46ba8f067fcb8fd382e18601ad0bb842f13698d7ae20ef'
+    assert p.part(0).hash == '9aed45e329a46a642d46ba8f067fcb8fd382e18601ad0bb842f13698d7ae20ef'
 
 
 # Bags: tabs whose rows each carry their own patient and cohort -- several of each in a tab.
@@ -292,18 +292,18 @@ def bag_partition(tmp_path, tbl, groupby=PATIENT, stratifyby=COHORT, **spec):
         collator=collator(groupby, stratifyby), **spec)).build()
 
 
-def built_folds(p, **kw):
-    return [p.fold(k).build(**kw) for k in range(p.n_folds())]
+def built_parts(p, **kw):
+    return [p.part(k).build(**kw) for k in range(p.n_folds())]
 
 
-def fold_meta(fold):
-    return fold.data('meta')['meta']
+def part_meta(part):
+    return part.data('meta')['meta']
 
 
 def test_every_row_is_in_one_fold_or_skipped_and_said(tmp_path):
     tbl = bags(tmp_path)
     p = bag_partition(tmp_path / 'p', tbl)
-    rows = [fold_meta(f)['row'] for f in built_folds(p)]
+    rows = [part_meta(f)['row'] for f in built_parts(p)]
     assert set(rows[0]).isdisjoint(rows[1])
     every = {1000 * b + i: r for b, bag in enumerate(BAGS) for i, r in enumerate(bag)}
     skipped = p.read('summary')['skipped']
@@ -317,8 +317,8 @@ def test_a_groups_rows_are_in_one_fold_across_tabs_and_pieces(tmp_path):
     for seed in range(4):
         p = bag_partition(tmp_path / f's{seed}', bags(tmp_path), seed=seed)
         fold_of = {}
-        for k, f in enumerate(built_folds(p)):
-            for info in fold_meta(f)['info']:
+        for k, f in enumerate(built_parts(p)):
+            for info in part_meta(f)['info']:
                 fold_of.setdefault(info['patient'], set()).add(k)
         assert all(len(ks) == 1 for ks in fold_of.values()), (seed, fold_of)
 
@@ -326,7 +326,7 @@ def test_a_groups_rows_are_in_one_fold_across_tabs_and_pieces(tmp_path):
 def test_a_piece_holds_its_value_in_every_row_and_slice_alike(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     n_pieces = 0
-    for fold in built_folds(p):
+    for fold in built_parts(p):
         for i, entry in enumerate(fold.tab_indices):
             if not isinstance(entry, dict):
                 continue
@@ -338,6 +338,27 @@ def test_a_piece_holds_its_value_in_every_row_and_slice_alike(tmp_path):
             assert meta['row'] == x['row']              # row i of one slice is row i of the other
             assert piece.tag == f"{p.datatable.tab(entry['tab']).tag}#{entry['groupby']}#{entry['stratifyby']}"
     assert n_pieces == p.read('summary')['n_pieces'] - 1        # all but the skipped one
+
+
+def test_a_piece_records_its_source_rows_which_take_the_same_piece_of_the_source(tmp_path):
+    p = bag_partition(tmp_path / 'p', bags(tmp_path))
+    for part in built_parts(p):
+        for i, entry in enumerate(part.tab_indices):
+            if not isinstance(entry, dict):
+                continue
+            piece, source = part.tab(i), p.datatable.tab(entry['tab'])
+            rows = piece.read('source_rows')
+            assert rows.dtype == np.int64 and list(rows) == sorted(rows)
+            # The indices, applied to the source, are the piece -- what a tab built from the source row by row reuses.
+            src = source.data('x')['x']
+            assert [src['row'][r] for r in rows] == piece.data('x')['x']['row']
+            info = source.data('meta')['meta']['info']
+            assert [r for r, v in enumerate(info) if (v['patient'], v['cohort']) == (entry['groupby'], entry['stratifyby'])] == list(rows)
+
+
+def test_fold_is_the_name_part_had_first(tmp_path):
+    p = bag_partition(tmp_path / 'p', bags(tmp_path))
+    assert p.fold(1).hash == p.part(1).hash
 
 
 def test_the_fractions_hold_within_each_stratum_counting_pieces(tmp_path):
@@ -366,9 +387,9 @@ def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
     for k in range(p.n_folds()):
         fold = DatatablePart(datalake=str(tmp_path / 'p'), spec=dict(partition=p, fold=k),
                              parallelization='multiprocessing', n_workers=2)
-        assert fold.hash == p.fold(k).hash
+        assert fold.hash == p.part(k).hash
         fold.build()
-        assert all(p.fold(k).valid_tab(i, validation='valid') for i in range(fold.n_tabs))
+        assert all(p.part(k).valid_tab(i, validation='valid') for i in range(fold.n_tabs))
 
 
 def test_a_piece_that_cannot_be_recovered_says_so(tmp_path):
@@ -403,7 +424,7 @@ def probe(tmp_path, fit, ev, **spec):
 
 def test_a_probe_fits_and_scores_on_folds_holding_pieces(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
-    fit, ev = built_folds(p)
+    fit, ev = built_parts(p)
     assert any(isinstance(e, dict) for e in fit.tab_indices + ev.tab_indices)
     pr = probe(tmp_path / 'probe', fit, ev).build()
     assert sorted(pr.read('classes').tolist()) == [0, 1]
@@ -420,7 +441,7 @@ def test_pieces_of_one_tab_in_two_folds_are_disjoint_and_one_piece_twice_is_not(
             break
     else:
         pytest.fail("no seed puts two pieces of one tab in different folds")
-    fit, ev = built_folds(p)
+    fit, ev = built_parts(p)
     probe(tmp_path / 'ok', fit, ev)._check_disjoint_()
     with pytest.raises(ValueError, match="share"):
         probe(tmp_path / 'twice', fit, fit)._check_disjoint_()
@@ -429,12 +450,12 @@ def test_pieces_of_one_tab_in_two_folds_are_disjoint_and_one_piece_twice_is_not(
 def test_a_probe_says_a_piece_is_not_built_before_it_starts(tmp_path):
     from dbx.datablocks import InvalidBlocksError
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
-    fit, ev = built_folds(p)
+    fit, ev = built_parts(p)
     # A built fold, and one of its pieces gone since: the fold vouches, the piece does not.
     i = next(i for i, e in enumerate(fit.tab_indices) if isinstance(e, dict))
     fit.UNSAFE_clear_blocks('meta', indices=[i], clear_done=False, OVERRIDE=True)
-    with pytest.raises(InvalidBlocksError, match=rf"(?s)reading \['x', 'meta'\] from its tabs; pieces of a fold "
-                                                 rf"are built by the fold: fold\.build\(\).*block {i}:"):
+    with pytest.raises(InvalidBlocksError, match=rf"(?s)reading \['x', 'meta'\] from its tabs; a part's pieces are "
+                                                 rf"built by the part: part\.build\(\).*block {i}:"):
         probe(tmp_path / 'probe', fit, ev).build()
 
 
@@ -444,9 +465,9 @@ def test_stratifying_by_the_label_makes_a_tab_of_two_labels_valid_samples(tmp_pa
     whole = DatatablePartition(datalake=str(tmp_path / 'whole'), spec=dict(
         datatable=tbl, fractions=[0.5, 0.5], partition_slice='meta')).build()
     with pytest.raises(ValueError, match="can carry only one label"):
-        probe(tmp_path / 'refused', *built_folds(whole), tab_aggregation='mean').build()
+        probe(tmp_path / 'refused', *built_parts(whole), tab_aggregation='mean').build()
     p = bag_partition(tmp_path / 'p', tbl, groupby=None, stratifyby=LABEL, balance='tabs')
-    fit, ev = built_folds(p)
+    fit, ev = built_parts(p)
     pr = probe(tmp_path / 'probe', fit, ev, tab_aggregation='mean').build()
     # One sample per tab or piece, each of one label.
     assert len(pr.read('fit', 'labels')) == fit.n_tabs and len(pr.read('eval', 'labels')) == ev.n_tabs

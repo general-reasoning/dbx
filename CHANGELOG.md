@@ -33,14 +33,20 @@ All notable changes to this project will be documented in this file.
   rows. A piece is dealt as a tab is, with its group and within its stratum;
   in `tabs` it is a record, `{"tab": i, "groupby": v, "stratifyby": v}`, beside
   the indices of the tabs dealt whole, and its tag is `<tab tag>#<value>...`.
-  The fold builds its pieces, in parallel: `partition.fold(k).build()`. Rows of
-  a mixed tab holding no value are a piece that is skipped, and recorded in
-  `summary` with their count. Only mixed tabs are split, so a partition of
-  constant tabs -- its hash, `tabs`, folds and summary -- is unchanged. Not for
-  a table reading upstream (a `Featuretable`): a mixed tab of one still raises
-  `NotImplementedError`.
-- **Probes read folds holding pieces.** `check_probe_inputs` asks a fold about
-  its own blocks, pieces included, and says to build the fold when a piece is
+  The part builds its pieces, in parallel: `partition.part(k).build()`. Each
+  piece records its source tab's row indices, in order, as `source_rows`. That
+  is what a table built from the source row by row (a feature table) can take
+  the same piece of itself by. Rows of a mixed tab holding no value are a piece
+  that is skipped, and recorded in `summary` with their count. Only mixed tabs
+  are split, so a partition of constant tabs -- its hash, `tabs`, folds and
+  summary -- is unchanged. Not for a table reading upstream (a `Featuretable`):
+  a mixed tab of one still raises `NotImplementedError`.
+- **`DatatablePartition.part(k)`**: fold *k* as a table, a `DatatablePart`.
+  `fold(k)` is the name it had first, and still works.
+- **DATAPARTITION.md**: partitions, parts and pieces -- what decides a
+  partition, the scan/deal/build flow, and the way to downstream tables.
+- **Probes read parts holding pieces.** `check_probe_inputs` asks a part about
+  its own blocks, pieces included, and says to build the part when a piece is
   missing; `_check_disjoint_` tells pieces apart by tag. Stratifying a
   partition by the label column turns a tab whose rows carry two labels into
   pieces carrying one each, which `tab_aggregation='mean'` takes as samples.

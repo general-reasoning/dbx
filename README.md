@@ -186,7 +186,8 @@ table.datastream('frames')               # one slice, unzipped
 table.data('annotations')                # every tab's samples, concatenated
 ```
 
-See [DATATABLES.md](DATATABLES.md).
+See [DATATABLES.md](DATATABLES.md), and [DATAPARTITION.md](DATAPARTITION.md) for
+splitting a table into folds: partitions, parts and pieces.
 
 ### Data Terminology
 

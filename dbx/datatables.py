@@ -1995,9 +1995,9 @@ class DatatablePartition(Datablock):
     `tabs_indices`; ``summary`` -- per fold its tags and counts (tabs, rows, per
     stratum), and the tabs and pieces skipped and why.
 
-    The folds build the pieces: ``partition.fold(k).build()`` builds them, in
-    parallel, as a table builds its tabs, and the whole tabs among them are
-    already built. A probe reading a fold whose pieces are not built says so
+    The parts build the pieces: ``partition.part(k).build()`` builds fold k's,
+    in parallel, as a table builds its tabs, and the whole tabs among them are
+    already built. A probe reading a part whose pieces are not built says so
     before it starts. The partition itself stays an index: it writes no rows.
     """
 
@@ -2129,7 +2129,11 @@ class DatatablePartition(Datablock):
                       columns={role: tuple(self.column_spec(role)) for role in values}, values=values),
         )
 
-    def fold(self, fold: int | str) -> DatatablePart:
+    def part(self, fold: int | str) -> DatatablePart:
+        """Fold *fold* as a table: the `DatatablePart` holding its tabs and pieces.
+
+        A fold is an index into ``tabs``; its part is the block that reads it.
+        """
         return DatatablePart(
             # As a table gives its tabs its url: a fold of a partition belongs
             # where the partition does, not wherever DBX_ROOT happens to point
@@ -2141,6 +2145,9 @@ class DatatablePartition(Datablock):
                 fold=fold,
             )
         )
+
+    #: The name `part` had first.
+    fold = part
 
     # 3. Accessors ---------------------------------------------------------
 
@@ -2200,7 +2207,7 @@ class DatatablePartition(Datablock):
         self.log.warning(
             f"{type(self).__name__}: splitting {len(mixed)} of {len(scans)} tabs, which hold more than one "
             f"value of a partition column, into {n_pieces} pieces, one per value -- dealt as tabs are, and "
-            f"built by the folds (fold.build()):\n{shown}" + ("\n  ..." if len(mixed) > 5 else ""))
+            f"built by the parts (part.build()):\n{shown}" + ("\n  ..." if len(mixed) > 5 else ""))
         return scans
 
     def _items_(self, scans) -> list[dict]:
@@ -2533,6 +2540,13 @@ class DatatabPiece(Datatab):
     i of each is still row i of the others. Only the slices: a topic of the
     source that is not a slice is the tab's, not of any subset of its rows.
 
+    ``source_rows`` records which rows those were: the source's row indices,
+    in the order written. The value says which rows a piece holds; the indices
+    say it in a form another tab can apply -- a tab built from the source row
+    by row (a feature tab over a sample tab) takes the same piece of itself by
+    taking the same rows, without reading any partition column, and a check
+    that two tabs still agree has something to compare.
+
     A piece of a tab that reads slices upstream (`DataslicesUpstream`, a
     `Featuretab`) is not implemented: it would have to be the same piece of
     its upstream tab too, and nothing says row i of the one is row i of the
@@ -2544,6 +2558,9 @@ class DatatabPiece(Datatab):
         tab: Datatab = None
         columns: dict = None
         values: dict = None
+
+    #: The source rows a piece holds, beside its slices.
+    SOURCE_ROWS = DATAFILE('source_rows.npy', "the indices of the source tab's rows this piece holds, in order")
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -2572,14 +2589,28 @@ class DatatabPiece(Datatab):
                 for i in rows:
                     writers[s].write(data[i])
                 del data
+        with self.fs.open(self.path('source_rows', ensure_dirpath=True), 'wb') as f:
+            np.save(f, np.asarray(rows, dtype=np.int64))
+
+    def __read__(self, *topicpath):
+        if self._normtopic_(topicpath) == ('source_rows',):
+            return self.source_rows()
+        return super().__read__(*topicpath)
+
+    # 2. Declared API ------------------------------------------------------
+
+    def source_rows(self) -> np.ndarray:
+        """The indices of the source tab's rows this piece holds, in the order its slices hold them."""
+        with self.fs.open(self.path('source_rows'), 'rb') as f:
+            return np.load(f)
 
     # 3. Accessors ---------------------------------------------------------
 
-    @forward_property({})
+    @forward_property({'source_rows': SOURCE_ROWS})
     def TOPICS(self):
-        """The source tab's slices, declared as it declares them -- and nothing else of its topics.
+        """The source tab's slices, declared as it declares them, and ``source_rows`` -- nothing else of its topics.
 
-        On the class, with no tab to ask, ``{}``.
+        On the class, with no tab to ask, ``source_rows`` alone.
         """
         source, topics = self.var.tab, {}
         for name in source.slices():
@@ -2588,7 +2619,10 @@ class DatatabPiece(Datatab):
             for h in head:
                 node = node.setdefault(h, {})
             node[leaf] = source._topicnode_(*name.split('/'))
-        return topics
+        if 'source_rows' in topics:
+            raise ValueError(f"{type(self).__name__}: {source.tag} has a slice named 'source_rows', the "
+                             f"topic a piece records its source rows in; rename the slice")
+        return {**topics, 'source_rows': self.SOURCE_ROWS}
 
     # 4. Helpers -----------------------------------------------------------
 

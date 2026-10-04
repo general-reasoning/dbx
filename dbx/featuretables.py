@@ -354,12 +354,24 @@ class Featuretable(DataslicesUpstream, Datatable):
         *args,
         device_batch_size: int = 64,
         devices: list | None = None,
+        device_parallelization: str | None = None,
+        device_work_stealing: bool = False,
         streaming: bool = False,
         dataloader_kwargs: dict | None = None,
         filter_built_tabs: bool = False,
         shared_upstream_column: 'str | None' = None,
         **kwargs,
     ):
+        # The feature evaluation -- building the tabs -- queues off *devices*,
+        # one worker per device: *device_parallelization* (default:
+        # multiprocessing for several devices, inline for one) and
+        # *device_work_stealing*. Everything else -- checking and adopting the
+        # tabs -- runs at the stack's own *n_workers*, *parallelization* and
+        # *work_stealing*. Operational, and passed on only when set.
+        if device_parallelization is not None:
+            kwargs['device_parallelization'] = device_parallelization
+        if device_work_stealing:
+            kwargs['device_work_stealing'] = True
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
@@ -385,6 +397,22 @@ class Featuretable(DataslicesUpstream, Datatable):
         """As `Datatable.build`, after checking that its *devices* exist here -- before anything else is done."""
         self._check_devices_()
         return super().build(*args, **kwargs)
+
+    def _build_executor_(self, tag: str):
+        """The feature evaluation's executor: one worker per device -- see `__init__`."""
+        devices = list(self.devices)
+        key = (getattr(self, 'device_parallelization', None)
+               or ('multiprocessing' if len(devices) > 1 else 'inline')).lower()
+        executors = self._get_executors_()
+        if key not in executors:
+            raise ValueError(f"Unknown device_parallelization {key!r}. Choose from {list(executors)}")
+        cls = executors[key]
+        kwargs = self._executor_kwargs_(tag=f"{tag} on {devices}", n_workers=len(devices), executor_cls=cls)
+        kwargs.pop('work_stealing', None)
+        if getattr(self, 'device_work_stealing', False):
+            kwargs['work_stealing'] = True
+        self.log.info(f"{self.anchorkeypath}: evaluating features on {devices}, one worker per device ({key})")
+        return cls(**kwargs)
 
     def _check_devices_(self) -> None:
         """Raise for a ``cuda:<i>`` this process cannot see.

@@ -661,3 +661,21 @@ def test_a_feature_table_refuses_devices_it_cannot_see_before_building(tmp_path)
     with pytest.raises((RuntimeError, ValueError), match="devices="):
         table.build()
     assert not table.valid() and not table.valid_tab(0)
+
+
+def test_feature_evaluation_queues_off_the_devices_and_the_rest_off_n_workers(tmp_path):
+    """The tabs are built one worker per device; n_workers is everything else's."""
+    url = str(tmp_path)
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag="queue_samples").build()
+
+    def table(devices, **kw):
+        return Featuretable(datalake=url, tag="queue", devices=devices, n_workers=5, spec=dict(
+            upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+            collator=sample_collator()), **kw)
+
+    two = table(["cpu", "cpu"], parallelization="multithreading")
+    assert two._build_executor_("t").n_workers == 2
+    assert two.executor_cls(**two._executor_kwargs_(tag="t")).n_workers == 5
+    one = table(["cpu"]).build()      # its checks at n_workers=5, its one device's evaluation inline
+    assert one.valid() and all(one.tab(i).valid() for i in range(one.n_tabs))
+    assert one.data(("features", "final"), concat=True)["features"]["final"].shape == (10, 8)

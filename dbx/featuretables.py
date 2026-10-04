@@ -259,11 +259,12 @@ class Featuretab(DataslicesUpstream, Datatab):
                 }
                 for i in range(batch_len):
                     writers['features'].write({col_name: arr[i] for col_name, arr in batch_features.items()})
-                evaluator.clear()
+                # Freed by reference count, and reused by the CUDA caching allocator
+                # for the next batch of the same shape: no collection per batch.
                 del batch, result, batch_features
-                gc.collect()
             del inputs
-            gc.collect()
+        # Once per bag: collect, and hand the allocator's cache back -- see `__build_streaming__`.
+        evaluator.clear()
         del evaluator
         gc.collect()
         return self
@@ -298,9 +299,14 @@ class Featuretab(DataslicesUpstream, Datatab):
                 }
                 for i in range(batch_len):
                     writers['features'].write({col_name: arr[i] for col_name, arr in batch_features.items()})
-                evaluator.clear()
+                # Freed by reference count, and reused by the CUDA caching allocator for
+                # the next batch of the same shape. A gc.collect() and
+                # torch.cuda.empty_cache() here -- evaluator.clear() -- ran per batch,
+                # stalling the GPU worker every batch for no memory it did not get back anyway.
                 del batch_data, inputs, batch, result, batch_features
-                gc.collect()
+        # Once per bag: collect, and hand the allocator's cache back to the driver,
+        # so a worker between bags holds no more than it needs.
+        evaluator.clear()
         del dataloader, dataset, evaluator
         gc.collect()
         return self

@@ -311,3 +311,33 @@ def test_one_filed_under_another_tag_is_still_found(tmp_path, monkeypatch):
     block = Grown(datalake=str(tmp_path), anchor='Grown', tag='here', spec={'n': 7})
     assert block.find_specialization() is not None
     assert reads == ['Grown']
+
+
+# ---------------------------------------------------------------------------
+# By hash (ADOPT_BY_HASH, the default): no block's past is looked for in the whole journal
+# ---------------------------------------------------------------------------
+
+def test_a_table_build_of_new_tabs_reads_no_whole_journal(tmp_path, monkeypatch):
+    """Each tab looks its pasts up by hash; none is filed, so none is adopted -- and nothing is read whole."""
+    Table(datalake=str(tmp_path), spec={'n': 1}).build()       # a journal under the tabs' anchor
+    reads = _count_full_reads(monkeypatch)
+    table = Table(datalake=str(tmp_path), spec={'n': 6}, parallelization='multithreading', n_workers=2).build()
+    assert table.valid() and all(table.tab(i).valid() for i in range(6))
+    assert [a for a in reads if a == Tab.anchor] == [], f"{len(reads)} whole-journal read(s)"
+
+
+def test_a_table_adopts_its_tabs_pasts_by_hash(grown, monkeypatch):
+    """The grown tabs find their v1 builds by hash, with no whole-journal read."""
+    reads = _count_full_reads(monkeypatch)
+    table = v1table(grown, spec={'n': 3}).build()
+    assert all(table.tab(i).redirected_topics() == ['rows'] for i in range(3))
+    assert reads == [], f"{len(reads)} whole-journal read(s)"
+
+
+def test_adopt_by_hash_off_reads_the_whole_journal_once(grown, monkeypatch):
+    from dbx.datablocks import Datastack
+    monkeypatch.setattr(Datastack, 'ADOPT_BY_HASH', False)
+    reads = _count_full_reads(monkeypatch)
+    table = v1table(grown, spec={'n': 3}).build()
+    assert all(table.tab(i).redirected_topics() == ['rows'] for i in range(3))
+    assert 1 <= len(reads) <= 2      # the tabs' anchor, and the one a renamed class's specialization names

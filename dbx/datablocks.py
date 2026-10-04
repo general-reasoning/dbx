@@ -30,6 +30,7 @@ import gc
 import hashlib
 import inspect
 import os
+import time
 import random
 import re
 import shutil
@@ -158,6 +159,20 @@ class SAME(metaclass=_SentinelMeta_):
     A class used as a value, as the topic markers are, so that it can stand in
     an annotation -- ``anchor: str | SAME = SAME`` -- as ``None`` does in
     ``str | None``. See `_SentinelMeta_`.
+    """
+
+
+class BY_HASH(metaclass=_SentinelMeta_):
+    """A journal standing for "look each block's past up by its hash -- and nowhere else".
+
+    What a stack hands its blocks in place of the whole of their anchor's
+    journal: each block then resolves each of its specializations with
+    `Datajournal.read_hash`, which lists only the directories that hash can
+    be filed in, and a hash filed nowhere is a past that never was -- not a
+    reason to read every entry the anchor has. Reading those took minutes over
+    thousands of blocks (11,079 entries, 423 s, for ``DeepFeatureBag``), once
+    per build, to adopt nothing when the blocks were new. See
+    `Datastack._build_journal_`.
     """
 
 
@@ -986,7 +1001,8 @@ class BlocksJournal:
         self.journal, self.anchor, self.datalake = state
 
     def __repr__(self):
-        n = 'no' if self.journal is None else len(self.journal)
+        n = ('no' if self.journal is None else 'by-hash' if self.journal is BY_HASH
+             else len(self.journal))
         return f"BlocksJournal({self.anchor!r} in {self.datalake!r}, {n} entries)"
 
 
@@ -3139,6 +3155,8 @@ class Datablock:
             return None
         if journal is None:
             journal = self.__dict__.get('__specialization_journal__')
+        if journal is BY_HASH:
+            journal = None
 
         recorded = self._recorded_redirection_(journal=journal)
         if recorded is None:
@@ -6842,6 +6860,8 @@ class Datablock:
 
     def _specialization_journal_(self, journal, specialization):
         """Extract the journal specific to specialization if journal is a dict or list/tuple."""
+        if journal is BY_HASH:
+            return None
         if isinstance(journal, dict):
             anchor = self._specialization_anchor_(specialization)
             return journal.get(anchor, journal.get(None))
@@ -6950,7 +6970,7 @@ class Datablock:
         """The anchor whose journal *specialization*'s narrower block is looked for in."""
         return self.anchor if specialization.anchor is SAME else specialization.anchor
 
-    def _hash_journal_(self, specialization):
+    def _hash_journal_(self, specialization, *, fallback: bool = True):
         """*specialization*'s narrower block's journal entries, for a block with no journal handed down.
 
         Read from that block's own directory -- `Datajournal.read_hash` --
@@ -6963,7 +6983,8 @@ class Datablock:
         version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
         j = Datajournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
                                   datalake=self.datalake, storage_options=self.storage_options, log=self.log)
-        if j is not None:
+        if j is not None or not fallback:
+            # *fallback* False -- `BY_HASH` -- takes "filed nowhere" for "never built".
             return j
         return self._journal_under_(anchor)
 
@@ -7196,17 +7217,22 @@ class Datablock:
                     f"computations under one hash"
                 )
                 continue
+            by_hash = memo.get('journal') is BY_HASH
             sp_j = self._specialization_journal_(memo.get('journal'), sp)
-            if sp_j is None and memo.get('journal') is None:
+            if sp_j is None and (memo.get('journal') is None or by_hash):
                 # No journal handed down: this one specialization's entries,
                 # from the narrower block's own directory -- kept for the redirect.
                 key = ('hash_journal', sp.key)
                 if key not in memo:
                     try:
-                        memo[key] = self._hash_journal_(sp)
+                        memo[key] = self._hash_journal_(sp, fallback=not by_hash)
                     except FileNotFoundError:
                         memo[key] = None
                 sp_j = memo[key]
+                if sp_j is None and by_hash:
+                    # Filed nowhere its hash would be: a past this block never had.
+                    self.log.detailed(f"specialization: {sp!r}: no entry for hash {self.get_hash(sp)}")
+                    continue
             resolved = self._specialization_paths_(sp, journal=sp_j)
             if resolved is None:
                 self.log.verbose(
@@ -7626,6 +7652,13 @@ class Datastack(Datablock):
         stack.build()
     """
 
+    #: How a build's blocks find earlier builds of themselves to adopt: True,
+    #: each by its own hashes (`BY_HASH`), in the workers, in seconds; False,
+    #: against the whole of their anchor's journal, read once in the parent --
+    #: minutes over thousands of blocks, but finding a past filed anywhere,
+    #: not only where its hash would be (`Datajournal.read_hash`).
+    ADOPT_BY_HASH: bool = True
+
     class BlockMaker:
         """Lightweight callable that forms and optionally builds a block.
 
@@ -7789,6 +7822,7 @@ class Datastack(Datablock):
         # they would read as unbuilt. The journal, when a block needs it, is
         # read once for the whole build -- see `_build_journal_`.
         self.__dict__['__building__'] = True
+        self.log.info(f"{self.anchorkeypath}: building -- first, which of its {self.n_blocks} blocks are built")
         validation = self._validation_()
         # deep=True takes no short cut: not the stack's validity, nor the manifest's -- every block is asked.
         if deep and validation == 'cross_check':
@@ -8223,18 +8257,27 @@ class Datastack(Datablock):
         valid, paths = self._check_blocks_(validation, parallelization=parallelization, n_workers=n_workers)
         invalid = list(valid[~valid].index)
         if not invalid:
-            self.log.verbose(
-                f"{self.__class__.__name__}: all {n} {item_label} already valid, "
-                f"skipping specialization adoption"
-            )
+            self.log.info(f"{self.anchorkeypath}: all {n} {item_label} already valid")
             return pd.Series([None] * n, dtype=object), [], {}, paths
 
         full = 'validate' if validation == 'validate' else 'valid'
         specs = self._block_class_() is not None and self._block_specializations_()
+        self.log.info(f"{self.anchorkeypath}: {len(invalid)} of {n} {item_label} not valid"
+                      + ("; looking for earlier builds of them to adopt, before computing any" if specs else ""))
+        # The journal handed to the blocks: the caller's, or `_build_journal_`'s -- by
+        # default `BY_HASH`, with which each block looks its own pasts up by hash,
+        # in the workers. Reading the whole anchor journal here instead took 423 s
+        # for DeepFeatureBag's 11,079 entries (2026-10-03), sent 72 MB to every
+        # worker, and adopted nothing for new blocks. `ADOPT_BY_HASH = False` brings
+        # it back, for blocks whose journals are not filed where read_hash looks.
         shared = (journal if journal is not None else self._build_journal_()) if specs else None
         install = shared is not None
-        tag = (f"SPECIALIZING {len(invalid)} of {n} {item_label} [{self.__class__.__name__}]" if install
-               else f"CLASSIFYING {len(invalid)} of {n} invalid {item_label} [{self.__class__.__name__}]")
+        tag = (f"ATTEMPTING SPECIALIZATION of {len(invalid)} of {n} {item_label} [{self.__class__.__name__}]"
+               if install else f"CLASSIFYING {len(invalid)} of {n} invalid {item_label} [{self.__class__.__name__}]")
+        self.log.info(f"{self.anchorkeypath}: "
+                      + (f"ATTEMPTING SPECIALIZATION of {len(invalid)} {item_label}: each looks for an earlier "
+                         f"build of itself to adopt" if install else
+                         f"classifying {len(invalid)} invalid {item_label}"))
         results = self._exec_over_blocks_(
             [self.DatablockSpecializationInstaller(i, validation=full, install=install) for i in invalid],
             journal=shared, tag=tag, parallelization=parallelization, n_workers=n_workers, **kwargs)
@@ -8247,12 +8290,15 @@ class Datastack(Datablock):
         still_invalid = by_status.get('owes', []) + by_status.get('unresolved', [])
         failed = {i: status for status in ('fails_validation', 'adoption_fails_validation')
                   for i in by_status.get(status, [])}
+        adopted, owes, unresolved = (len(by_status.get(k, [])) for k in ('adopted', 'owes', 'unresolved'))
+        fails = len(by_status.get('fails_validation', [])) + len(by_status.get('adoption_fails_validation', []))
+        verdict = ("ALL ADOPTED" if adopted == len(invalid) else "NONE ADOPTED" if adopted == 0
+                   else f"{adopted} OF {len(invalid)} ADOPTED")
         self.log.info(
-            f"{self.__class__.__name__}: specialization adoption over {n} {item_label}: "
-            f"{n - len(invalid) + len(by_status.get('valid', []))} already valid, "
-            f"{len(by_status.get('adopted', []))} adopted, {len(by_status.get('owes', []))} adopted but owing, "
-            f"{len(by_status.get('unresolved', []))} unresolved, {len(by_status.get('fails_validation', []))} "
-            f"failing validate(), {len(by_status.get('adoption_fails_validation', []))} whose adoption failed it"
+            f"{self.anchorkeypath}: SPECIALIZATION {verdict} -- of {n} {item_label}: "
+            f"{n - len(invalid) + len(by_status.get('valid', []))} ALREADY VALID, {adopted} ADOPTED, "
+            f"{owes} ADOPTED BUT OWING, {unresolved} UNRESOLVED, {fails} FAILING VALIDATE(); "
+            f"{owes + unresolved} TO BE COMPUTED"
         )
         if not still_invalid and not failed and paths is not None and self.valid():
             self._record_blocks_manifest_(paths)
@@ -8989,6 +9035,9 @@ class Datastack(Datablock):
                 try:
                     read_kwargs = dict(kwargs)
                     read_kwargs.setdefault('desc', f"Reading {a} ({kind}) journal files")
+                    # The user waits on this read; it shows, and it reads with the stack's workers.
+                    read_kwargs.setdefault('progress', True)
+                    read_kwargs.setdefault('n_workers', max(8, getattr(self, 'n_workers', 1) or 1))
                     frames.append(Datajournal.read(a, datalake=lake, storage_options=self.storage_options,
                                                    log=self.log, **read_kwargs))
                 except FileNotFoundError:
@@ -9007,6 +9056,9 @@ class Datastack(Datablock):
 
         Read only when there is something to resolve against it -- a BLOCK that
         declares SPECIALIZATIONS -- and once, here in the parent.
+
+        With `ADOPT_BY_HASH` (the default) nothing is read: the blocks get
+        `BY_HASH`, and each looks its own pasts up by hash, in the workers.
         """
         # Read once per build(): the blocks' adoption and the building of the
         # rest are both this build's -- see build() -- and share the one read.
@@ -9022,14 +9074,22 @@ class Datastack(Datablock):
         n_items = getattr(self, 'n_tabs', self.n_blocks)
 
         anchor = block_cls.anchor
-        self.log.verbose(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
-                         f"for {n_items} {item_label} to resolve against...")
+        if self.ADOPT_BY_HASH:
+            self.log.info(f"{self.anchorkeypath}: its {item_label} look up earlier builds of themselves by hash")
+            journal = BlocksJournal(BY_HASH, anchor, self._blocks_datalake_())
+            if self.__dict__.get('__building__'):
+                self.__dict__['__build_journal__'] = journal
+            return journal
+        self.log.info(f"{self.anchorkeypath}: reading the {anchor} journal, to find earlier builds its "
+                      f"{item_label} can adopt -- once for the whole build; over many blocks this takes minutes")
+        started = time.time()
         try:
             journal, anchor, lake = self._blocks_datajournal_()
         except FileNotFoundError:
+            self.log.info(f"{self.anchorkeypath}: no {anchor} journal: nothing to adopt")
             return None
-        self.log.verbose(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
-                         f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
+        self.log.info(f"{self.anchorkeypath}: read the {anchor} journal, {len(journal)} entries, "
+                      f"in {time.time() - started:.0f} s")
         journal = BlocksJournal(journal, anchor, lake)
         if self.__dict__.get('__building__'):
             self.__dict__['__build_journal__'] = journal

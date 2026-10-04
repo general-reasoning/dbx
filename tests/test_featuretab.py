@@ -611,3 +611,53 @@ def test_a_callable_instance_that_cannot_quote_itself_is_refused_by_name():
     # A function and a class still render as the calls they name.
     assert dbx.quote(len, 3) == "$builtins.len(3)"
     assert dbx.quote(Evaluator).endswith("Evaluator()")
+
+
+def _bipolar_table(url):
+    featuretable = _feature_table(url, "feature_table")
+    stats = _stats_probe(url, featuretable, "stats_table").build()
+    return BipolarFeaturetable(datalake=url, spec=dict(upstream=featuretable, stats_probe=stats),
+                               devices=["cpu"], tag="bipolar_table").build()
+
+
+@pytest.mark.parametrize("threshold", [0.2, 0.5, 1.0])
+def test_ternary_keeps_rows_that_agree_with_a_decided_bag(tmp_path, threshold):
+    from dbx.featuretables import TernaryFeaturetable
+    url = str(tmp_path)
+    bipolar = _bipolar_table(url)
+    ternary = TernaryFeaturetable(datalake=url, spec=dict(upstream=bipolar, bag_threshold=threshold),
+                                  devices=["cpu"], tag="ternary_table").build()
+    assert ternary.n_tabs == bipolar.n_tabs
+    assert "bipolar" in ternary.slices(recursive=True) and set(ternary.slices()) == {"ternary"}
+    for i in range(ternary.n_tabs):
+        tab = ternary.tab(i)
+        x = bipolar.tab(i).data(("bipolar", "final"))["bipolar"]["final"]
+        t = tab.data(("ternary", "final"))["ternary"]["final"]
+        bag = tab.bag("final")
+        mean = x.astype(float).mean(axis=0)
+        np.testing.assert_allclose(bag["mean"], mean, rtol=1e-6)
+        sign = np.where(np.abs(mean) >= threshold, np.sign(mean), 0)
+        np.testing.assert_array_equal(bag["sign"], sign)
+        assert int(bag["n_rows"]) == len(x)
+        np.testing.assert_array_equal(t, np.where((sign != 0) & (x == sign), x, 0))
+        assert set(np.unique(t)).issubset({-1, 0, 1})
+
+
+def test_ternary_refuses_a_threshold_outside_the_unit_interval(tmp_path):
+    from dbx.featuretables import TernaryFeaturetab
+    url = str(tmp_path)
+    bipolar = _bipolar_table(url)
+    with pytest.raises(ValueError, match="bag_threshold"):
+        TernaryFeaturetab(datalake=url, spec=dict(upstream=bipolar.tab(0), bag_threshold=0.0))
+
+
+def test_a_feature_table_refuses_devices_it_cannot_see_before_building(tmp_path):
+    """devices naming a GPU the process lacks fail at build(), first -- not in a worker, minutes in."""
+    url = str(tmp_path)
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag="devices_samples").build()
+    table = Featuretable(datalake=url, tag="devices", devices=["cuda:7"], spec=dict(
+        upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+        collator=sample_collator()))
+    with pytest.raises((RuntimeError, ValueError), match="devices="):
+        table.build()
+    assert not table.valid() and not table.valid_tab(0)

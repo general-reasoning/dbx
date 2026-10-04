@@ -20,7 +20,7 @@ except ImportError:
     torch = None
 
 import dbx
-from dbx.datablocks import DATADIR, DATAFILE, SAME, Datablock, Datastack, DIRTOPIC, forward_property
+from dbx.datablocks import DATADICT, DATADIR, DATAFILE, SAME, Datablock, Datastack, DIRTOPIC, forward_property
 from dbx.backbones import ModelEvaluatorBuilder
 from dbx.datatables import (
     DATASLICE,
@@ -381,6 +381,31 @@ class Featuretable(DataslicesUpstream, Datatable):
         self.devices = getattr(self, 'devices', None) or ["cpu"]
         self._devices = self.devices
 
+    def build(self, *args, **kwargs):
+        """As `Datatable.build`, after checking that its *devices* exist here -- before anything else is done."""
+        self._check_devices_()
+        return super().build(*args, **kwargs)
+
+    def _check_devices_(self) -> None:
+        """Raise for a ``cuda:<i>`` this process cannot see.
+
+        Each worker takes one of *devices*; one naming a GPU the job was not
+        given fails as ``CUDA error: invalid device ordinal`` -- in a worker,
+        after the blocks are checked and the journal read, minutes in. Here it
+        fails first, saying how many devices there are.
+        """
+        cuda = [str(d) for d in self.devices if str(d).startswith('cuda')]
+        if not cuda:
+            return
+        if torch is None or not torch.cuda.is_available():
+            raise RuntimeError(f"{type(self).__name__}: devices={self.devices} asks for CUDA, and this process "
+                               f"has none (torch.cuda.is_available() is False)")
+        n = torch.cuda.device_count()
+        missing = [d for d in cuda if (int(d.split(':', 1)[1]) if ':' in d else 0) >= n]
+        if missing:
+            raise ValueError(f"{type(self).__name__}: devices={self.devices} names {missing}, but this process "
+                             f"sees {n} CUDA device(s), cuda:0..cuda:{n - 1} -- ask for no more than the job has")
+
     def __tab__(self, idx: int, device: str | None = None, tag=None) -> Featuretab:
         upstream = self.var.upstream.tab(idx)
         spec = dict(
@@ -644,6 +669,157 @@ class BipolarFeaturetable(DataslicesUpstream, Datatable):
     @property
     def stats_probe(self):
         return self.var.stats_probe
+
+    @property
+    def n_tabs(self) -> int:
+        return self.upstream.n_tabs
+
+
+class TernaryFeaturetab(DataslicesUpstream, Datatab):
+    """A `BipolarFeaturetab`'s tiles, kept where their bag is sure of the sign and they agree with it, else 0.
+
+    The bag-level estimate, per column and dimension, is the mean of the
+    tab's bipolar rows, ``m = 2p - 1`` where ``p`` is the fraction at ``+1``:
+    how far the bag leans, and so how sure its sign is. The bag's sign is
+    ``sign(m)`` where ``|m| >= bag_threshold``, and 0 -- undecided -- where it
+    leans less. A row's ternary value is its bipolar value where the bag's
+    sign is decided and the row agrees with it, and 0 otherwise: ``{-1, 0, +1}``,
+    0 marking a dimension where the tile does not speak for its bag.
+
+    This is the June BitPath encoding (``bag_aggregation_threshold``, 0.5,
+    with its tiles ternarized), now a block of its own: the targets it gives a
+    still are an artifact with an identity, built once, rather than computed
+    inside a dataset.
+
+    Topics: ``ternary`` -- one ``ndarray:int8`` column per bipolar column, of
+    the same name; ``bag/<column>`` -- ``mean``, ``sign`` and ``n_rows``, the
+    estimate each row was judged against, from which another rule (an
+    interval on ``p``, say) can be read without a rebuild.
+    """
+
+    VERSION = 1
+
+    BAG_DATADICT = DATADICT('bag.npz', mean='ndarray', sign='ndarray', n_rows='ndarray')
+
+    @forward_property({'ternary': DATASLICE})
+    def TOPICS(self):
+        """``ternary``, one ``ndarray:int8`` column per bipolar column, and ``bag/<column>``.
+
+        On the class -- what a table sees of its TAB -- the slice alone.
+        """
+        columns = self.bipolar_columns
+        return {'ternary': DATASLICE(**{c: 'ndarray:int8' for c in columns}),
+                'bag': {c: self.BAG_DATADICT for c in columns}}
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        upstream: BipolarFeaturetab
+        bag_threshold: float = 0.5
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not 0 < float(self.var.bag_threshold) <= 1:
+            raise ValueError(f"{type(self).__name__}: bag_threshold is how far a bag's mean bipolar value "
+                             f"must lean to decide its sign, in (0, 1]; got {self.var.bag_threshold!r}")
+
+    def __build__(self):
+        from dbx.dataparts import write_npz
+        columns = self.bipolar_columns
+        data = self.upstream.data(('bipolar', list(columns)), concat=True)['bipolar']
+        ternary, counts = {}, set()
+        for c in columns:
+            x = np.asarray(data[c]).astype(np.int8)
+            if x.ndim == 1:
+                x = x.reshape(-1, 1)
+            if not np.isin(x, (-1, 1)).all():
+                raise ValueError(f"{type(self).__name__}: column 'bipolar.{c}' of {self.upstream.tag!r} "
+                                 f"holds values other than -1 and +1: {np.unique(x)[:8].tolist()}")
+            mean = x.astype(np.float64).mean(axis=0)
+            sign = np.where(np.abs(mean) >= self.var.bag_threshold, np.sign(mean), 0).astype(np.int8)
+            ternary[c] = np.where((sign != 0) & (x == sign), x, 0).astype(np.int8)
+            write_npz(self.path('bag', c, ensure_dirpath=True), storage_options=self.storage_options,
+                      mean=mean.astype(np.float32), sign=sign, n_rows=np.asarray(len(x)))
+            counts.add(len(x))
+        del data
+        if len(counts) != 1:
+            raise ValueError(f"{type(self).__name__}: bipolar columns disagree on row count: {sorted(counts)}")
+        with self.slice_writers(['ternary']) as writers:
+            for i in range(counts.pop()):
+                writers['ternary'].write({c: ternary[c][i] for c in columns})
+        return self
+
+    def __len__(self) -> int:
+        return len(self.upstream)
+
+    # 2. Declared API ------------------------------------------------------
+
+    def bag(self, column: str) -> dict:
+        """``{'mean', 'sign', 'n_rows'}`` of *column*: the bag-level estimate its rows were judged against."""
+        from dbx.dataparts import read_npz
+        if column not in self.bipolar_columns:
+            raise KeyError(f"{type(self).__name__}: no bipolar column {column!r}; it has {self.bipolar_columns}")
+        return read_npz(self.path('bag', column), 'mean', 'sign', 'n_rows', storage_options=self.storage_options)
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def upstream(self) -> BipolarFeaturetab:
+        return self.var.upstream
+
+    @property
+    def bipolar_columns(self) -> list[str]:
+        """The upstream's bipolar columns, in its declared order."""
+        declared = self.upstream.declared_columns('bipolar')
+        if not declared:
+            raise ValueError(f"{type(self).__name__}: {self.upstream.anchorkeypath} declares no columns for "
+                             f"its 'bipolar' slice, so there is nothing to say which to ternarize")
+        return list(declared)
+
+
+class TernaryFeaturetable(DataslicesUpstream, Datatable):
+    """A table of `TernaryFeaturetab` blocks built over a `BipolarFeaturetable`, one threshold for all."""
+
+    TAB = TernaryFeaturetab
+    VERSION = 1
+
+    @dataclass
+    class VAR(Datatable.VAR):
+        upstream: BipolarFeaturetable = None
+        bag_threshold: float = 0.5
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.var.upstream is None:
+            raise ValueError(f"{type(self).__name__}: VAR.upstream is required")
+
+    def __tab__(self, idx: int, tag=None, **kwargs) -> TernaryFeaturetab:
+        upstream = self.var.upstream.tab(idx)
+        tab_specs = (getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
+                     or getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None))
+        return self.TAB(
+            datalake=self._datalake_,
+            storage_options=self.storage_options,
+            cache=getattr(self, 'cache', None),
+            cache_limit=getattr(self, 'cache_limit', None),
+            verbose=False,
+            spec=dict(upstream=dbx.quote(upstream), bag_threshold=self.var.bag_threshold),
+            SPECIALIZATIONS=tab_specs,
+            revision=self.revision,
+            tag=tag if tag is not None else upstream.tag,
+        )
+
+    def __block__(self, idx: int, **kwargs) -> TernaryFeaturetab:
+        return self.__tab__(idx, **kwargs)
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def upstream(self) -> BipolarFeaturetable:
+        return self.var.upstream
 
     @property
     def n_tabs(self) -> int:

@@ -23,6 +23,7 @@ import fnmatch
 import functools
 import hashlib
 import os
+import time
 import multiprocessing
 import re
 import shutil
@@ -2581,8 +2582,14 @@ class Datajournal:
 
     @classmethod
     def read(cls, anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None,
-             log=None, n_workers=None, index=None, unnormalized: bool = False, url=None, desc=None, **filter_kwargs):
+             log=None, n_workers=None, index=None, unnormalized: bool = False, url=None, desc=None,
+             progress: bool | None = None, **filter_kwargs):
         """Read *anchor*'s journal under *url*: every entry, newest first, then filtered.
+
+        *progress*: whether to show the read -- an INFO line around listing the
+        files and a bar over reading them. None, the default, shows them only
+        when *log* is verbose; a caller whose read the user is waiting on --
+        a stack resolving its blocks' specializations -- passes True.
 
         Returns a `DatajournalFrame`, or the one `DatajournalEntry` at *loc*
         (a label) or *iloc* (a position). *datalake* (``url``, its old name)
@@ -2618,6 +2625,9 @@ class Datajournal:
         ]
 
         log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} BEGIN")
+        if progress:
+            log.info(f"Listing the {anchor} journal files under {anchordirpath} ...")
+        listing_started = time.time()
         parquet_files = []
         with ThreadPoolExecutor(max_workers=min(n_workers, len(glob_patterns))) as glob_ex:
             glob_futures = [glob_ex.submit(fs.glob, p) for p in glob_patterns]
@@ -2643,13 +2653,16 @@ class Datajournal:
             )
 
         log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
+        if progress:
+            log.info(f"Listed {len(parquet_files)} {anchor} journal files in {time.time() - listing_started:.0f} s; reading them")
         log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} END")
 
         log.detailed(f"READING JOURNAL: from {anchordirpath=}, files: {parquet_files}")
         df = None
         desc = desc or f"Reading {anchor} journal files"
         if len(parquet_files) > 0:
-            dfs = [d for d in Datajournal._read_files_(fs, parquet_files, n_workers=n_workers, log=log, desc=desc)
+            dfs = [d for d in Datajournal._read_files_(fs, parquet_files, n_workers=n_workers, log=log, desc=desc,
+                                                       progress=progress)
                    if d is not None]
             if dfs:
                 df = pd.concat(dfs, ignore_index=True)
@@ -3052,7 +3065,7 @@ class Datajournal:
         return stack
 
     @staticmethod
-    def _read_files_(fs, files, *, n_workers, log, desc=None):
+    def _read_files_(fs, files, *, n_workers, log, desc=None, progress: bool | None = None):
         """One frame per entry file, aligned with *files*; None where one could not be read."""
         def read_entry_file(file):
             # Through `fs`, not by path: a glob returns paths as that
@@ -3064,8 +3077,9 @@ class Datajournal:
                 return pd.read_parquet(f, engine='pyarrow')
 
         desc = desc or 'Reading journal files'
-        # Progress on reading a journal is VERBOSE detail, as its log lines are.
-        quiet = not (hasattr(log, 'ist') and log.ist('verbose'))
+        # Progress on reading a journal is VERBOSE detail, as its log lines are --
+        # unless the caller says the user is waiting on it (*progress*).
+        quiet = (not progress) if progress is not None else not (hasattr(log, 'ist') and log.ist('verbose'))
         results = [None] * len(files)
         with ThreadPoolExecutor(max_workers=max(1, min(n_workers, len(files)))) as ex:
             futures = {ex.submit(read_entry_file, file): i for i, file in enumerate(files)}

@@ -7652,13 +7652,6 @@ class Datastack(Datablock):
         stack.build()
     """
 
-    #: How a build's blocks find earlier builds of themselves to adopt: True,
-    #: each by its own hashes (`BY_HASH`), in the workers, in seconds; False,
-    #: against the whole of their anchor's journal, read once in the parent --
-    #: minutes over thousands of blocks, but finding a past filed anywhere,
-    #: not only where its hash would be (`Datajournal.read_hash`).
-    ADOPT_BY_HASH: bool = True
-
     class BlockMaker:
         """Lightweight callable that forms and optionally builds a block.
 
@@ -7713,7 +7706,7 @@ class Datastack(Datablock):
     #: How many blocks 'cross_check' compares with the manifest: block 0 and the rest at random.
     CROSS_CHECK_BLOCKS = 3
 
-    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, result_idle_timeout_sec: float | None = None, shuffle_callables: bool = False, work_stealing: bool = False, use_block_specializations: 'bool | str | None' = None, validation: str | None = None, cross_check_blocks: int | None = None, cross_check_seed: int | None = None, **kwargs):
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, result_idle_timeout_sec: float | None = None, shuffle_callables: bool = False, work_stealing: bool = False, use_block_specializations: 'bool | str | None' = None, validation: str | None = None, cross_check_blocks: int | None = None, cross_check_seed: int | None = None, specialization_use_full_journal: bool = False, **kwargs):
         # The use_specializations the blocks are formed with -- see _form_block_.
         # Passed on only when given: every keyword of a stack reaches its
         # quote(), and a default spelled out would change that of every stack.
@@ -7728,6 +7721,15 @@ class Datastack(Datablock):
             kwargs['cross_check_blocks'] = cross_check_blocks
         if cross_check_seed is not None:
             kwargs['cross_check_seed'] = cross_check_seed
+        # How a build's blocks find earlier builds of themselves to adopt: by
+        # default each looks its own pasts up by hash (`BY_HASH`), in the
+        # workers, in seconds. True reads the whole of their anchor's journal
+        # once, in the parent -- minutes over thousands of blocks -- and finds a
+        # past filed anywhere, not only where its hash would be
+        # (`Datajournal.read_hash`). Operational: in no hash, and passed on
+        # only when set, as above.
+        if specialization_use_full_journal:
+            kwargs['specialization_use_full_journal'] = True
         super().__init__(*args, parallelization=parallelization, n_workers=n_workers, devices=devices, multiprocessing_start_method=multiprocessing_start_method, worker_done_timeout_sec=worker_done_timeout_sec, result_idle_timeout_sec=result_idle_timeout_sec, shuffle_callables=shuffle_callables, work_stealing=work_stealing, **kwargs)
         if self._block_class_() is None and type(self) not in Datastack._NO_BLOCK_WARNED:
             Datastack._NO_BLOCK_WARNED.add(type(self))
@@ -8268,8 +8270,8 @@ class Datastack(Datablock):
         # default `BY_HASH`, with which each block looks its own pasts up by hash,
         # in the workers. Reading the whole anchor journal here instead took 423 s
         # for DeepFeatureBag's 11,079 entries (2026-10-03), sent 72 MB to every
-        # worker, and adopted nothing for new blocks. `ADOPT_BY_HASH = False` brings
-        # it back, for blocks whose journals are not filed where read_hash looks.
+        # worker, and adopted nothing for new blocks. specialization_use_full_journal=True
+        # brings it back, for blocks whose journals are not filed where read_hash looks.
         shared = (journal if journal is not None else self._build_journal_()) if specs else None
         install = shared is not None
         tag = (f"ATTEMPTING SPECIALIZATION of {len(invalid)} of {n} {item_label} [{self.__class__.__name__}]"
@@ -9057,8 +9059,9 @@ class Datastack(Datablock):
         Read only when there is something to resolve against it -- a BLOCK that
         declares SPECIALIZATIONS -- and once, here in the parent.
 
-        With `ADOPT_BY_HASH` (the default) nothing is read: the blocks get
-        `BY_HASH`, and each looks its own pasts up by hash, in the workers.
+        By default nothing is read: the blocks get `BY_HASH`, and each looks its
+        own pasts up by hash, in the workers. With
+        ``specialization_use_full_journal=True`` the whole journal is read here.
         """
         # Read once per build(): the blocks' adoption and the building of the
         # rest are both this build's -- see build() -- and share the one read.
@@ -9074,7 +9077,7 @@ class Datastack(Datablock):
         n_items = getattr(self, 'n_tabs', self.n_blocks)
 
         anchor = block_cls.anchor
-        if self.ADOPT_BY_HASH:
+        if not getattr(self, 'specialization_use_full_journal', False):
             self.log.info(f"{self.anchorkeypath}: its {item_label} look up earlier builds of themselves by hash")
             journal = BlocksJournal(BY_HASH, anchor, self._blocks_datalake_())
             if self.__dict__.get('__building__'):

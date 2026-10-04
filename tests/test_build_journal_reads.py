@@ -314,7 +314,7 @@ def test_one_filed_under_another_tag_is_still_found(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# By hash (ADOPT_BY_HASH, the default): no block's past is looked for in the whole journal
+# By hash (the default): no block's past is looked for in the whole journal
 # ---------------------------------------------------------------------------
 
 def test_a_table_build_of_new_tabs_reads_no_whole_journal(tmp_path, monkeypatch):
@@ -334,10 +334,17 @@ def test_a_table_adopts_its_tabs_pasts_by_hash(grown, monkeypatch):
     assert reads == [], f"{len(reads)} whole-journal read(s)"
 
 
-def test_adopt_by_hash_off_reads_the_whole_journal_once(grown, monkeypatch):
-    from dbx.datablocks import Datastack
-    monkeypatch.setattr(Datastack, 'ADOPT_BY_HASH', False)
+def test_specialization_use_full_journal_reads_the_whole_journal_once(grown, monkeypatch):
     reads = _count_full_reads(monkeypatch)
-    table = v1table(grown, spec={'n': 3}).build()
+    table = v1table(grown, spec={'n': 3}, specialization_use_full_journal=True).build()
     assert all(table.tab(i).redirected_topics() == ['rows'] for i in range(3))
     assert 1 <= len(reads) <= 2      # the tabs' anchor, and the one a renamed class's specialization names
+
+
+def test_specialization_use_full_journal_is_operational(tmp_path):
+    """Not in the identity, and kept as a stack is re-formed."""
+    plain = v1table(tmp_path, spec={'n': 3})
+    full = v1table(tmp_path, spec={'n': 3}, specialization_use_full_journal=True)
+    assert plain.hash == full.hash
+    assert full.set(tag=None).specialization_use_full_journal is True
+    assert not getattr(plain, 'specialization_use_full_journal', False)

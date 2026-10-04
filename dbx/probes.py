@@ -22,7 +22,7 @@ import dbx
 from dbx.datablocks import DATADICT, DATAFILE, Datablock, InvalidBlocksError, forward_property
 from dbx.datatables import Datacollator
 from dbx.featuretables import Featuretable, Featuretab
-from dbx.datatables import DatatablePart
+from dbx.datatables import DatatableCorePart, DatatablePart
 from dbx.dataparts import (
     callable_executor,
     read_npz,
@@ -231,7 +231,8 @@ def check_probe_inputs(probe, table=None) -> None:
     # A fold routes no slices of its own: it reads its table's. Its blocks --
     # the table's tabs, and pieces of them, which are not the table's -- are
     # asked of the fold itself; an upstream table's, at the fold's tab indices.
-    part = table if isinstance(table, DatatablePart) else None
+    # A core part is no view: its tabs are its own, holding every slice it reads.
+    part = table if isinstance(table, DatatablePart) and not isinstance(table, DatatableCorePart) else None
     if part is not None:
         table = part.datatable
     owners = {}

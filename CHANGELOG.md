@@ -34,13 +34,35 @@ All notable changes to this project will be documented in this file.
   in `tabs` it is a record, `{"tab": i, "groupby": v, "stratifyby": v}`, beside
   the indices of the tabs dealt whole, and its tag is `<tab tag>#<value>...`.
   The part builds its pieces, in parallel: `partition.part(k).build()`. Each
-  piece records its source tab's row indices, in order, as `source_rows`. That
-  is what a table built from the source row by row (a feature table) can take
+  piece's `source` slice records its source tab and rows, in order. That is
+  what a table built from the source row by row (a feature table) can take
   the same piece of itself by. Rows of a mixed tab holding no value are a piece
   that is skipped, and recorded in `summary` with their count. Only mixed tabs
   are split, so a partition of constant tabs -- its hash, `tabs`, folds and
   summary -- is unchanged. Not for a table reading upstream (a `Featuretable`):
   a mixed tab of one still raises `NotImplementedError`.
+- **`DatatableCorePartition`: coresets.** Rows are clustered by the columns
+  a collator names `coreby` -- flattened per row, k-means in the master
+  (`clustering='master'`, `MiniBatchKMeans`) or across the workers
+  (`'distributed'`, Lloyd passes over per-tab sums) -- and dealt nearest the
+  center first, honouring `groupby` and `stratifyby`. Fractions are of the
+  rows: summing to 1 deals every row; less takes the rows nearest each center.
+  Each fold is a `DatatableCorePart` of `DatatableCoreTab`s, built in
+  parallel, carrying only the columns the collator names (`carry` for the
+  rest), upstream ones copied flat. The layout -- `(tab, row, cluster)` per
+  row per fold -- is a topic, and `layout=` lets a table laid out alike take
+  it without clustering. `stratifyby` targets accumulate over a stratum's
+  clusters, so each stratum lands within half a unit of its share.
+- **Coverage of a core partition: the `coverage` topic.** How tightly each
+  fold fills out the table, in the clustered space: the distance from
+  sampled table rows to the nearest fold row (quantiles, against a random
+  subset of the same size and the table's own nearest-neighbour spacing),
+  the separation between fold rows, and the clusters' mix per fold. Sampled
+  (`coverage_sample`) and compared within each row's nearest clusters
+  (`coverage_clusters`), tab by tab in the workers -- no O(N^2).
+- **A `source` slice in every repartitioned tab.** `DATASLICE(tab='int',
+  row='int')`: row i says which tab and row of the partitioned table row i of
+  the other slices came from. A piece's replaces its `source_rows` file.
 - **`DatatablePartition.part(k)`**: fold *k* as a table, a `DatatablePart`.
   `fold(k)` is the name it had first, and still works.
 - **DATAPARTITION.md**: partitions, parts and pieces -- what decides a

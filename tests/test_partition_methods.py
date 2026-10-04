@@ -340,15 +340,16 @@ def test_a_piece_holds_its_value_in_every_row_and_slice_alike(tmp_path):
     assert n_pieces == p.read('summary')['n_pieces'] - 1        # all but the skipped one
 
 
-def test_a_piece_records_its_source_rows_which_take_the_same_piece_of_the_source(tmp_path):
+def test_a_pieces_source_slice_points_back_and_takes_the_same_piece_of_the_source(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     for part in built_parts(p):
         for i, entry in enumerate(part.tab_indices):
             if not isinstance(entry, dict):
                 continue
             piece, source = part.tab(i), p.datatable.tab(entry['tab'])
-            rows = piece.read('source_rows')
+            rows = piece.source_rows()
             assert rows.dtype == np.int64 and list(rows) == sorted(rows)
+            assert set(piece.data(('source', 'tab'))['source']['tab']) == {entry['tab']}
             # The indices, applied to the source, are the piece -- what a tab built from the source row by row reuses.
             src = source.data('x')['x']
             assert [src['row'][r] for r in rows] == piece.data('x')['x']['row']

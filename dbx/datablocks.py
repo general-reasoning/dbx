@@ -7921,8 +7921,7 @@ class Datastack(Datablock):
             callables, callable_kwargs = self.__split__(**kwargs)
             callables = [callables[i] for i in indices]
             self.log.info(f"{self.anchorkeypath}: building {len(indices)} of {self.n_blocks} blocks")
-            executor = self.executor_cls(**self._executor_kwargs_(
-                tag=f"BUILDING {len(indices)} of {self.n_blocks} blocks [{self.__class__.__name__}]"))
+            executor = self._build_executor_(f"BUILDING {len(indices)} of {self.n_blocks} blocks [{self.__class__.__name__}]")
             callable_kwargs = self._with_build_journal_(callables, callable_kwargs)
             executor.exec_callables(callables, self, **callable_kwargs)
             # A full pass, which records the manifest when every block is valid.
@@ -7945,10 +7944,7 @@ class Datastack(Datablock):
             f"Building {self.__class__.__name__}: blocks using {len(callables)} callables, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
         )
-        executor_kwargs = self._executor_kwargs_(
-            tag=f"EXECUTING {len(callables)} callables [{self.__class__.__name__}]"
-        )
-        executor = self.executor_cls(**executor_kwargs)
+        executor = self._build_executor_(f"EXECUTING {len(callables)} callables [{self.__class__.__name__}]")
         callable_kwargs = self._with_build_journal_(callables, callable_kwargs)
         callable_results = executor.exec_callables(callables, self, **callable_kwargs)
         self.log.info(f"Stacking the results of {len(callable_results)} callables of {self.__class__.__name__}")
@@ -8855,6 +8851,16 @@ class Datastack(Datablock):
             if all(any(cls._match_single_tag_pattern_(path_str, p) for path_str in block_paths) for p in clause):
                 return True
         return False
+
+    def _build_executor_(self, tag: str):
+        """The executor that BUILDS this stack's blocks -- not the one that checks or adopts them.
+
+        The stack's own -- *n_workers*, *parallelization*, *work_stealing* -- by
+        default. A stack whose builds need a resource its other passes do not
+        overrides it: `Featuretable` queues its feature evaluations off its
+        devices, one worker per device, while its checks run at *n_workers*.
+        """
+        return self.executor_cls(**self._executor_kwargs_(tag=tag))
 
     def _executor_kwargs_(self, tag: str | None = None, n_workers: int | None = None, executor_cls=None, **kwargs) -> dict:
         nw = n_workers if n_workers is not None else getattr(self, 'n_workers', 1)

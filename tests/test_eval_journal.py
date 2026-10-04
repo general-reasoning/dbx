@@ -184,6 +184,13 @@ class TestExecStatements:
 
         assert dbx.exec("e = xml.etree.ElementTree.Element('a'); e.tag") == 'a'
 
+    def test_a_missing_function_of_an_imported_module_is_named(self, tmp_path, monkeypatch):
+        """Not "name 'dbx' is not defined": the module imports, and what it lacks is said."""
+        monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'dbx_root'))
+
+        with pytest.raises(AttributeError, match="no_such_function"):
+            dbx.exec("dbx.datatables.no_such_function(1)")
+
     def test_trailing_comment_is_ignored(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'dbx_root'))
 

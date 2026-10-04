@@ -79,6 +79,8 @@ class SharedMemoryManager:
         if cls._patched:
             return
         try:
+            import streaming.base.dataset as shm_dataset_module
+            import streaming.base.shared as shm_shared_module
             import streaming.base.shared.prefix as shm_prefix_module
             import streaming.base.util as shm_util_module
 
@@ -86,8 +88,15 @@ class SharedMemoryManager:
                 pid = os.getpid()
                 return f'p{pid}_{prefix_int:04}_{name}'
 
-            shm_prefix_module._get_path = _pid_get_path
-            shm_util_module._get_path = _pid_get_path
+            # EVERY module holding its own reference to `_get_path` -- each did
+            # `from ... import _get_path`. Patched in `prefix` and `util` alone,
+            # the prefix was chosen among this process's names -- 0, in every
+            # process -- while `dataset` named its arrays the unpatched way,
+            # ``000000_shard_states``: the same segment in every process that
+            # opened a stream, mapped at another's size ("buffer is too small
+            # for requested array", 2026-10-03, four feature workers on one GPU).
+            for module in (shm_prefix_module, shm_util_module, shm_shared_module, shm_dataset_module):
+                module._get_path = _pid_get_path
             cls._patched = True
         except Exception:
             pass

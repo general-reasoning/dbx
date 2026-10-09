@@ -705,6 +705,18 @@ class BipolarFeaturetable(DataslicesUpstream, Datatable):
         return self.var.stats_probe
 
     @property
+    def bipolar_columns(self) -> list[str]:
+        """The columns of every tab's ``bipolar`` slice, in declared order -- from VAR, no tab read."""
+        declared = self.upstream.feature_columns
+        if self.var.features is None:
+            return list(declared)
+        unknown = [c for c in self.var.features if c not in declared]
+        if unknown:
+            raise ValueError(f"{type(self).__name__}: features {unknown} are not columns of "
+                             f"the featuretable's 'features' slice {list(declared)}")
+        return [c for c in declared if c in self.var.features]
+
+    @property
     def n_tabs(self) -> int:
         return self.upstream.n_tabs
 
@@ -854,6 +866,11 @@ class TernaryFeaturetable(DataslicesUpstream, Datatable):
     @property
     def upstream(self) -> BipolarFeaturetable:
         return self.var.upstream
+
+    @property
+    def ternary_columns(self) -> list[str]:
+        """The columns of every tab's ``ternary`` slice, one per bipolar column -- from VAR, no tab read."""
+        return self.upstream.bipolar_columns
 
     @property
     def n_tabs(self) -> int:

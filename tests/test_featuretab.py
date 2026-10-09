@@ -289,6 +289,23 @@ def test_bipolar_encodes_every_feature_column_or_the_ones_named(tmp_path):
             tag="nope").tab(0)
 
 
+def test_the_tables_columns_are_their_tabs_declared_slices_before_anything_is_built(tmp_path):
+    from dbx.featuretables import TernaryFeaturetable
+    url = str(tmp_path)
+    featuretable = _feature_table(url, "two_features", feature_for_column={"a": "final", "b": "final"})
+    stats = _stats_probe(url, featuretable, "two_stats", signals=(("features", "a"), ("features", "b")))
+    for features in (None, ["b"]):
+        bipolar = BipolarFeaturetable(datalake=url, spec=dict(upstream=featuretable, stats_probe=stats,
+                                                              features=features), tag="bipolar")
+        ternary = TernaryFeaturetable(datalake=url, spec=dict(upstream=bipolar), tag="ternary")
+        assert not stats.valid() and not bipolar.valid() and not ternary.valid()
+        assert bipolar.bipolar_columns == list(bipolar.tab(0).declared_columns("bipolar")) == (features or ["a", "b"])
+        assert ternary.ternary_columns == list(ternary.tab(0).declared_columns("ternary")) == bipolar.bipolar_columns
+    with pytest.raises(ValueError, match="not columns"):
+        BipolarFeaturetable(datalake=url, spec=dict(upstream=featuretable, stats_probe=stats, features=["c"]),
+                            tag="nope").bipolar_columns
+
+
 def test_bipolar_refuses_a_stats_probe_without_the_median_it_needs(tmp_path):
     url = str(tmp_path)
     featuretable = _feature_table(url, "short_features")

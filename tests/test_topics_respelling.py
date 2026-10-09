@@ -144,15 +144,20 @@ def test_the_stats_probe_hashes_its_per_column_topics(tmp_path):
 
 def test_a_table_reaches_its_tabs_past_not_its_own():
     """A table's own topics are markers over its tabs, written again in a moment; its tabs are
-    what is worth reaching, and each is, by its TAB's specializations. A table declares only
-    its VAR renames -- what a block holding it, a partition say, renders it as."""
+    what is worth reaching, and each is, by its TAB's specializations. A table declares its VAR
+    renames -- what a block holding it, a partition say, renders it as -- and a Featuretable
+    those again as built while a table declared tabs and tab_paths, reading only ``done``."""
     from dbx.datablocks import ABSENT, SAME
     from dbx.datatables import Datatable
     from dbx.featuretables import BipolarFeaturetable, Featuretable
     assert Datatable.SPECIALIZATIONS == []
     for cls in (Featuretable, BipolarFeaturetable):
-        assert cls.SPECIALIZATIONS and all(sp.spec == {} and sp.topics is SAME and sp.version is ABSENT
-                                           and sp.redirect_vars for sp in cls.SPECIALIZATIONS)
+        assert cls.SPECIALIZATIONS and all(sp.spec == {} and sp.version is ABSENT and sp.redirect_vars
+                                           for sp in cls.SPECIALIZATIONS)
+    assert all(sp.topics is SAME for sp in BipolarFeaturetable.SPECIALIZATIONS)
+    eras = [sp for sp in Featuretable.SPECIALIZATIONS if sp.topics is not SAME]
+    assert len(eras) == 2 and all(set(sp.topics) == {'tabs', 'tab_paths', 'done'}
+                                  and list(sp.redirect_topics) == ['done'] for sp in eras)
     assert Featuretable.TOPICS is Datatable.TOPICS
     assert not hasattr(Datatable, 'TAB_PATHS_TOPICS') and not hasattr(Datatable, 'TAB_PATHS_SPECIALIZATIONS')
 
@@ -171,3 +176,74 @@ def test_a_legacy_spelling_warns_and_a_canonical_one_does_not():
         class Canonical(Datablock):
             TOPICS = {'f': DATAFILE('f'), 'g': DATADICT('g.json', k='int'), 'h': DATADIR,
                       'i': {'j': DATASLICE(x='int')}, 'k': SYNTHETIC}
+
+
+
+def _tab_paths_era_topics():
+    from dbx.datablocks import DATADIR, DATAFILE
+    return {'tabs': DATADIR, 'tab_paths': DATADIR, 'done': DATAFILE('done')}
+
+
+@pytest.mark.parametrize("renamed", [('upstream',), ('upstream', 'feature_for_column')])
+def test_a_featuretable_reconstructs_its_tab_paths_era_identity(tmp_path, monkeypatch, renamed):
+    """Before dbx 4a25684 a table declared tabs and tab_paths, and a Featuretable named its upstream
+    datapoint_table -- and, before that, feature_for_column feature_namemap."""
+    from dataclasses import dataclass
+    from dbx.datablocks import Datablock
+    from dbx.datatables import Datacollator, Datatable
+    from dbx.featuretables import Featuretable
+
+    @dataclass
+    class UpstreamWasDatapointTable(Datablock.VAR):
+        datapoint_table: Datatable
+        evaluator_factory: object
+        collator: Datacollator
+        feature_for_column: dict | None = None
+        shard_size_limit_bytes: int = 1 << 26
+
+    @dataclass
+    class AndFeatureForColumnWasFeatureNamemap(Datablock.VAR):
+        datapoint_table: Datatable
+        evaluator_factory: object
+        collator: Datacollator
+        feature_namemap: dict | None = None
+        shard_size_limit_bytes: int = 1 << 26
+
+    OldVAR = UpstreamWasDatapointTable if len(renamed) == 1 else AndFeatureForColumnWasFeatureNamemap
+    old_names = {'upstream': 'datapoint_table', 'feature_for_column': 'feature_namemap'}
+    new = _feature_table(str(tmp_path))
+    spec = {old_names[k] if k in renamed else k: v for k, v in new.spec.items()}
+    with monkeypatch.context() as m:
+        m.setattr(Featuretable, 'VAR', OldVAR)
+        m.setattr(Featuretable, 'TOPICS', _tab_paths_era_topics())
+        m.setattr(Featuretable, 'SPECIALIZATIONS', [])
+        old = Featuretable(datalake=str(tmp_path), tag='features', spec=spec)
+        old_hash = old.hash
+    assert old_hash != new.hash
+    assert old_hash in new.specialization_hashes()
+
+
+def test_a_table_built_with_more_topics_is_adopted_reading_only_done(tmp_path, monkeypatch):
+    """The topics a table no longer declares are named for its identity and never read: the
+    adoption reads ``done``, the tabs are its TAB's, and nothing is owed."""
+    from dbx.datablocks import Datablock
+    from dbx.featuretables import Featuretable
+    url = str(tmp_path)
+    era = Datablock.Specialization(spec={}, topics=_tab_paths_era_topics(), redirect_topics=['done'],
+                                   note="test: built with tabs and tab_paths")
+    with monkeypatch.context() as m:
+        m.setattr(Featuretable, 'TOPICS', _tab_paths_era_topics())
+        m.setattr(Featuretable, 'SPECIALIZATIONS', [])
+        old = _feature_table(url).build_tree()
+        assert old.valid()
+        old_hash = old.hash
+    with monkeypatch.context() as m:
+        m.setattr(Featuretable, 'SPECIALIZATIONS', [era])
+        new = _feature_table(url)
+        assert new.hash != old_hash and old_hash in new.specialization_hashes()
+        assert all(new.tab(i).valid() for i in range(new.n_tabs))
+        assert not new.valid()
+        new.specialize()
+        assert new.valid() and not new.owedtopics()
+        assert new.redirected_topics() == ['done']
+        assert new.data(("features", "final"), concat=True)["features"]["final"].shape == (10, 8)

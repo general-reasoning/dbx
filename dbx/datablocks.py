@@ -6825,10 +6825,12 @@ class Datablock:
     def _specialization_mismatch_(self, specialization):
         """Why *specialization* does not describe this block, or None if it does.
 
-        A pin naming a field this class does not have, or a topic it does not
-        declare, RAISES rather than reporting a mismatch: that is a mistake in
-        the declaration, and a declaration that quietly never matches is the
-        one failure this feature cannot afford.
+        A pin naming a field this class does not have, or a topic it reads that
+        it does not declare, RAISES rather than reporting a mismatch: that is a
+        mistake in the declaration, and a declaration that quietly never matches
+        is the one failure this feature cannot afford. A topic the narrower
+        block declared and this one no longer does is named in its identity and
+        never read -- left out of ``redirect_topics`` -- and is no mistake.
         """
         fields = self.VAR.__dataclass_fields__
         unknown = [k for k in specialization.spec if k.split('.')[0] not in fields]
@@ -6838,7 +6840,9 @@ class Datablock:
                 f"{unknown}, which {self.VAR.__name__} does not declare. A pin names a "
                 f"VAR field this class has and the narrower block did not."
             )
-        self._topic_leaves_(self._specialization_topics_(specialization))   # raises on a topic we do not declare
+        read = (specialization.redirect_topics if getattr(specialization, 'redirect_topics', None) is not None
+                else self._specialization_topics_(specialization))
+        self._topic_leaves_(read)   # raises on a topic we read and do not declare
         typed = self._typed_specdict_()
         for k, v in specialization.spec.items():
             mine, pinned = self._spec_entry_(typed, k), self._specialization_pin_(k, v)

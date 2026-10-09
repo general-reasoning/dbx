@@ -342,6 +342,17 @@ class Featuretable(DataslicesUpstream, Datatable):
         Datablock.Specialization(
             spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_table', 'feature_for_column': 'feature_namemap'},
             note="... and from feature_namemap to feature_for_column"),
+        # Built while Datatable declared ``tabs`` and ``tab_paths`` (before dbx 4a25684): they are in
+        # its identity, so they are named here for its hash, and ``done`` alone is read. Its tabs are
+        # reached by the TAB's own specializations. To be retired with the tables built then.
+        *(Datablock.Specialization(
+            spec={}, topics={'tabs': DATADIR, 'tab_paths': DATADIR, 'done': DATAFILE('done')},
+            redirect_topics=['done'], redirect_vars=redirect_vars,
+            note=f"{note}, built while a table declared tabs and tab_paths")
+          for redirect_vars, note in (
+              ({'upstream': 'datapoint_table'}, "upstream was datapoint_table"),
+              ({'upstream': 'datapoint_table', 'feature_for_column': 'feature_namemap'},
+               "upstream was datapoint_table and feature_for_column feature_namemap"))),
     ]
 
     @dataclass

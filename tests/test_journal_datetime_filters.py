@@ -19,7 +19,7 @@ import pandas as pd
 import pytest
 
 import dbx
-from dbx.dataparts import (
+from dbx.databits import (
     JOURNAL_DATETIME_FORMAT,
     filter_journal_frame,
     write_exec_journal,
@@ -129,7 +129,7 @@ def test_exec_journal_is_filterable_by_date(tmp_path, monkeypatch):
 
 def test_exec_journal_reads_dbx_root_ahead_of_dbx_url(tmp_path, monkeypatch):
     """The exec journal resolves its lake as a block does: DBX_ROOT, then DBX_URL."""
-    from dbx.dataparts import read_exec_journal
+    from dbx.databits import read_exec_journal
     monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'root'))
     monkeypatch.setenv('DBX_URL', str(tmp_path / 'alias'))
     write_exec_journal("1 + 1")

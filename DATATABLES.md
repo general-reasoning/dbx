@@ -11,10 +11,12 @@ at import time:
 from dbx.datatables import Datatab, Datatable
 ```
 
-A class is recorded under the module it is defined in: a `DatatablePartition`
-or the `DatatablePart` it builds is stored under `dbx.datatables.*`. Builds from
-before 2026-10-02, stored under the old module name `dbx.datapoints.*`, are
-reached by those classes' specializations.
+A class is recorded under the module it is defined in. Partitions of a table
+-- `DatatablePartition`, the `DatatablePart`s it deals, their pieces and packed
+tabs, and the core partitions -- live in `dbx.dataparts`, and are stored under
+`dbx.dataparts.*`; see [DATAPARTITION.md](DATAPARTITION.md). Partitions built
+before their roles were renamed, on 2026-10-10, are rebuilt; pieces stored
+under `dbx.datatables.*` are reached by a specialization.
 
 ## Why slices
 

@@ -40,8 +40,8 @@ import numpy as np
 import pandas as pd
 import tqdm
 
-from . import dataparts
-from .dataparts import (
+from . import databits
+from .databits import (
     OutputTee,
     Remote,
     default_datalake,
@@ -1366,7 +1366,7 @@ def constructed(anchor=None, *, event=..., datalake=None, storage_options=None,
         return datajournal(anchor, datalake=datalake, storage_options=storage_options,
                            n_workers=n_workers, **filters)
     frames = []
-    for a in dataparts.anchors(datalake, storage_options=storage_options):
+    for a in databits.anchors(datalake, storage_options=storage_options):
         try:
             frames.append(datajournal(a, datalake=datalake, storage_options=storage_options,
                                       n_workers=n_workers, **filters))
@@ -2148,7 +2148,7 @@ class DatajournalEntry(pd.Series):
                               handle=remote if isinstance(remote, Remote) else None,
                               **remote_kwargs)
         if gitrepo is None:
-            gitrepo = dataparts.DBX_GIT_REPO
+            gitrepo = databits.DBX_GIT_REPO
         if gitrepo is None:
             gitrepo = 'journal_entry'
         return self.instantiate(gitrepo=gitrepo, revision=revision)
@@ -2895,8 +2895,8 @@ class Datajournal:
                                          'type': type_path,
                                          'repr': repr_path,
                                          'note': note_val,
-                                         'gitrepo': dataparts.DBX_GIT_REPO,
-                                         'wrkrepo': dataparts.DBX_USE_WORK_REPO,
+                                         'gitrepo': databits.DBX_GIT_REPO,
+                                         'wrkrepo': databits.DBX_USE_WORK_REPO,
         }])
         with block.fs.open(journal_path, 'wb') as f:
             df.to_parquet(f)

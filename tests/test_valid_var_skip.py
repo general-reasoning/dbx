@@ -7,7 +7,7 @@ import pytest
 from dataclasses import dataclass
 
 from dbx.datablocks import Datablock
-from dbx.dataparts import quote
+from dbx.databits import quote
 
 
 # ---------------------------------------------------------------------------

@@ -12,13 +12,19 @@ Quick start::
 
 Key modules
 -----------
-dataparts
+databits
     Standalone utilities: I/O helpers (``read_frame``,
     ``write_tensor``, …), callable executors for threading / multiprocessing /
     Ray parallelism.
 datablocks
     :class:`Datablock`, :class:`Datastack`, git-revision tracking, remote
     execution via Ray.
+datatables
+    :class:`Datatab`, :class:`Datatable` and :class:`Datacollator`: tables of
+    MDS slices, and the columns a consumer reads from them.
+dataparts
+    :class:`DatatablePartition` and :class:`DatatableCorePartition`: a table
+    dealt into parts, and the parts, pieces and packed tabs that read it.
 journals
     :class:`Datajournal` and the build records it reads and writes
     (:class:`DatajournalFrame`, :class:`DatajournalEntry`); the exec journal
@@ -45,10 +51,11 @@ stills
 
 __version__ = "0.0.1"
 
-from .dataparts import *
+from .databits import *
 from .datablocks import *
 from .journals import *
 from .datatables import *
+from .dataparts import *
 from .backbones import *
 from .featuretables import *
 from .probes import *

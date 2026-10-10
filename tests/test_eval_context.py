@@ -1,7 +1,7 @@
 """
 Tests for dbx being available in the dbx.eval() evaluation context.
 
-The ``eval()`` function in ``dataparts.py`` builds an evaluation context
+The ``eval()`` function in ``databits.py`` builds an evaluation context
 from the function-path portion of the specline (via ``get_named_const_and_cxt``).
 When the specline's top-level function is not in the ``dbx`` package (e.g.
 ``$os.path.join(dbx.getenv('ROOT'), 'sub')``), the context would only contain
@@ -18,7 +18,7 @@ import os
 import sys
 import pytest
 
-from dbx.dataparts import eval as dbx_eval, env, getenv
+from dbx.databits import eval as dbx_eval, env, getenv
 
 
 @pytest.fixture(autouse=True)
@@ -39,10 +39,10 @@ class TestDbxInEvalContextBaseline:
         result = dbx_eval("$dbx.getenv('EVAL_CXT_A')")
         assert result == '/data/a'
 
-    def test_dbx_dataparts_getenv_specline(self, monkeypatch):
-        """$dbx.dataparts.getenv('KEY') also works."""
+    def test_dbx_databits_getenv_specline(self, monkeypatch):
+        """$dbx.databits.getenv('KEY') also works."""
         monkeypatch.setenv('EVAL_CXT_B', '/data/b')
-        result = dbx_eval("$dbx.dataparts.getenv('EVAL_CXT_B')")
+        result = dbx_eval("$dbx.databits.getenv('EVAL_CXT_B')")
         assert result == '/data/b'
 
 

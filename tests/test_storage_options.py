@@ -2,7 +2,7 @@
 import os
 import pytest
 from dbx.datablocks import Datablock
-from dbx.dataparts import parse_storage_options
+from dbx.databits import parse_storage_options
 
 
 # ---------------------------------------------------------------------------

@@ -81,13 +81,14 @@ def test_a_different_declaration_on_a_subclass_stands(tmp_path):
 
 def test_a_partition_part_answers_on_the_class_with_a_dict():
     """Its TOPICS are its table's, per instance; on the class there is no table, and it says so as a dict."""
-    from dbx.datatables import DatatablePart
+    from dbx.dataparts import DatatablePart
     assert DatatablePart.TOPICS == {}
 
 
 def test_a_partition_part_declares_its_tab_forward():
     """Every part's tabs are Datatabs; which one is the partitioned table's -- and so is its BLOCK."""
-    from dbx.datatables import Datatab, DatatablePart
+    from dbx.datatables import Datatab
+    from dbx.dataparts import DatatablePart
     assert DatatablePart.TAB is Datatab and DatatablePart.BLOCK is Datatab
 
 

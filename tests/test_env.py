@@ -14,7 +14,7 @@ import os
 import pytest
 from dataclasses import dataclass
 
-from dbx.dataparts import env, getenv, eval as dbx_eval
+from dbx.databits import env, getenv, eval as dbx_eval
 from dbx.datablocks import Datablock
 
 

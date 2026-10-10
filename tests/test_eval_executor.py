@@ -11,7 +11,7 @@ import os
 import functools
 import unittest
 
-from dbx.dataparts import (
+from dbx.databits import (
     eval as dbx_eval,
     InlineCallableExecutor,
     MultithreadingCallableExecutor,

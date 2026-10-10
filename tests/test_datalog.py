@@ -5,7 +5,7 @@ import re
 import pytest
 
 from dbx.datablocks import Datablock, DATAFILE
-from dbx.dataparts import callable_executor
+from dbx.databits import callable_executor
 from dbx.journals import Datalog
 
 

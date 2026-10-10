@@ -10,7 +10,7 @@ Verifies:
 import time
 import pytest
 
-from dbx.dataparts import (
+from dbx.databits import (
     MultithreadingCallableExecutor,
     MultiprocessingCallableExecutor,
     InlineCallableExecutor,

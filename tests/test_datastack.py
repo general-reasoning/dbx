@@ -227,32 +227,32 @@ class TestDatastackParallelization(unittest.TestCase):
 
     def test_default_is_inline(self):
         stack = SimpleStack(datalake=self.tmpdir)
-        from dbx.dataparts import InlineCallableExecutor
+        from dbx.databits import InlineCallableExecutor
         self.assertIs(stack.executor_cls, InlineCallableExecutor)
 
     def test_explicit_inline(self):
         stack = SimpleStack(datalake=self.tmpdir, parallelization='inline')
-        from dbx.dataparts import InlineCallableExecutor
+        from dbx.databits import InlineCallableExecutor
         self.assertIs(stack.executor_cls, InlineCallableExecutor)
 
     def test_multithreading(self):
         stack = SimpleStack(datalake=self.tmpdir, parallelization='multithreading')
-        from dbx.dataparts import MultithreadingCallableExecutor
+        from dbx.databits import MultithreadingCallableExecutor
         self.assertIs(stack.executor_cls, MultithreadingCallableExecutor)
 
     def test_multiprocessing(self):
         stack = SimpleStack(datalake=self.tmpdir, parallelization='multiprocessing')
-        from dbx.dataparts import MultiprocessingCallableExecutor
+        from dbx.databits import MultiprocessingCallableExecutor
         self.assertIs(stack.executor_cls, MultiprocessingCallableExecutor)
 
     def test_ray(self):
         stack = SimpleStack(datalake=self.tmpdir, parallelization='ray')
-        from dbx.dataparts import RayCallableExecutor
+        from dbx.databits import RayCallableExecutor
         self.assertIs(stack.executor_cls, RayCallableExecutor)
 
     def test_case_insensitive(self):
         stack = SimpleStack(datalake=self.tmpdir, parallelization='Multithreading')
-        from dbx.dataparts import MultithreadingCallableExecutor
+        from dbx.databits import MultithreadingCallableExecutor
         self.assertIs(stack.executor_cls, MultithreadingCallableExecutor)
 
     def test_n_workers_stored(self):
@@ -399,35 +399,35 @@ class TestDatastackClearBlocks(unittest.TestCase):
 
 
 class TestCallableExecutorFactory(unittest.TestCase):
-    """Verify the callable_executor() factory from dataparts."""
+    """Verify the callable_executor() factory from databits."""
 
     def test_default_is_inline(self):
-        from dbx.dataparts import callable_executor, InlineCallableExecutor
+        from dbx.databits import callable_executor, InlineCallableExecutor
         executor = callable_executor(n_workers=1)
         self.assertIsInstance(executor, InlineCallableExecutor)
 
     def test_explicit_inline(self):
-        from dbx.dataparts import callable_executor, InlineCallableExecutor
+        from dbx.databits import callable_executor, InlineCallableExecutor
         executor = callable_executor('inline', n_workers=1)
         self.assertIsInstance(executor, InlineCallableExecutor)
 
     def test_multithreading(self):
-        from dbx.dataparts import callable_executor, MultithreadingCallableExecutor
+        from dbx.databits import callable_executor, MultithreadingCallableExecutor
         executor = callable_executor('multithreading', n_workers=2)
         self.assertIsInstance(executor, MultithreadingCallableExecutor)
 
     def test_multiprocessing(self):
-        from dbx.dataparts import callable_executor, MultiprocessingCallableExecutor
+        from dbx.databits import callable_executor, MultiprocessingCallableExecutor
         executor = callable_executor('multiprocessing', n_workers=2)
         self.assertIsInstance(executor, MultiprocessingCallableExecutor)
 
     def test_unknown_raises(self):
-        from dbx.dataparts import callable_executor
+        from dbx.databits import callable_executor
         with self.assertRaises(ValueError):
             callable_executor('quantum', n_workers=1)
 
     def test_case_insensitive(self):
-        from dbx.dataparts import callable_executor, MultithreadingCallableExecutor
+        from dbx.databits import callable_executor, MultithreadingCallableExecutor
         executor = callable_executor('Multithreading', n_workers=1)
         self.assertIsInstance(executor, MultithreadingCallableExecutor)
 
@@ -853,7 +853,7 @@ class TestBLOCK:
         import sys
         sys.path.insert(0, os.path.dirname(__file__))
         from test_partition_fold import DummyTable
-        from dbx.datatables import DatatablePartition
+        from dbx.dataparts import DatatablePartition
         table = DummyTable(datalake=str(tmp_path / 'table')).build()
         part = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
             datatable=table, fractions=[0.5, 0.5], partition_slice=0)).build().fold(0)

@@ -10,8 +10,8 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from dbx.datatables import (DATASLICE, Datacollator, Datatab, Datatable, DatatableCorePart,
-                            DatatableCorePartition, DatatableCoreTab)
+from dbx.datatables import DATASLICE, Datacollator, Datatab, Datatable
+from dbx.dataparts import DatatableCorePart, DatatableCorePartition, DatatableCoreTab
 
 
 @pytest.fixture(autouse=True)
@@ -68,13 +68,13 @@ def points(tmp_path, **spec):
 X, LABEL, PATIENT, SITE = ('pts', 'x'), ('pts', 'label'), ('pts', 'patient'), ('pts', 'site')
 
 
-def core(tmp_path, table, fractions=(0.8, 0.2), build=True, coreby=(X,), groupby=None, stratifyby=None,
+def core(tmp_path, table, fractions=(0.8, 0.2), build=True, coreby=(X,), stratifyby=None, partitionby=None,
          carry=None, name='core', parallelization=None, n_workers=1, **spec):
     columns = {'coreby': list(coreby)}
-    if groupby is not None:
-        columns['groupby'] = groupby
     if stratifyby is not None:
         columns['stratifyby'] = stratifyby
+    if partitionby is not None:
+        columns['partitionby'] = partitionby
     if carry is not None:
         columns['carry'] = list(carry)
     p = DatatableCorePartition(datalake=str(tmp_path / name), parallelization=parallelization, n_workers=n_workers,
@@ -135,7 +135,7 @@ def test_a_coreset_takes_the_rows_nearest_each_center(tmp_path):
 
 def test_a_group_is_dealt_whole(tmp_path):
     tbl = points(tmp_path)
-    p = core(tmp_path, tbl, groupby=PATIENT, fractions=(0.5, 0.5))
+    p = core(tmp_path, tbl, stratifyby=PATIENT, fractions=(0.5, 0.5))
     patients = {(t, r): pa for t in range(tbl.n_tabs) for r, pa in enumerate(tbl.tab(t).data(PATIENT)['pts']['patient'])}
     fold_of = {}
     for k in range(2):
@@ -257,28 +257,28 @@ def column(tbl, pair):
 
 
 @pytest.mark.parametrize('fractions', [(0.5, 0.5), (0.1, 0.1)])
-def test_the_fractions_hold_within_each_stratum(tmp_path, fractions):
+def test_the_fractions_hold_within_each_partition(tmp_path, fractions):
     tbl = points(tmp_path)
-    p = core(tmp_path, tbl, fractions=fractions, stratifyby=SITE)
+    p = core(tmp_path, tbl, fractions=fractions, partitionby=SITE)
     site = column(tbl, SITE)
     total = np.bincount(list(site.values()))
     for k, f in enumerate(fractions):
         got = np.bincount([site[(int(t), int(r))] for t, r, _ in p.layout(k)], minlength=len(total))
-        # Each stratum's cells carry their rounding into the next: within a row of its share.
+        # Each partition's cells carry their rounding into the next: within a row of its share.
         assert np.all(np.abs(got - f * total) <= 1), (k, got, f * total)
 
 
-def test_groups_with_strata_are_dealt_whole_and_a_group_across_strata_is_refused(tmp_path):
+def test_strata_within_partitions_are_dealt_whole_and_a_stratum_across_partitions_is_refused(tmp_path):
     tbl = points(tmp_path)
-    p = core(tmp_path, tbl, fractions=(0.5, 0.5), groupby=PATIENT, stratifyby=LABEL)
+    p = core(tmp_path, tbl, fractions=(0.5, 0.5), stratifyby=PATIENT, partitionby=LABEL)
     patient = column(tbl, PATIENT)
     fold_of = {}
     for k in range(2):
         for t, r, _ in p.layout(k):
             fold_of.setdefault(patient[(int(t), int(r))], set()).add(k)
     assert all(len(v) == 1 for v in fold_of.values())
-    with pytest.raises(ValueError, match="spans more than one stratum"):
-        core(tmp_path, tbl, name='across', groupby=PATIENT, stratifyby=SITE)
+    with pytest.raises(ValueError, match="spans more than one partition"):
+        core(tmp_path, tbl, name='across', stratifyby=PATIENT, partitionby=SITE)
 
 
 def test_coverage_measures_how_the_folds_fill_out_the_table(tmp_path):

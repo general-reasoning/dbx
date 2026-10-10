@@ -90,7 +90,7 @@ class DummyModelEvaluatorFactory(ModelEvaluatorBuilder):
 
 def _fit_eval_(url, featuretable, tag='split'):
     """Two folds of the feature table -- one tab each -- as a probe's fit_table and eval_table."""
-    from dbx.datatables import DatatablePartition
+    from dbx.dataparts import DatatablePartition
     split = DatatablePartition(datalake=url, tag=tag, spec=dict(
         datatable=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tabs')).build()
     return dict(fit_table=split.fold(0).build(), eval_table=split.fold(1).build())
@@ -407,7 +407,7 @@ def test_feature_affine_logistic_probe_parallel(tmp_path):
 
 if __name__ == "__main__":
     import sys
-    dbx.dataparts.gitwrkreposetup = lambda *a, **k: None
+    dbx.databits.gitwrkreposetup = lambda *a, **k: None
     sys.exit(pytest.main([__file__]))
 
 
@@ -482,33 +482,6 @@ def test_feature_stats_probe_over_tabs_of_different_sizes(tmp_path):
     np.testing.assert_allclose(np.concatenate(norms), probe.stat('norm', ('features', 'final')))
     # The reductions still stack: one row per tab.
     assert probe.stat('mean', ('features', 'final'), per_tab=True).shape == (2, 8)
-
-
-def test_tab_aggregation_refuses_a_tab_whose_rows_disagree(tmp_path):
-    url = str(tmp_path)
-    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag="agg_samples").build()
-    featuretable = Featuretable(
-        datalake=url,
-        spec=dict(
-            upstream=sampletable,
-            evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
-            collator=Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]})),
-        ),
-        devices=["cpu"],
-        tag="agg_features",
-    ).build()
-    probe = FeatureAffineLogisticProbe(
-        datalake=url,
-        spec=dict(
-            **_fit_eval_(url, featuretable),
-            collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True)),
-            tab_aggregation='mean',
-        ),
-        tag="agg_probe",
-    )
-    # The dummy tabs label their rows 0, 1, 0, ...: one tab, two labels.
-    with pytest.raises(ValueError, match="can carry only one label"):
-        probe.build()
 
 
 def _feature_table_(url, tag, n=4):

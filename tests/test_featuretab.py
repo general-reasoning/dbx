@@ -588,7 +588,7 @@ def test_an_upstream_slice_named_features_is_refused(tmp_path):
 
 if __name__ == "__main__":
     import sys
-    dbx.dataparts.gitwrkreposetup = lambda *a, **k: None
+    dbx.databits.gitwrkreposetup = lambda *a, **k: None
     sys.exit(pytest.main([__file__]))
 
 

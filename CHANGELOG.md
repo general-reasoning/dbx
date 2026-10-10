@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A partition's roles are renamed: `groupby` is `stratifyby`, and what was
+  `stratifyby` is `partitionby`.** `stratifyby` names the column whose values,
+  strata, must not cross the parts' boundaries -- a patient's rows go to one
+  part. `partitionby` names the column whose values, partitions, are each
+  divided between the parts by the fractions -- every part takes its share of
+  every cohort. The same for `DatatableCorePartition`, in `tabs.json` records
+  (`{"tab": i, "stratifyby": v, "partitionby": v}`), and in `summary`, whose
+  per-value counts are under `partitions` (were `strata`) and a core part's
+  under `strata` (were `groups`). **A collator still naming `stratifyby` in
+  the old sense now keeps its values together, silently**: rename it to
+  `partitionby`. A collator naming `groupby` is refused, as any unknown role
+  is. `DatatablePartition` and `DatatableCorePartition` are VERSION 2, so a
+  partition built before -- whose collator may spell the same and mean the
+  opposite -- is rebuilt, never taken for one built now; only `largest_first`
+  partitions, with no collator, are reached. Pieces are kept: a piece is the
+  rows of a tab holding a value, whichever role read it.
+- **`dbx.dataparts` is now the partitions' module; the utilities it held are
+  `dbx.databits`.** The standalone helpers -- I/O, callable executors, the term
+  evaluator, git-revision pinning -- moved from `dbx.dataparts` to
+  `dbx.databits` unchanged: `from dbx.databits import callable_executor`. Then
+  `DatatablePartition`, `DatatablePart`, `DatatabPiece`, the new
+  `DatatablePackTab`, and `DatatableCorePartition`, `DatatableCorePart` and
+  `DatatableCoreTab` moved from `dbx.datatables` to `dbx.dataparts`:
+  `from dbx.dataparts import DatatablePartition`. `Datacollator` stays in
+  `dbx.datatables`. No hash moved -- an identity names no module -- and a
+  piece's specialization anchored at `dbx.datatables` reaches the pieces built
+  there; partitions are rebuilt since the roles were renamed (above). `dbx.*`
+  re-exports all of them as before.
+- **`FeatureAffineLogisticProbe`: `aggregation` is `signal_reduction`, and
+  `tab_aggregation` is gone.** The old `VAR.aggregation` averaged within a row
+  -- a `(T, D)` token feature over `T` -- and is now `VAR.signal_reduction`
+  (`reduce_signal_np`, was `aggregate_features_np`; `signal_matrix(reduction=)`).
+  `VAR.aggregation` now averages across rows, by `aggregateby` (below).
+  `tab_aggregation='mean'`, one sample per tab, is removed: a tab is no longer
+  one slide once a partition rejoins or packs tabs; aggregate by a column
+  naming the slide instead. VERSION 4. A specialization cannot restore a
+  removed field, so probes built before are not reached, and rebuild.
+- **`DatatablePartition` gained `coalesce`, `min_tab_rows` and `max_tab_rows`,
+  and so every partition's hash moved.** `DatatableCorePartition` takes no
+  `coalesce`.
 - **One name for the block a feature block was built from: `upstream`.**
   `Featuretab.VAR.datapoint_tab`, `Featuretable.VAR.datapoint_table`,
   `BipolarFeaturetab.VAR.featuretab` and `BipolarFeaturetable.VAR.featuretable`
@@ -25,6 +65,24 @@ All notable changes to this project will be documented in this file.
   specializations reach the partitions built before.
 
 ### Added
+- **`DatatablePartition(coalesce=...)`: what a part's tabs are, once dealt.**
+  `None` (the default): whole tabs and pieces, as dealt. `'whole'`: a cut tab
+  whose pieces all went to one part, none skipped, is that
+  part's whole tab again -- read where it is, not copied. `'pack'`: as
+  `'whole'`, then each part's tabs and pieces of fewer than `min_tab_rows`
+  rows are pooled, in source order, into `DatatablePackTab`s of `max_tab_rows`
+  rows (twice `min_tab_rows` by default), recorded in `tabs` as
+  `{"fold": k, "pack": j, "segments": [[entry, offset, length], ...]}` and
+  built by the part. A rejoined or packed tab may hold rows of several groups
+  and strata. No mode moves a row to another part. `part.source_index()`
+  gives every row of a part as the `(tab, row)` of the partitioned table.
+- **`FeatureAffineLogisticProbe(aggregation='mean')`: rows aggregated by a
+  column.** The collator's new `aggregateby` role names the rows to aggregate
+  (a slide's id); the probe averages the rows sharing an `aggregateby` value
+  and a label, from whichever tabs they lie in -- each worker sums its tab's
+  share, the probe divides. With an `aggregateby` column the fit and eval
+  tables must share no value of it; and two parts of different partitions of
+  one table must share no row (by `source_index()`).
 - **`DatatablePartition` splits a tab holding several values of a partition
   column.** Such a tab -- several patients in one bag, tiles annotated one by
   one -- used to raise `NotImplementedError`. It is now split into pieces, one

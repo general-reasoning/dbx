@@ -64,7 +64,8 @@ def test_a_partition(tmp_path, monkeypatch):
     respelled -- is reached by a partition built with method='largest_first', the one it computed."""
     from dataclasses import dataclass
     from dbx.datablocks import Datablock
-    from dbx.datatables import Datatable, DatatablePartition
+    from dbx.datatables import Datatable
+    from dbx.dataparts import DatatablePartition
     from test_build_journal_reads import Table
     table = Table(datalake=str(tmp_path / 't'), spec={'n': 4})
 
@@ -81,6 +82,7 @@ def test_a_partition(tmp_path, monkeypatch):
     with monkeypatch.context() as m:
         m.setattr(DatatablePartition, 'VAR', OldVAR)
         m.setattr(DatatablePartition, 'TOPICS', {'tabs': 'tabs.json'})
+        m.setattr(DatatablePartition, 'VERSION', 1)       # what it was, before the roles were renamed
         m.setattr(DatatablePartition, 'SPECIALIZATIONS', [])
         m.setattr(DatatablePartition, '__post_init__', Datablock.__post_init__)
         old_hash = partition('datapoint_table').hash

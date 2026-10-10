@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from dbx import dataparts
+from dbx import databits
 from dbx.datablocks import Datablock
 
 
@@ -143,7 +143,7 @@ class TestWhatPasses:
     def test_a_specline_whatever_it_resolves_to(self, tmp_path, monkeypatch):
         """The identity renders the LINE for anything that does not resolve to a
         block, so what it resolves to never reaches the hash."""
-        monkeypatch.setattr(dataparts, 'eval', lambda term: Plain())
+        monkeypatch.setattr(databits, 'eval', lambda term: Plain())
         b = block(Held, tmp_path, thing='$something.opaque')
         assert isinstance(b.var.thing, Plain)
         assert "'$something.opaque'" in b.signaturestr()
@@ -179,7 +179,7 @@ class TestTheLazyLoaderResolvesOnce:
 
     def test_a_specline_resolving_to_none_is_evaluated_once(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(dataparts, 'eval', lambda term: calls.append(term))
+        monkeypatch.setattr(databits, 'eval', lambda term: calls.append(term))
         loader = Datablock.VAR.LazyLoader('$nothing', name='thing', owner='Held')
         assert loader() is None and loader() is None and loader() is None
         assert calls == ['$nothing']

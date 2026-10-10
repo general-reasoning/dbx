@@ -782,7 +782,7 @@ class TernaryFeaturetab(DataslicesUpstream, Datatab):
                              f"must lean to decide its sign, in (0, 1]; got {self.var.bag_threshold!r}")
 
     def __build__(self):
-        from dbx.dataparts import write_npz
+        from dbx.databits import write_npz
         columns = self.bipolar_columns
         data = self.upstream.data(('bipolar', list(columns)), concat=True)['bipolar']
         ternary, counts = {}, set()
@@ -814,7 +814,7 @@ class TernaryFeaturetab(DataslicesUpstream, Datatab):
 
     def bag(self, column: str) -> dict:
         """``{'mean', 'sign', 'n_rows'}`` of *column*: the bag-level estimate its rows were judged against."""
-        from dbx.dataparts import read_npz
+        from dbx.databits import read_npz
         if column not in self.bipolar_columns:
             raise KeyError(f"{type(self).__name__}: no bipolar column {column!r}; it has {self.bipolar_columns}")
         return read_npz(self.path('bag', column), 'mean', 'sign', 'n_rows', storage_options=self.storage_options)

@@ -14,7 +14,7 @@ import pandas as pd
 
 import dbx.datablocks as dbxmod
 from dbx.datablocks import journal, Datablock, Datajournal, DatajournalFrame, DatajournalEntry
-import dbx.dataparts as dataparts
+import dbx.databits as databits
 
 
 # ---------------------------------------------------------------------------
@@ -673,8 +673,8 @@ class TestDatablockJournalArgThreading:
 
 def _unbuilt_without_git(tmp_path, monkeypatch):
     """A block whose journal entry will record no revision and no gitrepo."""
-    monkeypatch.setattr(dataparts, 'DBX_GIT_REPO', None)
-    monkeypatch.setattr(dataparts, 'DBX_USE_WORK_REPO', None)
+    monkeypatch.setattr(databits, 'DBX_GIT_REPO', None)
+    monkeypatch.setattr(databits, 'DBX_USE_WORK_REPO', None)
     return BuildableBlock(datalake=str(tmp_path))
 
 

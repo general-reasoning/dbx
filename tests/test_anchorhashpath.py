@@ -3,7 +3,7 @@ import unittest
 import pandas as pd
 import fsspec
 from dbx.datablocks import Datablock, DatajournalEntry
-from dbx.dataparts import fs_full_path
+from dbx.databits import fs_full_path
 
 class TestAnchorKeyPath(unittest.TestCase):
     def setUp(self):

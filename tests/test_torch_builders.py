@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 torch = pytest.importorskip("torch", reason="torch is required for TorchMulti* tests")
 
-from dbx.dataparts import (
+from dbx.databits import (
     TorchMultithreadingCallableExecutor,
     TorchMultiprocessingCallableExecutor,
 )

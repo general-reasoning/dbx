@@ -63,8 +63,8 @@ import pandas as pd
 
 __eval__ = __builtins__['eval']
 
-from . import dataparts
-from .dataparts import (
+from . import databits
+from .databits import (
     default_datalake,
     InlineCallableExecutor,
     LogVolume,
@@ -834,7 +834,7 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
     called_from_cli = False
     if not args:
         called_from_cli = True
-        dataparts.pintrampoline()
+        databits.pintrampoline()
         import argparse
         parser = argparse.ArgumentParser(prog="dbx.valid", description="Validate latest builds for given anchors.")
         parser.add_argument("anchors", nargs="*", help="Anchor keys or Datablock names")
@@ -843,7 +843,7 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
         parser.add_argument("--datalake", "--url", dest="url", type=str, default=None, help="The datalake")
         parser.add_argument("--events", nargs="+", default=None, help="Event names to check validity for (default: build:end)")
 
-        cli_argv = [a for a in sys.argv[1:] if not a.startswith(dataparts.PIN_FLAGS)]
+        cli_argv = [a for a in sys.argv[1:] if not a.startswith(databits.PIN_FLAGS)]
         parsed, unknown = parser.parse_known_args(cli_argv)
 
         anchors = parsed.anchors
@@ -1177,7 +1177,7 @@ class Datablock:
                 if self.value is self._UNSET:
                     if isinstance(self.term, str):
                         try:
-                            self.value = dataparts.eval(self.term)
+                            self.value = databits.eval(self.term)
                         except Exception as e:
                             # Evaluated lazily -- often deep inside computing an
                             # identity -- so say which field of which block.
@@ -2381,7 +2381,7 @@ class Datablock:
                 value = getattr(self.var, k, None)
                 if self.is_specline(raw_v):
                     try:
-                        eval_v = dataparts.eval(raw_v)
+                        eval_v = databits.eval(raw_v)
                         if isinstance(eval_v, Datablock):
                             _spec_[k] = eval_v.signaturestr(
                                 legacy_typing=legacy_typing, legacy_signature=legacy)
@@ -3828,7 +3828,7 @@ class Datablock:
 
         ``pretty=True`` wraps one kwarg per line. It stays OFF by default
         because the result is a specline that gets ``eval``-ed on the way back
-        in (see ``dataparts.eval``), so formatting must be opt-in rather than
+        in (see ``databits.eval``), so formatting must be opt-in rather than
         silently changing what every caller emits.
         """
         mode = 'quote' if not cite else 'cite'
@@ -4942,9 +4942,9 @@ class Datablock:
             self.log.detailed(f"--------------> COMPUTING revision")
             if self._revision_ is None:
                 self.log.detailed(f"--------------> self._revision_ is None")
-                gitrepo = (dataparts.DBX_USE_WORK_REPO
-                           if dataparts.DBX_USE_WORK_REPO is not None
-                           else dataparts.DBX_GIT_REPO)
+                gitrepo = (databits.DBX_USE_WORK_REPO
+                           if databits.DBX_USE_WORK_REPO is not None
+                           else databits.DBX_GIT_REPO)
                 self._revision = gitrevision(log=self.log) if gitrepo is not None else None
                 self.log.detailed(f"--------------> self._revision_: from gitrevision()")
             else:
@@ -5253,7 +5253,7 @@ class Datablock:
             value = getattr(self.var, k)
             raw = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else value
             if k in nested:
-                block = value if isinstance(value, Datablock) else dataparts.eval(raw)
+                block = value if isinstance(value, Datablock) else databits.eval(raw)
                 past = nested[k]
                 out[out_key] = block._typed_specdict_(legacy=legacy, omit=tuple(past.spec),
                                                       redirect_vars=past.redirect_vars, nested=past.nested)
@@ -5266,7 +5266,7 @@ class Datablock:
                 # turns one into the other. Only a specline denoting something
                 # that is NOT a block stays text.
                 try:
-                    evaluated = dataparts.eval(raw)
+                    evaluated = databits.eval(raw)
                 except Exception:
                     evaluated = None
                 out[out_key] = (evaluated._typed_specdict_(legacy=legacy)
@@ -5383,7 +5383,7 @@ class Datablock:
         holding a marker is a modern one, and there is nothing else it could
         mean.  Derived on each call, so a TOPICS assigned or amended after the
         class body -- or computed per instance, as
-        :class:`~dbx.datatables.DatatablePart`'s is -- is answered as it stands.
+        :class:`~dbx.dataparts.DatatablePart`'s is -- is answered as it stands.
 
         A declaration holding both spellings has no era, and raises rather than
         rendering half of itself each way.
@@ -6797,7 +6797,7 @@ class Datablock:
             return value._typed_specdict_()
         if self.is_specline(value):
             try:
-                evaluated = dataparts.eval(value)
+                evaluated = databits.eval(value)
             except Exception:
                 evaluated = None
             return (evaluated._typed_specdict_()
@@ -7082,7 +7082,7 @@ class Datablock:
                 out.append((k, value))
             elif self.is_specline(spec.get(k, value)):
                 try:
-                    evaluated = dataparts.eval(spec.get(k, value))
+                    evaluated = databits.eval(spec.get(k, value))
                 except Exception:
                     continue
                 if isinstance(evaluated, Datablock):
@@ -8689,7 +8689,7 @@ class Datastack(Datablock):
 
     @classmethod
     def _get_executors_(cls):
-        """Lazily resolve executor classes (defined in dataparts)."""
+        """Lazily resolve executor classes (defined in databits)."""
         if not hasattr(cls, '_executors_cache'):
             cls._executors_cache = {
                 "inline":                InlineCallableExecutor,

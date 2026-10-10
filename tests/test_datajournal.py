@@ -281,7 +281,7 @@ class TestWithScope:
         assert seen['after'] is dj
 
     def test_dfn_yaml_carries_no_journal(self, tmp_path):
-        from dbx.dataparts import read_yaml
+        from dbx.databits import read_yaml
         b = block(tmp_path)
         b.build()
         assert 'datajournal' not in read_yaml(b.datajournal(loc=0)['dfn'], safe=True)
@@ -295,7 +295,7 @@ class TestExec:
         monkeypatch.setenv('DBX_ROOT', str(tmp_path))
 
     def _row(self, tmp_path):
-        from dbx.dataparts import read_exec_journal
+        from dbx.databits import read_exec_journal
         return read_exec_journal(datalake=str(tmp_path), iloc=0)
 
     def test_blocks_share_one_session_and_the_row_lists_their_entries(self, tmp_path):
@@ -324,14 +324,14 @@ class TestExec:
         assert len(self._row(tmp_path)['datajournal_entries']) == 1
 
     def test_one_row_written_when_the_command_is_over(self, tmp_path):
-        from dbx.dataparts import read_exec_journal
+        from dbx.databits import read_exec_journal
         seen = []
         dbx.exec("seen.append(len(read(datalake=root)))", seen=seen, read=read_exec_journal, root=str(tmp_path))
         assert seen == [0]
         assert len(read_exec_journal(datalake=str(tmp_path))) == 1
 
     def test_a_failing_command_is_one_row_too(self, tmp_path):
-        from dbx.dataparts import read_exec_journal
+        from dbx.databits import read_exec_journal
         with pytest.raises(ZeroDivisionError):
             dbx.exec("1/0")
         assert len(read_exec_journal(datalake=str(tmp_path))) == 1
@@ -343,7 +343,7 @@ class TestExec:
     def test_a_nested_exec_joins_the_session(self, tmp_path):
         outer = dbx.exec("dbx.exec('Built(datalake=root, spec={\"x\": 3})', Built=Built, root=root)",
                          Built=Built, root=str(tmp_path), dbx=dbx)
-        from dbx.dataparts import read_exec_journal
+        from dbx.databits import read_exec_journal
         rows = read_exec_journal(datalake=str(tmp_path))
         assert rows['session'].nunique() == 1 and len(rows) == 2
 
@@ -360,7 +360,7 @@ class TestExecjournal:
                         "a.build(); b.build(); (a, b)  # two", Built=Built, root=str(tmp_path))
 
     def test_the_types(self, tmp_path):
-        from dbx.dataparts import ExecjournalEntry, ExecjournalFrame
+        from dbx.databits import ExecjournalEntry, ExecjournalFrame
         self._run(tmp_path)
         assert isinstance(dbx.journal(), ExecjournalFrame)
         assert isinstance(dbx.journal(iloc=0), ExecjournalEntry)
@@ -455,14 +455,14 @@ class TestExecTimes:
 
     def test_start_and_end_with_datetime_the_start(self, tmp_path):
         import time
-        from dbx.dataparts import read_exec_journal
+        from dbx.databits import read_exec_journal
         dbx.exec("sleep(0.05)", sleep=time.sleep)
         row = read_exec_journal(datalake=str(tmp_path), iloc=0)
         assert row['datetime'] == row['exec:start:datetime']
         assert row['exec:end:datetime'] > row['exec:start:datetime']
 
     def test_a_failing_command_has_both(self, tmp_path):
-        from dbx.dataparts import read_exec_journal
+        from dbx.databits import read_exec_journal
         with pytest.raises(ZeroDivisionError):
             dbx.exec("1/0")
         row = read_exec_journal(datalake=str(tmp_path), iloc=0)
@@ -767,7 +767,7 @@ class TestTwoJournals:
         monkeypatch.setenv('DBX_ROOT', str(tmp_path))
 
     def test_each_says_which_it_reads(self, tmp_path):
-        from dbx.dataparts import ExecjournalFrame
+        from dbx.databits import ExecjournalFrame
         b = block(tmp_path)
         dbx.exec("b.build()", b=b)
         assert isinstance(dbx.datajournal(Built, datalake=str(tmp_path)), DatajournalFrame)
@@ -861,7 +861,7 @@ class TestAcrossProcesses:
         assert sorted(events) == ['build:end', 'build:exception']
 
     def test_results_are_the_callables_values(self, tmp_path):
-        from dbx.dataparts import callable_executor
+        from dbx.databits import callable_executor
         with Datajournal() as dj:
             hashes = callable_executor('multiprocessing', n_workers=2).exec_callables(
                 [functools.partial(_built_under_the_scope, i) for i in range(2)])
@@ -870,7 +870,7 @@ class TestAcrossProcesses:
 
     def test_with_no_scope_open_the_process_default_is_carried(self, tmp_path):
         """The default is the bottom of every stack: a worker writes under the dispatcher's, not its own."""
-        from dbx.dataparts import callable_executor
+        from dbx.databits import callable_executor
         hashes = callable_executor('multiprocessing', n_workers=1).exec_callables(
             [functools.partial(_built_under_the_scope, 0)])
         entry = block(tmp_path, x=100).datajournal(iloc=0)
@@ -879,7 +879,7 @@ class TestAcrossProcesses:
         assert entry['entry_path'] in DEFAULT_DATAJOURNAL.written_entries()
 
     def test_a_stream_keeps_what_arrived_after_a_failure(self, tmp_path):
-        from dbx.dataparts import callable_executor
+        from dbx.databits import callable_executor
         with Datajournal() as dj:
             stream = callable_executor('multiprocessing', n_workers=2).exec_callables_streaming(
                 [functools.partial(_fails_after, 3.0), functools.partial(_built_under_the_scope, 0, 6.0)])
@@ -888,7 +888,7 @@ class TestAcrossProcesses:
         assert dj.written_entries() == [block(tmp_path, x=100).datajournal(iloc=0)['entry_path']]
 
     def test_threads_are_not_wrapped(self):
-        from dbx.dataparts import callable_executor
+        from dbx.databits import callable_executor
         with Datajournal():
             assert callable_executor('multithreading', n_workers=2).exec_callables(
                 [lambda: 1, lambda: 2]) == [1, 2]
@@ -964,7 +964,7 @@ class TestSessionIndex:
         assert list(dbx.execjournal(id=outer['id'], iloc=0).datajournal()['anchor']) == ['__main__.Child']
 
     def test_a_worker_that_never_returned(self, tmp_path):
-        from dbx.dataparts import callable_executor
+        from dbx.databits import callable_executor
         with pytest.raises(Exception):
             dbx.exec("ex.exec_callables([die])", ex=callable_executor('multiprocessing', n_workers=1),
                      die=_dies_after_building)

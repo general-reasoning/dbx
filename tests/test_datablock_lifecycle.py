@@ -606,7 +606,7 @@ class TestDirTopicClear:
 class TestValidTree:
     
     def test_valid_tree_invalid_initial(self, tmp_path):
-        from dbx.dataparts import quote
+        from dbx.databits import quote
         child = SingleTopicBlock(datalake=str(tmp_path / "child"))
         parent = NestedBlock(
             datalake=str(tmp_path / "parent"),
@@ -628,7 +628,7 @@ class TestValidTree:
         }
         
     def test_valid_tree_mixed_validity(self, tmp_path):
-        from dbx.dataparts import quote
+        from dbx.databits import quote
         child = SingleTopicBlock(datalake=str(tmp_path / "child"))
         parent = NestedBlock(
             datalake=str(tmp_path / "parent"),

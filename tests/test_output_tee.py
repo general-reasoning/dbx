@@ -23,7 +23,7 @@ import pytest
 
 PROBE = textwrap.dedent("""
     import os, subprocess, sys
-    from dbx.dataparts import OutputTee
+    from dbx.databits import OutputTee
 
     logname = sys.argv[1]
     with open(logname, 'w') as lf:
@@ -100,7 +100,7 @@ class TestRestoration:
 
     def test_close_restores_the_descriptors(self, tmp_path):
         """Leaking the dup2 would redirect the rest of the process to a pipe."""
-        from dbx.dataparts import OutputTee
+        from dbx.databits import OutputTee
 
         before = (os.fstat(1).st_ino, os.fstat(2).st_ino)
         with open(tmp_path / 'x.log', 'w') as lf:
@@ -113,7 +113,7 @@ class TestRestoration:
 
 LINGERING = textwrap.dedent("""
     import subprocess, sys, time
-    from dbx.dataparts import OutputTee
+    from dbx.databits import OutputTee
 
     logname = sys.argv[1]
     with open(logname, 'w') as lf:

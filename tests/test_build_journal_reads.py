@@ -150,7 +150,7 @@ def test_valid_tabs_reads_the_journal_once(tmp_path, monkeypatch, parallelizatio
 
 
 def test_a_part_filters_its_built_tabs_in_the_parent_by_default(tmp_path):
-    from dbx.datatables import DatatablePartition
+    from dbx.dataparts import DatatablePartition
     table = Table(datalake=str(tmp_path / 't'), spec={'n': 4})
     part = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
         datatable=table, fractions=[0.5, 0.5], partition_slice=0)).fold(0)

@@ -5,7 +5,7 @@ import pytest
 
 import dbx
 from dbx.datablocks import Datablock, DatajournalEntry, journal
-from dbx.dataparts import write_exec_journal, read_exec_journal
+from dbx.databits import write_exec_journal, read_exec_journal
 
 
 class Built(Datablock):
@@ -235,7 +235,7 @@ class TestExecStatements:
         assert j.iloc[0]['exec'] == 'expr1  # nightly refresh'
 
     def test_exec_comment_reads_the_trailing_comment(self):
-        from dbx.dataparts import exec_comment
+        from dbx.databits import exec_comment
 
         assert exec_comment("a = 1  # note") == 'note'
         assert exec_comment("a = 1") is None

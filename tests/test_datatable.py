@@ -23,15 +23,8 @@ import pytest
 pytest.importorskip("torch", reason="torch is an optional dependency")
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datatables import (
-    DATADIR,
-    DATASLICE,
-    DIRTOPIC,
-    SLICETOPIC,
-    Datatab,
-    Datatable,
-    DatatablePartition,
-)
+from dbx.datatables import DATADIR, DATASLICE, DIRTOPIC, SLICETOPIC, Datatab, Datatable
+from dbx.dataparts import DatatablePartition
 from dbx.datastreams import (
     ZipIterableStreamingDatasets,
     ZipStreamingDataset,

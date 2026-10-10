@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import functools
 import gc
+import json
 import zlib
 from typing import Any
 
@@ -22,8 +23,8 @@ import dbx
 from dbx.datablocks import DATADICT, DATAFILE, Datablock, InvalidBlocksError, forward_property
 from dbx.datatables import Datacollator
 from dbx.featuretables import Featuretable, Featuretab
-from dbx.datatables import DatatableCorePart, DatatablePart
-from dbx.dataparts import (
+from dbx.dataparts import DatatableCorePart, DatatablePart
+from dbx.databits import (
     callable_executor,
     read_npz,
     read_pickle,
@@ -112,7 +113,7 @@ def _pair_array_(collator: Datacollator, data: dict, pair: tuple[str, str], *, a
 
 
 def signal_matrix(collator: Datacollator, data: dict, *,
-                  aggregation: str | None = None,
+                  reduction: str | None = None,
                   normalization: str | None = None,
                   allow_none: bool = False):
     """Every signal pair flattened and concatenated into one ``(N, D)`` matrix.
@@ -155,8 +156,8 @@ def signal_matrix(collator: Datacollator, data: dict, *,
             )
         if arr.ndim == 1:
             arr = arr.reshape(-1, 1)
-        if aggregation is not None:
-            arr = aggregate_features_np(arr, aggregation)
+        if reduction is not None:
+            arr = reduce_signal_np(arr, reduction)
         flat = arr.reshape(len(arr), -1)
         blocks.append(flat)
         # A triple's column is named with its key, so the layout still says
@@ -176,17 +177,18 @@ def signal_matrix(collator: Datacollator, data: dict, *,
     return X, layout
 
 
-def aggregate_features_np(arr: np.ndarray, aggregation: str):
-    """Collapse the axes between the sample axis and the feature axis.
+def reduce_signal_np(arr: np.ndarray, reduction: str):
+    """Collapse the axes between the row axis and the feature axis: within each row, never across rows.
 
     For ``(N, T, D)`` token features this averages over ``T`` and leaves
-    ``(N, D)``; for an already-flat ``(N, D)`` it is the identity.  The point
-    of aggregating before the flatten in `signal_matrix` is that afterwards
-    there is no token axis left to average over -- only one long vector, whose
-    mean is a single number per sample.
+    ``(N, D)``; ``(N, H, W, D)`` over ``H`` and ``W`` together; for an
+    already-flat ``(N, D)`` it is the identity.  The point of reducing before
+    the flatten in `signal_matrix` is that afterwards there is no token axis
+    left to average over -- only one long vector, whose mean is a single number
+    per row.
     """
-    if aggregation != 'mean':
-        raise ValueError(f"Unknown aggregation: {aggregation!r}")
+    if reduction != 'mean':
+        raise ValueError(f"Unknown signal reduction: {reduction!r}")
     if arr.ndim <= 2:
         return arr
     return arr.mean(axis=tuple(range(1, arr.ndim - 1)))
@@ -215,6 +217,38 @@ def label_vector(collator: Datacollator, data: dict, *, allow_none: bool = False
             f"but a classifier fits a single label per sample"
         )
     return y.ravel()
+
+
+def aggregateby_vector(collator: Datacollator, data: dict, *, allow_none: bool = False) -> np.ndarray | None:
+    """The ``aggregateby`` column as a 1-D object array of per-row values; None when the collator declares none.
+
+    The rows sharing a value -- a slide's tiles, say -- are one aggregate,
+    whichever tabs they lie in.
+    """
+    pairs = collator.pairs('aggregateby')
+    if not pairs:
+        return None
+    if len(pairs) != 1:
+        raise ValueError(f"aggregateby_vector: rows are aggregated by one column, but the collator's "
+                         f"aggregateby declares {len(pairs)}: {pairs!r}")
+    raw = Datacollator._pick_pair_(data, pairs[0], f"probes: aggregateby {pairs[0]!r}", allow_none=allow_none)
+    if raw is None:
+        if allow_none:
+            return np.array([], dtype=object)
+        raise ValueError(f"aggregateby_vector: aggregateby pair {pairs[0]!r} is missing")
+    values = np.empty(len(raw), dtype=object)
+    values[:] = list(raw)
+    return values
+
+
+def _aggregate_key_(value) -> str:
+    """An aggregateby value as the string aggregates are compared and merged by."""
+    return json.dumps(value.tolist() if isinstance(value, np.ndarray) else value, sort_keys=True, default=str)
+
+
+def _label_key_(label):
+    """A label as a JSON-able scalar, for the (aggregateby value, label) cell its row is summed in."""
+    return label.item() if isinstance(label, np.generic) else label
 
 
 def check_probe_inputs(probe, table=None) -> None:
@@ -280,11 +314,12 @@ class TabAffineLogisticCallable:
 
         X, layout = signal_matrix(
             collator, data,
-            aggregation=var.aggregation,
+            reduction=var.signal_reduction,
             normalization=var.normalization,
             allow_none=skip_missing,
         )
         y = label_vector(collator, data, allow_none=skip_missing)
+        keys = aggregateby_vector(collator, data, allow_none=skip_missing)
         del data
 
         if X is None or y is None:
@@ -301,6 +336,14 @@ class TabAffineLogisticCallable:
                 f"{type(self).__name__}: tab {self.tab_idx} has {len(X)} feature "
                 f"rows and {len(y)} labels"
             )
+        if keys is not None and len(keys) != len(y):
+            if skip_missing and not len(keys):
+                gc.collect()
+                return None
+            raise ValueError(
+                f"{type(self).__name__}: tab {self.tab_idx} has {len(y)} labels and "
+                f"{len(keys)} aggregateby values"
+            )
 
         if skip_missing:
             valid_y = np.array([v is not None and not (isinstance(v, (float, np.floating)) and np.isnan(v)) for v in y], dtype=bool)
@@ -309,6 +352,8 @@ class TabAffineLogisticCallable:
             else:
                 valid_x = ~np.isnan(X).any(axis=1) if np.issubdtype(X.dtype, np.floating) else np.ones(len(X), dtype=bool)
             valid = valid_x & valid_y
+            if keys is not None:
+                valid &= np.array([v is not None for v in keys], dtype=bool)
             n_valid = int(valid.sum())
             if n_valid == 0:
                 gc.collect()
@@ -316,6 +361,7 @@ class TabAffineLogisticCallable:
             if n_valid < len(y):
                 X = X[valid]
                 y = y[valid]
+                keys = None if keys is None else keys[valid]
 
         if X.dtype == object:
             X = np.asarray(X, dtype=np.float32)
@@ -327,29 +373,41 @@ class TabAffineLogisticCallable:
             rng = np.random.default_rng([var.seed, zlib.crc32(str(tag if tag is not None else self.tab_idx).encode())])
             keep = np.sort(rng.choice(len(y), size=limit, replace=False))
             X, y = X[keep], y[keep]
+            keys = None if keys is None else keys[keep]
 
-        if getattr(var, 'tab_aggregation', None) == 'mean':
-            labels = np.unique(y)
-            if len(labels) != 1:
-                raise ValueError(
-                    f"{type(self).__name__}: tab {self.tab_idx} holds rows labelled "
-                    f"{labels[:5].tolist()}{'...' if len(labels) > 5 else ''}; tab_aggregation='mean' "
-                    f"makes the tab one sample, which can carry only one label."
-                )
-            X, y = X.mean(axis=0, keepdims=True), y[:1]
-
+        out = {'signals': X, 'labels': y, 'layout': layout, 'tag': tag}
+        if keys is not None and any(v is None for v in keys):
+            raise ValueError(
+                f"{type(self).__name__}: tab {self.tab_idx} holds rows of no aggregateby value. "
+                f"Skip them with skip_missing=True, or give every row one.")
+        if keys is not None:
+            keys = np.array([_aggregate_key_(v) for v in keys], dtype=object)
+            if var.aggregation == 'mean':
+                # This tab's share of each aggregate: its rows' sum and count,
+                # per (aggregateby value, label). The rest of an aggregate may
+                # lie in other tabs -- a packed tab holds rows of many -- so the
+                # mean is taken by the probe, once every tab's share is in.
+                cells = np.array([json.dumps([k, _label_key_(l)]) for k, l in zip(keys, y)], dtype=object)
+                cells, first, inverse = np.unique(cells, return_index=True, return_inverse=True)
+                sums = np.zeros((len(cells), X.shape[1]), dtype=np.float64)
+                np.add.at(sums, inverse, X)
+                out.update(signals=sums, counts=np.bincount(inverse, minlength=len(cells)),
+                           labels=y[first], cells=cells, keys=keys[first])
+            else:
+                out['keys'] = np.unique(keys)
         gc.collect()
-        return {'signals': X, 'labels': y, 'layout': layout, 'tag': tag}
+        return out
 
 
 class FeatureAffineLogisticProbe(Datablock):
     """Fit a logistic classifier on one table's tabs and score it on another's.
 
     *fit_table* and *eval_table* are what it is fitted on and scored on --
-    typically two folds of a `DatatablePartition` of a feature table, dealt by
+    typically two parts of a `DatatablePartition` of a feature table, dealt by
     patient and stratified by label, so neither the patients nor the slides of
-    one are in the other. They must share no tab, and a probe given two that do
-    refuses to build, naming them.
+    one are in the other. They must share no tab, no row of the table they were
+    partitioned from, and -- when the collator names an ``aggregateby`` column
+    -- no value of it; a probe given two that do refuses to build, naming them.
 
     All signal pairs are treated as one vector per sample: each is flattened
     and they are laid end to end, in declaration order, so the fitted
@@ -357,21 +415,31 @@ class FeatureAffineLogisticProbe(Datablock):
     as the ``columns`` topic, which is what makes a coefficient attributable
     to a feature after the fact.
 
-    A sample is a row, or with *tab_aggregation* ``'mean'`` a tab: the mean of
-    its rows, labelled by the one label they share. A fold's tab may be a
-    piece of a tab (`DatatabPiece`), which is a sample of its own: a partition
-    stratified by the label column splits a tab whose rows carry several labels
-    into pieces carrying one each, which is what makes such a tab one sample
-    per label rather than a tab refused. *max_rows_per_tab* reads at
-    most that many of a tab's rows, drawn with *seed* and the tab's tag -- a
-    size for a fit, which moves no tab across the two tables.
+    A sample is a row by default. With *aggregation* ``'mean'`` it is the mean
+    of the rows sharing a value of the collator's ``aggregateby`` column (a
+    slide's id, say) and a label, wherever they lie: each tab sums its share of
+    each, and the probe divides once every tab's share is in. So an aggregate
+    may span tabs -- the pieces and packed tabs of a partition, the core tabs
+    of a core partition -- and the rows of one value carrying two labels are
+    two samples, one per label. Whenever the collator names an ``aggregateby``
+    column, the two tables must share no value of it, whatever *aggregation*
+    is.
+
+    *signal_reduction* ``'mean'`` reduces within a row, never across rows: a
+    signal whose value per row has more than one axis -- ``(T, D)`` tokens --
+    is averaged over all but its last before it is flattened, so ``coef_`` has
+    one coefficient per feature rather than per (token, feature).
+
+    *max_rows_per_tab* reads at most that many of a tab's rows, drawn with
+    *seed* and the tab's tag -- a size for a fit, which moves no tab across the
+    two tables.
 
     Persists the fitted classifier's ``coef_``, ``intercept_`` and
     ``classes_`` so the separating hyperplane can be inspected after building,
     and each side's features and labels under ``fit`` and ``eval``.
     """
 
-    VERSION = 3
+    VERSION = 4
 
     TOPICS = {
         'fit': {'labels': DATADICT('labels.npz', labels='ndarray'), 'features': DATAFILE('features.npy')},
@@ -382,6 +450,9 @@ class FeatureAffineLogisticProbe(Datablock):
         'intercept': DATAFILE('intercept.npy'),
         'classes': DATADICT('classes.npz', classes='ndarray'),
     }
+    # None: VERSION 3's builds had a field this one does not, tab_aggregation,
+    # and a specialization can only drop fields, not restore one.
+    SPECIALIZATIONS = []
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -389,16 +460,16 @@ class FeatureAffineLogisticProbe(Datablock):
         eval_table: Featuretable | Featuretab
         collator: Datacollator
         fit_intercept: bool = True
-        # Not 'mean': aggregation collapses the axes between sample and
+        # Not 'mean': signal_reduction collapses the axes between row and
         # feature, which only exist for token-shaped features.  Defaulting it
         # on averaged away whatever the caller actually asked to probe.
-        aggregation: str | None = None
+        signal_reduction: str | None = None
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
-        # 'mean' makes each tab one sample: the mean of its rows, labelled by
-        # the one label its rows share. A tab whose rows disagree is refused.
-        tab_aggregation: str | None = None
         max_rows_per_tab: int | None = None
         seed: int = 0
+        # 'mean' makes each (aggregateby value, label) one sample: the mean of
+        # its rows, from whichever tabs they lie in.
+        aggregation: str | None = None
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -422,10 +493,15 @@ class FeatureAffineLogisticProbe(Datablock):
 
     def __post_init__(self):
         super().__post_init__()
-        assert self.var.aggregation in (None, "mean"), f"Unknown aggregation: {self.var.aggregation}"
-        if self.var.tab_aggregation not in (None, 'mean'):
-            raise ValueError(f"{type(self).__name__}: unknown tab_aggregation {self.var.tab_aggregation!r}; "
-                             f"expected None or 'mean'")
+        what = type(self).__name__
+        if self.var.signal_reduction not in (None, 'mean'):
+            raise ValueError(f"{what}: unknown signal_reduction {self.var.signal_reduction!r}; expected None or 'mean'")
+        if self.var.aggregation not in (None, 'mean'):
+            raise ValueError(f"{what}: unknown aggregation {self.var.aggregation!r}; expected None or 'mean'")
+        if self.var.aggregation is not None and len(self.var.collator.pairs('aggregateby')) != 1:
+            raise ValueError(f"{what}: aggregation={self.var.aggregation!r} aggregates the rows sharing a value of "
+                             f"the collator's aggregateby column, which must name one, not "
+                             f"{self.var.collator.pairs('aggregateby')!r}")
         if self.var.max_rows_per_tab is not None and int(self.var.max_rows_per_tab) < 1:
             raise ValueError(f"{type(self).__name__}: max_rows_per_tab must be positive, got {self.var.max_rows_per_tab!r}")
         assert self.var.normalization in NORMALIZATION_MODES, f"Unknown normalization mode: {self.var.normalization!r}"
@@ -437,15 +513,20 @@ class FeatureAffineLogisticProbe(Datablock):
         self.log.verbose(f"FeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")
         self._check_disjoint_()
 
-        sides, layouts = {}, set()
+        sides, layouts, keys = {}, set(), {}
         for side in ('fit', 'eval'):
             table = getattr(self.var, f'{side}_table')
             results = self._tab_results_(f"COMPUTING LOGISTIC INPUT DATA ({side})", table,
                                          lambda i, t=table: TabAffineLogisticCallable(self, t, i))
             results = self._kept_(side, table, results)
             layouts |= {tuple(res['layout']) for res in results}
-            X = np.concatenate([res['signals'] for res in results], axis=0)
-            y = np.concatenate([res['labels'] for res in results], axis=0)
+            if self.var.aggregation == 'mean':
+                X, y, keys[side] = self._aggregate_means_(results)
+            else:
+                X = np.concatenate([res['signals'] for res in results], axis=0)
+                y = np.concatenate([res['labels'] for res in results], axis=0)
+                if any('keys' in res for res in results):
+                    keys[side] = np.unique(np.concatenate([res['keys'] for res in results]))
             write_npz(self.path(side, 'labels', ensure_dirpath=True), labels=y)
             write_tensor(torch.from_numpy(X), self.path(side, 'features', ensure_dirpath=True))
             sides[side] = (X, y)
@@ -455,6 +536,14 @@ class FeatureAffineLogisticProbe(Datablock):
         # position, and the eval rows are not what the classifier was fitted on.
         if len(layouts) != 1:
             raise ValueError(f"{self.__class__.__name__}: tabs disagree on the signal column layout: {sorted(layouts)}")
+        if len(keys) == 2:
+            shared = np.intersect1d(keys['fit'], keys['eval'])
+            if len(shared):
+                raise ValueError(
+                    f"{type(self).__name__}: fit_table and eval_table share {len(shared)} value(s) of "
+                    f"aggregateby {self.var.collator.pairs('aggregateby')[0]!r}, e.g. {shared[:5].tolist()} -- "
+                    f"their rows would be scored by a classifier fitted on the same ones. Partition with a stratifyby "
+                    f"column whose strata the aggregates lie within.")
         layout = list(layouts.pop())
         write_pickle(layout, self.path('columns', ensure_dirpath=True))
 
@@ -462,12 +551,13 @@ class FeatureAffineLogisticProbe(Datablock):
         self.log.verbose(
             f"FITTING LogisticRegression "
             f"(n_fit={len(y_fit)}, n_eval={len(y_eval)}, "
-            f"tab_aggregation={self.var.tab_aggregation!r}, max_rows_per_tab={self.var.max_rows_per_tab!r}, "
+            f"aggregation={self.var.aggregation!r}, "
+            f"max_rows_per_tab={self.var.max_rows_per_tab!r}, "
             f"fit_intercept={self.var.fit_intercept}, "
             f"signals={self.var.collator.signal_pairs!r}, "
             f"labels={self.var.collator.label_pairs!r}, "
             f"layout={layout!r}, "
-            f"aggregation={self.var.aggregation!r}, "
+            f"signal_reduction={self.var.signal_reduction!r}, "
             f"normalization={self.var.normalization!r})"
         )
         clf = LogisticRegression(fit_intercept=self.var.fit_intercept)
@@ -536,12 +626,46 @@ class FeatureAffineLogisticProbe(Datablock):
         return [table.tab(i).tag for i in range(n)] if n else [getattr(table, 'tag', None)]
 
     def _check_disjoint_(self) -> None:
-        """Refuse a fit and an eval table that share a tab: its rows would be scored by a classifier fitted on them."""
-        shared = sorted(set(self._tags_(self.var.fit_table)) & set(self._tags_(self.var.eval_table)) - {None})
+        """Refuse a fit and an eval table that share a tab, or a row: it would be scored by a classifier fitted on it.
+
+        Tabs are compared by tag. That says nothing of two parts holding tabs
+        the partitions made -- pieces, packed tabs, core tabs, tagged by where
+        they are -- so two parts of different partitions of one table are also
+        compared row by row, by the rows of that table their ``source`` slices
+        name. Two parts of one partition are disjoint by its deal, and are not.
+        """
+        fit, ev = self.var.fit_table, self.var.eval_table
+        shared = sorted(set(self._tags_(fit)) & set(self._tags_(ev)) - {None})
         if shared:
             raise ValueError(
                 f"{type(self).__name__}: fit_table and eval_table share {len(shared)} tab(s), e.g. {shared[:5]} -- "
-                f"their rows would be scored by a classifier fitted on them. Give it two folds of one partition.")
+                f"their rows would be scored by a classifier fitted on them. Give it two parts of one partition.")
+        if not (isinstance(fit, DatatablePart) and isinstance(ev, DatatablePart)):
+            return
+        if fit.var.partition.hash == ev.var.partition.hash or fit.datatable.hash != ev.datatable.hash:
+            return
+        for table in (fit, ev):
+            check_probe_inputs(self, table)
+        encode = lambda index: index[:, 0] * (1 << 32) + index[:, 1]
+        rows = np.intersect1d(encode(fit.source_index()), encode(ev.source_index()))
+        if len(rows):
+            raise ValueError(
+                f"{type(self).__name__}: fit_table and eval_table are parts of two partitions of one table, and "
+                f"share {len(rows)} of its rows, e.g. (tab, row) {[divmod(int(r), 1 << 32) for r in rows[:5]]} -- "
+                f"they would be scored by a classifier fitted on them. Give it two parts of one partition.")
+
+    @staticmethod
+    def _aggregate_means_(results) -> tuple:
+        """Every tab's per-(aggregateby value, label) sums and counts merged: one mean row per cell, its label, and the values."""
+        cells = np.concatenate([res['cells'] for res in results])
+        cells, first, inverse = np.unique(cells, return_index=True, return_inverse=True)
+        sums = np.zeros((len(cells), results[0]['signals'].shape[1]), dtype=np.float64)
+        np.add.at(sums, inverse, np.concatenate([res['signals'] for res in results], axis=0))
+        counts = np.bincount(inverse, weights=np.concatenate([res['counts'] for res in results]),
+                             minlength=len(cells))
+        X = (sums / counts[:, None]).astype(np.float32)
+        y = np.concatenate([res['labels'] for res in results])[first]
+        return X, y, np.unique(np.concatenate([res['keys'] for res in results]))
 
     def _kept_(self, side: str, table, results) -> list:
         """The tabs' results that carry data -- warning, by tag, of those skipped for missing signals or labels."""

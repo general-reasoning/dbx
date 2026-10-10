@@ -74,7 +74,7 @@ import lightning.pytorch.callbacks
 import lightning.pytorch.loggers
 
 from dbx.datablocks import DATADIR, DATAFILE, DIR, Datablock
-from dbx.dataparts import UNSAFE_allowed
+from dbx.databits import UNSAFE_allowed
 from dbx.datastreams import (
     ChunkShuffleSampler,
     ResumableDataLoader,

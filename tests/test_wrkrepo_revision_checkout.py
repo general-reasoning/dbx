@@ -13,7 +13,7 @@ import pytest
 from unittest.mock import patch, MagicMock, call
 
 import dbx.datablocks as dbxmod
-import dbx.dataparts as dataparts_mod
+import dbx.databits as databits_mod
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +62,9 @@ class TestGitwrkreposetupRevisionCheckout:
         old_rev = shas[0]
 
         # Simulate state after initial import-time clone (at HEAD = shas[1])
-        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', project_wrk)
-        monkeypatch.setattr(dataparts_mod, 'DBX_WORK_ROOT', (None, tmp_path))
-        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', project_wrk)
+        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', project_wrk)
+        monkeypatch.setattr(databits_mod, 'DBX_WORK_ROOT', (None, tmp_path))
+        monkeypatch.setattr(databits_mod, 'DBX_GIT_REPO', project_wrk)
 
         # Verify we start at HEAD (shas[1])
         head = subprocess.check_output(
@@ -90,9 +90,9 @@ class TestGitwrkreposetupRevisionCheckout:
         project_shas = _init_git_repo(project_wrk, commits=2)
 
         wrkrepo_str = f"{dbx_wrk}:{project_wrk}"
-        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', wrkrepo_str)
-        monkeypatch.setattr(dataparts_mod, 'DBX_WORK_ROOT', (tmp_path, tmp_path))
-        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', wrkrepo_str)
+        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', wrkrepo_str)
+        monkeypatch.setattr(databits_mod, 'DBX_WORK_ROOT', (tmp_path, tmp_path))
+        monkeypatch.setattr(databits_mod, 'DBX_GIT_REPO', wrkrepo_str)
 
         combined_rev = f"{dbx_shas[0]}:{project_shas[0]}"
         dbxmod.gitwrkreposetup(revision=combined_rev, reason="test")
@@ -114,9 +114,9 @@ class TestGitwrkreposetupRevisionCheckout:
         project_shas = _init_git_repo(project_wrk, commits=2)
 
         wrkrepo_str = f"{dbx_wrk}:{project_wrk}"
-        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', wrkrepo_str)
-        monkeypatch.setattr(dataparts_mod, 'DBX_WORK_ROOT', (tmp_path, tmp_path))
-        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', wrkrepo_str)
+        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', wrkrepo_str)
+        monkeypatch.setattr(databits_mod, 'DBX_WORK_ROOT', (tmp_path, tmp_path))
+        monkeypatch.setattr(databits_mod, 'DBX_GIT_REPO', wrkrepo_str)
 
         # Project-only revision (no ':')
         dbxmod.gitwrkreposetup(revision=project_shas[0], reason="test")
@@ -138,9 +138,9 @@ class TestGitwrkreposetupRevisionCheckout:
         project_wrk = str(tmp_path / "project")
         shas = _init_git_repo(project_wrk, commits=2)
 
-        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', project_wrk)
-        monkeypatch.setattr(dataparts_mod, 'DBX_WORK_ROOT', (None, tmp_path))
-        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', project_wrk)
+        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', project_wrk)
+        monkeypatch.setattr(databits_mod, 'DBX_WORK_ROOT', (None, tmp_path))
+        monkeypatch.setattr(databits_mod, 'DBX_GIT_REPO', project_wrk)
 
         dbxmod.gitwrkreposetup(revision=None, reason="test")
 
@@ -154,9 +154,9 @@ class TestGitwrkreposetupRevisionCheckout:
         project_wrk = str(tmp_path / "project")
         shas = _init_git_repo(project_wrk, commits=2)
 
-        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', project_wrk)
-        monkeypatch.setattr(dataparts_mod, 'DBX_WORK_ROOT', (None, tmp_path))
-        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', project_wrk)
+        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', project_wrk)
+        monkeypatch.setattr(databits_mod, 'DBX_WORK_ROOT', (None, tmp_path))
+        monkeypatch.setattr(databits_mod, 'DBX_GIT_REPO', project_wrk)
 
         with patch.object(importlib, 'invalidate_caches') as mock_invalidate:
             dbxmod.gitwrkreposetup(revision=shas[0], reason="test")
@@ -195,9 +195,9 @@ class TestGitwrkreposetupRevisionCheckout:
         with open(marker) as f:
             assert "new" in f.read()
 
-        monkeypatch.setattr(dataparts_mod, 'DBX_USE_WORK_REPO', project_wrk)
-        monkeypatch.setattr(dataparts_mod, 'DBX_WORK_ROOT', (None, tmp_path))
-        monkeypatch.setattr(dataparts_mod, 'DBX_GIT_REPO', project_wrk)
+        monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', project_wrk)
+        monkeypatch.setattr(databits_mod, 'DBX_WORK_ROOT', (None, tmp_path))
+        monkeypatch.setattr(databits_mod, 'DBX_GIT_REPO', project_wrk)
 
         # Checkout old revision
         dbxmod.gitwrkreposetup(revision=old_sha, reason="test")

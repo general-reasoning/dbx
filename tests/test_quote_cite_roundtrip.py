@@ -23,7 +23,7 @@ import pytest
 from dataclasses import dataclass
 
 from dbx.datablocks import Datablock
-from dbx.dataparts import eval as dbx_eval
+from dbx.databits import eval as dbx_eval
 
 
 @pytest.fixture(autouse=True)

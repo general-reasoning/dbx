@@ -280,7 +280,7 @@ class TestDatastackSerialization:
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_executor_cls_default(self, url, roundtrip):
         """Default (inline) executor_cls survives roundtrip."""
-        from dbx.dataparts import InlineCallableExecutor
+        from dbx.databits import InlineCallableExecutor
         stack = SimpleStack(datalake=url)
         restored = roundtrip(stack)
         assert restored.executor_cls is InlineCallableExecutor
@@ -288,7 +288,7 @@ class TestDatastackSerialization:
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_executor_cls_multithreading(self, url, roundtrip):
         """Multithreading executor_cls survives roundtrip."""
-        from dbx.dataparts import MultithreadingCallableExecutor
+        from dbx.databits import MultithreadingCallableExecutor
         stack = SimpleStack(datalake=url, parallelization='multithreading', n_workers=4)
         restored = roundtrip(stack)
         assert restored.executor_cls is MultithreadingCallableExecutor
@@ -297,7 +297,7 @@ class TestDatastackSerialization:
     @pytest.mark.parametrize("roundtrip", ROUNDTRIPS)
     def test_executor_cls_multiprocessing(self, url, roundtrip):
         """Multiprocessing executor_cls survives roundtrip."""
-        from dbx.dataparts import MultiprocessingCallableExecutor
+        from dbx.databits import MultiprocessingCallableExecutor
         stack = SimpleStack(datalake=url, parallelization='multiprocessing', n_workers=2)
         restored = roundtrip(stack)
         assert restored.executor_cls is MultiprocessingCallableExecutor
@@ -331,7 +331,7 @@ class TestDatastackSetPreservation:
 
     def test_set_tag_preserves_executor(self, url):
         """This is the exact bug that motivated the executor_cls property fix."""
-        from dbx.dataparts import MultithreadingCallableExecutor
+        from dbx.databits import MultithreadingCallableExecutor
         stack = SimpleStack(
             datalake=url,
             parallelization='multithreading',
@@ -344,7 +344,7 @@ class TestDatastackSetPreservation:
         assert clone.n_workers == 4
 
     def test_respec_through_dfn_preserves_executor(self, url):
-        from dbx.dataparts import MultiprocessingCallableExecutor
+        from dbx.databits import MultiprocessingCallableExecutor
         stack = SimpleStack(
             datalake=url,
             parallelization='multiprocessing',

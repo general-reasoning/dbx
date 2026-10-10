@@ -1,9 +1,9 @@
 """
-`DatatablePartition`: whole tabs dealt to folds, by groupby / stratifyby / balance / seed.
+`DatatablePartition`: whole tabs dealt to folds, by stratifyby / partitionby / balance / seed.
 
 Each tab here is one "slide": `rows` rows, every one carrying the slide's
 patient and cohort in a `meta` slice -- the columns the partition reads,
-named by its collator's groupby and stratifyby roles.
+named by its collator's stratifyby and partitionby roles.
 """
 import json
 from dataclasses import dataclass
@@ -12,7 +12,8 @@ import numpy as np
 import pytest
 
 from dbx.datablocks import Datablock
-from dbx.datatables import DATASLICE, Datacollator, Datatab, Datatable, DatatablePartition
+from dbx.datatables import DATASLICE, Datacollator, Datatab, Datatable
+from dbx.dataparts import DatatablePartition
 
 
 @pytest.fixture(autouse=True)
@@ -69,15 +70,15 @@ INFO = ('meta', 'info')
 PATIENT, COHORT = INFO + ('patient',), INFO + ('cohort',)
 
 
-def collator(groupby=None, stratifyby=None):
-    columns = {k: v for k, v in (('groupby', groupby), ('stratifyby', stratifyby)) if v is not None}
+def collator(stratifyby=None, partitionby=None):
+    columns = {k: v for k, v in (('stratifyby', stratifyby), ('partitionby', partitionby)) if v is not None}
     return Datacollator(spec=dict(columns=columns)) if columns else None
 
 
-def partition(tmp_path, tbl, groupby=None, stratifyby=None, build=True, **spec):
+def partition(tmp_path, tbl, stratifyby=None, partitionby=None, build=True, **spec):
     p = DatatablePartition(datalake=str(tmp_path), spec=dict(
         datatable=tbl, fractions=[0.5, 0.5], partition_slice='meta',
-        collator=collator(groupby, stratifyby), **spec))
+        collator=collator(stratifyby, partitionby), **spec))
     return p.build() if build else p
 
 
@@ -86,32 +87,32 @@ def folds_of(p):
 
 
 def test_every_tab_is_in_exactly_one_fold(tmp_path):
-    p = partition(tmp_path, table(tmp_path), groupby=PATIENT, stratifyby=COHORT)
+    p = partition(tmp_path, table(tmp_path), stratifyby=PATIENT, partitionby=COHORT)
     a, b = folds_of(p)
     assert a.isdisjoint(b) and a | b == set(range(len(SLIDES)))
 
 
-def test_a_group_lands_in_one_fold(tmp_path):
-    p = partition(tmp_path, table(tmp_path), groupby=PATIENT, balance='tabs')
+def test_a_stratum_lands_in_one_fold(tmp_path):
+    p = partition(tmp_path, table(tmp_path), stratifyby=PATIENT, balance='tabs')
     fold_of = {i: k for k, f in enumerate(folds_of(p)) for i in f}
     for patient in {s[0] for s in SLIDES}:
         tabs = [i for i, s in enumerate(SLIDES) if s[0] == patient]
         assert len({fold_of[i] for i in tabs}) == 1, patient
 
 
-def test_the_fractions_hold_within_each_stratum(tmp_path):
-    p = partition(tmp_path, table(tmp_path), stratifyby=COHORT, balance='tabs')
+def test_the_fractions_hold_within_each_partition(tmp_path):
+    p = partition(tmp_path, table(tmp_path), partitionby=COHORT, balance='tabs')
     for f in p.read('summary')['folds']:
         # 4 slides per cohort, halved: 2 and 2 in each fold.
-        assert {c: v['tabs'] for c, v in f['strata'].items()} == {'BRCA': 2, 'LUAD': 2, 'OV': 2}
+        assert {c: v['tabs'] for c, v in f['partitions'].items()} == {'BRCA': 2, 'LUAD': 2, 'OV': 2}
 
 
 def test_the_seed_decides_and_repeats(tmp_path):
     tbl = table(tmp_path)
-    one = folds_of(partition(tmp_path / 'a', tbl, groupby=PATIENT, stratifyby=COHORT, seed=0))
-    again = folds_of(partition(tmp_path / 'b', tbl, groupby=PATIENT, stratifyby=COHORT, seed=0))
+    one = folds_of(partition(tmp_path / 'a', tbl, stratifyby=PATIENT, partitionby=COHORT, seed=0))
+    again = folds_of(partition(tmp_path / 'b', tbl, stratifyby=PATIENT, partitionby=COHORT, seed=0))
     assert one == again
-    seeds = {json.dumps([sorted(f) for f in folds_of(partition(tmp_path / f's{s}', tbl, stratifyby=COHORT, seed=s))])
+    seeds = {json.dumps([sorted(f) for f in folds_of(partition(tmp_path / f's{s}', tbl, partitionby=COHORT, seed=s))])
              for s in range(8)}
     assert len(seeds) > 1, "different seeds deal differently"
 
@@ -127,7 +128,7 @@ def test_balance_counts_rows_or_tabs(tmp_path):
 
 def test_the_summary_says_what_each_fold_holds(tmp_path):
     tbl = table(tmp_path)
-    s = partition(tmp_path, tbl, groupby=PATIENT, stratifyby=COHORT).read('summary')
+    s = partition(tmp_path, tbl, stratifyby=PATIENT, partitionby=COHORT).read('summary')
     assert s['method'] == 'random' and s['n_tabs'] == len(SLIDES) and s['skipped'] == []
     tags = [t for f in s['folds'] for t in f['tags']]
     assert sorted(tags) == sorted(tbl.tab(i).tag for i in range(len(SLIDES)))
@@ -135,37 +136,37 @@ def test_the_summary_says_what_each_fold_holds(tmp_path):
 
 def test_a_tab_with_no_value_is_skipped_and_said(tmp_path, caplog):
     slides = SLIDES + [('p10', '', 10)]          # cohort None
-    p = partition(tmp_path, table(tmp_path, slides), stratifyby=COHORT)
+    p = partition(tmp_path, table(tmp_path, slides), partitionby=COHORT)
     s = p.read('summary')
-    assert [k['idx'] for k in s['skipped']] == [len(SLIDES)] and 'no stratifyby value' in s['skipped'][0]['why']
+    assert [k['idx'] for k in s['skipped']] == [len(SLIDES)] and 'no partitionby value' in s['skipped'][0]['why']
     assert len(SLIDES) not in set().union(*folds_of(p))
 
 
 def test_a_tab_holding_two_values_is_split_into_pieces(tmp_path):
     slides = SLIDES[:-1] + [('p9', 'OV', 20, True)]     # its last row is patient 'other'
-    p = partition(tmp_path, table(tmp_path, slides), groupby=PATIENT)
+    p = partition(tmp_path, table(tmp_path, slides), stratifyby=PATIENT)
     entries = [e for f in p.read('tabs') for e in f]
     last = len(slides) - 1
     assert last not in entries
-    assert sorted((e for e in entries if isinstance(e, dict)), key=lambda e: e['groupby']) == [
-        {'tab': last, 'groupby': 'other'}, {'tab': last, 'groupby': 'p9'}]
+    assert sorted((e for e in entries if isinstance(e, dict)), key=lambda e: e['stratifyby']) == [
+        {'tab': last, 'stratifyby': 'other'}, {'tab': last, 'stratifyby': 'p9'}]
     s = p.read('summary')
     assert s['n_pieces'] == 2 and sum(f['pieces'] for f in s['folds']) == 2
     assert {t for f in s['folds'] for t in f['tags'] if '#' in t} == {f"{p.datatable.tab(last).tag}#other",
                                                                      f"{p.datatable.tab(last).tag}#p9"}
 
 
-def test_a_group_spanning_strata_is_refused(tmp_path):
+def test_a_stratum_spanning_partitions_is_refused(tmp_path):
     slides = SLIDES + [('p1', 'OV', 10)]          # p1 is LUAD elsewhere
-    with pytest.raises(ValueError, match="span more than one stratum"):
-        partition(tmp_path, table(tmp_path, slides), groupby=PATIENT, stratifyby=COHORT)
+    with pytest.raises(ValueError, match="span more than one partition"):
+        partition(tmp_path, table(tmp_path, slides), stratifyby=PATIENT, partitionby=COHORT)
 
 
 def test_largest_first_takes_none_of_the_new_choices(tmp_path):
     with pytest.raises(ValueError, match="largest_first' takes no"):
         DatatablePartition(datalake=str(tmp_path), spec=dict(
             datatable=table(tmp_path), fractions=[0.5, 0.5], partition_slice='meta',
-            method='largest_first', collator=collator(stratifyby=COHORT)))
+            method='largest_first', collator=collator(partitionby=COHORT)))
 
 
 @pytest.mark.parametrize('mixed', [False, True])
@@ -184,54 +185,30 @@ def test_largest_first_deals_as_before(tmp_path, mixed):
 
 
 def test_a_collator_with_other_roles_is_refused(tmp_path):
-    c = Datacollator(spec=dict(columns={'groupby': PATIENT, 'signals': [INFO]}))
+    c = Datacollator(spec=dict(columns={'stratifyby': PATIENT, 'signals': [INFO]}))
     with pytest.raises(ValueError, match="declares \\['signals'\\] too"):
         DatatablePartition(datalake=str(tmp_path), spec=dict(
             datatable=table(tmp_path), fractions=[0.5, 0.5], partition_slice='meta', collator=c))
 
 
-@pytest.mark.parametrize('stratifyby', [COHORT, None])
-def test_the_partition_from_before_the_collator_is_reached(tmp_path, monkeypatch, stratifyby):
-    """Its table was datapoint_table, and groupby and stratifyby were fields of
-    its own -- as a collator holding them renders, under its old module name."""
-    tbl = table(tmp_path)
-
-    @dataclass
-    class OldVAR(Datablock.VAR):
-        datapoint_table: Datatable
-        fractions: list
-        partition_slice: int | str
-        method: str = 'random'
-        seed: int = 0
-        groupby: tuple | list | None = None
-        stratifyby: tuple | list | None = None
-        balance: str = 'rows'
-
-    with monkeypatch.context() as m:
-        m.setattr(DatatablePartition, 'VAR', OldVAR)
-        m.setattr(DatatablePartition, 'SPECIALIZATIONS', [])
-        m.setattr(DatatablePartition, '__post_init__', Datablock.__post_init__)
-        old = DatatablePartition(datalake=str(tmp_path), spec=dict(
-            datapoint_table=tbl, fractions=[0.5, 0.5], partition_slice='meta',
-            groupby=PATIENT, stratifyby=stratifyby, seed=3))
-        old_hash = old.hash
-    new = partition(tmp_path, tbl, groupby=PATIENT, stratifyby=stratifyby, seed=3, build=False)
-    assert new.hash != old_hash
-    assert old_hash in new.specialization_hashes()
-
-
 def test_a_partition_of_constant_tabs_is_what_it_was(tmp_path):
-    """Pinned from dbx 07cd119, before tabs could be split: no partition or fold of constant tabs moves."""
+    """Pinned from dbx 07cd119, before tabs could be split: no deal of constant tabs moves.
+
+    Its hash has moved twice. On 2026-10-09 *coalesce*, *min_tab_rows* and *max_tab_rows* became
+    fields, which a specialization pinning them to None reached past. On 2026-10-10 the roles
+    were renamed -- groupby is stratifyby, the old stratifyby partitionby -- and VERSION became 2,
+    so that a collator naming stratifyby, which hashes as before and means the opposite, is not
+    taken for one built before: what was built is rebuilt. The deal is what stays, pinned here.
+    """
     tbl = table(tmp_path)
-    p = partition(tmp_path / 'gs', tbl, groupby=PATIENT, stratifyby=COHORT)
-    assert p.hash == '3318e720fcb934c1fd3b563c7dc3f36487c8f63733a4414fdd0c9bccecba6a57'
+    p = partition(tmp_path / 'gs', tbl, stratifyby=PATIENT, partitionby=COHORT)
+    assert '3318e720fcb934c1fd3b563c7dc3f36487c8f63733a4414fdd0c9bccecba6a57' not in p.specialization_hashes()
     assert p.read('tabs') == [[3, 6, 7, 9, 10, 11], [0, 1, 2, 4, 5, 8]]
-    assert p.part(0).hash == 'c6c4a6c63b633cb4ffee9cc7e1ba5025653a53294314f7d87e1279b4fe4ce166'
+    assert p.part(0).tab_indices == [3, 6, 7, 9, 10, 11]
     assert 'n_pieces' not in p.read('summary')
     p = partition(tmp_path / 'none', tbl)
-    assert p.hash == '1229ccb8cfc81d5dc775aea8d497d19339f0f2b3bf3413bcbf0575127b134dbc'
     assert p.read('tabs') == [[0, 2, 3, 4, 5, 7, 9, 11], [1, 6, 8, 10]]
-    assert p.part(0).hash == '9aed45e329a46a642d46ba8f067fcb8fd382e18601ad0bb842f13698d7ae20ef'
+    assert p.part(0).tab_indices == [0, 2, 3, 4, 5, 7, 9, 11]
 
 
 # Bags: tabs whose rows each carry their own patient and cohort -- several of each in a tab.
@@ -286,10 +263,10 @@ def bags(tmp_path):
     return Bags(datalake=str(tmp_path), spec={'bags': [[list(r) for r in b] for b in BAGS]}).build()
 
 
-def bag_partition(tmp_path, tbl, groupby=PATIENT, stratifyby=COHORT, **spec):
+def bag_partition(tmp_path, tbl, stratifyby=PATIENT, partitionby=COHORT, **spec):
     return DatatablePartition(datalake=str(tmp_path), spec=dict(
         datatable=tbl, fractions=[0.5, 0.5], partition_slice='meta',
-        collator=collator(groupby, stratifyby), **spec)).build()
+        collator=collator(stratifyby, partitionby), **spec)).build()
 
 
 def built_parts(p, **kw):
@@ -307,13 +284,13 @@ def test_every_row_is_in_one_fold_or_skipped_and_said(tmp_path):
     assert set(rows[0]).isdisjoint(rows[1])
     every = {1000 * b + i: r for b, bag in enumerate(BAGS) for i, r in enumerate(bag)}
     skipped = p.read('summary')['skipped']
-    assert [(s['piece'], s['rows']) for s in skipped] == [({'tab': 2, 'groupby': None, 'stratifyby': 'B'}, 1)]
-    assert 'no groupby value' in skipped[0]['why']
+    assert [(s['piece'], s['rows']) for s in skipped] == [({'tab': 2, 'stratifyby': None, 'partitionby': 'B'}, 1)]
+    assert 'no stratifyby value' in skipped[0]['why']
     assert sorted(rows[0] + rows[1]) == sorted(r for r, (patient, _) in every.items() if patient is not None)
     assert len(rows[0]) + len(rows[1]) + sum(s['rows'] for s in skipped) == len(every)
 
 
-def test_a_groups_rows_are_in_one_fold_across_tabs_and_pieces(tmp_path):
+def test_a_stratums_rows_are_in_one_fold_across_tabs_and_pieces(tmp_path):
     for seed in range(4):
         p = bag_partition(tmp_path / f's{seed}', bags(tmp_path), seed=seed)
         fold_of = {}
@@ -333,10 +310,10 @@ def test_a_piece_holds_its_value_in_every_row_and_slice_alike(tmp_path):
             n_pieces += 1
             piece = fold.tab(i)
             meta, x = piece.data('meta')['meta'], piece.data('x')['x']
-            assert {(m['patient'], m['cohort']) for m in meta['info']} == {(entry['groupby'], entry['stratifyby'])}
+            assert {(m['patient'], m['cohort']) for m in meta['info']} == {(entry['stratifyby'], entry['partitionby'])}
             assert piece.n_rows('meta') == piece.n_rows('x') == len(meta['row']) > 0
             assert meta['row'] == x['row']              # row i of one slice is row i of the other
-            assert piece.tag == f"{p.datatable.tab(entry['tab']).tag}#{entry['groupby']}#{entry['stratifyby']}"
+            assert piece.tag == f"{p.datatable.tab(entry['tab']).tag}#{entry['stratifyby']}#{entry['partitionby']}"
     assert n_pieces == p.read('summary')['n_pieces'] - 1        # all but the skipped one
 
 
@@ -354,7 +331,7 @@ def test_a_pieces_source_slice_points_back_and_takes_the_same_piece_of_the_sourc
             src = source.data('x')['x']
             assert [src['row'][r] for r in rows] == piece.data('x')['x']['row']
             info = source.data('meta')['meta']['info']
-            assert [r for r, v in enumerate(info) if (v['patient'], v['cohort']) == (entry['groupby'], entry['stratifyby'])] == list(rows)
+            assert [r for r, v in enumerate(info) if (v['patient'], v['cohort']) == (entry['stratifyby'], entry['partitionby'])] == list(rows)
 
 
 def test_fold_is_the_name_part_had_first(tmp_path):
@@ -362,12 +339,12 @@ def test_fold_is_the_name_part_had_first(tmp_path):
     assert p.fold(1).hash == p.part(1).hash
 
 
-def test_the_fractions_hold_within_each_stratum_counting_pieces(tmp_path):
-    p = bag_partition(tmp_path / 'p', bags(tmp_path), groupby=None, balance='tabs')
+def test_the_fractions_hold_within_each_partition_counting_pieces(tmp_path):
+    p = bag_partition(tmp_path / 'p', bags(tmp_path), stratifyby=None, balance='tabs')
     folds = p.read('summary')['folds']
     # Split by cohort only: A is bags 0, 3 and a piece each of 2 and 5; B bags 1, 4 and the others.
     for cohort in COHORTS:
-        assert [f['strata'][cohort]['tabs'] for f in folds] == [2, 2], cohort
+        assert [f['partitions'][cohort]['tabs'] for f in folds] == [2, 2], cohort
 
 
 def test_the_same_seed_deals_the_same_pieces_with_the_same_hashes(tmp_path):
@@ -383,7 +360,7 @@ def test_the_same_seed_deals_the_same_pieces_with_the_same_hashes(tmp_path):
 
 
 def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
-    from dbx.datatables import DatatablePart
+    from dbx.dataparts import DatatablePart
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     for k in range(p.n_folds()):
         fold = DatatablePart(datalake=str(tmp_path / 'p'), spec=dict(partition=p, fold=k),
@@ -396,7 +373,7 @@ def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
 def test_a_piece_that_cannot_be_recovered_says_so(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     with pytest.raises(ValueError, match="cannot be recovered"):
-        p.tab({'tab': 0, 'groupby': 'p4', 'stratifyby': 'B'}).build()
+        p.tab({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}).build()
 
 
 def test_a_mixed_tab_upstream_of_a_feature_table_is_not_implemented(tmp_path):
@@ -410,7 +387,7 @@ def test_a_mixed_tab_upstream_of_a_feature_table_is_not_implemented(tmp_path):
     with pytest.raises(NotImplementedError, match="DataslicesUpstream"):
         DatatablePartition(datalake=url, spec=dict(
             datatable=features, fractions=[0.5, 0.5], partition_slice='features',
-            collator=Datacollator(spec=dict(columns={'stratifyby': ('labels', 'labels')}, recursive=True)))).build()
+            collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)))).build()
 
 
 # Probes on folds holding pieces.
@@ -458,17 +435,3 @@ def test_a_probe_says_a_piece_is_not_built_before_it_starts(tmp_path):
     with pytest.raises(InvalidBlocksError, match=rf"(?s)reading \['x', 'meta'\] from its tabs; a part's pieces are "
                                                  rf"built by the part: part\.build\(\).*block {i}:"):
         probe(tmp_path / 'probe', fit, ev).build()
-
-
-def test_stratifying_by_the_label_makes_a_tab_of_two_labels_valid_samples(tmp_path):
-    tbl = bags(tmp_path)
-    LABEL = ('meta', 'label')
-    whole = DatatablePartition(datalake=str(tmp_path / 'whole'), spec=dict(
-        datatable=tbl, fractions=[0.5, 0.5], partition_slice='meta')).build()
-    with pytest.raises(ValueError, match="can carry only one label"):
-        probe(tmp_path / 'refused', *built_parts(whole), tab_aggregation='mean').build()
-    p = bag_partition(tmp_path / 'p', tbl, groupby=None, stratifyby=LABEL, balance='tabs')
-    fit, ev = built_parts(p)
-    pr = probe(tmp_path / 'probe', fit, ev, tab_aggregation='mean').build()
-    # One sample per tab or piece, each of one label.
-    assert len(pr.read('fit', 'labels')) == fit.n_tabs and len(pr.read('eval', 'labels')) == ev.n_tabs

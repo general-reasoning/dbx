@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import fsspec
 
-from dbx.dataparts import fs_full_path
+from dbx.databits import fs_full_path
 
 
 # ---------------------------------------------------------------------------

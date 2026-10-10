@@ -309,11 +309,11 @@ class TestTheCommandLine:
 
     def test_the_pinned_runner_captures_its_rendering(self, tmp_path):
         """Phase 2 of a pinned run renders outside exec; the runner opens the capture around both."""
-        from dbx import dataparts
+        from dbx import databits
         runner = tmp_path / 'runner.py'
-        runner.write_text(dataparts._PINNED_RUNNER.format(
-            render=textwrap.indent(dataparts._PINNED_RENDER['pprint'], '    '),
-            capture_flag=dataparts.CAPTURE_OUTPUT_FLAG))
+        runner.write_text(databits._PINNED_RUNNER.format(
+            render=textwrap.indent(databits._PINNED_RENDER['pprint'], '    '),
+            capture_flag=databits.CAPTURE_OUTPUT_FLAG))
         env = dict(os.environ, DBX_ROOT=str(tmp_path), DBX_DIRTY_REPO_OK='1', DBX_USE_WORK_REPO='False')
         repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         env['PYTHONPATH'] = os.pathsep.join([repo] + ([env['PYTHONPATH']] if env.get('PYTHONPATH') else []))

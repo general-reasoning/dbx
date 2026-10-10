@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 import dbx
-from dbx.datablocks import Datablock, DatajournalEntry, journal
+from dbx.datablocks import Datablock, DataJournalEntry, journal
 from dbx.dataparts import write_exec_journal, read_exec_journal
 
 
@@ -22,7 +22,7 @@ class Built(Datablock):
             f.write('hello')
 
 
-class TestDatajournalEntryMethods:
+class TestDataJournalEntryMethods:
 
     def test_datajournal_entry_methods(self):
         series = pd.Series({
@@ -31,7 +31,7 @@ class TestDatajournalEntryMethods:
             'hash': '12345',
             'anchor': 'test.Anchor'
         })
-        entry = DatajournalEntry(series)
+        entry = DataJournalEntry(series)
 
         # The ENTRY: properties over the row's own columns.
         assert entry.block.signaturestr() == 'test.Anchor(spec={})'
@@ -48,7 +48,7 @@ class TestDatajournalEntryMethods:
 
     def test_datajournal_entry_methods_none(self):
         series = pd.Series({'hash': '12345', 'anchor': 'test.Anchor'})
-        entry = DatajournalEntry(series)
+        entry = DataJournalEntry(series)
 
         assert entry.block.signaturestr() is None
         assert entry.block.sigstr() is None

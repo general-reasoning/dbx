@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Breaking: the journal classes are spelled `DataJournal`, `ExecJournal…`.**
+  `Datajournal` -> `DataJournal`, `DatajournalFrame` -> `DataJournalFrame`,
+  `DatajournalEntry` -> `DataJournalEntry`, `ExecjournalFrame` ->
+  `ExecJournalFrame`, `ExecjournalEntry` -> `ExecJournalEntry`, and the
+  `Datablock.Datajournal()` reader -> `Datablock.DataJournal()`. There are no
+  aliases. A subclass that still defines `Datajournal` is refused at
+  definition, since nothing calls it any more. The readers `dbx.datajournal()`
+  and `dbx.execjournal()` keep their names.
 - **One name for the block a feature block was built from: `upstream`.**
   `Featuretab.VAR.datapoint_tab`, `Featuretable.VAR.datapoint_table`,
   `BipolarFeaturetab.VAR.featuretab` and `BipolarFeaturetable.VAR.featuretable`
@@ -25,6 +33,15 @@ All notable changes to this project will be documented in this file.
   specializations reach the partitions built before.
 
 ### Added
+- **`Pipeline`: a Datablock tree defined flat.** A subclass declares the VAR
+  of the whole tree, and its `__create__()` arranges the blocks out of it and
+  returns the root, the entrypoint. `create()`, `entrypoint` and
+  `read('entrypoint')`, its one SYNTHETIC topic, each record the creation in
+  the `PipeJournal`. That is a `DataJournal` laid out as a block's under
+  `{datalake}/.pipelines`, with an `entrypath` column.
+  `dbx.pipejournal()` (also `dbx.journal('pipelines')`) groups its entries by
+  pipeline, with every `entrypaths` each was created to; `construct_only=True`
+  keeps those whose entrypoints were built or redirected. See `JOURNALS.md`.
 - **`DatatablePartition` splits a tab holding several values of a partition
   column.** Such a tab -- several patients in one bag, tiles annotated one by
   one -- used to raise `NotImplementedError`. It is now split into pieces, one

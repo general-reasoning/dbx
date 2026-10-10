@@ -1,11 +1,11 @@
 """
-`ExecjournalFrame`: how the exec journal displays, and what a frame derived from it is.
+`ExecJournalFrame`: how the exec journal displays, and what a frame derived from it is.
 
 The display is compact -- short ids and sessions, timestamps to the second,
 path lists as counts, nothing repeated, no traceback -- and the data is not:
 every value is there, in full, to index, filter and read. A short id is enough
-to get a row by. A selection, a slice or a sort is an `ExecjournalFrame` still,
-as a selection of a block journal is a `DatajournalFrame`.
+to get a row by. A selection, a slice or a sort is an `ExecJournalFrame` still,
+as a selection of a block journal is a `DataJournalFrame`.
 """
 from dataclasses import dataclass
 
@@ -14,7 +14,7 @@ import pytest
 
 import dbx
 from dbx.datablocks import Datablock
-from dbx.journals import DatajournalFrame, ExecjournalEntry, ExecjournalFrame
+from dbx.journals import DataJournalFrame, ExecJournalEntry, ExecJournalFrame
 
 
 @pytest.fixture(autouse=True)
@@ -53,27 +53,27 @@ class TestTheDisplay:
             assert f"{full[:8]}…" in text
 
     def test_id_is_not_repeated_beside_the_index(self, ej):
-        shown = ExecjournalFrame._display_frame_(ej)
+        shown = ExecJournalFrame._display_frame_(ej)
         assert 'id' not in shown.columns and shown.index.name == 'id'
 
     def test_with_a_numbered_index_the_id_column_is_short(self, tmp_path):
         dbx.exec("1")
-        shown = ExecjournalFrame._display_frame_(dbx.execjournal(index=None))
+        shown = ExecJournalFrame._display_frame_(dbx.execjournal(index=None))
         assert shown['id'].iloc[0].endswith('…') and len(shown['id'].iloc[0]) == 9
 
     def test_timestamps_to_the_second_and_the_start_once(self, ej):
-        shown = ExecjournalFrame._display_frame_(ej)
+        shown = ExecJournalFrame._display_frame_(ej)
         assert 'exec:start:datetime' not in shown.columns
         assert all('.' not in v for v in shown['datetime'])
         assert list(shown.columns[:2]) == ['datetime', 'exec']
 
     def test_paths_are_counted_and_the_traceback_left_out(self, ej):
-        shown = ExecjournalFrame._display_frame_(ej)
+        shown = ExecJournalFrame._display_frame_(ej)
         assert list(shown['datajournal_entries']) == ['[0]', '[0]', '[1]']
         assert 'traceback' not in shown.columns and 'exception' in shown.columns
 
     def test_comment_and_success_last(self, ej):
-        assert list(ExecjournalFrame._display_frame_(ej).columns[-2:]) == ['comment', 'success']
+        assert list(ExecJournalFrame._display_frame_(ej).columns[-2:]) == ['comment', 'success']
 
     def test_the_data_is_untouched(self, ej):
         repr(ej)
@@ -130,27 +130,27 @@ class TestDerivedFrames:
 
     def test_a_selection_is_an_execjournal_frame_with_its_datalake(self, ej):
         sub = ej[['exec', 'comment']]
-        assert type(sub) is ExecjournalFrame
+        assert type(sub) is ExecJournalFrame
         assert sub.datalake == ej.datalake
         assert ej.index[0][:8] + '…' in repr(sub)
 
     def test_a_filter_a_sort_a_head(self, ej):
         for derived in (ej[ej['success'] == False], ej.sort_values('exec'), ej.head(1)):
-            assert type(derived) is ExecjournalFrame
+            assert type(derived) is ExecJournalFrame
             assert derived.datalake == ej.datalake
 
     def test_a_filtered_row_reaches_what_it_wrote(self, ej):
         built = ej[ej['comment'] == 'built']
         entry = built.get(built.index[0])
-        assert isinstance(entry, ExecjournalEntry)
+        assert isinstance(entry, ExecJournalEntry)
         assert len(entry.dataentries()) == 1
 
     def test_a_block_journal_selection_is_not_read_again(self, ej, tmp_path):
         frame = dbx.datajournal(Built, datalake=str(tmp_path), storage_options={'k': 1})
         sub = frame[['anchor', 'hash']]
-        assert type(sub) is DatajournalFrame
+        assert type(sub) is DataJournalFrame
         # Normalizing it again would add `type` and `signature` back.
         assert list(sub.columns) == ['anchor', 'hash']
         assert sub.storage_options == {'k': 1}
         built = frame[frame['event'] == 'build:end']
-        assert type(built) is DatajournalFrame and built.get(built.index[0])['anchor'] == frame['anchor'].iloc[0]
+        assert type(built) is DataJournalFrame and built.get(built.index[0])['anchor'] == frame['anchor'].iloc[0]

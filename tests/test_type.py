@@ -13,7 +13,7 @@ import pandas as pd
 import pytest
 from dataclasses import dataclass
 
-from dbx.datablocks import Datablock, DatajournalEntry
+from dbx.datablocks import Datablock, DataJournalEntry
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +103,7 @@ class TestSignatureInJournal:
 class TestPreRenameJournals:
 
     def _entry(self, **columns):
-        return DatajournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B', **columns}))
+        return DataJournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B', **columns}))
 
     def test_legacy_hashstr_column_is_read_as_type(self):
         entry = self._entry(hashstr='/j/x-hashstr-1.txt',
@@ -140,10 +140,10 @@ class TestPreRenameJournals:
                              'norm': '/j/legacy-norm.txt'})
         frame = pd.DataFrame([old_row, pd.Series(dict(new_row))])
 
-        assert DatajournalEntry.column(DatajournalEntry(frame.iloc[0]), 'type') == '/j/legacy-hashstr.txt'
-        assert DatajournalEntry.column(DatajournalEntry(frame.iloc[0]), 'signature') == '/j/legacy-norm.txt'
-        assert DatajournalEntry.column(DatajournalEntry(frame.iloc[1]), 'type') == new_row.type
-        assert DatajournalEntry.column(DatajournalEntry(frame.iloc[1]), 'signature') == new_row.signature
+        assert DataJournalEntry.column(DataJournalEntry(frame.iloc[0]), 'type') == '/j/legacy-hashstr.txt'
+        assert DataJournalEntry.column(DataJournalEntry(frame.iloc[0]), 'signature') == '/j/legacy-norm.txt'
+        assert DataJournalEntry.column(DataJournalEntry(frame.iloc[1]), 'type') == new_row.type
+        assert DataJournalEntry.column(DataJournalEntry(frame.iloc[1]), 'signature') == new_row.signature
 
 
 # ---------------------------------------------------------------------------

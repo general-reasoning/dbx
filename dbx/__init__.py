@@ -20,10 +20,14 @@ datablocks
     :class:`Datablock`, :class:`Datastack`, git-revision tracking, remote
     execution via Ray.
 journals
-    :class:`Datajournal` and the build records it reads and writes
-    (:class:`DatajournalFrame`, :class:`DatajournalEntry`); the exec journal
-    (:func:`execjournal`, :class:`ExecjournalFrame`); the filters both are
+    :class:`DataJournal` and the build records it reads and writes
+    (:class:`DataJournalFrame`, :class:`DataJournalEntry`); the exec journal
+    (:func:`execjournal`, :class:`ExecJournalFrame`); the filters both are
     queried with; and the log, :class:`Datalog`.
+pipelines
+    :class:`Pipeline`, a Datablock tree defined flat; every creation of
+    one is recorded in the :class:`PipeJournal`, read with
+    :func:`pipejournal`.
 
 Modules NOT imported here
 -------------------------
@@ -52,4 +56,5 @@ from .datatables import *
 from .backbones import *
 from .featuretables import *
 from .probes import *
+from .pipelines import *
 

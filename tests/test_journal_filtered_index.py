@@ -1,10 +1,10 @@
-"""A filtered DatajournalFrame must be renumbered 0..N-1, not keep its old labels.
+"""A filtered DataJournalFrame must be renumbered 0..N-1, not keep its old labels.
 
-``Datablock.Datajournal`` sorts the concatenated journal newest-first and resets the
-index, so a label is also a position. But ``DatajournalFrame.__init__`` applied its
+``Datablock.DataJournal`` sorts the concatenated journal newest-first and resets the
+index, so a label is also a position. But ``DataJournalFrame.__init__`` applied its
 ``filter_kwargs`` *after* that reset without renumbering, so a filtered journal
 kept the labels its rows had in the full journal -- while ``loc=`` and
-:meth:`DatajournalFrame.get` still index by label.
+:meth:`DataJournalFrame.get` still index by label.
 
 The result: ``lastbuilt()`` (``journal(event='build:end').get(0)``) raised
 ``KeyError: 0`` for any block whose newest journal entry was some *other* event.
@@ -17,7 +17,7 @@ returned silently) but it made ``lastbuilt()`` unusable exactly when it matters.
 import pytest
 from dataclasses import dataclass
 
-from dbx.datablocks import Datablock, DatajournalFrame, DatajournalEntry
+from dbx.datablocks import Datablock, DataJournalFrame, DataJournalEntry
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +83,7 @@ class TestLastbuilt:
     def test_returns_the_build_end_when_a_newer_event_exists(self, newest_is_another_event):
         """The repro: this raised KeyError: 0."""
         entry = newest_is_another_event.lastbuilt()
-        assert isinstance(entry, DatajournalEntry)
+        assert isinstance(entry, DataJournalEntry)
         assert entry.get('event') == 'build:end'
 
     def test_returns_the_newest_of_several_builds(self, tmp_path):
@@ -135,4 +135,4 @@ class TestUserSlicingKeepsPandasSemantics:
             self, newest_is_another_event):
         j = newest_is_another_event.datajournal()
         raw = j[j['event'] == 'build:end']
-        assert list(DatajournalFrame(raw).index) == [1]
+        assert list(DataJournalFrame(raw).index) == [1]

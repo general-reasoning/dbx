@@ -5,7 +5,7 @@ import pytest
 
 import dbx
 from dbx.datablocks import DATAFILE, Datablock
-from dbx.journals import DatajournalFrame
+from dbx.journals import DataJournalFrame
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +37,7 @@ def lake(tmp_path):
 
 def test_one_anchor(lake):
     frame = dbx.constructed(Apple, datalake=lake)
-    assert isinstance(frame, DatajournalFrame)
+    assert isinstance(frame, DataJournalFrame)
     assert set(frame['anchor']) == {Apple.anchor} and len(frame) == 2
     assert set(frame['event']) == {'build:end'}
     assert len(dbx.constructed(Apple.anchor, datalake=lake)) == 2
@@ -65,4 +65,4 @@ def test_another_event_filter(lake):
 
 def test_an_empty_lake(tmp_path):
     frame = dbx.constructed(datalake=str(tmp_path))
-    assert isinstance(frame, DatajournalFrame) and len(frame) == 0
+    assert isinstance(frame, DataJournalFrame) and len(frame) == 0

@@ -12,7 +12,7 @@ first, and the overwritten code stops resolving.
 import pytest
 from dataclasses import dataclass
 
-from dbx.datablocks import Datablock, DatajournalEntry
+from dbx.datablocks import Datablock, DataJournalEntry
 
 
 @pytest.fixture(autouse=True)
@@ -82,7 +82,7 @@ class TestTheCodeIsRecorded:
         block(tmp_path).write_journal_entry(event='wanted')
         code = block(tmp_path).write_journal_entry(event='also-wanted')
         entry = block(tmp_path).datajournal(id=code, loc=0)
-        assert isinstance(entry, DatajournalEntry)
+        assert isinstance(entry, DataJournalEntry)
         assert entry.get('event') == 'also-wanted'
 
     def test_codes_are_unique_across_the_whole_journal(self, tmp_path):
@@ -155,7 +155,7 @@ class TestLegacyJournals:
         b = block(tmp_path)
         b.write_journal_entry(event='note')
         entry = b.datajournal(loc=0)
-        assert DatajournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).block.id is None
+        assert DataJournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).block.id is None
 
     @pytest.mark.parametrize('legacy', ['session', 'uuid'])
     def test_a_tree_recorded_under_an_older_name_still_reads(self, tmp_path, legacy):
@@ -163,8 +163,8 @@ class TestLegacyJournals:
         b = block(tmp_path, tree='RUN-7')
         b.write_journal_entry(event='note')
         entry = b.datajournal(loc=0)
-        # A row as it was written then: no `tree`, and no Datajournal session.
-        old = DatajournalEntry(entry.drop(['tree', 'session']).copy())
+        # A row as it was written then: no `tree`, and no DataJournal session.
+        old = DataJournalEntry(entry.drop(['tree', 'session']).copy())
         old[legacy] = 'RUN-7'
         assert old.block.tree == 'RUN-7'
         assert old.block.session is None

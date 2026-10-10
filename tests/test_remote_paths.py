@@ -11,7 +11,7 @@ Key things tested:
     2. _dbxanchorhashpathx_ returns protocol-prefixed URLs
     3. build() + valid() round-trip on memory://
     4. Journal entries are written and readable on memory://
-    5. DatajournalEntry.anchorkeypath works on real journal data (url-based, no root)
+    5. DataJournalEntry.anchorkeypath works on real journal data (url-based, no root)
     6. fs_full_path leaves local paths alone, prefixes remote ones
 """
 import os
@@ -20,7 +20,7 @@ import pytest
 import pandas as pd
 import fsspec
 
-from dbx.datablocks import Datablock, DatajournalEntry, DatajournalFrame, journal
+from dbx.datablocks import Datablock, DataJournalEntry, DataJournalFrame, journal
 from dbx.dataparts import fs_full_path
 
 
@@ -214,7 +214,7 @@ class TestJournalOnMemory:
         block = MemSingleTopic(datalake=mem_url)
         block.build()
         j = block.datajournal()
-        assert isinstance(j, DatajournalFrame)
+        assert isinstance(j, DataJournalFrame)
         assert len(j) >= 1
 
     def test_journal_entry_has_correct_url(self, mem_url):
@@ -234,26 +234,26 @@ class TestJournalOnMemory:
     def test_static_journal_on_memory(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
         block.build()
-        j = Datablock.Datajournal(block.anchor, datalake=mem_url)
-        assert isinstance(j, DatajournalFrame)
+        j = Datablock.DataJournal(block.anchor, datalake=mem_url)
+        assert isinstance(j, DataJournalFrame)
         assert len(j) >= 1
 
 
 # ---------------------------------------------------------------------------
-# 6. DatajournalEntry.anchorkeypath works with url (not root)
+# 6. DataJournalEntry.anchorkeypath works with url (not root)
 # ---------------------------------------------------------------------------
 
-class TestDatajournalEntryPaths:
+class TestDataJournalEntryPaths:
 
     def test_anchorkeypath_from_url(self):
-        """DatajournalEntry with 'url' but no 'root' should produce correct paths."""
+        """DataJournalEntry with 'url' but no 'root' should produce correct paths."""
         data = {
             'url': 'memory://bucket/root',
             'anchor': 'my.module.MyBlock',
             'hash': 'abc123def456',
             'subhash': 'ab12cd34',
         }
-        entry = DatajournalEntry(pd.Series(data))
+        entry = DataJournalEntry(pd.Series(data))
         akp = entry.block.anchorkeypath
         assert akp.startswith('memory://')
         assert 'my.module.MyBlock' in akp
@@ -266,45 +266,45 @@ class TestDatajournalEntryPaths:
             'hash': 'abc123def456',
             'subhash': 'ab12cd34',
         }
-        entry = DatajournalEntry(pd.Series(data))
+        entry = DataJournalEntry(pd.Series(data))
         akp = entry.block.anchorkeypath
         assert akp.startswith('memory://')
         assert 'abc123de' in akp  # hash[:8] (tag_version_shorthash default)
 
     def test_anchorkeypath_local_url_no_prefix(self):
-        """DatajournalEntry with local url should produce bare paths."""
+        """DataJournalEntry with local url should produce bare paths."""
         data = {
             'url': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
             'hash': 'abc123def456',
             'subhash': 'ab12cd34',
         }
-        entry = DatajournalEntry(pd.Series(data))
+        entry = DataJournalEntry(pd.Series(data))
         assert not entry.block.anchorkeypath.startswith('file://')
         assert '/tmp/dbx_test' in entry.block.anchorkeypath
 
     def test_root_property_from_url(self):
-        """DatajournalEntry.root should derive from url."""
+        """DataJournalEntry.root should derive from url."""
         data = {
             'url': 'memory://bucket/root',
             'anchor': 'test',
             'hash': 'abc',
         }
-        entry = DatajournalEntry(pd.Series(data))
+        entry = DataJournalEntry(pd.Series(data))
         assert entry.block.root == '/bucket/root'
 
     def test_root_property_legacy_fallback(self):
-        """DatajournalEntry.root should fall back to 'root' field when no url."""
+        """DataJournalEntry.root should fall back to 'root' field when no url."""
         data = {
             'root': '/legacy/path',
             'anchor': 'test',
             'hash': 'abc',
         }
-        entry = DatajournalEntry(pd.Series(data))
+        entry = DataJournalEntry(pd.Series(data))
         assert entry.block.root == '/legacy/path'
 
     def test_journal_entry_from_real_build(self, mem_url):
-        """DatajournalEntry produced by a real build has correct anchorkeypath."""
+        """DataJournalEntry produced by a real build has correct anchorkeypath."""
         block = MemSingleTopic(datalake=mem_url)
         block.build()
         j = block.datajournal()

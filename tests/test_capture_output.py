@@ -7,7 +7,7 @@ opened when the command starts and closed when it is over; every worker
 PROCESS a dbx executor sends its work to runs each callable inside a capture
 of its own, whose path comes home with the result. The exec journal records
 them all as ``output_captures``, the master at index 0, and
-``ExecjournalEntry.output()`` prints one. A block captures nothing: its
+``ExecJournalEntry.output()`` prints one. A block captures nothing: its
 journal entry's ``log`` is the capture open around its build.
 """
 import functools

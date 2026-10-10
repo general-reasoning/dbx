@@ -1,4 +1,4 @@
-"""Tests for storage_options threading through DatajournalEntry and DatajournalFrame."""
+"""Tests for storage_options threading through DataJournalEntry and DataJournalFrame."""
 import os
 import pytest
 import pandas as pd
@@ -8,8 +8,8 @@ import fsspec
 
 from dbx.dataparts import parse_storage_options
 from dbx.datablocks import (
-    DatajournalEntry,
-    DatajournalFrame,
+    DataJournalEntry,
+    DataJournalFrame,
     Datablock,
     journal,
     default_storage_options,
@@ -42,12 +42,12 @@ class TestDefaultStorageOptions:
 
 
 # ---------------------------------------------------------------------------
-# DatajournalEntry storage_options
+# DataJournalEntry storage_options
 # ---------------------------------------------------------------------------
 
 def _make_entry(datalake='/tmp/dbx', anchor='mod.Block', hash_='abc123',
                 storage_options=None):
-    """Helper to construct a DatajournalEntry with minimal fields."""
+    """Helper to construct a DataJournalEntry with minimal fields."""
     data = {
         'anchor': anchor,
         'hash': hash_,
@@ -55,10 +55,10 @@ def _make_entry(datalake='/tmp/dbx', anchor='mod.Block', hash_='abc123',
         'keyby': 'taghash',
         'tag': None,
     }
-    return DatajournalEntry(pd.Series(data), storage_options=storage_options)
+    return DataJournalEntry(pd.Series(data), storage_options=storage_options)
 
 
-class TestDatajournalEntryStorageOptions:
+class TestDataJournalEntryStorageOptions:
 
     def test_default_storage_options_empty(self):
         entry = _make_entry()
@@ -104,24 +104,24 @@ class TestDatajournalEntryStorageOptions:
 
 
 # ---------------------------------------------------------------------------
-# DatajournalFrame storage_options propagation
+# DataJournalFrame storage_options propagation
 # ---------------------------------------------------------------------------
 
-class TestDatajournalStorageOptions:
+class TestDataJournalStorageOptions:
 
     def test_default_storage_options_empty(self):
         df = pd.DataFrame({'hash': ['a'], 'datetime': ['2026-01-01T00-00-00.000000']})
-        frame = DatajournalFrame(df)
+        frame = DataJournalFrame(df)
         assert frame.storage_options == {}
 
     def test_explicit_storage_options(self):
         so = {'key': 'val'}
         df = pd.DataFrame({'hash': ['a'], 'datetime': ['2026-01-01T00-00-00.000000']})
-        frame = DatajournalFrame(df, storage_options=so)
+        frame = DataJournalFrame(df, storage_options=so)
         assert frame.storage_options == so
 
     def test_get_propagates_storage_options(self):
-        """DatajournalFrame.get() should create DatajournalEntry with storage_options."""
+        """DataJournalFrame.get() should create DataJournalEntry with storage_options."""
         so = {'key': 'val'}
         df = pd.DataFrame({
             'hash': ['abc'],
@@ -129,13 +129,13 @@ class TestDatajournalStorageOptions:
             'anchor': ['mod.Block'],
             'url': ['/tmp/dbx'],
         })
-        frame = DatajournalFrame(df, storage_options=so)
+        frame = DataJournalFrame(df, storage_options=so)
         entry = frame.get(0)
-        assert isinstance(entry, DatajournalEntry)
+        assert isinstance(entry, DataJournalEntry)
         assert entry.storage_options == so
 
     def test_call_propagates_storage_options(self):
-        """DatajournalFrame.__call__() should also propagate storage_options."""
+        """DataJournalFrame.__call__() should also propagate storage_options."""
         so = {'key': 'val'}
         df = pd.DataFrame({
             'hash': ['abc'],
@@ -143,9 +143,9 @@ class TestDatajournalStorageOptions:
             'anchor': ['mod.Block'],
             'url': ['/tmp/dbx'],
         })
-        frame = DatajournalFrame(df, storage_options=so)
+        frame = DataJournalFrame(df, storage_options=so)
         entry = frame(0)
-        assert isinstance(entry, DatajournalEntry)
+        assert isinstance(entry, DataJournalEntry)
         assert entry.storage_options == so
 
 
@@ -156,9 +156,9 @@ class TestDatajournalStorageOptions:
 class TestJournalFunctionStorageOptions:
 
     def test_dataframe_path_propagates(self):
-        """journal(df, storage_options=...) should pass to DatajournalFrame."""
+        """journal(df, storage_options=...) should pass to DataJournalFrame."""
         df = pd.DataFrame({'hash': ['a'], 'datetime': ['2026-01-01T00-00-00.000000']})
         so = {'k': 'v'}
         result = journal(df, storage_options=so)
-        assert isinstance(result, DatajournalFrame)
+        assert isinstance(result, DataJournalFrame)
         assert result.storage_options == so

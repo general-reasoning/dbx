@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from dbx.datablocks import DIRTOPIC, Datablock, Datajournal
+from dbx.datablocks import DIRTOPIC, Datablock, DataJournal
 from dbx.datatables import Datatab, Datatable
 
 
@@ -57,13 +57,13 @@ class Table(Datatable):
 
 def _count_full_reads(monkeypatch):
     reads = []
-    original = Datajournal.read
+    original = DataJournal.read
 
     def counting(anchor, *args, **kwargs):
         reads.append(anchor)
         return original(anchor, *args, **kwargs)
 
-    monkeypatch.setattr(Datajournal, 'read', staticmethod(counting))
+    monkeypatch.setattr(DataJournal, 'read', staticmethod(counting))
     return reads
 
 

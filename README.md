@@ -227,20 +227,20 @@ results = executor.execute(list_of_callables)
 Every `build()` writes journal entries (Parquet) recording the timestamp, git revision, config, and hash. Query them later:
 
 ```python
-j = block.datajournal()            # DatajournalFrame (DataFrame subclass)
-entry = j.get(0)               # DatajournalEntry (Series subclass)
+j = block.datajournal()            # DataJournalFrame (DataFrame subclass)
+entry = j.get(0)               # DataJournalEntry (Series subclass)
 print(entry.hash, entry.anchor, entry.revision)
 ```
 
 Blocks don't choose where their journal entries go. Every entry is written
-under the current `Datajournal` session. To keep track of what a piece of code
+under the current `DataJournal` session. To keep track of what a piece of code
 wrote, open one around it:
 
 ```python
-with Datajournal() as dj:      # reads nothing; dj.session is fixed for its lifetime
+with DataJournal() as dj:      # reads nothing; dj.session is fixed for its lifetime
     run_pipeline()             # every block it builds, however deep, and on dbx executors' workers
 dj.written_entries()           # every entry path written under dj.session
-Datajournal.read('my.module.MyBlock', event='build:end')   # read any anchor's journal
+DataJournal.read('my.module.MyBlock', event='build:end')   # read any anchor's journal
 ```
 
 The innermost `with` wins. A `with` opened in the main thread is seen by every
@@ -248,7 +248,7 @@ thread; one opened in another thread is that thread's own. With none open,
 entries go under `DEFAULT_DATAJOURNAL`, one per process. Each `dbx.exec`
 command runs inside its own scope, so all of its blocks share one session. Its exec-journal row records that `session` and the
 `datajournal_entries` the command produced; `dbx.execjournal(iloc=0).datajournal()`
-reads them back as a `DatajournalFrame`, `.constructed()` just the blocks it
+reads them back as a `DataJournalFrame`, `.constructed()` just the blocks it
 built, redirected or copied in (by anchor), and `.rerun()` runs the command again.
 
 `dbx.datajournal(anchor | cls | block)` reads a block journal and

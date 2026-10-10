@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import pandas as pd
 import pytest
 
-from dbx.datablocks import Datablock, DatajournalFrame, journal, DatajournalEntry
+from dbx.datablocks import Datablock, DataJournalFrame, journal, DataJournalEntry
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +61,7 @@ def test_journal_writing_and_indexing(tmp_path):
 
     # Test standard journal call without index
     j_default = block.datajournal()
-    assert isinstance(j_default, DatajournalFrame)
+    assert isinstance(j_default, DataJournalFrame)
     assert 'code' in j_default.columns
     assert 'signature' in j_default.columns
     assert 'superhash' not in j_default.columns

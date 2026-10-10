@@ -39,7 +39,7 @@ from .datablocks import (
     DATAFILE,
     DIRTOPIC,
     Datablock,
-    DatajournalFrame,
+    DataJournalFrame,
     Datastack,
     TopicMarkerMeta,
     _NotedMarkerMeta_,
@@ -1453,8 +1453,8 @@ class Datatable(_Database_, Datastack):
         """Return a list of indices of all tabs matching the given signature, tag, and/or path pattern(s) (parallelized)."""
         return self.find_blocks(signature, *patterns, tag=tag, path=path, parallelization=parallelization, n_workers=n_workers, work_stealing=work_stealing, **kwargs)
 
-    def tab_datajournal(self, **kwargs) -> DatajournalFrame | None:
-        """Return the DatajournalFrame for child tabs, or None if no tabs exist or journal fails to load."""
+    def tab_datajournal(self, **kwargs) -> DataJournalFrame | None:
+        """Return the DataJournalFrame for child tabs, or None if no tabs exist or journal fails to load."""
         return self.block_datajournal(**kwargs)
 
     def valid_slice(self, slice) -> bool:

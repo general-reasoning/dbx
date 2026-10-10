@@ -46,7 +46,7 @@ def _make(tmp_path, **kw):
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestNoteDatajournalEntry:
+class TestNoteDataJournalEntry:
 
     def test_note_creates_journal_entry(self, tmp_path):
         b = _make(tmp_path)

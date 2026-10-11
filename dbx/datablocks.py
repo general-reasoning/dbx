@@ -1424,8 +1424,11 @@ class Datablock:
         UNSAFE_redirect_all_topics: bool = field(default=False, kw_only=True)
         #: Specific subset of topics to redirect from the matched build. If None,
         #: redirects all topics declared in `topics` (or all recorded topics if
-        #: `UNSAFE_redirect_all_topics` is True).
-        redirect_topics: tuple[str, ...] | list[str] | None = field(default=None, kw_only=True)
+        #: `UNSAFE_redirect_all_topics` is True). A mapping
+        #: ``{current_name: historical_name}`` redirects each topic to the one
+        #: the narrower block recorded under its old name -- a topic renamed, as
+        #: `redirect_vars` is for a VAR field; iterated, it is the current names.
+        redirect_topics: tuple[str, ...] | list[str] | dict | None = field(default=None, kw_only=True)
         #: Mapping from current VAR field names to historical ones,
         #: ``{current_name: historical_name}``.  Mirrors `redirect_topics`
         #: for vars: when a VAR field has been renamed, the specialization
@@ -1552,7 +1555,8 @@ class Datablock:
             if self.UNSAFE_redirect_all_topics:
                 d['UNSAFE_redirect_all_topics'] = self.UNSAFE_redirect_all_topics
             if self.redirect_topics is not None:
-                d['redirect_topics'] = list(self.redirect_topics)
+                d['redirect_topics'] = (dict(self.redirect_topics) if isinstance(self.redirect_topics, dict)
+                                        else list(self.redirect_topics))
             if self.redirect_vars is not None:
                 d['redirect_vars'] = dict(self.redirect_vars)
             if self.nested:
@@ -1632,7 +1636,9 @@ class Datablock:
                     None if self.anchor is SAME else self.anchor,
                     self.legacy,
                     self.UNSAFE_redirect_all_topics,
-                    tuple(self.redirect_topics) if self.redirect_topics is not None else None,
+                    (None if self.redirect_topics is None
+                     else tuple(sorted(self.redirect_topics.items())) if isinstance(self.redirect_topics, dict)
+                     else tuple(self.redirect_topics)),
                     tuple(sorted(self.redirect_vars.items())) if self.redirect_vars is not None else None,
                     tuple(sorted((k, v.key) for k, v in self.nested.items())) if self.nested else None,
                     # A subclass's field at SAME overrides nothing: that
@@ -6940,7 +6946,10 @@ class Datablock:
                 wanted = list(self._toplevel_topics_(specialization.redirect_topics))
             else:
                 wanted = self._toplevel_topics_(self._specialization_topics_(specialization))
-            paths = {t: recorded[t] for t in wanted if t in recorded}
+            # A topic renamed since is recorded under its old name, and read under its new one.
+            renamed = (specialization.redirect_topics
+                       if isinstance(getattr(specialization, 'redirect_topics', None), dict) else {})
+            paths = {t: recorded[renamed.get(t, t)] for t in wanted if renamed.get(t, t) in recorded}
             if len(paths) < len(wanted):
                 missing = sorted(set(wanted) - set(paths))
                 self.log.verbose(

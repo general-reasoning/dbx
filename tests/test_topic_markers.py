@@ -16,8 +16,8 @@ renders it bare.  So adopting the markers re-keys a block, and every block
 spelled the older way keeps its rendering, and its hashes, exactly.
 
 The other half: a ``Datatable`` spelled with the markers stops carrying its
-TAB's slice topics in its own signature.  Another block's topics were never its
-identity to hold, and the TAB is already part of the table.
+TABLET's slice topics in its own signature.  Another block's topics were never its
+identity to hold, and the TABLET is already part of the table.
 """
 import json
 import os
@@ -40,7 +40,7 @@ from dbx.datablocks import (
 
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datatables import DATASLICE, SLICETOPIC, Datatab, Datatable
+from dbx.datatables import DATASLICE, SLICETOPIC, Datatablet, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -72,12 +72,12 @@ class Sentinels(Datablock):
         pass
 
 
-class MarkedTab(Datatab):
+class MarkedTablet(Datatablet):
     VERSION = 1
     TOPICS = {'numbers': DATASLICE(idx='int', square='int'), 'note': 'note.txt'}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         n: int = 3
 
     def __build__(self):
@@ -85,21 +85,21 @@ class MarkedTab(Datatab):
             for i in range(self.var.n):
                 writers['numbers'].write({'idx': i, 'square': i * i})
         with self.fs.open(self.path('note', ensure_dirpath=True), 'w') as f:
-            f.write("tab note")
+            f.write("tablet note")
 
 
 class MarkedTable(Datatable):
     VERSION = 1
-    TAB = MarkedTab
+    TABLET = MarkedTablet
     TOPICS = {'tab_paths': DIR, 'done': 'done'}
 
     @dataclass
     class VAR(Datatable.VAR):
-        n_tabs_: int = 2
+        n_tablets_: int = 2
 
     @property
-    def n_tabs(self):
-        return self.var.n_tabs_
+    def n_tablets(self):
+        return self.var.n_tablets_
 
 
 def block(cls, tmp_path, **kwargs):
@@ -167,7 +167,7 @@ class TestTheDeclarationDecidesTheEra:
             block(Mixed, tmp_path).path('data', 'frames')
 
     def test_the_two_slice_spellings_are_a_mixture_too(self, tmp_path):
-        class Mixed(Datatab):
+        class Mixed(Datatablet):
             TOPICS = {'a': DATASLICE(idx='int'), 'b': SLICETOPIC}
 
             def __build__(self):
@@ -192,10 +192,10 @@ class TestTheDeclarationDecidesTheEra:
 class TestMarkersRenderAsThemselves:
 
     def test_a_slice_renders_with_its_columns(self, tmp_path):
-        assert "topic:numbers=DATASLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).typestr()
+        assert "topic:numbers=DATASLICE(idx='int', square='int')" in block(MarkedTablet, tmp_path).typestr()
 
     def test_a_bare_slice_renders_as_the_bare_marker(self, tmp_path):
-        class Bare(Datatab):
+        class Bare(Datatablet):
             TOPICS = {'numbers': DATASLICE}
 
             def __build__(self):
@@ -204,7 +204,7 @@ class TestMarkersRenderAsThemselves:
         assert 'topic:numbers=DATASLICE' in block(Bare, tmp_path).typestr()
 
     def test_a_markers_own_arguments_keep_their_quotes(self, tmp_path):
-        assert "DATASLICE(idx='int', square='int')" in block(MarkedTab, tmp_path).typestr()
+        assert "DATASLICE(idx='int', square='int')" in block(MarkedTablet, tmp_path).typestr()
 
     def test_the_markers_are_exported_from_the_package(self):
         assert (dbx.DIR, dbx.SYNTHETIC, dbx.DATASLICE) == (DIR, SYNTHETIC, DATASLICE)
@@ -225,11 +225,11 @@ class TestAMarkerBehavesAsTheSentinelItReplaces:
         assert b.valid()
 
     def test_a_slice_is_a_directory_topic(self, tmp_path):
-        t = block(MarkedTab, tmp_path)
+        t = block(MarkedTablet, tmp_path)
         assert t.path('numbers') == t.dirpath('numbers')
 
     def test_a_built_slice_reads_back(self, tmp_path):
-        t = block(MarkedTab, tmp_path)
+        t = block(MarkedTablet, tmp_path)
         t.build()
         assert t.data('numbers') == {'numbers': {'idx': [0, 1, 2], 'square': [0, 1, 4]}}
 
@@ -264,7 +264,7 @@ class TestAMarkerIsNotItsName:
         )
 
     def test_a_parameterised_marker_and_the_string_of_its_call(self, tmp_path):
-        class Both(Datatab):
+        class Both(Datatablet):
             TOPICS = {'numbers': DATASLICE(idx='int'), 'x': "DATASLICE(idx='int')"}
 
             def __build__(self):
@@ -303,7 +303,7 @@ class TestASlicesColumnsAreItsIdentity:
     """
 
     def _tab(self, tmp_path, columns):
-        class Tab(Datatab):
+        class Tab(Datatablet):
             TOPICS = {'numbers': DATASLICE(**columns)}
 
             def __build__(self):
@@ -344,7 +344,7 @@ class TestTheDeclarationIsWhatGetsWritten:
     """
 
     def test_columns_that_disagree_are_refused(self, tmp_path):
-        class Disagreeing(Datatab):
+        class Disagreeing(Datatablet):
             TOPICS = {'numbers': DATASLICE(idx='int')}
 
             def __build__(self):
@@ -355,7 +355,7 @@ class TestTheDeclarationIsWhatGetsWritten:
             block(Disagreeing, tmp_path).build()
 
     def test_a_reordering_is_a_disagreement(self, tmp_path):
-        class Reordered(Datatab):
+        class Reordered(Datatablet):
             TOPICS = {'numbers': DATASLICE(idx='int', square='int')}
 
             def __build__(self):
@@ -366,7 +366,7 @@ class TestTheDeclarationIsWhatGetsWritten:
             block(Reordered, tmp_path).build()
 
     def test_a_restatement_is_allowed(self, tmp_path):
-        class Restated(Datatab):
+        class Restated(Datatablet):
             TOPICS = {'numbers': DATASLICE(idx='int')}
 
             def __build__(self):
@@ -381,13 +381,13 @@ class TestTheDeclarationIsWhatGetsWritten:
 class TestSliceWritersTakesTheDeclaration:
 
     def test_no_argument_is_needed(self, tmp_path):
-        t = block(MarkedTab, tmp_path)
+        t = block(MarkedTablet, tmp_path)
         t.build()
         assert t.declared_columns('numbers') == {'idx': 'int', 'square': 'int'}
         assert t.data('numbers')['numbers']['square'] == [0, 1, 4]
 
     def test_a_bare_slice_still_needs_its_columns_passed(self, tmp_path):
-        class Bare(Datatab):
+        class Bare(Datatablet):
             TOPICS = {'numbers': DATASLICE}
 
             def __build__(self):
@@ -398,7 +398,7 @@ class TestSliceWritersTakesTheDeclaration:
             block(Bare, tmp_path).build()
 
     def test_the_sentinel_is_unaffected(self, tmp_path):
-        class Sentinel(Datatab):
+        class Sentinel(Datatablet):
             TOPICS = {'numbers': SLICETOPIC}
 
             def __build__(self):
@@ -411,7 +411,7 @@ class TestSliceWritersTakesTheDeclaration:
         assert b.data('numbers') == {'numbers': {'idx': [0]}}
 
     def test_a_missing_slice_is_still_refused(self, tmp_path):
-        class TwoSlices(Datatab):
+        class TwoSlices(Datatablet):
             TOPICS = {'numbers': SLICETOPIC, 'letters': SLICETOPIC}
 
             def __build__(self):
@@ -448,38 +448,38 @@ class TestSliceColumnsAreChecked:
 
 
 # ---------------------------------------------------------------------------
-# A table stops carrying the TAB's topics
+# A table stops carrying the TABLET's topics
 # ---------------------------------------------------------------------------
 
 class TestAMarkedTableCarriesOnlyItsOwnTopics:
 
-    def test_the_tabs_slices_are_not_in_the_tables_signature(self, tmp_path):
+    def test_the_tablets_slices_are_not_in_the_tables_signature(self, tmp_path):
         segments = block(MarkedTable, tmp_path)._topics_signature_()
         assert not any('numbers' in segment for segment in segments)
 
     def test_a_table_spelled_the_older_way_still_carries_them(self, tmp_path):
-        class LegacyTab(Datatab):
+        class LegacyTablet(Datatablet):
             TOPICS = {'numbers': SLICETOPIC}
 
             def __build__(self):
                 pass
 
         class LegacyTable(Datatable):
-            TAB = LegacyTab
+            TABLET = LegacyTablet
             # Spelled as the base was before it took the markers.
             TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
 
             @property
-            def n_tabs(self):
+            def n_tablets(self):
                 return 1
 
         assert 'topic:numbers=SLICETOPIC' in block(LegacyTable, tmp_path)._topics_signature_()
 
-    def test_the_table_still_routes_the_tabs_slices(self, tmp_path):
+    def test_the_table_still_routes_the_tablets_slices(self, tmp_path):
         """Identity is what stops carrying them; routing never did."""
         assert block(MarkedTable, tmp_path).slices() == ('numbers',)
 
-    def test_the_table_reads_its_tabs_slices(self, tmp_path):
+    def test_the_table_reads_its_tablets_slices(self, tmp_path):
         table = block(MarkedTable, tmp_path)
         table.build()
         assert table.data('numbers')['numbers']['idx'] == [0, 1, 2, 0, 1, 2]
@@ -506,7 +506,7 @@ class TestTheJournalRecordsMarkers:
         assert recorded._is_syntopic_('cache') and not recorded._is_syntopic_('masks')
 
     def test_a_recorded_slice_keeps_its_columns(self, tmp_path):
-        t = block(MarkedTab, tmp_path)
+        t = block(MarkedTablet, tmp_path)
         t.build()
         recorded = t.datajournal(loc=0).block.TOPICS
         assert recorded['numbers'].columns == {'idx': 'int', 'square': 'int'}

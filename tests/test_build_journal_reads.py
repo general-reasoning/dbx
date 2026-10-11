@@ -1,11 +1,11 @@
 """
 A stack reads its blocks' journal ONCE per build, not once per block.
 
-A block whose TAB declares SPECIALIZATIONS resolves them as it is formed, and
+A block whose TABLET declares SPECIALIZATIONS resolves them as it is formed, and
 resolving reads the journal. Each block-forming callable used to read it for
 itself -- `__block__` formed the block without the table's shared journal, and
 `_adopt_`'s `.set()` formed it again without it -- which on a real lake was a
-3700-file read per tab, repeated for every one of hundreds of tabs.
+3700-file read per tablet, repeated for every one of hundreds of tablets.
 
 The parent reads it once, hands it to the executor as a ctx kwarg -- one copy
 per worker, not per callable -- and each callable forms its block with it.
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import pytest
 
 from dbx.datablocks import DIRTOPIC, Datablock, Datajournal
-from dbx.datatables import Datatab, Datatable
+from dbx.datatables import Datatablet, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -23,24 +23,24 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class Tab(Datatab):
+class Tablet(Datatablet):
     TOPICS = {'rows': 'rows.txt', 'extra': 'extra.txt'}
-    # Narrower than this tab, and never built: every tab tries it and fails to
+    # Narrower than this tablet, and never built: every tablet tries it and fails to
     # resolve -- the case in which nothing is installed and nothing carries over.
     SPECIALIZATIONS = [Datablock.Specialization(spec={}, topics={'rows': 'rows.txt'})]
 
     @dataclass
-    class VAR(Datatab.VAR):
-        tab_idx: int = 0
+    class VAR(Datatablet.VAR):
+        tablet_idx: int = 0
 
     def __build__(self):
         for topic in ('rows', 'extra'):
             with open(self.path(topic, ensure_dirpath=True), 'w') as f:
-                f.write(f"{topic}-{self.var.tab_idx}")
+                f.write(f"{topic}-{self.var.tablet_idx}")
 
 
 class Table(Datatable):
-    TAB = Tab
+    TABLET = Tablet
     TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
 
     @dataclass
@@ -48,11 +48,11 @@ class Table(Datatable):
         n: int = 6
 
     @property
-    def n_tabs(self):
+    def n_tablets(self):
         return self.var.n
 
-    def __tab__(self, idx, **spec):
-        return super().__tab__(idx, tab_idx=idx, **spec)
+    def __tablet__(self, idx, **spec):
+        return super().__tablet__(idx, tablet_idx=idx, **spec)
 
 
 def _count_full_reads(monkeypatch):
@@ -68,14 +68,14 @@ def _count_full_reads(monkeypatch):
 
 
 @pytest.mark.parametrize('parallelization', ['inline', 'multithreading'])
-def test_a_table_build_reads_its_tabs_journal_once(tmp_path, monkeypatch, parallelization):
-    # Something journalled under the tabs' anchor already, so there is a journal to read.
+def test_a_table_build_reads_its_tablets_journal_once(tmp_path, monkeypatch, parallelization):
+    # Something journalled under the tablets' anchor already, so there is a journal to read.
     Table(datalake=str(tmp_path), spec={'n': 1}).build()
     reads = _count_full_reads(monkeypatch)
     Table(datalake=str(tmp_path), spec={'n': 6}, parallelization=parallelization,
           n_workers=2).build()
-    tab_reads = [a for a in reads if a == Tab.anchor]
-    assert len(tab_reads) <= 1, f"{len(tab_reads)} reads of the tabs' journal for 6 tabs"
+    tablet_reads = [a for a in reads if a == Tablet.anchor]
+    assert len(tablet_reads) <= 1, f"{len(tablet_reads)} reads of the tablets' journal for 6 tablets"
 
 
 # ---------------------------------------------------------------------------
@@ -92,20 +92,20 @@ from test_specializations import TestOneJournalReadForAWholeTable, adopted, v1ta
 @pytest.fixture
 def grown(tmp_path, monkeypatch):
     v1table(tmp_path, spec={'n': 3}).build()
-    TestOneJournalReadForAWholeTable._grow_the_tab(monkeypatch)
+    TestOneJournalReadForAWholeTable._grow_the_tablet(monkeypatch)
     return tmp_path
 
 
 def test_the_record_carries_the_paths(grown):
-    tab = adopted(v1table(grown, spec={'n': 3}).tab(0))  # installs, and records
-    entry = tab.datajournal(event='^UNSAFE_redirect$', hash=tab.hash, iloc=0, index=None)
+    tablet = adopted(v1table(grown, spec={'n': 3}).tablet(0))  # installs, and records
+    entry = tablet.datajournal(event='^UNSAFE_redirect$', hash=tablet.hash, iloc=0, index=None)
     assert 'paths' in entry.block.redirection
 
 
-def test_where_a_specialized_tab_reads_from_costs_no_journal_read(grown, monkeypatch):
-    adopted(v1table(grown, spec={'n': 3}).tab(0))         # installed, recorded
+def test_where_a_specialized_tablet_reads_from_costs_no_journal_read(grown, monkeypatch):
+    adopted(v1table(grown, spec={'n': 3}).tablet(0))         # installed, recorded
     reads = _count_full_reads(monkeypatch)
-    fresh = v1table(grown, spec={'n': 3}).tab(0)          # forming it reads nothing at all
+    fresh = v1table(grown, spec={'n': 3}).tablet(0)          # forming it reads nothing at all
     assert fresh.get_redirection().specialization is not None
     fresh.valid()           # False -- the grown `extra` is unbuilt -- and asked cheaply
     assert fresh.redirected_topics() == ['rows']
@@ -115,7 +115,7 @@ def test_where_a_specialized_tab_reads_from_costs_no_journal_read(grown, monkeyp
 def test_an_older_record_without_paths_answers_from_the_marker(grown, monkeypatch):
     """Records written before the paths were: the .redirection topic holds them."""
     from dbx.datablocks import Datablock
-    tab = adopted(v1table(grown, spec={'n': 3}).tab(0))
+    tablet = adopted(v1table(grown, spec={'n': 3}).tablet(0))
     original = Datablock._recorded_redirection_
 
     def without_paths(self, journal=None):
@@ -124,52 +124,52 @@ def test_an_older_record_without_paths_answers_from_the_marker(grown, monkeypatc
 
     monkeypatch.setattr(Datablock, '_recorded_redirection_', without_paths)
     reads = _count_full_reads(monkeypatch)
-    fresh = v1table(grown, spec={'n': 3}).tab(0)          # forming it reads nothing
+    fresh = v1table(grown, spec={'n': 3}).tablet(0)          # forming it reads nothing
     red = fresh.get_redirection()
-    assert red is not None and red.paths == tab.get_redirection().paths
+    assert red is not None and red.paths == tablet.get_redirection().paths
     assert reads == []
 
 
-def test_a_redirected_tab_formed_again_records_nothing_more(grown):
+def test_a_redirected_tablet_formed_again_records_nothing_more(grown):
     table = v1table(grown, spec={'n': 3})
-    tab = adopted(table.tab(0))
-    before = len(tab.datajournal(event='^UNSAFE_redirect$', hash=tab.hash, index=None))
+    tablet = adopted(table.tablet(0))
+    before = len(tablet.datajournal(event='^UNSAFE_redirect$', hash=tablet.hash, index=None))
     for _ in range(3):
-        adopted(v1table(grown, spec={'n': 3}).tab(0))   # finds the marker: installs nothing
-    after = len(tab.datajournal(event='^UNSAFE_redirect$', hash=tab.hash, index=None))
+        adopted(v1table(grown, spec={'n': 3}).tablet(0))   # finds the marker: installs nothing
+    after = len(tablet.datajournal(event='^UNSAFE_redirect$', hash=tablet.hash, index=None))
     assert after == before == 1
 
 
 @pytest.mark.parametrize('parallelization', ['inline', 'multithreading'])
-def test_valid_tabs_reads_the_journal_once(tmp_path, monkeypatch, parallelization):
+def test_valid_tablets_reads_the_journal_once(tmp_path, monkeypatch, parallelization):
     Table(datalake=str(tmp_path), spec={'n': 6}).build()
     reads = _count_full_reads(monkeypatch)
     table = Table(datalake=str(tmp_path), spec={'n': 6}, parallelization=parallelization, n_workers=2)
-    assert table.valid_tabs().all()
-    assert len([a for a in reads if a == Tab.anchor]) <= 1
+    assert table.valid_tablets().all()
+    assert len([a for a in reads if a == Tablet.anchor]) <= 1
 
 
-def test_a_part_filters_its_built_tabs_in_the_parent_by_default(tmp_path):
+def test_a_part_filters_its_built_tablets_in_the_parent_by_default(tmp_path):
     from dbx.dataparts import DatatablePartition
     table = Table(datalake=str(tmp_path / 't'), spec={'n': 4})
     part = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
         datatable=table, fractions=[0.5, 0.5], partition_slice=0)).fold(0)
-    assert part.filter_built_tabs is True
+    assert part.filter_built_tablets is True
 
 
 # ---------------------------------------------------------------------------
-# A table caches its tabs' journal on the instance, never in its state
+# A table caches its tablets' journal on the instance, never in its state
 # ---------------------------------------------------------------------------
 
 import pickle  # noqa: E402
 
 
-class PlainTab(Datatab):
+class PlainTablet(Datatablet):
     TOPICS = {'rows': 'rows.txt'}
 
     @dataclass
-    class VAR(Datatab.VAR):
-        tab_idx: int = 0
+    class VAR(Datatablet.VAR):
+        tablet_idx: int = 0
 
     def __build__(self):
         with open(self.path('rows', ensure_dirpath=True), 'w') as f:
@@ -177,7 +177,7 @@ class PlainTab(Datatab):
 
 
 class PlainTable(Table):
-    TAB = PlainTab
+    TABLET = PlainTablet
 
 
 def test_a_table_carries_no_journal_in_its_state(tmp_path):
@@ -194,7 +194,7 @@ def test_a_table_carries_no_journal_in_its_state(tmp_path):
 
 
 def test_a_copy_reads_the_journal_once_when_it_needs_it(tmp_path, monkeypatch):
-    """A worker's copy reads nothing to form its tabs, and a build of it reads once."""
+    """A worker's copy reads nothing to form its tablets, and a build of it reads once."""
     Table(datalake=str(tmp_path), spec={'n': 4}).build()
     table = Table(datalake=str(tmp_path), spec={'n': 4})
     blob = pickle.dumps(table)
@@ -202,27 +202,27 @@ def test_a_copy_reads_the_journal_once_when_it_needs_it(tmp_path, monkeypatch):
     twin = pickle.loads(blob)
     assert reads == [], "unpickling alone reads nothing"
     for i in range(4):
-        twin.tab(i)
-    assert reads == [], "forming tabs resolves nothing, so reads nothing"
+        twin.tablet(i)
+    assert reads == [], "forming tablets resolves nothing, so reads nothing"
     assert twin.child_specialization_datajournal() is not None
     twin.child_specialization_datajournal()
-    assert len([a for a in reads if a == Tab.anchor]) == 1
+    assert len([a for a in reads if a == Tablet.anchor]) == 1
 
 
-def test_nothing_is_read_for_a_table_whose_tabs_declare_no_specializations(tmp_path, monkeypatch):
+def test_nothing_is_read_for_a_table_whose_tablets_declare_no_specializations(tmp_path, monkeypatch):
     PlainTable(datalake=str(tmp_path), spec={'n': 3}).build()
     reads = _count_full_reads(monkeypatch)
     table = PlainTable(datalake=str(tmp_path), spec={'n': 3})
-    pickle.loads(pickle.dumps(table)).tab(0)
-    table.get_tab_redirections(parallelization='inline')
-    assert table.find_tab_specializations().tolist() == [None, None, None]
+    pickle.loads(pickle.dumps(table)).tablet(0)
+    table.get_tablet_redirections(parallelization='inline')
+    assert table.find_tablet_specializations().tolist() == [None, None, None]
     assert reads == []
 
 
 def test_the_journal_is_not_in_the_tables_definition(tmp_path):
     Table(datalake=str(tmp_path), spec={'n': 2}).build()
     table = Table(datalake=str(tmp_path), spec={'n': 2})
-    table.tab(0)
+    table.tablet(0)
     assert '__child_journal__' not in table.dfn and 'child_journal' not in table.quote()
 
 
@@ -232,28 +232,28 @@ def test_already_built_table_shortcircuits_build_and_build_tree(tmp_path, monkey
     table = Table(datalake=str(tmp_path), spec={'n': 4})
     assert table.valid()
     table.build()
-    assert reads == [], "build() on an already-valid table must not read tab journals"
+    assert reads == [], "build() on an already-valid table must not read tablet journals"
     table.build_tree()
-    assert reads == [], "build_tree() on an already-valid table must not read tab journals"
+    assert reads == [], "build_tree() on an already-valid table must not read tablet journals"
 
 
-def test_build_tree_deep_asks_every_tab(tmp_path, monkeypatch):
-    """deep=True takes no short cut -- neither the table's validity nor its manifest's: every tab is asked.
+def test_build_tree_deep_asks_every_tablet(tmp_path, monkeypatch):
+    """deep=True takes no short cut -- neither the table's validity nor its manifest's: every tablet is asked.
 
-    And reads no journal for it: every tab being valid, none has a specialization to resolve.
+    And reads no journal for it: every tablet being valid, none has a specialization to resolve.
     """
     Table(datalake=str(tmp_path), spec={'n': 4}).build()
     reads = _count_full_reads(monkeypatch)
     asked = []
-    original = Tab.valid
-    monkeypatch.setattr(Tab, 'valid', lambda self: asked.append(self.var.tab_idx) or original(self))
+    original = Tablet.valid
+    monkeypatch.setattr(Tablet, 'valid', lambda self: asked.append(self.var.tablet_idx) or original(self))
 
     Table(datalake=str(tmp_path), spec={'n': 4}).build_tree()
-    assert asked == [], "the manifest vouches for the tabs of a built table"
+    assert asked == [], "the manifest vouches for the tablets of a built table"
 
     Table(datalake=str(tmp_path), spec={'n': 4}).build_tree(deep=True)
-    assert sorted(set(asked)) == [0, 1, 2, 3], "build_tree(deep=True) must ask every tab"
-    assert [a for a in reads if a == Tab.anchor] == []
+    assert sorted(set(asked)) == [0, 1, 2, 3], "build_tree(deep=True) must ask every tablet"
+    assert [a for a in reads if a == Tablet.anchor] == []
 
 
 # ---------------------------------------------------------------------------
@@ -317,28 +317,28 @@ def test_one_filed_under_another_tag_is_still_found(tmp_path, monkeypatch):
 # By hash (the default): no block's past is looked for in the whole journal
 # ---------------------------------------------------------------------------
 
-def test_a_table_build_of_new_tabs_reads_no_whole_journal(tmp_path, monkeypatch):
-    """Each tab looks its pasts up by hash; none is filed, so none is adopted -- and nothing is read whole."""
-    Table(datalake=str(tmp_path), spec={'n': 1}).build()       # a journal under the tabs' anchor
+def test_a_table_build_of_new_tablets_reads_no_whole_journal(tmp_path, monkeypatch):
+    """Each tablet looks its pasts up by hash; none is filed, so none is adopted -- and nothing is read whole."""
+    Table(datalake=str(tmp_path), spec={'n': 1}).build()       # a journal under the tablets' anchor
     reads = _count_full_reads(monkeypatch)
     table = Table(datalake=str(tmp_path), spec={'n': 6}, parallelization='multithreading', n_workers=2).build()
-    assert table.valid() and all(table.tab(i).valid() for i in range(6))
-    assert [a for a in reads if a == Tab.anchor] == [], f"{len(reads)} whole-journal read(s)"
+    assert table.valid() and all(table.tablet(i).valid() for i in range(6))
+    assert [a for a in reads if a == Tablet.anchor] == [], f"{len(reads)} whole-journal read(s)"
 
 
-def test_a_table_adopts_its_tabs_pasts_by_hash(grown, monkeypatch):
-    """The grown tabs find their v1 builds by hash, with no whole-journal read."""
+def test_a_table_adopts_its_tablets_pasts_by_hash(grown, monkeypatch):
+    """The grown tablets find their v1 builds by hash, with no whole-journal read."""
     reads = _count_full_reads(monkeypatch)
     table = v1table(grown, spec={'n': 3}).build()
-    assert all(table.tab(i).redirected_topics() == ['rows'] for i in range(3))
+    assert all(table.tablet(i).redirected_topics() == ['rows'] for i in range(3))
     assert reads == [], f"{len(reads)} whole-journal read(s)"
 
 
 def test_specialization_use_full_journal_reads_the_whole_journal_once(grown, monkeypatch):
     reads = _count_full_reads(monkeypatch)
     table = v1table(grown, spec={'n': 3}, specialization_use_full_journal=True).build()
-    assert all(table.tab(i).redirected_topics() == ['rows'] for i in range(3))
-    assert 1 <= len(reads) <= 2      # the tabs' anchor, and the one a renamed class's specialization names
+    assert all(table.tablet(i).redirected_topics() == ['rows'] for i in range(3))
+    assert 1 <= len(reads) <= 2      # the tablets' anchor, and the one a renamed class's specialization names
 
 
 def test_specialization_use_full_journal_is_operational(tmp_path):

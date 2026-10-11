@@ -26,9 +26,9 @@ from dbx.datatables import (
     DATASLICE,
     Datacollator,
     DataslicesUpstream,
-    Datatab,
+    Datatablet,
     Datatable,
-    DatatableTab,
+    DatatableTablet,
     DIRTOPIC,
     SLICETOPIC,
 )
@@ -104,7 +104,7 @@ def _to_tensor_(inputs, device=None) -> torch.Tensor:
 def feature_map(feature_for_column, evaluator_factory) -> dict[str, str]:
     """``{column: layer}``: which evaluator layer each ``features`` column holds.
 
-    See `Featuretab.VAR.feature_for_column`: a dict is the map itself; a list,
+    See `Featuretablet.VAR.feature_for_column`: a dict is the map itself; a list,
     tuple or single string keeps just those layers, each under its own name;
     None keeps every layer in ``evaluator_factory.layer_names``.
     """
@@ -118,10 +118,10 @@ def feature_map(feature_for_column, evaluator_factory) -> dict[str, str]:
     return {str(feature_for_column): str(feature_for_column)}
 
 
-class Featuretab(DataslicesUpstream, Datatab):
-    """A tab storing multi-layer feature activations captured by an evaluator.
+class Featuretablet(DataslicesUpstream, Datatablet):
+    """A tablet storing multi-layer feature activations captured by an evaluator.
 
-    Inherits access to the slices of its ``upstream`` tab, the one its features
+    Inherits access to the slices of its ``upstream`` tablet, the one its features
     were computed from. Calling `dataset()` or `data()` with slice names present
     upstream zips them in using the `ZipStreamingDataset` mechanism.
     """
@@ -132,27 +132,33 @@ class Featuretab(DataslicesUpstream, Datatab):
     def TOPICS(self):
         """One ``ndarray:float32`` column per feature: the evaluator's layers, or `feature_for_column`'s columns.
 
-        On the class -- what a table sees of its TAB -- the slice alone: the
-        columns are each tab's spec's to say.
+        On the class -- what a table sees of its TABLET -- the slice alone: the
+        columns are each tablet's spec's to say.
         """
         return {'features': DATASLICE({column: 'ndarray:float32' for column in self.feature_for_column})}
 
+    # Each twice: under its own anchor, for a subclass's, and under the one this class had while it was
+    # Featuretab, until 2026-10-10 -- with one more for what was built as Featuretab under today's names.
     SPECIALIZATIONS = [
+        *(sp for anchor in (SAME, f'{__name__}.Featuretab') for sp in (
+            Datablock.Specialization(
+                spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_tab'}, anchor=anchor,
+                note="VAR field renamed from datapoint_tab to upstream"),
+            Datablock.Specialization(
+                spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_tab', 'feature_for_column': 'feature_namemap'},
+                anchor=anchor, note="... and from feature_namemap to feature_for_column"),
+            Datablock.Specialization(
+                spec={}, topics={'features': SLICETOPIC},
+                redirect_vars={'upstream': 'datapoint_tab', 'feature_for_column': 'feature_namemap'}, anchor=anchor,
+                note="respelled: the sentinel for DATASLICE, and the field names before"))),
         Datablock.Specialization(
-            spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_tab'},
-            note="VAR field renamed from datapoint_tab to upstream"),
-        Datablock.Specialization(
-            spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_tab', 'feature_for_column': 'feature_namemap'},
-            note="... and from feature_namemap to feature_for_column"),
-        Datablock.Specialization(
-            spec={}, topics={'features': SLICETOPIC},
-            redirect_vars={'upstream': 'datapoint_tab', 'feature_for_column': 'feature_namemap'},
-            note="respelled: the sentinel for DATASLICE, and the field names before"),
+            spec={}, topics=SAME, anchor=f'{__name__}.Featuretab',
+            note="this very block, stored as Featuretab until 2026-10-10"),
     ]
 
     @dataclass
     class VAR(Datablock.VAR):
-        upstream: Datatab
+        upstream: Datatablet
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
         #: The feature -- the evaluator layer -- for each column of the
@@ -165,7 +171,7 @@ class Featuretab(DataslicesUpstream, Datatab):
         #: The keys are the slice's declared columns.  A layer the evaluator
         #: does not return is skipped at build time without complaint, so its
         #: column is declared but never written.  Being VAR, it is part of the
-        #: block's identity: tabs differing only here are different blocks.
+        #: block's identity: tablets differing only here are different blocks.
         feature_for_column: dict[str, str] | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
@@ -175,7 +181,7 @@ class Featuretab(DataslicesUpstream, Datatab):
     # build time, so the cross-block alignment check has something to compare.
     #
     # As it stands the features slice declares `feature_for_column`'s columns and
-    # nothing else. A stock feature tab
+    # nothing else. A stock feature tablet
     # therefore has no column in common with its upstream sample slices, and
     # setting shared_upstream_column= on one is refused at read time ("carried
     # by fewer than two of the sources read") rather than checking anything.
@@ -187,7 +193,7 @@ class Featuretab(DataslicesUpstream, Datatab):
     # default:
     #
     #   * It must be VAR, not the kwarg it is now. Writing the column changes
-    #     the bytes, so two feature tabs -- one carrying it, one not -- hold
+    #     the bytes, so two feature tablets -- one carrying it, one not -- hold
     #     different data, and as a kwarg they would share a hash. That is the
     #     fault VAR.LazyLoader._check_renderable_ exists to prevent, arrived at
     #     from the other side.
@@ -329,24 +335,20 @@ class Featuretab(DataslicesUpstream, Datatab):
     # 4. Helpers -----------------------------------------------------------
 
 
-class Featuretable(DataslicesUpstream, Datatable):
-    """A table of `Featuretab` blocks built across a `Datatable`."""
-
-    TAB = Featuretab
-    VERSION = 1
-
-    SPECIALIZATIONS = [
-        Datablock.Specialization(
-            spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_table'},
+def _featuretable_pasts_(tablet) -> list:
+    """A `Featuretable`'s specializations from before, each naming *tablet* as its TABLET."""
+    return [
+        Datatable.Specialization(
+            TABLET=tablet, spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_table'},
             note="VAR field renamed from datapoint_table to upstream"),
-        Datablock.Specialization(
-            spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_table', 'feature_for_column': 'feature_namemap'},
+        Datatable.Specialization(
+            TABLET=tablet, spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_table', 'feature_for_column': 'feature_namemap'},
             note="... and from feature_namemap to feature_for_column"),
         # Built while Datatable declared ``tabs`` and ``tab_paths`` (before dbx 4a25684): they are in
-        # its identity, so they are named here for its hash, and ``done`` alone is read. Its tabs are
-        # reached by the TAB's own specializations. To be retired with the tables built then.
-        *(Datablock.Specialization(
-            spec={}, topics={'tabs': DATADIR, 'tab_paths': DATADIR, 'done': DATAFILE('done')},
+        # its identity, so they are named here for its hash, and ``done`` alone is read. Its tablets are
+        # reached by the TABLET's own specializations. To be retired with the tables built then.
+        *(Datatable.Specialization(
+            TABLET=tablet, spec={}, topics={'tabs': DATADIR, 'tab_paths': DATADIR, 'done': DATAFILE('done')},
             redirect_topics=['done'], redirect_vars=redirect_vars,
             note=f"{note}, built while a table declared tabs and tab_paths")
           for redirect_vars, note in (
@@ -355,12 +357,28 @@ class Featuretable(DataslicesUpstream, Datatable):
                "upstream was datapoint_table and feature_for_column feature_namemap"))),
     ]
 
+
+class Featuretable(DataslicesUpstream, Datatable):
+    """A table of `Featuretablet` blocks built across a `Datatable`."""
+
+    TABLET = Featuretablet
+    VERSION = 1
+
+    # A table's identity names its TABLET, which was Featuretab until 2026-10-10: each as it was, and
+    # under that name.
+    SPECIALIZATIONS = [
+        *(sp for tablet in (SAME, f'{__name__}.Featuretab') for sp in _featuretable_pasts_(tablet)),
+        Datatable.Specialization(
+            spec={}, topics=SAME, TABLET=f'{__name__}.Featuretab',
+            note="this very table, while its TABLET was Featuretab, until 2026-10-10"),
+    ]
+
     @dataclass
     class VAR(Datablock.VAR):
         upstream: Datatable
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
-        #: Passed unchanged to every tab; see `Featuretab.VAR.feature_for_column`.
+        #: Passed unchanged to every tablet; see `Featuretablet.VAR.feature_for_column`.
         feature_for_column: dict | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
@@ -375,15 +393,15 @@ class Featuretable(DataslicesUpstream, Datatable):
         device_work_stealing: bool = False,
         streaming: bool = False,
         dataloader_kwargs: dict | None = None,
-        filter_built_tabs: bool = False,
+        filter_built_tablets: bool = False,
         shared_upstream_column: 'str | None' = None,
         **kwargs,
     ):
-        # The feature evaluation -- building the tabs -- queues off *devices*,
+        # The feature evaluation -- building the tablets -- queues off *devices*,
         # one worker per device: *device_parallelization* (default:
         # multiprocessing for several devices, inline for one) and
         # *device_work_stealing*. Everything else -- checking and adopting the
-        # tabs -- runs at the stack's own *n_workers*, *parallelization* and
+        # tablets -- runs at the stack's own *n_workers*, *parallelization* and
         # *work_stealing*. Operational, and passed on only when set.
         if device_parallelization is not None:
             kwargs['device_parallelization'] = device_parallelization
@@ -395,7 +413,7 @@ class Featuretable(DataslicesUpstream, Datatable):
             devices=devices,
             streaming=streaming,
             dataloader_kwargs=dataloader_kwargs,
-            filter_built_tabs=filter_built_tabs,
+            filter_built_tablets=filter_built_tablets,
             shared_upstream_column=shared_upstream_column,
             **kwargs,
         )
@@ -405,7 +423,7 @@ class Featuretable(DataslicesUpstream, Datatable):
         # Read back from self — works whether we came through __init__ or __setstate__.
         self.streaming = getattr(self, 'streaming', False)
         self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
-        self.filter_built_tabs = getattr(self, 'filter_built_tabs', False)
+        self.filter_built_tablets = getattr(self, 'filter_built_tablets', False)
         self.device_batch_size = getattr(self, 'device_batch_size', 64)
         self.devices = getattr(self, 'devices', None) or ["cpu"]
         self._devices = self.devices
@@ -451,8 +469,8 @@ class Featuretable(DataslicesUpstream, Datatable):
             raise ValueError(f"{type(self).__name__}: devices={self.devices} names {missing}, but this process "
                              f"sees {n} CUDA device(s), cuda:0..cuda:{n - 1} -- ask for no more than the job has")
 
-    def __tab__(self, idx: int, device: str | None = None, tag=None) -> Featuretab:
-        upstream = self.var.upstream.tab(idx)
+    def __tablet__(self, idx: int, device: str | None = None, tag=None) -> Featuretablet:
+        upstream = self.var.upstream.tablet(idx)
         spec = dict(
             upstream=upstream.quote(),
             evaluator_factory=self.spec['evaluator_factory'],
@@ -460,16 +478,16 @@ class Featuretable(DataslicesUpstream, Datatable):
             feature_for_column=self.spec.get('feature_for_column'),
             shard_size_limit_bytes=self.spec.get('shard_size_limit_bytes', 1 << 26),
         )
-        tab_specs = (getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
+        tablet_specs = (getattr(self, 'TABLET_SPECIALIZATIONS', None) or getattr(self, 'TABLET_SPECIALIZATION', None)
                      or getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None))
-        return self.TAB(
+        return self.TABLET(
             datalake=self._datalake_,
             storage_options=self.storage_options,
             cache=getattr(self, 'cache', None),
             cache_limit=getattr(self, 'cache_limit', None),
             verbose=False,
             spec=spec,
-            SPECIALIZATIONS=tab_specs,
+            SPECIALIZATIONS=tablet_specs,
             device_batch_size=self.device_batch_size,
             device=device,
             streaming=self.streaming,
@@ -478,60 +496,60 @@ class Featuretable(DataslicesUpstream, Datatable):
             tag=tag if tag is not None else upstream.tag,
         )
 
-    def __block__(self, idx: int, **kwargs) -> Featuretab:
-        return self.__tab__(idx, **kwargs)
+    def __block__(self, idx: int, **kwargs) -> Featuretablet:
+        return self.__tablet__(idx, **kwargs)
 
     # 2. Declared API ------------------------------------------------------
 
-    def validate_tab(self, i: int, **kwargs) -> bool:
-        """Return whether the tab at index *i* validates."""
-        signature1 = self.tab(i).var.upstream.signaturestr()
-        signature2 = self.var.upstream.tab(i).signaturestr()
+    def validate_tablet(self, i: int, **kwargs) -> bool:
+        """Return whether the tablet at index *i* validates."""
+        signature1 = self.tablet(i).var.upstream.signaturestr()
+        signature2 = self.var.upstream.tablet(i).signaturestr()
         coherent_signatures = (signature1 == signature2)
         if not coherent_signatures:
             raise ValueError(f"tab({i}).var.upstream.signature: {signature1} "
-                             f"does not match var.upstream.tab({i}): {signature2}")
-        feature_dataset_len = self.tab(i).dataset().__len__()
-        point_dataset_len = self.tab(i).var.upstream.dataset().__len__()
+                             f"does not match var.upstream.tablet({i}): {signature2}")
+        feature_dataset_len = self.tablet(i).dataset().__len__()
+        point_dataset_len = self.tablet(i).var.upstream.dataset().__len__()
         coherent_datasets = feature_dataset_len == point_dataset_len
         if not coherent_datasets:
             raise ValueError(f"tab({i}).dataset().__len__(): {feature_dataset_len} does not match"
                              f"tab({i}).var.upstream.dataset().__len__(): {point_dataset_len}"
             )
-        return coherent_signatures and coherent_datasets and self.tab(i).validate(**kwargs)
+        return coherent_signatures and coherent_datasets and self.tablet(i).validate(**kwargs)
 
     # 3. Accessors ---------------------------------------------------------
 
     @property
     def feature_columns(self) -> list[str]:
-        """The columns of every tab's ``features`` slice, in declared order."""
+        """The columns of every tablet's ``features`` slice, in declared order."""
         return list(self.feature_for_column)
 
     @functools.cached_property
     def feature_for_column(self) -> dict[str, str]:
-        """``{column: layer}``, as each of its tabs has it."""
+        """``{column: layer}``, as each of its tablets has it."""
         return feature_map(self.var.feature_for_column, self.var.evaluator_factory)
 
     @property
-    def n_tabs(self) -> int:
-        return self.var.upstream.n_tabs
+    def n_tablets(self) -> int:
+        return self.var.upstream.n_tablets
 
 
-class BipolarFeaturetab(DataslicesUpstream, Datatab):
-    """Bipolar encoding of a `Featuretab`'s feature columns against a calibration.
+class BipolarFeaturetablet(DataslicesUpstream, Datatablet):
+    """Bipolar encoding of a `Featuretablet`'s feature columns against a calibration.
 
     Each column is mapped to ``{-1, +1}`` elementwise: ``+1`` where the value
     is at or above the column's median, ``-1`` below it. The median is the
     whole-table one in ``VAR.stats_probe`` -- a `FeatureStatsProbe` over a
-    calibration table, usually another fold than the one this tab is in -- and
+    calibration table, usually another fold than the one this tablet is in -- and
     the values are normalized first exactly as that probe normalized them
     before taking it (`normalize_features` with its ``normalization``, one
     column at a time), so value and median are in the same space.
 
-    Not the tab's own median. Centring every tab on itself makes each column
-    exactly half ``+1`` within every tab, which erases whatever sets one tab
+    Not the tablet's own median. Centring every tablet on itself makes each column
+    exactly half ``+1`` within every tablet, which erases whatever sets one tablet
     apart from another -- for slides, the very signal a slide-level probe is
-    after -- and the encoding then describes only variation within a tab.
+    after -- and the encoding then describes only variation within a tablet.
 
     One ``bipolar`` column per encoded feature column, of the same name, so
     ``('bipolar', c)`` is the encoding of ``('features', c)``. Every column of
@@ -543,22 +561,26 @@ class BipolarFeaturetab(DataslicesUpstream, Datatab):
     VERSION = 2
 
     SPECIALIZATIONS = [
+        *(Datablock.Specialization(
+            spec={}, topics=SAME, redirect_vars={'upstream': 'featuretab'}, anchor=anchor,
+            note="VAR field renamed from featuretab to upstream")
+          for anchor in (SAME, f'{__name__}.BipolarFeaturetab')),
         Datablock.Specialization(
-            spec={}, topics=SAME, redirect_vars={'upstream': 'featuretab'},
-            note="VAR field renamed from featuretab to upstream"),
+            spec={}, topics=SAME, anchor=f'{__name__}.BipolarFeaturetab',
+            note="this very block, stored as BipolarFeaturetab until 2026-10-10"),
     ]
 
     @forward_property({'bipolar': DATASLICE})
     def TOPICS(self):
         """One ``ndarray:int8`` column per encoded feature column, of the same name.
 
-        On the class -- what a table sees of its TAB -- the slice alone.
+        On the class -- what a table sees of its TABLET -- the slice alone.
         """
         return {'bipolar': DATASLICE(**{c: 'ndarray:int8' for c in self.feature_columns})}
 
     @dataclass
     class VAR(Datablock.VAR):
-        upstream: Featuretab
+        upstream: Featuretablet
         stats_probe: 'FeatureStatsProbe'
         features: list | None = None
         datapoints_per_row: int = 1
@@ -610,7 +632,7 @@ class BipolarFeaturetab(DataslicesUpstream, Datatab):
     # 3. Accessors ---------------------------------------------------------
 
     @property
-    def upstream(self) -> Featuretab:
+    def upstream(self) -> Featuretablet:
         return self.var.upstream
 
     @property
@@ -654,19 +676,25 @@ class BipolarFeaturetab(DataslicesUpstream, Datatab):
 
 
 class BipolarFeaturetable(DataslicesUpstream, Datatable):
-    """A table of `BipolarFeaturetab` blocks built over a `Featuretable`.
+    """A table of `BipolarFeaturetablet` blocks built over a `Featuretable`.
 
-    Every tab is calibrated by the one ``stats_probe``: that is what makes the
-    tabs' encodings comparable with each other.
+    Every tablet is calibrated by the one ``stats_probe``: that is what makes the
+    tablets' encodings comparable with each other.
     """
 
-    TAB = BipolarFeaturetab
+    TABLET = BipolarFeaturetablet
     VERSION = 2
 
+    # A table's identity names its TABLET, which was BipolarFeaturetab until 2026-10-10: each as it was,
+    # and under that name.
     SPECIALIZATIONS = [
-        Datablock.Specialization(
-            spec={}, topics=SAME, redirect_vars={'upstream': 'featuretable'},
-            note="VAR field renamed from featuretable to upstream"),
+        *(Datatable.Specialization(
+            spec={}, topics=SAME, redirect_vars={'upstream': 'featuretable'}, TABLET=tablet,
+            note="VAR field renamed from featuretable to upstream")
+          for tablet in (SAME, f'{__name__}.BipolarFeaturetab')),
+        Datatable.Specialization(
+            spec={}, topics=SAME, TABLET=f'{__name__}.BipolarFeaturetab',
+            note="this very table, while its TABLET was BipolarFeaturetab, until 2026-10-10"),
     ]
 
     @dataclass
@@ -682,11 +710,11 @@ class BipolarFeaturetable(DataslicesUpstream, Datatable):
         if self.var.upstream is None or self.var.stats_probe is None:
             raise ValueError(f"{type(self).__name__}: VAR.upstream and VAR.stats_probe are both required")
 
-    def __tab__(self, idx: int, tag=None, **kwargs) -> BipolarFeaturetab:
-        upstream = self.var.upstream.tab(idx)
-        tab_specs = (getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
+    def __tablet__(self, idx: int, tag=None, **kwargs) -> BipolarFeaturetablet:
+        upstream = self.var.upstream.tablet(idx)
+        tablet_specs = (getattr(self, 'TABLET_SPECIALIZATIONS', None) or getattr(self, 'TABLET_SPECIALIZATION', None)
                      or getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None))
-        return self.TAB(
+        return self.TABLET(
             datalake=self._datalake_,
             storage_options=self.storage_options,
             cache=getattr(self, 'cache', None),
@@ -697,13 +725,13 @@ class BipolarFeaturetable(DataslicesUpstream, Datatable):
                 stats_probe=dbx.quote(self.var.stats_probe),
                 features=self.var.features,
             ),
-            SPECIALIZATIONS=tab_specs,
+            SPECIALIZATIONS=tablet_specs,
             revision=self.revision,
             tag=tag if tag is not None else upstream.tag,
         )
 
-    def __block__(self, idx: int, **kwargs) -> BipolarFeaturetab:
-        return self.__tab__(idx, **kwargs)
+    def __block__(self, idx: int, **kwargs) -> BipolarFeaturetablet:
+        return self.__tablet__(idx, **kwargs)
 
     # 2. Accessors ---------------------------------------------------------
 
@@ -717,7 +745,7 @@ class BipolarFeaturetable(DataslicesUpstream, Datatable):
 
     @property
     def bipolar_columns(self) -> list[str]:
-        """The columns of every tab's ``bipolar`` slice, in declared order -- from VAR, no tab read."""
+        """The columns of every tablet's ``bipolar`` slice, in declared order -- from VAR, no tablet read."""
         declared = self.upstream.feature_columns
         if self.var.features is None:
             return list(declared)
@@ -728,15 +756,15 @@ class BipolarFeaturetable(DataslicesUpstream, Datatable):
         return [c for c in declared if c in self.var.features]
 
     @property
-    def n_tabs(self) -> int:
-        return self.upstream.n_tabs
+    def n_tablets(self) -> int:
+        return self.upstream.n_tablets
 
 
-class TernaryFeaturetab(DataslicesUpstream, Datatab):
-    """A `BipolarFeaturetab`'s tiles, kept where their bag is sure of the sign and they agree with it, else 0.
+class TernaryFeaturetablet(DataslicesUpstream, Datatablet):
+    """A `BipolarFeaturetablet`'s tiles, kept where their bag is sure of the sign and they agree with it, else 0.
 
     The bag-level estimate, per column and dimension, is the mean of the
-    tab's bipolar rows, ``m = 2p - 1`` where ``p`` is the fraction at ``+1``:
+    tablet's bipolar rows, ``m = 2p - 1`` where ``p`` is the fraction at ``+1``:
     how far the bag leans, and so how sure its sign is. The bag's sign is
     ``sign(m)`` where ``|m| >= bag_threshold``, and 0 -- undecided -- where it
     leans less. A row's ternary value is its bipolar value where the bag's
@@ -755,6 +783,9 @@ class TernaryFeaturetab(DataslicesUpstream, Datatab):
     """
 
     VERSION = 1
+    SPECIALIZATIONS = [Datablock.Specialization(
+        spec={}, topics=SAME, anchor=f'{__name__}.TernaryFeaturetab',
+        note="this very block, stored as TernaryFeaturetab until 2026-10-10")]
 
     BAG_DATADICT = DATADICT('bag.npz', mean='ndarray', sign='ndarray', n_rows='ndarray')
 
@@ -762,7 +793,7 @@ class TernaryFeaturetab(DataslicesUpstream, Datatab):
     def TOPICS(self):
         """``ternary``, one ``ndarray:int8`` column per bipolar column, and ``bag/<column>``.
 
-        On the class -- what a table sees of its TAB -- the slice alone.
+        On the class -- what a table sees of its TABLET -- the slice alone.
         """
         columns = self.bipolar_columns
         return {'ternary': DATASLICE(**{c: 'ndarray:int8' for c in columns}),
@@ -770,7 +801,7 @@ class TernaryFeaturetab(DataslicesUpstream, Datatab):
 
     @dataclass
     class VAR(Datablock.VAR):
-        upstream: BipolarFeaturetab
+        upstream: BipolarFeaturetablet
         bag_threshold: float = 0.5
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -822,7 +853,7 @@ class TernaryFeaturetab(DataslicesUpstream, Datatab):
     # 3. Accessors ---------------------------------------------------------
 
     @property
-    def upstream(self) -> BipolarFeaturetab:
+    def upstream(self) -> BipolarFeaturetablet:
         return self.var.upstream
 
     @property
@@ -836,10 +867,13 @@ class TernaryFeaturetab(DataslicesUpstream, Datatab):
 
 
 class TernaryFeaturetable(DataslicesUpstream, Datatable):
-    """A table of `TernaryFeaturetab` blocks built over a `BipolarFeaturetable`, one threshold for all."""
+    """A table of `TernaryFeaturetablet` blocks built over a `BipolarFeaturetable`, one threshold for all."""
 
-    TAB = TernaryFeaturetab
+    TABLET = TernaryFeaturetablet
     VERSION = 1
+    SPECIALIZATIONS = [Datatable.Specialization(
+        spec={}, topics=SAME, TABLET=f'{__name__}.TernaryFeaturetab',
+        note="this very table, while its TABLET was TernaryFeaturetab, until 2026-10-10")]
 
     @dataclass
     class VAR(Datatable.VAR):
@@ -853,24 +887,24 @@ class TernaryFeaturetable(DataslicesUpstream, Datatable):
         if self.var.upstream is None:
             raise ValueError(f"{type(self).__name__}: VAR.upstream is required")
 
-    def __tab__(self, idx: int, tag=None, **kwargs) -> TernaryFeaturetab:
-        upstream = self.var.upstream.tab(idx)
-        tab_specs = (getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
+    def __tablet__(self, idx: int, tag=None, **kwargs) -> TernaryFeaturetablet:
+        upstream = self.var.upstream.tablet(idx)
+        tablet_specs = (getattr(self, 'TABLET_SPECIALIZATIONS', None) or getattr(self, 'TABLET_SPECIALIZATION', None)
                      or getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None))
-        return self.TAB(
+        return self.TABLET(
             datalake=self._datalake_,
             storage_options=self.storage_options,
             cache=getattr(self, 'cache', None),
             cache_limit=getattr(self, 'cache_limit', None),
             verbose=False,
             spec=dict(upstream=dbx.quote(upstream), bag_threshold=self.var.bag_threshold),
-            SPECIALIZATIONS=tab_specs,
+            SPECIALIZATIONS=tablet_specs,
             revision=self.revision,
             tag=tag if tag is not None else upstream.tag,
         )
 
-    def __block__(self, idx: int, **kwargs) -> TernaryFeaturetab:
-        return self.__tab__(idx, **kwargs)
+    def __block__(self, idx: int, **kwargs) -> TernaryFeaturetablet:
+        return self.__tablet__(idx, **kwargs)
 
     # 3. Accessors ---------------------------------------------------------
 
@@ -880,9 +914,9 @@ class TernaryFeaturetable(DataslicesUpstream, Datatable):
 
     @property
     def ternary_columns(self) -> list[str]:
-        """The columns of every tab's ``ternary`` slice, one per bipolar column -- from VAR, no tab read."""
+        """The columns of every tablet's ``ternary`` slice, one per bipolar column -- from VAR, no tablet read."""
         return self.upstream.bipolar_columns
 
     @property
-    def n_tabs(self) -> int:
-        return self.upstream.n_tabs
+    def n_tablets(self) -> int:
+        return self.upstream.n_tablets

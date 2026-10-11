@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 from test_specializations import (  # noqa: E402
-    TABLE_ANCHOR, RowTab, RowTableV1, TestOneJournalReadForAWholeTable, adopted, v1, v1table,
+    TABLE_ANCHOR, RowTablet, RowTableV1, TestOneJournalReadForAWholeTable, adopted, v1, v1table,
 )
 
 from dbx.datablocks import Datablock, InvalidBlocksError  # noqa: E402
@@ -22,35 +22,35 @@ def setup_env(monkeypatch):
 
 @pytest.fixture
 def grown(tmp_path, monkeypatch):
-    """A table of 3 tabs built, then its TAB grown a topic with a specialization back to it."""
+    """A table of 3 tablets built, then its TABLET grown a topic with a specialization back to it."""
     v1table(tmp_path, spec={'n': 3}).build()
-    TestOneJournalReadForAWholeTable._grow_the_tab(monkeypatch)
+    TestOneJournalReadForAWholeTable._grow_the_tablet(monkeypatch)
     return tmp_path
 
 
 def _redirected(table):
-    return [table._form_block_(i, use_specializations=False).redirected() for i in range(table.n_tabs)]
+    return [table._form_block_(i, use_specializations=False).redirected() for i in range(table.n_tablets)]
 
 
 class TestFindSpecialization:
 
     def test_found_not_installed(self, grown):
-        table = v1table(grown, spec={'n': 3}, use_tab_specializations=False)
-        tab = table.tab(0)
-        assert tab.use_specializations is False
-        assert not tab.redirected()
-        sp = tab.find_specialization()
+        table = v1table(grown, spec={'n': 3}, use_tablet_specializations=False)
+        tablet = table.tablet(0)
+        assert tablet.use_specializations is False
+        assert not tablet.redirected()
+        sp = tablet.find_specialization()
         assert isinstance(sp, Datablock.Specialization) and list(sp.topics) == ['rows']
-        assert not tab.redirected(), "finding it installs nothing"
+        assert not tablet.redirected(), "finding it installs nothing"
 
     def test_nothing_to_find_when_nothing_narrower_was_built(self, tmp_path, monkeypatch):
-        TestOneJournalReadForAWholeTable._grow_the_tab(monkeypatch)
-        table = v1table(tmp_path, spec={'n': 2}, use_tab_specializations=False)
-        assert table.tab(0).find_specialization() is None
+        TestOneJournalReadForAWholeTable._grow_the_tablet(monkeypatch)
+        table = v1table(tmp_path, spec={'n': 2}, use_tablet_specializations=False)
+        assert table.tablet(0).find_specialization() is None
 
-    def test_a_table_finds_its_tabs_and_installs_nothing(self, grown):
-        table = v1table(grown, spec={'n': 3}, use_tab_specializations=False)
-        found = table.find_tab_specializations(parallelization='inline')
+    def test_a_table_finds_its_tablets_and_installs_nothing(self, grown):
+        table = v1table(grown, spec={'n': 3}, use_tablet_specializations=False)
+        found = table.find_tablet_specializations(parallelization='inline')
         assert found.index.tolist() == [0, 1, 2]
         assert all(list(sp.topics) == ['rows'] for sp in found)
         assert table.find_block_specializations(found_only=True).index.tolist() == [0, 1, 2]
@@ -58,27 +58,27 @@ class TestFindSpecialization:
 
     def test_forming_installs_nothing_and_adopting_installs_what_was_found(self, grown):
         table = v1table(grown, spec={'n': 3})
-        found = table.find_tab_specializations(parallelization='inline')
+        found = table.find_tablet_specializations(parallelization='inline')
         assert _redirected(table) == [False, False, False]      # finding is a query
-        assert [table.tab(i).specialization for i in range(3)] == [None] * 3   # forming, too
-        assert [adopted(table.tab(i)).specialization for i in range(3)] == list(found)
+        assert [table.tablet(i).specialization for i in range(3)] == [None] * 3   # forming, too
+        assert [adopted(table.tablet(i)).specialization for i in range(3)] == list(found)
         assert _redirected(table) == [True, True, True]
 
 
 class TestUseBlockSpecializations:
 
     def test_the_stack_sets_its_blocks(self, grown):
-        assert v1table(grown, spec={'n': 3}, use_block_specializations=False).tab(1).use_specializations is False
-        assert v1table(grown, spec={'n': 3}, use_tab_specializations='memory').tab(1).use_specializations == 'memory'
+        assert v1table(grown, spec={'n': 3}, use_block_specializations=False).tablet(1).use_specializations is False
+        assert v1table(grown, spec={'n': 3}, use_tablet_specializations='memory').tablet(1).use_specializations == 'memory'
 
     def test_left_unset_it_is_the_blocks_own(self, grown):
-        assert v1table(grown, spec={'n': 3}).tab(1).use_specializations == RowTab.USE_SPECIALIZATIONS
+        assert v1table(grown, spec={'n': 3}).tablet(1).use_specializations == RowTablet.USE_SPECIALIZATIONS
 
     def test_the_two_names_are_one_setting(self, grown):
-        t = v1table(grown, spec={'n': 3}, use_tab_specializations=False, use_block_specializations=False)
-        assert t.use_tab_specializations is False and t.use_block_specializations is False
+        t = v1table(grown, spec={'n': 3}, use_tablet_specializations=False, use_block_specializations=False)
+        assert t.use_tablet_specializations is False and t.use_block_specializations is False
         with pytest.raises(ValueError, match="disagree"):
-            v1table(grown, spec={'n': 3}, use_tab_specializations=False, use_block_specializations=True)
+            v1table(grown, spec={'n': 3}, use_tablet_specializations=False, use_block_specializations=True)
 
     def test_it_is_not_in_the_quote_unless_given(self, grown):
         assert 'use_block_specializations' not in v1table(grown, spec={'n': 3}).quote()
@@ -86,8 +86,8 @@ class TestUseBlockSpecializations:
             grown, spec={'n': 3}, use_block_specializations=False).quote()
 
     def test_nor_in_the_blocks_quote(self, grown):
-        quiet = v1table(grown, spec={'n': 3}, use_block_specializations=False).tab(0)
-        assert quiet.quote() == v1table(grown, spec={'n': 3}, use_block_specializations=False).tab(0).quote()
+        quiet = v1table(grown, spec={'n': 3}, use_block_specializations=False).tablet(0)
+        assert quiet.quote() == v1table(grown, spec={'n': 3}, use_block_specializations=False).tablet(0).quote()
         assert 'use_specializations=False' not in quiet.quote()
 
 
@@ -95,50 +95,50 @@ class TestClearRedirection:
 
     def test_a_block_reads_its_own_again(self, grown):
         table = v1table(grown, spec={'n': 3})
-        tab = adopted(table.tab(0))
-        assert tab.redirected() and tab.get_redirection() is not None
-        assert tab.UNSAFE_clear_redirection(OVERRIDE=True) is True
-        assert not tab.redirected() and tab.get_redirection() is None
+        tablet = adopted(table.tablet(0))
+        assert tablet.redirected() and tablet.get_redirection() is not None
+        assert tablet.UNSAFE_clear_redirection(OVERRIDE=True) is True
+        assert not tablet.redirected() and tablet.get_redirection() is None
         # Recorded: a fresh instance, specializations off, is not redirected either.
-        again = v1table(grown, spec={'n': 3}, use_tab_specializations=False).tab(0)
+        again = v1table(grown, spec={'n': 3}, use_tablet_specializations=False).tablet(0)
         assert not again.redirected() and again.get_redirection() is None
-        assert again.datajournal(event='^UNSAFE_clear_redirection$', index=None)['hash'].tolist() == [tab.hash]
+        assert again.datajournal(event='^UNSAFE_clear_redirection$', index=None)['hash'].tolist() == [tablet.hash]
         # And nothing that was built is gone.
-        assert v1table(grown, spec={'n': 3}, use_tab_specializations=False).valid()
+        assert v1table(grown, spec={'n': 3}, use_tablet_specializations=False).valid()
 
     def test_nothing_to_clear(self, tmp_path):
-        tab = v1table(tmp_path, spec={'n': 1}).tab(0)
-        assert tab.UNSAFE_clear_redirection(OVERRIDE=True) is False
+        tablet = v1table(tmp_path, spec={'n': 1}).tablet(0)
+        assert tablet.UNSAFE_clear_redirection(OVERRIDE=True) is False
 
-    def test_a_table_clears_its_tabs(self, grown):
+    def test_a_table_clears_its_tablets(self, grown):
         table = v1table(grown, spec={'n': 3})
-        assert [adopted(table.tab(i)).redirected() for i in range(3)] == [True, True, True]
-        cleared = table.UNSAFE_clear_tab_redirections(OVERRIDE=True, parallelization='inline')
+        assert [adopted(table.tablet(i)).redirected() for i in range(3)] == [True, True, True]
+        cleared = table.UNSAFE_clear_tablet_redirections(OVERRIDE=True, parallelization='inline')
         assert cleared.tolist() == [True, True, True]
-        assert _redirected(v1table(grown, spec={'n': 3}, use_tab_specializations=False)) == [False, False, False]
+        assert _redirected(v1table(grown, spec={'n': 3}, use_tablet_specializations=False)) == [False, False, False]
         assert v1table(grown, spec={'n': 3}).block_datajournal(event='^UNSAFE_clear_redirection$', index=None) is not None
 
     def test_without_override_it_does_nothing(self, grown, monkeypatch):
         monkeypatch.setattr('builtins.input', lambda *_: 'n')
-        tab = adopted(v1table(grown, spec={'n': 3}).tab(0))
-        assert tab.UNSAFE_clear_redirection() is False
-        assert tab.redirected()
+        tablet = adopted(v1table(grown, spec={'n': 3}).tablet(0))
+        assert tablet.UNSAFE_clear_redirection() is False
+        assert tablet.redirected()
 
 
 def test_a_query_does_not_reach_the_blocks_a_stack_caches(grown):
-    """Finding forms tabs with specializations off; the tabs the table caches must not inherit that."""
+    """Finding forms tablets with specializations off; the tablets the table caches must not inherit that."""
     table = v1table(grown, spec={'n': 3})
-    table.find_tab_specializations(parallelization='inline')
-    assert all(table.tab(i).use_specializations == RowTab.USE_SPECIALIZATIONS for i in range(3))
-    assert all(adopted(table.tab(i)).specialization is not None for i in range(3))
+    table.find_tablet_specializations(parallelization='inline')
+    assert all(table.tablet(i).use_specializations == RowTablet.USE_SPECIALIZATIONS for i in range(3))
+    assert all(adopted(table.tablet(i)).specialization is not None for i in range(3))
 
 
 class TestSpecializeMethod:
 
     def test_find_specialization_returns_joined_row_with_paths(self, grown):
-        table = v1table(grown, spec={'n': 3}, use_tab_specializations=False)
-        tab = table.tab(0)
-        row = tab.find_specialization()
+        table = v1table(grown, spec={'n': 3}, use_tablet_specializations=False)
+        tablet = table.tablet(0)
+        row = tablet.find_specialization()
         assert row is not None
         assert isinstance(row, Datablock.Specialization)
         assert isinstance(row, dict)
@@ -152,38 +152,38 @@ class TestSpecializeMethod:
         assert 'specialization Specialization(' in rendered
 
     def test_specialize_installs_specialization(self, grown):
-        tab = v1table(grown, spec={'n': 3}, tag='spec_only').tab(0)
-        assert not tab.redirected()
-        assert tab.find_specialization() is not None
-        res = tab.specialize()
-        assert res is tab
-        assert tab.redirected()
-        assert tab.validtopic('rows')
+        tablet = v1table(grown, spec={'n': 3}, tag='spec_only').tablet(0)
+        assert not tablet.redirected()
+        assert tablet.find_specialization() is not None
+        res = tablet.specialize()
+        assert res is tablet
+        assert tablet.redirected()
+        assert tablet.validtopic('rows')
 
     def test_find_specialization_on_redirected_block_resolves(self, grown):
         table = v1table(grown, spec={'n': 3}, tag='spec_redirected')
-        tab = table.tab(0)
-        tab.specialize()
-        assert tab.redirected()
-        row = tab.find_specialization()
+        tablet = table.tablet(0)
+        tablet.specialize()
+        assert tablet.redirected()
+        row = tablet.find_specialization()
         assert row is not None
         assert row.resolved is True
         assert 'rows' in row.paths
 
     def test_valid_block_not_re_specialized(self, grown):
-        table = v1table(grown, spec={'n': 3}, tag='valid_tab', use_tab_specializations=False)
-        tab = table.tab(0)
-        tab.build()
-        assert tab.valid()
-        assert not tab.redirected()
+        table = v1table(grown, spec={'n': 3}, tag='valid_tablet', use_tablet_specializations=False)
+        tablet = table.tablet(0)
+        tablet.build()
+        assert tablet.valid()
+        assert not tablet.redirected()
 
         # When already valid, specialize() must not install a redirection
-        tab_to_spec = v1table(grown, spec={'n': 3}, tag='valid_tab').tab(0)
-        assert not tab_to_spec.redirected()
-        res = tab_to_spec.specialize()
-        assert res is tab_to_spec
-        assert not tab_to_spec.redirected()
-        with tab_to_spec.fs.open(tab_to_spec.path('rows'), 'r') as f:
+        tablet_to_spec = v1table(grown, spec={'n': 3}, tag='valid_tablet').tablet(0)
+        assert not tablet_to_spec.redirected()
+        res = tablet_to_spec.specialize()
+        assert res is tablet_to_spec
+        assert not tablet_to_spec.redirected()
+        with tablet_to_spec.fs.open(tablet_to_spec.path('rows'), 'r') as f:
             assert f.read() == "rows-0\n"
 
     def test_datastack_specialize_with_blocks_journal_does_not_crash(self, grown):
@@ -205,53 +205,53 @@ class TestSpecializeMethod:
         from test_specializations import v2table
 
         table = v2table(grown, tag='stack_spec_test')
-        bj = BlocksJournal(journal=None, anchor=RowTab.anchor, datalake=str(grown))
+        bj = BlocksJournal(journal=None, anchor=RowTablet.anchor, datalake=str(grown))
         # Must not raise AttributeError: 'BlocksJournal' object has no attribute 'empty'
         table.specialize(journal=bj)
 
     def test_install_block_specializations_skips_valid_and_specializes_invalid(self, grown):
-        # Build tab 0 directly without specializations
-        tab0 = v1table(grown, spec={'n': 3}, tag='mixed_valid', use_tab_specializations=False).tab(0)
-        tab0.build()
-        assert tab0.valid()
-        assert not tab0.redirected()
+        # Build tablet 0 directly without specializations
+        tablet0 = v1table(grown, spec={'n': 3}, tag='mixed_valid', use_tablet_specializations=False).tablet(0)
+        tablet0.build()
+        assert tablet0.valid()
+        assert not tablet0.redirected()
 
-        # Table with use_tab_specializations=True has tab 0 valid, tabs 1 and 2 unbuilt
+        # Table with use_tablet_specializations=True has tablet 0 valid, tablets 1 and 2 unbuilt
         table = v1table(grown, spec={'n': 3}, tag='mixed_valid')
         res = table._install_block_specializations_()
         assert res is not None
-        # tab 0 was already valid, so not specialized
+        # tablet 0 was already valid, so not specialized
         assert res[0] is None
-        # tabs 1 and 2 adopted specializations
+        # tablets 1 and 2 adopted specializations
         assert res[1] is not None
         assert res[2] is not None
 
-        # Verify tab 0 stayed unredirected with its direct data
-        t0 = table.tab(0)
+        # Verify tablet 0 stayed unredirected with its direct data
+        t0 = table.tablet(0)
         assert not t0.redirected()
         with t0.fs.open(t0.path('rows'), 'r') as f:
             assert f.read() == "rows-0\n"
 
-        # Verify tab 1 was redirected
-        t1 = table.tab(1)
+        # Verify tablet 1 was redirected
+        t1 = table.tablet(1)
         assert t1.redirected()
 
     def test_valid_does_not_install_specialization(self, grown):
         table = v1table(grown, spec={'n': 3}, tag='valid_no_spec')
-        # table is not built, tabs are not built
+        # table is not built, tablets are not built
         # calling valid() must NOT install specializations
         assert not table.valid()
-        assert not table.tab(0).valid()
-        assert not table.tab(0).redirected()
+        assert not table.tablet(0).valid()
+        assert not table.tablet(0).redirected()
 
-        # calling valid_tabs() must NOT install specializations
-        v_series = table.valid_tabs()
+        # calling valid_tablets() must NOT install specializations
+        v_series = table.valid_tablets()
         assert not v_series.any()
-        assert not table.tab(0).redirected()
-        assert not table.tab(1).redirected()
-        assert not table.tab(2).redirected()
+        assert not table.tablet(0).redirected()
+        assert not table.tablet(1).redirected()
+        assert not table.tablet(2).redirected()
 
-    def test_valid_tabs_with_all_sentinels_reads_no_journal(self, grown, monkeypatch):
+    def test_valid_tablets_with_all_sentinels_reads_no_journal(self, grown, monkeypatch):
         # Build the table so all tab_paths sentinels exist
         table = v1table(grown, spec={'n': 3}, tag='sentinels_built')
         table.build()
@@ -261,28 +261,28 @@ class TestSpecializeMethod:
         t2 = v1table(grown, spec={'n': 3}, tag='sentinels_built')
         # Monkeypatch _build_journal_ to fail if called
         def fail_build_journal(*args, **kwargs):
-            raise AssertionError("_build_journal_ should not be called by valid_tabs!")
+            raise AssertionError("_build_journal_ should not be called by valid_tablets!")
         monkeypatch.setattr(t2, '_build_journal_', fail_build_journal)
 
-        # valid_tabs must succeed and return all True without calling _build_journal_
-        valid_res = t2.valid_tabs()
+        # valid_tablets must succeed and return all True without calling _build_journal_
+        valid_res = t2.valid_tablets()
         assert len(valid_res) == 3
         assert valid_res.all()
 
-    def test_tab_specializations_from_string_representation(self, grown):
+    def test_tablet_specializations_from_string_representation(self, grown):
         spec_str = (
             "[Specialization(spec={}, topics={'rows': 'SLICETOPIC'}, "
             "anchor='old.RowTab', legacy=['all'], note='Legacy build')]"
         )
-        table = v1table(grown, spec={'n': 3}, TAB_SPECIALIZATIONS=spec_str)
+        table = v1table(grown, spec={'n': 3}, TABLET_SPECIALIZATIONS=spec_str)
         specs = table._block_specializations_()
         assert len(specs) == 1
         assert isinstance(specs[0], Datablock.Specialization)
         assert specs[0].anchor == 'old.RowTab'
 
-        # Also test that quote() produces evaluable TAB_SPECIALIZATIONS records
+        # Also test that quote() produces evaluable TABLET_SPECIALIZATIONS records
         q = table.quote()
-        assert "TAB_SPECIALIZATIONS=" in q
+        assert "TABLET_SPECIALIZATIONS=" in q
 
     def test_stack_already_valid_skips_install_block_specializations(self, grown, monkeypatch):
         table = v1table(grown, spec={'n': 3}, tag='already_valid_test')
@@ -468,7 +468,7 @@ class TestCombineSpecializations:
 
 
 class RowTableNoMarkers(RowTableV1):
-    """RowTableV1 without `tab_paths`: which of its tabs are built is known only by asking them."""
+    """RowTableV1 without `tab_paths`: which of its tablets are built is known only by asking them."""
 
     TOPICS = {'summary': 'summary.txt', 'done': 'done'}
 
@@ -480,58 +480,58 @@ def nomarkers(url, **kw):
 
 @pytest.fixture
 def rekeyed(tmp_path, monkeypatch):
-    """A table without `tab_paths`, built; then its TAB grown a topic, re-keying every tab.
+    """A table without `tab_paths`, built; then its TABLET grown a topic, re-keying every tablet.
 
-    The table's own identity does not move, so it is still valid over tabs that are not.
+    The table's own identity does not move, so it is still valid over tablets that are not.
     """
     nomarkers(tmp_path).build()
-    TestOneJournalReadForAWholeTable._grow_the_tab(monkeypatch)
+    TestOneJournalReadForAWholeTable._grow_the_tablet(monkeypatch)
     table = nomarkers(tmp_path)
     assert table.valid()
-    assert not table.valid_tabs(parallelization='inline').any()
+    assert not table.valid_tablets(parallelization='inline').any()
     return tmp_path
 
 
-class TestAValidStackSpecializesItsTabs:
-    """A stack's own validity says nothing about tabs that moved to identities of their own."""
+class TestAValidStackSpecializesItsTablets:
+    """A stack's own validity says nothing about tablets that moved to identities of their own."""
 
-    def test_build_adopts_the_tabs_of_a_valid_stack_and_builds_what_they_owe(self, rekeyed):
-        # Adopted, the tabs still owe `extra`: the stack is done, its tabs are not -- so its build builds them.
+    def test_build_adopts_the_tablets_of_a_valid_stack_and_builds_what_they_owe(self, rekeyed):
+        # Adopted, the tablets still owe `extra`: the stack is done, its tablets are not -- so its build builds them.
         nomarkers(rekeyed).build()
         table = nomarkers(rekeyed)
-        assert table.tabs_redirected(parallelization='inline').all()
-        assert table.tab(1).read('rows') == "rows-1\n", "adopted"
-        assert table.tab(1).read('extra') == "extra-1\n", "built"
-        assert table.valid_tabs(parallelization='inline', validation='valid').all()
+        assert table.tablets_redirected(parallelization='inline').all()
+        assert table.tablet(1).read('rows') == "rows-1\n", "adopted"
+        assert table.tablet(1).read('extra') == "extra-1\n", "built"
+        assert table.valid_tablets(parallelization='inline', validation='valid').all()
         assert table._blocks_cross_checked_()
 
-    def test_a_tab_its_build_leaves_invalid_is_an_error(self, rekeyed, monkeypatch):
-        # Said by the tab's own build, where it failed -- not by the stack after the fact.
-        monkeypatch.setattr(RowTab, '__build__', lambda self: None)      # writes nothing
-        with pytest.raises(ValueError, match=r"Tab 0 of .*failed to validate"):
+    def test_a_tablet_its_build_leaves_invalid_is_an_error(self, rekeyed, monkeypatch):
+        # Said by the tablet's own build, where it failed -- not by the stack after the fact.
+        monkeypatch.setattr(RowTablet, '__build__', lambda self: None)      # writes nothing
+        with pytest.raises(ValueError, match=r"Tablet 0 of .*failed to validate"):
             nomarkers(rekeyed).build()
 
-    def test_build_blocks_builds_what_the_adopted_tabs_owe_and_vouches_for_them(self, rekeyed):
+    def test_build_blocks_builds_what_the_adopted_tablets_owe_and_vouches_for_them(self, rekeyed):
         nomarkers(rekeyed).build_blocks()
         table = nomarkers(rekeyed)
-        assert table.valid_tabs(parallelization='inline', validation='valid').all()
+        assert table.valid_tablets(parallelization='inline', validation='valid').all()
         assert table._blocks_cross_checked_()
         nomarkers(rekeyed).build()      # done, and quiet about it
 
-    def test_a_rekeyed_tab_fails_the_cross_check(self, rekeyed, monkeypatch):
+    def test_a_rekeyed_tablet_fails_the_cross_check(self, rekeyed, monkeypatch):
         nomarkers(rekeyed).build_blocks()
         assert nomarkers(rekeyed)._blocks_cross_checked_()
-        monkeypatch.setattr(RowTab, 'VERSION', 2)
+        monkeypatch.setattr(RowTablet, 'VERSION', 2)
         assert not nomarkers(rekeyed)._blocks_cross_checked_()
 
-    def test_specialize_tabs_adopts_them_and_builds_nothing(self, rekeyed):
-        found = nomarkers(rekeyed).specialize_tabs(parallelization='inline')
+    def test_specialize_tablets_adopts_them_and_builds_nothing(self, rekeyed):
+        found = nomarkers(rekeyed).specialize_tablets(parallelization='inline')
         assert [sp is not None for sp in found] == [True, True, True]
         table = nomarkers(rekeyed)
-        assert table.tabs_redirected(parallelization='inline').all()
-        assert not any(table.tab(i).validtopic('extra') for i in range(3)), "adopting builds nothing"
+        assert table.tablets_redirected(parallelization='inline').all()
+        assert not any(table.tablet(i).validtopic('extra') for i in range(3)), "adopting builds nothing"
 
     def test_again_it_finds_nothing_to_do(self, rekeyed):
-        nomarkers(rekeyed).specialize_tabs(parallelization='inline')
-        again = nomarkers(rekeyed).specialize_tabs(parallelization='inline')
+        nomarkers(rekeyed).specialize_tablets(parallelization='inline')
+        again = nomarkers(rekeyed).specialize_tablets(parallelization='inline')
         assert [sp is None for sp in again] == [True, True, True]

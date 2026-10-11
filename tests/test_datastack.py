@@ -324,11 +324,11 @@ class TestDatastackClearBlocks(unittest.TestCase):
         self.assertFalse(stack.valid_block(1))
         self.assertTrue(stack.valid_block(2))
 
-    def test_datatable_clear_tab_removes_sentinel(self):
-        """UNSAFE_clear_tab/block on Datatable removes .path file so valid_tab/block returns False."""
-        from dbx.datatables import Datatable, Datatab, SLICETOPIC
+    def test_datatable_clear_tablet_removes_sentinel(self):
+        """UNSAFE_clear_tablet/block on Datatable removes .path file so valid_tablet/block returns False."""
+        from dbx.datatables import Datatable, Datatablet, SLICETOPIC
 
-        class MinimalTab(Datatab):
+        class MinimalTablet(Datatablet):
             VERSION = 1
             TOPICS = {'data': SLICETOPIC}
             COLUMNS = {'data': {'x': 'int'}}
@@ -338,27 +338,27 @@ class TestDatastackClearBlocks(unittest.TestCase):
 
         class MinimalTable(Datatable):
             VERSION = 1
-            TAB = MinimalTab
+            TABLET = MinimalTablet
             @property
-            def n_tabs(self):
+            def n_tablets(self):
                 return 2
 
         tbl = MinimalTable(datalake=os.path.join(self.tmpdir, 'tbl')).build()
-        self.assertTrue(tbl.valid_tab(0))
+        self.assertTrue(tbl.valid_tablet(0))
         self.assertTrue(tbl.valid_block(0))
         self.assertTrue(os.path.exists(tbl._blocks_manifest_path_()))
 
-        tbl.UNSAFE_clear_tab(0, OVERRIDE=True)
+        tbl.UNSAFE_clear_tablet(0, OVERRIDE=True)
         self.assertFalse(os.path.exists(tbl._blocks_manifest_path_()))
-        self.assertFalse(tbl.valid_tab(0))
+        self.assertFalse(tbl.valid_tablet(0))
         self.assertFalse(tbl.valid_block(0))
-        self.assertTrue(tbl.valid_tab(1))
+        self.assertTrue(tbl.valid_tablet(1))
 
     def test_a_failing_validate_block_forgets_the_manifest(self):
         """validate_block failing forgets the manifest, which vouched for every block."""
-        from dbx.datatables import Datatable, Datatab, SLICETOPIC
+        from dbx.datatables import Datatable, Datatablet, SLICETOPIC
 
-        class ValidatableTab(Datatab):
+        class ValidatableTablet(Datatablet):
             VERSION = 1
             TOPICS = {'data': SLICETOPIC}
             COLUMNS = {'data': {'x': 'int'}}
@@ -370,25 +370,25 @@ class TestDatastackClearBlocks(unittest.TestCase):
 
         class ValidatableTable(Datatable):
             VERSION = 1
-            TAB = ValidatableTab
+            TABLET = ValidatableTablet
             @property
-            def n_tabs(self):
+            def n_tablets(self):
                 return 2
 
         tbl = ValidatableTable(datalake=os.path.join(self.tmpdir, 'val_tbl')).build()
         self.assertTrue(os.path.exists(tbl._blocks_manifest_path_()))
 
-        # Tab 0's data removed behind the stack's back: the manifest still
+        # Tablet 0's data removed behind the stack's back: the manifest still
         # vouches under 'cross_check' -- what it cannot see -- and 'valid' asks.
-        tbl.tab(0).UNSAFE_clear(OVERRIDE=True)
-        self.assertTrue(tbl.valid_tab(0))
-        self.assertFalse(tbl.valid_tab(0, validation='valid'))
+        tbl.tablet(0).UNSAFE_clear(OVERRIDE=True)
+        self.assertTrue(tbl.valid_tablet(0))
+        self.assertFalse(tbl.valid_tablet(0, validation='valid'))
         # validate_block fails, and forgets the manifest.
         self.assertFalse(tbl.validate_block(0))
         self.assertFalse(os.path.exists(tbl._blocks_manifest_path_()))
-        self.assertFalse(ValidatableTable(datalake=os.path.join(self.tmpdir, 'val_tbl')).valid_tab(0))
+        self.assertFalse(ValidatableTable(datalake=os.path.join(self.tmpdir, 'val_tbl')).valid_tablet(0))
 
-        tbl.tab(0).build()
+        tbl.tablet(0).build()
         self.assertTrue(tbl.validate_block(0))
 
     def test_returns_self(self):
@@ -819,21 +819,21 @@ class TestBLOCK:
             warnings.simplefilter('error')
             S(datalake=str(tmp_path))                     # the same class: not again
 
-    def test_a_tables_tab_is_its_block(self):
-        from dbx.datatables import Datatab, Datatable
+    def test_a_tables_tablet_is_its_block(self):
+        from dbx.datatables import Datatablet, Datatable
 
-        class T(Datatab):
+        class T(Datatablet):
             pass
 
         class Table(Datatable):
-            TAB = T
+            TABLET = T
 
         assert Table.BLOCK is T
 
-    def test_a_table_naming_its_own_block_must_tab_one(self):
-        from dbx.datatables import Datatab, Datatable
+    def test_a_table_naming_its_own_block_must_tablet_one(self):
+        from dbx.datatables import Datatablet, Datatable
 
-        class Base(Datatab):
+        class Base(Datatablet):
             pass
 
         class T(Base):
@@ -841,13 +841,13 @@ class TestBLOCK:
 
         class Ok(Datatable):
             BLOCK = Base
-            TAB = T
+            TABLET = T
 
         assert Ok.BLOCK is Base
         with pytest.raises(TypeError, match="is not a CounterBlock, the BLOCK it declares"):
             class Bad(Datatable):
                 BLOCK = CounterBlock
-                TAB = T
+                TABLET = T
 
     def test_a_part_has_its_tables_block(self, tmp_path):
         import sys
@@ -857,8 +857,8 @@ class TestBLOCK:
         table = DummyTable(datalake=str(tmp_path / 'table')).build()
         part = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
             datatable=table, fractions=[0.5, 0.5], partition_slice=0)).build().fold(0)
-        assert part._block_class_() is DummyTable.BLOCK is DummyTable.TAB
-        assert isinstance(part.block(0), DummyTable.TAB)
+        assert part._block_class_() is DummyTable.BLOCK is DummyTable.TABLET
+        assert isinstance(part.block(0), DummyTable.TABLET)
 
 
 class TestAnchorOnTheClass:

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Tabs are tablets, in every name code uses.** `Datatab` is `Datatablet`,
+  `Featuretab` (and `BipolarFeaturetab`, `TernaryFeaturetab`) is
+  `Featuretablet` (and `BipolarFeaturetablet`, `TernaryFeaturetablet`),
+  `DatatabPiece` is `DatatabletPiece`, `DatatableCoreTab` is
+  `DatatableCoreTablet`, and `DatatablePackTab` is `DatatablePartitionTablet`.
+  A table's `TAB`, `__tab__`, `n_tabs`, `tab()`, `valid_tab()`,
+  `tab_indices`, `TAB_SPECIALIZATIONS`, `filter_built_tabs` -- every method,
+  attribute and parameter -- say `tablet` now; a table class still defining
+  `TAB`, `__tab__`, `n_tabs` or `TAB_SPECIALIZATION(S)` is refused when it is
+  defined, rather than ignored. VAR fields: the piece's `tab` and `tab_index`
+  are `tablet` and `tablet_index`, and `min_tab_rows`, `max_tab_rows`,
+  `rows_per_tab` and `max_rows_per_tab` are `min_tablet_rows`,
+  `max_tablet_rows`, `rows_per_tablet` and `max_rows_per_tablet`. The
+  partitions' topic `tabs` is `tablets`, and `balance='tabs'` is
+  `balance='tablets'`. **Not renamed, being on disk or in identities:** the
+  topic's file `tabs.json` and its records' `"tab"` key, the `source` slice's
+  `tab` column, a tablet's default tag `tab_000003`, the `tab_paths` topic, and
+  the `TAB=` a table's identity renders its tablet class under -- so no
+  table's hash moved for the word. The feature tables and their tablets reach
+  what was built under the old class names, and a piece what was built with
+  its old VAR names, through specializations; the partitions are rebuilt. A
+  constructor state saved with `TAB_SPECIALIZATIONS` is still read. One old
+  name stays, for reading only: `dbx.datatables.DatatableTab`, which speclines
+  recorded before the rename name and must still evaluate; write
+  `DatatableTablet`. The test modules `test_featuretab*.py`,
+  `test_tab_stream_cache.py` and `test_datatable_tab_specline.py` are
+  `test_featuretablet*.py`, `test_tablet_stream_cache.py` and
+  `test_datatable_tablet_specline.py`.
 - **A partition's roles are renamed: `groupby` is `stratifyby`, and what was
   `stratifyby` is `partitionby`.** `stratifyby` names the column whose values,
   strata, must not cross the parts' boundaries -- a patient's rows go to one

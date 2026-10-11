@@ -2,11 +2,11 @@
 
 A `DatatablePartition` splits a `Datatable` into **parts**: tables, each a
 `DatatablePart`, such as a probe's fit and eval tables. Part *k* takes the
-*k*-th of `fractions` of the rows (or of the tabs), and `partition.part(k)`
+*k*-th of `fractions` of the rows (or of the tablets), and `partition.part(k)`
 returns it. The index *k* is also called the part's fold; `partition.fold(k)`
 is the name `part(k)` had first, and does the same. The `DatatablePartition`
 itself writes no rows: it decides which rows go to which part, and writes
-that down in `tabs` and `summary`.
+that down in `tablets` and `summary`.
 
 Two optional columns constrain which rows go to which part:
 
@@ -17,11 +17,11 @@ Two optional columns constrain which rows go to which part:
   so every part takes its share of every partition. The partitions keep their
   proportions in every part; they are not made equal.
 
-A tab is dealt to a part whole when all of its rows carry the same stratum
+A tablet is dealt to a part whole when all of its rows carry the same stratum
 and, with partitionby, the same partition. Otherwise it is cut into
-`DatatabPiece`s. "When a tab is cut" below says exactly when and how. Once
-the deal is done, *coalesce* can make a cut tab whole again, and pool small
-tabs and pieces into packed tabs, `DatatablePackTab`s: "What a part's tabs
+`DatatabletPiece`s. "When a tablet is cut" below says exactly when and how. Once
+the deal is done, *coalesce* can make a cut tablet whole again, and pool small
+tablets and pieces into packed tablets, `DatatablePartitionTablet`s: "What a part's tablets
 are" below.
 
 The partition and the classes it makes live in `dbx.dataparts`; the collator
@@ -45,19 +45,19 @@ fit_table, eval_table = split.part(0).build(), split.part(1).build()
 Five choices, each answering one question:
 
 - **stratifyby**: which rows must land in the SAME part? The rows of a stratum,
-  across all the tabs they lie in, are dealt as one **unit**. Without
-  stratifyby, each tab or piece is a unit of its own.
+  across all the tablets they lie in, are dealt as one **unit**. Without
+  stratifyby, each tablet or piece is a unit of its own.
 - **partitionby**: within which categories must the fractions hold? Each
   partition is dealt to the parts separately, so the fractions are met within
   each partition, not only overall. A partition spans every part; a stratum spans
   one.
-- **balance**: fractions of what? `'rows'` (the default) or `'tabs'`. A piece
+- **balance**: fractions of what? `'rows'` (the default) or `'tablets'`. A piece
   weighs its rows, or 1.
 - **seed**: the order units are dealt in, within each partition.
-- **coalesce**: what a part's tabs are, once dealt. `None` (the default):
-  whole tabs and pieces, as dealt. `'whole'`: a cut tab is made whole again
-  where it can be. `'pack'`: and small tabs and pieces are pooled into packed
-  tabs. It never moves a row to another part. See "What a part's tabs are".
+- **coalesce**: what a part's tablets are, once dealt. `None` (the default):
+  whole tablets and pieces, as dealt. `'whole'`: a cut tablet is made whole again
+  where it can be. `'pack'`: and small tablets and pieces are pooled into packed
+  tablets. It never moves a row to another part. See "What a part's tablets are".
 
 stratifyby and partitionby are roles of a `Datacollator`'s `columns`, each one
 column spec, `(slice, column[, key, ...])`. A column upstream of the table, a
@@ -65,43 +65,43 @@ feature table's annotations, is read only with the collator's
 `recursive=True`.
 
 `method='largest_first'` is the partition from before these choices: whole
-tabs by descending rows, each to the part furthest below target. It takes
-no collator and never cuts a tab.
+tablets by descending rows, each to the part furthest below target. It takes
+no collator and never cuts a tablet.
 
-## When a tab is cut
+## When a tablet is cut
 
 Units are dealt one partition at a time, and each unit goes to one part. So
 everything dealt must lie in **one** stratum, which goes to one part, and in
-**one** partition, which is the pool it is dealt from. A tab that already does
-is dealt whole. A tab that does not is cut into pieces, one per combination
+**one** partition, which is the pool it is dealt from. A tablet that already does
+is dealt whole. A tablet that does not is cut into pieces, one per combination
 of stratum and partition among its rows. A piece takes those rows wherever they
-lie in the tab, in their order.
+lie in the tablet, in their order.
 
 What that comes to depends on the roles the collator sets. The figures below
-split one table of five tabs three ways, with `fractions=[0.5, 0.5]` and
+split one table of five tablets three ways, with `fractions=[0.5, 0.5]` and
 `seed=4`. Each row shows its stratum, `s`, and its partition, `p`. A column
 the `DatatablePartition` reads is filled with the color of the part the row
 goes to; a column it does not read is grey. The strata lie in partitions: s1
-and s3 in p1, the others in p2. A tab marked "(split)" has rows in both
+and s3 in p1, the others in p2. A tablet marked "(split)" has rows in both
 parts. The figures are drawn from real runs by
 [make_figures.py](figures/datapartition/make_figures.py).
 
-**stratifyby only: a tab is cut by stratum.** Tabs 1, 3 and 4 hold two strata
-each, so each is cut in two. Tabs 0 and 2 hold only s1 and are dealt whole,
-together, as s1's unit, to part 0. Tab 1 is split: s2's piece goes to part 0
-and s3's to part 1. s3 also has a piece in tab 4, and it goes to part 1 with
-s3's unit. Tabs 3 and 4 are cut too, although both pieces of each go to
-part 1: tabs are cut before the deal, by what they hold, not by where their
+**stratifyby only: a tablet is cut by stratum.** Tablets 1, 3 and 4 hold two strata
+each, so each is cut in two. Tablets 0 and 2 hold only s1 and are dealt whole,
+together, as s1's unit, to part 0. Tablet 1 is split: s2's piece goes to part 0
+and s3's to part 1. s3 also has a piece in tablet 4, and it goes to part 1 with
+s3's unit. Tablets 3 and 4 are cut too, although both pieces of each go to
+part 1: tablets are cut before the deal, by what they hold, not by where their
 strata land. `coalesce='whole'` makes them whole again; see "What a part's
-tabs are". The partitions are not read.
+tablets are". The partitions are not read.
 
 ![stratifyby only](figures/datapartition/stratifyby.svg)
 
-**partitionby only: a tab is cut by partition.** Tabs 1 and 4 hold two partitions
+**partitionby only: a tablet is cut by partition.** Tablets 1 and 4 hold two partitions
 each, so each is cut in two, and both are split: their p1 rows go to part 0
-and their p2 rows to part 1. Tab 3 holds two strata, s4 and s6, but one
-partition, p2, and is dealt whole, since strata are not read. Each tab and
-piece is a unit of its own, so nothing keeps a stratum together: s1's tabs 0
+and their p2 rows to part 1. Tablet 3 holds two strata, s4 and s6, but one
+partition, p2, and is dealt whole, since strata are not read. Each tablet and
+piece is a unit of its own, so nothing keeps a stratum together: s1's tablets 0
 and 2 go to different parts.
 
 ![partitionby only](figures/datapartition/partitionby.svg)
@@ -112,7 +112,7 @@ partition gives the same pieces as cutting by stratum alone: these are the
 pieces of the stratifyby figure. What partitionby changes is the deal. The
 strata of p1 (s1, s3) are divided between the parts, and so, separately, are
 the strata of p2 (s2, s4, s5, s6). Each part gets its share of each partition,
-as nearly as whole strata allow. Tabs 1 and 3 end up split.
+as nearly as whole strata allow. Tablets 1 and 3 end up split.
 
 ![stratifyby and partitionby](figures/datapartition/both.svg)
 
@@ -122,7 +122,7 @@ from two pools. The `DatatablePartition` raises `ValueError`. Strata must lie
 inside partitions: patients within cohorts work, but patients whose tiles
 each carry a partition of their own do not. To use such a column, either
 partition by a value of the whole stratum, or drop stratifyby, so that each
-tab is cut by partition and its pieces are dealt apart.
+tablet is cut by partition and its pieces are dealt apart.
 
 ![a stratum in two partitions](figures/datapartition/refused.svg)
 
@@ -130,7 +130,7 @@ tab is cut by partition and its pieces are dealt apart.
 
 Within each partition, in sorted order:
 
-1. The partition's weight, its rows or its tabs and pieces, sets each part's
+1. The partition's weight, its rows or its tablets and pieces, sets each part's
    target: `target[k] = weight × fraction[k]`.
 2. The partition's units are shuffled with the seed. One generator shuffles
    every partition in turn, so the whole deal depends on the seed.
@@ -140,14 +140,14 @@ Within each partition, in sorted order:
 
 The deal of the "both" figure:
 
-| Partition | Unit | Its tabs and pieces | Weight | Deficits before, part 0 / 1 | To part | `have` after |
+| Partition | Unit | Its tablets and pieces | Weight | Deficits before, part 0 / 1 | To part | `have` after |
 |---|---|---|---|---|---|---|
-| p1, targets 5 / 5 | s3 | tab 1 #s3, tab 4 #s3 | 3 | 1.00 / 1.00 | 0 (tie) | 3 / 0 |
-| | s1 | tab 0, tab 2 | 7 | 0.40 / 1.00 | 1 | 3 / 7 |
-| p2, targets 4.5 / 4.5 | s5 | tab 4 #s5 | 3 | 1.00 / 1.00 | 0 (tie) | 3 / 0 |
-| | s2 | tab 1 #s2 | 2 | 0.33 / 1.00 | 1 | 3 / 2 |
-| | s4 | tab 3 #s4 | 2 | 0.33 / 0.56 | 1 | 3 / 4 |
-| | s6 | tab 3 #s6 | 2 | 0.33 / 0.11 | 0 | 5 / 4 |
+| p1, targets 5 / 5 | s3 | tablet 1 #s3, tablet 4 #s3 | 3 | 1.00 / 1.00 | 0 (tie) | 3 / 0 |
+| | s1 | tablet 0, tablet 2 | 7 | 0.40 / 1.00 | 1 | 3 / 7 |
+| p2, targets 4.5 / 4.5 | s5 | tablet 4 #s5 | 3 | 1.00 / 1.00 | 0 (tie) | 3 / 0 |
+| | s2 | tablet 1 #s2 | 2 | 0.33 / 1.00 | 1 | 3 / 2 |
+| | s4 | tablet 3 #s4 | 2 | 0.33 / 0.56 | 1 | 3 / 4 |
+| | s6 | tablet 3 #s6 | 2 | 0.33 / 0.11 | 0 | 5 / 4 |
 
 **Units are not cut to fit, so the fractions hold only as finely as the
 units allow.** The deal does not ask whether a unit fits: it goes to the
@@ -156,46 +156,46 @@ alone holds 7 of the 10 rows, so the split is 3 : 7 against 5 : 5. A partition
 of few, large strata meets its fractions loosely. `summary.json` gives the
 rows each part got per partition.
 
-## What a part's tabs are: coalesce
+## What a part's tablets are: coalesce
 
-Tabs are cut before the deal, by what they hold, not by where their strata
-land. So a tab may be cut although all its pieces go to one part, like
-tabs 3 and 4 in the stratifyby figure. A piece is a copy of its rows, while a
-whole tab is read where it is. *coalesce* decides, once the deal is done,
-what each part's tabs are. It moves no row from one part to another: the
-parts hold the same rows in every mode, and only the tabs holding them
+Tablets are cut before the deal, by what they hold, not by where their strata
+land. So a tablet may be cut although all its pieces go to one part, like
+tablets 3 and 4 in the stratifyby figure. A piece is a copy of its rows, while a
+whole tablet is read where it is. *coalesce* decides, once the deal is done,
+what each part's tablets are. It moves no row from one part to another: the
+parts hold the same rows in every mode, and only the tablets holding them
 differ.
 
-**`coalesce=None`**, the default: the entries as dealt, whole tabs and
+**`coalesce=None`**, the default: the entries as dealt, whole tablets and
 pieces. This is what a `DatatablePartition` did before *coalesce*.
 
-**`coalesce='whole'`**: a cut tab whose pieces all went to one part is made
-whole again in that part, the table's own tab, read where it is, whatever
-strata and partitions its rows hold. A tab stays cut only when a piece of it is
-in no part, skipped for holding no value: whole, the tab would bring those
+**`coalesce='whole'`**: a cut tablet whose pieces all went to one part is made
+whole again in that part, the table's own tablet, read where it is, whatever
+strata and partitions its rows hold. A tablet stays cut only when a piece of it is
+in no part, skipped for holding no value: whole, the tablet would bring those
 rows back.
 
-The stratifyby figure again, under `'whole'`. Tabs 3 and 4 are whole; tab 1 is
+The stratifyby figure again, under `'whole'`. Tablets 3 and 4 are whole; tablet 1 is
 split between the parts, so it stays cut:
 
 ![coalesce='whole'](figures/datapartition/whole.svg)
 
 **`coalesce='pack'`**: as `'whole'`, and then each part's entries of fewer
-than `min_tab_rows` rows, whole tabs and pieces alike, are pooled in source
-order into packed tabs of `max_tab_rows` rows (twice `min_tab_rows` unless
-given). An entry may run across two packed tabs, and the last packed tab of
+than `min_tablet_rows` rows, whole tablets and pieces alike, are pooled in source
+order into packed tablets of `max_tablet_rows` rows (twice `min_tablet_rows` unless
+given). An entry may run across two packed tablets, and the last packed tablet of
 a part holds what is left. Larger entries stay as they are, so nothing is
-copied that is not small. With `min_tab_rows=4`, tab 1's s2 piece and tab 2
-are pooled into part 0's packed tab 0:
+copied that is not small. With `min_tablet_rows=4`, tablet 1's s2 piece and tablet 2
+are pooled into part 0's packed tablet 0:
 
 ![coalesce='pack'](figures/datapartition/pack.svg)
 
-So a tab of a part may hold the rows of several strata, partitions and source
-tabs: a rejoined tab, a packed one. A probe that needs the rows of one slide
-takes them by a column, its `aggregateby`, not by tab: see "Probes".
+So a tablet of a part may hold the rows of several strata, partitions and source
+tablets: a rejoined tablet, a packed one. A probe that needs the rows of one slide
+takes them by a column, its `aggregateby`, not by tablet: see "Probes".
 
-The `summary` says what was done: `rejoined`, the tags of the tabs made
-whole, and, per part, `packed`, how many packed tabs hold how many entries
+The `summary` says what was done: `rejoined`, the tags of the tablets made
+whole, and, per part, `packed`, how many packed tablets hold how many entries
 and rows.
 
 ## The flow
@@ -203,32 +203,32 @@ and rows.
 `DatatablePartition.build()` runs five steps. Each hands the next one thing:
 
 ```
-the table ─SCAN─▶ a scan per tab ─ITEMS─▶ items ─DEAL─▶ each part's entries ─COALESCE─▶ each part's entries ─WRITE─▶ tabs.json, summary.json
+the table ─SCAN─▶ a scan per tablet ─ITEMS─▶ items ─DEAL─▶ each part's entries ─COALESCE─▶ each part's entries ─WRITE─▶ tabs.json, summary.json
 ```
 
-1. **SCAN** reads the table, in parallel, one worker per tab
-   (`_scan_`, `TabPartitionScanCallable`). Each worker reads its tab's
-   stratifyby and partitionby columns and returns a *scan* of the tab: its
-   row count, and the distinct values each column holds in it. A tab whose
+1. **SCAN** reads the table, in parallel, one worker per tablet
+   (`_scan_`, `TabletPartitionScanCallable`). Each worker reads its tablet's
+   stratifyby and partitionby columns and returns a *scan* of the tablet: its
+   row count, and the distinct values each column holds in it. A tablet whose
    columns each hold one value is *constant*, and that one value per column
-   is all its scan reports. A tab whose columns hold several is *mixed*, and
+   is all its scan reports. A tablet whose columns hold several is *mixed*, and
    its scan also lists its pieces: each combination of values its rows hold,
    with how many rows hold it. Only counts come back, never the rows, since a
-   tab may hold millions of them. Once every scan is in, the master refuses
-   two kinds of mixed tab: one in a table that reads slices upstream
+   tablet may hold millions of them. Once every scan is in, the master refuses
+   two kinds of mixed tablet: one in a table that reads slices upstream
    (`NotImplementedError`, see "Upstream and downstream tables"), and one
    whose slices or columns differ in length (`ValueError`), since a piece
    takes its rows by index.
 
 2. **ITEMS** turns the scans into the things to be dealt (`_items_`): one
-   item per constant tab, and one per piece of each mixed tab. An item
-   carries its entry (the tab's index, or the piece's record), its values,
+   item per constant tablet, and one per piece of each mixed tablet. An item
+   carries its entry (the tablet's index, or the piece's record), its values,
    its row count and its tag.
 
 3. **DEAL** gives each item to a part (`_deal_`). An item missing a value
    is set aside first: in no part, warned of, and recorded in the summary,
    a piece with its row count. The rest are gathered into units, each holding every
-   item of one stratum, from whichever tabs; without stratifyby, each item is
+   item of one stratum, from whichever tablets; without stratifyby, each item is
    a unit of its own. A stratum whose items lie in two partitions is refused
    (`ValueError`). Then, one partition at a time, the units are shuffled with
    the seed, and each goes to the part furthest below its target, as "How
@@ -237,33 +237,33 @@ the table ─SCAN─▶ a scan per tab ─ITEMS─▶ items ─DEAL─▶ each p
 
 4. **COALESCE** reshapes those lists, when *coalesce* is set (`_rejoin_`,
    `_pack_`). It moves no entry to another part. With `'whole'`, where all
-   of a cut tab's pieces are in one part's list, and none was set aside,
-   they are replaced there by the tab's own index. With `'pack'`, each
-   part's entries of fewer than `min_tab_rows` rows are then taken out of
-   its list, and replaced by packed tabs' records: each a list of segments,
-   pieces of those entries, filling up to `max_tab_rows` rows. Like DEAL, it
+   of a cut tablet's pieces are in one part's list, and none was set aside,
+   they are replaced there by the tablet's own index. With `'pack'`, each
+   part's entries of fewer than `min_tablet_rows` rows are then taken out of
+   its list, and replaced by packed tablets' records: each a list of segments,
+   pieces of those entries, filling up to `max_tablet_rows` rows. Like DEAL, it
    works on the counts alone.
 
 5. **WRITE** stores the result. `tabs.json` holds each part's list of
    entries, for instance
    `[[{"tab": 1, "stratifyby": "s3", "partitionby": "p1"}, ...], [0, 2, ...]]`.
-   `summary.json` says, for each part, which tabs it holds by tag, how many
-   tabs and pieces, how many rows in all and in each partition, and what was
+   `summary.json` says, for each part, which tablets it holds by tag, how many
+   tablets and pieces, how many rows in all and in each partition, and what was
    packed; and, for the whole, what was set aside and what was rejoined.
 
-Each part's list in `tabs.json` holds its **entries**: a tab index, `0`,
-for a whole tab; a record, `{"tab": 3, "stratifyby": "s6", "partitionby": "p2"}`,
-for a piece; and, with `coalesce='pack'`, a packed tab's record,
+Each part's list in `tabs.json` holds its **entries**: a tablet index, `0`,
+for a whole tablet; a record, `{"tab": 3, "stratifyby": "s6", "partitionby": "p2"}`,
+for a piece; and, with `coalesce='pack'`, a packed tablet's record,
 `{"fold": 0, "pack": 0, "segments": [[{"tab": 1, "stratifyby": "s2"}, 0, 2], [2, 0, 3]]}`:
 rows *offset* to *offset + length* of each entry, in order.
 
 A part, `partition.part(k)`, is a `DatatablePart` reading part *k*'s list.
-Its tab *i* is what entry *i* names: for a tab index, the table's own tab,
-with nothing copied; for a piece's record, a `DatatabPiece`; for a packed
-tab's record, a `DatatablePackTab`, both made by `partition.tab(entry)`.
-`part.build()` is the ordinary table build, in parallel. The whole tabs are
-built already and are skipped; each piece is built from its source tab, and
-each packed tab from the tabs its segments name.
+Its tablet *i* is what entry *i* names: for a tablet index, the table's own tablet,
+with nothing copied; for a piece's record, a `DatatabletPiece`; for a packed
+tablet's record, a `DatatablePartitionTablet`, both made by `partition.tablet(entry)`.
+`part.build()` is the ordinary table build, in parallel. The whole tablets are
+built already and are skipped; each piece is built from its source tablet, and
+each packed tablet from the tablets its segments name.
 
 ### Why DEAL is not parallel
 
@@ -274,31 +274,31 @@ would deal against stale totals, so it would lose both the balance and the
 reproducibility that the seed promises.
 
 It also has nothing to gain from it. DEAL works on counts already in memory:
-one item per tab or piece, a few arithmetic operations each, and no reads.
+one item per tablet or piece, a few arithmetic operations each, and no reads.
 The two passes that read data, SCAN (every
-tab's partition columns) and BUILD (every piece's and packed tab's rows),
+tablet's partition columns) and BUILD (every piece's and packed tablet's rows),
 are where the time goes, and both run in parallel. COALESCE, like DEAL,
 works on counts in memory.
 
 ## Pieces
 
-Only mixed tabs are split. A tab holding one value per role is dealt whole,
+Only mixed tablets are split. A tablet holding one value per role is dealt whole,
 and its part reads it where it is.
 
-A `DatatabPiece` is an ordinary `Datatab`, so everything that reads tabs
+A `DatatabletPiece` is an ordinary `Datatablet`, so everything that reads tablets
 reads it unchanged: `data()`, `datastream()`, a probe. Its VAR:
 
-- `tab`: the source tab;
+- `tablet`: the source tablet;
 - `columns`: the column spec of each role;
 - `values`: the value each role holds in the piece's rows, as read.
 
 So a piece is defined by its value, not by a list of rows. Its hash says
-"these rows of that tab": readable, small however many rows it holds, and
+"these rows of that tablet": readable, small however many rows it holds, and
 the same whatever the deal. Its tag is the source's and the values,
 `tab_000004#s5#p2`, which is how a probe tells two pieces of one slide apart.
 
-Its slices are the source tab's, declared as the source declares them, and
-`source`. A topic of the source that is not a slice belongs to the whole tab,
+Its slices are the source tablet's, declared as the source declares them, and
+`source`. A topic of the source that is not a slice belongs to the whole tablet,
 not to a subset of its rows, and is left out.
 
 Its build re-reads the source's partition columns and finds the rows that
@@ -308,40 +308,40 @@ It raises if the source's slices have different lengths, or if no row holds
 the values any more, as when the source was rebuilt after it was
 partitioned.
 
-### Packed tabs
+### Packed tablets
 
-A `DatatablePackTab` is an ordinary `Datatab` too. Its VAR is its place,
-`partition`, `fold` and `index`, as a core tab's is: what it holds is what
+A `DatatablePartitionTablet` is an ordinary `Datatablet` too. Its VAR is its place,
+`partition`, `fold` and `index`, as a core tablet's is: what it holds is what
 its partition's record says that place holds. Its tag says the same,
 `pack<partition hash>_f0_000000`.
 
-Its slices are the partitioned table's, declared as its tabs declare them,
-and `source`. Its build takes its segments in order. A whole tab's segment
-takes rows of all of that tab's; a piece's selects the piece's rows by value
+Its slices are the partitioned table's, declared as its tablets declare them,
+and `source`. Its build takes its segments in order. A whole tablet's segment
+takes rows of all of that tablet's; a piece's selects the piece's rows by value
 first, as the piece does. The rows are written to every slice, one slice at
 a time and a segment at a time, so only one source slice is held whole. It
-raises if a segment's tab no longer holds the rows the record counted.
+raises if a segment's tablet no longer holds the rows the record counted.
 
 ### The `source` slice
 
-Every repartitioned tab, a piece, a packed tab or a core tab (below), points
+Every repartitioned tablet, a piece, a packed tablet or a core tablet (below), points
 back with one slice, **`source`**, declared `DATASLICE(tab='int', row='int')`. Row *i* of
-it is the tab of the partitioned table, and the row of that tab, that row *i*
+it is the tablet of the partitioned table, and the row of that tablet, that row *i*
 of every other slice was copied from. It is written in lockstep with them,
-so it is read like any other slice: `tab.data('source')`, a zip with the
+so it is read like any other slice: `tablet.data('source')`, a zip with the
 others, a datastream. `piece.source_rows()` reads it as an array, and so
-does `source_index()`, on a piece, a packed tab or a core tab.
+does `source_index()`, on a piece, a packed tablet or a core tablet.
 `part.source_index()` reads a whole part's: every row of it, as the
-`(tab, row)` of the partitioned table, whatever tab holds it.
+`(tablet, row)` of the partitioned table, whatever tablet holds it.
 
 A slice and not a file beside the slices, so the back-pointers travel with
-the rows: whatever reads a row of a repartitioned tab can read where it came
+the rows: whatever reads a row of a repartitioned tablet can read where it came
 from, by the same means and in the same order. A table's slice may not be
 named `source`; the partition refuses one.
 
 The value and the indices say the same thing for different readers. The
 value is how the partition names a piece: it is stable and needs no rows.
-The indices are how another tab can take the same piece of itself (see
+The indices are how another tablet can take the same piece of itself (see
 below).
 
 ## Identities
@@ -351,27 +351,37 @@ below).
   `stratifyby` spells, and so hashes, exactly as it did, and now means the
   opposite. So `DatatablePartition` and `DatatableCorePartition` went to
   `VERSION = 2`, and no specialization reaches a partition built before:
-  partitions, their parts, packed tabs and core tabs are rebuilt. Only the
-  `largest_first` partitions, which take no collator, are still reached.
+  partitions, their parts, packed tablets and core tablets are rebuilt.
   `test_a_partition_from_before_the_roles_were_renamed_is_not_taken_for_one_now`
   says so.
-- **Pieces are kept.** A piece is the rows of a tab holding a value in a
+- **Tabs became tablets on 2026-10-10**, in every name code uses:
+  `Datatab` is `Datatablet`, `DatatabPiece` is `DatatabletPiece`,
+  `DatatablePackTab` is `DatatablePartitionTablet`, a table's `TAB` is its
+  `TABLET`, the partition's topic `tabs` is `tablets`, and `balance='tabs'`
+  is `balance='tablets'`. What is on disk kept its name: the topic's file is
+  still `tabs.json`, its records still say `"tab"`, the `source` slice's
+  column is still `tab`, and a tablet's default tag is still `tab_000003`.
+  A specialization takes a topic only under the name it had, so the
+  `largest_first` partitions, the last reached across the roles' renaming,
+  are rebuilt too. A piece is reached through a specialization from its VAR's
+  `tab` and `tab_index`.
+- **Pieces are kept.** A piece is the rows of a tablet holding a value in a
   column, whichever role read the column, so its hash and its rows did not
   change. A piece built under `dbx.datatables`, before the move to
   `dbx.dataparts` on 2026-10-09, is reached through a specialization
   anchored there: a hash names no module, but a block is stored under its
   class's.
-- **`coalesce`, `min_tab_rows` and `max_tab_rows`**, added on 2026-10-09,
+- **`coalesce`, `min_tablet_rows` and `max_tablet_rows`**, added on 2026-10-09,
   are in the hash at their defaults too. A core partition takes no
   *coalesce*: its VAR is built on the deal's fields alone,
   `DatatablePartition._DealVAR_`.
-- A partition of constant tabs, under `coalesce=None`, deals exactly as it
+- A partition of constant tablets, under `coalesce=None`, deals exactly as it
   always did, and writes the same `tabs.json`: plain ints, sorted the same
-  way. `test_a_partition_of_constant_tabs_is_what_it_was` pins the deal of
+  way. `test_a_partition_of_constant_tablets_is_what_it_was` pins the deal of
   dbx 07cd119.
-- A part's BLOCK is its table's TAB, and is in the part's hash. A piece is
-  not an instance of the TAB, so `DatatablePart._form_block_` checks the
-  piece's source instead. A packed tab packs the table's own tabs, and is
+- A part's BLOCK is its table's TABLET, and is in the part's hash. A piece is
+  not an instance of the TABLET, so `DatatablePart._form_block_` checks the
+  piece's source instead. A packed tablet packs the table's own tablets, and is
   not checked again.
 
 ## Probes
@@ -381,18 +391,18 @@ parts of one partition, typically. It does not split anything itself.
 
 - **A sample** is a row by default. With `aggregation='mean'` it is the mean
   of the rows sharing a value of the collator's **`aggregateby`** column (a
-  slide's id, say) and a label, from whichever tabs they lie in. Each worker
-  sums its tab's share of each (value, label), and the probe divides once
+  slide's id, say) and a label, from whichever tablets they lie in. Each worker
+  sums its tablet's share of each (value, label), and the probe divides once
   every share is in. The rows of one value carrying two labels are two
-  samples. This is what makes rejoined, packed and core tabs usable: the
-  rows of a slide are named by a column, not by the tab that happens to hold
+  samples. This is what makes rejoined, packed and core tablets usable: the
+  rows of a slide are named by a column, not by the tablet that happens to hold
   them.
 - `signal_reduction='mean'` is the other mean, and works within a row, never
   across rows: a signal whose value per row is `(T, D)` tokens is averaged
   over `T` before it is flattened.
-- `_check_disjoint_` refuses two tables that share a tab, compared by tag.
+- `_check_disjoint_` refuses two tables that share a tablet, compared by tag.
   Two pieces of one slide in different parts have different tags and pass:
-  the partition put their strata apart. Packed and core tabs are tagged by
+  the partition put their strata apart. Packed and core tablets are tagged by
   where they are, which says nothing of what they hold. So two parts of
   **different** partitions of one table are also compared row by row, by
   `part.source_index()`, and refused if they share a row. Two parts of one
@@ -401,11 +411,11 @@ parts of one partition, typically. It does not split anything itself.
   whatever `aggregation` is. A row of no value is refused, unless
   `skip_missing` skips it.
 - `check_probe_inputs` asks a part about its own blocks, its pieces and
-  packed tabs included, before any worker starts. If a piece is missing it
+  packed tablets included, before any worker starts. If a piece is missing it
   says so and says to build the part. A part that was never built is refused
   before that, by the probe's `validate_vars`.
 
-Before 2026-10-01 the probe took one `feature_table`, pooled every tab's
+Before 2026-10-01 the probe took one `feature_table`, pooled every tablet's
 rows, and split them with an unseeded `np.random.permutation` at
 `training_fraction`. Rows of one slide, and so one patient, landed on both
 sides, class balance was left to chance, and two builds of one hash scored
@@ -417,45 +427,45 @@ of the same split, was removed when nothing used it any more.
 
 A feature table (`Featuretable`, a `DataslicesUpstream`) reads some slices
 from its upstream table: its features are its own, its annotations are the
-sample table's. Row *i* of a feature tab is the features of row *i* of its
-upstream sample tab.
+sample table's. Row *i* of a feature tablet is the features of row *i* of its
+upstream sample tablet.
 
-Splitting a mixed feature tab is **not implemented** and raises
+Splitting a mixed feature tablet is **not implemented** and raises
 `NotImplementedError`. A piece of it would have to be the same piece of its
-upstream tab as well, or its features and its annotations would describe
+upstream tablet as well, or its features and its annotations would describe
 different rows.
 
 The way there is to partition once, upstream, and let downstream tables
 follow:
 
-1. Partition the sample table, the one whose tabs hold the rows. Its pieces'
+1. Partition the sample table, the one whose tablets hold the rows. Its pieces'
    `source` slices record which rows they took.
 2. A downstream part needs no SCAN and no DEAL: its entries are the upstream
-   part's, mapped one to one. A whole tab maps to the downstream tab at the
+   part's, mapped one to one. A whole tablet maps to the downstream tablet at the
    same index. A piece maps to a downstream piece, defined by its downstream
-   tab and the upstream piece, that takes the rows the upstream piece's
-   `source` slice names, of the downstream tab.
+   tablet and the upstream piece, that takes the rows the upstream piece's
+   `source` slice names, of the downstream tablet.
 3. Building the downstream part builds those pieces in parallel, each
    selecting by index. The upstream and downstream parts agree by
    construction: one row selection, made once, upstream.
 
-This still rests on row *i* of a feature tab being row *i* of its upstream
-tab, which every `Featuretab` already assumes. Indices give that assumption
-a place to be checked: where the feature tab carries a
+This still rests on row *i* of a feature tablet being row *i* of its upstream
+tablet, which every `Featuretablet` already assumes. Indices give that assumption
+a place to be checked: where the feature tablet carries a
 `shared_upstream_column`, a downstream piece can compare it against the
 upstream piece's and refuse a mismatch. The downstream piece class and the
 mirrored part are not written yet.
 
 A core partition (below) already does both halves of this for its own
-kind: it copies a feature table's upstream columns into its core tabs, flat,
+kind: it copies a feature table's upstream columns into its core tablets, flat,
 and a table laid out alike takes its layout without clustering anything.
 
 ## Core partitions: coresets
 
-A `DatatableCorePartition` deals **rows**, not tabs, by what they hold. It
+A `DatatableCorePartition` deals **rows**, not tablets, by what they hold. It
 clusters the table's rows by their values and deals each cluster's rows to
-the parts, nearest the center first. Its parts are new tables of new tabs,
-`DatatableCorePart`s of `DatatableCoreTab`s, holding only the columns asked
+the parts, nearest the center first. Its parts are new tables of new tablets,
+`DatatableCorePart`s of `DatatableCoreTablet`s, holding only the columns asked
 for.
 
 ```python
@@ -464,7 +474,7 @@ from dbx.dataparts import DatatableCorePartition
 
 core = DatatableCorePartition(spec=dict(
     datatable=features, fractions=[0.05, 0.05], partition_slice='features',
-    n_clusters=256, rows_per_tab=4096,
+    n_clusters=256, rows_per_tablet=4096,
     collator=Datacollator(spec=dict(columns={
         'coreby':  [('features', 'final')],                      # clustered by
         'stratifyby': ('annotations', 'annotations', 'case_id'),    # dealt whole
@@ -484,10 +494,10 @@ By role:
 - **carry**: columns the parts hold that nothing above reads, such as labels
   for a probe.
 
-A core tab carries the columns of every role and no others: nothing is pulled
+A core tablet carries the columns of every role and no others: nothing is pulled
 by default. With `recursive=True` a column may be upstream of the table, a
-feature table's annotations. It is copied like any other, so a core tab is a
-plain tab that reads nothing upstream. Features and annotations stay row for
+feature table's annotations. It is copied like any other, so a core tablet is a
+plain tablet that reads nothing upstream. Features and annotations stay row for
 row together because they are copied together.
 
 ### Fractions are of the rows
@@ -500,18 +510,18 @@ of it as `n_clusters` grows.
 ### The flow
 
 `DatatableCorePartition.build()` runs five steps, and the parts then build
-the core tabs:
+the core tablets:
 
 ```
-the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster and distance per row ─DEAL─▶ a part per row ─COVERAGE─▶ coverage ─LAYOUT─▶ each part's rows, cut into core tabs
+the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster and distance per row ─DEAL─▶ a part per row ─COVERAGE─▶ coverage ─LAYOUT─▶ each part's rows, cut into core tablets
 ```
 
-1. **SCAN** reads the table, in parallel, one worker per tab
-   (`TabCoreScanCallable`). For each row it flattens the `coreby` columns
+1. **SCAN** reads the table, in parallel, one worker per tablet
+   (`TabletCoreScanCallable`). For each row it flattens the `coreby` columns
    and lays them end to end into one `float32` vector, and reads the row's
    stratifyby and partitionby values. The values always come back to the
    master. Where the vectors go depends on `clustering`: with `'master'`
-   they come back too; with `'distributed'` each worker writes its tab's to
+   they come back too; with `'distributed'` each worker writes its tablet's to
    a scratch directory, and only a seeded sample of them comes back, to
    start the centers from.
 
@@ -519,7 +529,7 @@ the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster a
    `_cluster_distributed_`). With `'master'`, `MiniBatchKMeans` runs over
    all the vectors in the master. With `'distributed'`, k-means++ picks the
    starting centers from the sample, and Lloyd passes refine them: in each
-   pass the workers sum their tabs' rows per center (`TabCoreStepCallable`),
+   pass the workers sum their tablets' rows per center (`TabletCoreStepCallable`),
    and the master moves the centers to the means. A last pass gives each row
    its nearest center. What comes out is each row's cluster, and its
    distance to the cluster's center.
@@ -538,23 +548,23 @@ the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster a
    the next makes up. What comes out is each row's part, or none.
 
 4. **COVERAGE** measures how tightly each part fills out the table
-   (`_coverage_`, `TabCoverageCallable`), in the workers, tab by tab, with
+   (`_coverage_`, `TabletCoverageCallable`), in the workers, tablet by tablet, with
    `'distributed'`, and in the master otherwise. See "Coverage" below. Only
    now, with the distances measured, is the scratch directory removed.
 
 5. **LAYOUT** writes each part's rows down, in the master: as
-   `(tab, row, cluster)`, in source order (or shuffled, with
-   `shuffle=True`), cut into core tabs of `rows_per_tab` rows. The topics
-   are `layout/<fold>.npy`, `tabs`, `centers`, `columns`, `coverage` and
+   `(tablet, row, cluster)`, in source order (or shuffled, with
+   `shuffle=True`), cut into core tablets of `rows_per_tablet` rows. The topics
+   are `layout/<fold>.npy`, `tablets`, `centers`, `columns`, `coverage` and
    `summary`.
 
-`partition.part(k).build()` then builds part *k*'s core tabs, in parallel.
-Each reads the source tabs its rows are in, only the columns carried, and
+`partition.part(k).build()` then builds part *k*'s core tablets, in parallel.
+Each reads the source tablets its rows are in, only the columns carried, and
 writes them, with `source`, in the layout's order.
 
-Source order keeps a core tab's reads local: its rows come from a few
-neighbouring tabs. A shuffled layout mixes the table into every core tab,
-and each core tab then reads up to as many tabs as it has rows.
+Source order keeps a core tablet's reads local: its rows come from a few
+neighbouring tablets. A shuffled layout mixes the table into every core tablet,
+and each core tablet then reads up to as many tablets as it has rows.
 
 ### Clustering, and its parameters
 
@@ -567,7 +577,7 @@ All in `VAR`, with defaults:
 | `max_iter`, `tol` | 100, 1e-4 | k-means iterations and convergence (center shift, relative) |
 | `batch_size` | 4096 | `MiniBatchKMeans`'s, for `'master'` |
 | `init_size` | 65536 | rows sampled to start `'distributed'`'s centers |
-| `rows_per_tab` | 4096 | a core tab's rows |
+| `rows_per_tablet` | 4096 | a core tablet's rows |
 | `shuffle` | False | each part's rows in a seeded random order, not source order |
 | `coverage_sample` | 10000 | table rows (and rows of each part) sampled to measure coverage; 0 measures nothing |
 | `coverage_clusters` | 3 | the nearest clusters a sampled row is compared within |
@@ -607,7 +617,7 @@ near-duplicates. A good coreset has small coverage and large separation.
 All pairs would cost O(N²). Instead:
 
 - **Sampled rows.** `coverage_sample` rows of the table, seeded and spread
-  over all tabs, are the queries for coverage; the same number of each
+  over all tablets, are the queries for coverage; the same number of each
   part's rows, for separation. The quantiles are estimates from that sample.
   The median and p90 are sound; the sample's maximum is only a lower bound
   on the table's worst hole.
@@ -617,8 +627,8 @@ All pairs would cost O(N²). Instead:
   of them, the usual case for k-means clusters, though not a guarantee.
   Otherwise the distance is an over-estimate: coverage can only look worse, never better,
   than it is. With `coverage_clusters >= n_clusters` it is exact.
-- **Tab by tab.** Each tab's rows are compared with the queries in one
-  worker (`TabCoverageCallable`), and the master keeps the minimum over tabs.
+- **Tablet by tablet.** Each tablet's rows are compared with the queries in one
+  worker (`TabletCoverageCallable`), and the master keeps the minimum over tablets.
   Under `'distributed'` the workers read the scratch vectors, which are
   removed only after this pass.
 
@@ -628,7 +638,7 @@ The arrays, each with one entry per quantile in `levels`
 | Key | Shape | What |
 |---|---|---|
 | `levels` | (4,) | the quantile levels |
-| `sample` | (S, 2) | the sampled table rows, `(tab, row)` |
+| `sample` | (S, 2) | the sampled table rows, `(tablet, row)` |
 | `scale` | (4,) | each sampled row's distance to its nearest *other* row of the table: the data's own spacing |
 | `coverage` | (F+1, 4) | *d(x, part)* for the sampled rows; one row per part, the last for all parts together |
 | `coverage_mean` | (F+1,) | their means |
@@ -660,9 +670,9 @@ the rows the layout took, measured where they were clustered.
 
 ### Reusing a layout
 
-The layout records, for every row of every part, the tab and row of the
+The layout records, for every row of every part, the tablet and row of the
 partitioned table it came from. A table **laid out alike**, with the same
-tabs holding the same number of rows, such as a feature table and the table
+tablets holding the same number of rows, such as a feature table and the table
 it was computed from, takes it whole:
 
 ```python
@@ -672,19 +682,19 @@ again = DatatableCorePartition(spec=dict(
 ```
 
 Nothing is scanned, clustered or dealt. Its collator names only `carry`, its
-core tabs hold the same rows in the same places, and their `source` slices
-agree with `core`'s. Every tab's row count is checked against the layout's
+core tablets hold the same rows in the same places, and their `source` slices
+agree with `core`'s. Every tablet's row count is checked against the layout's
 table first, and a table that differs is refused.
 
 ### Probes on core parts
 
-A core part's tabs are its own, holding every slice they read, so a probe
+A core part's tablets are its own, holding every slice they read, so a probe
 reads it as it reads any table, with a collator that is not `recursive`.
-`check_probe_inputs` checks the core tabs themselves. With `stratifyby`, a
-stratum's rows are in one part, so fit and eval share no patient. A core tab
+`check_probe_inputs` checks the core tablets themselves. With `stratifyby`, a
+stratum's rows are in one part, so fit and eval share no patient. A core tablet
 holds rows of many slides, so the probe takes a slide's rows by an
 `aggregateby` column, with `aggregation='mean'`. Carry that column into the
-core tabs, as a `carry` role.
+core tablets, as a `carry` role.
 
 ## Where the code is
 
@@ -695,26 +705,26 @@ All in `dbx/dataparts.py`, except the probe.
 | Reading a partition column, following dict keys | `_column_values_` |
 | How two values are compared | `_value_key_` (sorted JSON) |
 | A piece's tag | `_piece_tag_` |
-| The per-tab scan worker | `TabPartitionScanCallable` |
+| The per-tablet scan worker | `TabletPartitionScanCallable` |
 | SCAN, ITEMS, DEAL, the summary | `DatatablePartition._scan_`, `_items_`, `_deal_`, `_summary_` |
 | COALESCE | `DatatablePartition._rejoin_`, `_pack_`, `_entry_rows_` |
-| An entry to its tab, piece or packed tab | `DatatablePartition.tab` |
+| An entry to its tablet, piece or packed tablet | `DatatablePartition.tablet` |
 | A part as a table | `DatatablePartition.part`, `DatatablePart` |
-| A part accepting pieces and packed tabs as blocks | `DatatablePart.tab`, `valid_tab`, `_form_block_` |
+| A part accepting pieces and packed tablets as blocks | `DatatablePart.tablet`, `valid_tablet`, `_form_block_` |
 | A part's rows, as the table's | `DatatablePart.source_index` |
-| The piece | `DatatabPiece`: `__build__`, `source_rows`, `source_index` |
-| The packed tab | `DatatablePackTab`: `__build__`, `segments`, `_segment_rows_` |
-| Selecting a tab's rows by value; copying a tab's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
+| The piece | `DatatabletPiece`: `__build__`, `source_rows`, `source_index` |
+| The packed tablet | `DatatablePartitionTablet`: `__build__`, `segments`, `_segment_rows_` |
+| Selecting a tablet's rows by value; copying a tablet's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
 | The back-pointing slice | `SOURCE_SLICE`, `SOURCE`, `_source_index_` |
 | Core: scan, cluster, deal, layout | `DatatableCorePartition`: `_cluster_and_deal_`, `_cluster_master_`, `_cluster_distributed_`, `_deal_rows_`, `_reuse_layout_` |
-| Core: the workers | `TabCoreScanCallable`, `TabCoreStepCallable`, `TabRowCountCallable`, `TabCoverageCallable`, `TabVectorsCallable` |
+| Core: the workers | `TabletCoreScanCallable`, `TabletCoreStepCallable`, `TabletRowCountCallable`, `TabletCoverageCallable`, `TabletVectorsCallable` |
 | Core: coverage | `DatatableCorePartition._coverage_` |
-| Core: a part and its tabs | `DatatableCorePart`, `DatatableCoreTab` |
+| Core: a part and its tablets | `DatatableCorePart`, `DatatableCoreTablet` |
 | The probe's check before reading | `check_probe_inputs` in `dbx/probes.py` |
 | Rows aggregated by a column; the checks by its value and by row | `aggregateby_vector`, `FeatureAffineLogisticProbe._aggregate_means_`, `_check_disjoint_` in `dbx/probes.py` |
 
 The tests are `tests/test_partition_methods.py` (dealing, pieces, probes on
-parts), `tests/test_partition_coalesce.py` (`coalesce`, packed tabs, and
+parts), `tests/test_partition_coalesce.py` (`coalesce`, packed tablets, and
 probes aggregating rows by a column), `tests/test_partition_fold.py` (parts as
 views) and `tests/test_core_partition.py` (core partitions). The figures are
 drawn from real partitions by

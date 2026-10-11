@@ -1031,7 +1031,7 @@ class TestDatajournalBuildersAreNamedForIt:
     def test_the_new_names(self):
         assert callable(Datablock.datajournal) and callable(Datablock.Datajournal)
         assert callable(Datastack.block_datajournal) and callable(Datastack.child_specialization_datajournal)
-        assert callable(dbx.Datatable.tab_datajournal)
+        assert callable(dbx.Datatable.tablet_datajournal)
 
     @pytest.mark.parametrize('old', ['journal', 'Journal', 'block_journal', 'child_specialization_journal'])
     def test_the_old_names_are_gone(self, old):

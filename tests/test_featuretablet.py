@@ -1,4 +1,4 @@
-"""test_featuretab.py — Unit tests for Featuretab/Table and BipolarFeaturetab/Table."""
+"""test_featuretablet.py — Unit tests for Featuretablet/Table and BipolarFeaturetablet/Table."""
 
 import pytest
 import numpy as np
@@ -8,13 +8,13 @@ from dataclasses import dataclass
 
 from dbx import (
     SLICETOPIC,
-    Datatab,
+    Datatablet,
     Datatable,
     ModelEvaluator,
     ModelEvaluatorBuilder,
-    Featuretab,
+    Featuretablet,
     Featuretable,
-    BipolarFeaturetab,
+    BipolarFeaturetablet,
     BipolarFeaturetable,
 )
 from dbx.datatables import Datacollator
@@ -30,11 +30,11 @@ def sample_collator(**spec):
     return Datacollator(spec=dict(columns={'signals': [("samples", "samples")], 'labels': [("labels", "labels")]}, **spec))
 
 
-class DummySampleTab(Datatab):
+class DummySampleTablet(Datatablet):
     TOPICS = {"samples": SLICETOPIC, "labels": SLICETOPIC}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         n_samples: int = 10
 
     def __build__(self):
@@ -52,20 +52,20 @@ class DummySampleTab(Datatab):
 
 
 class DummySampleTable(Datatable):
-    TAB = DummySampleTab
+    TABLET = DummySampleTablet
 
     @dataclass
     class VAR(Datatable.VAR):
-        samples_per_tab: int = 10
+        samples_per_tablet: int = 10
 
     @property
-    def n_tabs(self):
+    def n_tablets(self):
         return 2
 
-    def __tab__(self, idx: int) -> DummySampleTab:
-        return self.TAB(
+    def __tablet__(self, idx: int) -> DummySampleTablet:
+        return self.TABLET(
             datalake=self.url,
-            spec=dict(n_samples=self.var.samples_per_tab),
+            spec=dict(n_samples=self.var.samples_per_tablet),
             tag=f"tab_{idx}",
         )
 
@@ -85,21 +85,21 @@ class DummyModelEvaluatorFactory(ModelEvaluatorBuilder):
         return DummyModel()
 
 
-def test_featuretab_build_and_slice_inheritance(tmp_path):
+def test_featuretablet_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
-    # 1. Build upstream sample tab
-    sampletab = DummySampleTab(datalake=url, tag="samples_0").build()
-    assert sampletab.slices() == ("samples", "labels")
-    assert sampletab.valid()
+    # 1. Build upstream sample tablet
+    sampletablet = DummySampleTablet(datalake=url, tag="samples_0").build()
+    assert sampletablet.slices() == ("samples", "labels")
+    assert sampletablet.valid()
 
-    # 2. Build feature tab
+    # 2. Build feature tablet
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab = Featuretab(
+    featuretab = Featuretablet(
         datalake=url,
         spec=dict(
-            upstream=sampletab,
+            upstream=sampletablet,
             evaluator_factory=eval_factory,
             collator=sample_collator(),
         ),
@@ -143,7 +143,7 @@ def _stats_probe(url, feature_block, tag, *, signals=(("features", "final"),), n
 
 
 def _feature_table(url, tag, **spec):
-    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag=f"{tag}_samples").build()
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag=f"{tag}_samples").build()
     return Featuretable(
         datalake=url,
         spec=dict(
@@ -157,16 +157,16 @@ def _feature_table(url, tag, **spec):
     ).build()
 
 
-def test_bipolar_featuretab_build_and_slice_inheritance(tmp_path):
+def test_bipolar_featuretablet_build_and_slice_inheritance(tmp_path):
     url = str(tmp_path)
 
-    sampletab = DummySampleTab(datalake=url, tag="samples_1").build()
+    sampletablet = DummySampleTablet(datalake=url, tag="samples_1").build()
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab = Featuretab(
+    featuretab = Featuretablet(
         datalake=url,
         spec=dict(
-            upstream=sampletab,
+            upstream=sampletablet,
             evaluator_factory=eval_factory,
             collator=sample_collator(),
         ),
@@ -175,19 +175,19 @@ def test_bipolar_featuretab_build_and_slice_inheritance(tmp_path):
     ).build()
     stats = _stats_probe(url, featuretab, "stats_1").build()
 
-    bipolar_tab = BipolarFeaturetab(
+    bipolar_tablet = BipolarFeaturetablet(
         datalake=url,
         spec=dict(upstream=featuretab, stats_probe=stats),
         tag="bipolar_1",
     ).build()
 
-    assert bipolar_tab.valid()
-    assert set(bipolar_tab.slices()) == {"bipolar"}
-    assert bipolar_tab.declared_columns("bipolar") == {"final": "ndarray:int8"}
-    assert set(bipolar_tab.slices(recursive=True)) == {"bipolar", "features", "samples", "labels"}
+    assert bipolar_tablet.valid()
+    assert set(bipolar_tablet.slices()) == {"bipolar"}
+    assert bipolar_tablet.declared_columns("bipolar") == {"final": "ndarray:int8"}
+    assert set(bipolar_tablet.slices(recursive=True)) == {"bipolar", "features", "samples", "labels"}
 
     # Reading across the encoding, the raw features, and the original labels.
-    b_data = bipolar_tab.data(("bipolar", "final"), ("features", "final"), "labels")
+    b_data = bipolar_tablet.data(("bipolar", "final"), ("features", "final"), "labels")
     bipolar = b_data["bipolar"]["final"]
     features = b_data["features"]["final"]
     assert bipolar.shape == (10, 8)
@@ -201,7 +201,7 @@ def test_featuretable_and_bipolar_table(tmp_path):
     url = str(tmp_path)
     featuretable = _feature_table(url, "feature_table")
 
-    assert featuretable.n_tabs == 2
+    assert featuretable.n_tablets == 2
     assert set(featuretable.slices()) == {"features"}
 
     # Test reading combined data across table
@@ -218,7 +218,7 @@ def test_featuretable_and_bipolar_table(tmp_path):
         tag="bipolar_table",
     ).build()
 
-    assert bipolar_table.n_tabs == 2
+    assert bipolar_table.n_tablets == 2
     assert set(bipolar_table.slices(recursive=True)) == {"bipolar", "features", "samples", "labels"}
 
     b_tbl_data = bipolar_table.data("bipolar", ("features", "final"), "labels")
@@ -227,12 +227,12 @@ def test_featuretable_and_bipolar_table(tmp_path):
     assert len(b_tbl_data["labels"]["labels"]) == 10
 
 
-def test_bipolar_thresholds_against_the_calibration_not_the_tabs_own_median(tmp_path):
-    """Every tab is encoded against the one table-wide median.
+def test_bipolar_thresholds_against_the_calibration_not_the_tablets_own_median(tmp_path):
+    """Every tablet is encoded against the one table-wide median.
 
-    The samples grow with their index, so the table's two tabs sit on either
-    side of the table median. Against its own median each tab would come out
-    exactly half +1 in every column -- the difference between the tabs gone.
+    The samples grow with their index, so the table's two tablets sit on either
+    side of the table median. Against its own median each tablet would come out
+    exactly half +1 in every column -- the difference between the tablets gone.
     """
     url = str(tmp_path)
     featuretable = _feature_table(url, "calib_features")
@@ -242,13 +242,13 @@ def test_bipolar_thresholds_against_the_calibration_not_the_tabs_own_median(tmp_
     ).build()
 
     median = stats.stat("median", ("features", "final"))
-    tab_means = []
+    tablet_means = []
     for i in range(2):
-        tab = bipolar_table.tab(i)
-        d = tab.data(("bipolar", "final"), ("features", "final"))
+        tablet = bipolar_table.tablet(i)
+        d = tablet.data(("bipolar", "final"), ("features", "final"))
         np.testing.assert_array_equal(d["bipolar"]["final"], np.where(d["features"]["final"] >= median, 1, -1))
-        tab_means.append(d["bipolar"]["final"].mean(axis=0))
-    assert not np.allclose(tab_means[0], tab_means[1]), "the tabs' encodings still tell them apart"
+        tablet_means.append(d["bipolar"]["final"].mean(axis=0))
+    assert not np.allclose(tablet_means[0], tablet_means[1]), "the tablets' encodings still tell them apart"
 
 
 def test_bipolar_normalizes_as_its_stats_probe_did(tmp_path):
@@ -274,22 +274,22 @@ def test_bipolar_encodes_every_feature_column_or_the_ones_named(tmp_path):
 
     every = BipolarFeaturetable(
         datalake=url, spec=dict(upstream=featuretable, stats_probe=stats), tag="every")
-    assert every.tab(0).declared_columns("bipolar") == {"a": "ndarray:int8", "b": "ndarray:int8"}
+    assert every.tablet(0).declared_columns("bipolar") == {"a": "ndarray:int8", "b": "ndarray:int8"}
 
     only_b = BipolarFeaturetable(
         datalake=url, spec=dict(upstream=featuretable, stats_probe=stats, features=["b"]),
         tag="only_b").build()
-    assert only_b.tab(0).declared_columns("bipolar") == {"b": "ndarray:int8"}
+    assert only_b.tablet(0).declared_columns("bipolar") == {"b": "ndarray:int8"}
     assert only_b.data(("bipolar", "b"), concat=True)["bipolar"]["b"].shape == (10, 8)
     assert only_b.hash != every.hash
 
     with pytest.raises(ValueError, match="not columns"):
         BipolarFeaturetable(
             datalake=url, spec=dict(upstream=featuretable, stats_probe=stats, features=["c"]),
-            tag="nope").tab(0)
+            tag="nope").tablet(0)
 
 
-def test_the_tables_columns_are_their_tabs_declared_slices_before_anything_is_built(tmp_path):
+def test_the_tables_columns_are_their_tablets_declared_slices_before_anything_is_built(tmp_path):
     from dbx.featuretables import TernaryFeaturetable
     url = str(tmp_path)
     featuretable = _feature_table(url, "two_features", feature_for_column={"a": "final", "b": "final"})
@@ -299,8 +299,8 @@ def test_the_tables_columns_are_their_tabs_declared_slices_before_anything_is_bu
                                                               features=features), tag="bipolar")
         ternary = TernaryFeaturetable(datalake=url, spec=dict(upstream=bipolar), tag="ternary")
         assert not stats.valid() and not bipolar.valid() and not ternary.valid()
-        assert bipolar.bipolar_columns == list(bipolar.tab(0).declared_columns("bipolar")) == (features or ["a", "b"])
-        assert ternary.ternary_columns == list(ternary.tab(0).declared_columns("ternary")) == bipolar.bipolar_columns
+        assert bipolar.bipolar_columns == list(bipolar.tablet(0).declared_columns("bipolar")) == (features or ["a", "b"])
+        assert ternary.ternary_columns == list(ternary.tablet(0).declared_columns("ternary")) == bipolar.bipolar_columns
     with pytest.raises(ValueError, match="not columns"):
         BipolarFeaturetable(datalake=url, spec=dict(upstream=featuretable, stats_probe=stats, features=["c"]),
                             tag="nope").bipolar_columns
@@ -312,29 +312,29 @@ def test_bipolar_refuses_a_stats_probe_without_the_median_it_needs(tmp_path):
     stats = _stats_probe(url, featuretable, "short_stats", signals=(("samples", "samples"),))
     with pytest.raises(ValueError, match="has no median for feature column"):
         BipolarFeaturetable(
-            datalake=url, spec=dict(upstream=featuretable, stats_probe=stats), tag="short").tab(0)
+            datalake=url, spec=dict(upstream=featuretable, stats_probe=stats), tag="short").tablet(0)
 
 
 def test_bipolar_refuses_to_build_against_an_unbuilt_stats_probe(tmp_path):
     url = str(tmp_path)
     featuretable = _feature_table(url, "unbuilt_features")
     stats = _stats_probe(url, featuretable, "unbuilt_stats")
-    tab = BipolarFeaturetable(
-        datalake=url, spec=dict(upstream=featuretable, stats_probe=stats), tag="unbuilt").tab(0)
+    tablet = BipolarFeaturetable(
+        datalake=url, spec=dict(upstream=featuretable, stats_probe=stats), tag="unbuilt").tablet(0)
     # build() asks its VAR blocks before building, and names the one that is not.
     with pytest.raises(ValueError, match="'stats_probe': False"):
-        tab.build()
+        tablet.build()
 
 
 def test_custom_features_mapping(tmp_path):
     url = str(tmp_path)
-    sampletab = DummySampleTab(datalake=url, tag="samples_cust").build()
+    sampletablet = DummySampleTablet(datalake=url, tag="samples_cust").build()
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab = Featuretab(
+    featuretab = Featuretablet(
         datalake=url,
         spec=dict(
-            upstream=sampletab,
+            upstream=sampletablet,
             evaluator_factory=eval_factory,
             feature_for_column={"custom_output": "final"},
             collator=sample_collator(),
@@ -350,13 +350,13 @@ def test_custom_features_mapping(tmp_path):
 
 def test_signal_selection(tmp_path):
     url = str(tmp_path)
-    sampletab = DummySampleTab(datalake=url, tag="samples_sig").build()
+    sampletablet = DummySampleTablet(datalake=url, tag="samples_sig").build()
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab = Featuretab(
+    featuretab = Featuretablet(
         datalake=url,
         spec=dict(
-            upstream=sampletab,
+            upstream=sampletablet,
             evaluator_factory=eval_factory,
             collator=sample_collator(),
         ),
@@ -469,16 +469,16 @@ def test_datacollator_refuses_a_missing_column():
         collator(rows)
 
 
-def test_featuretab_streaming(tmp_path):
+def test_featuretablet_streaming(tmp_path):
     url = str(tmp_path)
-    sampletab = DummySampleTab(datalake=url, tag="samples_str").build()
+    sampletablet = DummySampleTablet(datalake=url, tag="samples_str").build()
 
     eval_factory = DummyModelEvaluatorFactory(spec=dict(capture_final=True))
 
-    featuretab_bulk = Featuretab(
+    featuretablet_bulk = Featuretablet(
         datalake=url,
         spec=dict(
-            upstream=sampletab,
+            upstream=sampletablet,
             evaluator_factory=eval_factory,
             collator=sample_collator(),
         ),
@@ -487,10 +487,10 @@ def test_featuretab_streaming(tmp_path):
         tag="features_bulk",
     ).build()
 
-    featuretab_stream = Featuretab(
+    featuretablet_stream = Featuretablet(
         datalake=url,
         spec=dict(
-            upstream=sampletab,
+            upstream=sampletablet,
             evaluator_factory=eval_factory,
             collator=sample_collator(),
         ),
@@ -500,12 +500,12 @@ def test_featuretab_streaming(tmp_path):
         tag="features_stream",
     ).build()
 
-    assert featuretab_stream.streaming is True
-    assert featuretab_stream.dataloader_kwargs == {"num_workers": 0}
-    assert featuretab_stream.valid()
+    assert featuretablet_stream.streaming is True
+    assert featuretablet_stream.dataloader_kwargs == {"num_workers": 0}
+    assert featuretablet_stream.valid()
 
-    data_bulk = featuretab_bulk.data(("features", "final"))["features"]["final"]
-    data_stream = featuretab_stream.data(("features", "final"))["features"]["final"]
+    data_bulk = featuretablet_bulk.data(("features", "final"))["features"]["final"]
+    data_stream = featuretablet_stream.data(("features", "final"))["features"]["final"]
     np.testing.assert_allclose(np.squeeze(data_stream), np.squeeze(data_bulk))
 
 
@@ -513,7 +513,7 @@ def test_featuretable_streaming(tmp_path):
     url = str(tmp_path)
     sampletable = DummySampleTable(
         datalake=url,
-        spec=dict(samples_per_tab=5),
+        spec=dict(samples_per_tablet=5),
         tag="sample_table_str",
     ).build()
 
@@ -534,17 +534,17 @@ def test_featuretable_streaming(tmp_path):
 
     assert featuretable_stream.streaming is True
     assert featuretable_stream.dataloader_kwargs == {"num_workers": 0}
-    tab0 = featuretable_stream.tab(0)
-    assert tab0.streaming is True
-    assert tab0.dataloader_kwargs == {"num_workers": 0}
+    tablet0 = featuretable_stream.tablet(0)
+    assert tablet0.streaming is True
+    assert tablet0.dataloader_kwargs == {"num_workers": 0}
 
     feat_data = featuretable_stream.data(("features", "final"), concat=True)
     assert np.squeeze(feat_data["features"]["final"]).shape == (10, 8)
 
 
-class FeaturesNamedSampleTab(DummySampleTab):
-    """A sample tab whose own slice is called 'features' -- the one name a
-    Featuretab cannot borrow, because it owns that name itself."""
+class FeaturesNamedSampleTablet(DummySampleTablet):
+    """A sample tablet whose own slice is called 'features' -- the one name a
+    Featuretablet cannot borrow, because it owns that name itself."""
 
     TOPICS = {"features": SLICETOPIC, "labels": SLICETOPIC}
 
@@ -561,17 +561,17 @@ class FeaturesNamedSampleTab(DummySampleTab):
 
 
 def test_an_upstream_slice_named_features_is_refused(tmp_path):
-    """A row is keyed by slice name, so the tab's own 'features' and an
+    """A row is keyed by slice name, so the tablet's own 'features' and an
     upstream 'features' have no way to both appear in one.  Silently
     preferring either is how a caller reads features believing it asked for
     samples, so this is an error rather than a precedence rule."""
     url = str(tmp_path)
-    sampletab = FeaturesNamedSampleTab(datalake=url, tag="clash_samples").build()
+    sampletablet = FeaturesNamedSampleTablet(datalake=url, tag="clash_samples").build()
 
-    featuretab = Featuretab(
+    featuretab = Featuretablet(
         datalake=url,
         spec=dict(
-            upstream=sampletab,
+            upstream=sampletablet,
             evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
             collator=Datacollator(spec=dict(columns={'signals': [("features", "samples")], 'labels': [("labels", "labels")]})),
             feature_for_column={"final": "final"},
@@ -644,13 +644,13 @@ def test_ternary_keeps_rows_that_agree_with_a_decided_bag(tmp_path, threshold):
     bipolar = _bipolar_table(url)
     ternary = TernaryFeaturetable(datalake=url, spec=dict(upstream=bipolar, bag_threshold=threshold),
                                   devices=["cpu"], tag="ternary_table").build()
-    assert ternary.n_tabs == bipolar.n_tabs
+    assert ternary.n_tablets == bipolar.n_tablets
     assert "bipolar" in ternary.slices(recursive=True) and set(ternary.slices()) == {"ternary"}
-    for i in range(ternary.n_tabs):
-        tab = ternary.tab(i)
-        x = bipolar.tab(i).data(("bipolar", "final"))["bipolar"]["final"]
-        t = tab.data(("ternary", "final"))["ternary"]["final"]
-        bag = tab.bag("final")
+    for i in range(ternary.n_tablets):
+        tablet = ternary.tablet(i)
+        x = bipolar.tablet(i).data(("bipolar", "final"))["bipolar"]["final"]
+        t = tablet.data(("ternary", "final"))["ternary"]["final"]
+        bag = tablet.bag("final")
         mean = x.astype(float).mean(axis=0)
         np.testing.assert_allclose(bag["mean"], mean, rtol=1e-6)
         sign = np.where(np.abs(mean) >= threshold, np.sign(mean), 0)
@@ -661,29 +661,29 @@ def test_ternary_keeps_rows_that_agree_with_a_decided_bag(tmp_path, threshold):
 
 
 def test_ternary_refuses_a_threshold_outside_the_unit_interval(tmp_path):
-    from dbx.featuretables import TernaryFeaturetab
+    from dbx.featuretables import TernaryFeaturetablet
     url = str(tmp_path)
     bipolar = _bipolar_table(url)
     with pytest.raises(ValueError, match="bag_threshold"):
-        TernaryFeaturetab(datalake=url, spec=dict(upstream=bipolar.tab(0), bag_threshold=0.0))
+        TernaryFeaturetablet(datalake=url, spec=dict(upstream=bipolar.tablet(0), bag_threshold=0.0))
 
 
 def test_a_feature_table_refuses_devices_it_cannot_see_before_building(tmp_path):
     """devices naming a GPU the process lacks fail at build(), first -- not in a worker, minutes in."""
     url = str(tmp_path)
-    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag="devices_samples").build()
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag="devices_samples").build()
     table = Featuretable(datalake=url, tag="devices", devices=["cuda:7"], spec=dict(
         upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
         collator=sample_collator()))
     with pytest.raises((RuntimeError, ValueError), match="devices="):
         table.build()
-    assert not table.valid() and not table.valid_tab(0)
+    assert not table.valid() and not table.valid_tablet(0)
 
 
 def test_feature_evaluation_queues_off_the_devices_and_the_rest_off_n_workers(tmp_path):
-    """The tabs are built one worker per device; n_workers is everything else's."""
+    """The tablets are built one worker per device; n_workers is everything else's."""
     url = str(tmp_path)
-    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag="queue_samples").build()
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag="queue_samples").build()
 
     def table(devices, **kw):
         return Featuretable(datalake=url, tag="queue", devices=devices, n_workers=5, spec=dict(
@@ -694,5 +694,5 @@ def test_feature_evaluation_queues_off_the_devices_and_the_rest_off_n_workers(tm
     assert two._build_executor_("t").n_workers == 2
     assert two.executor_cls(**two._executor_kwargs_(tag="t")).n_workers == 5
     one = table(["cpu"]).build()      # its checks at n_workers=5, its one device's evaluation inline
-    assert one.valid() and all(one.tab(i).valid() for i in range(one.n_tabs))
+    assert one.valid() and all(one.tablet(i).valid() for i in range(one.n_tablets))
     assert one.data(("features", "final"), concat=True)["features"]["final"].shape == (10, 8)

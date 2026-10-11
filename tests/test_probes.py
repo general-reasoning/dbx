@@ -12,9 +12,9 @@ from dbx import (
     DATADIR,
     DIRTOPIC,
     SLICETOPIC,
-    Featuretab,
+    Featuretablet,
     Featuretable,
-    Datatab,
+    Datatablet,
     Datatable,
     ModelEvaluator,
     ModelEvaluatorBuilder,
@@ -24,21 +24,21 @@ from dbx import (
 )
 
 
-class DummySampleTab(Datatab):
+class DummySampleTablet(Datatablet):
     TOPICS = {"samples": SLICETOPIC, "labels": SLICETOPIC}
 
     @dataclass
-    class VAR(Datatab.VAR):
-        samples_per_tab: int = 5
+    class VAR(Datatablet.VAR):
+        samples_per_tablet: int = 5
 
     def __build__(self):
-        samples_per_tab = self.var.samples_per_tab
+        samples_per_tablet = self.var.samples_per_tablet
         spec = {
             "samples": {"samples": "ndarray:float32"},
             "labels": {"labels": "int64"},
         }
         with self.slice_writers(spec) as writers:
-            for i in range(samples_per_tab):
+            for i in range(samples_per_tablet):
                 x = np.random.randn(4).astype(np.float32)
                 y = int(i % 2)
                 writers["samples"].write({"samples": x})
@@ -47,29 +47,29 @@ class DummySampleTab(Datatab):
 
 
 class DummySampleTable(Datatable):
-    TAB = DummySampleTab
+    TABLET = DummySampleTablet
 
-    #: This table roots its tabs inside itself -- see __tab__ -- so it declares
+    #: This table roots its tablets inside itself -- see __tablet__ -- so it declares
     #: the directory to root them in. The base no longer does.
     TOPICS = {'tabs': DATADIR, **Datatable.TOPICS}
 
     @dataclass
     class VAR(Datatable.VAR):
-        samples_per_tab: int = 5
+        samples_per_tablet: int = 5
 
     @property
-    def n_tabs(self) -> int:
+    def n_tablets(self) -> int:
         return 2
 
-    def __tab__(self, idx: int, tag=None) -> DummySampleTab:
-        return self.TAB(
+    def __tablet__(self, idx: int, tag=None) -> DummySampleTablet:
+        return self.TABLET(
             datalake=self.path('tabs'),
-            spec=dict(samples_per_tab=self.var.samples_per_tab),
+            spec=dict(samples_per_tablet=self.var.samples_per_tablet),
             tag=tag or f"tab_{idx}",
         )
 
     def __split__(self, *args, **kwargs):
-        return [self.TabMaker(idx) for idx in range(2)], dict(build=True)
+        return [self.TabletMaker(idx) for idx in range(2)], dict(build=True)
 
 
 class DummyModel(nn.Module):
@@ -89,10 +89,10 @@ class DummyModelEvaluatorFactory(ModelEvaluatorBuilder):
 
 
 def _fit_eval_(url, featuretable, tag='split'):
-    """Two folds of the feature table -- one tab each -- as a probe's fit_table and eval_table."""
+    """Two folds of the feature table -- one tablet each -- as a probe's fit_table and eval_table."""
     from dbx.dataparts import DatatablePartition
     split = DatatablePartition(datalake=url, tag=tag, spec=dict(
-        datatable=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tabs')).build()
+        datatable=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tablets')).build()
     return dict(fit_table=split.fold(0).build(), eval_table=split.fold(1).build())
 
 
@@ -118,7 +118,7 @@ def test_feature_affine_logistic_probe(tmp_path):
 
     sampletable = DummySampleTable(
         datalake=url,
-        spec=dict(samples_per_tab=5),
+        spec=dict(samples_per_tablet=5),
         tag="sample_table",
     ).build()
 
@@ -145,7 +145,7 @@ def test_feature_affine_logistic_probe(tmp_path):
     ).build()
 
     assert probe.valid()
-    # Fitted on one tab, scored on the other: 5 rows each.
+    # Fitted on one tablet, scored on the other: 5 rows each.
     assert probe.read('fit', 'features').shape == (5, 8)
     assert probe.read(['eval', 'features']).shape == (5, 8)
     assert len(probe.read('fit', 'labels')) == 5
@@ -169,7 +169,7 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
     in declaration order, and the layout records the widths."""
     url = str(tmp_path)
 
-    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5),
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5),
                                    tag="sample_table_multi").build()
     featuretable = Featuretable(
         datalake=url,
@@ -202,7 +202,7 @@ def test_affine_logistic_probe_concatenates_several_signals(tmp_path):
 def test_affine_logistic_probe_refuses_a_missing_signal_column(tmp_path):
     """No silent fallback to an arbitrary column."""
     url = str(tmp_path)
-    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5),
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5),
                                    tag="sample_table_bad").build()
     featuretable = Featuretable(
         datalake=url,
@@ -232,7 +232,7 @@ def test_feature_stats_probe(tmp_path):
 
     sampletable = DummySampleTable(
         datalake=url,
-        spec=dict(samples_per_tab=5),
+        spec=dict(samples_per_tablet=5),
         tag="sample_table_stats",
     ).build()
 
@@ -278,9 +278,9 @@ def test_feature_stats_probe(tmp_path):
     np.testing.assert_array_equal(stats_probe.stat('median', ('features', 'final')), stats['median'])
     assert stats_probe.stat('norm', ('features', 'final')).shape == (10,)
 
-    # Per-tab counterparts stack over the 2 tabs.
-    assert stats_probe.stat('mean', ('features', 'final'), per_tab=True).shape == (2, 8)
-    assert stats_probe.stat('max', ('samples', 'samples'), per_tab=True).shape == (2, 4)
+    # Per-tablet counterparts stack over the 2 tablets.
+    assert stats_probe.stat('mean', ('features', 'final'), per_tablet=True).shape == (2, 8)
+    assert stats_probe.stat('max', ('samples', 'samples'), per_tablet=True).shape == (2, 4)
     assert set(stats_probe.read('tab_stats', 'features', 'final')) == {'mean', 'std', 'median', 'min', 'max'}
 
     assert stats_probe.count == 10
@@ -297,10 +297,10 @@ def test_feature_stats_probe(tmp_path):
 
 def test_stats_probe_describes_every_declared_pair(tmp_path):
     """Not just the first signal: keying by pair leaves room for all of them,
-    which is what the old per-tab 'describes the first pair only' warning was
+    which is what the old per-tablet 'describes the first pair only' warning was
     apologising for."""
     url = str(tmp_path)
-    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5),
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5),
                                    tag="sample_table_all").build()
     featuretable = Featuretable(
         datalake=url,
@@ -333,7 +333,7 @@ def test_feature_stats_probe_parallel(tmp_path):
 
     sampletable = DummySampleTable(
         datalake=url,
-        spec=dict(samples_per_tab=5),
+        spec=dict(samples_per_tablet=5),
         tag="sample_table_stats_par",
     ).build()
 
@@ -364,7 +364,7 @@ def test_feature_stats_probe_parallel(tmp_path):
 
     assert stats_probe.valid()
     assert stats_probe.stat('mean', ('features', 'final')).shape == (8,)
-    assert stats_probe.stat('mean', ('features', 'final'), per_tab=True).shape == (2, 8)
+    assert stats_probe.stat('mean', ('features', 'final'), per_tablet=True).shape == (2, 8)
 
 
 def test_feature_affine_logistic_probe_parallel(tmp_path):
@@ -372,7 +372,7 @@ def test_feature_affine_logistic_probe_parallel(tmp_path):
 
     sampletable = DummySampleTable(
         datalake=url,
-        spec=dict(samples_per_tab=5),
+        spec=dict(samples_per_tablet=5),
         tag="sample_table_log_par",
     ).build()
 
@@ -415,7 +415,7 @@ if __name__ == "__main__":
 def test_table_stats_by_band_equal_the_stats_of_the_concatenation(band_bytes, monkeypatch):
     """Banding is a memory decision, not a numerical one.
 
-    The whole-table statistics used to be `column_stats` of every tab's rows
+    The whole-table statistics used to be `column_stats` of every tablet's rows
     concatenated -- a full copy of the table, and another inside np.median.
     Taken a band of columns at a time they must come out the same, whether
     the band is one column (8 bytes forces it) or the whole width.
@@ -423,38 +423,38 @@ def test_table_stats_by_band_equal_the_stats_of_the_concatenation(band_bytes, mo
     import dbx.probes as probes
     monkeypatch.setattr(probes, 'TABLE_STATS_BAND_BYTES', band_bytes)
     rng = np.random.default_rng(0)
-    tabs = [rng.normal(size=(n, 7)) for n in (5, 0, 11, 3)]
+    tablets = [rng.normal(size=(n, 7)) for n in (5, 0, 11, 3)]
     results = [{'columns': {('s', 'c'): t}, 'stats': {('s', 'c'): probes.column_stats(t) if len(t) else
-                                                     {'norm': np.zeros(0)}}} for t in tabs]
+                                                     {'norm': np.zeros(0)}}} for t in tablets]
 
     class Probe:
         column_paths = [('s', 'c')]
         _table_stats_ = probes.FeatureStatsProbe._table_stats_
 
     got = Probe()._table_stats_(results)[('s', 'c')]
-    want = probes.column_stats(np.concatenate(tabs, axis=0))
+    want = probes.column_stats(np.concatenate(tablets, axis=0))
     assert set(got) == set(want)
     for name in want:
         np.testing.assert_allclose(got[name], want[name], rtol=1e-12, atol=0, err_msg=name)
 
 
 class UnevenSampleTable(DummySampleTable):
-    """Tabs of 3 and 7 samples: real slides do not have one size."""
+    """Tablets of 3 and 7 samples: real slides do not have one size."""
 
-    def __tab__(self, idx: int, tag=None) -> DummySampleTab:
-        return self.TAB(
+    def __tablet__(self, idx: int, tag=None) -> DummySampleTablet:
+        return self.TABLET(
             datalake=self.path('tabs'),
-            spec=dict(samples_per_tab=3 + 4 * idx),
+            spec=dict(samples_per_tablet=3 + 4 * idx),
             tag=tag or f"tab_{idx}",
         )
 
 
-def test_feature_stats_probe_over_tabs_of_different_sizes(tmp_path):
-    """``tab_norm`` is one value per ROW, so uneven tabs do not stack.
+def test_feature_stats_probe_over_tablets_of_different_sizes(tmp_path):
+    """``tablet_norm`` is one value per ROW, so uneven tablets do not stack.
 
-    The build died on exactly that -- ``np.stack`` over per-tab norms of 3 and
-    7 -- after every tab's stats and the whole-table ones had been computed. A
-    table whose tabs all have one size, as the fixtures above do, never
+    The build died on exactly that -- ``np.stack`` over per-tablet norms of 3 and
+    7 -- after every tablet's stats and the whole-table ones had been computed. A
+    table whose tablets all have one size, as the fixtures above do, never
     reaches it.
     """
     url = str(tmp_path)
@@ -477,15 +477,15 @@ def test_feature_stats_probe_over_tabs_of_different_sizes(tmp_path):
     ).build()
 
     assert probe.count == 10
-    norms = probe.stat('norm', ('features', 'final'), per_tab=True)
+    norms = probe.stat('norm', ('features', 'final'), per_tablet=True)
     assert [len(n) for n in norms] == [3, 7]
     np.testing.assert_allclose(np.concatenate(norms), probe.stat('norm', ('features', 'final')))
-    # The reductions still stack: one row per tab.
-    assert probe.stat('mean', ('features', 'final'), per_tab=True).shape == (2, 8)
+    # The reductions still stack: one row per tablet.
+    assert probe.stat('mean', ('features', 'final'), per_tablet=True).shape == (2, 8)
 
 
 def _feature_table_(url, tag, n=4):
-    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tab=n), tag=f"{tag}_samples").build()
+    sampletable = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=n), tag=f"{tag}_samples").build()
     return Featuretable(
         datalake=url,
         spec=dict(
@@ -498,22 +498,22 @@ def _feature_table_(url, tag, n=4):
     ).build()
 
 
-def test_a_probe_refuses_fit_and_eval_tables_that_share_a_tab(tmp_path):
+def test_a_probe_refuses_fit_and_eval_tables_that_share_a_tablet(tmp_path):
     url = str(tmp_path)
     featuretable = _feature_table_(url, "shared_features")
     probe = FeatureAffineLogisticProbe(datalake=url, tag="shared_probe", spec=dict(
         fit_table=featuretable, eval_table=_fit_eval_(url, featuretable)['eval_table'],
         collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True))))
-    with pytest.raises(ValueError, match="share 1 tab"):
+    with pytest.raises(ValueError, match="share 1 tablet"):
         probe.build()
 
 
-def test_max_rows_per_tab_samples_each_tab_the_same_way_every_time(tmp_path):
+def test_max_rows_per_tablet_samples_each_tablet_the_same_way_every_time(tmp_path):
     url = str(tmp_path)
     featuretable = _feature_table_(url, "rows_features", n=10)
     def probe(tag):
         return FeatureAffineLogisticProbe(datalake=url, tag=tag, spec=dict(
-            **_fit_eval_(url, featuretable), max_rows_per_tab=4,
+            **_fit_eval_(url, featuretable), max_rows_per_tablet=4,
             collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True)))).build()
     one = probe("rows_a").read('fit', 'features')
     assert one.shape == (4, 8)

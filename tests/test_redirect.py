@@ -447,7 +447,7 @@ class TestResolution:
             assert reads.call_count == resolving
 
     def test_an_unredirected_block_does_not_read_the_anchors_journal(self, source, tmp_path):
-        """path() asks on first use, and a table of a thousand tabs asks a
+        """path() asks on first use, and a table of a thousand tablets asks a
         thousand times: the question has to be answerable from this block's own
         journal directory, not by globbing every entry under the anchor."""
         b = block(tmp_path, x=7)

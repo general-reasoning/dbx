@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from dbx.datablocks import Datablock
-from dbx.datatables import SLICETOPIC, Datatab
+from dbx.datatables import SLICETOPIC, Datatablet
 from dbx.datastreams import column_spec, merge_column_specs, project_column
 from dbx.datatables import Datacollator
 from dbx.probes import label_vector
@@ -23,11 +23,11 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class AnnotatedTab(Datatab):
+class AnnotatedTablet(Datatablet):
     TOPICS = {'samples': SLICETOPIC, 'annotations': SLICETOPIC}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         n: int = 4
 
     def __build__(self):
@@ -43,64 +43,64 @@ class AnnotatedTab(Datatab):
 
 
 @pytest.fixture
-def tab(tmp_path):
-    return AnnotatedTab(datalake=str(tmp_path), spec=dict(n=4)).build()
+def tablet(tmp_path):
+    return AnnotatedTablet(datalake=str(tmp_path), spec=dict(n=4)).build()
 
 
 class TestDatasetAndData:
 
-    def test_a_triple_takes_one_entry_as_rows_are_assembled(self, tab):
-        ds = tab.dataset(('annotations', 'annotations', 'label'))
+    def test_a_triple_takes_one_entry_as_rows_are_assembled(self, tablet):
+        ds = tablet.dataset(('annotations', 'annotations', 'label'))
         assert [ds[i]['annotations'] for i in range(4)] == [{'annotations': i % 2} for i in range(4)]
 
-    def test_a_list_of_keys_is_a_dict_of_just_those(self, tab):
-        row = tab.dataset(('annotations', 'annotations', ['label', 'site']))[1]
+    def test_a_list_of_keys_is_a_dict_of_just_those(self, tablet):
+        row = tablet.dataset(('annotations', 'annotations', ['label', 'site']))[1]
         assert row['annotations']['annotations'] == {'label': 1, 'site': 's1'}
 
-    def test_alongside_other_slices_and_columns(self, tab):
-        row = tab.dataset('samples', ('annotations', 'annotations', 'label'), ('annotations', 'idx'))[3]
+    def test_alongside_other_slices_and_columns(self, tablet):
+        row = tablet.dataset('samples', ('annotations', 'annotations', 'label'), ('annotations', 'idx'))[3]
         assert row['annotations'] == {'annotations': 1, 'idx': 3}
         assert row['samples']['x'].tolist() == [3.0, 3.0, 3.0]
 
-    def test_data_takes_it_too(self, tab):
-        got = tab.data(('annotations', 'annotations', 'label'))
+    def test_data_takes_it_too(self, tablet):
+        got = tablet.data(('annotations', 'annotations', 'label'))
         assert got == {'annotations': {'annotations': [0, 1, 0, 1]}}
-        stacked = tab.data(('annotations', 'annotations', 'label'), concat=True)
+        stacked = tablet.data(('annotations', 'annotations', 'label'), concat=True)
         assert np.asarray(stacked['annotations']['annotations']).tolist() == [0, 1, 0, 1]
 
-    def test_asked_whole_and_in_part_it_is_read_whole(self, tab):
-        row = tab.dataset(('annotations', 'annotations'), ('annotations', 'annotations', 'label'))[0]
+    def test_asked_whole_and_in_part_it_is_read_whole(self, tablet):
+        row = tablet.dataset(('annotations', 'annotations'), ('annotations', 'annotations', 'label'))[0]
         assert row['annotations']['annotations'] == {'label': 0, 'site': 's0', 'area': 0.0}
 
-    def test_two_keys_asked_separately_are_both_taken(self, tab):
-        row = tab.dataset(('annotations', 'annotations', 'label'),
+    def test_two_keys_asked_separately_are_both_taken(self, tablet):
+        row = tablet.dataset(('annotations', 'annotations', 'label'),
                           ('annotations', 'annotations', 'site'))[2]
         assert row['annotations']['annotations'] == {'label': 0, 'site': 's2'}
 
-    def test_a_missing_key_says_which(self, tab):
+    def test_a_missing_key_says_which(self, tablet):
         with pytest.raises(KeyError, match=r"no key\(s\) \['nope'\]"):
-            tab.dataset(('annotations', 'annotations', 'nope'))[0]
+            tablet.dataset(('annotations', 'annotations', 'nope'))[0]
 
-    def test_a_key_of_a_column_that_is_not_a_dict(self, tab):
+    def test_a_key_of_a_column_that_is_not_a_dict(self, tablet):
         with pytest.raises(TypeError, match="not a dict"):
-            tab.data(('annotations', 'idx', 'label'))
+            tablet.data(('annotations', 'idx', 'label'))
 
 
 class TestCollator:
     """A collator pair may be a triple -- which is what a probe's labels need."""
 
-    def test_on_a_stacked_slice(self, tab):
+    def test_on_a_stacked_slice(self, tablet):
         c = Datacollator(spec=dict(columns={'signals': [('samples', 'x')], 'labels': [('annotations', 'annotations', 'label')]}))
         assert c.slices() == ['samples', 'annotations']
-        data = tab.data(*c.slices(), concat=True)
+        data = tablet.data(*c.slices(), concat=True)
         signals, labels = c(data)
         assert signals.shape == (4, 3)
         assert np.asarray(labels).reshape(-1).tolist() == [0, 1, 0, 1]
         assert label_vector(c, data).tolist() == [0, 1, 0, 1]
 
-    def test_on_rows(self, tab):
+    def test_on_rows(self, tablet):
         c = Datacollator(spec=dict(columns={'signals': [('samples', 'x')], 'labels': [('annotations', 'annotations', 'label')]}))
-        ds = tab.dataset(*c.slices())
+        ds = tablet.dataset(*c.slices())
         _, labels = c([ds[i] for i in range(4)])
         assert labels.reshape(-1).tolist() == [0, 1, 0, 1]
 
@@ -168,7 +168,7 @@ def test_a_feature_table_parses_the_triple_as_a_table_does():
 from dbx.datatables import DATASLICE
 
 
-class DeclaredTab(Datatab):
+class DeclaredTablet(Datatablet):
     """Declares its dict column by structure, and so writes with no columns passed."""
     TOPICS = {'annotations': DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')}
 
@@ -186,24 +186,24 @@ class TestADictColumnDeclaredByItsStructure:
         assert repr(m) == "DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')"
 
     def test_it_is_in_the_hash(self, tmp_path):
-        text = DeclaredTab(datalake=str(tmp_path)).typestr()
+        text = DeclaredTablet(datalake=str(tmp_path)).typestr()
         assert "topic:annotations=DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')" in text
 
     def test_the_writer_gets_json(self, tmp_path):
-        t = DeclaredTab(datalake=str(tmp_path))
+        t = DeclaredTablet(datalake=str(tmp_path))
         assert t.declared_columns('annotations') == {'annotations': 'json', 'idx': 'int'}
         assert t.declared_schema('annotations') == {
             'annotations': {'cohort': 'str', 'recurrence': 'int'}, 'idx': 'int'}
 
     def test_built_and_read_back_by_key(self, tmp_path):
-        t = DeclaredTab(datalake=str(tmp_path)).build()
+        t = DeclaredTablet(datalake=str(tmp_path)).build()
         assert t.data(('annotations', 'annotations', 'recurrence')) == {
             'annotations': {'annotations': [0, 1, 2]}}
         assert t.dataset(('annotations', 'annotations', 'cohort'))[2] == {
             'annotations': {'annotations': 'c2'}}
 
     def test_an_explicit_json_agrees_with_the_declaration(self, tmp_path):
-        t = DeclaredTab(datalake=str(tmp_path))
+        t = DeclaredTablet(datalake=str(tmp_path))
         assert t._writable_columns_({'annotations': {'annotations': 'json', 'idx': 'int'}},
                                    ['annotations']) == {'annotations': {'annotations': 'json', 'idx': 'int'}}
 
@@ -214,11 +214,11 @@ class TestADictColumnDeclaredByItsStructure:
             DATASLICE(annotations=dict(cohort=3))
 
 
-class BadRowTab(Datatab):
+class BadRowTablet(Datatablet):
     TOPICS = {'annotations': DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         row: dict = None
 
     def __build__(self):
@@ -226,11 +226,11 @@ class BadRowTab(Datatab):
             writers['annotations'].write({'annotations': self.var.row, 'idx': 0})
 
 
-class NestedTab(Datatab):
+class NestedTablet(Datatablet):
     TOPICS = {'a': DATASLICE(rec=dict(site=dict(name='str', code='int')))}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         row: dict = None
 
     def __build__(self):
@@ -247,19 +247,19 @@ class TestTheDeclaredStructureIsChecked:
     ])
     def test_a_row_is_refused_when_written(self, tmp_path, row, error, match):
         with pytest.raises(error, match=match):
-            BadRowTab(datalake=str(tmp_path), spec=dict(row=row)).build()
+            BadRowTablet(datalake=str(tmp_path), spec=dict(row=row)).build()
 
     def test_a_row_that_matches_is_written(self, tmp_path):
-        t = BadRowTab(datalake=str(tmp_path), spec=dict(row={'cohort': 'c', 'recurrence': 1})).build()
+        t = BadRowTablet(datalake=str(tmp_path), spec=dict(row={'cohort': 'c', 'recurrence': 1})).build()
         assert t.data(('annotations', 'annotations', 'cohort')) == {'annotations': {'annotations': ['c']}}
 
     def test_nested_structure_too(self, tmp_path):
         with pytest.raises(ValueError, match=r"\['site'\].*missing \['code'\]"):
-            NestedTab(datalake=str(tmp_path), spec=dict(row={'site': {'name': 'x'}})).build()
-        NestedTab(datalake=str(tmp_path / 'ok'), spec=dict(row={'site': {'name': 'x', 'code': 1}})).build()
+            NestedTablet(datalake=str(tmp_path), spec=dict(row={'site': {'name': 'x'}})).build()
+        NestedTablet(datalake=str(tmp_path / 'ok'), spec=dict(row={'site': {'name': 'x', 'code': 1}})).build()
 
     def test_a_key_the_slice_does_not_declare_is_refused_before_reading(self, tmp_path):
-        t = DeclaredTab(datalake=str(tmp_path))            # not built: nothing is read
+        t = DeclaredTablet(datalake=str(tmp_path))            # not built: nothing is read
         with pytest.raises(KeyError, match=r"declares keys \['cohort', 'recurrence'\], not \['stage'\]"):
             t.dataset(('annotations', 'annotations', 'stage'))
         with pytest.raises(KeyError, match="not"):
@@ -267,22 +267,22 @@ class TestTheDeclaredStructureIsChecked:
 
     def test_a_key_of_a_column_declared_scalar_is_refused(self, tmp_path):
         with pytest.raises(TypeError, match="declares column 'idx' as 'int'"):
-            DeclaredTab(datalake=str(tmp_path)).dataset(('annotations', 'idx', 'k'))
+            DeclaredTablet(datalake=str(tmp_path)).dataset(('annotations', 'idx', 'k'))
 
-    def test_an_undeclared_slice_is_not_checked(self, tab):
-        """AnnotatedTab passes its columns to the writer: there is no declaration to hold it to."""
-        assert tab.dataset(('annotations', 'annotations', 'site'))[0] == {'annotations': {'annotations': 's0'}}
+    def test_an_undeclared_slice_is_not_checked(self, tablet):
+        """AnnotatedTablet passes its columns to the writer: there is no declaration to hold it to."""
+        assert tablet.dataset(('annotations', 'annotations', 'site'))[0] == {'annotations': {'annotations': 's0'}}
 
 
-def test_a_table_holds_a_key_to_its_tabs_declaration(tmp_path):
-    """A table's slices are declared by its tabs, not in its own TOPICS."""
+def test_a_table_holds_a_key_to_its_tablets_declaration(tmp_path):
+    """A table's slices are declared by its tablets, not in its own TOPICS."""
     from dbx.datatables import Datatable
 
     class DeclaredTable(Datatable):
-        TAB = DeclaredTab
+        TABLET = DeclaredTablet
 
         @property
-        def n_tabs(self):
+        def n_tablets(self):
             return 2
 
     table = DeclaredTable(datalake=str(tmp_path))
@@ -300,7 +300,7 @@ def test_a_table_holds_a_key_to_its_tabs_declaration(tmp_path):
 DEEP = dict(label='int', site=dict(code='int', geo=dict(lat='float', lon='float')))
 
 
-class DeepTab(Datatab):
+class DeepTablet(Datatablet):
     TOPICS = {'annotations': DATASLICE(annotations=dict(DEEP), idx='int')}
 
     def __build__(self):
@@ -325,21 +325,21 @@ class TestNested:
         assert repr(back['m']) == repr(m) and repr(back['d']) == repr(d)
 
     def test_a_path_reads_a_deep_entry(self, tmp_path):
-        t = DeepTab(datalake=str(tmp_path)).build()
+        t = DeepTablet(datalake=str(tmp_path)).build()
         assert t.data(('annotations', 'annotations', ('site', 'geo', 'lat'))) == {
             'annotations': {'annotations': [0.0, 1.0, 2.0]}}
         row = t.dataset(('annotations', 'annotations', ['label', ('site', 'code')]))[1]
         assert row['annotations']['annotations'] == {'label': 1, 'site': {'code': 11}}
 
     def test_a_path_is_checked_against_the_declaration(self, tmp_path):
-        t = DeepTab(datalake=str(tmp_path))
+        t = DeepTablet(datalake=str(tmp_path))
         with pytest.raises(KeyError, match=r"declares keys \['lat', 'lon'\] under 'site.geo', not \['alt'\]"):
             t.dataset(('annotations', 'annotations', ('site', 'geo', 'alt')))
         with pytest.raises(TypeError, match="declares 'label' as 'int', which has no key 'x'"):
             t.dataset(('annotations', 'annotations', ('label', 'x')))
 
     def test_a_deep_row_is_checked_when_written(self, tmp_path):
-        class Bad(DeepTab):
+        class Bad(DeepTablet):
             def __build__(self):
                 with self.slice_writers() as writers:
                     writers['annotations'].write({'annotations': {
@@ -348,7 +348,7 @@ class TestNested:
             Bad(datalake=str(tmp_path)).build()
 
     def test_a_collator_path(self, tmp_path):
-        t = DeepTab(datalake=str(tmp_path)).build()
+        t = DeepTablet(datalake=str(tmp_path)).build()
         c = Datacollator(spec=dict(columns={'signals': [('annotations', 'annotations', ['label', ('site', 'geo', 'lat')])], 'labels': [('annotations', 'annotations', ('site', 'code'))]}))
         assert c.signal_pairs == (('annotations', 'annotations', 'label'),
                                   ('annotations', 'annotations', ('site', 'geo', 'lat')))
@@ -367,19 +367,19 @@ class TestNested:
 class TestListsSideBySideTuplesDeeper:
 
     def test_several_columns_one_of_them_narrowed(self, tmp_path):
-        t = DeepTab(datalake=str(tmp_path)).build()
+        t = DeepTablet(datalake=str(tmp_path)).build()
         row = t.dataset(('annotations', [('annotations', 'site', 'code'), 'idx']))[1]
         assert row['annotations'] == {'annotations': 11, 'idx': 1}
 
     def test_the_path_may_be_spelled_flat_or_nested(self, tmp_path):
-        t = DeepTab(datalake=str(tmp_path)).build()
+        t = DeepTablet(datalake=str(tmp_path)).build()
         flat = t.data(('annotations', 'annotations', 'site', 'geo', 'lat'))
         nested = t.data(('annotations', 'annotations', ('site', 'geo', 'lat')))
         also = t.data(('annotations', ('annotations', 'site', 'geo', 'lat')))
         assert flat == nested == also == {'annotations': {'annotations': [0.0, 1.0, 2.0]}}
 
     def test_several_keys_under_a_path(self, tmp_path):
-        t = DeepTab(datalake=str(tmp_path)).build()
+        t = DeepTablet(datalake=str(tmp_path)).build()
         row = t.dataset(('annotations', 'annotations', 'site', 'geo', ['lat', 'lon']))[2]
         assert row['annotations']['annotations'] == {'site': {'geo': {'lat': 2.0, 'lon': -2.0}}}
 

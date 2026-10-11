@@ -58,7 +58,7 @@ class MyStack(Datastack):
 
 `BLOCK` declares what the stack holds: every `block(i)` is checked to be one
 as it is formed. It does not locate anything -- a block's journal is under
-that block's own url and anchor. A `Datatable`'s `TAB` is its `BLOCK`, so a
+that block's own url and anchor. A `Datatable`'s `TABLET` is its `BLOCK`, so a
 table declares nothing more. A stack with no `BLOCK` warns (`FutureWarning`);
 it will be required.
 

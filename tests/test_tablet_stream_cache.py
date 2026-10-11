@@ -1,17 +1,17 @@
-"""A remote tab is cached where the table says, not where mosaic guesses.
+"""A remote tablet is cached where the table says, not where mosaic guesses.
 
 ``Stream`` left without a ``local=`` invents ``{tmpdir}/{blake2s(remote)}`` and
-then REFUSES to reuse it, so the second open of the same remote tab -- a second
+then REFUSES to reuse it, so the second open of the same remote tablet -- a second
 process, a second run, a retry after a crash -- dies with "Could not create a
 temporary local directory ... already exists". The table computed a cache
 directory and never passed it, so every remote read went to that guessed path.
 
 It cannot be passed to ``StreamingDataset`` either: mosaic takes ``streams=`` or
 ``remote``/``local``, never both. It belongs on each ``Stream``, one
-subdirectory per tab -- which is also what keeps two tabs from sharing a
+subdirectory per tablet -- which is also what keeps two tablets from sharing a
 directory, itself the same collision.
 
-These drive the wiring with stub tabs rather than a real cloud path: what is
+These drive the wiring with stub tablets rather than a real cloud path: what is
 under test is which directory each stream is told to use, and no network is
 needed to see that.
 """
@@ -23,7 +23,7 @@ pytest.importorskip("torch", reason="torch is an optional dependency")
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
 from dbx import datatables
-from dbx.datatables import SLICETOPIC, Datatab, Datatable
+from dbx.datatables import SLICETOPIC, Datatablet, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -31,12 +31,12 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class Tab(Datatab):
+class Tablet(Datatablet):
     VERSION = 1
     TOPICS = {'numbers': SLICETOPIC}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         n: int = 2
 
     def __build__(self):
@@ -47,19 +47,19 @@ class Tab(Datatab):
 
 class Table(Datatable):
     VERSION = 1
-    TAB = Tab
+    TABLET = Tablet
 
     @dataclass
     class VAR(Datatable.VAR):
-        n_tabs_: int = 2
+        n_tablets_: int = 2
 
     @property
-    def n_tabs(self):
-        return self.var.n_tabs_
+    def n_tablets(self):
+        return self.var.n_tablets_
 
 
-class RemoteTab:
-    """A tab whose slice lives somewhere that has to be downloaded."""
+class RemoteTablet:
+    """A tablet whose slice lives somewhere that has to be downloaded."""
 
     def __init__(self, hash):
         self.hash = hash
@@ -70,14 +70,14 @@ class RemoteTab:
 
 @pytest.fixture
 def table(tmp_path):
-    return Table(datalake=str(tmp_path), spec=dict(n_tabs_=2))
+    return Table(datalake=str(tmp_path), spec=dict(n_tablets_=2))
 
 
 @pytest.fixture
 def remote_table(table, monkeypatch):
-    """The table above, with its tabs replaced by remote ones."""
-    monkeypatch.setattr(type(table), 'tab',
-                        lambda self, idx: RemoteTab(f"{'ab'[idx]}" * 32), raising=False)
+    """The table above, with its tablets replaced by remote ones."""
+    monkeypatch.setattr(type(table), 'tablet',
+                        lambda self, idx: RemoteTablet(f"{'ab'[idx]}" * 32), raising=False)
     return table
 
 
@@ -94,38 +94,38 @@ def opened(monkeypatch):
     return calls
 
 
-class TestARemoteTabIsToldWhereToCache:
+class TestARemoteTabletIsToldWhereToCache:
 
     def test_the_stream_gets_a_local_directory(self, table, tmp_path):
-        stream = table._tab_stream_(RemoteTab('a' * 32), 'numbers', local=str(tmp_path / 'cache'))
+        stream = table._tablet_stream_(RemoteTablet('a' * 32), 'numbers', local=str(tmp_path / 'cache'))
         assert stream.local == str(tmp_path / 'cache')
 
     def test_without_one_it_refuses_rather_than_letting_mosaic_guess(self, table):
         with pytest.raises(ValueError, match='local'):
-            table._tab_stream_(RemoteTab('a' * 32), 'numbers')
+            table._tablet_stream_(RemoteTablet('a' * 32), 'numbers')
 
     def test_the_directory_is_created(self, table, tmp_path):
         local = tmp_path / 'cache' / 'deeper'
-        table._tab_stream_(RemoteTab('a' * 32), 'numbers', local=str(local))
+        table._tablet_stream_(RemoteTablet('a' * 32), 'numbers', local=str(local))
         assert local.is_dir()
 
     def test_abfss_is_translated_for_mosaic(self, table, tmp_path):
-        stream = table._tab_stream_(RemoteTab('a' * 32), 'numbers', local=str(tmp_path / 'c'))
+        stream = table._tablet_stream_(RemoteTablet('a' * 32), 'numbers', local=str(tmp_path / 'c'))
         assert stream.remote.startswith('azure-dl://')
 
 
-class TestALocalTabIsItsOwnCache:
+class TestALocalTabletIsItsOwnCache:
 
     def test_no_copy_is_arranged_for_it(self, table):
-        tab = table.tab(0)
-        stream = table._tab_stream_(tab, 'numbers')
+        tablet = table.tablet(0)
+        stream = table._tablet_stream_(tablet, 'numbers')
         assert stream.remote is None
-        assert stream.local == tab.path('numbers')
+        assert stream.local == tablet.path('numbers')
 
     def test_a_local_argument_is_ignored(self, table, tmp_path):
-        tab = table.tab(0)
-        stream = table._tab_stream_(tab, 'numbers', local=str(tmp_path / 'unused'))
-        assert stream.local == tab.path('numbers')
+        tablet = table.tablet(0)
+        stream = table._tablet_stream_(tablet, 'numbers', local=str(tmp_path / 'unused'))
+        assert stream.local == tablet.path('numbers')
         assert not (tmp_path / 'unused').exists()
 
 
@@ -135,7 +135,7 @@ class TestDatastreamPassesItsCacheDown:
     def test_every_stream_is_cached_under_the_tables_cache_dir(self, remote_table, opened):
         remote_table.datastream('numbers')
         streams = opened[0]['streams']
-        assert len(streams) == remote_table.n_tabs
+        assert len(streams) == remote_table.n_tablets
         for stream in streams:
             assert stream.local is not None
             assert stream.local.startswith(remote_table.cacheroot)
@@ -153,7 +153,7 @@ class TestDatastreamPassesItsCacheDown:
             )
             assert stream.local != guess
 
-    def test_tabs_do_not_share_a_directory(self, remote_table, opened):
+    def test_tablets_do_not_share_a_directory(self, remote_table, opened):
         remote_table.datastream('numbers')
         locals_ = [s.local for s in opened[0]['streams']]
         assert len(set(locals_)) == len(locals_)

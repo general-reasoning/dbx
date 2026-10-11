@@ -1,11 +1,11 @@
 """
-`DatatablePartition`'s *coalesce*: a cut tab made whole again, small entries packed -- and the probe that reads them.
+`DatatablePartition`'s *coalesce*: a cut tablet made whole again, small entries packed -- and the probe that reads them.
 
-*coalesce* decides what a part's tabs are once the deal is done, never which
+*coalesce* decides what a part's tablets are once the deal is done, never which
 part a row goes to. So the tests compare each mode's parts with *coalesce*
 None's, row by row, by the rows of the table their ``source`` names.
 
-The table is DATAPARTITION.md's: five tabs of rows (stratum, partition), s1 and s3
+The table is DATAPARTITION.md's: five tablets of rows (stratum, partition), s1 and s3
 in p1, the others in p2, with a feature and a label per row for a probe -- 0 and 1 by turns,
 so a stratum's rows carry both.
 """
@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 
 from dbx.datablocks import Datablock
-from dbx.datatables import DATASLICE, Datacollator, Datatab, Datatable
-from dbx.dataparts import DatatablePackTab, DatatablePartition, DatatabPiece
+from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
+from dbx.dataparts import DatatablePartitionTablet, DatatablePartition, DatatabletPiece
 from test_partition_methods import COHORT, PATIENT, bag_partition, bags, built_parts  # noqa: E402
 
 
@@ -25,8 +25,8 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-#: Each tab's rows, (stratum, partition).
-TABS = [
+#: Each tablet's rows, (stratum, partition).
+TABLETS = [
     [('s1', 'p1')] * 4,
     [('s2', 'p2'), ('s2', 'p2'), ('s3', 'p1'), ('s3', 'p1')],
     [('s1', 'p1')] * 3,
@@ -36,41 +36,41 @@ TABS = [
 STRATUM, PARTITION = ('meta', 'stratum'), ('meta', 'partition')
 
 
-class RowsTab(Datatab):
+class RowsTablet(Datatablet):
     TOPICS = {'meta': DATASLICE(row='int', stratum='str', partition='str', label='int'),
               'x': DATASLICE(row='int', features='ndarray:float32')}
 
     @dataclass
-    class VAR(Datatab.VAR):
-        tab: int = 0
+    class VAR(Datatablet.VAR):
+        tablet: int = 0
         rows: list = field(default_factory=list)
 
     def __build__(self):
         with self.slice_writers() as writers:
             for i, (g, s) in enumerate(self.var.rows):
-                row, label = 100 * self.var.tab + i, i % 2      # a stratum's rows carry both labels
+                row, label = 100 * self.var.tablet + i, i % 2      # a stratum's rows carry both labels
                 x = np.random.default_rng(row).normal(size=3).astype(np.float32) + 3 * label
                 writers['meta'].write({'row': row, 'stratum': g, 'partition': s, 'label': label})
                 writers['x'].write({'row': row, 'features': x})
 
 
 class RowsTable(Datatable):
-    TAB = RowsTab
+    TABLET = RowsTablet
 
     @dataclass
     class VAR(Datatable.VAR):
-        tabs: list = None
+        tablets: list = None
 
     @property
-    def n_tabs(self):
-        return len(self.var.tabs)
+    def n_tablets(self):
+        return len(self.var.tablets)
 
-    def __tab__(self, idx, **kw):
-        return super().__tab__(idx, tab=idx, rows=[list(r) for r in self.var.tabs[idx]])
+    def __tablet__(self, idx, **kw):
+        return super().__tablet__(idx, tablet=idx, rows=[list(r) for r in self.var.tablets[idx]])
 
 
-def rows_table(tmp_path, tabs=TABS):
-    return RowsTable(datalake=str(tmp_path), spec={'tabs': [[list(r) for r in t] for t in tabs]}).build()
+def rows_table(tmp_path, tablets=TABLETS):
+    return RowsTable(datalake=str(tmp_path), spec={'tablets': [[list(r) for r in t] for t in tablets]}).build()
 
 
 def split(tmp_path, tbl, stratifyby=STRATUM, partitionby=None, seed=4, **spec):
@@ -81,7 +81,7 @@ def split(tmp_path, tbl, stratifyby=STRATUM, partitionby=None, seed=4, **spec):
 
 
 def rows_of(part) -> list:
-    """A built part's rows, as the (tab, row) of the partitioned table each one is."""
+    """A built part's rows, as the (tablet, row) of the partitioned table each one is."""
     return sorted(map(tuple, part.source_index().tolist()))
 
 
@@ -90,78 +90,78 @@ def test_coalesce_moves_no_row(tmp_path):
     tbl = rows_table(tmp_path)
     for partitionby in (None, PARTITION):
         cut = [rows_of(p) for p in built_parts(split(tmp_path / f'none{bool(partitionby)}', tbl, partitionby=partitionby))]
-        for mode, spec in (('whole', {}), ('pack', {'min_tab_rows': 3, 'max_tab_rows': 4})):
+        for mode, spec in (('whole', {}), ('pack', {'min_tablet_rows': 3, 'max_tablet_rows': 4})):
             p = split(tmp_path / f'{mode}{bool(partitionby)}', tbl, partitionby=partitionby, coalesce=mode, **spec)
             assert [rows_of(part) for part in built_parts(p)] == cut, (mode, partitionby)
 
 
-def test_whole_rejoins_a_cut_tab_whose_pieces_went_to_one_part(tmp_path):
-    """DATAPARTITION.md's stratifyby figure: tabs 3 and 4 are cut, and each one's pieces all go to part 1."""
+def test_whole_rejoins_a_cut_tablet_whose_pieces_went_to_one_part(tmp_path):
+    """DATAPARTITION.md's stratifyby figure: tablets 3 and 4 are cut, and each one's pieces all go to part 1."""
     tbl = rows_table(tmp_path)
     cut = split(tmp_path / 'none', tbl)
-    assert [e['tab'] for e in cut.read('tabs')[1] if isinstance(e, dict)] == [1, 3, 3, 4, 4]
+    assert [e['tab'] for e in cut.read('tablets')[1] if isinstance(e, dict)] == [1, 3, 3, 4, 4]
     p = split(tmp_path / 'whole', tbl, coalesce='whole')
-    assert p.read('tabs') == [[0, {'tab': 1, 'stratifyby': 's2'}, 2], [{'tab': 1, 'stratifyby': 's3'}, 3, 4]]
+    assert p.read('tablets') == [[0, {'tab': 1, 'stratifyby': 's2'}, 2], [{'tab': 1, 'stratifyby': 's3'}, 3, 4]]
     assert p.read('summary')['rejoined'] == ['tab_000003', 'tab_000004']
-    # Rejoined, a tab is the table's own, read where it is: no piece of it to build.
-    assert not any(isinstance(p.part(1).tab(i), DatatabPiece) for i in (1, 2))
+    # Rejoined, a tablet is the table's own, read where it is: no piece of it to build.
+    assert not any(isinstance(p.part(1).tablet(i), DatatabletPiece) for i in (1, 2))
 
 
-def test_whole_rejoins_a_tab_whose_pieces_lie_in_two_partitions_and_counts_it_in_both(tmp_path):
-    """Both pieces of tab 4 go to part 0, s3's in p1 and s5's in p2: whole, it holds rows of both partitions."""
+def test_whole_rejoins_a_tablet_whose_pieces_lie_in_two_partitions_and_counts_it_in_both(tmp_path):
+    """Both pieces of tablet 4 go to part 0, s3's in p1 and s5's in p2: whole, it holds rows of both partitions."""
     tbl = rows_table(tmp_path)
     cut = split(tmp_path / 'none', tbl, partitionby=PARTITION)
-    assert {(4, 's3'), (4, 's5')} <= {(e['tab'], e['stratifyby']) for e in cut.read('tabs')[0] if isinstance(e, dict)}
+    assert {(4, 's3'), (4, 's5')} <= {(e['tab'], e['stratifyby']) for e in cut.read('tablets')[0] if isinstance(e, dict)}
     p = split(tmp_path / 'p', tbl, partitionby=PARTITION, coalesce='whole')
-    assert 4 in p.read('tabs')[0]
-    # The rows per partition are the deal's, however the tabs hold them; tab 4 is a tab of each.
+    assert 4 in p.read('tablets')[0]
+    # The rows per partition are the deal's, however the tablets hold them; tablet 4 is a tablet of each.
     partitions = lambda q: {st: c['rows'] for st, c in q.read('summary')['folds'][0]['partitions'].items()}
     assert partitions(p) == partitions(cut)
     assert all(c['tabs'] >= 1 for c in p.read('summary')['folds'][0]['partitions'].values())
 
 
-def test_whole_keeps_cut_a_tab_with_a_piece_in_no_part(tmp_path):
+def test_whole_keeps_cut_a_tablet_with_a_piece_in_no_part(tmp_path):
     """Bag 2's row of no patient is skipped: the bag made whole would bring it back."""
     tbl = bags(tmp_path)
     for seed in range(30):
         p = bag_partition(tmp_path / f's{seed}', tbl, seed=seed, coalesce='whole')
-        parts = {k for k, f in enumerate(p.read('tabs')) for e in f if isinstance(e, dict) and e['tab'] == 2}
+        parts = {k for k, f in enumerate(p.read('tablets')) for e in f if isinstance(e, dict) and e['tab'] == 2}
         if len(parts) == 1:
             break
     else:
         pytest.fail("no seed deals bag 2's pieces to one part")
-    assert all(2 not in f for f in p.read('tabs'))
+    assert all(2 not in f for f in p.read('tablets'))
 
 
 def test_pack_pools_the_small_entries_and_keeps_the_rest(tmp_path):
     tbl = rows_table(tmp_path)
-    p = split(tmp_path / 'p', tbl, coalesce='pack', min_tab_rows=3, max_tab_rows=4)
-    for k, entries in enumerate(p.read('tabs')):
+    p = split(tmp_path / 'p', tbl, coalesce='pack', min_tablet_rows=3, max_tablet_rows=4)
+    for k, entries in enumerate(p.read('tablets')):
         part = p.part(k).build()
         packs = [e for e in entries if isinstance(e, dict) and 'pack' in e]
         kept = [e for e in entries if e not in packs]
-        # Whole tabs and pieces of at least 3 rows stay; every packed tab takes at most 4.
-        assert all(isinstance(e, int) and len(TABS[e]) >= 3 for e in kept), entries
+        # Whole tablets and pieces of at least 3 rows stay; every packed tablet takes at most 4.
+        assert all(isinstance(e, int) and len(TABLETS[e]) >= 3 for e in kept), entries
         for i, e in enumerate(entries):
             if e in packs:
-                tab = part.tab(i)
-                assert isinstance(tab, DatatablePackTab)
-                assert sum(seg[2] for seg in e['segments']) == tab.n_rows('meta') <= 4
+                tablet = part.tablet(i)
+                assert isinstance(tablet, DatatablePartitionTablet)
+                assert sum(seg[2] for seg in e['segments']) == tablet.n_rows('meta') <= 4
         assert p.read('summary')['folds'][k]['packed']['tabs'] == len(packs)
 
 
-def test_a_packed_tab_holds_the_rows_its_source_slice_names_in_every_slice(tmp_path):
+def test_a_packed_tablet_holds_the_rows_its_source_slice_names_in_every_slice(tmp_path):
     tbl = rows_table(tmp_path)
-    p = split(tmp_path / 'p', tbl, partitionby=PARTITION, coalesce='pack', min_tab_rows=3)
+    p = split(tmp_path / 'p', tbl, partitionby=PARTITION, coalesce='pack', min_tablet_rows=3)
     seen = 0
     for part in built_parts(p):
-        for i, e in enumerate(part.tab_indices):
+        for i, e in enumerate(part.tablet_indices):
             if not (isinstance(e, dict) and 'pack' in e):
                 continue
-            tab = part.tab(i)
-            meta, x = tab.data('meta')['meta'], tab.data('x')['x']
-            for j, (t, r) in enumerate(tab.source_index().tolist()):
-                source = tbl.tab(t)
+            tablet = part.tablet(i)
+            meta, x = tablet.data('meta')['meta'], tablet.data('x')['x']
+            for j, (t, r) in enumerate(tablet.source_index().tolist()):
+                source = tbl.tablet(t)
                 assert meta['row'][j] == source.data('meta')['meta']['row'][r] == x['row'][j]
                 assert np.array_equal(x['features'][j], source.data('x')['x']['features'][r])
                 seen += 1
@@ -169,9 +169,9 @@ def test_a_packed_tab_holds_the_rows_its_source_slice_names_in_every_slice(tmp_p
 
 
 @pytest.mark.parametrize('spec, match', [
-    ({'coalesce': 'pack'}, 'min_tab_rows'),
-    ({'coalesce': 'pack', 'min_tab_rows': 4, 'max_tab_rows': 3}, 'max_tab_rows'),
-    ({'min_tab_rows': 2}, "coalesce='pack' only"),
+    ({'coalesce': 'pack'}, 'min_tablet_rows'),
+    ({'coalesce': 'pack', 'min_tablet_rows': 4, 'max_tablet_rows': 3}, 'max_tablet_rows'),
+    ({'min_tablet_rows': 2}, "coalesce='pack' only"),
     ({'coalesce': 'tight'}, 'coalesce must be one of'),
 ])
 def test_coalesce_is_checked_where_it_is_given(tmp_path, spec, match):
@@ -202,11 +202,18 @@ def test_a_partition_from_before_the_roles_were_renamed_is_not_taken_for_one_now
         assert not [sp for sp in DatatablePartition.SPECIALIZATIONS if new._pins_match_(sp)]
 
 
-def test_a_piece_stored_under_dbx_datatables_is_reached(tmp_path):
+def test_a_piece_from_before_tablets_is_reached_under_its_old_names(tmp_path):
+    """Until 2026-10-10 it was DatatabPiece -- under dbx.datatables, then dbx.dataparts -- and its VAR
+    named its source tab and tab_index: what it reconstructs names them so, where they were."""
     p = split(tmp_path / 'p', rows_table(tmp_path))
-    piece = next(p.tab(e) for e in p.read('tabs')[0] if isinstance(e, dict))
-    reached = [(piece._specialization_anchor_(sp), piece.get_hash(sp)) for sp in type(piece).SPECIALIZATIONS]
-    assert ('dbx.datatables.DatatabPiece', piece.hash) in reached
+    piece = next(p.tablet(e) for e in p.read('tablets')[0] if isinstance(e, dict))
+    sps = type(piece).SPECIALIZATIONS
+    assert {piece._specialization_anchor_(sp) for sp in sps} == {'dbx.datatables.DatatabPiece',
+                                                                  'dbx.dataparts.DatatabPiece'}
+    for sp in sps:
+        old = piece.get_signature(sp)['spec']
+        assert {'tab', 'tab_index'} <= set(old) and not {'tablet', 'tablet_index'} & set(old)
+        assert piece.get_hash(sp) != piece.hash
 
 
 # The probe: rows aggregated by a column, wherever they lie.
@@ -220,11 +227,11 @@ def agg_probe(tmp_path, fit, ev, aggregateby=PATIENT, **spec):
         fit_table=fit, eval_table=ev, collator=Datacollator(spec=dict(columns=columns)), **spec))
 
 
-def test_an_aggregate_is_the_mean_of_its_rows_and_label_across_packed_tabs(tmp_path):
+def test_an_aggregate_is_the_mean_of_its_rows_and_label_across_packed_tablets(tmp_path):
     tbl = bags(tmp_path)
-    p = bag_partition(tmp_path / 'p', tbl, coalesce='pack', min_tab_rows=3)
+    p = bag_partition(tmp_path / 'p', tbl, coalesce='pack', min_tablet_rows=3)
     fit, ev = built_parts(p)
-    assert any(isinstance(e, dict) and 'pack' in e for e in fit.tab_indices + ev.tab_indices)
+    assert any(isinstance(e, dict) and 'pack' in e for e in fit.tablet_indices + ev.tablet_indices)
     pr = agg_probe(tmp_path / 'probe', fit, ev, aggregation='mean').build()
     for side, part in (('fit', fit), ('eval', ev)):
         meta, x = part.data('meta')['meta'], part.data('x')['x']
@@ -257,15 +264,15 @@ def test_two_tables_sharing_an_aggregateby_value_are_refused(tmp_path):
 
 
 def test_parts_of_two_partitions_of_one_table_sharing_rows_are_refused(tmp_path):
-    """Packed tabs are tagged by where they are, so only their rows can say they overlap.
+    """Packed tablets are tagged by where they are, so only their rows can say they overlap.
 
-    No bag holds 5 rows, so every entry is packed, and no tab of one part is a tab of the other.
+    No bag holds 5 rows, so every entry is packed, and no tablet of one part is a tablet of the other.
     """
     tbl = bags(tmp_path)
-    a = bag_partition(tmp_path / 'a', tbl, seed=0, coalesce='pack', min_tab_rows=5)
-    b = bag_partition(tmp_path / 'b', tbl, seed=1, coalesce='pack', min_tab_rows=5)
+    a = bag_partition(tmp_path / 'a', tbl, seed=0, coalesce='pack', min_tablet_rows=5)
+    b = bag_partition(tmp_path / 'b', tbl, seed=1, coalesce='pack', min_tablet_rows=5)
     fit, ev = a.part(0).build(), b.part(0).build()
-    assert all(isinstance(e, dict) and 'pack' in e for e in fit.tab_indices + ev.tab_indices)
+    assert all(isinstance(e, dict) and 'pack' in e for e in fit.tablet_indices + ev.tablet_indices)
     assert set(map(tuple, fit.source_index().tolist())) & set(map(tuple, ev.source_index().tolist()))
     with pytest.raises(ValueError, match="share .* of its rows"):
         agg_probe(tmp_path / 'probe', fit, ev, aggregateby=None)._check_disjoint_()

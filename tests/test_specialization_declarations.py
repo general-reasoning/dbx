@@ -11,7 +11,7 @@ block's own identity".
 import pytest
 
 from dbx.datablocks import ABSENT, DIRTOPIC, SAME, Datablock
-from dbx.datatables import DATASLICE, SLICETOPIC, Datatab, Datatable
+from dbx.datatables import DATASLICE, SLICETOPIC, Datatablet, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -19,13 +19,13 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class OldTab(Datatab):
+class OldTablet(Datatablet):
     """Spelled with the sentinel, as it was when it was built."""
     TOPICS = {'tiles': SLICETOPIC}
 
 
-class NewTab(Datatab):
-    """The same tab respelled with a marker -- a new identity -- specialized to the old one."""
+class NewTablet(Datatablet):
+    """The same tablet respelled with a marker -- a new identity -- specialized to the old one."""
     TOPICS = {'tiles': DATASLICE(tile='ndarray:uint8')}
     SPECIALIZATIONS = [Datablock.Specialization(
         spec={}, topics={'tiles': SLICETOPIC},
@@ -33,7 +33,7 @@ class NewTab(Datatab):
 
 
 class OldTable(Datatable):
-    TAB = OldTab
+    TABLET = OldTablet
     TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
 
 
@@ -41,31 +41,31 @@ from dbx.datablocks import DATADIR, DATAFILE  # noqa: E402
 
 
 class NewTable(Datatable):
-    """Respelled with the markers; its own identity no longer carries the TAB's slices."""
-    TAB = NewTab
+    """Respelled with the markers; its own identity no longer carries the TABLET's slices."""
+    TABLET = NewTablet
     TOPICS = {'tab_paths': DATADIR, 'done': DATAFILE('done')}
     SPECIALIZATIONS = [Datatable.Specialization(
-        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, TAB=None,
-        note="respelled only; built before a table's type named its TAB")]
+        spec={}, topics={'tab_paths': DIRTOPIC, 'done': 'done'}, TABLET=None,
+        note="respelled only; built before a table's type named its TABLET")]
 
 
 class TestARespelledBlockReconstructsTheOldOne:
 
-    def test_a_tab(self, tmp_path):
-        new, old = NewTab(datalake=str(tmp_path)), OldTab(datalake=str(tmp_path))
-        sp = NewTab.SPECIALIZATIONS[0]
+    def test_a_tablet(self, tmp_path):
+        new, old = NewTablet(datalake=str(tmp_path)), OldTablet(datalake=str(tmp_path))
+        sp = NewTablet.SPECIALIZATIONS[0]
         assert new.hash != old.hash, "the respelling is a new identity"
         assert new.get_hash(sp) == old.hash
         assert new.get_typestr(sp) == old.typestr()
         assert new._specialization_mismatch_(sp) is None
         assert 'topic:tiles=SLICETOPIC' in new.get_typestr(sp)
 
-    def test_a_table_adds_its_tabs_slices_as_the_old_era_did(self, tmp_path):
+    def test_a_table_adds_its_tablets_slices_as_the_old_era_did(self, tmp_path):
         new, old = NewTable(datalake=str(tmp_path)), OldTable(datalake=str(tmp_path))
         sp = NewTable.SPECIALIZATIONS[0]
         assert 'topic:tiles=SLICETOPIC' in old.typestr()          # the sentinel era accumulated
         assert 'topic:tiles' not in new.typestr()                  # the marker era does not
-        # Built before a table's type named its TAB: under those rules.
+        # Built before a table's type named its TABLET: under those rules.
         assert new.get_typestr(sp) == old.typestr(with_block=False)
         assert new.get_hash(sp) == old.get_hash(with_block=False)
 
@@ -77,7 +77,7 @@ class TestNothingIsInherited:
             Datablock.Specialization(spec={}, topics=['tiles'])
 
     def test_the_declaration_not_the_class_is_rendered(self, tmp_path):
-        new = NewTab(datalake=str(tmp_path))
+        new = NewTablet(datalake=str(tmp_path))
         other = Datablock.Specialization(spec={}, topics={'tiles': 'tiles.bin'})
         assert "topic:tiles='tiles.bin'" not in new.get_typestr(other)   # sentinel-era: bare
         assert 'topic:tiles=tiles.bin' in new.get_typestr(other)
@@ -200,8 +200,8 @@ class TestLegacySpecialization:
 class TestLooking:
 
     def test_types_typestrs_hashes_and_signatures(self, tmp_path):
-        new, old = NewTab(datalake=str(tmp_path)), OldTab(datalake=str(tmp_path))
-        sp = NewTab.SPECIALIZATIONS[0]
+        new, old = NewTablet(datalake=str(tmp_path)), OldTablet(datalake=str(tmp_path))
+        sp = NewTablet.SPECIALIZATIONS[0]
         assert new.specialization_hashes() == [old.hash]
         assert new.specialization_typestrs() == [old.typestr()]
         [t] = new.specialization_types()
@@ -212,7 +212,7 @@ class TestLooking:
         assert new.get_type() == new.type() and new.get_typestr() == new.typestr()
 
     def test_a_block_with_none_lists_none(self, tmp_path):
-        old = OldTab(datalake=str(tmp_path))
+        old = OldTablet(datalake=str(tmp_path))
         assert old.specialization_types() == old.specialization_typestrs() == old.specialization_hashes() == []
 
 

@@ -22,7 +22,7 @@ from sklearn.metrics import classification_report
 import dbx
 from dbx.datablocks import DATADICT, DATAFILE, Datablock, InvalidBlocksError, forward_property
 from dbx.datatables import Datacollator
-from dbx.featuretables import Featuretable, Featuretab
+from dbx.featuretables import Featuretable, Featuretablet
 from dbx.dataparts import DatatableCorePart, DatatablePart
 from dbx.databits import (
     callable_executor,
@@ -223,7 +223,7 @@ def aggregateby_vector(collator: Datacollator, data: dict, *, allow_none: bool =
     """The ``aggregateby`` column as a 1-D object array of per-row values; None when the collator declares none.
 
     The rows sharing a value -- a slide's tiles, say -- are one aggregate,
-    whichever tabs they lie in.
+    whichever tablets they lie in.
     """
     pairs = collator.pairs('aggregateby')
     if not pairs:
@@ -252,9 +252,9 @@ def _label_key_(label):
 
 
 def check_probe_inputs(probe, table=None) -> None:
-    """Raise `InvalidBlocksError` here, in the parent, before any worker starts, when a tab a probe will read is not valid.
+    """Raise `InvalidBlocksError` here, in the parent, before any worker starts, when a tablet a probe will read is not valid.
 
-    A worker reading an invalid tab fails far from the cause -- a missing shard
+    A worker reading an invalid tablet fails far from the cause -- a missing shard
     index, one traceback per worker -- and says nothing of why. The tables
     asked are the ones the collator's slices are read from: *table*'s own
     (the probe's ``feature_table`` by default), and the upstream ones its
@@ -263,9 +263,9 @@ def check_probe_inputs(probe, table=None) -> None:
     table = probe.var.feature_table if table is None else table
     collator = getattr(probe.var, 'collator', None)
     # A fold routes no slices of its own: it reads its table's. Its blocks --
-    # the table's tabs, and pieces of them, which are not the table's -- are
-    # asked of the fold itself; an upstream table's, at the fold's tab indices.
-    # A core part is no view: its tabs are its own, holding every slice it reads.
+    # the table's tablets, and pieces of them, which are not the table's -- are
+    # asked of the fold itself; an upstream table's, at the fold's tablet indices.
+    # A core part is no view: its tablets are its own, holding every slice it reads.
     part = table if isinstance(table, DatatablePart) and not isinstance(table, DatatableCorePart) else None
     if part is not None:
         table = part.datatable
@@ -276,38 +276,38 @@ def check_probe_inputs(probe, table=None) -> None:
     else:
         owners[id(table)] = (table, list(collator.slices(table)) if collator is not None else [])
     for owner, slices in owners.values():
-        if not hasattr(owner, 'valid_blocks') or not (getattr(owner, 'n_tabs', 0) or 0):
+        if not hasattr(owner, 'valid_blocks') or not (getattr(owner, 'n_tablets', 0) or 0):
             continue
         if part is not None and owner is table:
             owner = part
-            invalid = [i for i in range(part.n_tabs) if not part.valid_block(i)]
+            invalid = [i for i in range(part.n_tablets) if not part.valid_block(i)]
         elif part is not None:
-            # A partition splits no tab of a table reading upstream, so these are whole tabs.
-            invalid = [i for i in part.tab_indices if not owner.valid_block(i)]
+            # A partition splits no tablet of a table reading upstream, so these are whole tablets.
+            invalid = [i for i in part.tablet_indices if not owner.valid_block(i)]
         else:
             invalid = list(owner.valid_blocks(parallelization=probe.parallelization, n_workers=probe.n_workers,
                                               false_only=True).index)
         if invalid:
-            pieces = owner is part and any(isinstance(part.tab_indices[i], dict) for i in invalid)
+            pieces = owner is part and any(isinstance(part.tablet_indices[i], dict) for i in invalid)
             raise InvalidBlocksError(owner, invalid,
-                                     reader=f"{probe.anchorkeypath}: reading {slices} from its tabs"
+                                     reader=f"{probe.anchorkeypath}: reading {slices} from its tablets"
                                             + ("; a part's pieces are built by the part: part.build()" if pieces else ""))
 
 
-class TabAffineLogisticCallable:
-    """Worker callable that loads one tab's concatenated signal matrix and labels."""
+class TabletAffineLogisticCallable:
+    """Worker callable that loads one tablet's concatenated signal matrix and labels."""
 
-    def __init__(self, probe: Any, table: Any, tab_idx: int | None):
+    def __init__(self, probe: Any, table: Any, tablet_idx: int | None):
         self.probe = probe
         self.table = table
-        self.tab_idx = tab_idx
+        self.tablet_idx = tablet_idx
 
     def __call__(self):
         var = self.probe.var
         collator = var.collator
         skip_missing = getattr(collator.var, 'skip_missing', False) or getattr(var, 'skip_missing', False)
 
-        block = self.table if self.tab_idx is None else self.table.tab(self.tab_idx)
+        block = self.table if self.tablet_idx is None else self.table.tablet(self.tablet_idx)
         tag = getattr(block, 'tag', None)
         data = block.data(*collator.slices(), concat=True)
         del block
@@ -327,13 +327,13 @@ class TabAffineLogisticCallable:
                 gc.collect()
                 return None
             raise ValueError(
-                f"{type(self).__name__}: tab {self.tab_idx} missing signals or labels "
+                f"{type(self).__name__}: tablet {self.tablet_idx} missing signals or labels "
                 f"(X is None: {X is None}, y is None: {y is None})"
             )
 
         if len(X) != len(y):
             raise ValueError(
-                f"{type(self).__name__}: tab {self.tab_idx} has {len(X)} feature "
+                f"{type(self).__name__}: tablet {self.tablet_idx} has {len(X)} feature "
                 f"rows and {len(y)} labels"
             )
         if keys is not None and len(keys) != len(y):
@@ -341,7 +341,7 @@ class TabAffineLogisticCallable:
                 gc.collect()
                 return None
             raise ValueError(
-                f"{type(self).__name__}: tab {self.tab_idx} has {len(y)} labels and "
+                f"{type(self).__name__}: tablet {self.tablet_idx} has {len(y)} labels and "
                 f"{len(keys)} aggregateby values"
             )
 
@@ -366,11 +366,11 @@ class TabAffineLogisticCallable:
         if X.dtype == object:
             X = np.asarray(X, dtype=np.float32)
 
-        # A sample of the tab's rows, seeded by the tab -- its tag, not its
-        # index in this table -- so a tab gives the same rows wherever it is read.
-        limit = getattr(var, 'max_rows_per_tab', None)
+        # A sample of the tablet's rows, seeded by the tablet -- its tag, not its
+        # index in this table -- so a tablet gives the same rows wherever it is read.
+        limit = getattr(var, 'max_rows_per_tablet', None)
         if limit is not None and len(y) > limit:
-            rng = np.random.default_rng([var.seed, zlib.crc32(str(tag if tag is not None else self.tab_idx).encode())])
+            rng = np.random.default_rng([var.seed, zlib.crc32(str(tag if tag is not None else self.tablet_idx).encode())])
             keep = np.sort(rng.choice(len(y), size=limit, replace=False))
             X, y = X[keep], y[keep]
             keys = None if keys is None else keys[keep]
@@ -378,15 +378,15 @@ class TabAffineLogisticCallable:
         out = {'signals': X, 'labels': y, 'layout': layout, 'tag': tag}
         if keys is not None and any(v is None for v in keys):
             raise ValueError(
-                f"{type(self).__name__}: tab {self.tab_idx} holds rows of no aggregateby value. "
+                f"{type(self).__name__}: tablet {self.tablet_idx} holds rows of no aggregateby value. "
                 f"Skip them with skip_missing=True, or give every row one.")
         if keys is not None:
             keys = np.array([_aggregate_key_(v) for v in keys], dtype=object)
             if var.aggregation == 'mean':
-                # This tab's share of each aggregate: its rows' sum and count,
+                # This tablet's share of each aggregate: its rows' sum and count,
                 # per (aggregateby value, label). The rest of an aggregate may
-                # lie in other tabs -- a packed tab holds rows of many -- so the
-                # mean is taken by the probe, once every tab's share is in.
+                # lie in other tablets -- a packed tablet holds rows of many -- so the
+                # mean is taken by the probe, once every tablet's share is in.
                 cells = np.array([json.dumps([k, _label_key_(l)]) for k, l in zip(keys, y)], dtype=object)
                 cells, first, inverse = np.unique(cells, return_index=True, return_inverse=True)
                 sums = np.zeros((len(cells), X.shape[1]), dtype=np.float64)
@@ -400,12 +400,12 @@ class TabAffineLogisticCallable:
 
 
 class FeatureAffineLogisticProbe(Datablock):
-    """Fit a logistic classifier on one table's tabs and score it on another's.
+    """Fit a logistic classifier on one table's tablets and score it on another's.
 
     *fit_table* and *eval_table* are what it is fitted on and scored on --
     typically two parts of a `DatatablePartition` of a feature table, dealt by
     patient and stratified by label, so neither the patients nor the slides of
-    one are in the other. They must share no tab, no row of the table they were
+    one are in the other. They must share no tablet, no row of the table they were
     partitioned from, and -- when the collator names an ``aggregateby`` column
     -- no value of it; a probe given two that do refuses to build, naming them.
 
@@ -417,9 +417,9 @@ class FeatureAffineLogisticProbe(Datablock):
 
     A sample is a row by default. With *aggregation* ``'mean'`` it is the mean
     of the rows sharing a value of the collator's ``aggregateby`` column (a
-    slide's id, say) and a label, wherever they lie: each tab sums its share of
-    each, and the probe divides once every tab's share is in. So an aggregate
-    may span tabs -- the pieces and packed tabs of a partition, the core tabs
+    slide's id, say) and a label, wherever they lie: each tablet sums its share of
+    each, and the probe divides once every tablet's share is in. So an aggregate
+    may span tablets -- the pieces and packed tablets of a partition, the core tablets
     of a core partition -- and the rows of one value carrying two labels are
     two samples, one per label. Whenever the collator names an ``aggregateby``
     column, the two tables must share no value of it, whatever *aggregation*
@@ -430,8 +430,8 @@ class FeatureAffineLogisticProbe(Datablock):
     is averaged over all but its last before it is flattened, so ``coef_`` has
     one coefficient per feature rather than per (token, feature).
 
-    *max_rows_per_tab* reads at most that many of a tab's rows, drawn with
-    *seed* and the tab's tag -- a size for a fit, which moves no tab across the
+    *max_rows_per_tablet* reads at most that many of a tablet's rows, drawn with
+    *seed* and the tablet's tag -- a size for a fit, which moves no tablet across the
     two tables.
 
     Persists the fitted classifier's ``coef_``, ``intercept_`` and
@@ -450,14 +450,14 @@ class FeatureAffineLogisticProbe(Datablock):
         'intercept': DATAFILE('intercept.npy'),
         'classes': DATADICT('classes.npz', classes='ndarray'),
     }
-    # None: VERSION 3's builds had a field this one does not, tab_aggregation,
+    # None: VERSION 3's builds had a field this one does not, tablet_aggregation,
     # and a specialization can only drop fields, not restore one.
     SPECIALIZATIONS = []
 
     @dataclass
     class VAR(Datablock.VAR):
-        fit_table: Featuretable | Featuretab
-        eval_table: Featuretable | Featuretab
+        fit_table: Featuretable | Featuretablet
+        eval_table: Featuretable | Featuretablet
         collator: Datacollator
         fit_intercept: bool = True
         # Not 'mean': signal_reduction collapses the axes between row and
@@ -465,10 +465,10 @@ class FeatureAffineLogisticProbe(Datablock):
         # on averaged away whatever the caller actually asked to probe.
         signal_reduction: str | None = None
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
-        max_rows_per_tab: int | None = None
+        max_rows_per_tablet: int | None = None
         seed: int = 0
         # 'mean' makes each (aggregateby value, label) one sample: the mean of
-        # its rows, from whichever tabs they lie in.
+        # its rows, from whichever tablets they lie in.
         aggregation: str | None = None
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -502,8 +502,8 @@ class FeatureAffineLogisticProbe(Datablock):
             raise ValueError(f"{what}: aggregation={self.var.aggregation!r} aggregates the rows sharing a value of "
                              f"the collator's aggregateby column, which must name one, not "
                              f"{self.var.collator.pairs('aggregateby')!r}")
-        if self.var.max_rows_per_tab is not None and int(self.var.max_rows_per_tab) < 1:
-            raise ValueError(f"{type(self).__name__}: max_rows_per_tab must be positive, got {self.var.max_rows_per_tab!r}")
+        if self.var.max_rows_per_tablet is not None and int(self.var.max_rows_per_tablet) < 1:
+            raise ValueError(f"{type(self).__name__}: max_rows_per_tablet must be positive, got {self.var.max_rows_per_tablet!r}")
         assert self.var.normalization in NORMALIZATION_MODES, f"Unknown normalization mode: {self.var.normalization!r}"
         self.parallelization = getattr(self, 'parallelization', None) or 'inline'
         self.n_workers = getattr(self, 'n_workers', 1)
@@ -516,8 +516,8 @@ class FeatureAffineLogisticProbe(Datablock):
         sides, layouts, keys = {}, set(), {}
         for side in ('fit', 'eval'):
             table = getattr(self.var, f'{side}_table')
-            results = self._tab_results_(f"COMPUTING LOGISTIC INPUT DATA ({side})", table,
-                                         lambda i, t=table: TabAffineLogisticCallable(self, t, i))
+            results = self._tablet_results_(f"COMPUTING LOGISTIC INPUT DATA ({side})", table,
+                                         lambda i, t=table: TabletAffineLogisticCallable(self, t, i))
             results = self._kept_(side, table, results)
             layouts |= {tuple(res['layout']) for res in results}
             if self.var.aggregation == 'mean':
@@ -531,11 +531,11 @@ class FeatureAffineLogisticProbe(Datablock):
             write_tensor(torch.from_numpy(X), self.path(side, 'features', ensure_dirpath=True))
             sides[side] = (X, y)
 
-        # Every tab -- of both tables -- must lay its columns out identically,
+        # Every tablet -- of both tables -- must lay its columns out identically,
         # or the rows stacked here do not describe the same feature at the same
         # position, and the eval rows are not what the classifier was fitted on.
         if len(layouts) != 1:
-            raise ValueError(f"{self.__class__.__name__}: tabs disagree on the signal column layout: {sorted(layouts)}")
+            raise ValueError(f"{self.__class__.__name__}: tablets disagree on the signal column layout: {sorted(layouts)}")
         if len(keys) == 2:
             shared = np.intersect1d(keys['fit'], keys['eval'])
             if len(shared):
@@ -552,7 +552,7 @@ class FeatureAffineLogisticProbe(Datablock):
             f"FITTING LogisticRegression "
             f"(n_fit={len(y_fit)}, n_eval={len(y_eval)}, "
             f"aggregation={self.var.aggregation!r}, "
-            f"max_rows_per_tab={self.var.max_rows_per_tab!r}, "
+            f"max_rows_per_tab={self.var.max_rows_per_tablet!r}, "
             f"fit_intercept={self.var.fit_intercept}, "
             f"signals={self.var.collator.signal_pairs!r}, "
             f"labels={self.var.collator.label_pairs!r}, "
@@ -622,14 +622,14 @@ class FeatureAffineLogisticProbe(Datablock):
 
     @staticmethod
     def _tags_(table) -> list:
-        n = getattr(table, 'n_tabs', 0) or 0
-        return [table.tab(i).tag for i in range(n)] if n else [getattr(table, 'tag', None)]
+        n = getattr(table, 'n_tablets', 0) or 0
+        return [table.tablet(i).tag for i in range(n)] if n else [getattr(table, 'tag', None)]
 
     def _check_disjoint_(self) -> None:
-        """Refuse a fit and an eval table that share a tab, or a row: it would be scored by a classifier fitted on it.
+        """Refuse a fit and an eval table that share a tablet, or a row: it would be scored by a classifier fitted on it.
 
-        Tabs are compared by tag. That says nothing of two parts holding tabs
-        the partitions made -- pieces, packed tabs, core tabs, tagged by where
+        Tablets are compared by tag. That says nothing of two parts holding tablets
+        the partitions made -- pieces, packed tablets, core tablets, tagged by where
         they are -- so two parts of different partitions of one table are also
         compared row by row, by the rows of that table their ``source`` slices
         name. Two parts of one partition are disjoint by its deal, and are not.
@@ -638,7 +638,7 @@ class FeatureAffineLogisticProbe(Datablock):
         shared = sorted(set(self._tags_(fit)) & set(self._tags_(ev)) - {None})
         if shared:
             raise ValueError(
-                f"{type(self).__name__}: fit_table and eval_table share {len(shared)} tab(s), e.g. {shared[:5]} -- "
+                f"{type(self).__name__}: fit_table and eval_table share {len(shared)} tablet(s), e.g. {shared[:5]} -- "
                 f"their rows would be scored by a classifier fitted on them. Give it two parts of one partition.")
         if not (isinstance(fit, DatatablePart) and isinstance(ev, DatatablePart)):
             return
@@ -651,12 +651,12 @@ class FeatureAffineLogisticProbe(Datablock):
         if len(rows):
             raise ValueError(
                 f"{type(self).__name__}: fit_table and eval_table are parts of two partitions of one table, and "
-                f"share {len(rows)} of its rows, e.g. (tab, row) {[divmod(int(r), 1 << 32) for r in rows[:5]]} -- "
+                f"share {len(rows)} of its rows, e.g. (tablet, row) {[divmod(int(r), 1 << 32) for r in rows[:5]]} -- "
                 f"they would be scored by a classifier fitted on them. Give it two parts of one partition.")
 
     @staticmethod
     def _aggregate_means_(results) -> tuple:
-        """Every tab's per-(aggregateby value, label) sums and counts merged: one mean row per cell, its label, and the values."""
+        """Every tablet's per-(aggregateby value, label) sums and counts merged: one mean row per cell, its label, and the values."""
         cells = np.concatenate([res['cells'] for res in results])
         cells, first, inverse = np.unique(cells, return_index=True, return_inverse=True)
         sums = np.zeros((len(cells), results[0]['signals'].shape[1]), dtype=np.float64)
@@ -668,30 +668,30 @@ class FeatureAffineLogisticProbe(Datablock):
         return X, y, np.unique(np.concatenate([res['keys'] for res in results]))
 
     def _kept_(self, side: str, table, results) -> list:
-        """The tabs' results that carry data -- warning, by tag, of those skipped for missing signals or labels."""
+        """The tablets' results that carry data -- warning, by tag, of those skipped for missing signals or labels."""
         kept = [res for res in results if res is not None]
         if len(kept) < len(results):
-            # A warning, not info: a skipped tab is a whole slide missing from
+            # A warning, not info: a skipped tablet is a whole slide missing from
             # the fit or the evaluation, and the report says nothing of it.
             skipped = [i for i, res in enumerate(results) if res is None]
-            tags = [table.tab(i).tag for i in skipped[:10]] if getattr(table, 'n_tabs', 0) else []
+            tags = [table.tablet(i).tag for i in skipped[:10]] if getattr(table, 'n_tablets', 0) else []
             self.log.warning(
-                f"{self.__class__.__name__}: {side}: skipped {len(skipped)}/{len(results)} tabs with missing "
+                f"{self.__class__.__name__}: {side}: skipped {len(skipped)}/{len(results)} tablets with missing "
                 f"signals or labels ({len(kept)} remaining); first skipped: {tags or skipped[:10]}")
         if not kept:
-            raise ValueError(f"{self.__class__.__name__}: {side}: all {len(results)} tabs were skipped "
+            raise ValueError(f"{self.__class__.__name__}: {side}: all {len(results)} tablets were skipped "
                              f"for missing signals or labels")
         return kept
 
-    def _tab_results_(self, tag: str, table, make_callable):
+    def _tablet_results_(self, tag: str, table, make_callable):
         check_probe_inputs(self, table)
-        n_tabs = getattr(table, 'n_tabs', 0) or 0
+        n_tablets = getattr(table, 'n_tablets', 0) or 0
         executor_kwargs = dict(n_workers=self.n_workers,
                                tag=f"{tag} [{self.__class__.__name__}, n_workers={self.n_workers}]")
         if getattr(self, 'work_stealing', False):
             executor_kwargs['work_stealing'] = self.work_stealing
         executor = callable_executor(self.parallelization, **executor_kwargs)
-        indices = list(range(n_tabs)) if n_tabs > 0 else [None]
+        indices = list(range(n_tablets)) if n_tablets > 0 else [None]
         return executor.exec_callables([make_callable(i) for i in indices])
 
 
@@ -706,7 +706,7 @@ SAMPLE_REDUCTIONS = {
 #: norm per row, which is not a reduction and so is stored apart from them.
 COLUMN_STATS = (*SAMPLE_REDUCTIONS, 'norm')
 
-#: Bytes of one band of a whole-table column, concatenated across tabs.
+#: Bytes of one band of a whole-table column, concatenated across tablets.
 TABLE_STATS_BAND_BYTES = 256 * 2**20
 
 
@@ -757,12 +757,12 @@ def _nest_(paths, leaf) -> dict:
     return tree
 
 
-class TabColumnStatsCallable:
-    """Worker callable returning one tab's per-column values, ready to describe."""
+class TabletColumnStatsCallable:
+    """Worker callable returning one tablet's per-column values, ready to describe."""
 
-    def __init__(self, probe: Any, tab_idx: int | None):
+    def __init__(self, probe: Any, tablet_idx: int | None):
         self.probe = probe
-        self.tab_idx = tab_idx
+        self.tablet_idx = tablet_idx
 
     def __call__(self):
         table = self.probe.var.feature_table
@@ -770,7 +770,7 @@ class TabColumnStatsCallable:
         normalization = self.probe.var.normalization
         signals = set(collator.signal_pairs)
 
-        block = table if self.tab_idx is None else table.tab(self.tab_idx)
+        block = table if self.tablet_idx is None else table.tablet(self.tablet_idx)
         data = block.data(*collator.slices(), concat=True)
         del block
 
@@ -796,36 +796,36 @@ class TabColumnStatsCallable:
             raise ValueError(
                 f"{type(self).__name__}: columns disagree on sample count: {sorted(counts)}"
             )
-        # This tab's own statistics, here in the worker rather than in the
-        # build's loop over every tab afterwards: they then run in parallel.
+        # This tablet's own statistics, here in the worker rather than in the
+        # build's loop over every tablet afterwards: they then run in parallel.
         stats = {path: column_stats(arr) for path, arr in columns.items()}
         gc.collect()
         return {'columns': columns, 'stats': stats, 'n_rows': counts.pop() if counts else 0}
 
 
 class FeatureStatsProbe(Datablock):
-    """Per-column statistics for a Featuretable or Featuretab.
+    """Per-column statistics for a Featuretable or Featuretablet.
 
     Every signal and label pair the collator declares is described, each under
     its own path -- the pair's names, one level each -- in three topics::
 
         stats/<slice>/<column>/stats.npz          PER_FEATURE_DATADICT
-        tab_stats/<slice>/<column>/tab_stats.npz  PER_TAB_DATADICT
+        tablet_stats/<slice>/<column>/tablet_stats.npz  PER_TABLET_DATADICT
         norm/<slice>/<column>/norm.npz            NORM_DATADICT
 
     A statistic is addressed the way the data it describes is::
 
         probe.read('stats', 'features', 'final')   -> {'mean': array(8,), 'median': ..., ...}
         probe.stat('median', ('features', 'final'))                -> array(8,)
-        probe.stat('median', ('features', 'final'), per_tab=True)  -> array(n_tabs, 8)
+        probe.stat('median', ('features', 'final'), per_tablet=True)  -> array(n_tablets, 8)
 
     Whole-table statistics are computed over the concatenated rows rather than
-    averaged from the per-tab ones -- a mean of tab means is the table mean
-    only when the tabs are equal-sized, and a median or a min never is.
+    averaged from the per-tablet ones -- a mean of tablet means is the table mean
+    only when the tablets are equal-sized, and a median or a min never is.
 
     Signal columns are described after `normalize_features` with
     ``VAR.normalization``, one column at a time; labels as they are. A block
-    that thresholds against these statistics (`BipolarFeaturetab`) must
+    that thresholds against these statistics (`BipolarFeaturetablet`) must
     normalize its values the same way, and reads the mode from here to do so.
 
     TOPICS is built per instance from the collator's pairs, as the columns are
@@ -839,11 +839,11 @@ class FeatureStatsProbe(Datablock):
     #: array per statistic, each the shape of a single sample.
     PER_FEATURE_DATADICT = DATADICT(
         'stats.npz', mean='ndarray', std='ndarray', median='ndarray', min='ndarray', max='ndarray')
-    #: The same statistics per tab, stacked in tab order: ``(n_tabs, ...)``.
-    PER_TAB_DATADICT = DATADICT(
+    #: The same statistics per tablet, stacked in tablet order: ``(n_tablets, ...)``.
+    PER_TABLET_DATADICT = DATADICT(
         'tab_stats.npz', mean='ndarray', std='ndarray', median='ndarray', min='ndarray', max='ndarray')
-    #: One L2 norm per row, concatenated in tab order, and each tab's row
-    #: count, which splits them back into tabs.
+    #: One L2 norm per row, concatenated in tablet order, and each tablet's row
+    #: count, which splits them back into tablets.
     NORM_DATADICT = DATADICT('norm.npz', norm='ndarray', tab_counts='ndarray')
 
     @forward_property({'count': DATADICT('count.npz', count='ndarray')})
@@ -856,13 +856,13 @@ class FeatureStatsProbe(Datablock):
         return {
             'count': DATADICT('count.npz', count='ndarray'),
             'stats': _nest_(paths, self.PER_FEATURE_DATADICT),
-            'tab_stats': _nest_(paths, self.PER_TAB_DATADICT),
+            'tab_stats': _nest_(paths, self.PER_TABLET_DATADICT),
             'norm': _nest_(paths, self.NORM_DATADICT),
         }
 
     @dataclass
     class VAR(Datablock.VAR):
-        feature_table: Featuretable | Featuretab
+        feature_table: Featuretable | Featuretablet
         collator: Datacollator
         normalization: str | None = None  # None, 'l2', 'corner-l1', 'corner-l2', 'corner-linfty'
 
@@ -898,34 +898,34 @@ class FeatureStatsProbe(Datablock):
         check_probe_inputs(self)
         table = self.var.feature_table
 
-        n_tabs = getattr(table, 'n_tabs', 0) or 0
+        n_tablets = getattr(table, 'n_tablets', 0) or 0
         executor_kwargs = dict(n_workers=self.n_workers,
-                               tag=f"COMPUTING TAB STATS [{self.__class__.__name__}, n_workers={self.n_workers}]")
+                               tag=f"COMPUTING TABLET STATS [{self.__class__.__name__}, n_workers={self.n_workers}]")
         if getattr(self, 'work_stealing', False):
             executor_kwargs['work_stealing'] = self.work_stealing
         executor = callable_executor(self.parallelization, **executor_kwargs)
-        indices = list(range(n_tabs)) if n_tabs > 0 else [None]
-        self.log.info(f"{type(self).__name__}: computing per-tab stats of "
-                      f"{len(self.column_paths)} column(s) over {len(indices)} tab(s)")
-        results = executor.exec_callables([TabColumnStatsCallable(self, i) for i in indices])
+        indices = list(range(n_tablets)) if n_tablets > 0 else [None]
+        self.log.info(f"{type(self).__name__}: computing per-tablet stats of "
+                      f"{len(self.column_paths)} column(s) over {len(indices)} tablet(s)")
+        results = executor.exec_callables([TabletColumnStatsCallable(self, i) for i in indices])
 
         n_rows = sum(res['n_rows'] for res in results)
         held = sum(arr.nbytes for res in results for arr in res['columns'].values())
-        self.log.info(f"{type(self).__name__}: {len(results)} tab(s), {n_rows} row(s) in hand "
+        self.log.info(f"{type(self).__name__}: {len(results)} tablet(s), {n_rows} row(s) in hand "
                       f"({held / 2**30:.2f} GiB); computing whole-table stats")
         whole_by_path = self._table_stats_(results)
 
         from tqdm import tqdm
-        tab_counts = np.array([res['n_rows'] for res in results])
+        tablet_counts = np.array([res['n_rows'] for res in results])
         for path in tqdm(self.column_paths, desc=f"WRITING STATS [{type(self).__name__}]"):
             whole = whole_by_path[path]
             write_npz(self.path('stats', *path, ensure_dirpath=True),
                       **{name: whole[name] for name in self.PER_FEATURE_DATADICT.schema})
             write_npz(self.path('tab_stats', *path, ensure_dirpath=True),
                       **{name: np.stack([res['stats'][path][name] for res in results])
-                         for name in self.PER_TAB_DATADICT.schema})
+                         for name in self.PER_TABLET_DATADICT.schema})
             write_npz(self.path('norm', *path, ensure_dirpath=True),
-                      norm=whole['norm'], tab_counts=tab_counts)
+                      norm=whole['norm'], tab_counts=tablet_counts)        # tab_counts: the key on disk
 
         write_npz(self.path('count', ensure_dirpath=True), count=np.array(n_rows))
         self.log.info(f"{type(self).__name__}: stats written")
@@ -949,13 +949,13 @@ class FeatureStatsProbe(Datablock):
 
     # 2. Declared API ------------------------------------------------------
 
-    def stat(self, name: str, column, *, per_tab: bool = False) -> np.ndarray | list:
+    def stat(self, name: str, column, *, per_tablet: bool = False) -> np.ndarray | list:
         """One statistic of one described column.
 
         *column* is the pair as the collator declares it, ``('features',
-        'final')``. Whole-table by default; ``per_tab=True`` gives the tabs'
-        values stacked, ``(n_tabs, ...)``. ``'norm'`` is per row: the whole
-        table's rows in tab order, or with ``per_tab=True`` one array per tab.
+        'final')``. Whole-table by default; ``per_tablet=True`` gives the tablets'
+        values stacked, ``(n_tablets, ...)``. ``'norm'`` is per row: the whole
+        table's rows in tablet order, or with ``per_tablet=True`` one array per tablet.
         Only the one array asked for is read from its file.
         """
         if not isinstance(column, (tuple, list)):
@@ -964,14 +964,14 @@ class FeatureStatsProbe(Datablock):
         path = _column_path_(column)
         self._check_column_path_(path, f"stat({name!r}, {column!r})")
         if name == 'norm':
-            if not per_tab:
+            if not per_tablet:
                 return read_npz(self.path('norm', *path), 'norm')['norm']
             d = read_npz(self.path('norm', *path), 'norm', 'tab_counts')
             return np.split(d['norm'], np.cumsum(d['tab_counts'])[:-1])
         if name not in self.PER_FEATURE_DATADICT.schema:
             raise KeyError(f"{type(self).__name__}.stat: no statistic {name!r}; "
                            f"expected one of {list(COLUMN_STATS)}")
-        topic = 'tab_stats' if per_tab else 'stats'
+        topic = 'tab_stats' if per_tablet else 'stats'
         return read_npz(self.path(topic, *path), name)[name]
 
     # 3. Accessors ---------------------------------------------------------
@@ -993,7 +993,7 @@ class FeatureStatsProbe(Datablock):
     # 4. Helpers -----------------------------------------------------------
 
     def _stat_marker_(self, topic: str):
-        markers = {'stats': self.PER_FEATURE_DATADICT, 'tab_stats': self.PER_TAB_DATADICT,
+        markers = {'stats': self.PER_FEATURE_DATADICT, 'tab_stats': self.PER_TABLET_DATADICT,
                    'norm': self.NORM_DATADICT}
         if topic not in markers:
             raise ValueError(f"Unknown topic: {topic!r}; expected one of {['count', *markers]}")
@@ -1009,13 +1009,13 @@ class FeatureStatsProbe(Datablock):
     def _table_stats_(self, results) -> dict[tuple, dict[str, np.ndarray]]:
         """The whole-table `column_stats` of every column, a band of columns at a time.
 
-        Concatenating a column across all tabs and reducing it is a full copy of
+        Concatenating a column across all tablets and reducing it is a full copy of
         the table's features -- and ``np.median`` takes another to partition --
         which on a large table is tens of GB, and is where the build sat, with
-        no progress bar, after the last tab. Every reduction here runs over the
+        no progress bar, after the last tablet. Every reduction here runs over the
         sample axis, independently per column, so reducing one band of columns
         at a time gives the same values holding only that band. ``norm`` is per
-        sample, so it is the tabs' own, joined.
+        sample, so it is the tablets' own, joined.
         """
         from tqdm import tqdm
         plans = []
@@ -1045,7 +1045,7 @@ class FeatureStatsProbe(Datablock):
 
 # The statistics are spelled out in the DATADICTs, as documentation, and
 # computed by SAMPLE_REDUCTIONS: the two must name the same ones.
-for _marker in (FeatureStatsProbe.PER_FEATURE_DATADICT, FeatureStatsProbe.PER_TAB_DATADICT):
+for _marker in (FeatureStatsProbe.PER_FEATURE_DATADICT, FeatureStatsProbe.PER_TABLET_DATADICT):
     if tuple(_marker.schema) != tuple(SAMPLE_REDUCTIONS):
         raise RuntimeError(f"{_marker!r} declares {tuple(_marker.schema)}, "
                            f"but SAMPLE_REDUCTIONS computes {tuple(SAMPLE_REDUCTIONS)}")

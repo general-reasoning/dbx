@@ -1,7 +1,7 @@
 """
-`DatatablePartition`: whole tabs dealt to folds, by stratifyby / partitionby / balance / seed.
+`DatatablePartition`: whole tablets dealt to folds, by stratifyby / partitionby / balance / seed.
 
-Each tab here is one "slide": `rows` rows, every one carrying the slide's
+Each tablet here is one "slide": `rows` rows, every one carrying the slide's
 patient and cohort in a `meta` slice -- the columns the partition reads,
 named by its collator's stratifyby and partitionby roles.
 """
@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from dbx.datablocks import Datablock
-from dbx.datatables import DATASLICE, Datacollator, Datatab, Datatable
+from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
 from dbx.dataparts import DatatablePartition
 
 
@@ -21,11 +21,11 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class Slide(Datatab):
+class Slide(Datatablet):
     TOPICS = {'meta': DATASLICE(patient='str', cohort='str', info='json')}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         patient: str = ''
         cohort: str = ''
         rows: int = 1
@@ -47,19 +47,19 @@ SLIDES = [('p1', 'LUAD', 1000), ('p1', 'LUAD', 800), ('p2', 'LUAD', 50), ('p3', 
 
 
 class Slides(Datatable):
-    TAB = Slide
+    TABLET = Slide
 
     @dataclass
     class VAR(Datatable.VAR):
         slides: list = None
 
     @property
-    def n_tabs(self):
+    def n_tablets(self):
         return len(self.var.slides)
 
-    def __tab__(self, idx, **kw):
+    def __tablet__(self, idx, **kw):
         s = self.var.slides[idx]
-        return super().__tab__(idx, patient=s[0], cohort=s[1], rows=s[2], mixed=bool(s[3:]) and s[3])
+        return super().__tablet__(idx, patient=s[0], cohort=s[1], rows=s[2], mixed=bool(s[3:]) and s[3])
 
 
 def table(tmp_path, slides=SLIDES):
@@ -83,25 +83,25 @@ def partition(tmp_path, tbl, stratifyby=None, partitionby=None, build=True, **sp
 
 
 def folds_of(p):
-    return [set(f) for f in p.read('tabs')]
+    return [set(f) for f in p.read('tablets')]
 
 
-def test_every_tab_is_in_exactly_one_fold(tmp_path):
+def test_every_tablet_is_in_exactly_one_fold(tmp_path):
     p = partition(tmp_path, table(tmp_path), stratifyby=PATIENT, partitionby=COHORT)
     a, b = folds_of(p)
     assert a.isdisjoint(b) and a | b == set(range(len(SLIDES)))
 
 
 def test_a_stratum_lands_in_one_fold(tmp_path):
-    p = partition(tmp_path, table(tmp_path), stratifyby=PATIENT, balance='tabs')
+    p = partition(tmp_path, table(tmp_path), stratifyby=PATIENT, balance='tablets')
     fold_of = {i: k for k, f in enumerate(folds_of(p)) for i in f}
     for patient in {s[0] for s in SLIDES}:
-        tabs = [i for i, s in enumerate(SLIDES) if s[0] == patient]
-        assert len({fold_of[i] for i in tabs}) == 1, patient
+        tablets = [i for i, s in enumerate(SLIDES) if s[0] == patient]
+        assert len({fold_of[i] for i in tablets}) == 1, patient
 
 
 def test_the_fractions_hold_within_each_partition(tmp_path):
-    p = partition(tmp_path, table(tmp_path), partitionby=COHORT, balance='tabs')
+    p = partition(tmp_path, table(tmp_path), partitionby=COHORT, balance='tablets')
     for f in p.read('summary')['folds']:
         # 4 slides per cohort, halved: 2 and 2 in each fold.
         assert {c: v['tabs'] for c, v in f['partitions'].items()} == {'BRCA': 2, 'LUAD': 2, 'OV': 2}
@@ -117,10 +117,10 @@ def test_the_seed_decides_and_repeats(tmp_path):
     assert len(seeds) > 1, "different seeds deal differently"
 
 
-def test_balance_counts_rows_or_tabs(tmp_path):
+def test_balance_counts_rows_or_tablets(tmp_path):
     tbl = table(tmp_path)
-    by_tabs = partition(tmp_path / 't', tbl, balance='tabs').read('summary')['folds']
-    assert [f['tabs'] for f in by_tabs] == [6, 6]
+    by_tablets = partition(tmp_path / 't', tbl, balance='tablets').read('summary')['folds']
+    assert [f['tabs'] for f in by_tablets] == [6, 6]
     by_rows = partition(tmp_path / 'r', tbl, balance='rows').read('summary')['folds']
     rows = [f['rows'] for f in by_rows]
     assert sum(rows) == sum(s[2] for s in SLIDES) and min(rows) > 0
@@ -129,12 +129,12 @@ def test_balance_counts_rows_or_tabs(tmp_path):
 def test_the_summary_says_what_each_fold_holds(tmp_path):
     tbl = table(tmp_path)
     s = partition(tmp_path, tbl, stratifyby=PATIENT, partitionby=COHORT).read('summary')
-    assert s['method'] == 'random' and s['n_tabs'] == len(SLIDES) and s['skipped'] == []
+    assert s['method'] == 'random' and s['n_tablets'] == len(SLIDES) and s['skipped'] == []
     tags = [t for f in s['folds'] for t in f['tags']]
-    assert sorted(tags) == sorted(tbl.tab(i).tag for i in range(len(SLIDES)))
+    assert sorted(tags) == sorted(tbl.tablet(i).tag for i in range(len(SLIDES)))
 
 
-def test_a_tab_with_no_value_is_skipped_and_said(tmp_path, caplog):
+def test_a_tablet_with_no_value_is_skipped_and_said(tmp_path, caplog):
     slides = SLIDES + [('p10', '', 10)]          # cohort None
     p = partition(tmp_path, table(tmp_path, slides), partitionby=COHORT)
     s = p.read('summary')
@@ -142,18 +142,18 @@ def test_a_tab_with_no_value_is_skipped_and_said(tmp_path, caplog):
     assert len(SLIDES) not in set().union(*folds_of(p))
 
 
-def test_a_tab_holding_two_values_is_split_into_pieces(tmp_path):
+def test_a_tablet_holding_two_values_is_split_into_pieces(tmp_path):
     slides = SLIDES[:-1] + [('p9', 'OV', 20, True)]     # its last row is patient 'other'
     p = partition(tmp_path, table(tmp_path, slides), stratifyby=PATIENT)
-    entries = [e for f in p.read('tabs') for e in f]
+    entries = [e for f in p.read('tablets') for e in f]
     last = len(slides) - 1
     assert last not in entries
     assert sorted((e for e in entries if isinstance(e, dict)), key=lambda e: e['stratifyby']) == [
         {'tab': last, 'stratifyby': 'other'}, {'tab': last, 'stratifyby': 'p9'}]
     s = p.read('summary')
     assert s['n_pieces'] == 2 and sum(f['pieces'] for f in s['folds']) == 2
-    assert {t for f in s['folds'] for t in f['tags'] if '#' in t} == {f"{p.datatable.tab(last).tag}#other",
-                                                                     f"{p.datatable.tab(last).tag}#p9"}
+    assert {t for f in s['folds'] for t in f['tags'] if '#' in t} == {f"{p.datatable.tablet(last).tag}#other",
+                                                                     f"{p.datatable.tablet(last).tag}#p9"}
 
 
 def test_a_stratum_spanning_partitions_is_refused(tmp_path):
@@ -171,7 +171,7 @@ def test_largest_first_takes_none_of_the_new_choices(tmp_path):
 
 @pytest.mark.parametrize('mixed', [False, True])
 def test_largest_first_deals_as_before(tmp_path, mixed):
-    # It reads no partition column, so a mixed tab is a tab like any other to it, and is not split.
+    # It reads no partition column, so a mixed tablet is a tablet like any other to it, and is not split.
     slides = SLIDES[:-1] + [('p9', 'OV', 20, True)] if mixed else SLIDES
     p = partition(tmp_path, table(tmp_path, slides), method='largest_first')
     rows = [s[2] for s in SLIDES]
@@ -181,7 +181,7 @@ def test_largest_first_deals_as_before(tmp_path, mixed):
         k = int(np.argmax([target[0] - have[0], target[1] - have[1]]))
         want[k].append(i)
         have[k] += rows[i]
-    assert p.read('tabs') == [sorted(w) for w in want]
+    assert p.read('tablets') == [sorted(w) for w in want]
 
 
 def test_a_collator_with_other_roles_is_refused(tmp_path):
@@ -191,7 +191,7 @@ def test_a_collator_with_other_roles_is_refused(tmp_path):
             datatable=table(tmp_path), fractions=[0.5, 0.5], partition_slice='meta', collator=c))
 
 
-def test_a_partition_of_constant_tabs_is_what_it_was(tmp_path):
+def test_a_partition_of_constant_tablets_is_what_it_was(tmp_path):
     """Pinned from dbx 07cd119, before tabs could be split: no deal of constant tabs moves.
 
     Its hash has moved twice. On 2026-10-09 *coalesce*, *min_tab_rows* and *max_tab_rows* became
@@ -203,22 +203,22 @@ def test_a_partition_of_constant_tabs_is_what_it_was(tmp_path):
     tbl = table(tmp_path)
     p = partition(tmp_path / 'gs', tbl, stratifyby=PATIENT, partitionby=COHORT)
     assert '3318e720fcb934c1fd3b563c7dc3f36487c8f63733a4414fdd0c9bccecba6a57' not in p.specialization_hashes()
-    assert p.read('tabs') == [[3, 6, 7, 9, 10, 11], [0, 1, 2, 4, 5, 8]]
-    assert p.part(0).tab_indices == [3, 6, 7, 9, 10, 11]
+    assert p.read('tablets') == [[3, 6, 7, 9, 10, 11], [0, 1, 2, 4, 5, 8]]
+    assert p.part(0).tablet_indices == [3, 6, 7, 9, 10, 11]
     assert 'n_pieces' not in p.read('summary')
     p = partition(tmp_path / 'none', tbl)
-    assert p.read('tabs') == [[0, 2, 3, 4, 5, 7, 9, 11], [1, 6, 8, 10]]
-    assert p.part(0).tab_indices == [0, 2, 3, 4, 5, 7, 9, 11]
+    assert p.read('tablets') == [[0, 2, 3, 4, 5, 7, 9, 11], [1, 6, 8, 10]]
+    assert p.part(0).tablet_indices == [0, 2, 3, 4, 5, 7, 9, 11]
 
 
-# Bags: tabs whose rows each carry their own patient and cohort -- several of each in a tab.
+# Bags: tablets whose rows each carry their own patient and cohort -- several of each in a tablet.
 
-class Bag(Datatab):
+class Bag(Datatablet):
     TOPICS = {'meta': DATASLICE(row='int', patient='str', label='int', info='json'),
               'x': DATASLICE(row='int', features='ndarray:float32')}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         bag: int = 0
         rows: list = None           # [patient | None, cohort] per row
 
@@ -245,18 +245,18 @@ BAGS = [[('p1', 'A'), ('p1', 'A'), ('p2', 'A')],
 
 
 class Bags(Datatable):
-    TAB = Bag
+    TABLET = Bag
 
     @dataclass
     class VAR(Datatable.VAR):
         bags: list = None
 
     @property
-    def n_tabs(self):
+    def n_tablets(self):
         return len(self.var.bags)
 
-    def __tab__(self, idx, **kw):
-        return super().__tab__(idx, bag=idx, rows=[list(r) for r in self.var.bags[idx]])
+    def __tablet__(self, idx, **kw):
+        return super().__tablet__(idx, bag=idx, rows=[list(r) for r in self.var.bags[idx]])
 
 
 def bags(tmp_path):
@@ -290,7 +290,7 @@ def test_every_row_is_in_one_fold_or_skipped_and_said(tmp_path):
     assert len(rows[0]) + len(rows[1]) + sum(s['rows'] for s in skipped) == len(every)
 
 
-def test_a_stratums_rows_are_in_one_fold_across_tabs_and_pieces(tmp_path):
+def test_a_stratums_rows_are_in_one_fold_across_tablets_and_pieces(tmp_path):
     for seed in range(4):
         p = bag_partition(tmp_path / f's{seed}', bags(tmp_path), seed=seed)
         fold_of = {}
@@ -304,30 +304,30 @@ def test_a_piece_holds_its_value_in_every_row_and_slice_alike(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     n_pieces = 0
     for fold in built_parts(p):
-        for i, entry in enumerate(fold.tab_indices):
+        for i, entry in enumerate(fold.tablet_indices):
             if not isinstance(entry, dict):
                 continue
             n_pieces += 1
-            piece = fold.tab(i)
+            piece = fold.tablet(i)
             meta, x = piece.data('meta')['meta'], piece.data('x')['x']
             assert {(m['patient'], m['cohort']) for m in meta['info']} == {(entry['stratifyby'], entry['partitionby'])}
             assert piece.n_rows('meta') == piece.n_rows('x') == len(meta['row']) > 0
             assert meta['row'] == x['row']              # row i of one slice is row i of the other
-            assert piece.tag == f"{p.datatable.tab(entry['tab']).tag}#{entry['stratifyby']}#{entry['partitionby']}"
+            assert piece.tag == f"{p.datatable.tablet(entry['tab']).tag}#{entry['stratifyby']}#{entry['partitionby']}"
     assert n_pieces == p.read('summary')['n_pieces'] - 1        # all but the skipped one
 
 
 def test_a_pieces_source_slice_points_back_and_takes_the_same_piece_of_the_source(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     for part in built_parts(p):
-        for i, entry in enumerate(part.tab_indices):
+        for i, entry in enumerate(part.tablet_indices):
             if not isinstance(entry, dict):
                 continue
-            piece, source = part.tab(i), p.datatable.tab(entry['tab'])
+            piece, source = part.tablet(i), p.datatable.tablet(entry['tab'])
             rows = piece.source_rows()
             assert rows.dtype == np.int64 and list(rows) == sorted(rows)
             assert set(piece.data(('source', 'tab'))['source']['tab']) == {entry['tab']}
-            # The indices, applied to the source, are the piece -- what a tab built from the source row by row reuses.
+            # The indices, applied to the source, are the piece -- what a tablet built from the source row by row reuses.
             src = source.data('x')['x']
             assert [src['row'][r] for r in rows] == piece.data('x')['x']['row']
             info = source.data('meta')['meta']['info']
@@ -340,7 +340,7 @@ def test_fold_is_the_name_part_had_first(tmp_path):
 
 
 def test_the_fractions_hold_within_each_partition_counting_pieces(tmp_path):
-    p = bag_partition(tmp_path / 'p', bags(tmp_path), stratifyby=None, balance='tabs')
+    p = bag_partition(tmp_path / 'p', bags(tmp_path), stratifyby=None, balance='tablets')
     folds = p.read('summary')['folds']
     # Split by cohort only: A is bags 0, 3 and a piece each of 2 and 5; B bags 1, 4 and the others.
     for cohort in COHORTS:
@@ -350,13 +350,13 @@ def test_the_fractions_hold_within_each_partition_counting_pieces(tmp_path):
 def test_the_same_seed_deals_the_same_pieces_with_the_same_hashes(tmp_path):
     tbl = bags(tmp_path)
     one, two = bag_partition(tmp_path / 'a', tbl, seed=5), bag_partition(tmp_path / 'b', tbl, seed=5)
-    assert one.read('tabs') == two.read('tabs')
-    pieces = [e for f in one.read('tabs') for e in f if isinstance(e, dict)]
+    assert one.read('tablets') == two.read('tablets')
+    pieces = [e for f in one.read('tablets') for e in f if isinstance(e, dict)]
     assert pieces
     again = DatatablePartition(datalake=str(tmp_path / 'a'), spec=dict(
         datatable=tbl, fractions=[0.5, 0.5], partition_slice='meta', collator=collator(PATIENT, COHORT), seed=5))
-    assert [one.tab(e).hash for e in pieces] == [again.tab(e).hash for e in pieces]
-    assert len({one.tab(e).hash for e in pieces}) == len(pieces)
+    assert [one.tablet(e).hash for e in pieces] == [again.tablet(e).hash for e in pieces]
+    assert len({one.tablet(e).hash for e in pieces}) == len(pieces)
 
 
 def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
@@ -367,20 +367,20 @@ def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
                              parallelization='multiprocessing', n_workers=2)
         assert fold.hash == p.part(k).hash
         fold.build()
-        assert all(p.part(k).valid_tab(i, validation='valid') for i in range(fold.n_tabs))
+        assert all(p.part(k).valid_tablet(i, validation='valid') for i in range(fold.n_tablets))
 
 
 def test_a_piece_that_cannot_be_recovered_says_so(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     with pytest.raises(ValueError, match="cannot be recovered"):
-        p.tab({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}).build()
+        p.tablet({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}).build()
 
 
-def test_a_mixed_tab_upstream_of_a_feature_table_is_not_implemented(tmp_path):
+def test_a_mixed_tablet_upstream_of_a_feature_table_is_not_implemented(tmp_path):
     from test_probes import DummyModelEvaluatorFactory, DummySampleTable
     from dbx import Featuretable
     url = str(tmp_path)
-    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=4), tag='samples').build()
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=4), tag='samples').build()
     features = Featuretable(datalake=url, devices=['cpu'], tag='features', spec=dict(
         upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
         collator=Datacollator(spec=dict(columns={'signals': [('samples', 'samples')], 'labels': [('labels', 'labels')]})))).build()
@@ -403,22 +403,22 @@ def probe(tmp_path, fit, ev, **spec):
 def test_a_probe_fits_and_scores_on_folds_holding_pieces(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     fit, ev = built_parts(p)
-    assert any(isinstance(e, dict) for e in fit.tab_indices + ev.tab_indices)
+    assert any(isinstance(e, dict) for e in fit.tablet_indices + ev.tablet_indices)
     pr = probe(tmp_path / 'probe', fit, ev).build()
     assert sorted(pr.read('classes').tolist()) == [0, 1]
     assert len(pr.read('fit', 'labels')) == fit.n_rows('meta')
     assert len(pr.read('eval', 'labels')) == ev.n_rows('meta')
 
 
-def test_pieces_of_one_tab_in_two_folds_are_disjoint_and_one_piece_twice_is_not(tmp_path):
+def test_pieces_of_one_tablet_in_two_folds_are_disjoint_and_one_piece_twice_is_not(tmp_path):
     tbl = bags(tmp_path)
     for seed in range(20):
         p = bag_partition(tmp_path / f's{seed}', tbl, seed=seed)
-        sources = [{e['tab'] for e in f if isinstance(e, dict)} for f in p.read('tabs')]
+        sources = [{e['tab'] for e in f if isinstance(e, dict)} for f in p.read('tablets')]
         if sources[0] & sources[1]:
             break
     else:
-        pytest.fail("no seed puts two pieces of one tab in different folds")
+        pytest.fail("no seed puts two pieces of one tablet in different folds")
     fit, ev = built_parts(p)
     probe(tmp_path / 'ok', fit, ev)._check_disjoint_()
     with pytest.raises(ValueError, match="share"):
@@ -430,8 +430,8 @@ def test_a_probe_says_a_piece_is_not_built_before_it_starts(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     fit, ev = built_parts(p)
     # A built fold, and one of its pieces gone since: the fold vouches, the piece does not.
-    i = next(i for i, e in enumerate(fit.tab_indices) if isinstance(e, dict))
+    i = next(i for i, e in enumerate(fit.tablet_indices) if isinstance(e, dict))
     fit.UNSAFE_clear_blocks('meta', indices=[i], clear_done=False, OVERRIDE=True)
-    with pytest.raises(InvalidBlocksError, match=rf"(?s)reading \['x', 'meta'\] from its tabs; a part's pieces are "
+    with pytest.raises(InvalidBlocksError, match=rf"(?s)reading \['x', 'meta'\] from its tablets; a part's pieces are "
                                                  rf"built by the part: part\.build\(\).*block {i}:"):
         probe(tmp_path / 'probe', fit, ev).build()

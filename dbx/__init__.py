@@ -20,11 +20,11 @@ datablocks
     :class:`Datablock`, :class:`Datastack`, git-revision tracking, remote
     execution via Ray.
 datatables
-    :class:`Datatab`, :class:`Datatable` and :class:`Datacollator`: tables of
+    :class:`Datatablet`, :class:`Datatable` and :class:`Datacollator`: tables of
     MDS slices, and the columns a consumer reads from them.
 dataparts
     :class:`DatatablePartition` and :class:`DatatableCorePartition`: a table
-    dealt into parts, and the parts, pieces and packed tabs that read it.
+    dealt into parts, and the parts, pieces and packed tablets that read it.
 journals
     :class:`Datajournal` and the build records it reads and writes
     (:class:`DatajournalFrame`, :class:`DatajournalEntry`); the exec journal

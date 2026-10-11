@@ -138,7 +138,7 @@ A `Datastack` manages a collection of child Datablocks (blocks) and builds them 
 
 ```python
 class MyStack(Datastack):
-    BLOCK = MyBlock                  # the class its blocks are (a Datatable's TAB is its BLOCK)
+    BLOCK = MyBlock                  # the class its blocks are (a Datatable's TABLET is its BLOCK)
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -159,31 +159,31 @@ stack.build()
 
 See [DATASTACK.md](DATASTACK.md) for `__split__` / `__stack__`, shared state and multi-GPU.
 
-### Datatab & Datatable
+### Datatablet & Datatable
 
 `dbx.datatables` (needs the `torch` and `streaming` extras) adds a `Datablock` /
 `Datastack` pair for datasets stored as parallel MDS streams — *slices* — that
 can be zipped into one `torch.utils.data.Dataset` on demand:
 
 ```python
-from dbx.datatables import Datatab, Datatable            # or Datatab, Datatable
+from dbx.datatables import Datatablet, Datatable            # or Datatablet, Datatable
 
-class FrameTab(Datatab):
+class FrameTablet(Datatablet):
     SLICES = ('frames', 'annotations')
     def __build__(self):
         with self.slice_writers(COLUMNS) as writers: ...   # written in lockstep
 
 class FrameTable(Datatable):
-    TAB = FrameTab
+    TABLET = FrameTablet
     @property
-    def n_tabs(self): return len(self.var.episodes)
-    def __tab__(self, idx): return super().__tab__(idx, episode=self.var.episodes[idx])
+    def n_tablets(self): return len(self.var.episodes)
+    def __tablet__(self, idx): return super().__tablet__(idx, episode=self.var.episodes[idx])
 
 table.build()
 table.dataset('frames', 'annotations')   # zipped by index
 table.dataset('annotations')             # annotations only — no image bytes fetched
 table.datastream('frames')               # one slice, unzipped
-table.data('annotations')                # every tab's samples, concatenated
+table.data('annotations')                # every tablet's samples, concatenated
 ```
 
 See [DATATABLES.md](DATATABLES.md), and [DATAPARTITION.md](DATAPARTITION.md) for
@@ -191,10 +191,10 @@ splitting a table into folds: partitions, parts and pieces.
 
 ### Data Terminology
 
-Data in `Datatab` / `Datatable` (and derived feature tables) follows a consistent structure:
+Data in `Datatablet` / `Datatable` (and derived feature tables) follows a consistent structure:
 
 - **Datapoints / Observations (`obs`)**: The individual atomic data items (e.g. single vectors, tiles, or frames).
-- **Datapacks / Windows / Contexts / Sequences**: Datapoints are assembled into datapacks (also referred to as packs, windows, contexts, or sequences). A datapack can contain one or several datapoints. The length of the pack is fixed throughout the `Tab` / `Table` by its `VAR` specification at build time. By default, single-datapoint packs are assumed (`pack_length = 1`).
+- **Datapacks / Windows / Contexts / Sequences**: Datapoints are assembled into datapacks (also referred to as packs, windows, contexts, or sequences). A datapack can contain one or several datapoints. The length of the pack is fixed throughout the `Tablet` / `Table` by its `VAR` specification at build time. By default, single-datapoint packs are assumed (`pack_length = 1`).
 - **Slices & Columns**: A datapoint is composed of columns organized into `SLICES`. Individual columns are addressed by `(slice, column)` pairs (for example `("features_final", "features_final")` or `("labels", "class_id")`).
 
 ### Configuration & `env()`

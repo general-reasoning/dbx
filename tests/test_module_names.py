@@ -2,7 +2,7 @@
 dbx's classes live in the modules they are defined in, under the names they have now.
 
 The modules were once ``dbx.datapoints``, ``dbx.datafeatures``, ``dbx.datamodels``
-and ``dbx.dataprobes``, and the classes had other names (``DatapointTab``,
+and ``dbx.dataprobes``, and the classes had other names (``DatapointTablet``,
 ``DatafeatureTable``, ...). Those names are gone: a class's `fqcn` -- the anchor
 its artifacts are stored under -- is its real module and name. What was stored
 under an old module name is reached by a specialization naming that anchor -- except
@@ -21,11 +21,11 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-@pytest.mark.parametrize('cls', [datatables.Datatab, datatables.Datatable, dataparts.DatatablePartition,
-                                 dataparts.DatatablePart, featuretables.Featuretab, featuretables.Featuretable,
-                                 featuretables.BipolarFeaturetab, featuretables.BipolarFeaturetable,
-                                 datatables.Datacollator, dataparts.DatatabPiece, dataparts.DatatableCorePartition,
-                                 dataparts.DatatableCorePart, dataparts.DatatableCoreTab, dataparts.DatatablePackTab,
+@pytest.mark.parametrize('cls', [datatables.Datatablet, datatables.Datatable, dataparts.DatatablePartition,
+                                 dataparts.DatatablePart, featuretables.Featuretablet, featuretables.Featuretable,
+                                 featuretables.BipolarFeaturetablet, featuretables.BipolarFeaturetable,
+                                 datatables.Datacollator, dataparts.DatatabletPiece, dataparts.DatatableCorePartition,
+                                 dataparts.DatatableCorePart, dataparts.DatatableCoreTablet, dataparts.DatatablePartitionTablet,
                                  probes.FeatureStatsProbe])
 def test_a_class_is_recorded_under_its_own_module(cls):
     assert cls.__module__ in ('dbx.datatables', 'dbx.dataparts', 'dbx.featuretables', 'dbx.probes')

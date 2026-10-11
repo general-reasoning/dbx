@@ -19,7 +19,7 @@ import pytest
 from dataclasses import dataclass
 
 from dbx.datablocks import Datablock
-from dbx.datatables import DIRTOPIC, Datatab, Datatable
+from dbx.datatables import DIRTOPIC, Datatablet, Datatable
 
 ANCHOR = 'Spectra'
 
@@ -410,26 +410,26 @@ class TestTheIdentityIsNotTheRedirection:
 # directory before it does anything else. Both are reasonable on their own and
 # both break under a partial redirection, so this is the shape a specialization
 # has to survive to be usable by the classes that most want one -- a table
-# whose tabs hold terabytes and whose own topics are a few kilobytes derived
+# whose tablets hold terabytes and whose own topics are a few kilobytes derived
 # from them.
 
 TABLE_ANCHOR = 'Rows'
 
 
-class RowTab(Datatab):
-    """One tab, one file. No slices: this is about the TABLE's topics."""
+class RowTablet(Datatablet):
+    """One tablet, one file. No slices: this is about the TABLE's topics."""
 
     VERSION = 1
     TOPICS = {'rows': 'rows.txt'}
 
     @dataclass
-    class VAR(Datatab.VAR):
-        tab_idx: int = 0
+    class VAR(Datatablet.VAR):
+        tablet_idx: int = 0
 
     def __build__(self):
         for topic in self.ownedtopics():
             with open(self.path(topic, ensure_dirpath=True), 'w') as f:
-                f.write(f"{topic}-{self.var.tab_idx}\n")
+                f.write(f"{topic}-{self.var.tablet_idx}\n")
 
     def __read__(self, *topicpath):
         with open(self.path(*self._normtopic_(topicpath))) as f:
@@ -440,7 +440,7 @@ class RowTableV1(Datatable):
     """The table before it grew a topic."""
 
     VERSION = 1
-    TAB = RowTab
+    TABLET = RowTablet
     TOPICS = {'summary': 'summary.txt', 'tab_paths': DIRTOPIC, 'done': 'done'}
 
     @dataclass
@@ -448,17 +448,17 @@ class RowTableV1(Datatable):
         n: int = 2
 
     @property
-    def n_tabs(self):
+    def n_tablets(self):
         return self.var.n
 
-    def __tab__(self, idx, **spec):
-        return super().__tab__(idx, tab_idx=idx, **spec)
+    def __tablet__(self, idx, **spec):
+        return super().__tablet__(idx, tablet_idx=idx, **spec)
 
     def __stack__(self, results=None):
         if not self.valid_topic('summary'):
             with open(self.path('summary', ensure_dirpath=True), 'w') as f:
-                f.write(''.join(self.tab(i).read('rows')
-                                for i in range(self.n_tabs)))
+                f.write(''.join(self.tablet(i).read('rows')
+                                for i in range(self.n_tablets)))
         return super().__stack__(results)       # writes `done`
 
     def __read__(self, *topicpath):
@@ -470,9 +470,9 @@ class RowTableV1(Datatable):
 
 
 class RowTableV2(RowTableV1):
-    """The same table, grown a `report` topic derived from what the tabs hold.
+    """The same table, grown a `report` topic derived from what the tablets hold.
 
-    No VAR field was added and the TAB did not move, so the specialization pins
+    No VAR field was added and the TABLET did not move, so the specialization pins
     nothing and names the three topics the older table declared.
     """
 
@@ -483,14 +483,14 @@ class RowTableV2(RowTableV1):
         Datablock.Specialization(
             spec={},
             topics={'summary': 'summary.txt', 'tab_paths': DIRTOPIC, 'done': 'done'},
-            note="`report` is derived from the tabs, which did not re-key",
+            note="`report` is derived from the tablets, which did not re-key",
         ),
     ]
 
     def __stack__(self, results=None):
         if not self.valid_topic('report'):
             with open(self.path('report', ensure_dirpath=True), 'w') as f:
-                f.write(f"report over {self.n_tabs} tabs\n")
+                f.write(f"report over {self.n_tablets} tablets\n")
         return super().__stack__(results)       # summary, then `done`
 
 
@@ -505,7 +505,7 @@ def v2table(url, **kw):
 
 @pytest.fixture
 def built_table(tmp_path):
-    """The narrower TABLE, built: two tabs, a summary, a done marker."""
+    """The narrower TABLE, built: two tablets, a summary, a done marker."""
     t = v1table(tmp_path)
     t.build()
     assert t.valid()
@@ -542,7 +542,7 @@ class TestASpecializedTable:
         assert table.owedtopics() == ['report']    # which is what build() asks
         table.build()
         assert table.valid_topic('report')
-        assert table.read('report') == "report over 2 tabs\n"
+        assert table.read('report') == "report over 2 tablets\n"
 
     def test_the_split_does_not_ensure_a_redirected_directory(self, tmp_path,
                                                               built_table):
@@ -551,7 +551,7 @@ class TestASpecializedTable:
         `path(ensure_dirpath=True)` on a redirected topic raises -- correctly,
         since it would be creating a directory inside another block's data --
         and `Datatable.__split__` called exactly that on `tab_paths`
-        before doing anything else. The tab machinery was therefore not merely
+        before doing anything else. The tablet machinery was therefore not merely
         unnecessary for a specialized table, it was unreachable.
         """
         table = adopted(v2table(tmp_path))
@@ -562,8 +562,8 @@ class TestASpecializedTable:
 
     def test_no_sentinel_is_written_into_the_other_blocks_tab_paths(
             self, tmp_path, built_table):
-        """A redirection covering `tab_paths` can only be one that left the TAB
-        alone, so the sentinels already there name the same tabs. Ours would be
+        """A redirection covering `tab_paths` can only be one that left the TABLET
+        alone, so the sentinels already there name the same tablets. Ours would be
         a write into its data."""
         sentinels = sorted(os.listdir(built_table.path('tab_paths')))
         v2table(tmp_path).build()
@@ -696,12 +696,12 @@ class TestTheOwnedOwedPair:
 
 
 class TestOneJournalReadForAWholeTable:
-    """A specialized TAB resolves as it is CONSTRUCTED, not as it is built.
+    """A specialized TABLET resolves as it is CONSTRUCTED, not as it is built.
 
     `_install_specialization_` runs in `__setstate__`, and resolving means
-    reading the journal -- so a table that constructs N tabs paid N journal
+    reading the journal -- so a table that constructs N tablets paid N journal
     reads, each a glob over `**/*.parquet` plus a parquet read against whatever
-    storage the lake is on. That is what made per-tab specializations
+    storage the lake is on. That is what made per-tablet specializations
     impractical rather than merely expensive, and it is why a `journal=` kwarg
     on `__build__` could not have fixed it: by then every read has happened.
     """
@@ -722,48 +722,48 @@ class TestOneJournalReadForAWholeTable:
         return seen
 
     @staticmethod
-    def _grow_the_tab(monkeypatch):
-        """RowTab grows a topic IN PLACE, which is what a real class does.
+    def _grow_the_tablet(monkeypatch):
+        """RowTablet grows a topic IN PLACE, which is what a real class does.
 
-        Two differently-named classes would not do: a tab's anchor is its
+        Two differently-named classes would not do: a tablet's anchor is its
         fqcn, so the narrower hash would be looked for in a journal directory
         it was never written to, and nothing would resolve.
         """
-        monkeypatch.setattr(RowTab, 'TOPICS',
+        monkeypatch.setattr(RowTablet, 'TOPICS',
                             {'rows': 'rows.txt', 'extra': 'extra.txt'})
-        monkeypatch.setattr(RowTab, 'SPECIALIZATIONS', [
+        monkeypatch.setattr(RowTablet, 'SPECIALIZATIONS', [
             Datablock.Specialization(spec={}, topics={'rows': 'rows.txt'},
                                      note='extra is derived from rows')])
 
-    def test_the_reads_do_not_scale_with_the_tabs(self, tmp_path, monkeypatch):
+    def test_the_reads_do_not_scale_with_the_tablets(self, tmp_path, monkeypatch):
         v1table(tmp_path, spec={'n': self.N}).build()
-        self._grow_the_tab(monkeypatch)
+        self._grow_the_tablet(monkeypatch)
         seen = self._counting(monkeypatch)
 
         table = v1table(tmp_path, spec={'n': self.N})
-        [table.tab(i) for i in range(self.N)]
-        assert seen == [], "forming the tabs resolves nothing, so reads nothing"
+        [table.tablet(i) for i in range(self.N)]
+        assert seen == [], "forming the tablets resolves nothing, so reads nothing"
 
-        # A table not yet built -- another tag -- so its build builds every tab:
+        # A table not yet built -- another tag -- so its build builds every tablet:
         # the one that was built is valid() still, since its own identity did
-        # not move when its TAB grew, and a build of it skips.
+        # not move when its TABLET grew, and a build of it skips.
         fresh = v1table(tmp_path, spec={'n': self.N}, tag='again')
-        fresh.build()                                      # installs, tab by tab
-        # One read, in the parent, handed to every tab-building callable --
+        fresh.build()                                      # installs, tablet by tablet
+        # One read, in the parent, handed to every tablet-building callable --
         # O(1), against O(N) before.
         assert len(seen) <= 1, seen
-        tabs = [v1table(tmp_path, spec={'n': self.N}, tag='again').tab(i) for i in range(self.N)]
-        assert tabs[0].redirected_topics() == ['rows']     # they did resolve
-        assert tabs[-1].redirected_topics() == ['rows']
-        assert tabs[-1].ownedtopics() == ['extra']
+        tablets = [v1table(tmp_path, spec={'n': self.N}, tag='again').tablet(i) for i in range(self.N)]
+        assert tablets[0].redirected_topics() == ['rows']     # they did resolve
+        assert tablets[-1].redirected_topics() == ['rows']
+        assert tablets[-1].ownedtopics() == ['extra']
 
-    def test_a_table_whose_tabs_declare_none_reads_no_journal(self, tmp_path,
+    def test_a_table_whose_tablets_declare_none_reads_no_journal(self, tmp_path,
                                                               monkeypatch):
         """The gate: a journal nobody has a use for must not be read."""
-        assert not RowTab.SPECIALIZATIONS
+        assert not RowTablet.SPECIALIZATIONS
         seen = self._counting(monkeypatch)
         table = v1table(tmp_path, spec={'n': self.N})
-        [table.tab(i) for i in range(self.N)]
+        [table.tablet(i) for i in range(self.N)]
         assert seen == []
 
     def test_the_journal_is_not_part_of_the_block(self, tmp_path, monkeypatch):
@@ -771,36 +771,36 @@ class TestOneJournalReadForAWholeTable:
         business in `parameters`, in a specline, or in a pickle."""
         import pickle
         v1table(tmp_path, spec={'n': 2}).build()          # narrow, first
-        self._grow_the_tab(monkeypatch)
+        self._grow_the_tablet(monkeypatch)
 
-        tab = adopted(v1table(tmp_path, spec={'n': 2}).tab(0))
-        assert tab.redirected_topics() == ['rows']        # it really resolved
-        assert 'specialization_journal' not in tab.parameters
-        assert '__specialization_journal__' not in tab.parameters
-        assert 'specialization_journal' not in tab.quote()
-        assert '__specialization_journal__' not in tab.__getstate__()
+        tablet = adopted(v1table(tmp_path, spec={'n': 2}).tablet(0))
+        assert tablet.redirected_topics() == ['rows']        # it really resolved
+        assert 'specialization_journal' not in tablet.parameters
+        assert '__specialization_journal__' not in tablet.parameters
+        assert 'specialization_journal' not in tablet.quote()
+        assert '__specialization_journal__' not in tablet.__getstate__()
 
         # And what DOES travel is the resolution, so a worker re-reads nothing.
-        revived = pickle.loads(pickle.dumps(tab))
+        revived = pickle.loads(pickle.dumps(tablet))
         assert revived.redirected_topics() == ['rows']
         seen = self._counting(monkeypatch)
-        pickle.loads(pickle.dumps(tab))
+        pickle.loads(pickle.dumps(tablet))
         assert seen == []
 
     def test_a_handed_journal_resolves_the_same_specialization(self, tmp_path,
                                                                monkeypatch):
         """The shortcut has to reach the same answer as the long way round."""
         v1table(tmp_path, spec={'n': 2}).build()          # narrow, first
-        self._grow_the_tab(monkeypatch)
+        self._grow_the_tablet(monkeypatch)
 
         table = v1table(tmp_path, spec={'n': 2})
         shared = table.child_specialization_datajournal()
         assert shared is not None
 
         # In memory, so the first to install records nothing the second reads.
-        alone = adopted(RowTab(datalake=str(tmp_path), spec={'tab_idx': 0},
+        alone = adopted(RowTablet(datalake=str(tmp_path), spec={'tablet_idx': 0},
                                use_specializations='memory'))
-        handed = adopted(RowTab(datalake=str(tmp_path), spec={'tab_idx': 0},
+        handed = adopted(RowTablet(datalake=str(tmp_path), spec={'tablet_idx': 0},
                                 use_specializations='memory', specialization_journal=shared))
         assert alone.specialization is not None           # not vacuous
         assert handed.specialization == alone.specialization
@@ -812,7 +812,7 @@ class TestOneJournalReadForAWholeTable:
         """Reading the child journal constructs child 0, which is itself a
         child construction. It gets None and resolves the old way, once."""
         v1table(tmp_path, spec={'n': 2}).build()          # narrow, first
-        self._grow_the_tab(monkeypatch)
+        self._grow_the_tablet(monkeypatch)
         table = v1table(tmp_path, spec={'n': 2})
         assert table.child_specialization_datajournal() is not None
         assert table.child_specialization_datajournal() is \

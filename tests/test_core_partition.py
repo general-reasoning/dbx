@@ -1,7 +1,7 @@
 """
-`DatatableCorePartition`: rows clustered by their values, dealt nearest first into folds of fresh tabs.
+`DatatableCorePartition`: rows clustered by their values, dealt nearest first into folds of fresh tablets.
 
-Each tab here holds points from four well-separated blobs, one per label, so
+Each tablet here holds points from four well-separated blobs, one per label, so
 the clusters k-means finds are the labels, and a row's distance to its
 center says how central it is.
 """
@@ -10,8 +10,8 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from dbx.datatables import DATASLICE, Datacollator, Datatab, Datatable
-from dbx.dataparts import DatatableCorePart, DatatableCorePartition, DatatableCoreTab
+from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
+from dbx.dataparts import DatatableCorePart, DatatableCorePartition, DatatableCoreTablet
 
 
 @pytest.fixture(autouse=True)
@@ -22,12 +22,12 @@ def setup_env(monkeypatch):
 BLOBS = np.array([[0, 0], [10, 0], [0, 10], [10, 10]], dtype=np.float32)
 
 
-class Points(Datatab):
+class Points(Datatablet):
     TOPICS = {'pts': DATASLICE(x='ndarray:float32', patient='str', label='int', site='int'),
               'img': DATASLICE(big='ndarray:float32')}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         k: int = 0
         n: int = 40
         offset: int = 0         # shifts every point: a table laid out alike, holding other values
@@ -45,20 +45,20 @@ class Points(Datatab):
 
 
 class PointTable(Datatable):
-    TAB = Points
+    TABLET = Points
 
     @dataclass
     class VAR(Datatable.VAR):
-        n_tabs: int = 6
+        n_tablets: int = 6
         n: int = 40
         offset: int = 0
 
     @property
-    def n_tabs(self):
-        return self.var.n_tabs
+    def n_tablets(self):
+        return self.var.n_tablets
 
-    def __tab__(self, idx, **kw):
-        return super().__tab__(idx, k=idx, n=self.var.n, offset=self.var.offset)
+    def __tablet__(self, idx, **kw):
+        return super().__tablet__(idx, k=idx, n=self.var.n, offset=self.var.offset)
 
 
 def points(tmp_path, **spec):
@@ -85,7 +85,7 @@ def core(tmp_path, table, fractions=(0.8, 0.2), build=True, coreby=(X,), stratif
 
 
 def every_row(table):
-    return {(t, r) for t in range(table.n_tabs) for r in range(table.var.n)}
+    return {(t, r) for t in range(table.n_tablets) for r in range(table.var.n)}
 
 
 def test_fractions_summing_to_one_deal_every_row_once_and_sample_every_cluster(tmp_path):
@@ -94,7 +94,7 @@ def test_fractions_summing_to_one_deal_every_row_once_and_sample_every_cluster(t
     layouts = [p.layout(k) for k in range(2)]
     dealt = [{(int(t), int(r)) for t, r, _ in fl} for fl in layouts]
     assert dealt[0].isdisjoint(dealt[1]) and dealt[0] | dealt[1] == every_row(tbl)
-    for fl in layouts:          # source order: a core tab reads a few neighbouring tabs
+    for fl in layouts:          # source order: a core tablet reads a few neighbouring tablets
         assert [tuple(r) for r in fl[:, :2]] == sorted(tuple(r) for r in fl[:, :2])
     sizes = [np.bincount(fl[:, 2], minlength=4) for fl in layouts]
     for c in range(4):
@@ -107,7 +107,7 @@ def test_fractions_summing_to_one_deal_every_row_once_and_sample_every_cluster(t
 def test_the_clusters_are_the_blobs(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl)
-    labels = {(t, r): l for t in range(tbl.n_tabs) for r, l in enumerate(tbl.tab(t).data(LABEL)['pts']['label'])}
+    labels = {(t, r): l for t in range(tbl.n_tablets) for r, l in enumerate(tbl.tablet(t).data(LABEL)['pts']['label'])}
     # Each cluster holds one label.
     by_cluster = {}
     for k in range(2):
@@ -120,7 +120,7 @@ def test_a_coreset_takes_the_rows_nearest_each_center(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, fractions=(0.1, 0.1))
     centers = p.read('centers')
-    xs = {(t, r): x for t in range(tbl.n_tabs) for r, x in enumerate(tbl.tab(t).data(X)['pts']['x'])}
+    xs = {(t, r): x for t in range(tbl.n_tablets) for r, x in enumerate(tbl.tablet(t).data(X)['pts']['x'])}
     taken = {(int(t), int(r)): int(c) for k in range(2) for t, r, c in p.layout(k)}
     assert abs(len(taken) - 0.2 * len(xs)) <= 8          # 10% of each of 4 clusters, per fold, rounded
     for c in range(4):
@@ -136,7 +136,7 @@ def test_a_coreset_takes_the_rows_nearest_each_center(tmp_path):
 def test_a_group_is_dealt_whole(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, stratifyby=PATIENT, fractions=(0.5, 0.5))
-    patients = {(t, r): pa for t in range(tbl.n_tabs) for r, pa in enumerate(tbl.tab(t).data(PATIENT)['pts']['patient'])}
+    patients = {(t, r): pa for t in range(tbl.n_tablets) for r, pa in enumerate(tbl.tablet(t).data(PATIENT)['pts']['patient'])}
     fold_of = {}
     for k in range(2):
         for t, r, _ in p.layout(k):
@@ -144,21 +144,21 @@ def test_a_group_is_dealt_whole(tmp_path):
     assert len(fold_of) == len(set(patients.values())) and all(len(v) == 1 for v in fold_of.values())
 
 
-def test_core_tabs_carry_what_the_collator_names_and_point_back(tmp_path):
+def test_core_tablets_carry_what_the_collator_names_and_point_back(tmp_path):
     tbl = points(tmp_path)
-    p = core(tmp_path, tbl, carry=[LABEL], rows_per_tab=16)
+    p = core(tmp_path, tbl, carry=[LABEL], rows_per_tablet=16)
     assert p.carried_slices() == ['pts'] and p.read('columns') == {'pts': {'x': 'ndarray:float32', 'label': 'int'}}
     for k in range(2):
         part = DatatableCorePart(datalake=str(tmp_path / 'core'), spec=dict(partition=p, fold=k),
                                  parallelization='multiprocessing', n_workers=2)
-        assert part.hash == p.part(k).hash and isinstance(part.tab(0), DatatableCoreTab)
+        assert part.hash == p.part(k).hash and isinstance(part.tablet(0), DatatableCoreTablet)
         part.build()
         assert part.slices() == ('pts', 'source')
         fl = p.layout(k)
-        assert part.n_tabs == -(-len(fl) // 16)
+        assert part.n_tablets == -(-len(fl) // 16)
         n = 0
-        for i in range(part.n_tabs):
-            piece = part.tab(i)
+        for i in range(part.n_tablets):
+            piece = part.tablet(i)
             assert piece.valid() and sorted(piece.slices()) == ['pts', 'source']
             pts = piece.data('pts')['pts']
             assert sorted(pts) == ['label', 'x']            # no patient, no img
@@ -166,7 +166,7 @@ def test_core_tabs_carry_what_the_collator_names_and_point_back(tmp_path):
             assert len(src) == piece.n_rows('pts') == piece.n_rows('source')
             assert [tuple(r) for r in src] == [tuple(r) for r in fl[n:n + len(src), :2]]
             for (t, r), x, label in zip(src, pts['x'], pts['label']):
-                row = tbl.tab(int(t)).data('pts')['pts']
+                row = tbl.tablet(int(t)).data('pts')['pts']
                 np.testing.assert_array_equal(x, row['x'][r])
                 assert label == row['label'][r]
             n += len(src)
@@ -176,7 +176,7 @@ def test_core_tabs_carry_what_the_collator_names_and_point_back(tmp_path):
 def test_distributed_clustering_finds_the_same_blobs_and_leaves_no_scratch(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, clustering='distributed', parallelization='multiprocessing', n_workers=2)
-    labels = {(t, r): l for t in range(tbl.n_tabs) for r, l in enumerate(tbl.tab(t).data(LABEL)['pts']['label'])}
+    labels = {(t, r): l for t in range(tbl.n_tablets) for r, l in enumerate(tbl.tablet(t).data(LABEL)['pts']['label'])}
     by_cluster = {}
     for k in range(2):
         for t, r, c in p.layout(k):
@@ -188,18 +188,18 @@ def test_distributed_clustering_finds_the_same_blobs_and_leaves_no_scratch(tmp_p
 
 def test_a_table_laid_out_alike_takes_the_layout_without_clustering(tmp_path):
     tbl = points(tmp_path)
-    p = core(tmp_path, tbl, rows_per_tab=16)
+    p = core(tmp_path, tbl, rows_per_tablet=16)
     other = PointTable(datalake=str(tmp_path / 'other'), spec=dict(offset=100)).build()
     q = DatatableCorePartition(datalake=str(tmp_path / 'core'), spec=dict(
-        datatable=other, fractions=[0.8, 0.2], partition_slice='pts', layout=p, rows_per_tab=16,
+        datatable=other, fractions=[0.8, 0.2], partition_slice='pts', layout=p, rows_per_tablet=16,
         collator=Datacollator(spec=dict(columns={'carry': [('img', 'big')]})))).build()
     for k in range(2):
         np.testing.assert_array_equal(q.layout(k), p.layout(k))
         part = q.part(k).build()
         assert part.slices() == ('img', 'source')
-        src = np.concatenate([part.tab(i).source_index() for i in range(part.n_tabs)])
+        src = np.concatenate([part.tablet(i).source_index() for i in range(part.n_tablets)])
         np.testing.assert_array_equal(src, p.layout(k)[:, :2])
-        big = np.concatenate([part.tab(i).data('img', concat=True)['img']['big'] for i in range(part.n_tabs)])
+        big = np.concatenate([part.tablet(i).data('img', concat=True)['img']['big'] for i in range(part.n_tablets)])
         np.testing.assert_array_equal(big[:, 0], src[:, 0] * 1000 + src[:, 1])
     unlike = PointTable(datalake=str(tmp_path / 'unlike'), spec=dict(n=39)).build()
     with pytest.raises(ValueError, match="not laid out alike"):
@@ -214,7 +214,7 @@ def test_the_same_spec_is_the_same_partition(tmp_path):
     assert one.hash == two.hash
     for k in range(2):
         np.testing.assert_array_equal(one.layout(k), two.layout(k))
-        assert one.core_tab(k, 0).hash == two.core_tab(k, 0).hash
+        assert one.core_tablet(k, 0).hash == two.core_tablet(k, 0).hash
     assert core(tmp_path, tbl, name='c', seed=1, build=False).hash != one.hash
 
 
@@ -231,16 +231,16 @@ def test_what_a_core_partition_refuses(tmp_path, spec, match):
 
 
 def test_a_probe_fits_on_core_parts_of_a_feature_table(tmp_path):
-    """Features clustered, labels carried from upstream: the core tabs hold both, and read nothing upstream."""
+    """Features clustered, labels carried from upstream: the core tablets hold both, and read nothing upstream."""
     from test_probes import DummyModelEvaluatorFactory, DummySampleTable
     from dbx import FeatureAffineLogisticProbe, Featuretable
     url = str(tmp_path)
-    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=40), tag='samples').build()
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=40), tag='samples').build()
     features = Featuretable(datalake=url, devices=['cpu'], tag='features', spec=dict(
         upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
         collator=Datacollator(spec=dict(columns={'signals': [('samples', 'samples')], 'labels': [('labels', 'labels')]})))).build()
     p = DatatableCorePartition(datalake=url, spec=dict(
-        datatable=features, fractions=[0.5, 0.5], partition_slice='features', n_clusters=4, rows_per_tab=16,
+        datatable=features, fractions=[0.5, 0.5], partition_slice='features', n_clusters=4, rows_per_tablet=16,
         collator=Datacollator(spec=dict(columns={'coreby': [('features', 'final')], 'carry': [('labels', 'labels')]},
                                         recursive=True)))).build()
     fit, ev = p.part(0).build(), p.part(1).build()
@@ -253,7 +253,7 @@ def test_a_probe_fits_on_core_parts_of_a_feature_table(tmp_path):
 
 
 def column(tbl, pair):
-    return {(t, r): v for t in range(tbl.n_tabs) for r, v in enumerate(tbl.tab(t).data(pair)[pair[0]][pair[1]])}
+    return {(t, r): v for t in range(tbl.n_tablets) for r, v in enumerate(tbl.tablet(t).data(pair)[pair[0]][pair[1]])}
 
 
 @pytest.mark.parametrize('fractions', [(0.5, 0.5), (0.1, 0.1)])

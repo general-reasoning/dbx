@@ -1,21 +1,21 @@
 """
-A stack's type names its BLOCK -- a table's, its TAB -- so the class is identity.
+A stack's type names its BLOCK -- a table's, its TABLET -- so the class is identity.
 
 It did not: an identity names no class, and a table spelled with the topic
-markers carries none of its TAB's topics, so pointing a stack at another block
+markers carries none of its TABLET's topics, so pointing a stack at another block
 class left its hash, and its `done`, exactly where they were.
 
-The entry is the class's fqcn: ``BLOCK=<fqcn>`` -- ``TAB=<fqcn>`` for a table --
+The entry is the class's fqcn: ``BLOCK=<fqcn>`` -- ``TABLET=<fqcn>`` for a table --
 after the spec, before the version and the topics. ``with_block=False`` computes
 a type under the rules from before, as reconstructing a stack built then needs;
-a Specialization says the same with ``BLOCK=None`` -- a table's with ``TAB=None``.
+a Specialization says the same with ``BLOCK=None`` -- a table's with ``TABLET=None``.
 """
 from dataclasses import dataclass
 
 import pytest
 
 from dbx.datablocks import DATAFILE, SAME, Datablock, Datastack
-from dbx.datatables import DATASLICE, Datatab, Datatable
+from dbx.datatables import DATASLICE, Datatablet, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -39,20 +39,20 @@ class OtherStack(Datastack):
     BLOCK = OtherLeaf
 
 
-class TabA(Datatab):
+class TabletA(Datatablet):
     TOPICS = {'a': DATASLICE(i='int')}
 
 
-class TabB(Datatab):
+class TabletB(Datatablet):
     TOPICS = {'a': DATASLICE(i='int')}
 
 
 class TableA(Datatable):
-    TAB = TabA
+    TABLET = TabletA
 
 
 class TableB(Datatable):
-    TAB = TabB
+    TABLET = TabletB
 
 
 def _made(cls, tmp_path):
@@ -83,22 +83,22 @@ class TestAStackNamesItsBlock:
         assert 'BLOCK=' not in bare.typestr()
 
 
-class TestATableNamesItsTab:
+class TestATableNamesItsTablet:
 
-    def test_as_TAB_and_not_BLOCK(self, tmp_path):
+    def test_as_TABLET_and_not_BLOCK(self, tmp_path):
         tp = _made(TableA, tmp_path).typestr()
-        assert f"/TAB={TabA.fqcn}/version=" in tp and 'BLOCK=' not in tp
+        assert f"/TAB={TabletA.fqcn}/version=" in tp and 'BLOCK=' not in tp
 
-    def test_another_TAB_is_another_table(self, tmp_path):
+    def test_another_TABLET_is_another_table(self, tmp_path):
         assert _made(TableA, tmp_path).hash != _made(TableB, tmp_path).hash
 
-    def test_editing_the_TAB_in_place_does_not_rekey_the_table(self, tmp_path, monkeypatch):
+    def test_editing_the_TABLET_in_place_does_not_rekey_the_table(self, tmp_path, monkeypatch):
         """The limit of naming the fqcn: the class is named, not its contents.
 
         See the KNOWN GAP in Datatable's docstring.
         """
         before = _made(TableA, tmp_path).hash
-        monkeypatch.setattr(TabA, 'TOPICS', {'a': DATASLICE(i='int', j='int')})
+        monkeypatch.setattr(TabletA, 'TOPICS', {'a': DATASLICE(i='int', j='int')})
         assert _made(TableA, tmp_path).hash == before
 
 
@@ -126,15 +126,15 @@ class TestASpecializationSaysWhichRules:
         with pytest.raises(TypeError, match="BLOCK= is SAME, None or a block fqcn"):
             Datastack.Specialization(spec={}, topics={}, BLOCK=Leaf)
 
-    def test_a_block_specialization_has_no_BLOCK_and_a_tables_calls_it_TAB(self, tmp_path):
+    def test_a_block_specialization_has_no_BLOCK_and_a_tables_calls_it_TABLET(self, tmp_path):
         assert not hasattr(Datablock.Specialization(spec={}, topics={}), 'BLOCK')
-        sp = Datatable.Specialization(spec={}, topics={}, TAB=None)
+        sp = Datatable.Specialization(spec={}, topics={}, TABLET=None)
         assert not hasattr(sp, 'BLOCK')
         assert 'TAB=' not in _made(TableA, tmp_path).get_typestr(sp)
-        assert f"TAB={TabA.fqcn}" in _made(TableA, tmp_path).get_typestr(
+        assert f"TAB={TabletA.fqcn}" in _made(TableA, tmp_path).get_typestr(
             Datatable.Specialization(spec={}, topics={}))
-        with pytest.raises(TypeError, match="TAB= is SAME, None or a TAB fqcn"):
-            Datatable.Specialization(spec={}, topics={}, TAB=TabA)
+        with pytest.raises(TypeError, match="TABLET= is SAME, None or a TABLET fqcn"):
+            Datatable.Specialization(spec={}, topics={}, TABLET=TabletA)
 
     def test_a_plain_block_specialization_names_the_stacks_own(self, tmp_path):
         """SAME, as Datastack.Specialization's default: nothing to say about the block class."""

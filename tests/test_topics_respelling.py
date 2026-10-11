@@ -61,7 +61,9 @@ def test_still(tmp_path, monkeypatch):
 
 def test_a_partition(tmp_path, monkeypatch):
     """The partition from before method/seed/groupby/stratifyby/balance -- and before its topic was
-    respelled -- is reached by a partition built with method='largest_first', the one it computed."""
+    respelled -- is no longer reached, by a partition built with method='largest_first', the one it
+    computed: its topic was ``tabs``, and is ``tablets`` since 2026-10-10, and a specialization takes a
+    topic only under the name it had. What reached it was retired then; it is rebuilt."""
     from dataclasses import dataclass
     from dbx.datablocks import Datablock
     from dbx.datatables import Datatable
@@ -86,15 +88,15 @@ def test_a_partition(tmp_path, monkeypatch):
         m.setattr(DatatablePartition, 'SPECIALIZATIONS', [])
         m.setattr(DatatablePartition, '__post_init__', Datablock.__post_init__)
         old_hash = partition('datapoint_table').hash
-    assert old_hash in partition(method='largest_first').specialization_hashes()
-    assert old_hash != partition().hash, "method='random' is another computation"
+    assert old_hash not in partition(method='largest_first').specialization_hashes()
+    assert old_hash != partition(method='largest_first').hash
 
 
 def _feature_table(url):
     pytest.importorskip("torch")
     from dbx import Datacollator, Featuretable
-    from test_featuretab import DummyModelEvaluatorFactory, DummySampleTable
-    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tab=5), tag='samples')
+    from test_featuretablet import DummyModelEvaluatorFactory, DummySampleTable
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag='samples')
     return Featuretable(datalake=url, tag='features', devices=['cpu'], spec=dict(
         upstream=samples,
         evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
@@ -144,21 +146,26 @@ def test_the_stats_probe_hashes_its_per_column_topics(tmp_path):
     assert probe.hash == hashlib.sha256(probe.typestr().encode()).hexdigest()
 
 
-def test_a_table_reaches_its_tabs_past_not_its_own():
-    """A table's own topics are markers over its tabs, written again in a moment; its tabs are
-    what is worth reaching, and each is, by its TAB's specializations. A table declares its VAR
+def test_a_table_reaches_its_tablets_past_not_its_own():
+    """A table's own topics are markers over its tablets, written again in a moment; its tablets are
+    what is worth reaching, and each is, by its TABLET's specializations. A table declares its VAR
     renames -- what a block holding it, a partition say, renders it as -- and a Featuretable
     those again as built while a table declared tabs and tab_paths, reading only ``done``."""
     from dbx.datablocks import ABSENT, SAME
     from dbx.datatables import Datatable
     from dbx.featuretables import BipolarFeaturetable, Featuretable
     assert Datatable.SPECIALIZATIONS == []
-    for cls in (Featuretable, BipolarFeaturetable):
-        assert cls.SPECIALIZATIONS and all(sp.spec == {} and sp.version is ABSENT and sp.redirect_vars
-                                           for sp in cls.SPECIALIZATIONS)
+    for cls, old in ((Featuretable, 'dbx.featuretables.Featuretab'),
+                     (BipolarFeaturetable, 'dbx.featuretables.BipolarFeaturetab')):
+        assert cls.SPECIALIZATIONS and all(sp.spec == {} and sp.version is ABSENT for sp in cls.SPECIALIZATIONS)
+        # Each VAR rename twice: naming the TABLET as it is, and as it was until 2026-10-10 -- and the
+        # class rename once more, alone.
+        renames = [sp for sp in cls.SPECIALIZATIONS if sp.redirect_vars]
+        assert [sp.TABLET for sp in renames].count(old) == len(renames) // 2
+        assert [sp.TABLET for sp in cls.SPECIALIZATIONS if not sp.redirect_vars] == [old]
     assert all(sp.topics is SAME for sp in BipolarFeaturetable.SPECIALIZATIONS)
     eras = [sp for sp in Featuretable.SPECIALIZATIONS if sp.topics is not SAME]
-    assert len(eras) == 2 and all(set(sp.topics) == {'tabs', 'tab_paths', 'done'}
+    assert len(eras) == 4 and all(set(sp.topics) == {'tabs', 'tab_paths', 'done'}
                                   and list(sp.redirect_topics) == ['done'] for sp in eras)
     assert Featuretable.TOPICS is Datatable.TOPICS
     assert not hasattr(Datatable, 'TAB_PATHS_TOPICS') and not hasattr(Datatable, 'TAB_PATHS_SPECIALIZATIONS')
@@ -227,7 +234,7 @@ def test_a_featuretable_reconstructs_its_tab_paths_era_identity(tmp_path, monkey
 
 def test_a_table_built_with_more_topics_is_adopted_reading_only_done(tmp_path, monkeypatch):
     """The topics a table no longer declares are named for its identity and never read: the
-    adoption reads ``done``, the tabs are its TAB's, and nothing is owed."""
+    adoption reads ``done``, the tablets are its TABLET's, and nothing is owed."""
     from dbx.datablocks import Datablock
     from dbx.featuretables import Featuretable
     url = str(tmp_path)
@@ -243,7 +250,7 @@ def test_a_table_built_with_more_topics_is_adopted_reading_only_done(tmp_path, m
         m.setattr(Featuretable, 'SPECIALIZATIONS', [era])
         new = _feature_table(url)
         assert new.hash != old_hash and old_hash in new.specialization_hashes()
-        assert all(new.tab(i).valid() for i in range(new.n_tabs))
+        assert all(new.tablet(i).valid() for i in range(new.n_tablets))
         assert not new.valid()
         new.specialize()
         assert new.valid() and not new.owedtopics()

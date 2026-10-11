@@ -45,15 +45,15 @@ def test_constructing_and_asking_writes_nothing(tmp_path):
     assert _lake(tmp_path) == before
 
 
-def test_a_table_and_its_tabs_are_formed_and_queried_without_writing(tmp_path, monkeypatch):
+def test_a_table_and_its_tablets_are_formed_and_queried_without_writing(tmp_path, monkeypatch):
     v1table(tmp_path, spec={'n': 3}).build()
-    _Tables._grow_the_tab(monkeypatch)
+    _Tables._grow_the_tablet(monkeypatch)
     before = _lake(tmp_path)
     table = v1table(tmp_path, spec={'n': 3})
     for i in range(3):
-        table.tab(i).valid()
-    table.valid_tabs(parallelization='inline')
-    table.find_tab_specializations(parallelization='inline')
+        table.tablet(i).valid()
+    table.valid_tablets(parallelization='inline')
+    table.find_tablet_specializations(parallelization='inline')
     assert _lake(tmp_path) == before
 
 

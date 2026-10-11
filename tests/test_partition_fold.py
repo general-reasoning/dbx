@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from dbx import (
-    Datatab,
+    Datatablet,
     Datatable,
     DatatablePartition,
     DatatablePart,
@@ -14,11 +14,11 @@ from dbx import (
 )
 
 
-class DummyTab(Datatab):
+class DummyTablet(Datatablet):
     TOPICS = {'numbers': SLICETOPIC, 'letters': SLICETOPIC}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         n: int = 3
         base: int = 0
 
@@ -36,25 +36,25 @@ class DummyTab(Datatab):
 
 
 class DummyTable(Datatable):
-    TAB = DummyTab
+    TABLET = DummyTablet
 
     @dataclass
     class VAR(Datatable.VAR):
-        tab_sizes: tuple[int, ...] = (5, 3, 2, 4)
+        tablet_sizes: tuple[int, ...] = (5, 3, 2, 4)
 
     @property
-    def n_tabs(self):
-        return len(self.var.tab_sizes)
+    def n_tablets(self):
+        return len(self.var.tablet_sizes)
 
-    def __tab__(self, idx):
-        offset = sum(self.var.tab_sizes[:idx])
-        # Through super(), so the tab inherits the table's url. Constructing
-        # self.TAB directly leaves url unset, and the tab lands under DBX_ROOT
+    def __tablet__(self, idx):
+        offset = sum(self.var.tablet_sizes[:idx])
+        # Through super(), so the tablet inherits the table's url. Constructing
+        # self.TABLET directly leaves url unset, and the tablet lands under DBX_ROOT
         # instead of under the table it belongs to.
-        return super().__tab__(
+        return super().__tablet__(
             idx,
             tag=f"tab_{idx}",
-            n=self.var.tab_sizes[idx],
+            n=self.var.tablet_sizes[idx],
             base=offset,
         )
 
@@ -75,13 +75,13 @@ def test_datatable_partition_and_fold(table, tmp_path):
     assert partition.valid()
     assert partition.n_folds() == 2
 
-    tabs0 = partition.tabs(0)
-    tabs1 = partition.tabs(1)
-    indices0 = partition.tabs_indices(0)
-    indices1 = partition.tabs_indices(1)
+    tablets0 = partition.tablets(0)
+    tablets1 = partition.tablets(1)
+    indices0 = partition.tablets_indices(0)
+    indices1 = partition.tablets_indices(1)
 
     assert set(indices0).isdisjoint(set(indices1))
-    assert len(indices0) + len(indices1) == table.n_tabs
+    assert len(indices0) + len(indices1) == table.n_tablets
 
     fold0 = partition.fold(0)
     fold1 = partition.fold(1)
@@ -92,8 +92,8 @@ def test_datatable_partition_and_fold(table, tmp_path):
     assert fold0.var.partition.datatable == table
     assert fold0.datatable == table
     assert fold0.datapoints_per_row == 1
-    assert fold0.n_tabs == len(indices0)
-    assert fold1.n_tabs == len(indices1)
+    assert fold0.n_tablets == len(indices0)
+    assert fold1.n_tablets == len(indices1)
 
     # data() is column-major and keyed by slice, so a row count comes from a
     # column rather than from len() of the returned mapping.
@@ -119,21 +119,21 @@ def test_partition_slice_parameter(table, tmp_path):
         spec=dict(datatable=table, fractions=[0.5, 0.5], partition_slice=1),
     ).build()
     assert p_by_int.valid()
-    assert p_by_str.tabs_indices(0) == p_by_int.tabs_indices(0)
+    assert p_by_str.tablets_indices(0) == p_by_int.tablets_indices(0)
 
 
-def test_a_part_resolves_its_tabs_redirections_through_the_table(table, tmp_path):
-    """A part's tab i is the table's tab tab_indices[i]; so is its redirection."""
+def test_a_part_resolves_its_tablets_redirections_through_the_table(table, tmp_path):
+    """A part's tablet i is the table's tablet tablet_indices[i]; so is its redirection."""
     partition = DatatablePartition(
         datalake=str(tmp_path / 'partition_r'),
         spec=dict(datatable=table, fractions=[0.5, 0.5], partition_slice=0),
     ).build()
     fold = partition.fold(0)
-    real = fold.tab_indices[0]
+    real = fold.tablet_indices[0]
     other = DummyTable(datalake=str(tmp_path / 'elsewhere')).build()
-    table.tab(real).UNSAFE_redirect(paths=other.tab(real).paths(), OVERRIDE=True)
+    table.tablet(real).UNSAFE_redirect(paths=other.tablet(real).paths(), OVERRIDE=True)
 
-    got = fold.get_tab_redirections(parallelization='inline')
-    assert got.index.tolist() == list(range(fold.n_tabs))
-    assert got[0].paths == other.tab(real).paths()
-    assert fold.tabs_redirected(parallelization='inline')[0]
+    got = fold.get_tablet_redirections(parallelization='inline')
+    assert got.index.tolist() == list(range(fold.n_tablets))
+    assert got[0].paths == other.tablet(real).paths()
+    assert fold.tablets_redirected(parallelization='inline')[0]

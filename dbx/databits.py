@@ -1105,8 +1105,8 @@ class _CallableExecutorBase_(_CarriesDatajournal_):
     #: How long the main loop will wait for the NEXT result before giving up on
     #: the queue. Hours, because that is what the quantity means: it is the gap
     #: between consecutive results, not a limit on the run, so anything shorter
-    #: than the slowest single callable trips on a healthy run. A 101-tab MDS
-    #: build with hour-long tabs tripped the old 1000s default every time.
+    #: than the slowest single callable trips on a healthy run. A 101-tablet MDS
+    #: build with hour-long tablets tripped the old 1000s default every time.
     #:
     #: It cannot rescue a wedged worker and does not pretend to: the join below
     #: waits on `is_alive()` whatever this is set to, so shortening it buys no

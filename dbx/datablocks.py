@@ -541,15 +541,15 @@ class forward_property:
     computed once, checked against the promise, and cached in the instance's
     ``__dict__`` under its own name, as with `functools.cached_property`.
 
-    Made for a TOPICS the instance declares. A table reads its TAB's slice
-    NAMES off the TAB class, before any tab exists; a tab's full declaration --
+    Made for a TOPICS the instance declares. A table reads its TABLET's slice
+    NAMES off the TABLET class, before any tablet exists; a tablet's full declaration --
     the slice's columns -- follows from its VAR::
 
         @forward_property({'features': DATASLICE})
         def TOPICS(self):
             return {'features': DATASLICE({c: 'ndarray:float32' for c in self.feature_for_column})}
 
-    The class says "a ``features`` slice"; each tab says which columns. A plain
+    The class says "a ``features`` slice"; each tablet says which columns. A plain
     `property` cannot: on the class it is the property object, and a table
     reading one finds no slices and says nothing.
 
@@ -558,7 +558,7 @@ class forward_property:
 
     - a class (a topic marker included): the instance's value is it, a
       subclass of it, or an instance of it -- ``DATASLICE(final='ndarray:float32')``
-      refines ``DATASLICE``, a part's ``Featuretab`` refines ``Datatab``, and
+      refines ``DATASLICE``, a part's ``Featuretablet`` refines ``Datatablet``, and
       ``'final'`` refines ``str``;
     - a dict: every key it declares is the instance's too, each refined in
       turn; the instance may declare more;
@@ -602,7 +602,7 @@ class forward_property:
         return value
 
     def named(self, name: str) -> 'forward_property':
-        """The same declaration under another attribute name -- as a table's TAB is its BLOCK."""
+        """The same declaration under another attribute name -- as a table's TABLET is its BLOCK."""
         other = forward_property(self.classvalue)(self.func)
         other.__set_name__(None, name)
         return other
@@ -647,8 +647,8 @@ def _check_forward_override_(cls, name: str) -> None:
     Python finds an attribute on the class before its bases', so a plain one on
     a subclass hides the descriptor -- for the class AND for every instance. A
     copy of the forward declaration therefore replaces each instance's own
-    value with the placeholder, and nothing says so: for a `Featuretab`, every
-    tab then declares a ``features`` slice without columns, its hash moves, and
+    value with the placeholder, and nothing says so: for a `Featuretablet`, every
+    tablet then declares a ``features`` slice without columns, its hash moves, and
     whatever reads the columns fails far from here. A DIFFERENT value is taken
     as a deliberate override, and stands.
     """
@@ -978,7 +978,7 @@ _RENAMED_DATAJOURNAL_BUILDERS_ = {
     'journal': 'datajournal',
     'Journal': 'Datajournal',
     'block_journal': 'block_datajournal',
-    'tab_journal': 'tab_datajournal',
+    'tab_journal': 'tablet_datajournal',
     'child_specialization_journal': 'child_specialization_datajournal',
 }
 
@@ -1358,7 +1358,7 @@ class Datablock:
         nothing of the narrower block's topics is taken from this class, which
         is what lets a specialization describe a block whose topics were
         SPELLED differently, as every block from before the topic markers was.
-        (A Datatable still adds its TAB's slices, as its own identity always did.) *version* is the
+        (A Datatable still adds its TABLET's slices, as its own identity always did.) *version* is the
         :attr:`VERSION` the narrower block carried, left :data:`ABSENT` to
         inherit this class's. The sentinel rather than ``None``, because
         ``None`` is what :attr:`version` reads as for a class that declares no
@@ -1437,7 +1437,7 @@ class Datablock:
         #: `_specialization_variants_`). A field not named renders as it is now.
         nested: dict | None = field(default=None, kw_only=True)
         #: Why the coincidence holds. Last -- and keyword-only, so that it is
-        #: last in a subclass's constructor too, after its BLOCK or TAB.
+        #: last in a subclass's constructor too, after its BLOCK or TABLET.
         note: str = field(default='', kw_only=True)
 
         # 1. Protocol and hooks --------------------------------------------
@@ -1518,7 +1518,7 @@ class Datablock:
         def __eq__(self, other):
             # By key, across the family: a table's specialization read back from
             # its journal is a Datatable.Specialization, and equals the plain
-            # Datablock.Specialization the class declared when its TAB is SAME.
+            # Datablock.Specialization the class declared when its TABLET is SAME.
             if not isinstance(other, Datablock.Specialization):
                 return NotImplemented
             return self.key == other.key
@@ -1603,7 +1603,7 @@ class Datablock:
         # 4. Helpers -------------------------------------------------------
 
         #: The fields every Specialization has; a subclass's others -- a
-        #: Datastack's BLOCK, a Datatable's TAB -- are recorded and keyed too.
+        #: Datastack's BLOCK, a Datatable's TABLET -- are recorded and keyed too.
         _base_fields = frozenset({'spec', 'topics', 'version', 'note', 'anchor',
                                   'legacy', 'UNSAFE_redirect_all_topics', 'redirect_topics',
                                   'redirect_vars', 'nested'})
@@ -2128,14 +2128,17 @@ class Datablock:
         if specs is None:
             specs = state.get('SPECIALIZATION')
         self._SPECIALIZATIONS_ = self._specialization_records_(specs)
-        tab_specs = state.get('TAB_SPECIALIZATIONS')
-        if tab_specs is None:
-            tab_specs = state.get('TAB_SPECIALIZATION')
-        if tab_specs is None:
-            tab_specs = state.get('BLOCK_SPECIALIZATIONS')
-        if tab_specs is None:
-            tab_specs = state.get('BLOCK_SPECIALIZATION')
-        self._TAB_SPECIALIZATIONS_ = self._specialization_records_(tab_specs)
+        tablet_specs = state.get('TABLET_SPECIALIZATIONS')
+        if tablet_specs is None:
+            tablet_specs = state.get('TABLET_SPECIALIZATION')
+        if tablet_specs is None:
+            # A state saved before TAB became TABLET, on 2026-10-10.
+            tablet_specs = state.get('TAB_SPECIALIZATIONS') or state.get('TAB_SPECIALIZATION')
+        if tablet_specs is None:
+            tablet_specs = state.get('BLOCK_SPECIALIZATIONS')
+        if tablet_specs is None:
+            tablet_specs = state.get('BLOCK_SPECIALIZATION')
+        self._TABLET_SPECIALIZATIONS_ = self._specialization_records_(tablet_specs)
         self.validate_vars = state.get('validate_vars', True)
         self._paths_ = None
 
@@ -2180,16 +2183,17 @@ class Datablock:
             # After __post_init__, so the instance's own win over any a class
             # computes there, as they win over the class's.
             self.SPECIALIZATIONS = [self.Specialization.from_record(r) for r in self._SPECIALIZATIONS_]
-        if getattr(self, '_TAB_SPECIALIZATIONS_', None) is not None:
-            tab_cls = getattr(self, 'TAB', None) or getattr(self, 'BLOCK', None)
-            spec_cls = getattr(tab_cls, 'Specialization', self.Specialization) if tab_cls else self.Specialization
-            inst_tab_specs = [spec_cls.from_record(r) for r in self._TAB_SPECIALIZATIONS_]
-            if 'TAB_SPECIALIZATIONS' in state or hasattr(self, 'TAB_SPECIALIZATIONS'):
-                self.TAB_SPECIALIZATIONS = inst_tab_specs
+        if getattr(self, '_TABLET_SPECIALIZATIONS_', None) is not None:
+            tablet_cls = getattr(self, 'TABLET', None) or getattr(self, 'BLOCK', None)
+            spec_cls = getattr(tablet_cls, 'Specialization', self.Specialization) if tablet_cls else self.Specialization
+            inst_tablet_specs = [spec_cls.from_record(r) for r in self._TABLET_SPECIALIZATIONS_]
+            if ('TABLET_SPECIALIZATIONS' in state or 'TAB_SPECIALIZATIONS' in state
+                    or hasattr(self, 'TABLET_SPECIALIZATIONS')):
+                self.TABLET_SPECIALIZATIONS = inst_tablet_specs
             elif 'BLOCK_SPECIALIZATIONS' in state or hasattr(self, 'BLOCK_SPECIALIZATIONS'):
-                self.BLOCK_SPECIALIZATIONS = inst_tab_specs
+                self.BLOCK_SPECIALIZATIONS = inst_tablet_specs
             else:
-                self.TAB_SPECIALIZATIONS = inst_tab_specs
+                self.TABLET_SPECIALIZATIONS = inst_tablet_specs
         if specialization_journal is None:
             specialization_journal = _forming_journal_(self.anchor, self.datalake)
         if specialization_journal is not None:
@@ -2228,8 +2232,8 @@ class Datablock:
         #TODO: why does 'log' end up in self.parameters?
         for k in self.parameters:
             if k not in self.__explicit_params__() and k != 'log' and hasattr(self, k):
-                if k in ('TAB_SPECIALIZATIONS', 'TAB_SPECIALIZATION', 'BLOCK_SPECIALIZATIONS', 'BLOCK_SPECIALIZATION') and getattr(self, '_TAB_SPECIALIZATIONS_', None) is not None:
-                    _state[k] = self._TAB_SPECIALIZATIONS_
+                if k in ('TABLET_SPECIALIZATIONS', 'TABLET_SPECIALIZATION', 'BLOCK_SPECIALIZATIONS', 'BLOCK_SPECIALIZATION') and getattr(self, '_TABLET_SPECIALIZATIONS_', None) is not None:
+                    _state[k] = self._TABLET_SPECIALIZATIONS_
                 else:
                     _state[k] = getattr(self, k)
         return _state
@@ -4332,11 +4336,11 @@ class Datablock:
         ``topics`` alone, and its ``version`` when it names one. Its topics are
         rendered from the declaration it carries -- that block's own nodes, in
         that block's era -- and NOTHING of them is inherited from this class's
-        TOPICS. (A Datatable adds its TAB's slices, as its own identity does.)
+        TOPICS. (A Datatable adds its TABLET's slices, as its own identity does.)
         See :meth:`get_hash`.
 
         *with_block* False computes it under the rules from before a stack's
-        type named its BLOCK -- a Datatable's its TAB -- which is what
+        type named its BLOCK -- a Datatable's its TABLET -- which is what
         reconstructing a stack built then needs. See :meth:`_type_entries_`.
         """
         omit, topics = ((), None) if specialization is None else (
@@ -6358,7 +6362,7 @@ class Datablock:
             # mentioned the feature says -- and saying it out loud in every
             # quote() would move the recorded text of blocks that have nothing
             # to do with specializations.
-            and not (k in ('use_specializations', 'SPECIALIZATIONS', 'TAB_SPECIALIZATIONS', 'BLOCK_SPECIALIZATIONS') and v is None)
+            and not (k in ('use_specializations', 'SPECIALIZATIONS', 'TABLET_SPECIALIZATIONS', 'BLOCK_SPECIALIZATIONS') and v is None)
         }
         self.log.detailed(f"{self.anchor}: _tailkwargs_: {tailkwargs=}")
         return tailkwargs
@@ -6966,7 +6970,7 @@ class Datablock:
 
         Rendered ``name=text``, after the signature and before the version --
         so, like everything in the type, they are identity. None here; a
-        Datastack names its BLOCK, a Datatable its TAB.
+        Datastack names its BLOCK, a Datatable its TABLET.
         """
         return {}
 
@@ -7683,7 +7687,7 @@ class Datastack(Datablock):
     #: A declaration: it says what the stack holds and is checked as each block
     #: is formed, but it does not locate anything -- a block's journal is under
     #: that block's url and anchor, which ``block(0)`` knows. A `Datatable`'s
-    #: ``TAB`` is its BLOCK. Not declaring one is deprecated.
+    #: ``TABLET`` is its BLOCK. Not declaring one is deprecated.
     BLOCK = None
 
     #: Classes already warned about a missing BLOCK, so a stack built in a loop warns once.
@@ -7779,10 +7783,10 @@ class Datastack(Datablock):
             return self.BLOCK
 
     def _type_entries_(self, specialization=None, *, with_block: bool = True) -> dict:
-        """``{'BLOCK': fqcn}``: the block class is part of what a stack IS -- a Datatable calls it TAB.
+        """``{'BLOCK': fqcn}``: the block class is part of what a stack IS -- a Datatable calls it TABLET.
 
         Without it a stack's hash disregarded its BLOCK -- an identity names no
-        class, and a marker-spelled table carries none of its TAB's topics --
+        class, and a marker-spelled table carries none of its TABLET's topics --
         so editing the BLOCK, or pointing it at another class, moved every
         block and left the stack valid over them. *with_block* False, or a
         *specialization* whose BLOCK is None, computes the type under the rules
@@ -8254,7 +8258,7 @@ class Datastack(Datablock):
             return None, [], {}, []
         validation = self._validation_(validation)
         kind = self._block_kind_()
-        item_label = 'tabs' if kind == 'TAB' else 'blocks'
+        item_label = 'tablets' if kind == 'TABLET' else 'blocks'
 
         valid, paths = self._check_blocks_(validation, parallelization=parallelization, n_workers=n_workers)
         invalid = list(valid[~valid].index)
@@ -8997,7 +9001,7 @@ class Datastack(Datablock):
         """The specializations for this stack's blocks: from instance attributes, or the BLOCK class."""
         specs = getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None)
         if specs is None:
-            specs = getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None)
+            specs = getattr(self, 'TABLET_SPECIALIZATIONS', None) or getattr(self, 'TABLET_SPECIALIZATION', None)
         if specs is not None:
             block_cls = self._block_class_()
             spec_cls = getattr(block_cls, 'Specialization', Datablock.Specialization) if block_cls else Datablock.Specialization
@@ -9013,13 +9017,13 @@ class Datastack(Datablock):
         return getattr(block_cls, 'SPECIALIZATIONS', None) or []
 
     def _block_kind_(self) -> str:
-        """'TAB' if this stack or its table declares TAB, else 'BLOCK'."""
-        if getattr(self, 'TAB', None) is not None:
-            return 'TAB'
+        """'TABLET' if this stack or its table declares TABLET, else 'BLOCK'."""
+        if getattr(self, 'TABLET', None) is not None:
+            return 'TABLET'
         table = getattr(getattr(self, 'var', None), 'partition', None)
         table = getattr(table, 'datatable', None)
-        if table is not None and getattr(table, 'TAB', None) is not None:
-            return 'TAB'
+        if table is not None and getattr(table, 'TABLET', None) is not None:
+            return 'TABLET'
         return 'BLOCK'
 
     def _blocks_datajournal_(self, **kwargs):
@@ -9083,8 +9087,8 @@ class Datastack(Datablock):
         if block_cls is None or not block_specs:
             return None
         kind = self._block_kind_()
-        item_label = 'tabs' if kind == 'TAB' else 'blocks'
-        n_items = getattr(self, 'n_tabs', self.n_blocks)
+        item_label = 'tablets' if kind == 'TABLET' else 'blocks'
+        n_items = getattr(self, 'n_tablets', self.n_blocks)
 
         anchor = block_cls.anchor
         if not getattr(self, 'specialization_use_full_journal', False):
@@ -9215,8 +9219,8 @@ class Datastack(Datablock):
         if block_cls is None or not block_specs:
             return None
         kind = self._block_kind_()
-        item_label = 'tabs' if kind == 'TAB' else 'blocks'
-        n_items = getattr(self, 'n_tabs', self.n_blocks)
+        item_label = 'tablets' if kind == 'TABLET' else 'blocks'
+        n_items = getattr(self, 'n_tablets', self.n_blocks)
         anchor = block_cls.anchor
         self.log.verbose(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
                          f"for {n_items} {item_label} to resolve against...")

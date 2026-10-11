@@ -11,7 +11,7 @@ Usage::
 
     from dbx.datastreams import ZipStreamingDataset          # map-style
     from dbx.datastreams import ZipIterableStreamingDatasets  # iterator-style
-    from dbx.datatables import Datatab, Datatable
+    from dbx.datatables import Datatablet, Datatable
 """
 
 from __future__ import annotations
@@ -127,7 +127,7 @@ def release_shared_memory_when_collected(dataset):
     ``atexit`` -- ``atexit.register(self.cleanup)`` -- so the registry holds
     each one, and its file descriptors, until the PROCESS exits, long after the
     `StreamingDataset` that made it is gone. A process that opens a dataset per
-    tab, as a probe or a table build does, accumulates them without bound until
+    tablet, as a probe or a table build does, accumulates them without bound until
     the next open fails with "Too many open files" -- in whatever needed a file
     next, which is how it surfaced: Metal failing to load its shader library.
 
@@ -694,7 +694,7 @@ class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
     * ``shuffle=True`` on every source with identical ``shuffle_seed``,
       ``shuffle_algo``, ``num_canonical_nodes`` and ``batch_size``, **and**
       shard boundaries that coincide: aligned, full locality-aware shuffle.
-      ``Datatab.slice_writers(..., flush_every=N)`` is what makes the
+      ``Datatablet.slice_writers(..., flush_every=N)`` is what makes the
       boundaries coincide.
     * ``shuffle_algo='naive'`` is the exception that needs no aligned
       boundaries -- it permutes ``sum(shard_sizes)`` and so depends only on
@@ -1062,7 +1062,7 @@ class _CountingWriter_:
     A proxy rather than a subclass so that ``slice_writers(flush_every=N)``
     is the only change a ``__build__()`` needs -- every other attribute and
     method, ``finish()`` included, passes straight through, so the writers
-    a tab is handed behave exactly as before.
+    a tablet is handed behave exactly as before.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -1141,7 +1141,7 @@ class _CountingWriter_:
 class ShardSync:
     """Counts a group of writers, and breaks them onto a new shard together.
 
-    Two jobs, and only the second is optional.  Counting says whether the tab
+    Two jobs, and only the second is optional.  Counting says whether the tablet
     wrote every slice once per item -- the invariant the slices exist to keep,
     since sample i of one must describe what sample i of another does -- and
     costs an increment per write, so it is always on.  Breaking them onto a
@@ -1150,9 +1150,9 @@ class ShardSync:
     The condition is deliberately "every writer has written the same number
     of samples, and that number is a multiple of *every*" rather than
     "*every* writes have happened on this one": slices are written one
-    sample each per item but in whatever order the tab's loop body
+    sample each per item but in whatever order the tablet's loop body
     happens to use, so the sync has to fire on the last of them, not the
-    first.  A tab that does not write its slices in lockstep never satisfies
+    first.  A tablet that does not write its slices in lockstep never satisfies
     the condition, which is what ``check_lockstep()`` reports at the end.
     """
 
@@ -1160,7 +1160,7 @@ class ShardSync:
 
     def __init__(self, every: 'int | None' = None):
         #: None counts without ever rotating: the lockstep COUNT is what says
-        #: whether a tab wrote its slices one sample per item, and that question
+        #: whether a tablet wrote its slices one sample per item, and that question
         #: is worth answering on every build.  Sharing shard boundaries is a
         #: separate thing to want, and only that one costs anything.
         self.every = every

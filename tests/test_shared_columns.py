@@ -6,9 +6,9 @@ by the author.  Which columns two slices hold in common is a fact about how
 they were WRITTEN: the caller is the wrong party to know it, and every caller of
 one table needs the same answer.
 
-So a `Datatab` or `Datatable` declares ``shared_slice_columns``, and a
-block reading an upstream block's slices alongside its own -- a `Featuretab`
-over its `Datatab` -- declares ``shared_upstream_column`` for the column
+So a `Datatablet` or `Datatable` declares ``shared_slice_columns``, and a
+block reading an upstream block's slices alongside its own -- a `Featuretablet`
+over its `Datatablet` -- declares ``shared_upstream_column`` for the column
 that answers the question spanning the two: is feature row *i* the features OF
 sample row *i*?
 
@@ -26,7 +26,7 @@ import pytest
 
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datatables import SLICETOPIC, Datatab, Datatable
+from dbx.datatables import SLICETOPIC, Datatablet, Datatable
 from dbx.datatables import DataslicesUpstream
 
 
@@ -35,14 +35,14 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class Samples(Datatab):
+class Samples(Datatablet):
     """Two slices carrying one bookkeeping column, written in lockstep."""
 
     VERSION = 1
     TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         n: int = 4
 
     def __build__(self):
@@ -55,15 +55,15 @@ class Samples(Datatab):
 
 class SampleTable(Datatable):
     VERSION = 1
-    TAB = Samples
+    TABLET = Samples
 
     @property
-    def n_tabs(self):
+    def n_tablets(self):
         return 2
 
 
-class Derived(DataslicesUpstream, Datatab):
-    """The shape a `Featuretab` has: own slice plus an upstream block's.
+class Derived(DataslicesUpstream, Datatablet):
+    """The shape a `Featuretablet` has: own slice plus an upstream block's.
 
     Carries the upstream's bookkeeping column through, which is what makes the
     cross-block alignment checkable at all.
@@ -73,7 +73,7 @@ class Derived(DataslicesUpstream, Datatab):
     TOPICS = {'d': SLICETOPIC}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         upstream: Samples = None
         offset: int = 0
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import pytest
 
 from dbx.datablocks import DIRTOPIC, SAME, Datablock, Datajournal
-from dbx.datatables import Datatab, Datatable
+from dbx.datatables import Datatablet, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -20,20 +20,20 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class Before(Datatab):
+class Before(Datatablet):
     """The class as it was named when it was built."""
     TOPICS = {'rows': 'rows.txt'}
 
     @dataclass
-    class VAR(Datatab.VAR):
-        tab_idx: int = 0
+    class VAR(Datatablet.VAR):
+        tablet_idx: int = 0
 
     def __build__(self):
         with open(self.path('rows', ensure_dirpath=True), 'w') as f:
-            f.write(f"rows-{self.var.tab_idx}")
+            f.write(f"rows-{self.var.tablet_idx}")
 
 
-class After(Datatab):
+class After(Datatablet):
     """The same block renamed: same spec, topics and version, so the same hash."""
     TOPICS = {'rows': 'rows.txt'}
     SPECIALIZATIONS = [Datablock.Specialization(
@@ -41,15 +41,15 @@ class After(Datatab):
         note="renamed only")]
 
     @dataclass
-    class VAR(Datatab.VAR):
-        tab_idx: int = 0
+    class VAR(Datatablet.VAR):
+        tablet_idx: int = 0
 
     def __build__(self):
         raise AssertionError("a renamed block should be read, not rebuilt")
 
 
 class BeforeTable(Datatable):
-    TAB = Before
+    TABLET = Before
     TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
 
     @dataclass
@@ -57,15 +57,15 @@ class BeforeTable(Datatable):
         n: int = 4
 
     @property
-    def n_tabs(self):
+    def n_tablets(self):
         return self.var.n
 
-    def __tab__(self, idx, **spec):
-        return super().__tab__(idx, tab_idx=idx, **spec)
+    def __tablet__(self, idx, **spec):
+        return super().__tablet__(idx, tablet_idx=idx, **spec)
 
 
 class AfterTable(BeforeTable):
-    TAB = After
+    TABLET = After
 
 
 def _count_reads(monkeypatch):
@@ -95,12 +95,12 @@ def test_an_anchor_must_be_one():
 
 
 def test_a_renamed_block_reads_what_its_old_name_built(tmp_path):
-    Before(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
-    after = After(datalake=str(tmp_path), spec={'tab_idx': 2})
+    Before(datalake=str(tmp_path), spec={'tablet_idx': 2}).build()
+    after = After(datalake=str(tmp_path), spec={'tablet_idx': 2})
     assert after.redirected_topics() == [], "constructing it installs nothing"
     after.build()                       # adopts, and builds nothing -- After.__build__ would raise
     assert after.anchor != Before.anchor
-    assert after.hash == Before(datalake=str(tmp_path), spec={'tab_idx': 2}).hash
+    assert after.hash == Before(datalake=str(tmp_path), spec={'tablet_idx': 2}).hash
     assert after.redirected_topics() == ['rows']
     assert after.valid()
     with open(after.path('rows')) as f:
@@ -112,17 +112,17 @@ def test_under_its_own_anchor_the_same_identity_is_still_refused(tmp_path):
     assert "own identity" in Before(datalake=str(tmp_path))._specialization_mismatch_(same)
 
 
-def test_a_table_reads_each_anchor_once_for_all_its_tabs(tmp_path, monkeypatch):
+def test_a_table_reads_each_anchor_once_for_all_its_tablets(tmp_path, monkeypatch):
     BeforeTable(datalake=str(tmp_path), spec={'n': 4}).build()
     reads = _count_reads(monkeypatch)
     AfterTable(datalake=str(tmp_path), spec={'n': 4}).build()
-    tabs = [AfterTable(datalake=str(tmp_path), spec={'n': 4}).tab(i) for i in range(4)]
-    assert all(t.redirected_topics() == ['rows'] for t in tabs)
-    for i, t in enumerate(tabs):
+    tablets = [AfterTable(datalake=str(tmp_path), spec={'n': 4}).tablet(i) for i in range(4)]
+    assert all(t.redirected_topics() == ['rows'] for t in tablets)
+    for i, t in enumerate(tablets):
         with open(t.path('rows')) as f:
             assert f.read() == f'rows-{i}'
     old_reads = [a for a in reads if a == Before.anchor]
-    assert len(old_reads) <= 1, f"{len(old_reads)} reads of the old anchor's journal for 4 tabs"
+    assert len(old_reads) <= 1, f"{len(old_reads)} reads of the old anchor's journal for 4 tablets"
 
 
 # ---------------------------------------------------------------------------
@@ -135,20 +135,20 @@ import pickle  # noqa: E402
 
 def _renamed_by_instance(url, **kw):
     """`Before` built; a class that declares nothing, given the rename per instance."""
-    return Unspecialized(datalake=url, spec={'tab_idx': 2}, SPECIALIZATIONS=[
+    return Unspecialized(datalake=url, spec={'tablet_idx': 2}, SPECIALIZATIONS=[
         Datablock.Specialization(spec={}, topics={'rows': 'rows.txt'}, anchor=Before.anchor)], **kw)
 
 
-class Unspecialized(Datatab):
+class Unspecialized(Datatablet):
     TOPICS = {'rows': 'rows.txt'}
 
     @dataclass
-    class VAR(Datatab.VAR):
-        tab_idx: int = 0
+    class VAR(Datatablet.VAR):
+        tablet_idx: int = 0
 
 
 def test_an_instance_declares_its_own(tmp_path):
-    Before(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
+    Before(datalake=str(tmp_path), spec={'tablet_idx': 2}).build()
     assert Unspecialized.SPECIALIZATIONS in (None, [])
     block = _renamed_by_instance(str(tmp_path)).build()
     assert block.redirected_topics() == ['rows']
@@ -156,18 +156,18 @@ def test_an_instance_declares_its_own(tmp_path):
 
 
 def test_none_keeps_the_class_and_empty_declares_none(tmp_path):
-    Before(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
+    Before(datalake=str(tmp_path), spec={'tablet_idx': 2}).build()
     # First: once a build installs the redirection, its .redirection marker
     # answers every later construction, whatever they declare.
-    off = After(datalake=str(tmp_path), spec={'tab_idx': 2}, SPECIALIZATIONS=[])
+    off = After(datalake=str(tmp_path), spec={'tablet_idx': 2}, SPECIALIZATIONS=[])
     assert off._install_specialization_() is None
     assert off.SPECIALIZATIONS == [] and off.redirected_topics() == []
-    on = After(datalake=str(tmp_path), spec={'tab_idx': 2}).build()
+    on = After(datalake=str(tmp_path), spec={'tablet_idx': 2}).build()
     assert on.redirected_topics() == ['rows']
 
 
 def test_they_are_not_the_identity(tmp_path):
-    plain = Unspecialized(datalake=str(tmp_path), spec={'tab_idx': 2})
+    plain = Unspecialized(datalake=str(tmp_path), spec={'tablet_idx': 2})
     assert _renamed_by_instance(str(tmp_path)).hash == plain.hash
 
 

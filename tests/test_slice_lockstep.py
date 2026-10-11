@@ -1,7 +1,7 @@
 """Every slice gets one sample per item, and a build that breaks that says so.
 
-A tab's slices are read back by index: sample *i* of one is taken to describe
-what sample *i* of another does.  A tab that writes one slice and skips another
+A tablet's slices are read back by index: sample *i* of one is taken to describe
+what sample *i* of another does.  A tablet that writes one slice and skips another
 for some item -- an early ``continue``, a per-item exception swallowed, a branch
 that writes two of three -- shifts one slice against the rest from that item on.
 
@@ -23,7 +23,7 @@ import pytest
 
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datatables import SLICETOPIC, Datatab, Datatable
+from dbx.datatables import SLICETOPIC, Datatablet, Datatable
 
 
 @pytest.fixture(autouse=True)
@@ -31,14 +31,14 @@ def setup_env(monkeypatch):
     monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
 
 
-class TwoSlices(Datatab):
+class TwoSlices(Datatablet):
     """Writes ``n`` items into two slices, optionally skipping one item of 'b'."""
 
     VERSION = 1
     TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         n: int = 4
         skip: int = None
         flush_every: int = None
@@ -106,22 +106,22 @@ class TestValidateReadsTheFinishedIndexes:
         with pytest.raises(ValueError, match='lockstep'):
             long.validate()
 
-    def test_a_whole_tab_validates(self, tmp_path):
+    def test_a_whole_tablet_validates(self, tmp_path):
         t = tab(tmp_path, n=4)
         t.build()
         assert t.validate()
 
-    def test_an_unbuilt_tab_is_answered_before_any_index_is_read(self, tmp_path):
-        """`valid()` comes first, so a tab with nothing on disk says False
+    def test_an_unbuilt_tablet_is_answered_before_any_index_is_read(self, tmp_path):
+        """`valid()` comes first, so a tablet with nothing on disk says False
         rather than raising about row counts it cannot read."""
         assert tab(tmp_path, n=4).validate() is False
 
 
-class TestASingleSliceTabIsUnaffected:
+class TestASingleSliceTabletIsUnaffected:
     """The count costs an increment per write and answers vacuously here."""
 
     def test_it_builds_and_reads(self, tmp_path):
-        class OneSlice(Datatab):
+        class OneSlice(Datatablet):
             TOPICS = {'only': SLICETOPIC}
 
             def __build__(self):
@@ -134,19 +134,19 @@ class TestASingleSliceTabIsUnaffected:
         assert t.validate() and t.data('only') == {'only': {'i': [0, 1, 2]}}
 
 
-class TestATableRefusesARaggedTab:
+class TestATableRefusesARaggedTablet:
 
-    def test_the_build_stops_at_the_tab_that_did_it(self, tmp_path):
+    def test_the_build_stops_at_the_tablet_that_did_it(self, tmp_path):
         class RaggedTable(Datatable):
             VERSION = 1
-            TAB = TwoSlices
+            TABLET = TwoSlices
 
             @property
-            def n_tabs(self):
+            def n_tablets(self):
                 return 2
 
-            def __tab__(self, idx, tag=None):
-                return super().__tab__(idx, n=4, skip=2 if idx == 1 else None)
+            def __tablet__(self, idx, tag=None):
+                return super().__tablet__(idx, n=4, skip=2 if idx == 1 else None)
 
         with pytest.raises(ValueError, match='lockstep'):
             RaggedTable(datalake=str(tmp_path)).build()

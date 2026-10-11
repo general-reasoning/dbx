@@ -1,4 +1,4 @@
-"""datapoints — Datatab / Datatable blocks over MDS slices."""
+"""datapoints — Datatablet / Datatable blocks over MDS slices."""
 
 from __future__ import annotations
 
@@ -117,7 +117,7 @@ class DATASLICE(DATADIR, metaclass=_DataSliceMeta_):
     rows are read back in the order they were written, and a projection that
     permuted an axis rather than failing is the bug this forecloses.
 
-    The declaration is what `Datatab.slice_writers` writes, so it takes no
+    The declaration is what `Datatablet.slice_writers` writes, so it takes no
     argument when every slice declares its columns.  A bare ``DATASLICE`` declares
     none, and is the sentinel's behaviour under the marker's spelling: the
     columns are then the writer's to supply.
@@ -166,7 +166,7 @@ class DATASLICE(DATADIR, metaclass=_DataSliceMeta_):
 
 
 class _Database_(Datablock):
-    """Base class for sliced datapoint blocks (Datatab and Datatable).
+    """Base class for sliced datapoint blocks (Datatablet and Datatable).
 
     A **slice** is one independently-readable MDS stream directory inside a block.
     Slices are declared via topics marked with `SLICETOPIC`.
@@ -174,11 +174,11 @@ class _Database_(Datablock):
     A subclass declaring TOPICS constructs its TOPICS dictionary explicitly if extending
     its base class's topics::
 
-        class BaseTab(Datatab):
+        class BaseTablet(Datatablet):
             TOPICS = {'samples': SLICETOPIC, 'meta': 'meta.json'}
 
-        class SubTab(BaseTab):
-            TOPICS = {'report': 'report.json', **BaseTab.TOPICS}
+        class SubTablet(BaseTablet):
+            TOPICS = {'report': 'report.json', **BaseTablet.TOPICS}
     """
 
     TOPICS = {}
@@ -444,11 +444,11 @@ class _Database_(Datablock):
             raise TypeError(f"{self.__class__.__name__}.shard_sizes requires an explicit slice argument")
         slice = self.slice_names((slice,))[0]
         sizes = []
-        if hasattr(self, 'n_tabs'):
-            for idx in range(self.n_tabs):
-                tab = self.tab(idx)
+        if hasattr(self, 'n_tablets'):
+            for idx in range(self.n_tablets):
+                tablet = self.tablet(idx)
                 try:
-                    with tab.fs.open(tab.slice_index_path(slice), 'r') as f:
+                    with tablet.fs.open(tablet.slice_index_path(slice), 'r') as f:
                         index = json.load(f)
                     sizes.extend(
                         reader_from_json('.', None, meta).size
@@ -666,19 +666,19 @@ class _Database_(Datablock):
                     node = node[k]
 
     def _slice_declaration_(self, slice) -> dict:
-        """*slice*'s declared schema wherever it is declared -- here, or on a table's tabs -- else ``{}``.
+        """*slice*'s declared schema wherever it is declared -- here, or on a table's tablets -- else ``{}``.
 
-        A table's slices are its tabs' topics, not its own, and every tab of
-        one table is one TAB class, so the first tab speaks for them all.
+        A table's slices are its tablets' topics, not its own, and every tablet of
+        one table is one TABLET class, so the first tablet speaks for them all.
         """
         try:
             return self.declared_schema(slice) or {}
         except KeyError:
             pass
-        n_tabs = getattr(self, 'n_tabs', 0) or 0
-        if n_tabs and hasattr(self, 'tab'):
+        n_tablets = getattr(self, 'n_tablets', 0) or 0
+        if n_tablets and hasattr(self, 'tablet'):
             try:
-                return self.tab(0).declared_schema(slice) or {}
+                return self.tablet(0).declared_schema(slice) or {}
             except KeyError:
                 pass
         return {}
@@ -759,43 +759,43 @@ class _Database_(Datablock):
             f"{self.__class__.__name__} must implement _read_slice_(slice)"
         )
 
-    def _tab_stream_(self, tab, slice, local: str | None = None) -> Stream:
-        """One tab's slice as a `Stream`, cached under *local* when it is remote.
+    def _tablet_stream_(self, tablet, slice, local: str | None = None) -> Stream:
+        """One tablet's slice as a `Stream`, cached under *local* when it is remote.
 
-        A local tab is its own cache and *local* is ignored, as in
+        A local tablet is its own cache and *local* is ignored, as in
         `open_datastream()`. A remote one MUST be given a cache directory of its
         own: left without, `Stream` invents `{tmpdir}/{blake2s(remote)}` and
-        REFUSES to reuse it, so the second open of that tab -- a second process,
+        REFUSES to reuse it, so the second open of that tablet -- a second process,
         a second run, a retry after a crash -- dies with "Could not create a
         temporary local directory ... already exists". Hence the error rather
         than a default here: the caller knows which cache this belongs in, and
         every path that omitted one was a collision waiting to happen.
         """
-        index_dir = tab.path(*slice.split('/'))
+        index_dir = tablet.path(*slice.split('/'))
         scheme = urllib.parse.urlparse(index_dir).scheme
         if scheme in ('', 'file'):
             return Stream(local=index_dir.removeprefix('file://'))
         remote = abfs_to_mds_azure(index_dir) if scheme in ('abfs', 'abfss') else index_dir
         if local is None:
             raise ValueError(
-                f"{self.__class__.__name__}._tab_stream_: {index_dir} is remote, so it "
+                f"{self.__class__.__name__}._tablet_stream_: {index_dir} is remote, so it "
                 f"needs a local cache directory of its own; pass local="
             )
         os.makedirs(local, exist_ok=True)
         return Stream(remote=remote, local=local)
 
-    def _tab_streams_(self, slice, local: str):
-        """One `Stream` per tab, each cached in its own subdirectory of *local*.
+    def _tablet_streams_(self, slice, local: str):
+        """One `Stream` per tablet, each cached in its own subdirectory of *local*.
 
-        Subdivided by tab, because `StreamingDataset` takes either `streams=` or
+        Subdivided by tablet, because `StreamingDataset` takes either `streams=` or
         `local=` and never both -- so the cache directory this class computes
         cannot be handed to the dataset, only to the streams under it -- and
         because two streams sharing one directory is itself the collision.
-        Named by the tab's hash: unique per tab, and the same across runs, so a
+        Named by the tablet's hash: unique per tablet, and the same across runs, so a
         cache is reused rather than rebuilt.
         """
-        return [self._tab_stream_(tab, slice, local=os.path.join(local, tab.hash[:12]))
-                for tab in (self.tab(idx) for idx in range(self.n_tabs))]
+        return [self._tablet_stream_(tablet, slice, local=os.path.join(local, tablet.hash[:12]))
+                for tablet in (self.tablet(idx) for idx in range(self.n_tablets))]
 
     @staticmethod
     def _find_slice_topics_(topics_dict, prefix=()):
@@ -817,8 +817,8 @@ class _Database_(Datablock):
         return tuple(slice_topics)
 
 
-class Datatab(_Database_):
-    """One tab of a `Datatable`: a Datablock writing MDS slices."""
+class Datatablet(_Database_):
+    """One tablet of a `Datatable`: a Datablock writing MDS slices."""
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -838,16 +838,16 @@ class Datatab(_Database_):
     def __validate__(self, **kwargs):
         """As `Datablock.__validate__`, and the slices must agree on their length.
 
-        The write-time count in `slice_writers` catches a tab that wrote its
+        The write-time count in `slice_writers` catches a tablet that wrote its
         slices unequally. This reads the finished ``index.json`` files instead
-        of trusting the write path, so it also answers for a tab that arrived by
-        copy or redirection, or whose upload stopped half way -- and `TabMaker`
-        calls it after every build and refuses the tab if it says no.
+        of trusting the write path, so it also answers for a tablet that arrived by
+        copy or redirection, or whose upload stopped half way -- and `TabletMaker`
+        calls it after every build and refuses the tablet if it says no.
 
-        On the tab and not on `_Database_`: a table's `shard_sizes()` opens
-        the index of every tab, so the same override on the table would turn one
-        validate() into a read per tab per slice. It needs no such thing -- a
-        table is valid only when every tab of it validated.
+        On the tablet and not on `_Database_`: a table's `shard_sizes()` opens
+        the index of every tablet, so the same override on the table would turn one
+        validate() into a read per tablet per slice. It needs no such thing -- a
+        table is valid only when every tablet of it validated.
         """
         if not super().__validate__(**kwargs):
             return False
@@ -921,7 +921,7 @@ class Datatab(_Database_):
 
         writers = {}
         # Always, not only when flush_every asks for shared shard boundaries.
-        # The count is what catches a tab that wrote one slice and skipped
+        # The count is what catches a tablet that wrote one slice and skipped
         # another for some item -- an early continue, a swallowed per-item
         # exception, a branch that writes two of three -- and left the slices
         # mis-zipped. Nothing downstream can see that: a map-mode zip pairs
@@ -997,12 +997,12 @@ class Datatab(_Database_):
                 tmpdir=kwargs.pop('cache', None) or self._ensure_cacheroot_(), **kwargs,
             )
         except FileNotFoundError as e:
-            # A missing shard says where, not why: say why, when it is that this tab is not valid.
+            # A missing shard says where, not why: say why, when it is that this tablet is not valid.
             why = self.why_invalid()
             if why is None:
                 raise
             raise FileNotFoundError(
-                f"{self.anchorkeypath}: cannot read slice {slice!r}: this tab is not valid: {why}"
+                f"{self.anchorkeypath}: cannot read slice {slice!r}: this tablet is not valid: {why}"
             ) from e
 
     def _upload_slice_(self, local_dir, target_dir):
@@ -1015,117 +1015,130 @@ class Datatab(_Database_):
             self.fs.put_file(local_path, target_path)
 
 
-def DatatableTab(table, idx, tag=None, **spec):
+def DatatableTablet(table, idx, tag=None, **spec):
     if isinstance(table, str) and (table.startswith('$') or table.startswith('@') or table.startswith('#')):
         from .databits import eval as dbx_eval
         table = dbx_eval(table)
     return table(idx, tag=tag, **spec)
 
 
+#: The name `DatatableTablet` had until 2026-10-10. Speclines are recorded as written -- in
+#: identities, in journals -- and one written then, ``$dbx.datatables.DatatableTab(...)``, must
+#: still evaluate. For reading those only; write DatatableTablet.
+DatatableTab = DatatableTablet
+
+
+#: What a table declared before tabs were tablets, on 2026-10-10: old name -> new.
+_RETIRED_TAB_NAMES_ = {
+    'TAB': 'TABLET', '__tab__': '__tablet__', 'n_tabs': 'n_tablets',
+    'TAB_SPECIALIZATIONS': 'TABLET_SPECIALIZATIONS', 'TAB_SPECIALIZATION': 'TABLET_SPECIALIZATION',
+}
+
+
 class Datatable(_Database_, Datastack):
-    """A table of Datatabs, sliced the same way as its tabs.
+    """A table of Datatablets, sliced the same way as its tablets.
 
     A table's TOPICS only contains what the table itself owns: the structural
     topic ``done`` and any extra file topics the subclass
-    declares (such as ``bag_lens``). The tab's slice topics are NOT merged into
-    the table's TOPICS -- they belong to the tab, not the table.
+    declares (such as ``bag_lens``). The tablet's slice topics are NOT merged into
+    the table's TOPICS -- they belong to the tablet, not the table.
 
-    The table's `slices()` is derived from ``TAB``'s slice topics rather than
+    The table's `slices()` is derived from ``TABLET``'s slice topics rather than
     from ``TOPICS``, so slice routing (``data()``, ``dataset()``,
     ``valid_slice()``) continues to work without polluting ``TOPICS``.
 
-    The tab's ordinary (non-slice) topics are written into each tab under the
-    tab's own key; the table has nothing at those paths.
+    The tablet's ordinary (non-slice) topics are written into each tablet under the
+    tablet's own key; the table has nothing at those paths.
 
-    The TAB is part of the table's identity: its type names it, ``TAB=<fqcn>``,
-    after the spec -- so ``TAB =`` another class is another table. See
+    The TABLET is part of the table's identity: its type names it, ``TABLET=<fqcn>``,
+    after the spec -- so ``TABLET =`` another class is another table. See
     `Datastack._type_entries_`; ``with_block=False`` gives the type under the
-    rules from before, as a ``Datatable.Specialization``'s ``TAB=None`` does.
+    rules from before, as a ``Datatable.Specialization``'s ``TABLET=None`` does.
 
-    KNOWN GAP -- THE TAB IS NAMED BY ITS FQCN, NOT ITS CONTENTS
+    KNOWN GAP -- THE TABLET IS NAMED BY ITS FQCN, NOT ITS CONTENTS
     -----------------------------------------------------------
-    Edit the TAB class IN PLACE -- a topic added or respelled, a VERSION bump,
-    a VAR field with a default -- and every tab re-keys while the table does
+    Edit the TABLET class IN PLACE -- a topic added or respelled, a VERSION bump,
+    a VAR field with a default -- and every tablet re-keys while the table does
     not:
 
     * the table's old ``done`` marker still answers, so ``valid()`` is True;
     * ``build()`` therefore skips the table -- after adopting, block by block,
-      whatever the TAB's SPECIALIZATIONS resolve to (see `Datastack.build`) --
-      and builds none of the topics the re-keyed tabs still owe;
-    * a tab without a specialization back to its old identity reads as
+      whatever the TABLET's SPECIALIZATIONS resolve to (see `Datastack.build`) --
+      and builds none of the topics the re-keyed tablets still owe;
+    * a tablet without a specialization back to its old identity reads as
       unbuilt, and one with a partial specialization owes what it did not
       cover, while the table reports itself built.
 
-    After such an edit, rebuild the table's tabs explicitly -- build each tab
-    (``table.tab(i).build()``), or clear the table's ``done`` and build it.
-    The ways out, not yet chosen: `valid()` requiring valid tabs (a check per
-    tab), or a stack's build running whenever a block owes topics.
+    After such an edit, rebuild the table's tablets explicitly -- build each tablet
+    (``table.tablet(i).build()``), or clear the table's ``done`` and build it.
+    The ways out, not yet chosen: `valid()` requiring valid tablets (a check per
+    tablet), or a stack's build running whenever a block owes topics.
     """
 
-    TAB = None
+    TABLET = None
 
     #: The topics the table machinery itself writes and reads: the sentinels
-    #: recording which tabs are built, and the marker that says the stack
+    #: recording which tablets are built, and the marker that says the stack
     #: completed. Subclasses extending TOPICS explicitly include
     #: Datatable.TOPICS if desired.
     #:
-    #: A ``tabs`` directory was declared here too, and nothing ever wrote into
-    #: it: a tab is config-addressed on the table's own url and lands beside the
-    #: table rather than inside it. A subclass that wants its tabs nested still
-    #: declares ``tabs`` itself and roots them there -- which is what it always
+    #: A ``tablets`` directory was declared here too, and nothing ever wrote into
+    #: it: a tablet is config-addressed on the table's own url and lands beside the
+    #: table rather than inside it. A subclass that wants its tablets nested still
+    #: declares ``tablets`` itself and roots them there -- which is what it always
     #: was, an addressable location rather than something the machinery used.
     TOPICS = {'done': DATAFILE('done')}
 
     @dataclass(frozen=True, repr=False, eq=False)   # the base's repr (note last) and equality
     class Specialization(Datablock.Specialization):
-        """A Datablock's Specialization, and the TAB the narrower table's type names.
+        """A Datablock's Specialization, and the TABLET the narrower table's type names.
 
-        A table's BLOCK is its TAB, so this is `Datastack.Specialization` with
-        the field named for what it is. *TAB*: SAME for this table's own; a
+        A table's BLOCK is its TABLET, so this is `Datastack.Specialization` with
+        the field named for what it is. *TABLET*: SAME for this table's own; a
         string for another fqcn; None for a table built before a table's type
-        named its TAB at all.
+        named its TABLET at all.
         """
-        TAB: str | SAME | None = SAME
+        TABLET: str | SAME | None = SAME
 
         __hash__ = Datablock.Specialization.__hash__
 
         def __post_init__(self):
             super().__post_init__()
-            if not (self.TAB is SAME or self.TAB is None or (isinstance(self.TAB, str) and self.TAB)):
-                raise TypeError(f"Specialization TAB= is SAME, None or a TAB fqcn, got {self.TAB!r}")
+            if not (self.TABLET is SAME or self.TABLET is None or (isinstance(self.TABLET, str) and self.TABLET)):
+                raise TypeError(f"Specialization TABLET= is SAME, None or a TABLET fqcn, got {self.TABLET!r}")
 
         @property
         def _block_(self):
-            return self.TAB
+            return self.TABLET
 
-    #: None: a table's own topics are markers over its tabs, cheaply written
-    #: again; what is worth reaching are its tabs, each by the TAB's own
+    #: None: a table's own topics are markers over its tablets, cheaply written
+    #: again; what is worth reaching are its tablets, each by the TABLET's own
     #: specializations.
     SPECIALIZATIONS = []
 
-    Tab = staticmethod(DatatableTab)
+    Tablet = staticmethod(DatatableTablet)
 
 
     @dataclass
     class VAR(Datastack.VAR):
         datapoints_per_row: int = 1
 
-    validate_tab = Datastack.validate_block
+    validate_tablet = Datastack.validate_block
     validate_block = Datastack.validate_block
 
-    UNSAFE_clear_tab = Datastack.UNSAFE_clear_block
-    UNSAFE_clear_tabs = Datastack.UNSAFE_clear_blocks
+    UNSAFE_clear_tablet = Datastack.UNSAFE_clear_block
+    UNSAFE_clear_tablets = Datastack.UNSAFE_clear_blocks
 
-    class TabMaker(Datastack.BlockMaker):
-        """Lightweight callable that forms and optionally builds a tab."""
+    class TabletMaker(Datastack.BlockMaker):
+        """Lightweight callable that forms and optionally builds a tablet."""
 
-        def __init__(self, table=None, tab_idx: int | None = None, **kwargs):
-            if isinstance(table, int) and tab_idx is None:
-                tab_idx = table
+        def __init__(self, table=None, tablet_idx: int | None = None, **kwargs):
+            if isinstance(table, int) and tablet_idx is None:
+                tablet_idx = table
                 table = None
-            super().__init__(tab_idx)
+            super().__init__(tablet_idx)
             self.table = table
-            self.tab_idx = tab_idx
+            self.tablet_idx = tablet_idx
             self.kwargs = kwargs
 
         def __call__(self, table=None, *, build=True, journal=None):
@@ -1133,82 +1146,89 @@ class Datatable(_Database_, Datastack):
             # Formed -- by __block__, then again by _adopt_'s .set() -- against the
             # journal the table read once and the executor handed this worker.
             with forming_with_journal(journal), tbl._block_specializations_in_force_():
-                if tbl is not None and tbl.valid_tab(self.idx):
-                    return {'tab_idx': self.idx, 'skipped': True}
-                tab = tbl.__block__(self.idx, **self.kwargs)
-                tab = tbl._adopt_(tab, keyby=True)
-            skipped = tab.valid()
+                if tbl is not None and tbl.valid_tablet(self.idx):
+                    return {'tablet_idx': self.idx, 'skipped': True}
+                tablet = tbl.__block__(self.idx, **self.kwargs)
+                tablet = tbl._adopt_(tablet, keyby=True)
+            skipped = tablet.valid()
             if build and not skipped:
-                tab.build()
-                if tbl is not None and hasattr(tbl, 'validate_tab'):
-                    validated = tbl.validate_tab(self.idx)
+                tablet.build()
+                if tbl is not None and hasattr(tbl, 'validate_tablet'):
+                    validated = tbl.validate_tablet(self.idx)
                 else:
-                    validated = tab.validate()
+                    validated = tablet.validate()
                 if not validated:
-                    raise ValueError(f"Tab {self.idx} of {tbl} failed to validate")
-            result = {'tab_idx': self.idx, 'skipped': skipped}
-            del tab
+                    raise ValueError(f"Tablet {self.idx} of {tbl} failed to validate")
+            result = {'tablet_idx': self.idx, 'skipped': skipped}
+            del tablet
             gc.collect()
             return result
 
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init_subclass__(cls, **kwargs):
-        """A table's TAB is its BLOCK: declaring one declares the other.
+        """A table's TABLET is its BLOCK: declaring one declares the other.
 
-        A table may still name a BLOCK of its own, and then its TAB must be one.
+        A table may still name a BLOCK of its own, and then its TABLET must be one.
         """
         super().__init_subclass__(**kwargs)
-        tab = cls.__dict__.get('TAB')
-        if tab is None:
+        retired = sorted(set(cls.__dict__) & set(_RETIRED_TAB_NAMES_))
+        if retired:
+            # Renamed on 2026-10-10: nothing reads the old names, so a table declaring one would
+            # be ignored in silence -- its TABLET, its __tablet__, its n_tablets -- and build something else.
+            raise TypeError(
+                f"{cls.__qualname__} defines {retired}: a table's tablets are tablets now -- "
+                + ", ".join(f"{old} is {_RETIRED_TAB_NAMES_[old]}" for old in retired))
+        tablet = cls.__dict__.get('TABLET')
+        if tablet is None:
             return
-        if isinstance(tab, forward_property):
-            # Declared forward, its TAB is each instance's -- and so is its BLOCK.
+        if isinstance(tablet, forward_property):
+            # Declared forward, its TABLET is each instance's -- and so is its BLOCK.
             if 'BLOCK' not in cls.__dict__:
-                cls.BLOCK = tab.named('BLOCK')
+                cls.BLOCK = tablet.named('BLOCK')
             return
         if 'BLOCK' in cls.__dict__ and cls.BLOCK is not None:
-            if not (isinstance(tab, type) and issubclass(tab, cls.BLOCK)):
+            if not (isinstance(tablet, type) and issubclass(tablet, cls.BLOCK)):
                 raise TypeError(
-                    f"{cls.__qualname__}.TAB = {getattr(tab, '__name__', tab)!r} is not a "
+                    f"{cls.__qualname__}.TABLET = {getattr(tablet, '__name__', tablet)!r} is not a "
                     f"{cls.BLOCK.__name__}, the BLOCK it declares"
                 )
         else:
-            cls.BLOCK = tab
+            cls.BLOCK = tablet
 
     def _type_entries_(self, specialization=None, *, with_block: bool = True) -> dict:
-        """A stack's entries, its BLOCK named for what a table's is: ``TAB=<fqcn>``."""
+        """A stack's entries, its BLOCK named for what a table's is: ``TABLET=<fqcn>``."""
         entries = super()._type_entries_(specialization, with_block=with_block)
         return {('TAB' if k == 'BLOCK' else k): v for k, v in entries.items()}
 
-    def __init__(self, *args, cache=None, cache_limit=None, filter_built_tabs: bool = False,
-                 use_tab_specializations: 'bool | str | None' = None, **kwargs):
-        # A table's blocks are its tabs, so use_tab_specializations IS
+    def __init__(self, *args, cache=None, cache_limit=None, filter_built_tablets: bool = False,
+                 use_tablet_specializations: 'bool | str | None' = None, **kwargs):
+        # A table's blocks are its tablets, so use_tablet_specializations IS
         # use_block_specializations -- either may be given, both if they agree.
         block = kwargs.get('use_block_specializations')
-        if use_tab_specializations is not None:
-            if block is not None and block != use_tab_specializations:
+        if use_tablet_specializations is not None:
+            if block is not None and block != use_tablet_specializations:
                 raise ValueError(
-                    f"{type(self).__name__}: use_tab_specializations={use_tab_specializations!r} "
+                    f"{type(self).__name__}: use_tablet_specializations={use_tablet_specializations!r} "
                     f"and use_block_specializations={block!r} disagree; they are one setting"
                 )
-            kwargs['use_block_specializations'] = use_tab_specializations
-        super().__init__(*args, cache=cache, cache_limit=cache_limit, filter_built_tabs=filter_built_tabs, **kwargs)
+            kwargs['use_block_specializations'] = use_tablet_specializations
+        super().__init__(*args, cache=cache, cache_limit=cache_limit, filter_built_tablets=filter_built_tablets, **kwargs)
 
-    def __tab__(self, idx: int, *, tag=None, **spec) -> Datatab:
-        if self.TAB is None:
+    def __tablet__(self, idx: int, *, tag=None, **spec) -> Datatablet:
+        if self.TABLET is None:
             raise NotImplementedError(
-                f"{self.__class__.__name__} must set TAB = <Datatab subclass>"
+                f"{self.__class__.__name__} must set TABLET = <Datatablet subclass>"
             )
-        # No journal handed down: forming a tab resolves nothing -- a tab's
+        # No journal handed down: forming a tablet resolves nothing -- a tablet's
         # specializations are installed by its build(), and a table's build
-        # hands its tab-building callables the one journal it read.
-        tab_specs = getattr(self, 'TAB_SPECIALIZATIONS', None) or getattr(self, 'TAB_SPECIALIZATION', None) or getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None)
-        return self.TAB(
+        # hands its tablet-building callables the one journal it read.
+        tablet_specs = getattr(self, 'TABLET_SPECIALIZATIONS', None) or getattr(self, 'TABLET_SPECIALIZATION', None) or getattr(self, 'BLOCK_SPECIALIZATIONS', None) or getattr(self, 'BLOCK_SPECIALIZATION', None)
+        return self.TABLET(
             # The table's own url, RAW -- the specline it was given, not what
-            # that resolved to -- so a relocatable table stays relocatable tab
-            # by tab. Without it a tab fell back to DBX_ROOT, and a table built
-            # anywhere else (a test's tmp_path, a second lake) wrote its tabs to
+            # that resolved to -- so a relocatable table stays relocatable tablet
+            # by tablet. Without it a tablet fell back to DBX_ROOT, and a table built
+            # anywhere else (a test's tmp_path, a second lake) wrote its tablets to
             # an unrelated root, where they were then looked for in vain.
             datalake=self._datalake_,
             storage_options=self.storage_options,
@@ -1216,12 +1236,12 @@ class Datatable(_Database_, Datastack):
             cache_limit=getattr(self, 'cache_limit', None),
             verbose=False,
             spec=spec,
-            SPECIALIZATIONS=tab_specs,
+            SPECIALIZATIONS=tablet_specs,
             tag=tag if tag is not None else f"tab_{idx:06d}",
         )
 
-    def __block__(self, idx: int) -> Datatab:
-        return self.__tab__(idx)
+    def __block__(self, idx: int) -> Datatablet:
+        return self.__tablet__(idx)
 
     def __split__(self, *args, **kwargs):
         # A table that declares `tab_paths` in its own TOPICS -- the table
@@ -1232,9 +1252,9 @@ class Datatable(_Database_, Datastack):
         # refuses to create a directory inside another block's data.
         if 'tab_paths' in self.topics() and 'tab_paths' in self.ownedtopics():
             self.path('tab_paths', ensure_dirpath=True)
-        n = self.n_tabs
+        n = self.n_tablets
         self.log.info(
-            "%s: %d tabs x %d slices %s",
+            "%s: %d tablets x %d slices %s",
             self.__class__.__name__, n, len(self.slices()), list(self.slices()),
         )
         devices = getattr(self, '_devices', None) or getattr(self, 'devices', None)
@@ -1242,7 +1262,7 @@ class Datatable(_Database_, Datastack):
         if device_mapping is not None and isinstance(device_mapping, dict):
             block_device = device_mapping.get('block_device', None)
             makers = [
-                self.TabMaker(self, idx, device=block_device[idx])
+                self.TabletMaker(self, idx, device=block_device[idx])
                 for idx in range(n)
             ]
         elif devices:
@@ -1254,11 +1274,11 @@ class Datatable(_Database_, Datastack):
                 for idx in chunk:
                     block_device[idx] = dev
             makers = [
-                self.TabMaker(self, idx, device=block_device[idx])
+                self.TabletMaker(self, idx, device=block_device[idx])
                 for idx in range(n)
             ]
         else:
-            makers = [self.TabMaker(self, idx) for idx in range(n)]
+            makers = [self.TabletMaker(self, idx) for idx in range(n)]
         return makers, dict(build=True)
 
     def __build__(self, *args, **kwargs):
@@ -1266,28 +1286,28 @@ class Datatable(_Database_, Datastack):
         if not callables:
             return self.__stack__([])
 
-        filter_built = getattr(self, 'filter_built_tabs', False)
+        filter_built = getattr(self, 'filter_built_tablets', False)
         if filter_built:
             work_stealing_state = getattr(self, 'work_stealing', False)
             self.log.info(
-                f"Building {self.__class__.__name__}: filtering {len(callables)} tabs using "
+                f"Building {self.__class__.__name__}: filtering {len(callables)} tablets using "
                 f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
             )
-            validity = self.valid_tabs()
+            validity = self.valid_tablets()
 
             to_build_callables = []
             callable_results = []
 
             for i, (c, is_valid) in enumerate(zip(callables, validity)):
-                idx = getattr(c, 'tab_idx', getattr(c, 'idx', i))
+                idx = getattr(c, 'tablet_idx', getattr(c, 'idx', i))
                 if is_valid:
-                    callable_results.append({'tab_idx': idx, 'skipped': True})
+                    callable_results.append({'tablet_idx': idx, 'skipped': True})
                 else:
                     to_build_callables.append(c)
 
             self.log.info(
-                f"{self.__class__.__name__}: {len(callables) - len(to_build_callables)}/{len(callables)} tabs already valid, "
-                f"building {len(to_build_callables)} tabs"
+                f"{self.__class__.__name__}: {len(callables) - len(to_build_callables)}/{len(callables)} tablets already valid, "
+                f"building {len(to_build_callables)} tablets"
             )
         else:
             to_build_callables = callables
@@ -1300,21 +1320,21 @@ class Datatable(_Database_, Datastack):
             built_results = build_executor.exec_callables(to_build_callables, self, **callable_kwargs)
             callable_results.extend(built_results)
 
-        callable_results.sort(key=lambda r: r.get('tab_idx', 0))
+        callable_results.sort(key=lambda r: r.get('tablet_idx', 0))
         result = self.__stack__(callable_results)
         self.log.info(f"Build complete: {self.__class__.__name__}")
         return result
 
     def __stack__(self, results=None):
-        n_tabs = n_skipped = 0
+        n_tablets = n_skipped = 0
         for result in (results or []):
             if result is None:
                 continue
-            n_tabs += 1
+            n_tablets += 1
             n_skipped += bool(result.get('skipped'))
         self.log.info(
-            "%s.__stack__: %d tabs (%d already built)",
-            self.__class__.__name__, n_tabs, n_skipped,
+            "%s.__stack__: %d tablets (%d already built)",
+            self.__class__.__name__, n_tablets, n_skipped,
         )
 
         if self.valid_topic('done'):
@@ -1349,28 +1369,28 @@ class Datatable(_Database_, Datastack):
 
     # 2. Declared API ------------------------------------------------------
 
-    #: Slices come from TAB, not from this table's own TOPICS.
+    #: Slices come from TABLET, not from this table's own TOPICS.
     def slices(self, recursive: bool = False):
-        """The TAB's slices: a table declares none of its own.
+        """The TABLET's slices: a table declares none of its own.
 
-        Slice topics belong to the tab, so a table reads them off ``TAB``
+        Slice topics belong to the tablet, so a table reads them off ``TABLET``
         rather than out of its own TOPICS -- which is what keeps them out of
         the table's TOPICS while leaving slice routing (`data()`, `dataset()`,
         `valid_slice()`) working.
 
-        Falls back to its own TOPICS when TAB is unset or is not a
+        Falls back to its own TOPICS when TABLET is unset or is not a
         `_Database_` -- as for :class:`DatatablePart`, which overrides
-        TOPICS per instance and computes its TAB dynamically.
+        TOPICS per instance and computes its TABLET dynamically.
         """
-        tab = getattr(self, 'TAB', None)
-        if isinstance(tab, type) and issubclass(tab, _Database_):
-            return _Database_._find_slice_topics_(getattr(tab, 'TOPICS', None))
+        tablet = getattr(self, 'TABLET', None)
+        if isinstance(tablet, type) and issubclass(tablet, _Database_):
+            return _Database_._find_slice_topics_(getattr(tablet, 'TOPICS', None))
         return _Database_._find_slice_topics_(getattr(self, 'TOPICS', None))
 
     def read(self, *topicpath):
         """As `Datablock.read()`, but slice names bypass the TOPICS guard.
 
-        Slice topics are not in this table's TOPICS (they belong to the tab),
+        Slice topics are not in this table's TOPICS (they belong to the tablet),
         so the base `read()` would reject them with a KeyError.  Slice reads
         are valid, they just skip the guard and fall through to `__read__`.
         """
@@ -1381,54 +1401,54 @@ class Datatable(_Database_, Datastack):
             return self.__read__(*topicpath)
         return super().read(*topicpath)
 
-    def valid_tab(self, i: int, validation: str | None = None) -> bool:
-        """Whether tab *i* is valid: `Datastack.valid_block`, by tab."""
+    def valid_tablet(self, i: int, validation: str | None = None) -> bool:
+        """Whether tablet *i* is valid: `Datastack.valid_block`, by tablet."""
         return Datastack.valid_block(self, i, validation=validation)
 
-    valid_block = valid_tab
+    valid_block = valid_tablet
 
-    def redirected_tab(self, i: int) -> bool:
-        """Return whether the tab at index *i* is redirected."""
-        return self.tab(i).redirected()
+    def redirected_tablet(self, i: int) -> bool:
+        """Return whether the tablet at index *i* is redirected."""
+        return self.tablet(i).redirected()
 
-    redirected_block = redirected_tab
+    redirected_block = redirected_tablet
 
-    def valid_tabs(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, validation: str | None = None, **kwargs) -> pd.Series:
-        """Return a pandas Series of booleans, one per tab, indicating validity (parallelized): `Datastack.valid_blocks`, by tab."""
+    def valid_tablets(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, validation: str | None = None, **kwargs) -> pd.Series:
+        """Return a pandas Series of booleans, one per tablet, indicating validity (parallelized): `Datastack.valid_blocks`, by tablet."""
         return self.valid_blocks(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, validation=validation, **kwargs)
 
-    def tabs_redirected(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
-        """Whether each tab is redirected: `Datastack.blocks_redirected`, by tab."""
+    def tablets_redirected(self, parallelization: str | None = None, n_workers: int | None = None, false_only: bool = False, true_only: bool = False, **kwargs) -> pd.Series:
+        """Whether each tablet is redirected: `Datastack.blocks_redirected`, by tablet."""
         return self.blocks_redirected(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, **kwargs)
 
-    #: The name `tabs_redirected` had first.
-    redirected_tabs = tabs_redirected
+    #: The name `tablets_redirected` had first.
+    redirected_tablets = tablets_redirected
 
-    def get_tab_redirections(self, parallelization: str | None = None, n_workers: int | None = None,
+    def get_tablet_redirections(self, parallelization: str | None = None, n_workers: int | None = None,
                              journal=None, redirected_only: bool = False, **kwargs) -> pd.Series:
-        """Each tab's `Redirection`, or None: `Datastack.get_block_redirections`, by tab."""
+        """Each tablet's `Redirection`, or None: `Datastack.get_block_redirections`, by tablet."""
         return self.get_block_redirections(parallelization=parallelization, n_workers=n_workers,
                                            journal=journal, redirected_only=redirected_only, **kwargs)
 
-    def find_tab_specializations(self, parallelization: str | None = None, n_workers: int | None = None,
+    def find_tablet_specializations(self, parallelization: str | None = None, n_workers: int | None = None,
                                  journal=None, found_only: bool = False, **kwargs) -> pd.Series:
-        """`Datastack.find_block_specializations`, by tab."""
+        """`Datastack.find_block_specializations`, by tablet."""
         return self.find_block_specializations(parallelization=parallelization, n_workers=n_workers,
                                                journal=journal, found_only=found_only, **kwargs)
 
-    def specialize_tabs(self, parallelization: str | None = None, n_workers: int | None = None,
+    def specialize_tablets(self, parallelization: str | None = None, n_workers: int | None = None,
                         journal=None, **kwargs) -> pd.Series | None:
-        """`Datastack.specialize_blocks`, by tab."""
+        """`Datastack.specialize_blocks`, by tablet."""
         return self.specialize_blocks(parallelization=parallelization, n_workers=n_workers,
                                       journal=journal, **kwargs)
 
-    def UNSAFE_clear_tab_redirections(self, *, OVERRIDE: bool = False, parallelization: str | None = None,
+    def UNSAFE_clear_tablet_redirections(self, *, OVERRIDE: bool = False, parallelization: str | None = None,
                                       n_workers: int | None = None, **kwargs) -> pd.Series:
-        """`Datastack.UNSAFE_clear_block_redirections`, by tab."""
+        """`Datastack.UNSAFE_clear_block_redirections`, by tablet."""
         return self.UNSAFE_clear_block_redirections(OVERRIDE=OVERRIDE, parallelization=parallelization,
                                                     n_workers=n_workers, **kwargs)
 
-    def validate_tabs(
+    def validate_tablets(
         self,
         parallelization: str | None = None,
         n_workers: int | None = None,
@@ -1437,7 +1457,7 @@ class Datatable(_Database_, Datastack):
         true_only: bool = False,
         **kwargs,
     ) -> pd.Series:
-        """Return a pandas Series of booleans, one per tab, indicating validation result (parallelized)."""
+        """Return a pandas Series of booleans, one per tablet, indicating validation result (parallelized)."""
         return self.validate_blocks(
             parallelization=parallelization,
             n_workers=n_workers,
@@ -1447,23 +1467,23 @@ class Datatable(_Database_, Datastack):
             **kwargs,
         )
 
-    def find_tabs(self, signature=None, *patterns, tag=None, path=None, parallelization: str | None = None, n_workers: int | None = None, work_stealing: bool | None = None, **kwargs) -> list[int]:
-        """Return a list of indices of all tabs matching the given signature, tag, and/or path pattern(s) (parallelized)."""
+    def find_tablets(self, signature=None, *patterns, tag=None, path=None, parallelization: str | None = None, n_workers: int | None = None, work_stealing: bool | None = None, **kwargs) -> list[int]:
+        """Return a list of indices of all tablets matching the given signature, tag, and/or path pattern(s) (parallelized)."""
         return self.find_blocks(signature, *patterns, tag=tag, path=path, parallelization=parallelization, n_workers=n_workers, work_stealing=work_stealing, **kwargs)
 
-    def tab_datajournal(self, **kwargs) -> DatajournalFrame | None:
-        """Return the DatajournalFrame for child tabs, or None if no tabs exist or journal fails to load."""
+    def tablet_datajournal(self, **kwargs) -> DatajournalFrame | None:
+        """Return the DatajournalFrame for child tablets, or None if no tablets exist or journal fails to load."""
         return self.block_datajournal(**kwargs)
 
     def valid_slice(self, slice) -> bool:
         return all(
-            self.tab(idx).valid_slice(slice) for idx in range(self.n_tabs)
+            self.tablet(idx).valid_slice(slice) for idx in range(self.n_tablets)
         )
 
-    def tab(self, idx: int) -> Datatab:
+    def tablet(self, idx: int) -> Datatablet:
         return self.block(idx)
 
-    def tabs(self) -> list:
+    def tablets(self) -> list:
         return self.blocks()
 
     def datastream(self, slice, **kwargs) -> StreamingDataset:
@@ -1473,7 +1493,7 @@ class Datatable(_Database_, Datastack):
                                f"{self.fqcn}-{self.hash[:12]}-{slice.replace('/', '_')}")
         local = os.path.join(cacheroot, cache_dir)
         os.makedirs(local, exist_ok=True)
-        streams = self._tab_streams_(slice, local)
+        streams = self._tablet_streams_(slice, local)
         cache_limit = kwargs.pop('cache_limit', getattr(self, 'cache_limit', None))
         shuffle = kwargs.pop('shuffle', False)
         allow_unsafe_types = kwargs.pop('allow_unsafe_types', True)
@@ -1488,40 +1508,40 @@ class Datatable(_Database_, Datastack):
             return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
         except (ValueError, TypeError, OSError, FileExistsError, FileNotFoundError) as exc:
             SharedMemoryManager.clean_process_shared_memory()
-            streaming_kwargs['streams'] = self._tab_streams_(slice, local)
+            streaming_kwargs['streams'] = self._tablet_streams_(slice, local)
             return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
 
     # 3. Accessors ---------------------------------------------------------
 
     @property
-    def tab_redirections(self) -> pd.Series:
-        """`Datastack.block_redirections`, by tab."""
+    def tablet_redirections(self) -> pd.Series:
+        """`Datastack.block_redirections`, by tablet."""
         return self.block_redirections
 
     @property
-    def use_tab_specializations(self):
+    def use_tablet_specializations(self):
         """`use_block_specializations`, by its table name."""
         return getattr(self, 'use_block_specializations', None)
 
     @property
-    def n_tabs(self) -> int:
+    def n_tablets(self) -> int:
         raise NotImplementedError(
-            f"{self.__class__.__name__} must implement n_tabs"
+            f"{self.__class__.__name__} must implement n_tablets"
         )
 
     @property
     def n_blocks(self) -> int:
-        return self.n_tabs
+        return self.n_tablets
 
     # 4. Helpers -----------------------------------------------------------
 
 
     def _topics_signature_(self, topics=None, *, declared=None):
-        """Own TOPICS segments -- plus, in a sentinel declaration, the TAB's slices.
+        """Own TOPICS segments -- plus, in a sentinel declaration, the TABLET's slices.
 
-        A table's slices are the TAB's declaration and not the table's, and a
+        A table's slices are the TABLET's declaration and not the table's, and a
         block has no business carrying another's topics in its own identity: the
-        TAB is already part of this table, so a differently-sliced TAB is already
+        TABLET is already part of this table, so a differently-sliced TABLET is already
         a different table. A table that declares its own topics with the markers
         carries only its own.
 
@@ -1531,36 +1551,36 @@ class Datatable(_Database_, Datastack):
         """
         # Own (non-slice) topics come first, in declaration order. *topics*
         # restricts THOSE -- a specialization names this table's topics, not
-        # the TAB's slices, which are the TAB's declaration and accumulate here
+        # the TABLET's slices, which are the TABLET's declaration and accumulate here
         # whatever subset of its own a table is being rendered under.
         own = super()._topics_signature_(topics, declared=declared)
         # The era of the declaration being RENDERED: a table reconstructed from a
-        # sentinel-era declaration accumulated its TAB's slices then, whatever
+        # sentinel-era declaration accumulated its TABLET's slices then, whatever
         # this class is spelled in now.
         if self._modern_topics_(self.TOPICS if declared is None else declared):
             return own
-        # Then the TAB's slice topics, in the same format Datastack uses.
-        tab = self.TAB
-        if isinstance(tab, type) and issubclass(tab, _Database_):
-            # TAB is a class here, and slices() is an instance method as
+        # Then the TABLET's slice topics, in the same format Datastack uses.
+        tablet = self.TABLET
+        if isinstance(tablet, type) and issubclass(tablet, _Database_):
+            # TABLET is a class here, and slices() is an instance method as
             # topics() is, so the shared helper does the work rather than an
             # unbound call.
             slice_segments = tuple(
                 f"topic:{name}=SLICETOPIC"
-                for name in _Database_._find_slice_topics_(getattr(tab, 'TOPICS', None))
+                for name in _Database_._find_slice_topics_(getattr(tablet, 'TOPICS', None))
             )
         else:
             slice_segments = ()
         return own + slice_segments
 
     def _block_class_(self):
-        return getattr(self, 'BLOCK', None) or getattr(self, 'TAB', None)
+        return getattr(self, 'BLOCK', None) or getattr(self, 'TABLET', None)
 
-    def _read_slice_(self, slice, *, tabs=None, **kwargs):
-        indices = range(self.n_tabs) if tabs is None else tabs
+    def _read_slice_(self, slice, *, tablets=None, **kwargs):
+        indices = range(self.n_tablets) if tablets is None else tablets
         datapoints = []
         for idx in indices:
-            datapoints.extend(self.tab(idx)._read_slice_(slice, **kwargs))
+            datapoints.extend(self.tablet(idx)._read_slice_(slice, **kwargs))
         return datapoints
 
 
@@ -1589,7 +1609,7 @@ class Datacollator(Datablock):
     value is picked, so it works on a row and on a stacked batch alike.
 
     ``recursive`` says whether the slices may be the table's UPSTREAM ones --
-    a `Featuretab`'s samples, say, rather than its ``features``. Off unless
+    a `Featuretablet`'s samples, say, rather than its ``features``. Off unless
     turned on: `slices(table)` refuses a slice the table only borrows, so
     reading across blocks is something a collator declares, not something it
     drifts into.
@@ -1863,17 +1883,17 @@ class Datacollator(Datablock):
 
 
 class DataslicesUpstream:
-    """Slice routing for a tab or table that reads its own slices and an upstream one's.
+    """Slice routing for a tablet or table that reads its own slices and an upstream one's.
 
-    A mixin, ahead of `Datatab` or `Datatable` in the bases. `Featuretab` owns
-    ``features`` and borrows the sample slices of the `Datatab` it was built
+    A mixin, ahead of `Datatablet` or `Datatable` in the bases. `Featuretablet` owns
+    ``features`` and borrows the sample slices of the `Datatablet` it was built
     from; `Featuretable` does the same over a `Datatable`. Both answer
     `dataset()` and `data()` for either, so both need the same three things:
     work out which block owns a requested slice, keep the caller's order, and
     refuse a name that two blocks both claim.
 
     The upstream is the VAR field ``upstream``: a block of the same kind --
-    a tab's a tab, a table's a table -- that this one was built from.
+    a tablet's a tablet, a table's a table -- that this one was built from.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -1933,7 +1953,7 @@ class DataslicesUpstream:
         """The requested slices read whole, keyed as `dataset()` keys one row.
 
         A table reads its own slice through `Datatable._read_slice_`,
-        which already runs over every tab, so nothing here concatenates tabs
+        which already runs over every tablet, so nothing here concatenates tablets
         by hand.
         """
         routed = self._route_(slices, upstream)

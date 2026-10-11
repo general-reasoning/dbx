@@ -1,8 +1,8 @@
 """
 `forward_property`: a cached_property that also answers on the class.
 
-Made for a TOPICS the instance declares -- a table reads its TAB's slice names
-off the class, while a tab's columns follow from its VAR.
+Made for a TOPICS the instance declares -- a table reads its TABLET's slice names
+off the class, while a tablet's columns follow from its VAR.
 """
 import pytest
 
@@ -85,11 +85,11 @@ def test_a_partition_part_answers_on_the_class_with_a_dict():
     assert DatatablePart.TOPICS == {}
 
 
-def test_a_partition_part_declares_its_tab_forward():
-    """Every part's tabs are Datatabs; which one is the partitioned table's -- and so is its BLOCK."""
-    from dbx.datatables import Datatab
+def test_a_partition_part_declares_its_tablet_forward():
+    """Every part's tablets are Datatablets; which one is the partitioned table's -- and so is its BLOCK."""
+    from dbx.datatables import Datatablet
     from dbx.dataparts import DatatablePart
-    assert DatatablePart.TAB is Datatab and DatatablePart.BLOCK is Datatab
+    assert DatatablePart.TABLET is Datatablet and DatatablePart.BLOCK is Datatablet
 
 
 class Promising(Datablock):

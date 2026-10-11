@@ -1,7 +1,7 @@
-"""Tests for the :class:`~dbx.datatables.Datatab` / :class:`~dbx.datatables.Datatable`
+"""Tests for the :class:`~dbx.datatables.Datatablet` / :class:`~dbx.datatables.Datatable`
 scaffolding.
 
-Covers TOPICS synthesis from SLICETOPIC entries, where a tab's shards land relative to
+Covers TOPICS synthesis from SLICETOPIC entries, where a tablet's shards land relative to
 its table, the all-or-nothing validity rule, the merged per-slice index and its
 ordering, and the two ways a built table reads back (``data`` and ``dataset``).
 """
@@ -23,7 +23,7 @@ import pytest
 pytest.importorskip("torch", reason="torch is an optional dependency")
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
-from dbx.datatables import DATADIR, DATASLICE, DIRTOPIC, SLICETOPIC, Datatab, Datatable
+from dbx.datatables import DATADIR, DATASLICE, DIRTOPIC, SLICETOPIC, Datatablet, Datatable
 from dbx.dataparts import DatatablePartition
 from dbx.datastreams import (
     ZipIterableStreamingDatasets,
@@ -37,17 +37,17 @@ def setup_env(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# A minimal tab/table pair
+# A minimal tablet/table pair
 # ---------------------------------------------------------------------------
 
-class LetterTab(Datatab):
+class LetterTablet(Datatablet):
     """Writes ``n`` items into two lockstep slices, plus a non-slice topic."""
 
     VERSION = 1
     TOPICS = {'numbers': SLICETOPIC, 'letters': SLICETOPIC, 'note': 'note.txt'}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         n: int = 3
         base: int = 0
         fail: bool = False
@@ -66,7 +66,7 @@ class LetterTab(Datatab):
                 if self.var.fail and i == self.var.n - 1:
                     raise RuntimeError("boom")
         with self.fs.open(self.path('note', ensure_dirpath=True), 'w') as f:
-            f.write(f"tab note")
+            f.write(f"tablet note")
 
     def __stats__(self, slice_name):
         cols = self.data(slice_name)[slice_name]
@@ -75,30 +75,30 @@ class LetterTab(Datatab):
 
 class LetterTable(Datatable):
     VERSION = 1
-    TAB = LetterTab
+    TABLET = LetterTablet
 
     @dataclass
     class VAR(Datatable.VAR):
-        n_tabs_: int = 3
-        per_tab: int = 3
+        n_tablets_: int = 3
+        per_tablet: int = 3
         fail: bool = False
 
     @property
-    def n_tabs(self):
-        return self.var.n_tabs_
+    def n_tablets(self):
+        return self.var.n_tablets_
 
-    def __tab__(self, idx):
-        return super().__tab__(idx, n=self.var.per_tab,
-                               base=idx * self.var.per_tab, fail=self.var.fail)
+    def __tablet__(self, idx):
+        return super().__tablet__(idx, n=self.var.per_tablet,
+                               base=idx * self.var.per_tablet, fail=self.var.fail)
 
     def __stats__(self, slice_name):
-        per_tab = [self.tab(i).stats(slice_name) for i in range(self.n_tabs)]
-        return {'n_samples': sum(s['n_samples'] for s in per_tab)}
+        per_tablet = [self.tablet(i).stats(slice_name) for i in range(self.n_tablets)]
+        return {'n_samples': sum(s['n_samples'] for s in per_tablet)}
 
 
 @pytest.fixture
 def table(tmp_path):
-    return LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+    return LetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=3, per_tablet=3))
 
 
 @pytest.fixture
@@ -113,28 +113,28 @@ def built_table(table):
 
 class TestTopicsFromSlices:
 
-    def test_tab_data_group_is_synthesized(self):
-        assert LetterTab.TOPICS['numbers'] == SLICETOPIC
-        assert LetterTab.TOPICS['letters'] == SLICETOPIC
+    def test_tablet_data_group_is_synthesized(self):
+        assert LetterTablet.TOPICS['numbers'] == SLICETOPIC
+        assert LetterTablet.TOPICS['letters'] == SLICETOPIC
 
     def test_declared_topics_are_kept(self):
-        assert LetterTab.TOPICS['note'] == 'note.txt'
+        assert LetterTablet.TOPICS['note'] == 'note.txt'
 
-    def test_table_slices_equal_tab_slices(self, tmp_path):
-        """Table slices come from TAB, not from table's own TOPICS."""
-        table = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
-        assert table.slices() == LetterTab(datalake=str(tmp_path)).slices()
+    def test_table_slices_equal_tablet_slices(self, tmp_path):
+        """Table slices come from TABLET, not from table's own TOPICS."""
+        table = LetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=3, per_tablet=3))
+        assert table.slices() == LetterTablet(datalake=str(tmp_path)).slices()
         assert 'numbers' not in LetterTable.TOPICS
 
     def test_table_keeps_its_inherited_topics(self):
-        # Datatable's own is `done` alone: its tabs' validity is its manifest's, not a topic's.
+        # Datatable's own is `done` alone: its tablets' validity is its manifest's, not a topic's.
         assert 'tab_paths' not in LetterTable.TOPICS
         assert LetterTable.TOPICS['done'].filename == 'done'
         assert 'tabs' not in LetterTable.TOPICS
 
     def test_docstring_example_subclass_extends_topics_and_slices(self, tmp_path):
-        """The Datatab docstring's DebuggableFrameTab example."""
-        class Debuggable(LetterTab):
+        """The Datatablet docstring's DebuggableFrameTablet example."""
+        class Debuggable(LetterTablet):
             TOPICS = {'debug': {'plots': DIRTOPIC}, 'depth': SLICETOPIC}
 
         assert Debuggable.TOPICS['debug'] == {'plots': DIRTOPIC}
@@ -142,29 +142,29 @@ class TestTopicsFromSlices:
 
     def test_topics_do_not_accumulate_down_the_hierarchy(self):
         """A subclass declaring TOPICS does not accumulate parent TOPICS unless explicitly specified."""
-        class BaseTab(Datatab):
+        class BaseTablet(Datatablet):
             TOPICS = {'samples': SLICETOPIC, 'meta': 'meta.json'}
 
-        class SubTab(BaseTab):
+        class SubTablet(BaseTablet):
             TOPICS = {'report': 'report.json'}
 
-        class ExplicitSubTab(BaseTab):
-            TOPICS = {'report': 'report.json', **BaseTab.TOPICS}
+        class ExplicitSubTablet(BaseTablet):
+            TOPICS = {'report': 'report.json', **BaseTablet.TOPICS}
 
-        assert SubTab.TOPICS == {'report': 'report.json'}
-        assert ExplicitSubTab.TOPICS == {'report': 'report.json', 'samples': SLICETOPIC, 'meta': 'meta.json'}
+        assert SubTablet.TOPICS == {'report': 'report.json'}
+        assert ExplicitSubTablet.TOPICS == {'report': 'report.json', 'samples': SLICETOPIC, 'meta': 'meta.json'}
 
     def test_slice_topics_are_not_in_table_topics(self):
-        """Slice topics belong to the tab; they must not appear in the table's TOPICS."""
+        """Slice topics belong to the tablet; they must not appear in the table's TOPICS."""
         assert 'numbers' not in LetterTable.TOPICS
         assert 'letters' not in LetterTable.TOPICS
 
     def test_slices_are_in_the_signature_of_a_table_spelled_the_older_way(self, tmp_path):
-        """The sentinel era added the TAB's slices to a table's own identity."""
+        """The sentinel era added the TABLET's slices to a table's own identity."""
         class SentinelLetterTable(LetterTable):
             TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
 
-        table = SentinelLetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        table = SentinelLetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=3, per_tablet=3))
         assert 'topic:numbers=SLICETOPIC' in table.typestr()
         assert 'topic:letters=SLICETOPIC' in table.typestr()
 
@@ -172,18 +172,18 @@ class TestTopicsFromSlices:
         assert 'topic:numbers' not in table.typestr()
 
     def test_renaming_a_slice_rekeys_a_table_spelled_the_older_way(self, tmp_path):
-        class GlyphTab(LetterTab):
+        class GlyphTablet(LetterTablet):
             TOPICS = {'numbers': SLICETOPIC, 'glyphs': SLICETOPIC}
 
         class SentinelLetterTable(LetterTable):
             TOPICS = {'tab_paths': DIRTOPIC, 'done': 'done'}
 
         class GlyphTable(SentinelLetterTable):
-            TAB = GlyphTab
+            TABLET = GlyphTablet
 
         assert 'glyphs' not in GlyphTable.TOPICS
-        a = SentinelLetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
-        b = GlyphTable(datalake=str(tmp_path), spec=dict(n_tabs_=3, per_tab=3))
+        a = SentinelLetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=3, per_tablet=3))
+        b = GlyphTable(datalake=str(tmp_path), spec=dict(n_tablets_=3, per_tablet=3))
         assert 'glyphs' in b.slices()
         assert a.hash != b.hash
 
@@ -199,16 +199,16 @@ class TestTopicsFromSlices:
 
 class TestPlacement:
 
-    def test_tab_slices_live_under_tab_anchorkeypath(self, table):
-        tab = table.tab(0)
-        assert tab.path('numbers').startswith(tab.anchorkeypath)
+    def test_tablet_slices_live_under_tablet_anchorkeypath(self, table):
+        tablet = table.tablet(0)
+        assert tablet.path('numbers').startswith(tablet.anchorkeypath)
 
-    def test_non_slice_topics_stay_under_the_tabs_own_key(self, table):
-        tab = table.tab(0)
-        assert tab.path('note').startswith(tab.anchorkeypath)
+    def test_non_slice_topics_stay_under_the_tablets_own_key(self, table):
+        tablet = table.tablet(0)
+        assert tablet.path('note').startswith(tablet.anchorkeypath)
 
-    def test_a_tab_without_a_table_can_address_its_slices_and_topics(self, tmp_path):
-        lone = LetterTab(datalake=str(tmp_path), spec=dict(n=2))
+    def test_a_tablet_without_a_table_can_address_its_slices_and_topics(self, tmp_path):
+        lone = LetterTablet(datalake=str(tmp_path), spec=dict(n=2))
         assert lone.path('note') == os.path.join(
             lone.anchorkeypath, 'note', 'note.txt',
         )
@@ -227,42 +227,42 @@ class TestBuild:
     def test_table_is_valid_after_build(self, built_table):
         assert built_table.valid() is True
 
-    def test_every_tab_is_valid(self, built_table):
-        assert all(built_table.tab(i).valid() for i in range(built_table.n_tabs))
+    def test_every_tablet_is_valid(self, built_table):
+        assert all(built_table.tablet(i).valid() for i in range(built_table.n_tablets))
 
     def test_rebuild_is_a_no_op(self, built_table):
-        before = json.loads(open(built_table.tab(0).slice_index_path('numbers')).read())
+        before = json.loads(open(built_table.tablet(0).slice_index_path('numbers')).read())
         built_table.build()
-        after = json.loads(open(built_table.tab(0).slice_index_path('numbers')).read())
+        after = json.loads(open(built_table.tablet(0).slice_index_path('numbers')).read())
         assert before == after
 
     def test_staged_build_lands_the_same_data(self, tmp_path):
         """``stage=True`` is the remote-storage path; on local storage it must
         produce the same results as writing in place."""
-        direct = LetterTable(datalake=str(tmp_path / 'direct'), spec=dict(n_tabs_=1))
-        staged = LetterTable(datalake=str(tmp_path / 'staged'), spec=dict(n_tabs_=1))
-        direct.tab(0).build(stage=False)
-        staged.tab(0).build(stage=True)
-        assert staged.tab(0).valid()
-        assert staged.tab(0).data('letters') == direct.tab(0).data('letters')
+        direct = LetterTable(datalake=str(tmp_path / 'direct'), spec=dict(n_tablets_=1))
+        staged = LetterTable(datalake=str(tmp_path / 'staged'), spec=dict(n_tablets_=1))
+        direct.tablet(0).build(stage=False)
+        staged.tablet(0).build(stage=True)
+        assert staged.tablet(0).valid()
+        assert staged.tablet(0).data('letters') == direct.tablet(0).data('letters')
 
     def test_staged_upload_sends_the_index_last(self, tmp_path, monkeypatch):
         """valid_slice() reads a non-empty index.json as "built", so an upload
         interrupted partway must not have landed the index before the shards
         it names."""
-        tab = LetterTab(datalake=str(tmp_path), spec=dict(n=3, base=0))
+        tablet = LetterTablet(datalake=str(tmp_path), spec=dict(n=3, base=0))
 
         uploaded = []
-        original = type(tab.fs).put_file
+        original = type(tablet.fs).put_file
 
         def recording_put_file(self, src, dest, **kwargs):
             uploaded.append(os.path.basename(dest))
             return original(self, src, dest, **kwargs)
 
-        monkeypatch.setattr(type(tab.fs), 'put_file', recording_put_file)
-        tab.build(stage=True)
+        monkeypatch.setattr(type(tablet.fs), 'put_file', recording_put_file)
+        tablet.build(stage=True)
 
-        assert uploaded.count('index.json') == len(tab.slices())
+        assert uploaded.count('index.json') == len(tablet.slices())
         runs, current = [], []
         for name in uploaded:
             current.append(name)
@@ -274,34 +274,34 @@ class TestBuild:
             assert run[-1] == 'index.json'
             assert len(run) > 1, "a slice uploaded its index and no shards"
 
-    def test_a_failed_build_leaves_the_tab_invalid(self, tmp_path):
-        broken = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1, fail=True))
-        tab = broken.tab(0)
+    def test_a_failed_build_leaves_the_tablet_invalid(self, tmp_path):
+        broken = LetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=1, fail=True))
+        tablet = broken.tablet(0)
         with pytest.raises(RuntimeError, match='boom'):
-            tab.build()
-        assert tab.valid() is False
-        assert tab.validtopic('numbers') is False
+            tablet.build()
+        assert tablet.valid() is False
+        assert tablet.validtopic('numbers') is False
 
     def test_an_empty_slice_is_valid(self, tmp_path):
         """``MDSWriter.finish()`` writes an index.json even when nothing was
         written through it; presence of index.json counts as built and valid."""
-        empty = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1, per_tab=0))
-        tab = empty.tab(0)
-        tab.build()
-        assert os.path.exists(tab.slice_index_path('numbers'))
+        empty = LetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=1, per_tablet=0))
+        tablet = empty.tablet(0)
+        tablet.build()
+        assert os.path.exists(tablet.slice_index_path('numbers'))
 
 
 # ---------------------------------------------------------------------------
 # The merged per-slice index
 # ---------------------------------------------------------------------------
 
-class TestTabIndexes:
+class TestTabletIndexes:
 
-    def test_one_index_per_tab_and_slice(self, built_table):
-        for idx in range(built_table.n_tabs):
-            tab = built_table.tab(idx)
+    def test_one_index_per_tablet_and_slice(self, built_table):
+        for idx in range(built_table.n_tablets):
+            tablet = built_table.tablet(idx)
             for name in built_table.slices():
-                assert os.path.exists(tab.slice_index_path(name))
+                assert os.path.exists(tablet.slice_index_path(name))
 
 
 # ---------------------------------------------------------------------------
@@ -310,11 +310,11 @@ class TestTabIndexes:
 
 class TestRead:
 
-    def test_tab_data_returns_its_own_samples(self, built_table):
-        assert built_table.tab(1).data('letters')['letters']['label'] == \
+    def test_tablet_data_returns_its_own_samples(self, built_table):
+        assert built_table.tablet(1).data('letters')['letters']['label'] == \
             ['lbl3', 'lbl4', 'lbl5']
 
-    def test_table_data_concatenates_the_tabs(self, built_table):
+    def test_table_data_concatenates_the_tablets(self, built_table):
         assert built_table.data('numbers')['numbers']['idx'] == list(range(9))
 
     def test_data_is_keyed_by_slice_even_for_one_slice(self, built_table):
@@ -373,14 +373,14 @@ class TestRead:
         assert set(ds[0]) == {'letters'}
         assert set(ds[0]['letters']) == {'idx', 'label'}
 
-    def test_tab_dataset_covers_only_that_tab(self, built_table):
-        ds = built_table.tab(2).dataset()
+    def test_tablet_dataset_covers_only_that_tablet(self, built_table):
+        ds = built_table.tablet(2).dataset()
         assert len(ds) == 3
         assert [ds[i]['numbers']['idx'] for i in range(3)] == [6, 7, 8]
 
     def test_stats_per_slice(self, built_table):
         assert built_table.stats('numbers') == {'n_samples': 9}
-        assert built_table.tab(0).stats('letters') == {'n_samples': 3}
+        assert built_table.tablet(0).stats('letters') == {'n_samples': 3}
 
     def test_stats_with_no_slice_returns_every_slice(self, built_table):
         assert built_table.stats() == {'numbers': {'n_samples': 9},
@@ -429,7 +429,7 @@ class TestDatasetMode:
 # flush_every: shard boundaries that coincide across slices
 # ---------------------------------------------------------------------------
 
-class SizedTab(Datatab):
+class SizedTablet(Datatablet):
     """Two slices whose samples differ wildly in size, so that a byte-driven
     shard boundary in one lands nowhere near the other's."""
 
@@ -437,7 +437,7 @@ class SizedTab(Datatab):
     TOPICS = {'small': SLICETOPIC, 'big': SLICETOPIC}
 
     @dataclass
-    class VAR(Datatab.VAR):
+    class VAR(Datatablet.VAR):
         n: int = 24
         width: int = 400
         flush_every: int = None
@@ -460,7 +460,7 @@ class SizedTab(Datatab):
 
 class SizedTable(Datatable):
     VERSION = 1
-    TAB = SizedTab
+    TABLET = SizedTablet
 
     @dataclass
     class VAR(Datatable.VAR):
@@ -471,11 +471,11 @@ class SizedTable(Datatable):
         skew: bool = False
 
     @property
-    def n_tabs(self):
+    def n_tablets(self):
         return 1
 
-    def __tab__(self, idx):
-        return super().__tab__(
+    def __tablet__(self, idx):
+        return super().__tablet__(
             idx, n=self.var.n, width=self.var.width,
             flush_every=self.var.flush_every, size_limit=self.var.size_limit,
             skew=self.var.skew,
@@ -567,7 +567,7 @@ class TestScaffoldingErrors:
     LONE = dict()
 
     def test_build_names_the_slices_to_write(self, tmp_path):
-        class Bare(Datatab):
+        class Bare(Datatablet):
             TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
         # __build__ directly, not build(): build() journals first, and
@@ -576,26 +576,26 @@ class TestScaffoldingErrors:
         with pytest.raises(NotImplementedError, match="'a', 'b'"):
             Bare(datalake=str(tmp_path), spec=dict(self.LONE)).__build__()
 
-    def test_missing_tab_class(self, tmp_path):
-        class NoTab(Datatable):
+    def test_missing_tablet_class(self, tmp_path):
+        class NoTablet(Datatable):
             TOPICS = {'a': DATASLICE, **Datatable.TOPICS}
 
             @property
-            def n_tabs(self):
+            def n_tablets(self):
                 return 1
 
         with pytest.raises(NotImplementedError, match='TAB'):
-            NoTab(datalake=str(tmp_path)).build()
+            NoTablet(datalake=str(tmp_path)).build()
 
-    def test_missing_n_tabs(self, tmp_path):
+    def test_missing_n_tablets(self, tmp_path):
         class NoCount(Datatable):
-            TAB = LetterTab
+            TABLET = LetterTablet
 
-        with pytest.raises(NotImplementedError, match='n_tabs'):
+        with pytest.raises(NotImplementedError, match='n_tablets'):
             NoCount(datalake=str(tmp_path)).build()
 
     def test_slice_writers_requires_every_slice(self, tmp_path):
-        class Partial(Datatab):
+        class Partial(Datatablet):
             TOPICS = {'a': SLICETOPIC, 'b': SLICETOPIC}
 
             def __build__(self):
@@ -619,23 +619,23 @@ class TestCache:
     def test_cacheroot_is_dbx_cache_when_set(self, table, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_CACHE', str(tmp_path / 'dbxcache'))
         assert table.cacheroot == str(tmp_path / 'dbxcache')
-        assert table.tab(0).cacheroot == str(tmp_path / 'dbxcache')
+        assert table.tablet(0).cacheroot == str(tmp_path / 'dbxcache')
 
     def test_an_explicit_cache_beats_dbx_cache(self, tmp_path, monkeypatch):
         monkeypatch.setenv('DBX_CACHE', str(tmp_path / 'dbxcache'))
-        explicit = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1),
+        explicit = LetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=1),
                                cache=str(tmp_path / 'scratch'))
         assert explicit.cacheroot == str(tmp_path / 'scratch')
 
     def test_cacheroot_honours_an_explicit_cache(self, tmp_path):
-        explicit = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1),
+        explicit = LetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=1),
                                cache=str(tmp_path / 'scratch'))
         assert explicit.cacheroot == str(tmp_path / 'scratch')
 
-    def test_tabs_inherit_the_tables_cache(self, tmp_path):
-        explicit = LetterTable(datalake=str(tmp_path), spec=dict(n_tabs_=1),
+    def test_tablets_inherit_the_tables_cache(self, tmp_path):
+        explicit = LetterTable(datalake=str(tmp_path), spec=dict(n_tablets_=1),
                                cache=str(tmp_path / 'scratch'))
-        assert explicit.tab(0).cacheroot == str(tmp_path / 'scratch')
+        assert explicit.tablet(0).cacheroot == str(tmp_path / 'scratch')
 
     def test_an_unset_cache_stays_unset_in_the_handle(self, table):
         """cacheroot resolves lazily, so no machine's absolute path is baked
@@ -645,15 +645,15 @@ class TestCache:
 
 
 # ---------------------------------------------------------------------------
-# Placement is the tab's own key
+# Placement is the tablet's own key
 # ---------------------------------------------------------------------------
 
-class TestTabKey:
+class TestTabletKey:
 
     def test_slice_dir_and_own_topics_share_the_key(self, table):
-        tab = table.tab(0)
-        assert tab.path('numbers').startswith(tab.anchorkeypath)
-        assert tab.anchorkeypath.endswith(tab.key)
+        tablet = table.tablet(0)
+        assert tablet.path('numbers').startswith(tablet.anchorkeypath)
+        assert tablet.anchorkeypath.endswith(tablet.key)
 
 
 # ---------------------------------------------------------------------------
@@ -737,24 +737,24 @@ class TestZipPolicy:
 # Topics besides the slices
 # ---------------------------------------------------------------------------
 
-class NestedTab(LetterTab):
-    """A tab with a file topic and a nested topic group besides its slices."""
+class NestedTablet(LetterTablet):
+    """A tablet with a file topic and a nested topic group besides its slices."""
 
-    TOPICS = {'note': 'note.txt', 'debug': {'plots': DIRTOPIC, 'log': 'run.log'}, **LetterTab.TOPICS}
+    TOPICS = {'note': 'note.txt', 'debug': {'plots': DIRTOPIC, 'log': 'run.log'}, **LetterTablet.TOPICS}
 
 
 class NestedTable(LetterTable):
-    TAB = NestedTab
+    TABLET = NestedTablet
 
 
 class TestExtraTopics:
     """Anything in TOPICS that is not a slice is an ordinary Datablock topic."""
 
     def _table(self, tmp_path):
-        return NestedTable(datalake=str(tmp_path), spec=dict(n_tabs_=1))
+        return NestedTable(datalake=str(tmp_path), spec=dict(n_tablets_=1))
 
     def test_extra_topics_merge_with_the_synthesized_data_group(self):
-        assert NestedTab.TOPICS == {
+        assert NestedTablet.TOPICS == {
             'numbers': SLICETOPIC,
             'letters': SLICETOPIC,
             'note': 'note.txt',
@@ -762,36 +762,36 @@ class TestExtraTopics:
         }
 
     def test_nested_extra_groups_are_addressable(self, tmp_path):
-        tab = self._table(tmp_path).tab(0)
-        assert tab.path('debug', 'log') == os.path.join(
-            tab.anchorkeypath, 'debug', 'log', 'run.log',
+        tablet = self._table(tmp_path).tablet(0)
+        assert tablet.path('debug', 'log') == os.path.join(
+            tablet.anchorkeypath, 'debug', 'log', 'run.log',
         )
-        assert set(tab.path('debug')) == {'plots', 'log'}
+        assert set(tablet.path('debug')) == {'plots', 'log'}
 
-    def test_extra_topics_stay_under_the_tabs_own_key(self, tmp_path):
+    def test_extra_topics_stay_under_the_tablets_own_key(self, tmp_path):
         table = self._table(tmp_path)
-        tab = table.tab(0)
-        assert tab.path('debug', 'log').startswith(tab.anchorkeypath)
-        assert tab.path('numbers').startswith(tab.anchorkeypath)
+        tablet = table.tablet(0)
+        assert tablet.path('debug', 'log').startswith(tablet.anchorkeypath)
+        assert tablet.path('numbers').startswith(tablet.anchorkeypath)
 
     def test_extra_topics_are_in_the_signature(self, tmp_path):
-        tab = self._table(tmp_path).tab(0)
-        assert 'topic:debug/log=run.log' in tab.typestr()
-        assert ('debug', 'log') in tab.leaftopics()
+        tablet = self._table(tmp_path).tablet(0)
+        assert 'topic:debug/log=run.log' in tablet.typestr()
+        assert ('debug', 'log') in tablet.leaftopics()
 
     def test_extra_topics_count_towards_validity(self, tmp_path):
-        """A tab whose slices landed but whose extra topic did not is unbuilt."""
+        """A tablet whose slices landed but whose extra topic did not is unbuilt."""
         table = self._table(tmp_path)
-        tab = table.tab(0)
-        tab.build()                              # LetterTab.__build__ writes 'note'
-        assert tab.validtopic('numbers') is True
-        assert tab.validtopic('debug') is False  # nothing writes it
-        assert tab.valid() is False
+        tablet = table.tablet(0)
+        tablet.build()                              # LetterTablet.__build__ writes 'note'
+        assert tablet.validtopic('numbers') is True
+        assert tablet.validtopic('debug') is False  # nothing writes it
+        assert tablet.valid() is False
 
     def test_read_defers_extra_topics_to_the_subclass(self, tmp_path):
-        tab = self._table(tmp_path).tab(0)
+        tablet = self._table(tmp_path).tablet(0)
         with pytest.raises(NotImplementedError, match='note'):
-            tab.read('note')
+            tablet.read('note')
 
 
 # ---------------------------------------------------------------------------
@@ -902,166 +902,166 @@ class TestTableSampler:
 
 
 # ---------------------------------------------------------------------------
-# Valid Tab Fast Path and Sentinel Files
+# Valid Tablet Fast Path and Sentinel Files
 # ---------------------------------------------------------------------------
 
-class TestValidTabAndSentinels:
+class TestValidTabletAndSentinels:
 
     def test_manifest_written_on_build(self, tmp_path):
-        tbl = LetterTable(datalake=str(tmp_path / "sentinel_test"), spec=dict(n_tabs_=3))
+        tbl = LetterTable(datalake=str(tmp_path / "sentinel_test"), spec=dict(n_tablets_=3))
         for i in range(3):
-            assert not tbl.valid_tab(i)
+            assert not tbl.valid_tablet(i)
         assert tbl._read_blocks_manifest_() is None
 
         tbl.build()
 
-        again = LetterTable(datalake=str(tmp_path / "sentinel_test"), spec=dict(n_tabs_=3))
-        assert again._read_blocks_manifest_() == [again.tab(i).anchorkeypath for i in range(3)]
+        again = LetterTable(datalake=str(tmp_path / "sentinel_test"), spec=dict(n_tablets_=3))
+        assert again._read_blocks_manifest_() == [again.tablet(i).anchorkeypath for i in range(3)]
         assert again._blocks_cross_checked_()
-        assert all(again.valid_tab(i) for i in range(3))
+        assert all(again.valid_tablet(i) for i in range(3))
 
     def test_fallback_when_tab_paths_topic_missing(self, tmp_path):
         class NoTabPathsTable(LetterTable):
             TOPICS = {'tabs': DIRTOPIC, 'done': 'done'}
 
-        tbl = NoTabPathsTable(datalake=str(tmp_path / "nobuilt_test"), spec=dict(n_tabs_=2))
+        tbl = NoTabPathsTable(datalake=str(tmp_path / "nobuilt_test"), spec=dict(n_tablets_=2))
         assert 'tab_paths' not in tbl.topics()
-        assert not tbl.valid_tab(0)
+        assert not tbl.valid_tablet(0)
         
         tbl.build()
-        assert tbl.valid_tab(0)
-        assert tbl.valid_tab(1)
+        assert tbl.valid_tablet(0)
+        assert tbl.valid_tablet(1)
 
-    def test_find_tabs(self, tmp_path):
+    def test_find_tablets(self, tmp_path):
         tbl = LetterTable(
             datalake=str(tmp_path / "find_table"),
-            spec=dict(n_tabs_=4),
+            spec=dict(n_tablets_=4),
             parallelization="multithreading",
             n_workers=2,
         )
-        assert tbl.find_tabs("base=0") == [0]
+        assert tbl.find_tablets("base=0") == [0]
         assert tbl.find_blocks("base=3") == [1]
-        assert tbl.find_tabs(("LetterTab", "base=9")) == [3]
-        assert tbl.find_tabs(["LetterTab", "base=9"]) == [0, 1, 2, 3]
+        assert tbl.find_tablets(("LetterTablet", "base=9")) == [3]
+        assert tbl.find_tablets(["LetterTablet", "base=9"]) == [0, 1, 2, 3]
 
         # Test overrides
-        assert tbl.find_tabs("base=0", parallelization="inline") == [0]
+        assert tbl.find_tablets("base=0", parallelization="inline") == [0]
         assert tbl.find_blocks("base=3", n_workers=1, work_stealing=True) == [1]
 
         # Match multiple
-        assert tbl.find_tabs("LetterTab") == [0, 1, 2, 3]
-        assert tbl.find_blocks("LetterTab") == [0, 1, 2, 3]
+        assert tbl.find_tablets("LetterTablet") == [0, 1, 2, 3]
+        assert tbl.find_blocks("LetterTablet") == [0, 1, 2, 3]
 
         # Test tag matching
-        tbl.tab(1)._tag_ = "sample_tag_1"
-        tbl.tab(2)._tag_ = "sample_tag_2"
-        assert tbl.find_tabs(tag="sample_tag_1") == [1]
-        assert tbl.find_tabs(tag=["sample_tag_1"]) == [1]
-        assert tbl.find_tabs(tag="sample_tag") == [1, 2]
-        assert tbl.find_tabs(signature="base=3", tag="sample_tag_1") == [1]
-        assert tbl.find_tabs(signature="base=0", tag="sample_tag_1") == []
+        tbl.tablet(1)._tag_ = "sample_tag_1"
+        tbl.tablet(2)._tag_ = "sample_tag_2"
+        assert tbl.find_tablets(tag="sample_tag_1") == [1]
+        assert tbl.find_tablets(tag=["sample_tag_1"]) == [1]
+        assert tbl.find_tablets(tag="sample_tag") == [1, 2]
+        assert tbl.find_tablets(signature="base=3", tag="sample_tag_1") == [1]
+        assert tbl.find_tablets(signature="base=0", tag="sample_tag_1") == []
 
         # Test path matching
-        assert tbl.find_tabs(path="note.txt") == [0, 1, 2, 3]
-        assert tbl.find_tabs(path="sample_tag_1") == [1]
-        assert tbl.find_tabs(path=("sample_tag_2", "letters")) == [2]
-        assert tbl.find_tabs(path=["tab_000000", "tab_000003"]) == [0, 3]
-        assert tbl.find_tabs(signature="base=3", path="sample_tag_1") == [1]
-        assert tbl.find_tabs(signature="base=0", path="sample_tag_1") == []
+        assert tbl.find_tablets(path="note.txt") == [0, 1, 2, 3]
+        assert tbl.find_tablets(path="sample_tag_1") == [1]
+        assert tbl.find_tablets(path=("sample_tag_2", "letters")) == [2]
+        assert tbl.find_tablets(path=["tab_000000", "tab_000003"]) == [0, 3]
+        assert tbl.find_tablets(signature="base=3", path="sample_tag_1") == [1]
+        assert tbl.find_tablets(signature="base=0", path="sample_tag_1") == []
 
         # No match
-        assert tbl.find_tabs("nonexistent") == []
-        assert tbl.find_tabs(tag="nonexistent_tag") == []
-        assert tbl.find_tabs(path="nonexistent_path") == []
+        assert tbl.find_tablets("nonexistent") == []
+        assert tbl.find_tablets(tag="nonexistent_tag") == []
+        assert tbl.find_tablets(path="nonexistent_path") == []
 
-    def test_parallel_filtering_skips_already_valid_tabs(self, tmp_path):
+    def test_parallel_filtering_skips_already_valid_tablets(self, tmp_path):
         tbl = LetterTable(
             datalake=str(tmp_path / "filter_test"),
-            spec=dict(n_tabs_=4),
+            spec=dict(n_tablets_=4),
             parallelization="multithreading",
             n_workers=2,
         )
-        # Manually build tab 0 and tab 2
-        tbl.tab(0).build()
-        tbl.tab(2).build()
+        # Manually build tablet 0 and tablet 2
+        tbl.tablet(0).build()
+        tbl.tablet(2).build()
 
-        assert tbl.valid_tab(0)
-        assert not tbl.valid_tab(1)
-        assert tbl.valid_tab(2)
-        assert not tbl.valid_tab(3)
+        assert tbl.valid_tablet(0)
+        assert not tbl.valid_tablet(1)
+        assert tbl.valid_tablet(2)
+        assert not tbl.valid_tablet(3)
 
         # Build whole table — should filter out 0 and 2, only building 1 and 3
         tbl.build()
         for i in range(4):
-            assert tbl.valid_tab(i)
+            assert tbl.valid_tablet(i)
 
-    def test_filter_built_tabs_option(self, tmp_path):
-        tbl_default = LetterTable(datalake=str(tmp_path / "filter_default"), spec=dict(n_tabs_=2))
-        assert tbl_default.filter_built_tabs is False
+    def test_filter_built_tablets_option(self, tmp_path):
+        tbl_default = LetterTable(datalake=str(tmp_path / "filter_default"), spec=dict(n_tablets_=2))
+        assert tbl_default.filter_built_tablets is False
 
-        tbl_explicit = LetterTable(datalake=str(tmp_path / "filter_explicit"), spec=dict(n_tabs_=2), filter_built_tabs=True)
-        assert tbl_explicit.filter_built_tabs is True
+        tbl_explicit = LetterTable(datalake=str(tmp_path / "filter_explicit"), spec=dict(n_tablets_=2), filter_built_tablets=True)
+        assert tbl_explicit.filter_built_tablets is True
 
-    def test_valid_tabs_and_valid_blocks(self, tmp_path):
+    def test_valid_tablets_and_valid_blocks(self, tmp_path):
         tbl = LetterTable(
             datalake=str(tmp_path / "valid_tabs_test"),
-            spec=dict(n_tabs_=4),
+            spec=dict(n_tablets_=4),
             parallelization="multithreading",
             n_workers=2,
         )
-        assert isinstance(tbl.valid_tabs(), pd.Series)
+        assert isinstance(tbl.valid_tablets(), pd.Series)
         assert isinstance(tbl.valid_blocks(), pd.Series)
-        assert tbl.valid_tabs().tolist() == [False, False, False, False]
+        assert tbl.valid_tablets().tolist() == [False, False, False, False]
         assert tbl.valid_blocks().tolist() == [False, False, False, False]
 
         # Test parallelization override
-        assert tbl.valid_tabs(parallelization="inline").tolist() == [False, False, False, False]
-        assert tbl.valid_tabs(n_workers=1).tolist() == [False, False, False, False]
+        assert tbl.valid_tablets(parallelization="inline").tolist() == [False, False, False, False]
+        assert tbl.valid_tablets(n_workers=1).tolist() == [False, False, False, False]
 
-        tbl.tab(0).build()
-        tbl.tab(2).build()
+        tbl.tablet(0).build()
+        tbl.tablet(2).build()
 
-        assert tbl.valid_tabs().tolist() == [True, False, True, False]
+        assert tbl.valid_tablets().tolist() == [True, False, True, False]
         assert tbl.valid_blocks().tolist() == [True, False, True, False]
-        assert tbl.valid_tabs(parallelization="inline").tolist() == [True, False, True, False]
+        assert tbl.valid_tablets(parallelization="inline").tolist() == [True, False, True, False]
 
         # Test false_only and true_only
-        assert tbl.valid_tabs(false_only=True).index.tolist() == [1, 3]
-        assert tbl.valid_tabs(true_only=True).index.tolist() == [0, 2]
+        assert tbl.valid_tablets(false_only=True).index.tolist() == [1, 3]
+        assert tbl.valid_tablets(true_only=True).index.tolist() == [0, 2]
         with pytest.raises(ValueError, match="mutually exclusive"):
-            tbl.valid_tabs(false_only=True, true_only=True)
+            tbl.valid_tablets(false_only=True, true_only=True)
 
-        assert tbl.valid_tab(0) is True
-        assert tbl.valid_tab(1) is False
+        assert tbl.valid_tablet(0) is True
+        assert tbl.valid_tablet(1) is False
         assert tbl.valid_block(0) is True
         assert tbl.valid_block(1) is False
 
         tbl.build()
-        assert tbl.valid_tabs().tolist() == [True, True, True, True]
+        assert tbl.valid_tablets().tolist() == [True, True, True, True]
         assert tbl.valid_blocks().tolist() == [True, True, True, True]
-        assert tbl.valid_tabs(false_only=True).empty
-        assert tbl.valid_tabs(true_only=True).index.tolist() == [0, 1, 2, 3]
+        assert tbl.valid_tablets(false_only=True).empty
+        assert tbl.valid_tablets(true_only=True).index.tolist() == [0, 1, 2, 3]
 
     def test_block_redirections_by_every_name(self, tmp_path):
-        """The stack-wide redirection API, and its tab names on a table."""
-        src_tbl = LetterTable(datalake=str(tmp_path / "rsrc"), spec=dict(n_tabs_=3)).build()
-        dst_tbl = LetterTable(datalake=str(tmp_path / "rdst"), spec=dict(n_tabs_=3),
+        """The stack-wide redirection API, and its tablet names on a table."""
+        src_tbl = LetterTable(datalake=str(tmp_path / "rsrc"), spec=dict(n_tablets_=3)).build()
+        dst_tbl = LetterTable(datalake=str(tmp_path / "rdst"), spec=dict(n_tablets_=3),
                               parallelization="multithreading", n_workers=2)
-        dst_tbl.tab(1).UNSAFE_redirect(paths=src_tbl.tab(1).paths(), OVERRIDE=True)
+        dst_tbl.tablet(1).UNSAFE_redirect(paths=src_tbl.tablet(1).paths(), OVERRIDE=True)
 
-        for series in (dst_tbl.blocks_redirected(), dst_tbl.tabs_redirected(),
-                       dst_tbl.redirected_blocks(), dst_tbl.redirected_tabs()):
+        for series in (dst_tbl.blocks_redirected(), dst_tbl.tablets_redirected(),
+                       dst_tbl.redirected_blocks(), dst_tbl.redirected_tablets()):
             assert series.tolist() == [False, True, False]
-        assert dst_tbl.tabs_redirected(true_only=True).index.tolist() == [1]
+        assert dst_tbl.tablets_redirected(true_only=True).index.tolist() == [1]
 
-        for got in (dst_tbl.get_block_redirections(), dst_tbl.get_tab_redirections(),
-                    dst_tbl.get_tab_redirections(parallelization="inline")):
+        for got in (dst_tbl.get_block_redirections(), dst_tbl.get_tablet_redirections(),
+                    dst_tbl.get_tablet_redirections(parallelization="inline")):
             assert got.index.tolist() == [0, 1, 2]
             assert got[0] is None and got[2] is None
-            assert got[1].paths == src_tbl.tab(1).paths()
-        only = dst_tbl.get_tab_redirections(redirected_only=True)
+            assert got[1].paths == src_tbl.tablet(1).paths()
+        only = dst_tbl.get_tablet_redirections(redirected_only=True)
         assert only.index.tolist() == [1]
-        # No journal read at all: LetterTab declares no SPECIALIZATIONS, so a tab
+        # No journal read at all: LetterTablet declares no SPECIALIZATIONS, so a tablet
         # not redirected answers from its own hash directory and one redirected
         # from its record -- the anchor's journal is never needed.
         from dbx.datablocks import Datajournal
@@ -1072,67 +1072,67 @@ class TestValidTabAndSentinels:
             return original(self, anchor, *a, **kw)
         import unittest.mock
         with unittest.mock.patch.object(Datajournal, 'read', counting):
-            dst_tbl.get_tab_redirections(parallelization="inline")
+            dst_tbl.get_tablet_redirections(parallelization="inline")
         assert reads == []
 
-        assert dst_tbl.tab_redirections.index.tolist() == [0, 1, 2]
+        assert dst_tbl.tablet_redirections.index.tolist() == [0, 1, 2]
         assert dst_tbl.block_redirections is dst_tbl.block_redirections   # resolved once
-        assert dst_tbl.tab_redirections is dst_tbl.block_redirections
+        assert dst_tbl.tablet_redirections is dst_tbl.block_redirections
 
     def test_get_redirection_is_the_whole_api(self, tmp_path):
         """No private twin behind it any more; the property goes through it."""
-        tbl = LetterTable(datalake=str(tmp_path / "one"), spec=dict(n_tabs_=1))
-        assert not hasattr(tbl.tab(0), '_get_redirection')
-        assert tbl.tab(0).redirection is None and tbl.tab(0).get_redirection() is None
+        tbl = LetterTable(datalake=str(tmp_path / "one"), spec=dict(n_tablets_=1))
+        assert not hasattr(tbl.tablet(0), '_get_redirection')
+        assert tbl.tablet(0).redirection is None and tbl.tablet(0).get_redirection() is None
 
-    def test_redirected_tabs_and_redirected_blocks(self, tmp_path):
+    def test_redirected_tablets_and_redirected_blocks(self, tmp_path):
         src_tbl = LetterTable(
             datalake=str(tmp_path / "red_src"),
-            spec=dict(n_tabs_=3),
+            spec=dict(n_tablets_=3),
         ).build()
         dst_tbl = LetterTable(
             datalake=str(tmp_path / "red_dst"),
-            spec=dict(n_tabs_=3),
+            spec=dict(n_tablets_=3),
             parallelization="multithreading",
             n_workers=2,
         )
-        assert isinstance(dst_tbl.redirected_tabs(), pd.Series)
+        assert isinstance(dst_tbl.redirected_tablets(), pd.Series)
         assert isinstance(dst_tbl.redirected_blocks(), pd.Series)
-        assert dst_tbl.redirected_tabs().tolist() == [False, False, False]
+        assert dst_tbl.redirected_tablets().tolist() == [False, False, False]
         assert dst_tbl.redirected_blocks().tolist() == [False, False, False]
 
         # Test parallelization override
-        assert dst_tbl.redirected_tabs(parallelization="inline").tolist() == [False, False, False]
+        assert dst_tbl.redirected_tablets(parallelization="inline").tolist() == [False, False, False]
 
-        dst_tbl.tab(1).UNSAFE_redirect(paths=src_tbl.tab(1).paths(), OVERRIDE=True)
+        dst_tbl.tablet(1).UNSAFE_redirect(paths=src_tbl.tablet(1).paths(), OVERRIDE=True)
 
-        assert dst_tbl.tab(1).redirected() is True
-        assert dst_tbl.tab(0).redirected() is False
-        assert dst_tbl.redirected_tab(1) is True
-        assert dst_tbl.redirected_tab(0) is False
+        assert dst_tbl.tablet(1).redirected() is True
+        assert dst_tbl.tablet(0).redirected() is False
+        assert dst_tbl.redirected_tablet(1) is True
+        assert dst_tbl.redirected_tablet(0) is False
         assert dst_tbl.redirected_block(1) is True
         assert dst_tbl.redirected_block(0) is False
-        assert dst_tbl.redirected_tabs().tolist() == [False, True, False]
+        assert dst_tbl.redirected_tablets().tolist() == [False, True, False]
         assert dst_tbl.redirected_blocks().tolist() == [False, True, False]
-        assert dst_tbl.redirected_tabs(parallelization="inline").tolist() == [False, True, False]
+        assert dst_tbl.redirected_tablets(parallelization="inline").tolist() == [False, True, False]
 
         # Test false_only and true_only
-        assert dst_tbl.redirected_tabs(false_only=True).index.tolist() == [0, 2]
-        assert dst_tbl.redirected_tabs(true_only=True).index.tolist() == [1]
+        assert dst_tbl.redirected_tablets(false_only=True).index.tolist() == [0, 2]
+        assert dst_tbl.redirected_tablets(true_only=True).index.tolist() == [1]
         with pytest.raises(ValueError, match="mutually exclusive"):
-            dst_tbl.redirected_tabs(false_only=True, true_only=True)
+            dst_tbl.redirected_tablets(false_only=True, true_only=True)
 
-    def test_fold_valid_and_redirected_tabs(self, tmp_path):
+    def test_fold_valid_and_redirected_tablets(self, tmp_path):
         src_tbl = LetterTable(
             datalake=str(tmp_path / "fold_src"),
-            spec=dict(n_tabs_=4),
+            spec=dict(n_tablets_=4),
         ).build()
         dst_tbl = LetterTable(
             datalake=str(tmp_path / "fold_dst"),
-            spec=dict(n_tabs_=4),
+            spec=dict(n_tablets_=4),
         )
-        dst_tbl.tab(0).build()
-        dst_tbl.tab(2).UNSAFE_redirect(paths=src_tbl.tab(2).paths(), OVERRIDE=True)
+        dst_tbl.tablet(0).build()
+        dst_tbl.tablet(2).UNSAFE_redirect(paths=src_tbl.tablet(2).paths(), OVERRIDE=True)
 
         partition = DatatablePartition(
             datalake=str(tmp_path / "partition"),
@@ -1145,13 +1145,13 @@ class TestValidTabAndSentinels:
         ).build()
 
         fold0 = partition.fold(0)
-        # fold0 covers a subset of tabs
-        valid_res = fold0.valid_tabs()
-        red_res = fold0.redirected_tabs()
+        # fold0 covers a subset of tablets
+        valid_res = fold0.valid_tablets()
+        red_res = fold0.redirected_tablets()
         assert isinstance(valid_res, pd.Series)
         assert isinstance(red_res, pd.Series)
-        assert len(valid_res) == fold0.n_tabs
-        assert len(red_res) == fold0.n_tabs
+        assert len(valid_res) == fold0.n_tablets
+        assert len(red_res) == fold0.n_tablets
         assert all(isinstance(v, (bool, np.bool_)) for v in valid_res)
         assert all(isinstance(r, (bool, np.bool_)) for r in red_res)
 

@@ -1,6 +1,6 @@
 ---
 name: running-tests
-description: How to run this repo's test suite - the conda env that has torch, lightning and tensorboard, and why importorskip must not be used to paper over a missing one. Load before running pytest here, or when a test module reports as skipped rather than passed.
+description: How to run this repo's test suite - always in parallel (pytest -n 16), in the conda env that has torch, lightning and tensorboard, and why importorskip must not be used to paper over a missing one. Load before running pytest here, or when a test module reports as skipped rather than passed.
 ---
 
 # Running the tests
@@ -11,13 +11,15 @@ the modules that matter.
 
 ```bash
 DBX_USE_WORK_REPO=False DBX_DIRTY_REPO_OK=True \
-    /home/dmitry/miniconda3/envs/dbx/bin/python -m pytest -q             # linux
+    ~/miniconda3/envs/dbx/bin/python -m pytest -q -n 16                          # linux
 DBX_USE_WORK_REPO=False DBX_DIRTY_REPO_OK=True \
-    /opt/homebrew/Caskroom/miniconda/base/envs/dbx/bin/python -m pytest -q   # macOS
+    /opt/homebrew/Caskroom/miniconda/base/envs/dbx/bin/python -m pytest -q -n 8   # macOS
 ```
 
-Call the interpreter by absolute path, and check which of the two exists here
-before using one. `conda activate dbx` does not survive between tool calls —
+Call the interpreter by absolute path, and check which exists here before
+using one: `~/miniconda3/envs/dbx` on the linux machines (the home directory
+differs from one to the next -- `/home/dmitry`, `/home/t-9dkarp`), the
+Homebrew path on macOS. `conda activate dbx` does not survive between tool calls —
 each Bash invocation is a fresh shell — and `conda` on its own fails out of
 the shell snapshot on this machine.
 
@@ -38,11 +40,24 @@ repo. With the work repo off there is no clone to make, so it is belt and
 braces — harmless, and it keeps the command working whichever way the first
 variable is set.
 
-A full run takes **7–8 minutes**. A single module is seconds; scope with a
-path (`... -m pytest tests/test_stills.py -q`) while iterating and run the
-whole suite once at the end.
+## Always in parallel
 
-`-p no:randomly` makes a failure reproducible while you work on it.
+**Run the suite with `-n 16`** -- `pytest-xdist`, declared in the `dev` extra.
+Serially the full suite takes about **28 minutes** on the 32-core linux
+machine; with `-n 16` it takes **under 5** (2510 tests, 2026-10-11). Nothing in
+it needs to run alone: every test writes under its own `tmp_path`, and
+streaming's shared memory is named per process. Use about half the cores
+(`nproc`): `-n auto` takes them all, and the tests that build in worker pools
+of their own then compete for them.
+
+Scope with a path (`... -m pytest tests/test_stills.py -q`) while iterating --
+a single module is seconds, and needs no `-n` -- and run the whole suite, in
+parallel, once at the end.
+
+A failure seen only under `-n` is a test sharing state it should not --
+a fixed path, an environment variable, a module-level cache -- and is a bug in
+that test: fix it rather than dropping `-n`. To reproduce one, run its module
+alone with `-p no:randomly`.
 
 ## Skipped is not passed
 

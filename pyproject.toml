@@ -81,6 +81,7 @@ azure = [
 dev = [
     "build",
     "pytest>=8.0",
+    "pytest-xdist",           # pytest -n auto: the suite across processes
     "twine",
 ]
 all = [

@@ -101,10 +101,10 @@ from .journals import (
     CallableType,
     CallableTp,
     Block,
-    DatajournalEntry,
-    DatajournalFrame,
+    DataJournalEntry,
+    DataJournalFrame,
     one_datalake,
-    Datajournal,
+    DataJournal,
     Datalog,
     DEFAULT_DATAJOURNAL,
     JOURNAL_DATETIME_FORMAT,
@@ -167,7 +167,7 @@ class BY_HASH(metaclass=_SentinelMeta_):
 
     What a stack hands its blocks in place of the whole of their anchor's
     journal: each block then resolves each of its specializations with
-    `Datajournal.read_hash`, which lists only the directories that hash can
+    `DataJournal.read_hash`, which lists only the directories that hash can
     be filed in, and a hash filed nowhere is a past that never was -- not a
     reason to read every entry the anchor has. Reading those took minutes over
     thousands of blocks (11,079 entries, 423 s, for ``DeepFeatureBag``), once
@@ -907,7 +907,7 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
                 if len(j_ev) > 0:
                     try:
                         row = j_ev.iloc[0]
-                        entry = DatajournalEntry(row.dropna(), storage_options=getattr(j, 'storage_options', None))
+                        entry = DataJournalEntry(row.dropna(), storage_options=getattr(j, 'storage_options', None))
                         block = entry.instantiate()
                         val_res = block.valid()
                         if isinstance(val_res, dict):
@@ -973,10 +973,11 @@ _BLOCK_SPECIALIZATIONS = threading.local()
 #: the stack that read it is in another process.
 _FORMING_JOURNALS = threading.local()
 
-#: What builds a `Datajournal` or `DatajournalFrame` is named for it: old name -> new.
+#: What builds a `DataJournal` or `DataJournalFrame` is named for it: old name -> new.
 _RENAMED_DATAJOURNAL_BUILDERS_ = {
     'journal': 'datajournal',
-    'Journal': 'Datajournal',
+    'Journal': 'DataJournal',
+    'Datajournal': 'DataJournal',
     'block_journal': 'block_datajournal',
     'tab_journal': 'tablet_datajournal',
     'child_specialization_journal': 'child_specialization_datajournal',
@@ -1646,7 +1647,7 @@ class Datablock:
         filter matched, and is None for a redirection given paths directly.
         """
         paths: dict | None = None
-        entry: Optional['DatajournalEntry'] = None
+        entry: Optional['DataJournalEntry'] = None
         filter: dict | None = None
         topic_map: dict | None = None
         #: The topics this redirection covers, when it covers only some. None
@@ -1860,7 +1861,7 @@ class Datablock:
             raise TypeError(
                 f"{cls.__qualname__} defines {', '.join(renamed)}, renamed "
                 + ', '.join(f"{old} -> {_RENAMED_DATAJOURNAL_BUILDERS_[old]}" for old in renamed)
-                + ": what builds a Datajournal or DatajournalFrame is named for it."
+                + ": what builds a DataJournal or DataJournalFrame is named for it."
             )
 
     def __init__(
@@ -1924,10 +1925,10 @@ class Datablock:
         if 'datajournal' in kwargs:
             # Left to **kwargs it would be kept as a dynamic parameter and do
             # nothing: which session an entry goes under is the open
-            # `with Datajournal()`'s to say, never a block's.
+            # `with DataJournal()`'s to say, never a block's.
             raise TypeError(
                 f"{type(self).__name__}: datajournal= is not a Datablock argument; "
-                f"open `with dbx.Datajournal():` around the code that builds instead"
+                f"open `with dbx.DataJournal():` around the code that builds instead"
             )
         if SPECIALIZATIONS is None and SPECIALIZATION is not None:
             SPECIALIZATIONS = SPECIALIZATION
@@ -3272,7 +3273,7 @@ class Datablock:
             self.log.detailed(f"redirected: error checking .redirection topic: {e}")
             return False
 
-    def UNSAFE_redirect(self, *, redirector: Callable|None = None, journal: DatajournalFrame|None = None, filter: dict|None = None, topic_map: dict|None = None,
+    def UNSAFE_redirect(self, *, redirector: Callable|None = None, journal: DataJournalFrame|None = None, filter: dict|None = None, topic_map: dict|None = None,
                         paths: dict|None = None, topics: list|None = None,
                         specialization: 'Datablock.Specialization | None' = None,
                         merge: bool = False,
@@ -3411,9 +3412,9 @@ class Datablock:
 
         if target_paths is None and filter is not None and journal is not None:
             try:
-                j = DatajournalFrame(journal, storage_options=getattr(journal, 'storage_options', self.storage_options), **dict(filter))
+                j = DataJournalFrame(journal, storage_options=getattr(journal, 'storage_options', self.storage_options), **dict(filter))
                 if len(j) > 0:
-                    entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else DatajournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
+                    entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else DataJournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
                     target_paths = entry.block.paths()
                     if target_paths is None or not isinstance(target_paths, dict):
                         try:
@@ -3437,9 +3438,9 @@ class Datablock:
 
         if target_paths is None and filter is None and explicit_journal:
             try:
-                j = journal if isinstance(journal, DatajournalFrame) else DatajournalFrame(journal, storage_options=self.storage_options)
+                j = journal if isinstance(journal, DataJournalFrame) else DataJournalFrame(journal, storage_options=self.storage_options)
                 if len(j) > 0:
-                    entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else DatajournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
+                    entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else DataJournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
                     target_paths = entry.block.paths()
                     if target_paths is None or not isinstance(target_paths, dict):
                         try:
@@ -3765,7 +3766,7 @@ class Datablock:
             whose ``anchorkeypath`` is used as the copy source, e.g.
             ``{'iloc': 0}``, ``{'loc': 3}``, or filter kwargs like
             ``{'event': 'build:end'}``. Must resolve to a single
-            :class:`DatajournalEntry`.
+            :class:`DataJournalEntry`.
         OVERRIDE : bool, default False
             If True, skip the interactive confirmation prompt. Forwarded to
             :meth:`UNSAFE_copy_from`.
@@ -4003,9 +4004,9 @@ class Datablock:
 
     def diffsignature(
         self,
-        other_signature: 'Datablock | DatajournalEntry | str | None' = ABSENT,
+        other_signature: 'Datablock | DataJournalEntry | str | None' = ABSENT,
         *,
-        journal: 'DatajournalFrame | DatajournalEntry | dict | str | int | None' = None,
+        journal: 'DataJournalFrame | DataJournalEntry | dict | str | int | None' = None,
         raw: bool = False,
         deslash: bool = False,
         legacy: 'bool | None' = None,
@@ -4016,7 +4017,7 @@ class Datablock:
         """Diff this datablock's signature against another signature, key by key."""
         if isinstance(other_signature, Datablock):
             other_signature = other_signature.signaturestr(legacy=legacy)
-        elif isinstance(other_signature, DatajournalEntry):
+        elif isinstance(other_signature, DataJournalEntry):
             other_signature = other_signature.read('signature') or other_signature.read('subsignature') or other_signature.read('norm') or ''
         elif (other_signature is None or other_signature is ABSENT) and journal is not None:
             _entry = self._journal_entry_(journal)
@@ -4206,7 +4207,7 @@ class Datablock:
         Parameters
         ----------
         other_topics:
-            A :class:`Datablock`, a :class:`DatajournalEntry`, a ``TOPICS``
+            A :class:`Datablock`, a :class:`DataJournalEntry`, a ``TOPICS``
             declaration (dict or list, ``None`` for a block declaring none), or
             the ``str(dict)`` form a journal records. Omit it to read the other
             side from *journal*.
@@ -4255,7 +4256,7 @@ class Datablock:
         Parameters
         ----------
         other_version:
-            A :class:`Datablock`, a :class:`DatajournalEntry`, or a version
+            A :class:`Datablock`, a :class:`DataJournalEntry`, or a version
             value (``None`` being the version of a block declaring no
             ``VERSION``). Omit it to read the other side from *journal*.
         journal:
@@ -4266,7 +4267,7 @@ class Datablock:
             if journal is None:
                 raise ValueError("diffversion needs other_version= or journal=")
             other_version = self._journal_entry_(journal)
-        if isinstance(other_version, (Datablock, DatajournalEntry)):
+        if isinstance(other_version, (Datablock, DataJournalEntry)):
             other_version = other_version.version
         mine = self.version
         if str(mine) == str(other_version):
@@ -4283,8 +4284,8 @@ class Datablock:
         **kwargs,
     ) -> 'Diff | tuple':
         """Diff this block against another across all three signature components."""
-        if other is not ABSENT and not isinstance(other, (Datablock, DatajournalEntry)) and journal is None:
-            raise TypeError(f"diff requires a Datablock or DatajournalEntry, got {type(other).__name__}: {other!r}")
+        if other is not ABSENT and not isinstance(other, (Datablock, DataJournalEntry)) and journal is None:
+            raise TypeError(f"diff requires a Datablock or DataJournalEntry, got {type(other).__name__}: {other!r}")
         subsig = self.diffsubsignature(other, journal=journal, report=report, maxlen=maxlen, **kwargs)
 
         topics = self.difftopics(other, journal=journal, report=report, maxlen=maxlen)
@@ -4837,24 +4838,24 @@ class Datablock:
     def write_journal_entry(self, event: str, *, note: str = None, inline_note: bool = False,
                             message: str = None, inline_message: bool = False, journal_prefix: str = '',
                             redirection: 'str | dict | None' = None):
-        """Write one journal entry for *event*, under the current `Datajournal` session. See `Datajournal.write`."""
-        return Datajournal.write(self, event, note=note, inline_note=inline_note,
+        """Write one journal entry for *event*, under the current `DataJournal` session. See `DataJournal.write`."""
+        return DataJournal.write(self, event, note=note, inline_note=inline_note,
                                  message=message, inline_message=inline_message,
                                  journal_prefix=journal_prefix, redirection=redirection)
 
     @staticmethod
-    def Datajournal(anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, url=None, **filter_kwargs):
-        """*anchor*'s journal. See `Datajournal.read`."""
-        return Datajournal.read(anchor, loc, iloc=iloc, datalake=one_datalake(datalake, url, 'Datajournal'),
+    def DataJournal(anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, url=None, **filter_kwargs):
+        """*anchor*'s journal. See `DataJournal.read`."""
+        return DataJournal.read(anchor, loc, iloc=iloc, datalake=one_datalake(datalake, url, 'DataJournal'),
                                 storage_options=storage_options,
                                 log=log, n_workers=n_workers, index=index,
                                 unnormalized=unnormalized, **filter_kwargs)
 
     def datajournal(self, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=None, index: str | None = None, unnormalized: bool = False, url=None, **filter_kwargs):
-        """This block's anchor's journal, under this block's datalake. See `Datajournal.read`."""
+        """This block's anchor's journal, under this block's datalake. See `DataJournal.read`."""
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-        return Datajournal.read(
+        return DataJournal.read(
             self.anchor,
             loc=loc,
             iloc=iloc,
@@ -4868,14 +4869,14 @@ class Datablock:
         )
 
     def lastbuilt(self, index: str | None = None):
-        """Return the most recent 'build:end' DatajournalEntry, or None."""
+        """Return the most recent 'build:end' DataJournalEntry, or None."""
         j = self.datajournal(event='build:end', index=index)
         if len(j) == 0:
             return None
         return j.get(0, dropna=True)
 
     def running(self, index: str | None = None):
-        """Return the latest 'build:start' DatajournalEntry with no matching 'build:end', or None."""
+        """Return the latest 'build:start' DataJournalEntry with no matching 'build:end', or None."""
         j = self.datajournal(index=index)
         if len(j) == 0:
             return None
@@ -4885,7 +4886,7 @@ class Datablock:
         if not running_hashes:
             return None
         running_entries = j[(j['event'] == 'build:start') & (j['hash'].isin(running_hashes))]
-        return DatajournalEntry(running_entries.iloc[0].dropna(), storage_options=self.storage_options)
+        return DataJournalEntry(running_entries.iloc[0].dropna(), storage_options=self.storage_options)
 
     # 3. Accessors ---------------------------------------------------------
 
@@ -5530,7 +5531,7 @@ class Datablock:
         try:
             j = self.datajournal(id=code)
             if len(j) > 0:
-                return DatajournalEntry(j.iloc[0].dropna(), storage_options=self.storage_options)
+                return DataJournalEntry(j.iloc[0].dropna(), storage_options=self.storage_options)
         except Exception:
             pass
 
@@ -5544,10 +5545,10 @@ class Datablock:
                         df = pd.read_parquet(f, engine='pyarrow')
                     if 'id' in df.columns and code in df['id'].values:
                         row = df[df['id'] == code].iloc[0]
-                        return DatajournalEntry(row.dropna(), storage_options=self.storage_options)
+                        return DataJournalEntry(row.dropna(), storage_options=self.storage_options)
                     elif 'entry_code' in df.columns and code in df['entry_code'].values:
                         row = df[df['entry_code'] == code].iloc[0]
-                        return DatajournalEntry(row.dropna(), storage_options=self.storage_options)
+                        return DataJournalEntry(row.dropna(), storage_options=self.storage_options)
                 except Exception:
                     continue
         except Exception:
@@ -5565,7 +5566,7 @@ class Datablock:
             else:
                 return None
             if len(j) > 0:
-                return DatajournalEntry(j.iloc[0].dropna(), storage_options=self.storage_options)
+                return DataJournalEntry(j.iloc[0].dropna(), storage_options=self.storage_options)
         except Exception:
             pass
         return None
@@ -5984,7 +5985,7 @@ class Datablock:
 
     def _journal_hashdirpath_(self):
         """The directory holding THIS block's journal entries, and no others."""
-        return Datajournal.dirpath(self, 'journal')
+        return DataJournal.dirpath(self, 'journal')
 
     def _recorded_redirection_(self, journal=None):
         """The latest redirection recorded for this block's hash, or None.
@@ -6001,7 +6002,7 @@ class Datablock:
                 if not sub.empty:
                     latest = None
                     for _, row in sub.iterrows():
-                        entry = DatajournalEntry(row, storage_options=self.storage_options)
+                        entry = DataJournalEntry(row, storage_options=self.storage_options)
                         when = row.get('datetime')
                         if entry.block.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
                             if latest is None or str(when) > str(latest[0]):
@@ -6043,7 +6044,7 @@ class Datablock:
             if 'redirection' not in df.columns:
                 continue
             for _, row in df.iterrows():
-                entry = DatajournalEntry(row, storage_options=self.storage_options)
+                entry = DataJournalEntry(row, storage_options=self.storage_options)
                 when = row.get('datetime')
                 if entry.block.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
                     if latest is None or str(when) > str(latest[0]):
@@ -6081,10 +6082,10 @@ class Datablock:
             return None
         if hasattr(j, 'get') and 0 in j.index:
             row = j.get(0, dropna=True)
-            return DatajournalEntry(pd.Series(row).copy(deep=True), storage_options=self.storage_options)
+            return DataJournalEntry(pd.Series(row).copy(deep=True), storage_options=self.storage_options)
         else:
             row = j.iloc[0]
-            return DatajournalEntry(row.dropna(), storage_options=self.storage_options)
+            return DataJournalEntry(row.dropna(), storage_options=self.storage_options)
 
     def _UNSAFE_copy_fs_(self, *, src_path, dst_path, recursive: bool = False):
         """Copy a single file or directory between two fsspec paths.
@@ -6645,7 +6646,7 @@ class Datablock:
         return cls._structure_signatureval_(value)
 
 
-    def _journal_entry_(self, journal: dict) -> 'DatajournalEntry':
+    def _journal_entry_(self, journal: dict) -> 'DataJournalEntry':
         selectors = {k: journal[k] for k in ('entry_path', 'iloc', 'loc') if k in journal}
         filters = {k: v for k, v in journal.items() if k not in selectors}
         if len(selectors) != 1:
@@ -6664,7 +6665,7 @@ class Datablock:
             fs, _ = fsspec.url_to_fs(value, **(self.storage_options or {}))
             with fs.open(value, 'rb') as f:
                 _df = pd.read_parquet(f)
-            return DatajournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
+            return DataJournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
         return self.datajournal(**{key: value}, **filters)
 
     def _topic_map_(self, topics):
@@ -6709,7 +6710,7 @@ class Datablock:
             other_topics = self._journal_entry_(journal)
         if isinstance(other_topics, Datablock):
             return other_topics._topics_signature_(), other_topics._topic_map_(getattr(other_topics, 'TOPICS', None))
-        if isinstance(other_topics, DatajournalEntry):
+        if isinstance(other_topics, DataJournalEntry):
             # A journal records a list-TOPICS block as a mapping of DIRTOPIC,
             # so the two render alike from an entry even though they do not from
             # the blocks themselves. Compare two LIVE blocks to see that one.
@@ -6911,7 +6912,7 @@ class Datablock:
             if specialization.anchor is not SAME:
                 j = self._journal_under_(anchor, journal, hash=h)
             else:
-                j = self.datajournal(hash=h) if journal is None else DatajournalFrame(
+                j = self.datajournal(hash=h) if journal is None else DataJournalFrame(
                     journal, storage_options=self.storage_options, hash=h)
         except (FileNotFoundError, KeyError, TypeError) as e:
             self.log.detailed(f"specialization: no journal to resolve {h} in: {e}")
@@ -6925,7 +6926,7 @@ class Datablock:
             return None
         candidates = 0
         for i in range(len(j)):
-            entry = DatajournalEntry(j.iloc[i].dropna(), storage_options=self.storage_options)
+            entry = DataJournalEntry(j.iloc[i].dropna(), storage_options=self.storage_options)
             if entry.get('event') not in self.SPECIALIZATION_EVENTS:
                 continue
             candidates += 1
@@ -6981,7 +6982,7 @@ class Datablock:
     def _hash_journal_(self, specialization, *, fallback: bool = True):
         """*specialization*'s narrower block's journal entries, for a block with no journal handed down.
 
-        Read from that block's own directory -- `Datajournal.read_hash` --
+        Read from that block's own directory -- `DataJournal.read_hash` --
         rather than the whole of its anchor's journal, every block's entries,
         which is what one block resolving its specialization used to read. The
         whole journal, read once per instance, when that block is not filed
@@ -6989,7 +6990,7 @@ class Datablock:
         """
         anchor = self._specialization_anchor_(specialization)
         version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
-        j = Datajournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
+        j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
                                   datalake=self.datalake, storage_options=self.storage_options, log=self.log)
         if j is not None or not fallback:
             # *fallback* False -- `BY_HASH` -- takes "filed nowhere" for "never built".
@@ -6999,13 +7000,13 @@ class Datablock:
     def _past_recorded_(self, specialization) -> bool:
         """Whether the journal holds any entry -- a build, an adoption -- for *specialization*'s identity of this block.
 
-        Read by hash alone (`Datajournal.read_hash`): a nested block's pasts
+        Read by hash alone (`DataJournal.read_hash`): a nested block's pasts
         are many, and the whole of an anchor's journal is not read for each.
         """
         anchor = self._specialization_anchor_(specialization)
         version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
         try:
-            j = Datajournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
+            j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
                                       datalake=self.datalake, storage_options=self.storage_options, log=self.log)
         except FileNotFoundError:
             return False
@@ -7025,19 +7026,19 @@ class Datablock:
             if 'anchor' in getattr(journal, 'columns', ()):
                 rows = journal[journal['anchor'] == anchor]
                 if len(rows):
-                    return DatajournalFrame(rows, storage_options=self.storage_options, **filter_kwargs)
+                    return DataJournalFrame(rows, storage_options=self.storage_options, **filter_kwargs)
             else:
-                return DatajournalFrame(journal, storage_options=self.storage_options, **filter_kwargs)
+                return DataJournalFrame(journal, storage_options=self.storage_options, **filter_kwargs)
         cache = self.__dict__.setdefault('__anchor_journals__', {})
         if anchor not in cache:
             try:
-                cache[anchor] = Datajournal.read(
+                cache[anchor] = DataJournal.read(
                     anchor, datalake=self.datalake, storage_options=self.storage_options, log=self.log)
             except FileNotFoundError:
                 cache[anchor] = None
         if cache[anchor] is None:
             raise FileNotFoundError(f"no journal under {anchor!r} in {self.datalake!r}")
-        return DatajournalFrame(cache[anchor], storage_options=self.storage_options, **filter_kwargs)
+        return DataJournalFrame(cache[anchor], storage_options=self.storage_options, **filter_kwargs)
 
     def _toplevel_topics_(self, topics):
         """*topics* as TOP-LEVEL names, which is how a `paths` mapping is keyed."""
@@ -7334,7 +7335,7 @@ class Datablock:
         return _dbxanchorpathx_
 
     def _dbxanchorhashpathx_(self, x, ext=None, *, ensure_dirpath: bool = True, filename_prefix: str = ''):
-        return Datajournal.path(self, x, ext, ensure_dirpath=ensure_dirpath, filename_prefix=filename_prefix)
+        return DataJournal.path(self, x, ext, ensure_dirpath=ensure_dirpath, filename_prefix=filename_prefix)
 
 
     #LOG LEVEL: END
@@ -7734,7 +7735,7 @@ class Datastack(Datablock):
         # workers, in seconds. True reads the whole of their anchor's journal
         # once, in the parent -- minutes over thousands of blocks -- and finds a
         # past filed anywhere, not only where its hash would be
-        # (`Datajournal.read_hash`). Operational: in no hash, and passed on
+        # (`DataJournal.read_hash`). Operational: in no hash, and passed on
         # only when set, as above.
         if specialization_use_full_journal:
             kwargs['specialization_use_full_journal'] = True
@@ -7999,8 +8000,8 @@ class Datastack(Datablock):
         indices = tqdm.tqdm(range(n), desc=f"Forming {n} blocks") if n > 100 else range(n)
         return [self.block(idx) for idx in indices]
 
-    def block_datajournal(self, **kwargs) -> DatajournalFrame | None:
-        """Return the DatajournalFrame for child blocks, or None if no blocks exist or journal fails to load."""
+    def block_datajournal(self, **kwargs) -> DataJournalFrame | None:
+        """Return the DataJournalFrame for child blocks, or None if no blocks exist or journal fails to load."""
         if self.n_blocks == 0:
             return None
         try:
@@ -9054,14 +9055,14 @@ class Datastack(Datablock):
                     # The user waits on this read; it shows, and it reads with the stack's workers.
                     read_kwargs.setdefault('progress', True)
                     read_kwargs.setdefault('n_workers', max(8, getattr(self, 'n_workers', 1) or 1))
-                    frames.append(Datajournal.read(a, datalake=lake, storage_options=self.storage_options,
+                    frames.append(DataJournal.read(a, datalake=lake, storage_options=self.storage_options,
                                                    log=self.log, **read_kwargs))
                 except FileNotFoundError:
                     if a == anchor and not others:
                         raise
             if not frames:
                 raise FileNotFoundError(f"no journal under {[anchor] + others!r} in {lake!r}")
-            journal = frames[0] if len(frames) == 1 else DatajournalFrame(
+            journal = frames[0] if len(frames) == 1 else DataJournalFrame(
                 pd.concat(frames), storage_options=self.storage_options)
             return journal, anchor, lake
         first = self._form_block_(0, use_specializations=False)
@@ -9249,7 +9250,7 @@ def _redirect_succeeded_(result) -> bool:
     return getattr(result, 'paths', None) is not None
 
 
-def _UNSAFE_redirect_block_callable_(redirector, block, stack, idx, *, journal: DatajournalFrame|None = None, validate: bool = False):
+def _UNSAFE_redirect_block_callable_(redirector, block, stack, idx, *, journal: DataJournalFrame|None = None, validate: bool = False):
     target = redirector(block, stack, idx, journal=journal)
     if not target:
         return None

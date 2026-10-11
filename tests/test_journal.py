@@ -1,11 +1,11 @@
 """
-Tests for dbx.journal() / Datablock.Datajournal():
+Tests for dbx.journal() / Datablock.DataJournal():
 
 1. FileNotFoundError is raised when the journal directory does not exist.
-2. A DatajournalFrame is returned when the directory exists but has no parquet files.
-3. loc= and iloc= correctly return a DatajournalEntry.
+2. A DataJournalFrame is returned when the directory exists but has no parquet files.
+3. loc= and iloc= correctly return a DataJournalEntry.
 4. Regression: root must not be passed positionally (would silently land in
-   the 'loc' slot of Datablock.Datajournal before the fix).
+   the 'loc' slot of Datablock.DataJournal before the fix).
 """
 import os
 import datetime
@@ -13,7 +13,7 @@ import pytest
 import pandas as pd
 
 import dbx.datablocks as dbxmod
-from dbx.datablocks import journal, Datablock, Datajournal, DatajournalFrame, DatajournalEntry
+from dbx.datablocks import journal, Datablock, DataJournal, DataJournalFrame, DataJournalEntry
 import dbx.databits as databits
 
 
@@ -92,13 +92,13 @@ class TestJournalMissingDir:
 
 
 # ---------------------------------------------------------------------------
-# 2. Empty journal dir → DatajournalFrame(None)
+# 2. Empty journal dir → DataJournalFrame(None)
 # ---------------------------------------------------------------------------
 
 class TestJournalEmptyDir:
 
     def test_returns_journalframe_when_no_parquets(self, tmp_path, monkeypatch):
-        """An existing but empty journal dir should return a DatajournalFrame wrapping None."""
+        """An existing but empty journal dir should return a DataJournalFrame wrapping None."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         # Create the journal directory with no parquet files
@@ -108,38 +108,38 @@ class TestJournalEmptyDir:
         fs.makedirs(jdir, exist_ok=True)
 
         result = journal(FakeBlock, datalake=root)
-        assert isinstance(result, DatajournalFrame)
+        assert isinstance(result, DataJournalFrame)
 
 
 # ---------------------------------------------------------------------------
-# 3. loc/iloc parameter returns a DatajournalEntry
+# 3. loc/iloc parameter returns a DataJournalEntry
 # ---------------------------------------------------------------------------
 
 class TestJournalLocIlocParam:
 
     def test_loc_returns_journal_entry(self, tmp_path, monkeypatch):
-        """journal(cls, loc=0, datalake=...) should return the 0th DatajournalEntry."""
+        """journal(cls, loc=0, datalake=...) should return the 0th DataJournalEntry."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="deadbeef", event="build")
 
         result = journal(FakeBlock, loc=0, datalake=root)
-        assert isinstance(result, DatajournalEntry)
+        assert isinstance(result, DataJournalEntry)
 
     def test_loc_none_returns_journalframe(self, tmp_path, monkeypatch):
-        """journal(cls, datalake=...) with no loc/iloc should return the full DatajournalFrame."""
+        """journal(cls, datalake=...) with no loc/iloc should return the full DataJournalFrame."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="cafebabe", event="build")
 
         result = journal(FakeBlock, datalake=root)
-        assert isinstance(result, DatajournalFrame)
+        assert isinstance(result, DataJournalFrame)
         assert len(result) == 1
 
     def test_loc_value_matches_row(self, tmp_path, monkeypatch):
-        """The returned DatajournalEntry should contain the correct hash."""
+        """The returned DataJournalEntry should contain the correct hash."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
@@ -149,14 +149,14 @@ class TestJournalLocIlocParam:
         assert entry.get('hash') == "myhash42"
 
     def test_iloc_returns_journal_entry(self, tmp_path, monkeypatch):
-        """journal(cls, iloc=0, datalake=...) should return the 0th DatajournalEntry via positional index."""
+        """journal(cls, iloc=0, datalake=...) should return the 0th DataJournalEntry via positional index."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         journal_dir = _journal_dir(root, FakeBlock)
         _write_fake_journal_entry(journal_dir, hash_val="iloc_hash", event="build")
 
         result = journal(FakeBlock, iloc=0, datalake=root)
-        assert isinstance(result, DatajournalEntry)
+        assert isinstance(result, DataJournalEntry)
         assert result.get('hash') == "iloc_hash"
 
     def test_loc_and_iloc_raises(self, tmp_path, monkeypatch):
@@ -179,7 +179,7 @@ class TestJournalRootPassedCorrectly:
     def test_root_kwarg_is_not_mistaken_for_entry(self, tmp_path, monkeypatch):
         """
         Before the fix, `journal(cls, root)` passed root as the second positional
-        arg to Datablock.Datajournal, which would interpret it as 'entry'.  This test
+        arg to Datablock.DataJournal, which would interpret it as 'entry'.  This test
         confirms root is forwarded as a keyword arg and the directory check uses
         the actual root path.
         """
@@ -238,8 +238,8 @@ class TestJournalFqcnSubdirectories:
         _write_journal_in_hash_dir(fake_jdir, fake_anchor, hash_val="aaa")
         _write_journal_in_hash_dir(other_jdir, other_anchor, hash_val="bbb")
 
-        result = Datablock.Datajournal(fake_anchor, datalake=root)
-        assert isinstance(result, DatajournalFrame)
+        result = Datablock.DataJournal(fake_anchor, datalake=root)
+        assert isinstance(result, DataJournalFrame)
         assert len(result) == 2
 
     def test_single_fqcn_found(self, tmp_path, monkeypatch):
@@ -250,7 +250,7 @@ class TestJournalFqcnSubdirectories:
         fake_jdir = Datablock._dbxanchorpathx_(root, fake_anchor, 'journal', fqcn=fake_anchor)
         _write_journal_in_hash_dir(fake_jdir, fake_anchor, hash_val="xyz")
 
-        result = Datablock.Datajournal(fake_anchor, datalake=root)
+        result = Datablock.DataJournal(fake_anchor, datalake=root)
         assert len(result) == 1
 
 
@@ -277,7 +277,7 @@ class TestJournalAnchorForms:
         block = BuildableBlock(datalake=root)
         block.build()
         result = block.datajournal()
-        assert isinstance(result, DatajournalFrame)
+        assert isinstance(result, DataJournalFrame)
         assert len(result) >= 1
 
     def test_custom_anchor_journal(self, tmp_path, monkeypatch):
@@ -287,28 +287,28 @@ class TestJournalAnchorForms:
         block = BuildableBlock(datalake=root, anchor='my.custom.anchor')
         block.build()
         result = block.datajournal()
-        assert isinstance(result, DatajournalFrame)
+        assert isinstance(result, DataJournalFrame)
         assert len(result) >= 1
 
     def test_static_journal_default_anchor(self, tmp_path, monkeypatch):
-        """Datablock.Datajournal(anchor) finds entries for default anchor."""
+        """Datablock.DataJournal(anchor) finds entries for default anchor."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         block = BuildableBlock(datalake=root)
         block.build()
         anchor = block.anchor
-        result = Datablock.Datajournal(anchor, datalake=root)
-        assert isinstance(result, DatajournalFrame)
+        result = Datablock.DataJournal(anchor, datalake=root)
+        assert isinstance(result, DataJournalFrame)
         assert len(result) >= 1
 
     def test_static_journal_custom_anchor(self, tmp_path, monkeypatch):
-        """Datablock.Datajournal(anchor) finds entries for custom anchor."""
+        """Datablock.DataJournal(anchor) finds entries for custom anchor."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         block = BuildableBlock(datalake=root, anchor='custom.anchor')
         block.build()
-        result = Datablock.Datajournal('custom.anchor', datalake=root)
-        assert isinstance(result, DatajournalFrame)
+        result = Datablock.DataJournal('custom.anchor', datalake=root)
+        assert isinstance(result, DataJournalFrame)
         assert len(result) >= 1
 
     def test_multiple_builds_all_found(self, tmp_path, monkeypatch):
@@ -437,7 +437,7 @@ class TestJournalBuildDatetimes:
         path = os.path.join(hdir, f"legacy-journal.parquet")
         df.to_parquet(path)
 
-        result = Datablock.Datajournal(fake_anchor, datalake=root)
+        result = Datablock.DataJournal(fake_anchor, datalake=root)
         assert 'build:end:datetime' in result.columns, "Legacy build_datetime should be renamed"
         assert 'build_datetime' not in result.columns, "Old column name should not survive"
         assert result.iloc[0]['build:end:datetime'] == '2025-01-01T00-00-00'
@@ -471,7 +471,7 @@ class TestJournalBuildDatetimes:
         }])
         legacy_df.to_parquet(os.path.join(legacy_hash_dir, "legacy_entry.parquet"))
 
-        # 3. Read journal using Datablock.Datajournal and verify both entries are found
+        # 3. Read journal using Datablock.DataJournal and verify both entries are found
         j = b.datajournal()
         events = set(j['event'])
         assert 'colocated_test' in events, "Colocated entry should be in journal results"
@@ -481,25 +481,25 @@ class TestJournalBuildDatetimes:
 class TestDatablockJournalArgThreading:
 
     def test_n_workers_threaded_to_journal(self, tmp_path, monkeypatch):
-        """Datablock.datajournal() threads n_workers to the Datajournal that reads it."""
+        """Datablock.datajournal() threads n_workers to the DataJournal that reads it."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         b = BuildableBlock(datalake=root)
         b.build()
 
-        # Capture calls to Datajournal.read
-        original_read = Datajournal.read
+        # Capture calls to DataJournal.read
+        original_read = DataJournal.read
         captured_kwargs = {}
 
         def spy_read(self, *args, **kwargs):
             captured_kwargs.update(kwargs)
             return original_read(self, *args, **kwargs)
 
-        monkeypatch.setattr(Datajournal, 'read', spy_read)
+        monkeypatch.setattr(DataJournal, 'read', spy_read)
 
         res = b.datajournal(n_workers=3)
         assert captured_kwargs.get('n_workers') == 3
-        assert isinstance(res, DatajournalFrame)
+        assert isinstance(res, DataJournalFrame)
         assert len(res) >= 1
 
     def test_url_and_storage_options_threaded(self, tmp_path, monkeypatch):
@@ -516,11 +516,11 @@ class TestDatablockJournalArgThreading:
 
         # Reading root2 from b1 by explicitly passing url
         j = b1.datajournal(datalake=root2, n_workers=2)
-        assert isinstance(j, DatajournalFrame)
+        assert isinstance(j, DataJournalFrame)
         assert len(j) >= 1
 
     def test_custom_logger_threaded_and_used(self, tmp_path, monkeypatch):
-        """Datablock.datajournal() and Datablock.Datajournal() preserve passed logger."""
+        """Datablock.datajournal() and Datablock.DataJournal() preserve passed logger."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         b = BuildableBlock(datalake=root)
@@ -552,30 +552,30 @@ class TestDatablockJournalArgThreading:
 
         # loc
         entry_loc = b.datajournal(loc=0, n_workers=2)
-        assert isinstance(entry_loc, DatajournalEntry)
+        assert isinstance(entry_loc, DataJournalEntry)
 
         # iloc
         entry_iloc = b.datajournal(iloc=0, n_workers=2)
-        assert isinstance(entry_iloc, DatajournalEntry)
+        assert isinstance(entry_iloc, DataJournalEntry)
 
         # index & filter kwargs
         j_indexed = b.datajournal(event='build:end', index='event', n_workers=2)
-        assert isinstance(j_indexed, DatajournalFrame)
+        assert isinstance(j_indexed, DataJournalFrame)
         assert 'build:end' in j_indexed.index
 
     def test_top_level_journal_threads_n_workers(self, tmp_path, monkeypatch):
-        """Top-level journal() threads n_workers and log to Datablock.Datajournal."""
+        """Top-level journal() threads n_workers and log to Datablock.DataJournal."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         root = str(tmp_path)
         b = BuildableBlock(datalake=root)
         b.build()
 
         j_class = journal(BuildableBlock, datalake=root, n_workers=4)
-        assert isinstance(j_class, DatajournalFrame)
+        assert isinstance(j_class, DataJournalFrame)
         assert len(j_class) >= 1
 
         j_inst = journal(b, n_workers=4)
-        assert isinstance(j_inst, DatajournalFrame)
+        assert isinstance(j_inst, DataJournalFrame)
         assert len(j_inst) >= 1
 
     def test_journal_entry_block(self, tmp_path, monkeypatch):
@@ -588,7 +588,7 @@ class TestDatablockJournalArgThreading:
         assert not hasattr(b, 'bid')            # Bid is gone
 
         entry = b.datajournal(iloc=0)
-        assert isinstance(entry, DatajournalEntry)
+        assert isinstance(entry, DataJournalEntry)
         block = entry.block
 
         assert block.hash == b.hash
@@ -630,7 +630,7 @@ class TestDatablockJournalArgThreading:
         """It mimics what the ROW determines -- not the entry, not a build.
 
         `read` is the sharp one: Datablock.read reads a TOPIC and
-        DatajournalEntry.read reads a journal COLUMN, so the same name would
+        DataJournalEntry.read reads a journal COLUMN, so the same name would
         mean two things.
         """
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
@@ -646,9 +646,9 @@ class TestDatablockJournalArgThreading:
             assert hasattr(block, name), f"Block should carry {name!r}"
 
     def test_journal_entry_field_order_and_cleanup(self, tmp_path, monkeypatch):
-        """DatajournalEntry member ordering, and removal of the renamed fields."""
-        members = list(DatajournalEntry.__dict__)
-        props = [k for k, v in DatajournalEntry.__dict__.items() if isinstance(v, property)]
+        """DataJournalEntry member ordering, and removal of the renamed fields."""
+        members = list(DataJournalEntry.__dict__)
+        props = [k for k, v in DataJournalEntry.__dict__.items() if isinstance(v, property)]
 
         # Verify removals
         assert 'subhash' not in members
@@ -682,7 +682,7 @@ def _unbuilt_without_git(tmp_path, monkeypatch):
 class TestANullColumnReadsAsNone:
     """A column recorded null must read back as None, not as a missing field.
 
-    An entry is a Series built with ``dropna`` (`Datablock.Datajournal`), so a
+    An entry is a Series built with ``dropna`` (`Datablock.DataJournal`), so a
     column whose value was null loses its LABEL -- and attribute access, which
     a Series answers out of its index, raises AttributeError where every
     reader expects None. ``revision`` and ``gitrepo`` are null on every block
@@ -691,7 +691,7 @@ class TestANullColumnReadsAsNone:
     exactly the entries that recorded none.
 
     What must hold is that a recorded null reads as None wherever it is read.
-    Whether the label survives the row is `Datablock.Datajournal`'s business.
+    Whether the label survives the row is `Datablock.DataJournal`'s business.
     """
 
     def test_the_entry_really_recorded_no_revision(self, tmp_path, monkeypatch):
@@ -707,8 +707,8 @@ class TestANullColumnReadsAsNone:
         block = _unbuilt_without_git(tmp_path, monkeypatch)
         block.build()
         entry = block.datajournal(iloc=0)
-        assert DatajournalEntry.column(entry, 'revision') is None
-        assert DatajournalEntry.column(entry, 'gitrepo') is None
+        assert DataJournalEntry.column(entry, 'revision') is None
+        assert DataJournalEntry.column(entry, 'gitrepo') is None
         assert entry.block.revision is None
         assert entry.block.gitrepo is None
 

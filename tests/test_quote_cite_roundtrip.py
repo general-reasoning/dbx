@@ -256,7 +256,7 @@ class TestCiteChunks:
 
 
 # =====================================================================
-# cite() as a recorded field: Bid, the journal, and DatajournalEntry
+# cite() as a recorded field: Bid, the journal, and DataJournalEntry
 # =====================================================================
 
 class Solo(Datablock):
@@ -296,7 +296,7 @@ class TestCiteInJournal:
         which is what a bare column lookup would do.
         """
         import pandas as pd
-        from dbx.datablocks import DatajournalEntry
-        entry = DatajournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B'}))
+        from dbx.datablocks import DataJournalEntry
+        entry = DataJournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B'}))
         assert entry.block.cite() is None
         assert entry.read('cite') is None

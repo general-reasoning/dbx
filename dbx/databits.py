@@ -754,8 +754,8 @@ def exec(s=None, *, capture_output: bool = False, **kwargs):
     # the workers a dbx executor hands it to, and in any process started while
     # it runs -- writes under one session, indexed where the exec journal is.
     # An exec inside an exec joins the session already open.
-    from .journals import Datajournal, OutputCapture, write_exec_journal
-    dj = Datajournal.command_session()
+    from .journals import DataJournal, OutputCapture, write_exec_journal
+    dj = DataJournal.command_session()
     # Its capture -- the one open, which it joins, or a new master -- and
     # closed before the row is written, so the row points at a file that is
     # there. One it joined is closed by whoever opened it.
@@ -988,7 +988,7 @@ def _with_payloads_(exc, payloads):
     """*exc*, carrying the results that DID arrive before it was raised, as ``executor_payloads``.
 
     An executor that raises returns nothing, so the results of the callables
-    that succeeded -- their values, and under a `Datajournal` scope the entry
+    that succeeded -- their values, and under a `DataJournal` scope the entry
     paths they wrote -- would go down with the raise. None stands for an item
     that never arrived, as in exec_callables' own result.
     """
@@ -999,17 +999,17 @@ def _with_payloads_(exc, payloads):
     return exc
 
 
-class _CarriesDatajournal_:
-    """An executor's public entry points, carrying the open `Datajournal` scope to its workers.
+class _CarriesDataJournal_:
+    """An executor's public entry points, carrying the open `DataJournal` scope to its workers.
 
-    Every entry is written under `Datajournal.current()` -- in a ``dbx.exec``
+    Every entry is written under `DataJournal.current()` -- in a ``dbx.exec``
     command, the command's session. A worker process has a stack of its own,
     so a block built there would write under that process's default session,
     and the command's exec-journal row would list none of it; a worker thread
     sees the main thread's stack, but not a ``with`` the dispatching thread
     opened itself. So an executor with workers (``CARRIES_DATAJOURNAL``)
-    sends each callable out in the current session (`Datajournal.carry`) and
-    takes back what it wrote (`Datajournal.collect`) before a caller sees the
+    sends each callable out in the current session (`DataJournal.carry`) and
+    takes back what it wrote (`DataJournal.collect`) before a caller sees the
     result. The results themselves are unchanged. The inline executor runs
     in the caller's thread, and sends nothing.
 
@@ -1060,8 +1060,8 @@ class _CarriesDatajournal_:
         """*callables* as they go out, the session to collect into -- None when there is nothing to carry -- and the capture."""
         if not self.CARRIES_DATAJOURNAL:
             return callables, None, None
-        from .journals import Datajournal, OutputCapture
-        dj, capture = Datajournal.current(), OutputCapture.current()
+        from .journals import DataJournal, OutputCapture
+        dj, capture = DataJournal.current(), OutputCapture.current()
         return dj.carry(callables, capture), dj, capture
 
     def _journaled_(self, payload):
@@ -1069,14 +1069,14 @@ class _CarriesDatajournal_:
         return payload
 
     def _collect_(self, dj, capture, payload):
-        """`Datajournal.collect`, with *payload*'s capture paths collected into *capture* on the way."""
+        """`DataJournal.collect`, with *payload*'s capture paths collected into *capture* on the way."""
         payload = self._journaled_(payload)
         if capture is not None:
             capture.collect(payload)
         return dj.collect(payload)
 
     def _collect_raised_(self, dj, capture, exc):
-        """`Datajournal.collect_raised` -- and `OutputCapture.collect_raised` -- over the payloads *exc* carries as this executor returns them."""
+        """`DataJournal.collect_raised` -- and `OutputCapture.collect_raised` -- over the payloads *exc* carries as this executor returns them."""
         payloads = getattr(exc, 'executor_payloads', None)
         if payloads:
             _with_payloads_(exc, [self._journaled_(p) for p in payloads])
@@ -1085,7 +1085,7 @@ class _CarriesDatajournal_:
         dj.collect_raised(exc)
 
 
-class _CallableExecutorBase_(_CarriesDatajournal_):
+class _CallableExecutorBase_(_CarriesDataJournal_):
     """
     Abstract base that implements the fan-out / collect / join scaffold shared by
     MultithreadingCallableExecutor and MultiprocessingCallableExecutor.
@@ -1882,7 +1882,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         gc.collect()
 
 
-class RayCallableExecutor(_CarriesDatajournal_):
+class RayCallableExecutor(_CarriesDataJournal_):
     """Execute callables on pre-created Ray actor workers.
 
     Requires the ``ray`` optional dependency (``pip install datablocks[ray]``).
@@ -3656,7 +3656,7 @@ def slurm_pprint(s=None, *, revision=None, conda=None, gpus=0, mem='8G', cpus=1,
 #: Names that moved to `dbx.journals`, still found here -- by an import, a
 #: recorded specline or a pickle that names them in this module. Looked up
 #: when asked for, since `journals` imports from here and not the reverse.
-_MOVED_TO_JOURNALS_ = frozenset({'JOURNAL_DATETIME_FORMAT', 'write_exec_journal', 'filter_journal_frame', 'CONSTRUCTED_EVENTS', 'ExecjournalEntry', 'ExecjournalFrame', 'EXEC_JOURNAL_COLUMNS', 'read_exec_journal', 'execjournal'})
+_MOVED_TO_JOURNALS_ = frozenset({'JOURNAL_DATETIME_FORMAT', 'write_exec_journal', 'filter_journal_frame', 'CONSTRUCTED_EVENTS', 'ExecJournalEntry', 'ExecJournalFrame', 'EXEC_JOURNAL_COLUMNS', 'read_exec_journal', 'execjournal'})
 
 
 def __getattr__(name):

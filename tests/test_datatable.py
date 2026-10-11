@@ -1064,14 +1064,14 @@ class TestValidTabletAndSentinels:
         # No journal read at all: LetterTablet declares no SPECIALIZATIONS, so a tablet
         # not redirected answers from its own hash directory and one redirected
         # from its record -- the anchor's journal is never needed.
-        from dbx.datablocks import Datajournal
+        from dbx.datablocks import DataJournal
         reads = []
-        original = Datajournal.read
+        original = DataJournal.read
         def counting(self, anchor, *a, **kw):
             reads.append(anchor)
             return original(self, anchor, *a, **kw)
         import unittest.mock
-        with unittest.mock.patch.object(Datajournal, 'read', counting):
+        with unittest.mock.patch.object(DataJournal, 'read', counting):
             dst_tbl.get_tablet_redirections(parallelization="inline")
         assert reads == []
 

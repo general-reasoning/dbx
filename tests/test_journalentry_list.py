@@ -1,5 +1,5 @@
 """
-Tests for DatajournalEntry.ls / .list / .size.
+Tests for DataJournalEntry.ls / .list / .size.
 
 These mirror Datablock.ls/.list/.size but resolve the topic path from
 the journal entry's recorded ``paths`` field rather than a live block.
@@ -17,7 +17,7 @@ import os
 import pytest
 from dataclasses import dataclass
 
-from dbx.datablocks import Datablock, DatajournalEntry
+from dbx.datablocks import Datablock, DataJournalEntry
 
 
 @pytest.fixture(autouse=True)
@@ -62,7 +62,7 @@ def _built(cls, tmp_path):
     block = cls(datalake=str(tmp_path))
     block.build()
     entry = block.lastbuilt()
-    assert isinstance(entry, DatajournalEntry)
+    assert isinstance(entry, DataJournalEntry)
     return block, entry
 
 

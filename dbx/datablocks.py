@@ -1433,7 +1433,11 @@ class Datablock:
         #: ``{current_name: historical_name}``.  Mirrors `redirect_topics`
         #: for vars: when a VAR field has been renamed, the specialization
         #: reconstructs the historical identity under the old key name so
-        #: the hash matches what was built before the rename.
+        #: the hash matches what was built before the rename.  A dotted
+        #: current name moves an entry out of a nested field: to the top level
+        #: under a plain historical name, or to where a dotted one says -- a
+        #: key renamed within its dict, ``{'collator.columns.stratifyby':
+        #: 'collator.columns.groupby'}``.
         redirect_vars: dict | None = field(default=None, kw_only=True)
         #: How this block's nested VAR blocks rendered then: ``{field: their
         #: Specialization}``, each one of THAT block's own -- never written by
@@ -5312,16 +5316,33 @@ class Datablock:
                 raise KeyError(f"{what}: {path!r} names no entry of this block's spec")
             return holder, rest[-1]
 
-        for path, historical in moves.items():
-            holder, leaf = holder_of(path)
-            out[historical] = holder.pop(leaf, None)
+        # Every entry out before any goes in: a key renamed within a dict -- roles swapped, say,
+        # partitionby to stratifyby as stratifyby goes to groupby -- reads what was there before.
+        taken = [(historical, holder.pop(leaf, None))
+                 for path, historical in moves.items() for holder, leaf in [holder_of(path)]]
+        for historical, value in taken:
+            if '.' not in historical:
+                out[historical] = value
+                continue
+            # A dotted historical name puts it back within a field: a key renamed where it is.
+            head, *rest = historical.split('.')
+            if out.get(head, ...) is None:
+                continue        # the field holds nothing -- a collator left None, say: nothing was renamed
+            if not isinstance(out.get(head), dict):
+                raise KeyError(f"{what}: {historical!r} names no dict field of this block's spec to put it in")
+            holder = out[head]
+            for part in rest[:-1]:
+                holder = holder.setdefault(part, {})
+            holder[rest[-1]] = value
         for path in deep_omit:
             holder, leaf = holder_of(path)
             if out[head_of(path)] is not None and leaf not in holder:
                 raise KeyError(f"{what}: pin {path!r} names no entry of this block's spec")
             holder.pop(leaf, None)
-        # A field holding no block had none of the entries now gathered in it.
-        for head in {head_of(p) for p in [*moves, *deep_omit]}:
+        # A field holding no block had none of the entries now gathered in it -- one an entry
+        # moved OUT of; a key renamed where it is says the field was there, as it is.
+        moved_out = [p for p, historical in moves.items() if '.' not in historical]
+        for head in {head_of(p) for p in [*moved_out, *deep_omit]}:
             if out.get(head, ...) is None:
                 del out[head]
 

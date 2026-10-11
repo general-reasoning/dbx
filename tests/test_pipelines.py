@@ -64,6 +64,7 @@ def test_entrypoint_is_what_create_returns(lake):
     root = p.create()
     assert isinstance(root, Root) and root.var.m == 3 and root.var.leaf.var.n == 2
     assert p.entrypoint.hash == root.hash
+    assert p.entry.hash == root.hash
     assert p.read('entrypoint').hash == root.hash
     assert p.entrypath == root.anchorkeypath
 

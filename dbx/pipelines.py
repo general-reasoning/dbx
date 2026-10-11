@@ -35,7 +35,8 @@ class Pipeline(Datablock):
 
     The one topic, ``entrypoint``, is SYNTHETIC: a pipeline stores nothing
     of its own, and is valid vacuously. ``read('entrypoint')``,
-    :attr:`entrypoint` and :meth:`create` all create the tree afresh,
+    :attr:`entrypoint` (or :attr:`entry`, for short) and :meth:`create` all
+    create the tree afresh,
     and each records the creation in the `PipeJournal`, with the
     entrypoint's anchorkeypath as ``entrypath`` -- which is how the pipelines
     that led to a block are found again (`PipeJournal.collect`).
@@ -72,6 +73,11 @@ class Pipeline(Datablock):
     def entrypoint(self) -> Datablock:
         """:meth:`create`: the root of this pipeline's tree, created afresh."""
         return self.create()
+
+    @property
+    def entry(self) -> Datablock:
+        """:attr:`entrypoint`, for short: the root of this pipeline's tree, created afresh."""
+        return self.entrypoint
 
     @property
     def entrypath(self) -> str:

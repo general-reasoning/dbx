@@ -101,6 +101,9 @@ All notable changes to this project will be documented in this file.
   specializations reach the partitions built before.
 
 ### Added
+- **`Pipeline.entry`: `entrypoint`, for short.** Like `entrypoint`, it creates
+  the tree afresh and records the creation in the `PipeJournal`.
+
 - **`DatatablePartition(coalesce=...)`: what a part's tabs are, once dealt.**
   `None` (the default): whole tabs and pieces, as dealt. `'whole'`: a cut tab
   whose pieces all went to one part, none skipped, is that

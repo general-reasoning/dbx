@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **`import dbx` works without torch and mosaicml-streaming** again, as the
+  package docstring promised: the data modules (`datatables`, `dataparts`,
+  `backbones`, `featuretables`, `probes`) are imported only when both are
+  installed. Pinned by `test_import_core`.
+- **Journal files are listed a directory level at a time, in parallel.**
+  `DataJournal.read` globbed `**`, one listing per round trip: over ssh, a
+  pipeline journal of 233 entries took 77 s to list, and `dbx.pipejournal()`
+  about 90 s; now about 8 s with `n_workers=16`. The siblings of `journal/`
+  under `.journal/{fqcn}/` -- `spec/`, `dfn/`, `kwargs/` -- are no longer
+  entered.
+- **`fs_full_path` keeps an ssh host.** It gave `ssh:///home/...` for an
+  sshfs path; now `ssh://[user@]host[:port]/home/...`, so `entry_path` names
+  the machine.
+- **`pipejournal(construct_only=True)` over a remote datalake.** Entrypaths
+  are recorded as the datalake's host names them, and were looked for on the
+  local disk -- so every one was dropped. They are looked for on the
+  datalake's filesystem.
+
 ### Changed
 - **Tabs are tablets, in every name code uses.** `Datatab` is `Datatablet`,
   `Featuretab` (and `BipolarFeaturetab`, `TernaryFeaturetab`) is

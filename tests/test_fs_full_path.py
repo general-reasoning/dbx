@@ -110,3 +110,50 @@ class TestFsFullPathTupleProtocol:
         fs.unstrip_protocol.return_value = 'gcs://bucket/key'
         result = fs_full_path(fs, 'bucket/key')
         assert result == 'gcs://bucket/key'
+
+
+# ---------------------------------------------------------------------------
+# ssh / sftp — the host must be restored
+# ---------------------------------------------------------------------------
+
+class _SSHFS_:
+    """What fs_full_path sees of an sshfs filesystem: no `host` attribute.
+
+    As `fsspec.url_to_fs('ssh://host/...')` makes one, the host is a keyword
+    argument, in storage_options; constructed by hand, it may be positional.
+    """
+
+    def __init__(self, protocol=('ssh', 'sftp'), host='wheelbarrow', positional=False, **options):
+        self.protocol = protocol
+        self.storage_args = (host,) if positional else ()
+        self.storage_options = options if positional else {'host': host, **options}
+
+    def unstrip_protocol(self, path):
+        return f"ssh://{path}"
+
+
+class TestFsFullPathSSH:
+
+    def test_sshfs_restores_host(self):
+        """unstrip_protocol() alone gives ssh:///home/... -- a url naming no machine."""
+        assert fs_full_path(_SSHFS_(), '/home/u/lake/x.parquet') == 'ssh://wheelbarrow/home/u/lake/x.parquet'
+
+    def test_sshfs_positional_host(self):
+        assert fs_full_path(_SSHFS_(positional=True), '/data/x') == 'ssh://wheelbarrow/data/x'
+
+    def test_sftp_host_attribute(self):
+        """fsspec's own sftp filesystem keeps the host as fs.host."""
+        fs = _SSHFS_(protocol='sftp', host=None)
+        fs.host = 'cilantro'
+        assert fs_full_path(fs, '/data/x') == 'sftp://cilantro/data/x'
+
+    def test_user_and_port(self):
+        fs = _SSHFS_(username='me', port=2222)
+        assert fs_full_path(fs, '/data/x') == 'ssh://me@wheelbarrow:2222/data/x'
+
+    def test_round_trip_through_url_to_fs(self):
+        """The url names the same host and path fsspec parsed it from."""
+        from fsspec.utils import infer_storage_options
+        url = fs_full_path(_SSHFS_(username='me'), '/home/u/lake')
+        opts = infer_storage_options(url)
+        assert (opts['host'], opts['username'], opts['path']) == ('wheelbarrow', 'me', '/home/u/lake')

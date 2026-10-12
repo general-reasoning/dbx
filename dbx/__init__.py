@@ -55,13 +55,23 @@ stills
 
 __version__ = "0.0.1"
 
+import importlib.util as _importlib_util
+
 from .databits import *
 from .datablocks import *
 from .journals import *
-from .datatables import *
-from .dataparts import *
-from .backbones import *
-from .featuretables import *
-from .probes import *
+
+# The data modules stand on dbx.datastreams, which needs torch and
+# mosaicml-streaming -- the [streaming] extra -- at import. They are imported
+# only when both are installed, so that `import dbx` works without them:
+# reading a journal needs neither. The packages are looked up rather than an
+# ImportError caught, so that a real error in one of these modules is not
+# mistaken for a missing extra and swallowed.
+if _importlib_util.find_spec('torch') and _importlib_util.find_spec('streaming'):
+    from .datatables import *
+    from .dataparts import *
+    from .backbones import *
+    from .featuretables import *
+    from .probes import *
 from .pipelines import *
 

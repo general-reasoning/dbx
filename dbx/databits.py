@@ -330,6 +330,9 @@ def fs_full_path(fs, path):
     ``@account.dfs.core.windows.net`` portion.  We reconstruct the full
     ``abfss://container@account.dfs.core.windows.net/path`` form so that
     downstream consumers (e.g. MosaicML) can extract the account name.
+
+    Special case: ``ssh``/``sftp`` — ``unstrip_protocol()`` drops the host;
+    ``ssh://[user@]host[:port]/path`` is reconstructed from the filesystem.
     """
     protocol = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
     if protocol in ('file', 'local', ''):
@@ -342,6 +345,20 @@ def fs_full_path(fs, path):
         rest = parts[1] if len(parts) > 1 else ''
         host = f"{fs.account_name}.dfs.core.windows.net"
         return f"abfss://{container}@{host}/{rest}"
+    # ssh/sftp: unstrip_protocol() has no host to put back, and turns an
+    # absolute path into ssh:///home/... -- a url that names no machine.
+    # fsspec's sftp keeps the host as fs.host; sshfs only as a constructor
+    # argument, which fsspec records: in storage_options when the filesystem
+    # came from a url (url_to_fs passes host=), in storage_args otherwise.
+    if protocol in ('ssh', 'sftp'):
+        options = getattr(fs, 'storage_options', None) or {}
+        args = getattr(fs, 'storage_args', None) or ()
+        host = next((h for h in (getattr(fs, 'host', None), options.get('host'), args[0] if args else None)
+                     if isinstance(h, str) and h), None)
+        if host:
+            user, port = options.get('username'), options.get('port')
+            netloc = (f"{user}@" if user else '') + host + (f":{port}" if port else '')
+            return f"{protocol}://{netloc}/{path.lstrip('/')}"
     return fs.unstrip_protocol(path)
 
 

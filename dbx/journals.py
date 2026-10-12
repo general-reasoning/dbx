@@ -2627,32 +2627,11 @@ class DataJournal:
 
         anchordirpath = fs_full_path(fs, os.path.join(root, anchor))
 
-        glob_patterns = [
-            os.path.join(anchordirpath, ".dbx", "*/journal/**/*.parquet"),
-            os.path.join(anchordirpath, "**/.journal", "*/journal/**/*.parquet"),
-        ]
-
-        log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} BEGIN")
+        log.verbose(f"Retrieving journal files from {anchordirpath=} BEGIN")
         if progress:
             log.info(f"Listing the {anchor} journal files under {anchordirpath} ...")
         listing_started = time.time()
-        parquet_files = []
-        with ThreadPoolExecutor(max_workers=min(n_workers, len(glob_patterns))) as glob_ex:
-            glob_futures = [glob_ex.submit(fs.glob, p) for p in glob_patterns]
-            for gf in as_completed(glob_futures):
-                try:
-                    parquet_files.extend(gf.result())
-                except Exception as e:
-                    log.warning(f"Error globbing journal files: {e}")
-
-        # Deduplicate found files while preserving order
-        seen = set()
-        unique_parquet_files = []
-        for pf in parquet_files:
-            if pf not in seen:
-                seen.add(pf)
-                unique_parquet_files.append(pf)
-        parquet_files = unique_parquet_files
+        parquet_files = DataJournal._journal_files_(fs, anchordirpath, n_workers=n_workers, log=log)
 
         if len(parquet_files) == 0 and not fs.exists(anchordirpath):
             raise FileNotFoundError(
@@ -2663,7 +2642,7 @@ class DataJournal:
         log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
         if progress:
             log.info(f"Listed {len(parquet_files)} {anchor} journal files in {time.time() - listing_started:.0f} s; reading them")
-        log.verbose(f"Retrieving journal files from {anchordirpath=} using globs: {glob_patterns} END")
+        log.verbose(f"Retrieving journal files from {anchordirpath=} END")
 
         log.detailed(f"READING JOURNAL: from {anchordirpath=}, files: {parquet_files}")
         df = None
@@ -3016,6 +2995,51 @@ class DataJournal:
 
     # 4. Helpers -----------------------------------------------------------
 
+    #: Relative to an anchor's directory: an entry file -- under
+    #: ``**/.journal/{fqcn}/journal/``, or the legacy ``.dbx/{fqcn}/journal/``
+    #: -- and a sibling of ``journal/`` under ``{fqcn}/``, which is not entered.
+    _ENTRY_FILE_ = re.compile(r'^(?:\.dbx|(?:.*/)?\.journal)/[^/]+/journal/.*\.parquet$')
+    _NOT_JOURNAL_DIR_ = re.compile(r'^(?:\.dbx|(?:.*/)?\.journal)/[^/]+/(?!journal$)[^/]+$')
+
+    @staticmethod
+    def _journal_files_(fs, anchordirpath, *, n_workers, log) -> list:
+        """Every entry file under *anchordirpath*, listed a directory level at a time, in parallel.
+
+        What the globs ``{anchordir}/.dbx/*/journal/**/*.parquet`` and
+        ``{anchordir}/**/.journal/*/journal/**/*.parquet`` find. But a ``**``
+        glob lists the tree one directory at a time, and on a remote
+        filesystem every listing is a round trip: over ssh, a datalake's
+        pipeline journal of 233 entries took 77 s to list that way. Here every
+        directory of a level is listed at once, on *n_workers* threads. And
+        ``journal/``'s siblings under ``.journal/{fqcn}/`` -- ``spec/``,
+        ``dfn/``, ``kwargs/``, with parquet files of their own that are not
+        entries -- are never entered.
+        """
+        root = fs._strip_protocol(anchordirpath).rstrip('/')
+
+        def listing(d):
+            try:
+                return fs.ls(d, detail=True)
+            except FileNotFoundError:
+                return []
+
+        files, level = [], [root]
+        with ThreadPoolExecutor(max_workers=max(1, n_workers)) as ex:
+            while level:
+                listings = list(ex.map(listing, level))
+                level = []
+                for infos in listings:
+                    for info in infos:
+                        name = info['name'].rstrip('/')
+                        rel = name[len(root):].lstrip('/')
+                        if info['type'] == 'directory':
+                            if not DataJournal._NOT_JOURNAL_DIR_.match(rel):
+                                level.append(name)
+                        elif DataJournal._ENTRY_FILE_.match(rel):
+                            files.append(name)
+                log.detailed(f"Listing journal files under {anchordirpath}: {len(files)} so far, {len(level)} directories next")
+        return sorted(files)
+
     @staticmethod
     def _lake_(block):
         """Where *block*'s entries go: ``(fs, storage_options, anchorkeypath)``, the last the directory ``.journal`` is under.
@@ -3277,7 +3301,7 @@ class PipeJournal(DataJournal):
             rows.append(group.iloc[0])
             entrypaths.append(list(dict.fromkeys(group['entrypath'].dropna())))
         if construct_only:
-            built = cls._constructed_entrypaths_({p for ps in entrypaths for p in ps},
+            built = cls._constructed_entrypaths_({p for ps in entrypaths for p in ps}, datalake=datalake,
                                                  storage_options=storage_options, n_workers=n_workers, log=log)
             entrypaths = [[p for p in ps if p in built] for ps in entrypaths]
             rows, entrypaths = (zip(*[(r, ps) for r, ps in zip(rows, entrypaths) if ps])
@@ -3299,10 +3323,21 @@ class PipeJournal(DataJournal):
                 fs_full_path(block.fs, os.path.join(block.root, cls.ANCHOR, block.anchorkey)))
 
     @classmethod
-    def _constructed_entrypaths_(cls, entrypaths, *, storage_options, n_workers, log) -> set:
-        """The *entrypaths* whose own journal holds an `ENTRYPOINT_EVENTS` entry."""
+    def _constructed_entrypaths_(cls, entrypaths, *, datalake, storage_options, n_workers, log) -> set:
+        """The *entrypaths* whose own journal holds an `ENTRYPOINT_EVENTS` entry.
+
+        An entrypath is recorded as the host that wrote it named it: without a
+        protocol when the datalake is that host's own disk. Read from anywhere
+        else -- an ``ssh://`` datalake -- such a path is on the DATALAKE's
+        filesystem, not this machine's, and is looked for there.
+        """
+        lake_fs, _ = fsspec.url_to_fs(datalake, **storage_options)
+
         def constructed(entrypath):
-            fs, root = fsspec.url_to_fs(entrypath, **storage_options)
+            if '://' in entrypath:
+                fs, root = fsspec.url_to_fs(entrypath, **storage_options)
+            else:
+                fs, root = lake_fs, entrypath
             for file in fs.glob(os.path.join(root, '.journal', '*', 'journal', '*', '*.parquet')):
                 try:
                     with fs.open(file, 'rb') as f:

@@ -205,3 +205,24 @@ def test_journal_dispatches_pipelines(lake):
     for name in ('pipelines', PipeJournal.ANCHOR):
         assert list(dbx.journal(name)['hash']) == [Flat().hash]
     assert len(dbx.journal('pipelines', construct_only=True)) == 0
+
+
+def test_constructed_entrypaths_are_on_the_datalakes_filesystem():
+    """A bare entrypath -- as the datalake's host recorded it -- is looked for on the datalake, not here.
+
+    Read over ssh, a datalake's entrypaths are paths on the remote host; a
+    memory:// datalake stands in for one, its bare paths absent from the
+    local disk.
+    """
+    import fsspec
+    import pandas as pd
+    from dbx.journals import Datalog, PipeJournal
+
+    fs = fsspec.filesystem('memory')
+    built, unbuilt = '/remote-lake/Model/v1', '/remote-lake/Model/v2'
+    for path, event in ((built, 'build:end'), (unbuilt, 'build:start')):
+        with fs.open(f'{path}/.journal/pkg.Model/journal/h/e.parquet', 'wb') as f:
+            pd.DataFrame([{'event': event}]).to_parquet(f)
+    found = PipeJournal._constructed_entrypaths_({built, unbuilt}, datalake='memory:///remote-lake',
+                                                 storage_options={}, n_workers=2, log=Datalog())
+    assert found == {built}

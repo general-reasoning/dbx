@@ -865,6 +865,10 @@ class DatatablePart(Datatable):
     def n_tablets(self) -> int:
         return len(self.tablet_indices)
 
+    def valid(self) -> bool:
+        """Not valid while its partition is not: its tablets are the partition's to say, and are not there to ask about."""
+        return self.var.partition.valid() and super().valid()
+
     # 4. Helpers -----------------------------------------------------------
 
 

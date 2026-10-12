@@ -3155,10 +3155,6 @@ class Datablock:
         what resolves -- a stack's blocks too -- and computes nothing. What is left not valid, or owing
         topics, stays so, to be built deliberately rather than as a side effect of adopting the rest.
 
-        A block over one left not valid is not asked at all -- it has no past to read without its
-        upstream, and asking may read what is not there (a part, its partition's tablets): it is
-        ``'not-valid'``, its owed topics None, unknown.
-
         Returns ``{anchorkey: ('valid' | 'not-valid', owed topics)}`` for every block of the tree, each
         once, in the order they were tried.
         """
@@ -3167,12 +3163,8 @@ class Datablock:
         def visit(block):
             if block.anchorkey in status:
                 return
-            children = [child for _, child in block._iter_var_blocks_('TREE_SKIP_VALIDATION')]
-            for child in children:
+            for _, child in block._iter_var_blocks_('TREE_SKIP_VALIDATION'):
                 visit(child)
-            if any(status[child.anchorkey][0] != 'valid' for child in children):
-                status[block.anchorkey] = ('not-valid', None)
-                return
             if not block.valid():
                 block.specialize()
             status[block.anchorkey] = ('valid' if block.valid() else 'not-valid', block.owedtopics())

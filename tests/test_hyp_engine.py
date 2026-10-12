@@ -85,3 +85,21 @@ def test_nearest_excludes_self():
     nn = layout.nearest(emb, 2)
     assert nn.shape == (4, 2)
     assert not np.any(nn == np.arange(4)[:, None])
+
+
+def test_store_over_an_fsspec_url():
+    """A corpus kept at a url -- a datalake's .hyp -- saves, reloads and clears as one on local disk does."""
+    import fsspec
+
+    url = "memory://hyp-store-test/.hyp"
+    store = Store(url)
+    store.reset("fake")
+    store.add(["a", "b"], ["A", "B"], np.eye(2, dtype=np.float32))
+    store.save()
+    store.save()  # over the files the first save wrote
+    again = Store(url)
+    assert again.embedder == "fake" and [p["text"] for p in again.points] == ["a", "b"]
+    assert np.array_equal(again.embeddings, np.eye(2, dtype=np.float32))
+    again.clear()
+    assert len(Store(url)) == 0
+    fsspec.filesystem("memory").rm("/hyp-store-test", recursive=True)

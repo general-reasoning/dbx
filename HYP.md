@@ -19,18 +19,20 @@ hyp                            # or: python -m hyp
 ```
 
 On first run it pulls `nomic-embed-text` (embeddings) and `deepseek-r1:1.5b`
-(one-line summaries) through Ollama. Each corpus is kept in a directory of its
-own under `~/.hyp`.
+(one-line summaries) through Ollama. The seed corpus is kept under
+`~/.hyp/seeds`; a datalake's pipelines, in the datalake itself.
 
 ## A datalake's pipelines
 
 ```bash
-hyp --dbx.pipejournal --dbx.datalake ssh://wheelbarrow/home/t-9dkarp/datalake
-hyp --dbx.pipejournal                    # the datalake dbx defaults to
+DBX_DATALAKE=ssh://wheelbarrow/home/t-9dkarp/datalake hyp --pipejournal
 ```
 
 runs `HypDbxPipelines`, the specialization of the app over a datalake's
-pipelines. `dbx.pipejournal()` reads the pipeline journal and aggregates it --
+pipelines. The datalake is dbx's own -- `DBX_DATALAKE`, then `DBX_ROOT`,
+`DBX_URL` -- as every block resolves it; hyp names none. Its corpus --
+embeddings, layout, points -- is kept in the datalake, under
+`{DBX_DATALAKE}/.hyp`, and `--reset` clears it there. `dbx.pipejournal()` reads the pipeline journal and aggregates it --
 one row per pipeline, every run of it, with every entrypoint it was created
 to -- and each row is a point:
 
@@ -49,7 +51,7 @@ new pipelines and re-embeds the ones whose spec changed.
 
 An `ssh://` datalake is read through fsspec's sshfs, on asyncssh, which applies
 `~/.ssh/config`: `ssh://host/path` names the host as `ssh host` does, user and
-all. `--dbx.datalake` also takes the scp-style `ssh://host:/path`.
+all.
 
 ## Controls
 
@@ -68,10 +70,10 @@ all. `--dbx.datalake` also takes the scp-style `ssh://host:/path`.
 ## Options
 
 ```
-hyp --data DIR               # the corpus directory (default: one per source, under ~/.hyp)
+hyp --data DIR               # the corpus directory, local or an fsspec url
+                             # (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)
 hyp --reset                  # discard the corpus and start over
-hyp --dbx.pipejournal        # a datalake's pipelines (HypDbxPipelines)
-hyp --dbx.datalake URL       # ... of this datalake, rather than dbx's default
+hyp --pipejournal            # the pipelines of DBX_DATALAKE (HypDbxPipelines)
 hyp --n-workers N            # threads reading the datalake (default 16)
 hyp --embedder deepseek      # DeepSeek-R1-Distill-Qwen-1.5B's pooled hidden states,
                              # through transformers: `pip install -e '.[hyp-deepseek]'`

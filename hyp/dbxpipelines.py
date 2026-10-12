@@ -11,14 +11,14 @@ entrypoints dbx found constructed (`pipejournal(construct_only=True)`), each
 opening its own journal in a window over this one. Both are read in the
 background once the points are up.
 
-The datalake may be any fsspec url. ``ssh://host:/path`` (scp style) is taken
-as ``ssh://host/path``; sshfs connects through asyncssh, which resolves
-``host`` from ``~/.ssh/config``. Side file paths are recorded as the host
-wrote them, without a protocol, and are read through the protocol and host of
-the row's ``entry_path``.
+The datalake is dbx's -- ``DBX_DATALAKE`` -- and the corpus is kept in it,
+under ``{datalake}/.hyp``. It may be any fsspec url; over ``ssh://host/path``,
+sshfs connects through asyncssh, which resolves ``host`` from
+``~/.ssh/config``. Side file paths are recorded as the host wrote them,
+without a protocol, and are read through the protocol and host of the row's
+``entry_path``.
 """
 
-import os
 import pprint
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -50,17 +50,6 @@ class Entry:
     embed: str  # anchor, spec, and signature or type
     summary: str  # the tag's last component and the datetime: the tooltip
     extra: dict = field(default_factory=dict)  # stored with the point
-
-
-def normalize_url(url):
-    """``ssh://host:/path`` -> ``ssh://host/path``; anything else unchanged."""
-    m = re.match(r"^(ssh|sftp)://([^/:]+):(/.*)$", url)
-    return f"{m[1]}://{m[2]}{m[3]}" if m else url
-
-
-def slug(url):
-    """A directory name for the corpus read from *url*."""
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", normalize_url(url).split("://")[-1]).strip("-")
 
 
 def rebase(path, url):
@@ -220,37 +209,40 @@ def _dbx_():
     return dbx
 
 
-def pipelines(url=None, progress=print, n_workers=16):
-    """Every pipeline in the datalake at *url* -- dbx's default if None -- from `dbx.pipejournal()`, newest first.
+def datalake():
+    """dbx's datalake -- ``DBX_DATALAKE``, then ``DBX_ROOT``, ``DBX_URL`` -- where hyp reads the pipelines and keeps its corpus."""
+    lake = _dbx_().default_datalake()
+    if not lake:
+        raise SystemExit("hyp --pipejournal: no datalake; set DBX_DATALAKE")
+    return lake
+
+
+def pipelines(progress=print, n_workers=16):
+    """Every pipeline in dbx's datalake, from `dbx.pipejournal()`, newest first.
 
     *n_workers* threads list and read the journal -- `dbx.pipejournal()`
     parallelizes with threads only, which suits it: the work is round trips
     to the datalake -- and then read the side files.
     """
-    dbx = _dbx_()
-    url = normalize_url(url) if url else None
-    progress(f"dbx.pipejournal(datalake={url!r})")
-    df = dbx.pipejournal(datalake=url, n_workers=n_workers)
+    progress("dbx.pipejournal()")
+    df = _dbx_().pipejournal(n_workers=n_workers)
     progress(f"reading the side files of {len(df)} pipelines")
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
         return list(ex.map(lambda i: entry(df.iloc[i]), range(len(df))))
 
 
-def journal_entries(url=None, n_workers=16):
+def journal_entries(n_workers=16):
     """Every entry of the pipeline journal, unaggregated, newest first, as a DataFrame."""
     import pandas as pd
 
     dbx = _dbx_()
-    url = normalize_url(url) if url else None
-    df = dbx.PipeJournal.read(dbx.PipeJournal.ANCHOR, datalake=url, n_workers=n_workers, index=None)
+    df = dbx.PipeJournal.read(dbx.PipeJournal.ANCHOR, datalake=datalake(), n_workers=n_workers, index=None)
     return pd.DataFrame(df).reset_index(drop=True)
 
 
-def constructed_entrypaths(url=None, n_workers=16):
+def constructed_entrypaths(n_workers=16):
     """``{anchorkeypath: [entrypath]}``: each pipeline's entrypoints that were built or redirected."""
-    dbx = _dbx_()
-    url = normalize_url(url) if url else None
-    df = dbx.pipejournal(datalake=url, construct_only=True, n_workers=n_workers)
+    df = _dbx_().pipejournal(construct_only=True, n_workers=n_workers)
     if not len(df):
         return {}
     return {str(r["anchorkeypath"]): [str(p) for p in r["entrypaths"]] for _, r in df.iterrows()}
@@ -287,21 +279,23 @@ class HypDbxPipelines(Hyp):
 
     @classmethod
     def __default_data__(cls, args):
-        name = f"dbx-pipelines-{slug(args.datalake)}" if args.datalake else "dbx-pipelines"
-        return os.path.join(cls.HOME, name)
+        return f"{datalake().rstrip('/')}/.hyp"
+
+    @classmethod
+    def __storage_options__(cls, args):
+        return _dbx_().default_storage_options()
 
     @classmethod
     def __source__(cls, args):
-        return lambda progress: pipelines(args.datalake, progress, n_workers=args.n_workers)
+        return lambda progress: pipelines(progress, n_workers=args.n_workers)
 
     def __init__(self, engine, worker, args=None):
         super().__init__(engine, worker, args)
-        self.datalake = getattr(args, "datalake", None)
         self.n_workers = getattr(args, "n_workers", 16)
         self.journal = None  # every pipeline journal entry, newest first; None until read
         self.constructed = None  # {anchorkeypath: [entrypath]}; None until read
-        self.run_async(lambda: journal_entries(self.datalake, self.n_workers), lambda df: setattr(self, "journal", df))
-        self.run_async(lambda: constructed_entrypaths(self.datalake, self.n_workers), lambda d: setattr(self, "constructed", d))
+        self.run_async(lambda: journal_entries(self.n_workers), lambda df: setattr(self, "journal", df))
+        self.run_async(lambda: constructed_entrypaths(self.n_workers), lambda d: setattr(self, "constructed", d))
 
     def __point_label__(self, i):
         return self.snap.points[i].get("label") or self.snap.summaries[i]

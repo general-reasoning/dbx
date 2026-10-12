@@ -1,4 +1,7 @@
-"""The on-disk corpus: texts, their summaries, embeddings and disk positions.
+"""The stored corpus: texts, their summaries, embeddings and disk positions.
+
+Under *root*, a local directory or any fsspec url -- a datalake's
+``{datalake}/.hyp`` over ssh, say:
 
     <dir>/meta.json        {"embedder": name}
     <dir>/points.jsonl     one {"text", "summary", "added"} per line, with
@@ -6,22 +9,25 @@
     <dir>/embeddings.npy   (n, d) float32
     <dir>/layout.npy       (n,) complex128 Poincare disk positions
 
-Every write replaces whole files atomically, so a crash leaves the previous
-state rather than a torn one. The corpus is small enough for that.
+Every write goes to a temporary file that is then moved over the old one, so
+a crash leaves the previous state rather than a torn one. The corpus is small
+enough for that.
 """
 
+import io
 import json
-import os
+import posixpath
 import time
-from pathlib import Path
 
+import fsspec
 import numpy as np
 
 
 class Store:
-    def __init__(self, root):
-        self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+    def __init__(self, root, storage_options=None):
+        self.root = str(root)
+        self.fs, self._dir = fsspec.url_to_fs(self.root, **(storage_options or {}))
+        self.fs.makedirs(self._dir, exist_ok=True)
         self.embedder = None
         self.points = []
         self.embeddings = np.zeros((0, 0), dtype=np.float32)
@@ -32,21 +38,29 @@ class Store:
         return len(self.points)
 
     def _path_(self, name):
-        return self.root / name
+        return posixpath.join(self._dir, name)
+
+    def _read_(self, name):
+        """The bytes of file *name*, or None where there is none."""
+        try:
+            with self.fs.open(self._path_(name), "rb") as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
 
     def load(self):
-        meta = self._path_("meta.json")
-        if meta.exists():
-            self.embedder = json.loads(meta.read_text()).get("embedder")
-        pts = self._path_("points.jsonl")
-        if pts.exists():
-            self.points = [json.loads(ln) for ln in pts.read_text().splitlines() if ln.strip()]
-        emb = self._path_("embeddings.npy")
-        if emb.exists():
-            self.embeddings = np.load(emb)
-        lay = self._path_("layout.npy")
-        if lay.exists():
-            self.layout = np.load(lay)
+        meta = self._read_("meta.json")
+        if meta is not None:
+            self.embedder = json.loads(meta).get("embedder")
+        pts = self._read_("points.jsonl")
+        if pts is not None:
+            self.points = [json.loads(ln) for ln in pts.decode().splitlines() if ln.strip()]
+        emb = self._read_("embeddings.npy")
+        if emb is not None:
+            self.embeddings = np.load(io.BytesIO(emb))
+        lay = self._read_("layout.npy")
+        if lay is not None:
+            self.layout = np.load(io.BytesIO(lay))
         # Embeddings without their points, or the reverse, are unusable; a
         # layout that does not cover every point is recomputed.
         n = min(len(self.points), len(self.embeddings))
@@ -55,10 +69,22 @@ class Store:
             self.layout = None
 
     def _write_(self, name, write):
-        tmp = self._path_(name + ".tmp")
-        with open(tmp, "wb") as f:
+        tmp, path = self._path_(name + ".tmp"), self._path_(name)
+        with self.fs.open(tmp, "wb") as f:
             write(f)
-        os.replace(tmp, self._path_(name))
+        try:
+            self.fs.mv(tmp, path)
+        except OSError:
+            # SFTP's rename will not replace a file that exists.
+            self.fs.rm(path)
+            self.fs.mv(tmp, path)
+
+    def clear(self):
+        """Remove everything stored under *root*: what --reset does."""
+        if self.fs.exists(self._dir):
+            self.fs.rm(self._dir, recursive=True)
+        self.fs.makedirs(self._dir, exist_ok=True)
+        self.reset(None)
 
     def save(self):
         self._write_("meta.json", lambda f: f.write(json.dumps({"embedder": self.embedder}).encode()))

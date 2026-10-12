@@ -14,11 +14,9 @@ import math
 import os
 import queue
 import re
-import shutil
 import textwrap
 import threading
 import time
-from pathlib import Path
 
 import numpy as np
 import pygame
@@ -419,7 +417,8 @@ class Hyp:
     """The disk, its navigation, and the hooks a specialization overrides.
 
     A specialization -- `dbxpipelines.HypDbxPipelines` -- changes where the
-    corpus comes from (`__source__`, `__default_data__`), what opening a point
+    corpus comes from (`__source__`, `__default_data__`,
+    `__storage_options__`), what opening a point
     does (`__open_point__`), and how a point is labeled (`__point_label__`,
     `__point_datetime__`, `__point_tooltip__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
@@ -435,6 +434,11 @@ class Hyp:
     @classmethod
     def __default_data__(cls, args):
         return os.path.join(cls.HOME, "seeds")
+
+    @classmethod
+    def __storage_options__(cls, args):
+        """The fsspec storage options the corpus directory is opened with."""
+        return None
 
     @classmethod
     def __source__(cls, args):
@@ -789,9 +793,8 @@ class Hyp:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hyp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", default=None, help="corpus directory (default: one per source under ~/.hyp)")
-    ap.add_argument("--dbx.pipejournal", dest="pipejournal", action="store_true", help="the pipelines of a dbx datalake, from dbx.pipejournal(), one point each")
-    ap.add_argument("--dbx.datalake", dest="datalake", metavar="URL", help="the datalake dbx.pipejournal() reads, e.g. ssh://host:/path/to/datalake, host as named in ~/.ssh/config (default: dbx's)")
+    ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)")
+    ap.add_argument("--pipejournal", action="store_true", help="the pipelines of dbx's datalake (DBX_DATALAKE), from dbx.pipejournal(), one point each")
     ap.add_argument("--n-workers", type=int, default=16, help="threads reading a remote source, e.g. the dbx journal and its side files (default: 16)")
     ap.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama", help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
     ap.add_argument("--embed-model", default=None, help=f"default: {EMBED_MODEL} for ollama")
@@ -800,18 +803,17 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=0, help="UMAP random state")
     args = ap.parse_args(argv)
 
-    if args.datalake and not args.pipejournal:
-        ap.error("--dbx.datalake needs --dbx.pipejournal")
     cls = Hyp
     if args.pipejournal:
         from .dbxpipelines import HypDbxPipelines as cls
     if args.data is None:
         args.data = cls.__default_data__(args)
-    if args.reset and Path(args.data).exists():
-        shutil.rmtree(args.data)
+    store = Store(args.data, cls.__storage_options__(args))
+    if args.reset:
+        store.clear()
     ollama = Ollama()
     engine = Engine(
-        Store(args.data),
+        store,
         make_embedder(args.embedder, args.embed_model, ollama),
         Summarizer(ollama, args.summary_model),
         seed=args.seed,

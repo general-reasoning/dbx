@@ -9,9 +9,10 @@ All notable changes to this project will be documented in this file.
   `hyp` console script and the `[hyp]` extra (in `[all]`, so `dbx.yml`
   installs it): texts embedded through Ollama and laid out on the Poincaré
   disk with hyperbolic UMAP, navigated by geodesic slides and hyperbolic zoom.
-  `hyp --dbx.pipejournal [--dbx.datalake URL]` makes the texts a datalake's
-  pipelines, from `dbx.pipejournal()`, each openable to its journal row, its
-  other runs, and the journals of the entrypoints it constructed. See
+  `hyp --pipejournal` makes the texts the pipelines of dbx's datalake
+  (`DBX_DATALAKE`), from `dbx.pipejournal()`, each openable to its journal
+  row, its other runs, and the journals of the entrypoints it constructed;
+  their embeddings are kept in the datalake, under `{DBX_DATALAKE}/.hyp`. See
   [HYP.md](HYP.md).
 
 ### Fixed

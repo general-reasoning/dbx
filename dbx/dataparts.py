@@ -865,9 +865,22 @@ class DatatablePart(Datatable):
     def n_tablets(self) -> int:
         return len(self.tablet_indices)
 
+    @property
+    def dealt(self) -> bool:
+        """Whether its partition has dealt its tablets: the ``tablets`` topic is there, built or redirected.
+
+        Not the partition's `valid`, which a partition owing a topic only it computes -- one adopted from
+        before its ``summary`` -- is not, its tablets readable all the same.
+        """
+        return self.var.partition.valid_topic('tablets')
+
     def valid(self) -> bool:
-        """Not valid while its partition is not: its tablets are the partition's to say, and are not there to ask about."""
-        return self.var.partition.valid() and super().valid()
+        """Not valid while its tablets are not dealt: they are the partition's to say, and not there to ask about."""
+        return self.dealt and super().valid()
+
+    def specialize(self, *args, **kwargs):
+        """Nothing to specialize while its tablets are not dealt -- see `valid`; else as any table."""
+        return super().specialize(*args, **kwargs) if self.dealt else self
 
     # 4. Helpers -----------------------------------------------------------
 

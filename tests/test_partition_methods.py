@@ -440,8 +440,9 @@ def test_a_probe_says_a_piece_is_not_built_before_it_starts(tmp_path):
 def test_a_part_of_a_partition_not_built_is_not_valid(tmp_path):
     """Asked, it says no -- rather than reading tablets its partition has not dealt."""
     p = partition(tmp_path, table(tmp_path), build=False)
-    assert not p.valid()
+    assert not p.valid() and not p.part(0).dealt
     assert p.part(0).valid() is False
+    assert p.part(0).specialize().valid() is False, "nothing to specialize, and nothing read"
     p.build()
-    assert p.part(0).build().valid()
+    assert p.part(0).dealt and p.part(0).build().valid()
 

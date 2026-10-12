@@ -127,3 +127,14 @@ def test_try_specialize_tree_specializes_what_resolves_and_builds_nothing(lake):
     status = tree.try_specialize_tree()
     assert status == {grown.anchorkey: ('valid', []), tree.anchorkey: ('not-valid', [])}
     assert grown.path('x') == old.path('old') and not tree.valid()
+
+
+def test_try_specialize_tree_asks_nothing_of_a_block_over_one_not_valid(lake, monkeypatch):
+    """A part asked whether it is valid reads its partition's tablets; over an unbuilt one, it is not asked."""
+    tree = Root(spec={'leaf': Leaf(spec={'n': 5}), 'm': 1})
+
+    def asked(self):
+        raise AssertionError("a block over one not valid was asked")
+    monkeypatch.setattr(Root, 'valid', asked)
+    status = tree.try_specialize_tree()
+    assert status == {tree.var.leaf.anchorkey: ('not-valid', []), tree.anchorkey: ('not-valid', None)}

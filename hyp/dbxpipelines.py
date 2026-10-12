@@ -19,12 +19,12 @@ without a protocol, and are read through the protocol and host of the row's
 ``entry_path``.
 """
 
-import pprint
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from .app import Dropdown, Hyp, TextViewer
+from .app import Button, Dropdown, Hyp, TextViewer
 
 # Columns shown first, in this order; the rest follow as the frame has them,
 # then the side files, then TAIL_COLUMNS.
@@ -40,6 +40,14 @@ LAKE_PATHS = ("anchorkeypath", "entrypaths")
 # Columns holding a dict's repr: shown one key per line.
 DICT_COLUMNS = ("topics", "paths")
 SIDE_FILE_LIMIT = 16_000
+# A captured output longer than this is shown by its end: what a run came to.
+OUTPUT_LIMIT = 1_000_000
+# The repr of what a topic reads is cut short past this.
+READ_LIMIT = 200_000
+# The interpreter on the datalake's host whose Ray -- started there, for the
+# session, by dbx.SshRay -- trueinst() instantiates blocks in: it needs dbx,
+# ray (the version this one is) and the project's package.
+REMOTE_PYTHON = "~/miniconda3/envs/autopath/bin/python"
 EMBED_LIMIT = 4_000
 
 
@@ -134,7 +142,15 @@ def _is_blank_(v):
 
 
 def _side_file_(column, path, url):
-    """The side file *path* names, as text -- a dict pretty-printed, for DICT_FILES."""
+    """The side file *path* names, as ``(shown, compact)`` text; None where it cannot be read.
+
+    For DICT_FILES, *shown* is the dict one key per line, a level per four
+    spaces -- so that a viewer folds it by level -- and *compact* the dict
+    pretty-printed, as points have always been embedded from: a change to
+    how it is shown must not move every point. Otherwise both are the file.
+    """
+    import pprint
+
     import yaml
     from dbx.databits import read_str, read_yaml
 
@@ -142,19 +158,25 @@ def _side_file_(column, path, url):
         return None
     path = rebase(path, url)
     try:
-        text = None
+        shown = compact = None
         if column in DICT_FILES and path.endswith((".yaml", ".yml")):
             try:
                 # dbx's own reader, as it reads them back: the dumps hold
                 # python tuples, which only the unsafe loader makes.
-                text = pprint.pformat(read_yaml(path, safe=False), width=100, sort_dicts=False)
+                data = read_yaml(path, safe=False)
+                shown = "\n".join(dict_lines(repr(data)))
+                compact = pprint.pformat(data, width=100, sort_dicts=False)
             except yaml.YAMLError:
                 pass  # shown as the yaml it is
-        if text is None:
-            text = read_str(path)
+        if shown is None:
+            shown = compact = read_str(path)
     except (FileNotFoundError, OSError):
         return None
-    return text if len(text) <= SIDE_FILE_LIMIT else text[:SIDE_FILE_LIMIT] + "\n…"
+
+    def limited(text):
+        return text if len(text) <= SIDE_FILE_LIMIT else text[:SIDE_FILE_LIMIT] + "\n…"
+
+    return limited(shown), limited(compact)
 
 
 def var_name(row):
@@ -177,7 +199,9 @@ def entry(row):
     """One `dbx.pipejournal()` row, or any journal row, with its side files read, as an Entry."""
     row = {k: v for k, v in dict(row).items() if not _is_blank_(v)}
     url = row.get("entry_path", "")
-    sides = {c: t for c in SIDE_FILES if c in row and (t := _side_file_(c, row[c], url))}
+    read = {c: t for c in SIDE_FILES if c in row and (t := _side_file_(c, row[c], url))}
+    sides = {c: shown for c, (shown, _) in read.items()}
+    compact = {c: text for c, (_, text) in read.items()}
     lake = str(row.get("datalake", ""))
 
     def shown(c):
@@ -204,16 +228,17 @@ def entry(row):
         lines += [""] + table(tails)
 
     embed = [str(row.get("anchor", ""))]
-    embed += [sides[c] for c in ("spec",) if c in sides]
-    embed += [sides[c] for c in ("signature", "type") if c in sides][:1]
+    embed += [compact[c] for c in ("spec",) if c in compact]
+    embed += [compact[c] for c in ("signature", "type") if c in compact][:1]
     key = str(row.get("anchorkeypath") or f"{row.get('anchor')}/{row.get('hash')}")
     label = tail(row.get("tag", row.get("anchor", "?")))
+    name = var_name(row)
     return Entry(
         key=key,
         text="\n".join(lines),
         embed="\n".join(embed)[:EMBED_LIMIT],
         summary=f"{label} · {when(row['datetime'])}" if "datetime" in row else label,
-        extra={"anchor": str(row.get("anchor", "")), "label": label, "row": {k: str(v) for k, v in row.items()}},
+        extra={"anchor": str(row.get("anchor", "")), "label": label, "name": name, "row": {k: str(v) for k, v in row.items()}},
     )
 
 
@@ -271,11 +296,176 @@ def constructed_entrypaths(n_workers=16):
     return {str(r["anchorkeypath"]): [str(p) for p in r["entrypaths"]] for _, r in df.iterrows()}
 
 
+def has_output(row):
+    """Whether the process that wrote *row*'s entry had its output captured: dbx records where, as ``log``."""
+    return bool(row) and not _is_blank_(row.get("log", None))
+
+
+def output_text(row, limit=OUTPUT_LIMIT):
+    """The captured stdout and stderr of the process that wrote *row*'s entry, as text: its end, past *limit* bytes.
+
+    ``log`` is recorded as the datalake's host wrote it and is read, as the
+    side files are, through the protocol and host of the row's
+    ``entry_path``. A capture is uploaded when its command ends, so one not
+    there yet may be of a command still running. Escape codes are dropped,
+    and a line redrawn with carriage returns -- a progress bar -- is shown as
+    it was last drawn.
+    """
+    import fsspec
+
+    path = rebase(row["log"], row.get("entry_path", ""))
+    fs, p = fsspec.url_to_fs(path, **_dbx_().default_storage_options())
+    try:
+        size = fs.size(p)
+    except FileNotFoundError:
+        return f"{path}\n\nNot there. A capture is uploaded when its command ends: it may still be running."
+    with fs.open(p, "rb") as f:
+        if size > limit:
+            f.seek(size - limit)
+        data = f.read()
+    text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", data.decode("utf-8", errors="replace"))
+    lines = [ln.rstrip("\r").split("\r")[-1] for ln in text.split("\n")]
+    head = [path] + ([f"… its first {size - limit:,} of {size:,} bytes left out"] if size > limit else [])
+    return "\n".join(head + [""] + lines)
+
+
+def session_blocks(row, n_workers=16):
+    """The blocks journaled under *row*'s session: ``[(anchorkeypath, last event)]``, in the order first written.
+
+    From the index a ``dbx.exec`` command keeps of every entry written under
+    its session, by any process -- `DataJournal.session_entries` -- under
+    ``{datalake}/.journal/sessions/{session}/``. The index and the entries it
+    lists are recorded as the datalake's host wrote them, and are read, as the
+    side files are, through the row's ``entry_path``. A session no command
+    ran -- a block built outside ``dbx.exec`` -- has no index, and no blocks.
+    A pipeline's entries are left out: they are its creations, filed in the
+    pipeline journal, and its block directory holds none of them.
+    """
+    import pandas as pd
+
+    dbx = _dbx_()
+    session, lake, url = row.get("session"), str(row.get("datalake", "")), row.get("entry_path", "")
+    if _is_blank_(session) or not lake:
+        return []
+    options = dbx.default_storage_options()
+    paths = dbx.DataJournal.session_entries(session, datalake=rebase(lake, url), storage_options=options)
+    if not paths:
+        return []
+    df = pd.DataFrame(dbx.DataJournal.read_frame([rebase(p, url) for p in paths], storage_options=options, n_workers=n_workers))
+    blocks = {}
+    for _, r in df.iterrows():
+        if not _is_blank_(r.get("anchorkeypath")) and "/.pipelines/" not in str(r.get("entry_path", "")):
+            blocks[str(r["anchorkeypath"])] = str(r.get("event", ""))
+    return list(blocks.items())
+
+
+def _entry_(row):
+    """*row* -- a block's journal row, as a window keeps one -- as a `DataJournalEntry` whose filesystem is the datalake's, over ssh if it is remote."""
+    import pandas as pd
+
+    dbx = _dbx_()
+    lake = rebase(str(row.get("datalake", "")), row.get("entry_path", ""))
+    return dbx.DataJournalEntry(pd.Series({**row, "datalake": lake}), storage_options=dbx.default_storage_options())
+
+
+def topics(row):
+    """The leaf topics *row*'s block recorded, ``[(topicpath, stored)]``: *stored* False for a synthetic one, which has no location."""
+    from dbx.datablocks import SYNTHETIC, SYNTOPIC, is_topicmarker
+
+    if _is_blank_(row.get("topics") if row else None):
+        return []
+    out = []
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for name, child in node.items():
+                walk(child, path + (name,))
+        else:
+            out.append((path, not (node == SYNTOPIC or is_topicmarker(node, SYNTHETIC))))
+
+    try:
+        walk(_entry_(row).block.TOPICS, ())
+    except Exception:
+        return []
+    return out
+
+
+def ls_text(row, topic):
+    """What is at the path *row*'s block recorded for *topic*: one line per entry, its size and its name.
+
+    The block's own `ls`, over its recorded paths -- nothing is instantiated.
+    """
+    entry = _entry_(row)
+    listing = entry.block.ls(*topic, detail=True)
+    head = [f"ls {'/'.join(topic)} of {row.get('anchorkeypath', '?')}", ""]
+    if not listing:
+        return "\n".join(head + ["nothing there"])
+    lines = []
+    for e in sorted(listing, key=lambda e: str(e.get("name"))):
+        kind = e.get("type")
+        size = "dir" if kind == "directory" else f"{e.get('size') or 0:,}"
+        lines.append(f"{size:>16}  {e.get('name')}")
+    return "\n".join(head + lines)
+
+
+# The block read_text last instantiated, and what it is of: kept, so that
+# reading it again does not start another worker. One at a time: each
+# trueinst() connects Ray afresh, which the one before does not survive.
+_REMOTE_ = {"key": None, "block": None}
+_REMOTE_LOCK_ = threading.Lock()
+
+
+def read_text(row, topic, python=REMOTE_PYTHON, limit=READ_LIMIT):
+    """``read(*topic)`` of *row*'s block, instantiated with ``trueinst()`` where its data are, as text.
+
+    trueinst() pins a Ray worker to the entry's own revision of dbx and of
+    the project, so the block comes back with the hash it was built under,
+    reading the data that hash names. For a datalake reached over ssh, the
+    worker is on its host, in the Ray head `dbx.SshRay` keeps there for the
+    session, run by *python*; the block, a proxy to it here. The block is
+    kept for the next read of it. What comes back is the value's repr -- taken
+    there, when the value stays there behind a proxy -- cut short past *limit*;
+    or the traceback.
+    """
+    import traceback
+
+    dbx = _dbx_()
+    url = str(row.get("entry_path", ""))
+    m = re.match(r"^(?:ssh|sftp)://([^/:]+)(?::\d+)?/", url)
+    where = m[1] if m else "here"
+    head = f"read {'/'.join(topic)} of {row.get('anchorkeypath', '?')}  -- trueinst() on {where}"
+    try:
+        with _REMOTE_LOCK_:
+            key = (url, str(row.get("id")))
+            if _REMOTE_["key"] != key:
+                entry = dbx.DataJournal.read_entries([url])[0]
+                kwargs = {}
+                if m:
+                    cluster = dbx.SshRay.session(m[1], python=python)
+                    kwargs = {"address": cluster.address, "gitrepo": dbx.DataJournalEntry.column(entry, "gitrepo")}
+                _REMOTE_.update(key=None, block=None)
+                _REMOTE_["block"] = entry.trueinst(**kwargs)
+                _REMOTE_["key"] = key
+            value = _REMOTE_["block"].read(*topic)
+            if type(value).__name__ == "Remote":
+                # Left there, behind a proxy: it forwards a dunder only when
+                # asked for by name -- repr() would describe the proxy.
+                text, kind = value.__getattr__("__repr__")(), f"(a proxy to the value on {where})"
+            else:
+                text, kind = repr(value), f"{type(value).__module__}.{type(value).__qualname__}"
+    except Exception:
+        return "\n".join([head, "", traceback.format_exc()])
+    cut = f"   (its first {limit:,} of {len(text):,} characters)" if len(text) > limit else ""
+    return "\n".join([head, f"{kind}{cut}", "", text[:limit]])
+
+
 def entrypoint_text(entrypath, row, n_workers=16):
     """The journal of the block at *entrypath*: its events, then its newest entry as `entry` shows one.
 
     *row* is a pipeline's journal row: its ``datalake`` and ``entry_path`` say
-    where *entrypath*, recorded as the host wrote it, is read from.
+    where *entrypath*, recorded as the host wrote it, is read from. Returns
+    ``(text, newest)``: *newest* the newest entry's row, as `entry` keeps
+    one, or None where there is no entry.
     """
     import pandas as pd
 
@@ -290,9 +480,10 @@ def entrypoint_text(entrypath, row, n_workers=16):
     if "anchorkeypath" in df.columns:
         df = df[df["anchorkeypath"].astype(str) == entrypath]
     if not len(df):
-        return f"No journal entries for {entrypath}"
+        return f"No journal entries for {entrypath}", None
     events = [f"{when(r.get('datetime'), seconds=True)}  {r.get('event', '')}" for _, r in df.iterrows()]
-    return "\n".join(["── events ──", *events, "", entry(df.iloc[0]).text])
+    newest = entry(df.iloc[0])
+    return "\n".join(["── events ──", *events, "", newest.text]), newest.extra["row"]
 
 
 class HypDbxPipelines(Hyp):
@@ -314,44 +505,48 @@ class HypDbxPipelines(Hyp):
 
     def __init__(self, engine, worker, args=None):
         super().__init__(engine, worker, args)
+        # A pipeline's VAR.name, under its label before the datetime: listed first.
+        self.settings = {"names": True, **self.settings}
         self.n_workers = getattr(args, "n_workers", 16)
+        self.remote_python = getattr(args, "remote_python", None) or REMOTE_PYTHON
         self.journal = None  # every pipeline journal entry, newest first; None until read
         self.constructed = None  # {anchorkeypath: [entrypath]}; None until read
+        self.sessions = {}  # {session: [(anchorkeypath, last event)]}; None while read
         self.run_async(lambda: journal_entries(self.n_workers), lambda df: setattr(self, "journal", df))
         self.run_async(lambda: constructed_entrypaths(self.n_workers), lambda d: setattr(self, "constructed", d))
 
     def __point_label__(self, i):
         return self.snap.points[i].get("label") or self.snap.summaries[i]
 
+    def __point_name__(self, i):
+        return self.snap.points[i].get("name")
+
     def __point_datetime__(self, i):
         dt = self.snap.points[i].get("row", {}).get("datetime")
         return when(dt) if dt else None
-
-    def __point_tooltip__(self, i):
-        dt = self.__point_datetime__(i) if self.settings["datetimes"] else None
-        label = self.__point_label__(i)
-        return f"{label} · {dt}" if dt else label
 
     def __open_point__(self, i):
         row = self.snap.points[i].get("row", {})
         viewer = TextViewer(self.snap.summaries[i], self.snap.texts[i])
         viewer.row = row
         times = Dropdown(
-            self._title_(row),
+            self._title_(row, self.snap.points[i].get("name")),
             lambda: self._datetimes_(row.get("tag")),
             lambda k: self._show_entry_(viewer, k),
             empty="no entries",
             match=lambda k: self._is_entry_(k, viewer.row),
         )
         roots = Dropdown("constructed entrypoints", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p), empty="none constructed")
-        viewer.menus = [times, roots]
+        viewer.menus = [times, roots, self._output_button_(viewer)]
         self.viewers = [viewer]
 
     # Helpers -----------------------------------------------------------------
 
     @staticmethod
-    def _title_(row):
-        return f"{tail(row.get('tag', row.get('anchor', '?')))} · {when(row.get('datetime', ''), seconds=True)}"
+    def _title_(row, name=None):
+        """A pipeline window's title: its tag's last component, its ``VAR.name`` where it has one, and its datetime."""
+        parts = [tail(row.get("tag", row.get("anchor", "?"))), name, when(row.get("datetime", ""), seconds=True)]
+        return " · ".join(p for p in parts if p)
 
     def _datetimes_(self, tag):
         """The journal's entries with *tag*, newest first, as dropdown items; None until read."""
@@ -384,7 +579,7 @@ class HypDbxPipelines(Hyp):
                 return  # stepped on past it meanwhile
             viewer.set_text(e.text)
             viewer.row = e.extra["row"]
-            viewer.menus[0].label = self._title_(e.extra["row"])
+            viewer.menus[0].label = self._title_(e.extra["row"], e.extra.get("name"))
             self.status = "ready"
 
         self.run_async(lambda: entry(row), shown)
@@ -399,6 +594,7 @@ class HypDbxPipelines(Hyp):
     def _open_entrypoint_(self, row, entrypath):
         """Open a window over the pipeline's, its title a menu of the pipeline's constructed blocks."""
         window = TextViewer(None, "")
+        window.row = None  # the newest entry of the block shown, once read
         window.menus = [
             Dropdown(
                 self._relative_(row, entrypath),
@@ -406,7 +602,29 @@ class HypDbxPipelines(Hyp):
                 lambda p: self._show_entrypoint_(window, row, p),
                 empty="none constructed",
                 value=entrypath,
-            )
+            ),
+            Dropdown(
+                "session blocks",
+                lambda: self._session_blocks_(window, row),
+                lambda p: self._show_session_block_(window, row, p),
+                empty="none indexed: the session was no dbx.exec command's",
+                visible=lambda: bool(window.row) and not _is_blank_(window.row.get("session")),
+            ),
+            Dropdown(
+                "read",
+                lambda: self._topic_items_(window, stored_only=False),
+                lambda t: self._open_topic_(window.row, t, "read"),
+                empty="no topics",
+                visible=lambda: bool(window.row) and not _is_blank_(window.row.get("topics")),
+            ),
+            Dropdown(
+                "ls",
+                lambda: self._topic_items_(window, stored_only=True),
+                lambda t: self._open_topic_(window.row, t, "ls"),
+                empty="no stored topics",
+                visible=lambda: bool(window.row) and not _is_blank_(window.row.get("topics")),
+            ),
+            self._output_button_(window),
         ]
         self.push_viewer(window)
         self._show_entrypoint_(window, row, entrypath)
@@ -415,13 +633,66 @@ class HypDbxPipelines(Hyp):
         """Show the journal of the block at *entrypath* in *window*, read off the UI thread."""
         menu = window.menus[0]
         menu.label = self._relative_(row, entrypath)
+        window.row = None
         window.set_text(f"reading the journal of {menu.label} …")
 
-        def shown(text):
+        def shown(result):
             if menu.value == entrypath:  # not stepped on past it meanwhile
+                text, window.row = result
                 window.set_text(text)
 
         self.run_async(lambda: entrypoint_text(entrypath, row, self.n_workers), shown)
+
+    def _session_blocks_(self, window, row):
+        """The blocks of the session of the entry *window* shows, as dropdown items; None while read, the first time asked."""
+        shown = window.row
+        session = str(shown.get("session"))
+        if session not in self.sessions:
+            self.sessions[session] = None
+
+            def read():
+                try:
+                    return session_blocks(shown, self.n_workers)
+                except Exception:
+                    self.sessions[session] = []  # not read: shown as none, the error in the status line
+                    raise
+
+            self.run_async(read, lambda blocks: self.sessions.__setitem__(session, blocks))
+        blocks = self.sessions[session]
+        return None if blocks is None else [(f"{self._relative_(row, p)}   {event}", p) for p, event in blocks]
+
+    def _show_session_block_(self, window, row, path):
+        """Show the journal of the session's block at *path* in *window*, as picking a constructed entrypoint does."""
+        window.menus[0].value = path
+        self._show_entrypoint_(window, row, path)
+
+    @staticmethod
+    def _topic_items_(window, stored_only):
+        """The topics of the block *window* shows, as dropdown items: only those with a location, for ls."""
+        return [("/".join(t), t) for t, stored in topics(window.row) if stored or not stored_only]
+
+    def _open_topic_(self, row, topic, how):
+        """Open ``ls`` or ``read`` of *row*'s block's *topic* in a window over the one it was asked from, run off the UI thread."""
+        name = "/".join(topic)
+        if how == "ls":
+            window = TextViewer(f"ls {name} · {self._relative_(row, str(row.get('anchorkeypath', '')))}", f"listing {name} …")
+            fn = lambda: ls_text(row, topic)  # noqa: E731
+        else:
+            window = TextViewer(f"read {name} · {self._relative_(row, str(row.get('anchorkeypath', '')))}",
+                                f"reading {name} through trueinst(): the first read of a block starts a Ray worker pinned to its revision, which takes a while …")
+            fn = lambda: read_text(row, topic, self.remote_python)  # noqa: E731
+        self.push_viewer(window)
+        self.run_async(fn, window.set_text)
+
+    def _output_button_(self, viewer):
+        """The ``output`` button of a journal entry's window: shown while the entry it shows -- ``viewer.row`` -- had its output captured."""
+        return Button("output", lambda: self._open_output_(viewer.row), visible=lambda: has_output(getattr(viewer, "row", None)))
+
+    def _open_output_(self, row):
+        """Open the captured output of the entry *row* in a window over the one it was asked from, read off the UI thread."""
+        window = TextViewer(f"output · {when(row.get('datetime', ''), seconds=True)} · {str(row.get('log')).rsplit('/', 1)[-1]}", "reading the captured output …")
+        self.push_viewer(window)
+        self.run_async(lambda: output_text(row), window.set_text)
 
     @staticmethod
     def _relative_(row, path):

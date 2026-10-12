@@ -37,15 +37,36 @@ one row per pipeline, every run of it, with every entrypoint it was created
 to -- and each row is a point:
 
 - embedded from the pipeline's fqcn (`anchor`), spec, and signature (or type)
-- labeled with the last component of its `tag`, with its datetime below
+- labeled with the last component of its `tag`, and below it its `VAR.name`,
+  where its spec has one, and its datetime
 - on right click, its row's columns and its side files' contents -- spec, dfn
   and kwargs as the dicts they hold, `topics` and `paths` one key per line --
-  under two menus:
-  - the tag: every journal entry with that tag, by datetime and -- where
-    its spec has one -- `VAR.name`, to switch to
+  under a title -- the tag, `VAR.name` where its spec has one, and the
+  datetime -- that has the top row to itself, with a row of menus beneath:
+  - the title itself: every journal entry with that tag, by datetime and
+    `VAR.name`, to switch to
   - constructed entrypoints, from `dbx.pipejournal(construct_only=True)`:
-    picking one opens that block's own journal over the pipeline's, its title
-    a menu of the pipeline's other constructed blocks
+    picking one opens that block's own journal over the pipeline's -- below
+    its header, which stays in view -- its title a menu of the pipeline's
+    other constructed blocks, and beside it, *session blocks*: every block
+    journaled under the session of the entry shown, from the index a
+    `dbx.exec` command keeps (`DataJournal.session_entries`), to show in its
+    place. A block built outside `dbx.exec` has no index to list.
+  - *read* and *ls*, beside them, list the shown block's recorded topics.
+    *ls* lists what is at a topic's recorded path, over ssh, with nothing
+    instantiated. *read* calls the entry's `trueinst()` here, against a Ray
+    head that `dbx.SshRay` starts on the datalake's host for the session --
+    run by `--remote-python`, reached through an ssh tunnel, and stopped when
+    hyp exits -- so the block is a proxy to an instance pinned to the entry's
+    own revision of dbx and the project, where its data are. The topic is
+    read there and its repr shown. The first read of a block takes about a
+    minute; the block is kept, and reading it again takes seconds. Ray here
+    must be the version Ray there is.
+- in either window, an `output` button, where the entry shown had its output
+  captured (dbx records the capture as `log`): it opens the process's
+  captured stdout and stderr -- its last 1 MB, escape codes dropped, a
+  progress bar as last drawn. A capture is uploaded when its command ends,
+  so one still running has none to show yet.
 
 The menus are read in the background once the points are up. Each launch adds
 new pipelines and re-embeds the ones whose spec changed.
@@ -63,10 +84,12 @@ all.
 | scroll | hyperbolic zoom: a point at distance *d* is drawn at *k·d* |
 | right click on a point | its stored text |
 | right click elsewhere | type a text; Enter embeds, summarizes, stores and places it |
-| hover | a one-line summary, and geodesics to the 5 nearest neighbors in embedding space |
-| Home | back to the corpus center, zoom 1 |
-| settings (top right) | datetimes on and off: under labels, and in tooltips |
+| hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space |
+| Home, or double click off the disk | back to the original view: the corpus center, zoom 1 |
+| (lower left) | a spinning wheel while data are being loaded or prepared |
+| settings (top right) | names (`--pipejournal`) and datetimes, each on and off: under labels, and datetimes in tooltips |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
+| in a text window, 1–9 | fold: lines nested deeper than that many levels collapse, each run to one `… N lines`; 0 unfolds. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |
 
 ## Options
 
@@ -76,6 +99,8 @@ hyp --data DIR               # the corpus directory, local or an fsspec url
 hyp --reset                  # discard the corpus and start over
 hyp --pipejournal            # the pipelines of DBX_DATALAKE (HypDbxPipelines)
 hyp --n-workers N            # threads reading the datalake (default 16)
+hyp --remote-python PATH     # the python on the datalake's host whose Ray read's trueinst() runs in
+                             # (default ~/miniconda3/envs/autopath/bin/python)
 hyp --embedder deepseek      # DeepSeek-R1-Distill-Qwen-1.5B's pooled hidden states,
                              # through transformers: `pip install -e '.[hyp-deepseek]'`
 hyp --embed-model M          # another Ollama embedding model

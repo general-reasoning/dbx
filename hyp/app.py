@@ -37,6 +37,9 @@ ZOOM_RANGE = (0.25, 8.0)
 HOVER_PX = 9
 # A press that moves further than this before release is a drag, not a click.
 DRAG_PX = 4
+# Two left clicks off the disk this close, in time and place, reset the view.
+DOUBLE_CLICK_S = 0.4
+DOUBLE_CLICK_PX = 6
 # Dragging is clamped inside this radius: near the rim one pixel spans a huge
 # hyperbolic distance, and the plane would lurch.
 DRAG_RADIUS = 0.97
@@ -200,13 +203,15 @@ class Dropdown:
 
     *items* is a list of ``(text, value)``, or a function returning one, asked
     each time the list opens -- None from it while the items are still being
-    read. Picking an item calls ``on_select(value)``.
+    read. Picking an item calls ``on_select(value)``. Shown only while
+    *visible()*.
     """
 
     ROWS = 16
 
-    def __init__(self, label, items, on_select, empty="none", value=None, match=None):
+    def __init__(self, label, items, on_select, empty="none", value=None, match=None, visible=lambda: True):
         self.label = label
+        self.visible = visible
         self.items = items
         self.on_select = on_select
         self.empty = empty
@@ -240,6 +245,9 @@ class Dropdown:
 
     def handle(self, ev):
         """Whether *ev* was this dropdown's to handle."""
+        if not self.visible():
+            self.open = False
+            return False
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             if self.button.collidepoint(ev.pos):
                 self.open, self.top = not self.open, 0
@@ -263,8 +271,13 @@ class Dropdown:
             return True
         return False
 
-    def draw_button(self, surf, font, x, y, color):
-        img = font.render(self.label, True, color)
+    def draw_button(self, surf, font, x, y, color, max_width=None):
+        """Draw the button at (*x*, *y*), its label shortened with … to fit *max_width*; returns its width."""
+        label = self.label
+        if max_width is not None:
+            while len(label) > 1 and font.size(label)[0] + 26 > max_width:
+                label = label[:-2] + "…"
+        img = font.render(label, True, color)
         h = img.get_height()
         self.button = pygame.Rect(x - 4, y - 2, img.get_width() + 22, h + 4)
         pygame.draw.rect(surf, (36, 42, 54), self.button, border_radius=4)
@@ -275,7 +288,7 @@ class Dropdown:
         return self.button.width
 
     def draw_list(self, surf, font):
-        if not self.open:
+        if not self.open or not self.visible():
             return
         items = self.current()
         texts = [t for t, _ in items] if items else ["loading…" if items is None else self.empty]
@@ -297,6 +310,37 @@ class Dropdown:
             surf.blit(more, (self.list.right - more.get_width() - 8, self.list.bottom - self.row_h))
 
 
+class Button:
+    """A button in a viewer's header, beside its menus: clicking it calls *on_click*.
+
+    Shown only while *visible()* -- when what it opens is there to open.
+    """
+
+    def __init__(self, label, on_click, visible=lambda: True):
+        self.label = label
+        self.on_click = on_click
+        self.visible = visible
+        self.button = pygame.Rect(0, 0, 0, 0)
+
+    def handle(self, ev):
+        """Whether *ev* was this button's to handle."""
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.visible() and self.button.collidepoint(ev.pos):
+            self.on_click()
+            return True
+        return False
+
+    def draw_button(self, surf, font, x, y, color, max_width=None):
+        img = font.render(self.label, True, color)
+        self.button = pygame.Rect(x - 4, y - 2, img.get_width() + 8, img.get_height() + 4)
+        hot = self.button.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(surf, (52, 60, 76) if hot else (36, 42, 54), self.button, border_radius=4)
+        surf.blit(img, (x, y))
+        return self.button.width
+
+    def draw_list(self, surf, font):
+        pass
+
+
 class TextViewer:
     """A read-only, scrollable view of one stored text, with optional header menus.
 
@@ -309,19 +353,46 @@ class TextViewer:
         self.title = title
         self.menus = list(menus)
         self.inset = inset
+        self.over = None  # the viewer this one was opened over: it opens below that one's header
+        self.fold = None  # nesting level past which lines are collapsed; None shows every line
+        self.header_bottom = 0  # where the header ends, as last drawn
         self.rect = pygame.Rect(0, 0, 0, 0)
         self.close = pygame.Rect(0, 0, 0, 0)
         self.set_text(text)
 
+    #: Spaces per level of nesting, for folding: as `dbxpipelines.dict_lines` lays a dict out.
+    INDENT = 4
+
     def set_text(self, text):
         self.text = text.replace("\t", "    ")
         self.top = 0  # first visible line
-        self._wrapped = (None, [])
+        self._wrapped = (None, None, [])
+
+    def folded(self):
+        """The text's lines, those nested deeper than ``fold`` levels -- by indentation -- collapsed, a run to one line."""
+        paras = self.text.split("\n")
+        if self.fold is None:
+            return paras
+        out, run = [], 0
+
+        def flush():
+            if run:
+                out.append(" " * (self.INDENT * (self.fold + 1)) + f"… {run} line{'s' if run > 1 else ''}")
+
+        for para in paras:
+            if len(para) - len(para.lstrip(" ")) > self.INDENT * self.fold:
+                run += 1
+                continue
+            flush()
+            run = 0
+            out.append(para)
+        flush()
+        return out
 
     def lines(self, cols):
-        if self._wrapped[0] != cols:
+        if self._wrapped[:2] != (cols, self.fold):
             out = []
-            for para in self.text.split("\n"):
+            for para in self.folded():
                 # Continuation lines hang under the value of a "column  value"
                 # row, or under the indentation of a yaml line. The value is
                 # wrapped in the width beside its column, so that a long
@@ -332,8 +403,8 @@ class TextViewer:
                 body = para[len(m[0]) :]
                 wrapped = textwrap.wrap(body, cols - len(head), replace_whitespace=False, drop_whitespace=False, break_on_hyphens=False) or [""]
                 out += [(head if i == 0 else " " * len(head)) + w for i, w in enumerate(wrapped)]
-            self._wrapped = (cols, out)
-        return self._wrapped[1]
+            self._wrapped = (cols, self.fold, out)
+        return self._wrapped[2]
 
     def scroll(self, n):
         self.top = max(0, self.top + n)
@@ -358,6 +429,9 @@ class TextViewer:
                 self.scroll(step[ev.key])
             elif ev.key == pygame.K_HOME:
                 self.top = 0
+            elif pygame.K_0 <= ev.key <= pygame.K_9 and not pygame.key.get_mods() & (pygame.KMOD_META | pygame.KMOD_CTRL):
+                self.fold = (ev.key - pygame.K_0) or None
+                self.top = 0
             elif ev.key == pygame.K_c and pygame.key.get_mods() & (pygame.KMOD_META | pygame.KMOD_CTRL):
                 try:
                     pygame.scrap.put_text(self.text)
@@ -371,6 +445,11 @@ class TextViewer:
         w, h = surf.get_size()
         self.rect = pygame.Rect(0, 0, int(w * 0.8) - 2 * self.inset, int(h * 0.82) - 2 * self.inset)
         self.rect.center = (w // 2, (h - 24) // 2)
+        if self.over is not None:
+            # Below the header of the one it was opened over, which stays in view.
+            bottom = self.rect.bottom
+            self.rect.top = self.over.header_bottom + 6
+            self.rect.height = max(160, bottom - self.rect.top)
         x, y, rw, rh = self.rect
         pad = 14
         pygame.draw.rect(surf, (24, 28, 36), self.rect, border_radius=8)
@@ -382,15 +461,25 @@ class TextViewer:
         c = self.close.inflate(-12, -12)
         for a, b in ((c.topleft, c.bottomright), (c.topright, c.bottomleft)):
             pygame.draw.line(surf, EDGE if hot else LABEL, a, b, 2)
+        # The header: the title -- the first menu, if any -- has the top row to
+        # itself, as wide as it needs up to the close button; the other menus
+        # and buttons sit in a row underneath.
+        row_h = font.get_linesize() + 10
+        bottom = y + pad + font.get_linesize()
         if self.menus:
+            self.menus[0].draw_button(surf, font, x + pad, y + pad, EDGE, max_width=self.close.x - 8 - (x + pad))
+            rest = [m for m in self.menus[1:] if getattr(m, "visible", lambda: True)()]
             bx = x + pad
-            for m in self.menus:
-                bx += m.draw_button(surf, font, bx, y + pad, EDGE) + 12
+            for m in rest:
+                bx += m.draw_button(surf, font, bx, y + pad + row_h, EDGE) + 12
+            if rest:
+                bottom += row_h
         else:
             surf.blit(font.render(self.title, True, EDGE), (x + pad, y + pad))
+        self.header_bottom = bottom + 4
 
         lh = mono.get_linesize()
-        body_top = y + pad + font.get_linesize() + 10
+        body_top = bottom + 10
         rows = max(1, (y + rh - pad - lh - 6 - body_top) // lh)
         lines = self.lines(max(20, (rw - 2 * pad) // mono.size("M")[0]))
         self.top = min(self.top, max(0, len(lines) - rows))
@@ -398,7 +487,8 @@ class TextViewer:
             surf.blit(mono.render(ln, True, LABEL), (x + pad, body_top + i * lh))
         where = f"lines {self.top + 1}–{min(len(lines), self.top + rows)} of {len(lines)}"
         cycle = "   Left / Right: previous / next" if self.menus else ""
-        hint = font.render(f"{where}   scroll / Up Down / PgUp PgDn: move{cycle}   Cmd+C: copy   Esc: close", True, STATUS)
+        folding = f"folded past level {self.fold} (0: unfold)" if self.fold else "1–9: fold"
+        hint = font.render(f"{where}   scroll / Up Down / PgUp PgDn: move{cycle}   {folding}   Cmd+C: copy   Esc: close", True, STATUS)
         surf.blit(hint, (x + pad, y + rh - pad - lh + 2))
         for m in self.menus:
             m.draw_list(surf, font)
@@ -420,7 +510,7 @@ class Hyp:
     corpus comes from (`__source__`, `__default_data__`,
     `__storage_options__`), what opening a point
     does (`__open_point__`), and how a point is labeled (`__point_label__`,
-    `__point_datetime__`, `__point_tooltip__`). The hooks are the only methods
+    `__point_name__`, `__point_datetime__`, `__point_tooltip__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
     """
 
@@ -453,19 +543,24 @@ class Hyp:
         """The label drawn beside point *i*."""
         return self.snap.summaries[i]
 
+    def __point_name__(self, i):
+        """A name for point *i*, as text, drawn under its label before its datetime; or None: here, none."""
+        return None
+
     def __point_datetime__(self, i):
         """When point *i* is from, as text, or None: here, when it was added."""
         added = self.snap.points[i].get("added") if self.snap.points else None
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(added)) if added else None
 
     def __point_tooltip__(self, i):
-        """The tooltip of point *i*: its summary, and its datetime when they are shown."""
-        dt = self.__point_datetime__(i) if self.settings["datetimes"] else None
-        return f"{self.snap.summaries[i]} · {dt}" if dt else self.snap.summaries[i]
+        """The tooltip of point *i*: its label, both lines, as the settings show them -- in full, where the label is cut short."""
+        sub = self.sublabel(i, full=True)
+        return f"{self.__point_label__(i)}\n{sub}" if sub else self.__point_label__(i)
 
     def push_viewer(self, viewer):
-        """Open *viewer* over the ones open, inset so that they show around it."""
+        """Open *viewer* over the ones open: inset so that they show around it, and below the header of the top one."""
         viewer.inset = 28 * len(self.viewers)
+        viewer.over = self.viewers[-1] if self.viewers else None
         self.viewers.append(viewer)
 
     def run_async(self, fn, then):
@@ -480,9 +575,12 @@ class Hyp:
                 result = fn()
             except Exception as e:  # shown in the status line
                 self.worker.events.put(("error", f"{type(e).__name__}: {e}"))
-                return
-            self.worker.events.put(("call", lambda: then(result)))
+            else:
+                self.worker.events.put(("call", lambda: then(result)))
+            finally:
+                self.worker.events.put(("read", None))
 
+        self.reading += 1
         threading.Thread(target=run, daemon=True).start()
 
     def __init__(self, engine, worker, args=None):
@@ -494,10 +592,12 @@ class Hyp:
         self.tween = None  # (from positions, to positions, start time)
         self.status = "starting"
         self.error = None
+        self.reading = 0  # run_async reads under way: with the worker's jobs, what the spinner shows
         self.box = None
         self.viewers = []  # open text windows, the last on top
         self.hover = None
         self.press = None  # where the left button went down, while it is down
+        self.last_off_disk = None  # (pos, time) of the last left click off the disk: half a double click
         self.dragging = False
         self.last = None
         self.labels = {}
@@ -602,6 +702,8 @@ class Hyp:
             if abs(self.to_disk(ev.pos)) < 1:
                 self.press = ev.pos
                 self.dragging = False
+            elif self.double_click_off_disk(ev.pos, now):
+                self.reset_view(now)
         elif ev.type == pygame.MOUSEMOTION and self.press is not None:
             if not self.dragging:
                 dx, dy = ev.pos[0] - self.press[0], ev.pos[1] - self.press[1]
@@ -632,8 +734,23 @@ class Hyp:
         elif ev.type == pygame.MOUSEWHEEL:
             self.view.zoom_by(ZOOM_STEP ** getattr(ev, "precise_y", ev.y))
         elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_HOME:
-            self.view.k = 1.0
-            self.view.center_on(self.view.isometry(now)(0j), now)
+            self.reset_view(now)
+
+    def reset_view(self, now):
+        """Back to the original view: zoom 1, the corpus center sliding back to the middle."""
+        self.view.k = 1.0
+        self.view.center_on(self.view.isometry(now)(0j), now)
+
+    def double_click_off_disk(self, pos, now):
+        """Whether a left click at *pos*, off the disk, is the second of a double click there."""
+        last, self.last_off_disk = self.last_off_disk, (pos, now)
+        if last is None:
+            return False
+        (x, y), t = last
+        if now - t <= DOUBLE_CLICK_S and (pos[0] - x) ** 2 + (pos[1] - y) ** 2 <= DOUBLE_CLICK_PX**2:
+            self.last_off_disk = None  # a third click starts another
+            return True
+        return False
 
     def drain(self, now):
         """Handle what the worker and async reads sent; whether there was any."""
@@ -654,17 +771,20 @@ class Hyp:
                 payload()
             elif kind == "finished":
                 self.worker.pending -= 1
+            elif kind == "read":
+                self.reading -= 1
 
     # -- drawing --------------------------------------------------------------
 
-    def label(self, i, text, when=None):
-        """Point *i*'s label: *text*, and below it, dimmer, *when*."""
-        key = (i, text, when)
+    def label(self, i, text, sub=None):
+        """Point *i*'s label: *text*, and below it, dimmer, *sub* -- its `sublabel`."""
+        key = (i, text, sub)
         if key not in self.labels:
             short = text if len(text) <= 32 else text[:31] + "…"
             lines = [self.small.render(short, True, LABEL)]
-            if when:
-                lines.append(self.tiny.render(when, True, STATUS))
+            if sub:
+                sub = sub if len(sub) <= 48 else sub[:47] + "…"
+                lines.append(self.tiny.render(sub, True, STATUS))
             img = pygame.Surface((max(l.get_width() for l in lines), sum(l.get_height() for l in lines)), pygame.SRCALPHA)
             y = 0
             for line in lines:
@@ -672,6 +792,17 @@ class Hyp:
                 y += line.get_height()
             self.labels[key] = img
         return self.labels[key]
+
+    def sublabel(self, i, full=False):
+        """The second line of point *i*'s label: its name and its datetime, each as the settings say; None for neither.
+
+        A long name is cut short, so that the datetime stays readable, unless *full*.
+        """
+        name = self.__point_name__(i) if self.settings.get("names") else None
+        if name and len(name) > 30 and not full:
+            name = name[:29] + "…"  # so that a long one leaves the datetime readable
+        parts = [name, self.__point_datetime__(i) if self.settings.get("datetimes") else None]
+        return " · ".join(p for p in parts if p) or None
 
     def _settings_items_(self):
         return [(f"[{'x' if on else ' '}]  {name}", name) for name, on in self.settings.items()]
@@ -728,7 +859,7 @@ class Hyp:
             for i in np.argsort(r2)[:MAX_LABELS]:
                 if r2[i] > LABEL_RADIUS**2:
                     break
-                img = self.label(i, self.__point_label__(i), self.__point_datetime__(i) if self.settings["datetimes"] else None)
+                img = self.label(i, self.__point_label__(i), self.sublabel(i))
                 rect = img.get_rect(midleft=(sx[i] + 8, sy[i]))
                 if rect.collidelist(placed) < 0:
                     img.set_alpha(int(255 * (1.0 - r2[i] / LABEL_RADIUS**2) ** 0.5))
@@ -745,24 +876,46 @@ class Hyp:
         for viewer in self.viewers:
             viewer.draw(surf, self.font, self.mono)
         self.settings_menu.draw_list(surf, self.small)
-        self.statusline()
+        self.statusline(now)
         pygame.display.flip()
 
     def tooltip(self, text, pos):
-        img = self.font.render(text, True, TIP_FG)
-        rect = img.get_rect(topleft=(pos[0] + 14, pos[1] + 14)).inflate(16, 10)
+        """*text* in a box by *pos*: its first line as a label's, any after it smaller, as a label's second line."""
+        first, *rest = text.split("\n")
+        lines = [self.font.render(first, True, TIP_FG)] + [self.small.render(t, True, (90, 90, 90)) for t in rest]
+        w, h = max(l.get_width() for l in lines), sum(l.get_height() for l in lines)
+        rect = pygame.Rect(pos[0] + 14, pos[1] + 14, w, h).inflate(16, 10)
         rect.clamp_ip(self.screen.get_rect())
         pygame.draw.rect(self.screen, TIP_BG, rect, border_radius=4)
-        self.screen.blit(img, img.get_rect(center=rect.center))
+        y = rect.y + 5
+        for line in lines:
+            self.screen.blit(line, (rect.x + 8, y))
+            y += line.get_height()
 
-    def statusline(self):
+    def busy(self):
+        """Whether data are being loaded or prepared: an engine job, or a read a viewer waits on."""
+        return bool(self.worker.pending or self.reading)
+
+    def spinner(self, center, now, radius=7, dots=10):
+        """A wheel of *dots* at *center*, the brightest one going round once a second."""
+        head = int(now * dots) % dots
+        for j in range(dots):
+            a = 0.2 + 0.8 * (1.0 - ((head - j) % dots) / dots)  # 1 at the head, fading behind it to 0.2
+            color = tuple(int(b + (s - b) * a) for b, s in zip(BG, LABEL))
+            angle = 2 * math.pi * j / dots - math.pi / 2
+            pygame.draw.circle(self.screen, color, (center[0] + radius * math.cos(angle), center[1] + radius * math.sin(angle)), 2)
+
+    def statusline(self, now):
         w, h = self.screen.get_size()
-        busy = "⋯ " if self.worker.pending else ""
         n = len(self.snap.texts) if self.snap else 0
-        msg = f"error: {self.error}" if self.error else f"{busy}{self.status}"
+        msg = f"error: {self.error}" if self.error else self.status
         left = self.small.render(f"{n} texts · zoom {self.view.k:.2f} · {msg}", True, (240, 120, 110) if self.error else STATUS)
-        right = self.small.render("click: center · drag: move · scroll: zoom · right-click: open / add · Home: reset", True, STATUS)
-        self.screen.blit(left, (10, h - 20))
+        right = self.small.render("click: center · drag: move · scroll: zoom · right-click: open / add · Home or double-click outside: reset", True, STATUS)
+        x = 10
+        if self.busy():
+            self.spinner((x + 8, h - 20 + left.get_height() // 2), now)
+            x += 24
+        self.screen.blit(left, (x, h - 20))
         self.screen.blit(right, (w - right.get_width() - 10, h - 20))
 
     def raise_window(self):
@@ -786,7 +939,7 @@ class Hyp:
             # Redraw only while something can change on screen; an idle frame
             # at 60 fps costs half a core for nothing.
             moving = self.view.anim is not None or self.tween is not None
-            if events or news or moving or self.worker.pending or self.box is not None:
+            if events or news or moving or self.busy() or self.box is not None:
                 self.draw(now)
             self.clock.tick(60 if moving else 30)
 
@@ -795,6 +948,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="hyp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)")
     ap.add_argument("--pipejournal", action="store_true", help="the pipelines of dbx's datalake (DBX_DATALAKE), from dbx.pipejournal(), one point each")
+    ap.add_argument("--remote-python", default=None, help="with --pipejournal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: ~/miniconda3/envs/autopath/bin/python)")
     ap.add_argument("--n-workers", type=int, default=16, help="threads reading a remote source, e.g. the dbx journal and its side files (default: 16)")
     ap.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama", help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
     ap.add_argument("--embed-model", default=None, help=f"default: {EMBED_MODEL} for ollama")

@@ -22,6 +22,7 @@ import collections
 import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
+import copyreg
 from dataclasses import dataclass, field, fields, asdict, replace
 import datetime
 import functools
@@ -262,6 +263,31 @@ class TopicMarkerMeta(type):
         return f"{cls.__name__}({_render_columns_(columns)})"
 
     __str__ = __repr__
+
+    def __init_subclass__(meta, **kwargs):
+        super().__init_subclass__(**kwargs)
+        copyreg.pickle(meta, _reduce_marker_)
+
+
+def _reduce_marker_(marker):
+    """Pickle a topic marker: a declared one by its name, a parameterised one as the call that made it.
+
+    ``DATAFILE('tabs.json', 'a note')`` is a class made on the call, under the name ``DATAFILE``, which
+    is another class: pickled by name, it would be refused as "not the same object". Its rendering is
+    its identity and `literal_topics` reads it back, so that is what travels -- to a worker, say, inside
+    a specialization naming a narrower block's topics.
+    """
+    if any(marker.__dict__.get(k) for k in ('columns', 'filename', 'note')):
+        return _marker_from_rendering_, (repr(marker),)
+    return marker.__qualname__
+
+
+def _marker_from_rendering_(text: str):
+    """The marker *text* renders -- see `_reduce_marker_`."""
+    return literal_topics(f"{{'marker': {text}}}")['marker']
+
+
+copyreg.pickle(TopicMarkerMeta, _reduce_marker_)
 
 
 class TOPICMARKER(metaclass=TopicMarkerMeta):

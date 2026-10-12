@@ -2890,6 +2890,9 @@ class DataJournal:
                        if isinstance(_TOPICS, dict)
                        else {topic: datablocks.DIRTOPIC for topic in block.topics()})
         paths_dict = block.paths()
+        # What can be read from it, which a table's TOPICS do not say: its tablets' slices, and upstream's.
+        readable = getattr(block, 'readable_slices', None)
+        slices_dict = readable() if readable is not None else None
         #
         journal_path = cls.path(block, 'journal', 'parquet', ensure_dirpath=True, filename_prefix=journal_prefix)
         df = pd.DataFrame.from_records([{'datetime': dt,
@@ -2911,6 +2914,7 @@ class DataJournal:
                                          'tag': block.tag,
                                          'topics': str(topics_dict),
                                          'paths': str(paths_dict),
+                                         'slices': str(slices_dict) if slices_dict is not None else None,
                                          'log': capture.path if capture is not None else None,
                                          'event': event,
                                          'redirection': redirection_value,

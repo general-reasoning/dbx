@@ -665,6 +665,28 @@ class _Database_(Datablock):
                         )
                     node = node[k]
 
+    def readable_slices(self) -> dict:
+        """``{slice: {column: type} | None}``: every slice this block reads, its own and upstream, as its owner declares it.
+
+        What a journal entry records as ``slices``. A table's slices are its
+        tablets' topics, not its own -- not in its TOPICS, nor its hash, nor its
+        paths -- and this is where one is told what can be read from it. A
+        slice's columns are its owner's declaration (`_route_`, then
+        `_slice_declaration_`, which asks a table's first tablet); None when
+        none is declared, or when the owner cannot be asked yet -- a table
+        whose tablets are not dealt, say, journaled before its tree is built.
+        Never raises for that: a journal entry must not break the build it records.
+        """
+        out = {}
+        for s in self.slices(recursive=True):
+            try:
+                (owner, _, _), = self._route_([s])
+                declared = owner._slice_declaration_(s)
+                out[s] = DATASLICE.writer_columns(declared) if declared else None
+            except Exception:
+                out[s] = None
+        return out
+
     def _slice_declaration_(self, slice) -> dict:
         """*slice*'s declared schema wherever it is declared -- here, or on a table's tablets -- else ``{}``.
 

@@ -35,6 +35,11 @@ All notable changes to this project will be documented in this file.
   datalake's filesystem.
 
 ### Changed
+- **`quote()` and `cite()` render a set `tag` before `spec`.** The tag names
+  the block where the spec, often dozens of entries, says how it was made, so
+  it is read first rather than found under the spec. An unset tag stays after
+  the spec. Only the rendering moves: a quote still evaluates to the same
+  block, and no hash depends on the order.
 - **Tabs are tablets, in every name code uses.** `Datatab` is `Datatablet`,
   `Featuretab` (and `BipolarFeaturetab`, `TernaryFeaturetab`) is
   `Featuretablet` (and `BipolarFeaturetablet`, `TernaryFeaturetablet`),

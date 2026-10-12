@@ -3838,14 +3838,10 @@ class Datablock:
         """
         mode = 'quote' if not cite else 'cite'
         quoted_spec = self.__expand_spec__(mode)
-        kwargs = {**self._rootkwargs_, **{'spec': quoted_spec},}
-        if tailkwargs:
-            kwargs.update(**self._tailkwargs_)
-        else:
-            kwargs.update({
-                k: v for k, v in self._tailkwargs_.items()
-                if k in self.CITE_KEEP_TAILKWARGS
-            })
+        tail = (self._tailkwargs_ if tailkwargs else
+                {k: v for k, v in self._tailkwargs_.items() if k in self.CITE_KEEP_TAILKWARGS})
+        kwargs = {**self._rootkwargs_, **self._tag_first_(tail), 'spec': quoted_spec}
+        kwargs.update({k: v for k, v in tail.items() if k not in kwargs})
         quote = self._render_call_(kwargs, pretty=pretty, deslash=deslash, dollar=not cite)
         self.log.detailed(f"quote: ------------> {quoted_spec=}")
         self.log.detailed(f"quote: ------------> {quote=}")
@@ -3896,8 +3892,12 @@ class Datablock:
         """
         IND = '    '
         inner = _indent + IND
+        tail = (self._tailkwargs_ if tailkwargs else
+                {k: v for k, v in self._tailkwargs_.items()
+                 if k in self.CITE_KEEP_TAILKWARGS})
+        head = self._tag_first_(tail)
         lines = [f"${self.fqcn}("]
-        for k, v in self._rootkwargs_.items():
+        for k, v in {**self._rootkwargs_, **head}.items():
             lines.append(f"{inner}{k}={v!r},")
 
         lines.append(f"{inner}spec={{")
@@ -3916,11 +3916,9 @@ class Datablock:
                 lines.append(f"{inner}{IND}{sk!r}: {val!r},")
         lines.append(f"{inner}}},")
 
-        tail = (self._tailkwargs_ if tailkwargs else
-                {k: v for k, v in self._tailkwargs_.items()
-                 if k in self.CITE_KEEP_TAILKWARGS})
         for k, v in tail.items():
-            lines.append(f"{inner}{k}={v!r},")
+            if k not in head:
+                lines.append(f"{inner}{k}={v!r},")
         lines.append(f"{_indent})")
 
         cite = '\n'.join(lines)
@@ -6440,6 +6438,18 @@ class Datablock:
         pieces = [p for p in pieces if p]
         body = f"\n{indent}".join(repr(p) for p in pieces)
         return f"(\n{indent}{body}\n{indent})"
+
+    @staticmethod
+    def _tag_first_(tailkwargs) -> dict:
+        """``{'tag': tag}`` from *tailkwargs* when it is set, else ``{}``: what quote and cite render before ``spec``.
+
+        A tag names the block for a reader -- ``gigapath_deep_feature_clip`` --
+        where its spec, often dozens of entries, says how it was made; ahead
+        of the spec it is read first, rather than found under it. Unset, it is
+        left where it was.
+        """
+        tag = tailkwargs.get('tag')
+        return {'tag': tag} if tag is not None else {}
 
     def _render_call_(self, kwargs, *, pretty: bool, deslash: int, dollar: bool) -> str:
         """``fqcn(k=v, ...)`` for *kwargs*: the rendering :meth:`quote` and :meth:`repr` share."""

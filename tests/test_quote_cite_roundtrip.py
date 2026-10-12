@@ -300,3 +300,27 @@ class TestCiteInJournal:
         entry = DataJournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B'}))
         assert entry.block.cite() is None
         assert entry.read('cite') is None
+
+
+class TestTagBeforeSpec:
+    """A set tag is rendered before the spec, in quote and cite alike: it names
+    the block, where the spec -- often dozens of entries -- says how it was
+    made. An unset tag stays where it was, after the spec."""
+
+    def test_quote_renders_a_set_tag_before_spec(self):
+        q = Leaf(spec={'size': 5}, tag='pkg.pipelines.leaf_tag').quote()
+        assert q.index("tag='pkg.pipelines.leaf_tag'") < q.index('spec=')
+
+    def test_cite_renders_a_set_tag_before_spec(self):
+        c = Leaf(spec={'size': 5}, tag='pkg.pipelines.leaf_tag').cite()
+        assert c.index("tag='pkg.pipelines.leaf_tag'") < c.index('spec=')
+        assert c.count('tag=') == 1
+
+    def test_an_unset_tag_stays_after_spec(self):
+        q = Leaf(spec={'size': 5}).quote()
+        assert q.index('spec=') < q.index('tag=None')
+
+    def test_a_quote_with_tag_first_still_evaluates_to_the_block(self):
+        b = Leaf(spec={'size': 5}, tag='pkg.pipelines.leaf_tag')
+        again = dbx_eval(b.quote())
+        assert (again.hash, again.tag) == (b.hash, b.tag)

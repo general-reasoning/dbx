@@ -157,6 +157,22 @@ def _side_file_(column, path, url):
     return text if len(text) <= SIDE_FILE_LIMIT else text[:SIDE_FILE_LIMIT] + "\n…"
 
 
+def var_name(row):
+    """The pipeline's ``VAR.name``, from the spec side file *row* names; None where it has none, or it cannot be read."""
+    import yaml
+    from dbx.databits import read_yaml
+
+    path = row.get("spec")
+    if not isinstance(path, str) or not path.endswith((".yaml", ".yml")):
+        return None
+    try:
+        spec = read_yaml(rebase(path, row.get("entry_path", "")), safe=False)
+    except (FileNotFoundError, OSError, yaml.YAMLError):
+        return None
+    name = spec.get("name") if isinstance(spec, dict) else None
+    return None if name is None or str(name) == "" else str(name)
+
+
 def entry(row):
     """One `dbx.pipejournal()` row, or any journal row, with its side files read, as an Entry."""
     row = {k: v for k, v in dict(row).items() if not _is_blank_(v)}
@@ -232,12 +248,19 @@ def pipelines(progress=print, n_workers=16):
 
 
 def journal_entries(n_workers=16):
-    """Every entry of the pipeline journal, unaggregated, newest first, as a DataFrame."""
+    """Every entry of the pipeline journal, unaggregated, newest first, as a DataFrame.
+
+    With a ``name`` column: each entry's `var_name`, read from its spec side
+    file on *n_workers* threads -- what tells apart the runs the tag menu lists.
+    """
     import pandas as pd
 
     dbx = _dbx_()
     df = dbx.PipeJournal.read(dbx.PipeJournal.ANCHOR, datalake=datalake(), n_workers=n_workers, index=None)
-    return pd.DataFrame(df).reset_index(drop=True)
+    df = pd.DataFrame(df).reset_index(drop=True)
+    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+        df["name"] = list(ex.map(lambda i: var_name(df.iloc[i]), range(len(df))))
+    return df
 
 
 def constructed_entrypaths(n_workers=16):
@@ -338,7 +361,13 @@ class HypDbxPipelines(Hyp):
         if "tag" not in df.columns:
             return []
         same = df[df["tag"].astype(str) == str(tag)]
-        return [(f"{when(r.get('datetime'), seconds=True)}   {str(r.get('hash', ''))[:8]}   {r.get('event', '')}", k) for k, r in same.iterrows()]
+
+        def text(r):
+            name = r.get("name")
+            named = f"{name}   " if isinstance(name, str) and name else ""
+            return f"{when(r.get('datetime'), seconds=True)}   {named}{str(r.get('hash', ''))[:8]}   {r.get('event', '')}"
+
+        return [(text(r), k) for k, r in same.iterrows()]
 
     def _is_entry_(self, k, row):
         """Whether the journal's entry *k* is the one *row* -- a stored, stringified row -- records."""

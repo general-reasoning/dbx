@@ -41,7 +41,8 @@ to -- and each row is a point:
 - on right click, its row's columns and its side files' contents -- spec, dfn
   and kwargs as the dicts they hold, `topics` and `paths` one key per line --
   under two menus:
-  - the tag: every journal entry with that tag, by datetime, to switch to
+  - the tag: every journal entry with that tag, by datetime and -- where
+    its spec has one -- `VAR.name`, to switch to
   - constructed entrypoints, from `dbx.pipejournal(construct_only=True)`:
     picking one opens that block's own journal over the pipeline's, its title
     a menu of the pipeline's other constructed blocks

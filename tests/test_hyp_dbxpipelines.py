@@ -169,3 +169,22 @@ def test_no_datalake_is_refused(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     with pytest.raises(SystemExit, match="DBX_DATALAKE"):
         dbxpipelines.HypDbxPipelines.__default_data__(None)
+
+
+def test_the_tag_menu_names_each_run_by_its_var_name(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("DBX_DATALAKE", str(tmp_path))
+    write_run(tmp_path, "TrainPipeline", "aaaa", 0, "lr: 0.1\nname: gigapath clip\n")
+    write_run(tmp_path, "TrainPipeline", "aaaa", 1, "lr: 0.2\nname: uni clip\n")
+    write_run(tmp_path, "TrainPipeline", "aaaa", 2, "lr: 0.3\n")
+    entries = dbxpipelines.journal_entries()
+    assert sorted(entries["name"].fillna("-")) == ["-", "gigapath clip", "uni clip"]
+
+    app = SimpleNamespace(journal=entries)
+    items = [text for text, _ in dbxpipelines.HypDbxPipelines._datetimes_(app, "pkg.pipelines.trainpipeline")]
+    assert items == [
+        "2026-10-03 12:00:00   haaaa   create",
+        "2026-10-02 12:00:00   uni clip   haaaa   create",
+        "2026-10-01 12:00:00   gigapath clip   haaaa   create",
+    ]

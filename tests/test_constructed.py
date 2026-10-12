@@ -29,7 +29,8 @@ class Pear(Apple):
 def lake(tmp_path):
     Apple(datalake=str(tmp_path)).build()
     Pear(datalake=str(tmp_path)).build()
-    Apple(datalake=str(tmp_path), tag='second').build()
+    # A second build of one hash: only a tag-keyed layout files it apart.
+    Apple(datalake=str(tmp_path), tag='second', keyby='tag_version_shorthash').build()
     # Journalled, and not a construction.
     Apple(datalake=str(tmp_path)).write_journal_entry(event='note:checked')
     return str(tmp_path)

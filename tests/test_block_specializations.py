@@ -237,7 +237,8 @@ class TestSpecializeMethod:
         assert t1.redirected()
 
     def test_valid_does_not_install_specialization(self, grown):
-        table = v1table(grown, spec={'n': 3}, tag='valid_no_spec')
+        # Tag-keyed, so it is not the table `grown` built.
+        table = v1table(grown, spec={'n': 3}, tag='valid_no_spec', keyby='tag_version_shorthash')
         # table is not built, tablets are not built
         # calling valid() must NOT install specializations
         assert not table.valid()
@@ -450,7 +451,8 @@ class TestCombineSpecializations:
             SourceA.anchor: sa.datajournal(),
             SourceB.anchor: sb.datajournal(),
         }
-        target_dict = Target(datalake=lake, tag="multi_j", use_specializations=True)
+        # Tag-keyed, so the two are two blocks, each to install its own.
+        target_dict = Target(datalake=lake, tag="multi_j", keyby='tag_version_shorthash', use_specializations=True)
         res = target_dict._install_specialization_(journal=j_dict)
         assert res is not None
         assert target_dict.valid()
@@ -459,7 +461,7 @@ class TestCombineSpecializations:
 
         # Test passing journal as list (corresponding to SPECIALIZATIONS order)
         j_list = [sa.datajournal(), sb.datajournal()]
-        target_list = Target(datalake=lake, tag="multi_j_list", use_specializations=True)
+        target_list = Target(datalake=lake, tag="multi_j_list", keyby='tag_version_shorthash', use_specializations=True)
         res_list = target_list._install_specialization_(journal=j_list)
         assert res_list is not None
         assert target_list.valid()

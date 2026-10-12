@@ -1994,6 +1994,8 @@ class Block:
             return hash if tag is None else f"{tag}/{hash[:8]}"
         if keyby == 'version_hash':
             return f"version={version}/{hash[:8]}" if version is not None else hash
+        if keyby == 'version_shorthash':
+            return f"version={version}/{hash[:8]}" if version is not None else hash[:8]
         if keyby in ('tag_version_hash', 'tag_version_shorthash'):
             parts = []
             if tag is not None:
@@ -2689,7 +2691,8 @@ class DataJournal:
         return result
 
     @classmethod
-    def read_hash(cls, anchor, hash: str, *, tag: str | None = None, version=None, datalake=None,
+    def read_hash(cls, anchor, hash: str, *, tag: str | None = None, version=None,
+                  keyby: str | None = 'tag_version_shorthash', datalake=None,
                   storage_options=None, log=None, n_workers=None) -> 'DataJournalFrame | None':
         """The entries *anchor*'s journal holds for one block hash -- read from where that block's are filed.
 
@@ -2697,9 +2700,12 @@ class DataJournal:
         directory -- and is then filtered. A block resolving its own
         specialization wants one hash's entries, and the path says where those
         are: ``<anchor>/.dbx/<anchor>/journal/<hash>/`` (where they were filed
-        first) and the block's own ``<anchor>/<tag>/version=<version>/<hash...>
-        /.journal/<anchor>/journal/<hash>/``. Those directories, and no others,
-        are listed here.
+        first) and the block's own ``<anchor>/[<tag>/]version=<version>/<hash...>
+        /.journal/<anchor>/journal/<hash>/``. The tag is in that path when
+        *keyby* puts it there; when it does not, the directory under the tag
+        is listed as well, where a build keyed by tag -- as every block was
+        before 'version_shorthash' -- is filed. Those directories, and no
+        others, are listed here.
 
         None when none of them holds an entry -- the block was built under
         another tag, say, as a specialization allows -- and the caller reads
@@ -2713,8 +2719,17 @@ class DataJournal:
             url = eval(url)
         fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
         base = fs_full_path(fs, os.path.join(root, anchor))
-        tagdir = os.path.join(base, tag) if tag else base
-        blockdirs = ([os.path.join(tagdir, f"version={version}")] if version is not None else []) + [tagdir]
+        # Not the untagged directory for a tag-keyed block: a tablet is one of
+        # thousands under its anchor, and listing the anchor for each is what
+        # looking by hash is there to avoid.
+        if not tag:
+            keydirs = [base]
+        elif keyby in cls._TAG_KEYBYS_:
+            keydirs = [os.path.join(base, tag)]
+        else:
+            keydirs = [base, os.path.join(base, tag)]
+        blockdirs = [d for k in keydirs
+                     for d in ([os.path.join(k, f"version={version}")] if version is not None else []) + [k]]
         # Expanded a level at a time, listing only where a level is a wildcard:
         # fs.glob walks everything under a pattern's last literal directory --
         # all of `.dbx/`, every block's journal -- to match a handful of files.
@@ -3015,6 +3030,9 @@ class DataJournal:
         return self._session
 
     # 4. Helpers -----------------------------------------------------------
+
+    #: The keybys that put a block's tag in its path.
+    _TAG_KEYBYS_ = ('tag', 'taghash', 'tag_hash', 'tag_version_hash', 'tag_version_shorthash')
 
     @staticmethod
     def _lake_(block):

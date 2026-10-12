@@ -1836,11 +1836,19 @@ class Datablock:
     # what the block IS, so they are noise in a citation and they dominate it.
     #
     # `tag` is the one that cannot be dropped silently. It is NOT part of the
-    # identity hash (subsignature() is built from _rootkwargs_ + spec), but
-    # keyby='tag_version_shorthash' puts it in the artifact PATH, so a citation
+    # identity hash (subsignature() is built from _rootkwargs_ + spec), but a
+    # tag-keyed layout (a Datatablet's KEYBY, or an explicit
+    # keyby='tag_version_shorthash') puts it in the artifact PATH, so a citation
     # without it re-evaluates to the same hash at a DIFFERENT key -- i.e. it
     # points at storage that does not hold the artifact you cited.
     CITE_KEEP_TAILKWARGS = ('tag',)
+
+    #: The keyby a block is given when its constructor is not: what its key,
+    #: and so its path, is made of. 'version_shorthash' leaves the tag out, so
+    #: a tag is a label and tagging a built block does not move it; for an
+    #: untagged block it is the key 'tag_version_shorthash' made. `Datatablet`
+    #: keeps 'tag_version_shorthash': a tablet's tag has always been in its path.
+    KEYBY = 'version_shorthash'
 
     Diff = collections.namedtuple('Diff', ['subsig', 'topics', 'version'])
 
@@ -1920,7 +1928,8 @@ class Datablock:
         # its journal entry records the capture open around its build.
         capture_output: bool = None,
         revision: str = None,
-        keyby: str = 'tag_version_shorthash',
+        # 'default' is the class's KEYBY. None is a keyby of its own: no key.
+        keyby: 'str | None' = 'default',
         uuid16: bool = False,
         # Shared by every block of one build tree, and generated when not given. A
         # block's own identity does not depend on it, so it stays out of the
@@ -2135,9 +2144,14 @@ class Datablock:
         self._revision_ = _unquote(state.get('revision'))
         if self._revision_ == 'None':
             self._revision_ = None
+        # A state with no keyby predates the class KEYBY, when every block was
+        # keyed 'tag_version_shorthash'; 'default' is what __init__ says when
+        # it was given none.
         self.keyby = _unquote(state.get('keyby', 'tag_version_shorthash'))
-        if self.keyby not in (None, 'hash', 'code', 'subhash', 'superhash', 'norm', 'signature', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'code', 'signature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
+        if self.keyby == 'default':
+            self.keyby = type(self).KEYBY
+        if self.keyby not in (None, 'hash', 'code', 'subhash', 'superhash', 'norm', 'signature', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'version_shorthash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'code', 'signature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'version_shorthash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -5143,6 +5157,11 @@ class Datablock:
                 key = f"version={self.version}/{self.hash[:8]}"
             else:
                 key = self.hash
+        elif self.keyby == 'version_shorthash':
+            if self.version is not None:
+                key = f"version={self.version}/{self.hash[:8]}"
+            else:
+                key = self.hash[:8]
         elif self.keyby == 'tag_version_hash' or self.keyby == 'tag_version_shorthash':
             parts = []
             if self._tag_ is not None:
@@ -6395,11 +6414,20 @@ class Datablock:
         that only overrides ``__block__`` never has to think about it.
         """
         kw = {'tree': self.tree}
-        if keyby:
-            keyby_val = getattr(self, 'keyby', None)
-            if keyby_val is not None:
-                kw['keyby'] = keyby_val
+        if keyby and self._keyby_given_():
+            kw['keyby'] = self.keyby
         return child.set(**kw)
+
+    def _keyby_given_(self) -> bool:
+        """Whether this block's keyby is one it was given, rather than its class's KEYBY.
+
+        What decides whether a stack hands its keyby to its blocks: a table at
+        its default leaves each tablet its own (tag-keyed) KEYBY, so a tablet's
+        path is the same built by the table and read back by ``tablet(i)``.
+        Judged by value, not by how the block was constructed, so a pickled
+        or re-quoted stack, which always spells its keyby, says the same.
+        """
+        return self.keyby != type(self).KEYBY
 
     @functools.cached_property
     def _rootkwargs_(self):
@@ -7071,7 +7099,7 @@ class Datablock:
         anchor = self._specialization_anchor_(specialization)
         version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
         j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
-                                  datalake=self.datalake, storage_options=self.storage_options, log=self.log)
+                                  keyby=self.keyby, datalake=self.datalake, storage_options=self.storage_options, log=self.log)
         if j is not None or not fallback:
             # *fallback* False -- `BY_HASH` -- takes "filed nowhere" for "never built".
             return j
@@ -7087,7 +7115,8 @@ class Datablock:
         version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
         try:
             j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
-                                      datalake=self.datalake, storage_options=self.storage_options, log=self.log)
+                                      keyby=self.keyby, datalake=self.datalake,
+                                      storage_options=self.storage_options, log=self.log)
         except FileNotFoundError:
             return False
         return j is not None and len(j) > 0
@@ -7758,7 +7787,8 @@ class Datastack(Datablock):
             # specializations against, rather than reading the journal itself.
             with forming_with_journal(journal), stack._block_specializations_in_force_():
                 block = stack.__block__(self.idx)
-                block.keyby = stack.keyby
+                if stack._keyby_given_():
+                    block.keyby = stack.keyby
                 if build:
                     block.build()
             del block

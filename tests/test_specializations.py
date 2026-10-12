@@ -1054,11 +1054,12 @@ class TestSetIsAnOrdinaryConstruction:
         """
         v1(tmp_path).build()
         moving = self._redirected(tmp_path)
-        elsewhere = v2(tmp_path, tag='mine', use_specializations=False)
+        # A tag moves a block only where its keyby puts the tag in the path.
+        elsewhere = v2(tmp_path, tag='mine', keyby='tag_version_shorthash', use_specializations=False)
         elsewhere.build()                      # builds both topics for itself
         assert 'spectra' in os.listdir(elsewhere.anchorkeypath)
 
-        moved = moving.set(tag='mine')
+        moved = moving.set(tag='mine', keyby='tag_version_shorthash')
         assert moved.anchorkeypath == elsewhere.anchorkeypath
         assert moved._redirected_paths_ is None
         assert moved.ownedtopics() == ['spectra', 'phases']

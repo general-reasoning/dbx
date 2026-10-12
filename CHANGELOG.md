@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A block's tag is a label, not a location: `keyby='version_shorthash'` is
+  the default.** It keys a block `version=<V>/<hash8>`, or `<hash8>` with no
+  VERSION -- for an untagged block exactly the key `tag_version_shorthash`
+  made, so no untagged build moves. A tagged block is keyed as if untagged,
+  so tagging one already built finds it built. The default is the class's
+  `KEYBY`, and `Datatablet.KEYBY` stays `'tag_version_shorthash'`: every
+  tablet -- a table's, a piece, a packed or core tablet, an autopath
+  `__tablet__` override's -- keeps its tag in its path, as built. A stack
+  hands its keyby to its blocks only when it is not the stack's `KEYBY`, so
+  a table at its default builds its tablets where `tablet(i)` reads them; an
+  explicit keyby on a table still reaches them. Every quote spells its
+  keyby, so a block reconstructed from a journalled quote keeps the path it
+  was built at. **Moves:** a non-tablet block built with a tag under the old
+  default is no longer found by the same constructor without
+  `keyby='tag_version_shorthash'`. `DataJournal.read_hash` lists a tagged,
+  untag-keyed block's directory both beside the untagged and under its tag,
+  so a specialization still finds a narrower build of either layout by its
+  directory. A pipeline's `PipeJournal` entries move the same way;
+  `pipejournal()` scans, and finds both.
 - **Tabs are tablets, in every name code uses.** `Datatab` is `Datatablet`,
   `Featuretab` (and `BipolarFeaturetab`, `TernaryFeaturetab`) is
   `Featuretablet` (and `BipolarFeaturetablet`, `TernaryFeaturetablet`),

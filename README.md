@@ -287,6 +287,19 @@ dbx.execjournal()[['exec', 'comment']]     # every dbx.exec/dbx.pprint invocatio
 dbx.execjournal(comment='nightly')         # ... filtered by what it was for
 ```
 
+## hyp
+
+dbx ships an app, `hyp`, as a package of its own: a datalake's pipelines --
+or any texts -- embedded and laid out on the Poincaré disk, to navigate
+hyperbolically and open.
+
+```bash
+hyp --dbx.pipejournal --dbx.datalake ssh://host/path/to/datalake
+```
+
+It installs with the `[hyp]` extra, which `[all]` -- and so `dbx.yml` --
+includes. See [HYP.md](HYP.md).
+
 ## Running Tests
 
 ```bash

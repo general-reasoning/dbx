@@ -78,6 +78,23 @@ azure = [
     # block is given one, as "Protocol not known: abfss".
     "adlfs>=2023.1",
 ]
+hyp = [
+    # hyp, the app: a text space -- by default, a datalake's pipelines -- on
+    # the Poincare disk. A package of its own, in this distribution so that it
+    # shares dbx's env and setup; nothing in dbx imports it.
+    "pygame-ce>=2.5",
+    "requests>=2.28",
+    "umap-learn>=0.5.5",
+    # ssh:// datalakes, through fsspec: asyncssh, which reads ~/.ssh/config.
+    "sshfs>=2024.0",
+]
+hyp-deepseek = [
+    # hyp --embedder deepseek: DeepSeek publishes no embedding model and
+    # Ollama will not embed with a generative one, so its hidden states are
+    # pooled through transformers. Large, and not in [all].
+    "datablocks[hyp,torch]",
+    "transformers>=4.40",
+]
 dev = [
     "build",
     "pytest>=8.0",
@@ -85,7 +102,7 @@ dev = [
     "twine",
 ]
 all = [
-    "datablocks[ray,torch,streaming,lightning,azure,dev]",
+    "datablocks[ray,torch,streaming,lightning,azure,hyp,dev]",
 ]
 
 [project.urls]
@@ -104,9 +121,10 @@ dbx = "dbx:exec"
 "dbx.slurm.eval" = "dbx:slurm_eval"
 "dbx.slurm.print" = "dbx:slurm_pprint"
 "dbx.slurm.pprint" = "dbx:slurm_pprint"
+hyp = "hyp.app:main"
 
 [tool.setuptools.packages.find]
-include = ["dbx*"]
+include = ["dbx*", "hyp*"]
 exclude = ["tests*"]
 
 [tool.pytest.ini_options]

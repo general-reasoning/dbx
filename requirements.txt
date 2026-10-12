@@ -14,3 +14,5 @@ tqdm>=4.60
 #           -- dbx.stills only; also needs torch
 # Optional: adlfs>=2023.1           (pip install datablocks[azure])
 #           -- fsspec driver for abfs:// and abfss:// urls
+# Optional: pygame-ce, requests, umap-learn, sshfs (pip install datablocks[hyp])
+#           -- hyp, the app, only

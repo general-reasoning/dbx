@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`hyp`, an app.** A package of its own in this distribution, with the
+  `hyp` console script and the `[hyp]` extra (in `[all]`, so `dbx.yml`
+  installs it): texts embedded through Ollama and laid out on the Poincaré
+  disk with hyperbolic UMAP, navigated by geodesic slides and hyperbolic zoom.
+  `hyp --dbx.pipejournal [--dbx.datalake URL]` makes the texts a datalake's
+  pipelines, from `dbx.pipejournal()`, each openable to its journal row, its
+  other runs, and the journals of the entrypoints it constructed. See
+  [HYP.md](HYP.md).
+
 ### Fixed
 - **`import dbx` works without torch and mosaicml-streaming** again, as the
   package docstring promised: the data modules (`datatables`, `dataparts`,

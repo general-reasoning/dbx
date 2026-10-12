@@ -3122,6 +3122,30 @@ class Datablock:
             self.build(*args, deep=deep, **kwargs)
         return self
 
+    def try_specialize_tree(self) -> dict:
+        """Specialize every block of this one's tree whose specialization resolves -- and build none.
+
+        Bottom up, as `build_tree` builds: each block not valid is asked to `specialize`, which installs
+        what resolves -- a stack's blocks too -- and computes nothing. What is left not valid, or owing
+        topics, stays so, to be built deliberately rather than as a side effect of adopting the rest.
+
+        Returns ``{anchorkey: ('valid' | 'not-valid', owed topics)}`` for every block of the tree, each
+        once, in the order they were tried.
+        """
+        status = {}
+
+        def visit(block):
+            if block.anchorkey in status:
+                return
+            for _, child in block._iter_var_blocks_('TREE_SKIP_VALIDATION'):
+                visit(child)
+            if not block.valid():
+                block.specialize()
+            status[block.anchorkey] = ('valid' if block.valid() else 'not-valid', block.owedtopics())
+
+        visit(self)
+        return status
+
     def valid_var(self, *, reduce=False):
         if not self.validate_vars:
             return True if reduce else {}

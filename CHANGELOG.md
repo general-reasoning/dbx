@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`dbx.SshRay`: a block's true instance, from another machine.** It starts
+  a Ray head on a host over ssh for the session -- its own ports, its own
+  temp dir, in a directory of its own -- and tunnels to its client port, so
+  that `entry.trueinst(address=cluster.address, gitrepo=<the host's repo
+  paths>)` returns a proxy here to the block, instantiated where its data
+  are and pinned to the entry's revision. `SshRay.session(host, python=)`
+  keeps one per host for the process. The head stops, and leaves nothing
+  behind, on `stop()`, at exit, and when its connection drops. Ray here must
+  be the version Ray there is.
+
+### Added
 - **`hyp`, an app.** A package of its own in this distribution, with the
   `hyp` console script and the `[hyp]` extra (in `[all]`, so `dbx.yml`
   installs it): texts embedded through Ollama and laid out on the Poincaré
@@ -16,6 +27,23 @@ All notable changes to this project will be documented in this file.
   [HYP.md](HYP.md).
 
 ### Fixed
+- **`trueinst()` gives the worker the datalake its entry recorded.**
+  `remote()` passes this process's `DBX_*` variables to its workers, so a
+  block whose quote leaves its datalake to the environment took the
+  caller's -- from another machine, an `ssh://` url its own host could not
+  reach. `rinst()` now sets the worker's `DBX_DATALAKE` to the entry's
+  `datalake`; `remote(env=)` sets, overrides or (with `None`) unsets any.
+- **An entry read over ssh reads its side files there.** Its quote, spec and
+  the rest are recorded as its host's local paths, and were opened on the
+  local disk -- so `trueinst()` of such an entry found no quote. A bare
+  absolute path is now read on the `ssh://`/`sftp://` filesystem the entry's
+  `entry_path` names, as the block view lists its paths; a global path
+  (`abfss://`, `gs://`, ...) is never touched.
+- **`remote()` from a machine with no `DBX_GIT_REPO`,** given the host's repo
+  paths as `gitrepo=`, no longer refuses an off-host cluster.
+- **Proxies through Ray's client.** Over `ray://`, an actor's handle is a
+  `ClientActorHandle`, which `Remote` did not recognise: `trueinst()` returned
+  the bare handle instead of a proxy to the block.
 - **`import dbx` works without torch and mosaicml-streaming** again, as the
   package docstring promised: the data modules (`datatables`, `dataparts`,
   `backbones`, `featuretables`, `probes`) are imported only when both are

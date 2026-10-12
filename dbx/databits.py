@@ -3409,15 +3409,223 @@ class Remote:
     # 4. Helpers -----------------------------------------------------------
 
     def _unwrap_or_proxy_(self, val):
-        import ray
-        if isinstance(val, ray.actor.ActorHandle):
+        if self._is_actor_handle_(val):
             return Remote(val) # Recursive wrapping
         return val
+
+    @staticmethod
+    def _is_actor_handle_(val) -> bool:
+        """Whether *val* is an actor's handle: a `ray.actor.ActorHandle` -- or, through Ray's client (``ray://``), its own kind."""
+        import ray
+        if isinstance(val, ray.actor.ActorHandle):
+            return True
+        try:
+            from ray.util.client.common import ClientActorHandle
+        except ImportError:
+            return False
+        return isinstance(val, ClientActorHandle)
+
+
+class SshRay:
+    """A Ray head started on *host* over ssh for this session, and a tunnel to it: `remote` connects through `address`.
+
+    So that a block can be instantiated where its data are -- the datalake's
+    host -- and interrogated from here::
+
+        cluster = dbx.SshRay.session('wheelbarrow', python='~/miniconda3/envs/autopath/bin/python')
+        block = entry.trueinst(address=cluster.address, gitrepo='/home/me/dbx:/home/me/autopath')
+        block.hash, block.read('classes')        # forwarded to the pinned worker there
+
+    *python* is the interpreter on *host* whose ``ray`` starts the head: its
+    Ray must be the version this one is, which Ray's client requires. The
+    head runs in the foreground (``ray start --block``) of a shell of its
+    own, in a temporary directory -- not the home directory, where a checkout
+    named like a package shadows it -- on ports picked here, with a
+    ``--temp-dir`` of its own: so nothing of another Ray on the host is
+    touched, and ``ray stop``, which stops every Ray of the user's there, is
+    never needed. The shell stops the head, and removes both directories,
+    when told to -- :meth:`stop` -- and when its connection drops, since it
+    has a terminal that goes with it.
+
+    The client port is reached through ``ssh -L``, so the host's ports need
+    not be open: `address` is ``ray://localhost:<port>``. :meth:`session`
+    keeps one per (*host*, *python*) for as long as the process runs, and
+    stops them at exit.
+    """
+
+    #: Printed by the head's shell before it starts Ray: its pid and directories.
+    _MARK_ = 'DBX-SSHRAY'
+
+    _SESSIONS_ = {}
+    _SESSIONS_LOCK_ = threading.Lock()
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __init__(self, host, *, python, timeout=180, log: 'Datalog' = None):
+        self.host = host
+        self.python = python
+        self.log = log if log is not None else _datalog_()
+        self._head = self._tunnel = None
+        self._pid = self._dirs = None
+        self._address = None
+        try:
+            self._start_(timeout)
+        except BaseException:
+            self.stop()
+            raise
+        atexit.register(self.stop)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.stop()
+        return False
+
+    def __repr__(self):
+        return f"dbx.SshRay({self.host!r}, python={self.python!r}, address={self._address!r})"
+
+    # 2. Declared API ------------------------------------------------------
+
+    @classmethod
+    def session(cls, host, *, python, timeout=180) -> 'SshRay':
+        """The head on *host* run by *python* for this process: started the first time asked, and kept."""
+        key = (host, python)
+        with cls._SESSIONS_LOCK_:
+            cluster = cls._SESSIONS_.get(key)
+            if cluster is None or not cluster.running():
+                cluster = cls._SESSIONS_[key] = cls(host, python=python, timeout=timeout)
+            return cluster
+
+    def running(self) -> bool:
+        """Whether the head's shell and the tunnel are both still up."""
+        return all(p is not None and p.poll() is None for p in (self._head, self._tunnel))
+
+    def stop(self):
+        """Stop the head, remove its directories, and close the tunnel; a client connected through it is shut down first."""
+        if self._address is not None:
+            try:
+                import ray
+                if ray.is_initialized():
+                    ray.shutdown()
+            except Exception:
+                pass
+        if self._pid is not None:
+            # TERM to the head's shell, whose trap stops Ray and cleans up --
+            # and exits, which closes its connection: waited for, so that the
+            # cleanup is done before this returns.
+            subprocess.run(['ssh', '-o', 'BatchMode=yes', self.host, f'kill -TERM {self._pid}'],
+                           capture_output=True, timeout=60)
+            self._pid = None
+            if self._head is not None:
+                try:
+                    self._head.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    self.log.warning(f"SshRay: the Ray head on {self.host} did not stop in 60s; "
+                                     f"look for processes under {self._dirs}")
+        for proc in (self._tunnel, self._head):
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        self._head = self._tunnel = None
+        self._address = None
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def address(self) -> str:
+        """``ray://localhost:<port>``: the head's client port, through the tunnel."""
+        return self._address
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _start_(self, timeout):
+        rng = _random.Random()
+        gcs, client, agent = rng.sample(range(20000, 40000), 3)
+        ray_bin = f"{self.python.rsplit('/', 1)[0]}/ray" if '/' in self.python else 'ray'
+        tag = uuid.uuid4().hex[:8]
+        # A shell that owns the head: it starts Ray in the background, says
+        # where, and on HUP (the connection dropped), TERM (stop()) or Ray's
+        # own exit, cleans up. `ray start --block` cannot be relied on to: on
+        # TERM it stops some of what it started and keeps running itself. So
+        # every process naming the head's own session directory -- GCS,
+        # raylet, monitor, workers, and no other Ray's -- is killed, then
+        # `ray start`, then the directories go. Signals are ignored meanwhile,
+        # so that a dropped connection cannot cut the cleanup short. The temp
+        # dir is short: Ray's socket paths live under it, and a unix socket
+        # path may not be long.
+        script = (
+            f'd=$(mktemp -d) && t=/tmp/ray-dbx-{tag} && cd "$d" || exit 1\n'
+            f'{ray_bin} start --head --block --port={gcs} --ray-client-server-port={client} '
+            f'--dashboard-agent-listen-port={agent} --include-dashboard=false '
+            f'--disable-usage-stats --temp-dir="$t" &\n'
+            f'child=$!\n'
+            f'cleanup() {{\n'
+            f'  trap "" HUP TERM INT\n'
+            f'  kill -TERM $child 2>/dev/null\n'
+            f'  for i in 1 2 3 4 5; do kill -0 $child 2>/dev/null || break; sleep 1; done\n'
+            f'  for p in $(ps -u "$(id -un)" -o pid=,args= | grep -F -- "$t/" | grep -v grep | awk \'{{print $1}}\'); do\n'
+            f'    [ "$p" != "$$" ] && kill -KILL "$p" 2>/dev/null\n'
+            f'  done\n'
+            f'  kill -KILL $child 2>/dev/null\n'
+            f'  rm -rf "$d" "$t"\n'
+            f'  exit 0\n'
+            f'}}\n'
+            f'trap cleanup HUP TERM INT\n'
+            f'echo "{self._MARK_} $$ $d $t"\n'
+            f'wait $child\n'
+            f'cleanup\n'
+        )
+        self.log.info(f"SshRay: starting a Ray head on {self.host} with {ray_bin}, client port {client}")
+        self._head = subprocess.Popen(['ssh', '-tt', '-o', 'BatchMode=yes', self.host, f"bash -c {_shquote_(script)}"],
+                                      stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, bufsize=1)
+        lines = queue.Queue()
+        threading.Thread(target=lambda: [lines.put(ln) for ln in self._head.stdout], daemon=True).start()
+        deadline, seen, started = time_module.monotonic() + timeout, [], False
+        while not started:
+            try:
+                line = lines.get(timeout=max(0.1, deadline - time_module.monotonic()))
+            except queue.Empty:
+                raise TimeoutError(f"SshRay: no Ray head on {self.host} after {timeout}s:\n" + ''.join(seen[-40:]))
+            seen.append(line)
+            if line.startswith(self._MARK_):
+                _, pid, *dirs = line.split()
+                self._pid, self._dirs = int(pid), dirs
+            elif 'Ray runtime started' in line:
+                started = True
+            elif self._head.poll() is not None and lines.empty():
+                raise RuntimeError(f"SshRay: the Ray head on {self.host} exited:\n" + ''.join(seen[-40:]))
+        with socket.socket() as sock:
+            sock.bind(('localhost', 0))
+            port = sock.getsockname()[1]
+        self._tunnel = subprocess.Popen(['ssh', '-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes',
+                                         '-L', f'{port}:localhost:{client}', self.host],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        while True:
+            if self._tunnel.poll() is not None:
+                raise RuntimeError(f"SshRay: the tunnel to {self.host}:{client} failed: {self._tunnel.stderr.read().decode()}")
+            with socket.socket() as sock:
+                if sock.connect_ex(('localhost', port)) == 0:
+                    break
+            if time_module.monotonic() > deadline:
+                raise TimeoutError(f"SshRay: the tunnel to {self.host}:{client} did not come up in {timeout}s")
+            time_module.sleep(0.2)
+        self._address = f'ray://localhost:{port}'
+        self.log.info(f"SshRay: Ray head on {self.host} at {self._address}")
+
+
+def _shquote_(text: str) -> str:
+    """*text* as one single-quoted shell word."""
+    return "'" + text.replace("'", "'\\''") + "'"
 
 
 def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=None,
            pin_root=None, pin_mode='auto', pin_source=None, gitrepo=None,
-           working_dir='auto', log: 'Datalog' = _datalog_()):
+           working_dir='auto', env: 'dict | None' = None, log: 'Datalog' = _datalog_()):
     """
     Instantiate a remote dbx interpreter and return a Remote handle to it.
 
@@ -3458,6 +3666,12 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
         Override the repo paths the workers are told about, and that pinning
         clones from. Mirrors the *gitrepo* argument of the local instantiation
         path.
+    env:
+        Environment variables for the workers, over the ``DBX*`` ones of this
+        process they are otherwise given; ``None`` as a value unsets one. For
+        a worker on another host, whose ``DBX_DATALAKE`` -- say -- is not this
+        one's: `DataJournalEntry.rinst` sets it to the datalake its entry
+        recorded.
     working_dir:
         Ray ``runtime_env`` working directory. ``'auto'`` (the default) means:
         when pinning, hand Ray an EMPTY directory, because Ray otherwise puts
@@ -3487,7 +3701,7 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
     offhost = bool(slurm) or address is not None
     if shared_repo is None:
         shared_repo = offhost
-    if shared_repo:
+    if shared_repo and gitrepo is None:
         if _DBX_GIT_REPO_ is None:
             raise ValueError(
                 "shared_repo requires an original repo path, but DBX_GIT_REPO was "
@@ -3502,6 +3716,12 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
 
     if gitrepo is not None:
         dbx_env['DBX_GIT_REPO'] = gitrepo
+
+    for k, v in (env or {}).items():
+        if v is None:
+            dbx_env.pop(k, None)
+        else:
+            dbx_env[k] = str(v)
 
     runtime_env = {'env_vars': dbx_env}
     if conda:

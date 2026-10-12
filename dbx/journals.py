@@ -1324,6 +1324,25 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage
         return datablocks.Datablock.DataJournal(anchor, loc=loc, iloc=iloc, datalake=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
 
 
+def _on_fs_of_(path, url):
+    """*path*, recorded as its host wrote it, on the filesystem *url* names: ``ssh://host`` + *path*.
+
+    An entry written on a datalake's host records its side files, its
+    ``datalake`` and its paths as that host's local paths -- no protocol. Read
+    from elsewhere, over ssh, its ``entry_path`` is the one thing that names
+    the filesystem in full; a bare absolute *path* is put on it.
+
+    Only a HOST's filesystem -- ``ssh://``, ``sftp://`` -- is one a bare path
+    can be local to. A path with a protocol of its own (``abfss://``,
+    ``gs://``, ``s3://``) is global, and is never touched; nor is a bare path
+    when *url* is anything but ssh or sftp.
+    """
+    if not isinstance(path, str) or '://' in path or not path.startswith('/'):
+        return path
+    m = re.match(r'^((?:ssh|sftp)://[^/]+)/', str(url or ''))
+    return m[1] + path if m else path
+
+
 def _anchor_of_(cls_or_anchor) -> str:
     """The anchor a Datablock class, an anchor string, or a block names."""
     if isinstance(cls_or_anchor, str):
@@ -1878,7 +1897,7 @@ class Block:
     @staticmethod
     def _fs_(entry):
         url = DataJournalEntry.column(entry, 'datalake') or entry.get('root')  # legacy fallback
-        fs, _ = fsspec.url_to_fs(url, **entry.storage_options)
+        fs, _ = fsspec.url_to_fs(_on_fs_of_(url, entry.get('entry_path')), **entry.storage_options)
         return fs
 
     @staticmethod
@@ -2076,7 +2095,8 @@ class DataJournalEntry(pd.Series):
             # str() is its repr rather than the path the column holds.
             val = self.column(self, target_attr)
             if val is not None and not (isinstance(val, float) and pd.isna(val)):
-                path = str(val)
+                # Where the entry was read from: a host's own path, read over ssh.
+                path = _on_fs_of_(str(val), self.get('entry_path'))
                 _, _ext = os.path.splitext(path)
                 ext = _ext[1:] if _ext else ''
                 try:
@@ -2184,6 +2204,21 @@ class DataJournalEntry(pd.Series):
         *handle* reuses an existing :func:`remote` worker instead of starting one
         per call; it is the caller's job to ensure it was pinned compatibly.
 
+        The worker's ``DBX_DATALAKE`` is the datalake this entry recorded --
+        the one the block was built in, as its host names it -- rather than
+        this process's, which `remote` would otherwise pass on: a block whose
+        quote leaves its datalake to the environment then finds its data
+        wherever the worker is. Read over ssh, this process's names the host
+        from outside, and a worker on that host could not reach it. An
+        ``env=`` of the caller's is laid over it.
+
+        From another machine, the worker is on a Ray cluster where the data
+        are -- `SshRay` starts one there over ssh -- with *gitrepo* that
+        host's repo paths::
+
+            cluster = dbx.SshRay.session('host', python='~/envs/x/bin/python')
+            block = entry.trueinst(address=cluster.address, gitrepo='/home/me/dbx:/home/me/project')
+
         The proxy forwards attribute and method access, but it is a
         :class:`Remote`, not an ``IJEPAsaurUSPoseStill``: ``isinstance`` is false,
         and implicit dunder protocols (``repr``, ``len``, ``[]``) are looked up on
@@ -2204,7 +2239,9 @@ class DataJournalEntry(pd.Series):
             raise ValueError(f"{self.__tag__()} records no quote to instantiate from")
 
         if handle is None:
-            handle = remote(revision=revision, gitrepo=gitrepo, **remote_kwargs)
+            env = {**({'DBX_DATALAKE': datalake} if (datalake := self.column(self, 'datalake')) else {}),
+                   **(remote_kwargs.pop('env', None) or {})}
+            handle = remote(revision=revision, gitrepo=gitrepo, env=env, **remote_kwargs)
 
         def _build():
             # Runs in the worker. dbx.eval resolves the leading '$' of the quote,

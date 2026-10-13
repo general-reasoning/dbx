@@ -352,6 +352,22 @@ def test_read_instantiates_on_the_datalakes_host_and_keeps_the_block(remote_dbx)
     assert len(remote_dbx["trueinst"]) == 2
 
 
+def test_the_head_runs_in_the_python_the_entrys_build_recorded(remote_dbx, monkeypatch):
+    import dbx
+
+    monkeypatch.setattr(dbx.DataJournal, "read_entries", lambda paths, **kw: [
+        type("E", (dict,), {"trueinst": lambda self, **kw: object(), "read": lambda self, *a, **k: None})(
+            python="/env/bin/python")])
+    dbxpipelines.read_text({"entry_path": "ssh://host/lake/e.parquet", "id": "e1"}, ("n",))
+    assert remote_dbx["session"] == [("host", "/env/bin/python")]
+
+
+def test_an_override_beats_the_recorded_python_and_python3_stands_in_for_none():
+    assert dbxpipelines.remote_python({"python": "/env/bin/python"}, "/other/bin/python") == "/other/bin/python"
+    assert dbxpipelines.remote_python({"python": "/env/bin/python"}) == "/env/bin/python"
+    assert dbxpipelines.remote_python({}) == dbxpipelines.FALLBACK_PYTHON
+
+
 def test_a_local_datalake_instantiates_here(remote_dbx):
     text = dbxpipelines.read_text({"entry_path": "/data/lake/e.parquet", "id": "e1"}, ("n",))
     assert text.splitlines()[0].endswith("trueinst() on here")

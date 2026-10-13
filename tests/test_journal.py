@@ -722,3 +722,19 @@ class TestANullColumnReadsAsNone:
         block.build()
         entry = block.datajournal(iloc=0)
         assert entry.inst().hash == block.hash
+
+
+# ---------------------------------------------------------------------------
+# 9. The interpreter a build ran in
+# ---------------------------------------------------------------------------
+
+def test_an_entry_records_the_interpreter_and_host_its_build_ran_in(tmp_path):
+    """What trueinst() needs to run the block again where it was built -- the code is pinned by revision, the env is not."""
+    import socket
+    import sys
+
+    block = BuildableBlock(datalake=str(tmp_path))
+    block.build()
+    entry = block.datajournal(iloc=0)
+    assert DataJournalEntry.column(entry, 'python') == sys.executable
+    assert DataJournalEntry.column(entry, 'host') == socket.gethostname()

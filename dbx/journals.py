@@ -2217,10 +2217,12 @@ class DataJournalEntry(pd.Series):
 
         From another machine, the worker is on a Ray cluster where the data
         are -- `SshRay` starts one there over ssh -- with *gitrepo* that
-        host's repo paths::
+        host's repo paths, in the interpreter the entry records was its
+        build's, ``python``::
 
-            cluster = dbx.SshRay.session('host', python='~/envs/x/bin/python')
-            block = entry.trueinst(address=cluster.address, gitrepo='/home/me/dbx:/home/me/project')
+            python = DataJournalEntry.column(entry, 'python')
+            cluster = dbx.SshRay.session('host', python=python)
+            block = entry.trueinst(address=cluster.address, gitrepo=DataJournalEntry.column(entry, 'gitrepo'))
 
         The proxy forwards attribute and method access, but it is a
         :class:`Remote`, not an ``IJEPAsaurUSPoseStill``: ``isinstance`` is false,
@@ -2946,6 +2948,11 @@ class DataJournal:
                                          'note': note_val,
                                          'gitrepo': databits.DBX_GIT_REPO,
                                          'wrkrepo': databits.DBX_USE_WORK_REPO,
+                                         # The interpreter that wrote this -- the build's own, in
+                                         # whatever env it ran -- and its host: where trueinst()
+                                         # can run the block again, its code pinned by revision.
+                                         'python': sys.executable,
+                                         'host': socket.gethostname(),
         }])
         if columns:
             clash = sorted(set(columns) & set(df.columns))

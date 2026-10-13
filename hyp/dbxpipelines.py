@@ -62,9 +62,12 @@ WORKERS = (1, 4, 8, 16, 32)
 DEFAULT_WORKERS = 16
 # The interpreter on the datalake's host whose Ray -- started there, for the
 # session, by dbx.SshRay -- trueinst() instantiates blocks in: it needs dbx,
-# ray (the version this one is) and the project's package.
-# HYP_REMOTE_PYTHON names it, as --remote-python does for one launch.
-REMOTE_PYTHON = __import__("os").environ.get("HYP_REMOTE_PYTHON", "python3")
+# ray (the version this one is) and the project's package. An entry records
+# the one its build ran in, ``python``, and that one is used; HYP_REMOTE_PYTHON
+# -- or --remote-python, for one launch -- overrides it, and FALLBACK_PYTHON
+# stands in where an entry, written before entries recorded it, does not say.
+REMOTE_PYTHON = __import__("os").environ.get("HYP_REMOTE_PYTHON") or None
+FALLBACK_PYTHON = "python3"
 EMBED_LIMIT = 4_000
 
 
@@ -497,6 +500,14 @@ def _where_(row):
     return m[1] if m else None
 
 
+def remote_python(entry, python=None):
+    """The interpreter to run *entry*'s block in: *python* if given, else the one its build recorded, else FALLBACK_PYTHON."""
+    if python:
+        return python
+    recorded = _dbx_().DataJournalEntry.column(entry, "python")
+    return FALLBACK_PYTHON if _is_blank_(recorded) else str(recorded)
+
+
 def _remote_block_(row, python):
     """*row*'s block, by ``trueinst()`` where its data are: kept for the next call. Called holding `_REMOTE_LOCK_`."""
     dbx = _dbx_()
@@ -507,7 +518,7 @@ def _remote_block_(row, python):
         kwargs = {}
         host = _where_(row)
         if host:
-            cluster = dbx.SshRay.session(host, python=python)
+            cluster = dbx.SshRay.session(host, python=remote_python(entry, python))
             kwargs = {"address": cluster.address, "gitrepo": dbx.DataJournalEntry.column(entry, "gitrepo")}
         _REMOTE_.update(key=None, block=None, quote=None)
         _REMOTE_["block"] = entry.trueinst(**kwargs)

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **A build entry records `python` and `host`: the interpreter its build ran
+  in, and where.** Revision pins a block's code; this names its environment,
+  so that `trueinst()` from another machine can run it again in the same one.
+  `hyp` starts its `SshRay` head in an entry's recorded `python`;
+  `HYP_REMOTE_PYTHON` and `--remote-python` now only override it, and
+  `python3` stands in for entries written before this.
 - **`data(sample_fraction=, sample_seed=)`: a sample of a slice's rows.** The
   same rows of every slice -- `datatables.sample_rows` picks them -- so a
   row's slices stay together, and an upstream block's routed `data()` takes

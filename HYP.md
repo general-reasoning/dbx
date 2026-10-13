@@ -115,8 +115,8 @@ hyp --pipejournal            # the pipelines of DBX_DATALAKE (HypDbxPipelines)
 hyp --n-workers N            # threads reading the datalake (default 16)
 hyp --remote-python PATH     # the python on the datalake's host whose Ray read's and hyp's trueinst() run in,
                              # with dbx, ray (the version here) and the project; a path there, quoted so ~
-                             # expands there (default $HYP_REMOTE_PYTHON, else python3, whose ray is rarely
-                             # on a non-interactive PATH)
+                             # expands there (default $HYP_REMOTE_PYTHON, else the python each entry records
+                             # its build ran in, else -- for entries older than that -- python3)
 hyp --embedder deepseek      # DeepSeek-R1-Distill-Qwen-1.5B's pooled hidden states,
                              # through transformers: `pip install -e '.[hyp-deepseek]'`
 hyp --embed-model M          # another Ollama embedding model

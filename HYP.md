@@ -25,7 +25,7 @@ On first run it pulls `nomic-embed-text` (embeddings) and `deepseek-r1:1.5b`
 ## A datalake's pipelines
 
 ```bash
-DBX_DATALAKE=ssh://host/path/to/datalake hyp --pipejournal
+DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal     # or: --journal pipelines
 ```
 
 runs `HypDbxPipelines`, the specialization of the app over a datalake's
@@ -90,6 +90,24 @@ An `ssh://` datalake is read through fsspec's sshfs, on asyncssh, which applies
 `~/.ssh/config`: `ssh://host/path` names the host as `ssh host` does, user and
 all.
 
+## An anchor's blocks
+
+```bash
+DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal dbx.dataparts.DatatableCorePart
+```
+
+runs `HypDbxJournal`: one point per block of the anchor, from its block
+journal -- each block's newest entry, embedded and labeled as a pipeline is;
+pipeline entries, filed in the pipeline journal, are not among them. Its
+corpus is kept under `{DBX_DATALAKE}/.hyp/anchors/<anchor>`.
+
+- **left click** opens the block's window -- the one a constructed entry
+  block opens in under a pipeline: its journal's events and newest entry,
+  with *session blocks*, *read*, *ls*, the slice menus and *output* -- its
+  title a menu of the anchor's blocks, to step through;
+- **right click** lists the blocks of its `dbx.exec` session, at the mouse,
+  each opening its window.
+
 ## A directory's documents
 
 ```bash
@@ -139,8 +157,8 @@ over the layers behind it. Opening a window brings its layer to the front.
 | Input | Effect |
 |---|---|
 | left click | slide the clicked point to the center along a geodesic; time ∝ distance |
-| left click on a pipeline (`--pipejournal`) | its window, as a right click opens a point otherwise |
-| right click on a pipeline (`--pipejournal`) | its constructed entry blocks, in a menu at the mouse: picking one opens that block's window directly |
+| left click on a pipeline (`--journal`) | its window, as a right click opens a point otherwise |
+| right click on a pipeline (`--journal`) | its constructed entry blocks, in a menu at the mouse: picking one opens that block's window directly |
 | left drag | move the plane rigidly (a hyperbolic translation); the grabbed point stays under the cursor |
 | scroll | hyperbolic zoom: a point at distance *d* is drawn at *k·d* |
 | right click on a point | its stored text |
@@ -149,7 +167,7 @@ over the layers behind it. Opening a window brings its layer to the front.
 | Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
 | (lower left) | a spinning wheel while data are being loaded or prepared; an error, in red, for 15 s or until the next read -- its full traceback in the terminal |
 | points (top right) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center; a right click on one does what a right click on its point does |
-| settings (top right) | names and versions (`--pipejournal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same |
+| settings (top right) | names and versions (`--journal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
 | in a text window: the triangle by a line | a line whose next line is indented deeper folds the deeper lines after it into `… N lines`, and unfolds them. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |
 | in a text window: *fold* (top right), or 1–9, 0 | fold every such line at that many levels of indentation or deeper; *unfold all*, or 0, unfolds them all |
@@ -159,10 +177,11 @@ over the layers behind it. Opening a window brings its layer to the front.
 
 ```
 hyp --data DIR               # the corpus directory, local or an fsspec url
-                             # (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)
+                             # (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)
 hyp --reset                  # discard the corpus and start over
-hyp --pipejournal            # the pipelines of DBX_DATALAKE (HypDbxPipelines)
-hyp --pipejournal --ece ckpt # --extra-construction-events: events that also make an entry block count as
+hyp --journal                # the pipelines of DBX_DATALAKE (HypDbxPipelines); also: --journal pipelines
+hyp --journal ANCHOR         # the blocks of ANCHOR, from its block journal (HypDbxJournal)
+hyp --journal --ece ckpt     # --extra-construction-events: events that also make an entry block count as
                              # constructed, each alone or followed by = or : -- here, a still that checkpointed
 hyp --docs [--dir DIR]       # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
 hyp --n-workers N            # threads reading the datalake (default 16)

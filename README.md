@@ -295,7 +295,8 @@ or any texts -- embedded and laid out on the Poincaré disk, to navigate
 hyperbolically and open.
 
 ```bash
-DBX_DATALAKE=ssh://host/path/to/datalake hyp --pipejournal
+DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal            # its pipelines
+DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal pkg.Anchor # an anchor's blocks
 ```
 
 It installs with the `[hyp]` extra, which `[all]` -- and so `dbx.yml` --

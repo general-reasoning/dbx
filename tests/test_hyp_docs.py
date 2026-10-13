@@ -335,7 +335,7 @@ def test_docs_and_dir_are_checked():
     with pytest.raises(SystemExit):
         main(["--dir", "/somewhere"])
     with pytest.raises(SystemExit):
-        main(["--docs", "--pipejournal"])
+        main(["--docs", "--journal"])
 
 
 def test_a_click_on_a_layer_brings_it_to_the_front(app):

@@ -766,7 +766,7 @@ def test_ece_is_the_short_of_extra_construction_events_and_is_for_pipejournal(mo
     monkeypatch.setattr(app_mod, "Store", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("parsed")))
     monkeypatch.setattr(dbxpipelines.HypDbxPipelines, "__default_data__", classmethod(lambda cls, args: parsed.update(vars(args)) or "/x"))
     with pytest.raises(RuntimeError, match="parsed"):
-        app_mod.main(["--pipejournal", "--ece", "ckpt", "fit:end"])
+        app_mod.main(["--journal", "--ece", "ckpt", "fit:end"])
     assert parsed["extra_construction_events"] == ["ckpt", "fit:end"]
 
 
@@ -785,3 +785,95 @@ def test_a_pipelines_window_lists_its_sessions_blocks_and_opens_them(pipelines_a
     assert app.opened == [("entrypoint", "/lake/pkg.Data/d1")]
     viewer.row = {**row, "session": None}
     assert not session.visible()
+
+
+JOURNAL_ROWS = [
+    {"anchor": "pkg.Model", "anchorkeypath": "/lake/pkg.Model/v1", "datetime": "2026-10-12 10:00:00", "event": "build:start",
+     "entry_path": "ssh://host/lake/pkg.Model/v1/.journal/e2.parquet", "datalake": "/lake", "tag": "pkg.models:FIRST"},
+    {"anchor": "pkg.Model", "anchorkeypath": "/lake/pkg.Model/v1", "datetime": "2026-10-11 10:00:00", "event": "build:end",
+     "entry_path": "ssh://host/lake/pkg.Model/v1/.journal/e1.parquet", "datalake": "/lake", "tag": "pkg.models:FIRST"},
+    {"anchor": "pkg.Model", "anchorkeypath": "/lake/pkg.Model/v2", "datetime": "2026-10-13 10:00:00", "event": "build:end",
+     "entry_path": "ssh://host/lake/pkg.Model/v2/.journal/e3.parquet", "datalake": "/lake", "tag": "pkg.models:SECOND"},
+    {"anchor": "pkg.Model", "anchorkeypath": "/lake/.pipelines/pkg.Model/p", "datetime": "2026-10-13 11:00:00", "event": "create",
+     "entry_path": "ssh://host/lake/.pipelines/pkg.Model/p/.journal/e4.parquet", "datalake": "/lake", "tag": "pkg.models:PIPE"},
+]
+
+
+@pytest.fixture
+def anchor_journal(monkeypatch):
+    import dbx
+
+    monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
+    monkeypatch.setattr(dbx.DataJournal, "read", lambda anchor, **kw: pd.DataFrame(JOURNAL_ROWS))
+    monkeypatch.setattr(dbxpipelines, "_side_file_", lambda *a: None)
+    monkeypatch.setattr(dbxpipelines, "var_name", lambda row: None)
+
+
+def test_an_anchors_blocks_are_its_newest_entries_and_no_pipelines(anchor_journal):
+    found = dbxpipelines.blocks("pkg.Model", progress=lambda m: None, n_workers=2)
+    assert [e.key for e in found] == ["/lake/pkg.Model/v2", "/lake/pkg.Model/v1"]
+    assert found[1].extra["row"]["event"] == "build:start", "a block's newest entry"
+
+
+def test_journal_without_an_anchor_is_the_pipelines_and_with_one_its_blocks(monkeypatch):
+    from hyp import app as app_mod
+
+    chosen = []
+
+    def stop(cls, args):
+        chosen.append((cls.__name__, args.journal))
+        raise RuntimeError("chosen")
+
+    for cls in (dbxpipelines.HypDbxPipelines, dbxpipelines.HypDbxJournal):
+        monkeypatch.setattr(cls, "__default_data__", classmethod(stop))
+    for argv in (["--journal"], ["--journal", "pipelines"], ["--journal", "pkg.Model"]):
+        with pytest.raises(RuntimeError, match="chosen"):
+            app_mod.main(argv)
+    assert chosen == [("HypDbxPipelines", "pipelines"), ("HypDbxPipelines", "pipelines"), ("HypDbxJournal", "pkg.Model")]
+    with pytest.raises(SystemExit):
+        app_mod.main(["--journal", "pkg.Model", "--ece", "ckpt"])
+    with pytest.raises(SystemExit):
+        app_mod.main(["--pipejournal"])
+
+
+def test_an_anchors_corpus_is_kept_apart_from_the_pipelines(anchor_journal):
+    from types import SimpleNamespace as NS
+
+    assert dbxpipelines.HypDbxJournal.__default_data__(NS(journal="pkg.Model")) == "ssh://host/lake/.hyp/anchors/pkg.Model"
+    assert dbxpipelines.HypDbxPipelines.__default_data__(NS(journal="pipelines")) == "ssh://host/lake/.hyp"
+
+
+@pytest.fixture
+def journal_app(anchor_journal, monkeypatch):
+    import os
+    from types import SimpleNamespace as NS
+
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    from hyp.app import Worker
+
+    monkeypatch.setattr(dbxpipelines.HypDbxJournal, "run_async", lambda self, fn, then: None)
+    app = dbxpipelines.HypDbxJournal(engine=None, worker=Worker(), args=NS(journal="pkg.Model", n_workers=2))
+    found = dbxpipelines.blocks("pkg.Model", progress=lambda m: None, n_workers=2)
+    app.snap = NS(positions=np.array([0.1 + 0j, 0.2 + 0j]), summaries=[e.summary for e in found], texts=[e.text for e in found],
+                  points=[{**e.extra} for e in found])
+    return app
+
+
+def test_a_click_on_a_block_opens_its_window_titled_by_the_anchors_blocks(journal_app):
+    app = journal_app
+    assert app.title == "hyp: dbx pkg.Model" and app.constructed == {}
+    app.__click_point__(1, 0.0)
+    window = app.viewers[-1]
+    title = window.menus[0]
+    assert title.value == "/lake/pkg.Model/v1"
+    assert [v for _, v in title.current()] == ["/lake/pkg.Model/v2", "/lake/pkg.Model/v1"]
+
+
+def test_a_right_click_on_a_block_lists_its_sessions_blocks(journal_app):
+    app = journal_app
+    app.snap.points[0]["row"]["session"] = "s9"
+    app.sessions["s9"] = [("/lake/pkg.Data/d1", "build:end")]
+    app.__context_point__(0, (10, 10))
+    assert [v for _, v in app.popup.current()] == ["/lake/pkg.Data/d1"]
+    app.popup.select("/lake/pkg.Data/d1")
+    assert app.viewers[-1].menus[0].value == "/lake/pkg.Data/d1"

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`hyp --journal [ANCHOR]` replaces `hyp --pipejournal`.** With no anchor,
+  or `pipelines`, it is the pipelines, as before. With an anchor, it is that
+  anchor's blocks from its block journal, one point each (`HypDbxJournal`).
+  A click opens the block's window, and a right click lists its session's
+  blocks. Its corpus is kept under `{DBX_DATALAKE}/.hyp/anchors/<anchor>`.
+  `--pipejournal` is gone, with no alias.
 - **`update` is a construction event**, in `CONSTRUCTED_EVENTS` and
   `PipeJournal.ENTRYPOINT_EVENTS`, and **`UNSAFE_copy_from:END` counts for a
   pipeline's entry blocks**, as it did for `constructed()`: the two lists
@@ -12,7 +18,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **`pipejournal(construct_only=True, extra_construction_events=[...])`, and
-  `hyp --pipejournal --extra-construction-events ...` (`--ece`).** Events
+  `hyp --journal --extra-construction-events ...` (`--ece`).** Events
   that also make an entry block count as constructed, besides `build:end`,
   `UNSAFE_redirect` and `note`. Each matches an event alone, or followed by `=`
   or `:` and the rest, so `ckpt` takes a still that has checkpointed
@@ -51,7 +57,7 @@ All notable changes to this project will be documented in this file.
   `hyp` console script and the `[hyp]` extra (in `[all]`, so `dbx.yml`
   installs it): texts embedded through Ollama and laid out on the Poincaré
   disk with hyperbolic UMAP, navigated by geodesic slides and hyperbolic zoom.
-  `hyp --pipejournal` makes the texts the pipelines of dbx's datalake
+  `hyp --journal` makes the texts the pipelines of dbx's datalake
   (`DBX_DATALAKE`), from `dbx.pipejournal()`, each openable to its journal
   row, its other runs, and the journals of the entrypoints it constructed;
   their embeddings are kept in the datalake, under `{DBX_DATALAKE}/.hyp`. See

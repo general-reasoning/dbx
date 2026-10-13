@@ -1,4 +1,4 @@
-"""Hyp over the pipelines of a dbx datalake.
+"""Hyp over a journal of a dbx datalake: its pipelines (`HypDbxPipelines`, ``hyp --journal``), or an anchor's blocks (`HypDbxJournal`, ``hyp --journal ANCHOR``).
 
 `dbx.pipejournal()` reads the datalake's pipeline journal and aggregates it:
 one row per pipeline, its newest entry, with ``entrypaths`` -- every entrypoint
@@ -377,7 +377,7 @@ def datalake():
     """dbx's datalake -- ``DBX_DATALAKE``, then ``DBX_ROOT``, ``DBX_URL`` -- where hyp reads the pipelines and keeps its corpus."""
     lake = _dbx_().default_datalake()
     if not lake:
-        raise SystemExit("hyp --pipejournal: no datalake; set DBX_DATALAKE")
+        raise SystemExit("hyp --journal: no datalake; set DBX_DATALAKE")
     return lake
 
 
@@ -391,6 +391,33 @@ def pipelines(progress=print, n_workers=16):
     progress("dbx.pipejournal()")
     df = _dbx_().pipejournal(n_workers=n_workers)
     progress(f"reading the side files of {len(df)} pipelines")
+    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+        return list(ex.map(lambda i: entry(df.iloc[i]), range(len(df))))
+
+
+def blocks(anchor, progress=print, n_workers=16):
+    """Every block of *anchor* in dbx's datalake, from its block journal: one each, its newest entry, newest first.
+
+    A pipeline's entries -- filed under the pipeline journal, ``.pipelines`` --
+    are not among them.
+    """
+    import pandas as pd
+
+    progress(f"dbx.DataJournal.read({anchor!r})")
+    try:
+        df = pd.DataFrame(_dbx_().DataJournal.read(anchor, datalake=datalake(), n_workers=n_workers, index=None))
+    except FileNotFoundError as e:
+        raise SystemExit(f"hyp --journal {anchor}: no journal for it in {datalake()}: {e}")
+    if not len(df):
+        return []
+    if "entry_path" in df.columns:
+        df = df[~df["entry_path"].astype(str).str.contains("/.pipelines/", regex=False)]
+    if "datetime" in df.columns:
+        df = df.sort_values("datetime", ascending=False, kind="stable")
+    if "anchorkeypath" in df.columns:
+        df = df.drop_duplicates("anchorkeypath", keep="first")
+    df = df.reset_index(drop=True)
+    progress(f"reading the side files of {len(df)} blocks of {anchor}")
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
         return list(ex.map(lambda i: entry(df.iloc[i]), range(len(df))))
 
@@ -908,14 +935,17 @@ class HypDbxPipelines(Hyp):
         self.constructed = None  # {anchorkeypath: [entrypath]}; None until read
         self.sessions = {}  # {session: [(anchorkeypath, last event)]}; None while read
         self.slice_info = {}  # {(entry_path, id): {slice: (rows, {column: kind})}}; None while read
-        self.run_async(lambda: journal_entries(self.n_workers), lambda df: setattr(self, "journal", df))
-        self.run_async(lambda: constructed_entrypaths(self.n_workers, self.extra_events), lambda d: setattr(self, "constructed", d))
+        self._read_journals_()
 
     def __reload__(self):
         """The journal, the constructed entry blocks and the session indexes, read again with the pipelines."""
         self.journal = self.constructed = None
         self.sessions = {}
         self.slice_info = {}
+        self._read_journals_()
+
+    def _read_journals_(self):
+        """What the windows list besides the points, read in the background: every entry of the pipeline journal, and the entry blocks."""
         self.run_async(lambda: journal_entries(self.n_workers), lambda df: setattr(self, "journal", df))
         self.run_async(lambda: constructed_entrypaths(self.n_workers, self.extra_events), lambda d: setattr(self, "constructed", d))
 
@@ -1266,3 +1296,67 @@ class HypDbxPipelines(Hyp):
     def _relative_(row, path):
         lake = str(row.get("datalake", ""))
         return path[len(lake) :].lstrip("/") if lake and path.startswith(lake) else path
+
+
+class HypDbxJournal(HypDbxPipelines):
+    """One point per block of an anchor -- ``hyp --journal <anchor>`` -- from its block journal; a click opens the block's window.
+
+    The block's window is the one an entry block opens in under a pipeline:
+    its journal's events and newest entry, with *session blocks*, *read*,
+    *ls*, the slice menus and *output*; its title, a menu of the anchor's
+    blocks to step through. A right click lists the blocks of its session.
+    """
+
+    HINT = "click: open · right-click: session blocks · drag: move · scroll: zoom · Home or double-click outside: reset"
+
+    @classmethod
+    def __default_data__(cls, args):
+        return f"{datalake().rstrip('/')}/.hyp/anchors/{args.journal}"
+
+    @classmethod
+    def __source__(cls, args):
+        return lambda progress: blocks(args.journal, progress, n_workers=args.n_workers)
+
+    def __init__(self, engine, worker, args=None):
+        self.anchor = getattr(args, "journal", None)
+        self.title = f"hyp: dbx {self.anchor}"
+        super().__init__(engine, worker, args)
+
+    def _read_journals_(self):
+        """Nothing: an anchor's blocks are its points, and a block's window reads its own journal."""
+        self.journal, self.constructed = None, {}
+
+    def _entrypoints_(self, row):
+        """The title menu of a block's window: the anchor's blocks -- the points -- by label, newest first."""
+        if self.snap is None:
+            return []
+        lake = str(row.get("datalake", ""))
+        out = []
+        for p in self.snap.points:
+            r = p.get("row", {})
+            path = str(r.get("anchorkeypath", ""))
+            if path:
+                shown = path[len(lake) :].lstrip("/") if lake and path.startswith(lake) else path
+                out.append((f"{shown}   {when(r.get('datetime', ''), seconds=True)}", path))
+        return out
+
+    def __click_point__(self, i, now):
+        """Left click on a block: its window."""
+        self.__open_point__(i)
+
+    def __open_point__(self, i):
+        row = self.snap.points[i].get("row", {})
+        self.viewers = []
+        self._open_entrypoint_(row, str(row.get("anchorkeypath", "")), self.title_color(i))
+
+    def __context_point__(self, i, pos):
+        """Right click on a block: the blocks journaled under its session, at the mouse; picking one opens its window."""
+        from types import SimpleNamespace
+
+        row = self.snap.points[i].get("row", {})
+        if _is_blank_(row.get("session")):
+            self.status = "no session: the block was built outside dbx.exec"
+            return
+        held = SimpleNamespace(row=row)
+        self.open_popup(lambda: self._session_blocks_(held, row), lambda p: (setattr(self, "viewers", []), self._open_entrypoint_(row, p, self.title_color(i))),
+                        pos, empty="none indexed: the session was no dbx.exec command's")

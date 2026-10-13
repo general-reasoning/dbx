@@ -1601,14 +1601,16 @@ class Hyp:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hyp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)")
-    ap.add_argument("--pipejournal", action="store_true", help="the pipelines of dbx's datalake (DBX_DATALAKE), from dbx.pipejournal(), one point each")
+    ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)")
+    ap.add_argument("--journal", nargs="?", const="pipelines", default=None, metavar="ANCHOR",
+                    help="a journal of dbx's datalake (DBX_DATALAKE): with no ANCHOR, or 'pipelines', its pipelines, from "
+                         "dbx.pipejournal(), one point each; with an ANCHOR, that anchor's blocks, from its block journal")
     ap.add_argument("--extra-construction-events", "--ece", nargs="+", default=[], metavar="EVENT",
-                    help="with --pipejournal: events that also make an entry block count as constructed -- each alone, or "
+                    help="with --journal (pipelines): events that also make an entry block count as constructed -- each alone, or "
                          "followed by = or : and the rest: `--ece ckpt` takes a block that has checkpointed (ckpt=<tag>)")
     ap.add_argument("--docs", action="store_true", help="the documents -- markdowns and pdfs -- under --dir, one point each")
     ap.add_argument("--dir", default=None, help="with --docs: the directory scanned, local or an fsspec url (default: the current one)")
-    ap.add_argument("--remote-python", default=None, help="with --pipejournal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: $HYP_REMOTE_PYTHON, else the one each entry records its build ran in, else python3)")
+    ap.add_argument("--remote-python", default=None, help="with --journal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: $HYP_REMOTE_PYTHON, else the one each entry records its build ran in, else python3)")
     ap.add_argument("--n-workers", type=int, default=16, help="threads reading a remote source, e.g. the dbx journal and its side files (default: 16)")
     ap.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama", help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
     ap.add_argument("--embed-model", default=None, help=f"default: {EMBED_MODEL} for ollama")
@@ -1618,14 +1620,17 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     cls = Hyp
-    if args.pipejournal and args.docs:
-        ap.error("--pipejournal and --docs are two corpora: one at a time")
-    if args.extra_construction_events and not args.pipejournal:
-        ap.error("--extra-construction-events is for --pipejournal's entry blocks")
+    pipelines = args.journal in ("pipelines", ".pipelines")
+    if args.journal is not None and args.docs:
+        ap.error("--journal and --docs are two corpora: one at a time")
+    if args.extra_construction_events and not pipelines:
+        ap.error("--extra-construction-events is for the entry blocks of --journal's pipelines")
     if args.dir is not None and not args.docs:
         ap.error("--dir is the directory --docs scans")
-    if args.pipejournal:
+    if pipelines:
         from .dbxpipelines import HypDbxPipelines as cls
+    elif args.journal is not None:
+        from .dbxpipelines import HypDbxJournal as cls
     elif args.docs:
         from .docs import HypDocs as cls
     if args.data is None:

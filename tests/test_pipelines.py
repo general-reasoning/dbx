@@ -254,3 +254,18 @@ def test_an_extra_event_matches_itself_and_what_follows_it_after_an_equals_or_a_
     import re
 
     assert bool(re.fullmatch(PipeJournal._is_event_(['ckpt']), event)) is counts
+
+
+def test_entrypoint_events_are_the_constructed_events():
+    """One notion of constructed: a pipeline's entry blocks count by the events a block journal's constructed() does."""
+    from dbx.journals import CONSTRUCTED_EVENTS
+
+    assert {f'^{e}$' for e in PipeJournal.ENTRYPOINT_EVENTS} == set(CONSTRUCTED_EVENTS)
+
+
+@pytest.mark.parametrize('event', ['UNSAFE_copy_from:END', 'update'])
+def test_collect_construct_only_counts_a_copied_or_updated_entrypoint(lake, event):
+    p = Flat(spec={'n': 7})
+    p.create()
+    p.entrypoint.write_journal_entry(event=event)
+    assert list(PipeJournal.collect(construct_only=True)['hash']) == [p.hash]

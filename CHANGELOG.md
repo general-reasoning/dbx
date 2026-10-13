@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **`update` is a construction event**, in `CONSTRUCTED_EVENTS` and
+  `PipeJournal.ENTRYPOINT_EVENTS`, and **`UNSAFE_copy_from:END` counts for a
+  pipeline's entry blocks**, as it did for `constructed()`: the two lists
+  name the same events.
+
 ### Added
 - **`pipejournal(construct_only=True, extra_construction_events=[...])`, and
   `hyp --pipejournal --extra-construction-events ...` (`--ece`).** Events

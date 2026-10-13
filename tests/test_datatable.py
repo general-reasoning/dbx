@@ -317,6 +317,24 @@ class TestRead:
     def test_table_data_concatenates_the_tablets(self, built_table):
         assert built_table.data('numbers')['numbers']['idx'] == list(range(9))
 
+    def test_a_sample_is_the_same_rows_of_every_slice(self, built_table):
+        got = built_table.data('numbers', 'letters', sample_fraction=0.5, sample_seed=3)
+        idx = got['numbers']['idx']
+        assert len(idx) == 4 and idx == sorted(idx) and set(idx) <= set(range(9))
+        assert got['numbers']['square'] == [k * k for k in idx]
+        assert got['letters']['label'] == [f"lbl{k}" for k in idx], "a row's slices stay together"
+        assert built_table.data('numbers', sample_fraction=0.5, sample_seed=3)['numbers']['idx'] == idx, "the same seed, the same rows"
+
+    def test_a_whole_sample_is_every_row(self, built_table):
+        assert built_table.data('numbers', sample_fraction=1.0)['numbers']['idx'] == list(range(9))
+
+    def test_sample_rows(self):
+        from dbx.datatables import sample_rows
+        assert list(sample_rows(9, 0.5, seed=3)) == list(sample_rows(9, 0.5, seed=3))
+        assert len(sample_rows(1000, 0.01)) == 10 and len(sample_rows(5, 0.01)) == 1 and len(sample_rows(0, 0.5)) == 0
+        with pytest.raises(ValueError):
+            sample_rows(9, 0)
+
     def test_data_is_keyed_by_slice_even_for_one_slice(self, built_table):
         """No special case: one slice is a mapping like any other count, so a
         consumer never has to ask which shape it was handed."""

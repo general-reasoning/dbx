@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`data(sample_fraction=, sample_seed=)`: a sample of a slice's rows.** The
+  same rows of every slice -- `datatables.sample_rows` picks them -- so a
+  row's slices stay together, and an upstream block's routed `data()` takes
+  them too. A slice is still read whole; what comes back is the sample.
 - **`dbx.SshRay`: a block's true instance, from another machine.** It starts
   a Ray head on a host over ssh for the session -- its own ports, its own
   temp dir, in a directory of its own -- and tunnels to its client port, so
@@ -27,6 +31,15 @@ All notable changes to this project will be documented in this file.
   [HYP.md](HYP.md).
 
 ### Fixed
+- **A pinned interpreter makes no work repo, asked for a revision or not.**
+  `gitwrkreposetup` returned early for `DBX_PINNED_REVISION` only when given a
+  revision, so the import of `dbx.datablocks` in a pinned process went on to
+  check its source repos for uncommitted changes -- and refused, though its
+  code is the revision's. A pinned job's environment also takes
+  `DBX_DIRTY_REPO_OK`, for a cluster whose own dbx predates the fix.
+- **`SshRay`'s head imports dbx without making a work repo**, and one that
+  cannot start -- no such `ray` -- is reported at once, with what it printed
+  and the `ray` it tried, rather than waited out.
 - **`trueinst()` gives the worker the datalake its entry recorded.**
   `remote()` passes this process's `DBX_*` variables to its workers, so a
   block whose quote leaves its datalake to the environment took the

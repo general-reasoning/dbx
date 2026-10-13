@@ -69,6 +69,24 @@ from .datastreams import (
 SLICETOPIC = 'SLICETOPIC'
 
 
+def sample_rows(n: int, fraction: float, seed: int = 0) -> np.ndarray:
+    """The rows a *fraction* of *n* samples, sorted: the same for the same *n*, *fraction* and *seed*.
+
+    ``round(n * fraction)`` of them, at least one of a non-empty *n*, drawn
+    without replacement. What `_Database_.data` reads with ``sample_fraction``:
+    every slice of one block has its *n* rows, so one draw picks the same rows
+    of each, and a row's slices stay together.
+    """
+    if not 0 < fraction <= 1:
+        raise ValueError(f"sample_rows: fraction must be in (0, 1], got {fraction!r}")
+    if n <= 0:
+        return np.zeros(0, dtype=np.int64)
+    k = min(n, max(1, round(n * fraction)))
+    if k == n:
+        return np.arange(n)
+    return np.sort(np.random.default_rng(seed).choice(n, size=k, replace=False))
+
+
 class _DataSliceMeta_(_NotedMarkerMeta_):
     """Makes ``DATASLICE(idx='int')`` a marker carrying those columns.
 
@@ -263,8 +281,8 @@ class _Database_(Datablock):
         return dict(columns) if columns else None
 
     def data(self, *slice_columns, nested=True, concat: bool = False,
-             columns=None, **kwargs):
-        """Every row of the named slices, keyed exactly as `dataset()` keys one row.
+             columns=None, sample_fraction: float | None = None, sample_seed: int = 0, **kwargs):
+        """Every row of the named slices -- or, with *sample_fraction*, a sample of them -- keyed exactly as `dataset()` keys one row.
 
         The mirror of `dataset()`: same ``*slice_columns`` spec, same
         ``nested`` keying, and the same guarantee that no two slices can
@@ -293,6 +311,12 @@ class _Database_(Datablock):
         concat : bool, optional
             Stack each column's values into one array along a new leading
             axis.  Left False, a leaf is the plain list of per-row values.
+        sample_fraction : float, optional
+            Only that fraction of the rows, in their order: the rows
+            `sample_rows` picks with *sample_seed* -- the same rows of every
+            slice, so a row's slices stay together, and the same rows of
+            another block of as many, as an upstream block's are. A slice is
+            still read whole; what comes back is the sample.
         **kwargs
             Passed to `_read_slice_()`.
         """
@@ -301,6 +325,8 @@ class _Database_(Datablock):
         out = {}
         for pos, name in enumerate(names):
             rows = self._read_slice_(name, **kwargs)
+            if sample_fraction is not None:
+                rows = [rows[i] for i in sample_rows(len(rows), sample_fraction, sample_seed)]
             cols = per_slice_columns[pos] if per_slice_columns else None
             if cols is None:
                 specs = [(c, None) for c in (rows[0] if rows else [])]

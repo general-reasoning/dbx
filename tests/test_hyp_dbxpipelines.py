@@ -631,6 +631,21 @@ def test_the_window_samples_what_is_picked_and_shows_it(pipelines_app, monkeypat
     assert len(disk.positions) == 6 and disk.note is None and [l for _, l, _ in disk.legend] == ["a", "b", "c"]
 
 
+def test_tablets_and_workers_are_shown_dimmed_until_the_plan_is_read(pipelines_app):
+    from types import SimpleNamespace as NS
+
+    app = pipelines_app
+    window = NS(row=SLICED_ROW)
+    app._slice_menus_(window)
+    tablets, workers = window.slice_menus["tablets"], window.slice_menus["workers"]
+    assert tablets.visible() and workers.visible() and not tablets.enabled() and not workers.enabled()
+    key = (str(SLICED_ROW.get("entry_path")), str(SLICED_ROW.get("id")))
+    app.slice_info[key] = {"tablets": 532, "rows0": {}}
+    assert tablets.enabled() and workers.enabled()
+    app.slice_info[key] = {"tablets": 1, "rows0": {}}
+    assert not tablets.visible() and not workers.visible(), "one tablet: nothing to choose"
+
+
 def test_undeclared_slices_can_not_be_viewed(pipelines_app):
     from types import SimpleNamespace as NS
 

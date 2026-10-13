@@ -33,6 +33,11 @@ SECONDS_PER_UNIT = 0.35
 # A click this close to the rim is clamped to it: anything further out is
 # many units away, and the slide would take seconds.
 MAX_CLICK_RADIUS = 0.995
+# The longest slide to a point picked from the points menu, however far it is.
+GOTO_SECONDS = 1.5
+# The most points the points menu lists, and the longest item it shows.
+POINTS_MENU_LIMIT = 2000
+POINTS_MENU_CHARS = 140
 RELAYOUT_SECONDS = 0.8
 ZOOM_STEP = 1.12
 ZOOM_RANGE = (0.25, 8.0)
@@ -59,6 +64,7 @@ TIP_BG = (245, 240, 225)
 TIP_FG = (30, 30, 30)
 EDGE = (250, 200, 90)
 STATUS = (150, 160, 175)
+DIMMED = (85, 92, 105)  # a menu shown but not yet usable
 
 
 def make_embedder(kind, model, ollama):
@@ -134,16 +140,21 @@ class View:
             self.M, self.anim = M, None
         return M
 
-    def center_on(self, p, now):
-        """Slide p (in view coordinates, before the zoom) to the center."""
+    def center_on(self, p, now, exact=False):
+        """Slide p (in view coordinates, before the zoom) to the center.
+
+        A click near the rim goes only so far toward it; *exact* goes all the
+        way, however far, in at most GOTO_SECONDS.
+        """
         self.M = self.isometry(now)  # start from wherever a running slide got to
         r = abs(p)
         self.anim = None
         if r < 1e-9:
             return
-        if r > MAX_CLICK_RADIUS:
+        if r > MAX_CLICK_RADIUS and not exact:
             p = p / r * MAX_CLICK_RADIUS
-        self.anim = (self.M, p, now, SECONDS_PER_UNIT * float(P.distance0(p)))
+        seconds = SECONDS_PER_UNIT * float(P.distance0(p))
+        self.anim = (self.M, p, now, min(seconds, GOTO_SECONDS) if exact else seconds)
 
     def drag(self, a, b):
         """Move the plane rigidly so that a (view coordinates) lands on b."""
@@ -224,14 +235,17 @@ class Dropdown:
     *items* is a list of ``(text, value)``, or a function returning one, asked
     each time the list opens -- None from it while the items are still being
     read. Picking an item calls ``on_select(value)``. Shown only while
-    *visible()*.
+    *visible()*, and usable only while *enabled()*: shown dimmed, and opening
+    on no click, until then.
     """
 
     ROWS = 16
 
-    def __init__(self, label, items, on_select, empty="none", value=None, match=None, visible=lambda: True):
+    def __init__(self, label, items, on_select, empty="none", value=None, match=None, visible=lambda: True,
+                 enabled=lambda: True):
         self.label = label
         self.visible = visible
+        self.enabled = enabled
         self.items = items
         self.on_select = on_select
         self.empty = empty
@@ -270,7 +284,7 @@ class Dropdown:
             return False
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             if self.button.collidepoint(ev.pos):
-                self.open, self.top = not self.open, 0
+                self.open, self.top = (not self.open and self.enabled()), 0
                 return True
             if not self.open:
                 return False
@@ -298,6 +312,8 @@ class Dropdown:
     def draw_button(self, surf, font, x, y, color, max_width=None):
         """Draw the button at (*x*, *y*), its label shortened with … to fit *max_width*; returns its width."""
         label = self.label
+        if not self.enabled():
+            color = DIMMED
         if max_width is not None:
             while len(label) > 1 and font.size(label)[0] + 26 > max_width:
                 label = label[:-2] + "…"
@@ -312,7 +328,7 @@ class Dropdown:
         return self.button.width
 
     def draw_list(self, surf, font):
-        if not self.open or not self.visible():
+        if not self.open or not self.visible() or not self.enabled():
             return
         items = self.current()
         texts = [t for t, _ in items] if items else ["loading…" if items is None else self.empty]
@@ -397,6 +413,8 @@ class TextViewer:
         self.title = title
         self.menus = list(menus)
         self.inset = inset
+        # The title's color, as a function returning one -- or None for the usual.
+        self.title_color = lambda: None
         self.over = None  # the viewer this one was opened over: it opens below that one's header
         self.fold_menu = Dropdown("fold", [("unfold all", None)] + [(f"fold past level {n}", n) for n in range(1, self.FOLD_LEVELS + 1)],
                                   self.set_fold)
@@ -596,8 +614,9 @@ class TextViewer:
         title_w = fold_x - 12 - (x + pad)
         row_h = font.get_linesize() + 10
         bottom = y + pad + font.get_linesize()
+        title_color = self.title_color() or EDGE
         if self.menus:
-            self.menus[0].draw_button(surf, font, x + pad, y + pad, EDGE, max_width=title_w)
+            self.menus[0].draw_button(surf, font, x + pad, y + pad, title_color, max_width=title_w)
             rest = [m for m in self.menus[1:] if getattr(m, "visible", lambda: True)()]
             bx, by = x + pad, y + pad + row_h
             for m in rest:
@@ -607,7 +626,7 @@ class TextViewer:
             if rest:
                 bottom = by + font.get_linesize()
         else:
-            surf.blit(font.render(_fit_(font, self.title, title_w), True, EDGE), (x + pad, y + pad))
+            surf.blit(font.render(_fit_(font, self.title, title_w), True, title_color), (x + pad, y + pad))
         self.header_bottom = bottom + 4
 
         # The gutter: line numbers, if asked for, then the fold triangles.
@@ -992,7 +1011,9 @@ class Hyp:
 
     def __open_point__(self, i):
         """Right click on point *i*: show its stored text."""
-        self.viewers = [TextViewer(self.snap.summaries[i], self.snap.texts[i])]
+        viewer = TextViewer(self.snap.summaries[i], self.snap.texts[i])
+        viewer.title_color = self.title_color(i)
+        self.viewers = [viewer]
 
     def __point_label__(self, i):
         """The label drawn beside point *i*."""
@@ -1068,8 +1089,10 @@ class Hyp:
         self.dragging = False
         self.last = None
         self.labels = {}
-        self.settings = {"datetimes": True, "line numbers": False}
+        self.settings = {"datetimes": True, "line numbers": False, "title colors": True}
         self.settings_menu = Dropdown("settings", self._settings_items_, self._toggle_setting_)
+        self.points_menu = Dropdown("points", self._points_items_, self.go_to, empty="no points")
+        self._points_ = (None, None, [])  # (snapshot, settings, items): what the points menu last listed
         self.popup = None  # a menu opened on the disk, at the mouse: see open_popup
         self.reload_button = Button("reload", self.reload)
         self.grid = _grid_()
@@ -1161,7 +1184,7 @@ class Hyp:
         self.worker.submit(job)
 
     def handle(self, ev, now):
-        if self.settings_menu.handle(ev) or (not self.viewers and self.reload_button.handle(ev)):
+        if self.settings_menu.handle(ev) or (not self.viewers and (self.reload_button.handle(ev) or self.points_menu.handle(ev))):
             return
         if self.popup is not None and ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEWHEEL, pygame.KEYDOWN):
             # The menu's, whatever it is: a click picks an item or, elsewhere, only closes it.
@@ -1287,6 +1310,42 @@ class Hyp:
         parts = [name, f"v{version}" if version else None, self.__point_datetime__(i) if self.settings.get("datetimes") else None]
         return " · ".join(p for p in parts if p) or None
 
+    def point_color(self, z):
+        """A point's color, by where it lies on the disk -- *z*, in data coordinates: its angle the hue, its radius the saturation."""
+        col = pygame.Color(0)
+        col.hsva = (math.degrees(math.atan2(z.imag, z.real)) % 360, 45 + 40 * min(1.0, abs(z) * 1.5), 95, 100)
+        return col
+
+    def title_color(self, i):
+        """For a window of point *i*: a function giving its title the point's color, while the settings say to; None otherwise."""
+        snap = self.snap
+        return lambda: (self.point_color(snap.positions[i]) if self.settings.get("title colors") and i < len(snap.positions)
+                        else None)
+
+    def _points_items_(self):
+        """Every point, by its label and second line in full, alphabetically: at most POINTS_MENU_LIMIT of them."""
+        if self.snap is None:
+            return []
+        known = (self.snap, tuple(self.settings.items()))
+        if self._points_[:2] != known:
+            def text(i):
+                sub = self.sublabel(i, full=True)
+                t = f"{self.__point_label__(i)}  ·  {sub}" if sub else str(self.__point_label__(i))
+                return t if len(t) <= POINTS_MENU_CHARS else t[: POINTS_MENU_CHARS - 1] + "…"
+
+            items = sorted(((text(i), i) for i in range(len(self.snap.positions))), key=lambda t: t[0].lower())
+            if len(items) > POINTS_MENU_LIMIT:
+                items = items[:POINTS_MENU_LIMIT] + [(f"… and {len(items) - POINTS_MENU_LIMIT:,} more, not listed", None)]
+            self._points_ = (*known, items)
+        return self._points_[2]
+
+    def go_to(self, i, now=None):
+        """Slide point *i* to the center of the disk, however far it is; a pick of the points menu."""
+        if i is None or self.snap is None or not 0 <= i < len(self.snap.positions):
+            return
+        now = time.monotonic() if now is None else now
+        self.view.center_on(self.view.isometry(now)(self.positions(now)[i]), now, exact=True)
+
     def _settings_items_(self):
         return [(f"[{'x' if on else ' '}]  {name}", name) for name, on in self.settings.items()]
 
@@ -1330,9 +1389,7 @@ class Hyp:
             # Far points first, so the near ones draw over them; size follows
             # the conformal factor, so distance reads as shrinkage.
             for i in np.argsort(-r2):
-                ang = math.degrees(math.atan2(data[i].imag, data[i].real)) % 360
-                col = pygame.Color(0)
-                col.hsva = (ang, 45 + 40 * min(1.0, abs(data[i]) * 1.5), 95, 100)
+                col = self.point_color(data[i])
                 rad = 1.5 + 6.0 * (1.0 - r2[i])
                 pygame.draw.circle(surf, col, (sx[i], sy[i]), rad)
                 if i == self.hover:
@@ -1358,9 +1415,12 @@ class Hyp:
         sx = w - self.small.size("settings")[0] - 30
         self.settings_menu.draw_button(surf, self.small, sx, 10, STATUS)
         self.reload_button.draw_button(surf, self.small, sx - self.small.size("reload")[0] - 22, 10, STATUS)
+        self.points_menu.draw_button(surf, self.small, 14, 10, STATUS)
         for viewer in self.viewers:
             viewer.draw(surf, self.font, self.mono, numbers=self.settings.get("line numbers"))
         self.settings_menu.draw_list(surf, self.small)
+        if not self.viewers:
+            self.points_menu.draw_list(surf, self.small)
         if self.popup is not None:
             self.popup.draw_list(surf, self.small)
         self.statusline(now)

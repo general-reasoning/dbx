@@ -109,7 +109,7 @@ def test_names_versions_and_datetimes_toggle_apart(named):
 
 def test_names_is_a_setting_only_where_points_have_names(app, named):
     assert "names" not in app.settings
-    assert [v for _, v in named._settings_items_()] == ["names", "versions", "datetimes", "line numbers"]
+    assert [v for _, v in named._settings_items_()] == ["names", "versions", "datetimes", "line numbers", "title colors"]
 
 
 def test_the_tooltip_is_the_label_in_full(named):
@@ -462,3 +462,55 @@ def test_layouts_run_one_at_a_time(monkeypatch):
     for t in threads:
         t.join()
     assert most[0] == 1
+
+
+@pytest.fixture
+def placed(app):
+    """The app with three points, labeled out of alphabetical order, one far out by the rim."""
+    import numpy as np
+    from types import SimpleNamespace as NS
+
+    app.snap = NS(positions=np.array([0.1 + 0j, -0.3 + 0.2j, 0.97 + 0j]), summaries=["zeta", "Alpha", "mid"],
+                  texts=["z", "a", "m"], neighbors=[[], [], []], points=[{}, {}, {}])
+    return app
+
+
+def test_the_points_menu_lists_every_point_alphabetically(placed):
+    assert [(t.split("  ·  ")[0], i) for t, i in placed._points_items_()] == [("Alpha", 1), ("mid", 2), ("zeta", 0)]
+
+
+def test_the_points_menu_is_cut_short(placed, monkeypatch):
+    from hyp import app as app_mod
+
+    monkeypatch.setattr(app_mod, "POINTS_MENU_LIMIT", 2)
+    items = placed._points_items_()
+    assert [i for _, i in items] == [1, 2, None] and "1 more" in items[-1][0]
+    placed.go_to(None)  # the note picks nothing
+
+
+def test_picking_a_point_centers_it_however_far(placed):
+    placed.go_to(2, now=0.0)
+    end = placed.view.isometry(100.0)
+    assert abs(end(placed.snap.positions[2])) < 1e-6
+
+
+def test_a_windows_title_takes_its_points_color_while_the_setting_says(placed):
+    placed.__open_point__(2)
+    color = placed.viewers[-1].title_color
+    assert color() == placed.point_color(placed.snap.positions[2])
+    placed._toggle_setting_("title colors")
+    assert color() is None
+
+
+def test_a_disabled_menu_does_not_open():
+    import pygame
+
+    from hyp.app import Dropdown
+
+    ready = [False]
+    menu = Dropdown("tablets", [("all", 1.0)], lambda v: None, enabled=lambda: ready[0])
+    menu.button = pygame.Rect(0, 0, 50, 20)
+    click = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(5, 5))
+    assert menu.handle(click) and not menu.open
+    ready[0] = True
+    assert menu.handle(click) and menu.open

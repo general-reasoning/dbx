@@ -45,7 +45,7 @@ to -- and each row is a point:
   datetime -- that has the top row to itself, with a row of menus beneath:
   - the title itself: every journal entry with that tag, by datetime and
     `VAR.name`, to switch to
-  - constructed entrypoints, from `dbx.pipejournal(construct_only=True)`:
+  - constructed entry blocks, from `dbx.pipejournal(construct_only=True)`:
     picking one opens that block's own journal over the pipeline's -- below
     its header, which stays in view -- its title a menu of the pipeline's
     other constructed blocks, and beside it, *session blocks*: every block
@@ -69,7 +69,9 @@ to -- and each row is a point:
     on the datalake's host: of a table, *tablets* of its tablets, each read
     whole -- its rows together, as its shards hold them -- in one of *workers*
     processes forked there, *rows* of each kept. Auto is 64 tablets and 4,000
-    rows split among them. The sample is laid out with hyperbolic UMAP here,
+    rows split among them. *tablets* and *workers* are dimmed while the
+    table's tablets are counted there -- begun as the block's window opens --
+    and gone for a table of one. The sample is laid out with hyperbolic UMAP here,
     on a disk in a window of its own, colored by label. A slice that declares
     no columns -- a bare `DATASLICE` -- cannot be viewed.
 - in either window, an `output` button, where the entry shown had its output
@@ -91,7 +93,7 @@ all.
 |---|---|
 | left click | slide the clicked point to the center along a geodesic; time ∝ distance |
 | left click on a pipeline (`--pipejournal`) | its window, as a right click opens a point otherwise |
-| right click on a pipeline (`--pipejournal`) | its constructed entrypoints, in a menu at the mouse: picking one opens that block's window directly |
+| right click on a pipeline (`--pipejournal`) | its constructed entry blocks, in a menu at the mouse: picking one opens that block's window directly |
 | left drag | move the plane rigidly (a hyperbolic translation); the grabbed point stays under the cursor |
 | scroll | hyperbolic zoom: a point at distance *d* is drawn at *k·d* |
 | right click on a point | its stored text |
@@ -99,7 +101,8 @@ all.
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space |
 | Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
 | (lower left) | a spinning wheel while data are being loaded or prepared; an error, in red, for 15 s or until the next read -- its full traceback in the terminal |
-| settings (top right) | names and versions (`--pipejournal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default) |
+| points (top left) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center |
+| settings (top right) | names and versions (`--pipejournal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
 | in a text window: the triangle by a line | a line whose next line is indented deeper folds the deeper lines after it into `… N lines`, and unfolds them. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |
 | in a text window: *fold* (top right), or 1–9, 0 | fold every such line at that many levels of indentation or deeper; *unfold all*, or 0, unfolds them all |

@@ -910,7 +910,7 @@ class HypDbxPipelines(Hyp):
         self.run_async(lambda: constructed_entrypaths(self.n_workers), lambda d: setattr(self, "constructed", d))
 
     def __reload__(self):
-        """The journal, the constructed entrypoints and the session indexes, read again with the pipelines."""
+        """The journal, the constructed entry blocks and the session indexes, read again with the pipelines."""
         self.journal = self.constructed = None
         self.sessions = {}
         self.slice_info = {}
@@ -936,7 +936,7 @@ class HypDbxPipelines(Hyp):
         self.__open_point__(i)
 
     def __context_point__(self, i, pos):
-        """Right click on a pipeline: its constructed entrypoints, at the mouse; picking one opens its window, over the disk."""
+        """Right click on a pipeline: its constructed entry blocks, at the mouse; picking one opens its window, over the disk."""
         row = self.snap.points[i].get("row", {})
         self.open_popup(lambda: self._entrypoints_(row), lambda p: self._open_entrypoint_(row, p), pos, empty="none constructed")
 
@@ -944,6 +944,7 @@ class HypDbxPipelines(Hyp):
         row = self.snap.points[i].get("row", {})
         viewer = TextViewer(self.snap.summaries[i], self.snap.texts[i])
         viewer.row = row
+        viewer.title_color = self.title_color(i)
         times = Dropdown(
             self._title_(row, self.snap.points[i].get("name")),
             lambda: self._datetimes_(row.get("tag")),
@@ -951,7 +952,7 @@ class HypDbxPipelines(Hyp):
             empty="no entries",
             match=lambda k: self._is_entry_(k, viewer.row),
         )
-        roots = Dropdown("constructed entrypoints", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p), empty="none constructed")
+        roots = Dropdown("constructed entry blocks", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p), empty="none constructed")
         viewer.menus = [times, roots, self._output_button_(viewer)]
         self.viewers = [viewer]
 
@@ -1057,6 +1058,8 @@ class HypDbxPipelines(Hyp):
             if menu.value == entrypath:  # not stepped on past it meanwhile
                 text, window.row = result
                 window.set_text(text)
+                if declared_columns(window.row):
+                    self._slice_info_(window)  # start planning a sample: tablets and workers wait on it
 
         self.run_async(lambda: entrypoint_text(entrypath, row, self.n_workers), shown)
 
@@ -1111,15 +1114,18 @@ class HypDbxPipelines(Hyp):
         shown = lambda: bool(recorded_slices(window.row))  # noqa: E731
         declared = lambda: bool(declared_columns(window.row))  # noqa: E731
         empty = "no declared columns: its DATASLICEs declare none, so nothing of it can be viewed"
-        # Only a plan already read: asking for one here would read it at every draw of every block with slices.
-        tabled = lambda: declared() and (self._known_plan_(window) or {}).get("tablets", 1) > 1  # noqa: E731
+        # Only a plan already read: asking for one here would read it at every
+        # draw of every block with slices. Until it is, they are shown dimmed;
+        # once it is, only a table of more than one tablet has them.
+        tabled = lambda: declared() and (self._known_plan_(window) or {"tablets": 2}).get("tablets", 1) > 1  # noqa: E731
+        planned = lambda: self._known_plan_(window) is not None  # noqa: E731
         menu = lambda which, items, **kw: Dropdown(self.MENU_LABELS[which], items, lambda v: self._pick_slice_(window, which, v), **kw)  # noqa: E731
         window.slice_menus = {
             "data": menu("data", lambda: self._slice_items_(window), empty=empty, visible=shown),
             "labels": menu("labels", lambda: self._slice_items_(window, none=True), empty=empty, visible=shown),
             "rows": menu("rows", lambda: self._fraction_items_(window, "rows"), visible=declared),
-            "tablets": menu("tablets", lambda: self._fraction_items_(window, "tablets"), visible=tabled),
-            "workers": menu("workers", [(str(n), n) for n in WORKERS], visible=tabled),
+            "tablets": menu("tablets", lambda: self._fraction_items_(window, "tablets"), visible=tabled, enabled=planned),
+            "workers": menu("workers", [(str(n), n) for n in WORKERS], visible=tabled, enabled=planned),
         }
         self._reset_slice_menus_(window)
         button = Button("hyp", lambda: self._open_slice_disk_(window), visible=lambda: declared() and window.slice_pick.get("data") is not None)

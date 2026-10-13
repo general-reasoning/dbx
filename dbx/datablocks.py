@@ -3146,15 +3146,35 @@ class Datablock:
             self.leave_breadcrumbs_at_path(dirpath, crumbs=crumbs)
         return self
 
-    def build_tree(self, *args, exclude_self: bool = False, deep: bool = False, **kwargs):
+    def build_tree(self, *args, exclude_self: bool = False, deep: bool | str = False, **kwargs):
+        """Build this block's tree bottom up: its children's subtrees, then itself.
+
+        *deep* says what a child already valid is taken to vouch for:
+
+        - ``False`` -- its whole subtree: it is skipped.
+        - ``'try_specialize_children'`` -- itself, not its children: its VAR subtrees and, a stack's,
+          its blocks. Each is tried for a specialization, as `try_specialize_tree` does, and nothing
+          is built. A child whose identity moved -- a new hash under a parent that kept its own --
+          adopts the earlier build its specialization resolves to, rather than being found unbuilt
+          by whatever reads it later.
+        - ``True`` -- nothing: every block is built anew, valid or not.
+
+        A child not valid is built in every case, with the same *deep*.
+        """
+        if deep not in (False, True, 'try_specialize_children'):
+            raise ValueError(f"build_tree(deep={deep!r}): deep is False, True or 'try_specialize_children'")
         log = self.log
         log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
         def skip_cb(s):
             log.skip_subtree(s, "TREE_SKIP_BUILDING")
-        
+
         for s, c in self._iter_var_blocks_('TREE_SKIP_BUILDING', skip_callback=skip_cb):
-            if not deep and c.valid():
-                log.skip_subtree(s, "already valid")
+            if deep is not True and c.valid():
+                if deep == 'try_specialize_children':
+                    c._specialize_tree_('TREE_SKIP_BUILDING', {})
+                    log.skip_subtree(s, "already valid; its children tried for specializations")
+                else:
+                    log.skip_subtree(s, "already valid")
                 continue
             self.write_journal_entry(event=f"build_tree:{s}:begin")
             with log.subtree(s):
@@ -3163,31 +3183,32 @@ class Datablock:
                 self._adopt_(c).build_tree(*args, deep=deep, **kwargs)
             self.write_journal_entry(event=f"build_tree:{s}:end")
         if not exclude_self:
-            self.build(*args, deep=deep, **kwargs)
+            self.build(*args, deep=deep is True, **kwargs)
         return self
 
     def try_specialize_tree(self) -> dict:
         """Specialize every block of this one's tree whose specialization resolves -- and build none.
 
-        Bottom up, as `build_tree` builds: each block not valid is asked to `specialize`, which installs
-        what resolves -- a stack's blocks too -- and computes nothing. What is left not valid, or owing
+        Bottom up, as `build_tree` builds: each block is asked to `specialize`, which installs what
+        resolves and computes nothing -- a stack's blocks too, even of a stack that is itself valid, as
+        blocks moved to identities of their own leave it. What is left not valid, or owing
         topics, stays so, to be built deliberately rather than as a side effect of adopting the rest.
 
         Returns ``{anchorkey: ('valid' | 'not-valid', owed topics)}`` for every block of the tree, each
         once, in the order they were tried.
         """
-        status = {}
+        return self._specialize_tree_('TREE_SKIP_VALIDATION', {})
 
-        def visit(block):
-            if block.anchorkey in status:
-                return
-            for _, child in block._iter_var_blocks_('TREE_SKIP_VALIDATION'):
-                visit(child)
-            if not block.valid():
-                block.specialize()
-            status[block.anchorkey] = ('valid' if block.valid() else 'not-valid', block.owedtopics())
-
-        visit(self)
+    def _specialize_tree_(self, skips: str, status: dict) -> dict:
+        """`try_specialize_tree`'s walk, over the children *skips* -- a ``TREE_SKIP_*`` -- leaves; *status* filled."""
+        if self.anchorkey in status:
+            return status
+        for _, child in self._iter_var_blocks_(skips):
+            child._specialize_tree_(skips, status)
+        # Asked of a valid block too: a block's specialize() returns at once, but a
+        # stack's asks its blocks, which may have moved under it -- see `Datastack.specialize`.
+        self.specialize()
+        status[self.anchorkey] = ('valid' if self.valid() else 'not-valid', self.owedtopics())
         return status
 
     def valid_var(self, *, reduce=False):

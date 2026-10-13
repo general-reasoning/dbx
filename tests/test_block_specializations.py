@@ -6,13 +6,14 @@ import os
 import sys
 
 import pytest
+from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(__file__))
 from test_specializations import (  # noqa: E402
     TABLE_ANCHOR, RowTablet, RowTableV1, TestOneJournalReadForAWholeTable, adopted, v1, v1table,
 )
 
-from dbx.datablocks import Datablock, InvalidBlocksError  # noqa: E402
+from dbx.datablocks import DATAFILE, Datablock, InvalidBlocksError  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -537,3 +538,52 @@ class TestAValidStackSpecializesItsTablets:
         nomarkers(rekeyed).specialize_tablets(parallelization='inline')
         again = nomarkers(rekeyed).specialize_tablets(parallelization='inline')
         assert [sp is None for sp in again] == [True, True, True]
+
+
+class Over(Datablock):
+    """A block over the table -- as a clip's fold is over its bags' table: built on it, its hash not the tablets'."""
+
+    TOPICS = {'over': DATAFILE('over.txt')}
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        table: RowTableNoMarkers = None
+
+    def __build__(self):
+        with open(self.path('over', ensure_dirpath=True), 'w') as f:
+            f.write('over')
+
+
+def over(url):
+    return Over(datalake=str(url), spec={'table': nomarkers(url)})
+
+
+class TestBuildTreeSpecializesUnderAValidChild:
+    """build_tree(deep='try_specialize_children'): a valid child vouches for itself, not for the tablets that moved under it."""
+
+    @pytest.fixture
+    def built(self, rekeyed):
+        over(rekeyed).build_tree()
+        assert over(rekeyed).valid() and nomarkers(rekeyed).valid()
+        assert not nomarkers(rekeyed).tablets_redirected(parallelization='inline').any()
+        return rekeyed
+
+    def test_shallow_leaves_the_tablets_unadopted(self, built):
+        over(built).build_tree()
+        assert not nomarkers(built).tablets_redirected(parallelization='inline').any()
+
+    def test_try_specialize_children_adopts_them_and_builds_nothing(self, built, monkeypatch):
+        monkeypatch.setattr(Over, '__build__', lambda self: pytest.fail("a valid block is not built"))
+        over(built).build_tree(deep='try_specialize_children')
+        table = nomarkers(built)
+        assert table.tablets_redirected(parallelization='inline').all()
+        assert table.tablet(1).read('rows') == "rows-1\n", "adopted"
+        assert not any(table.tablet(i).validtopic('extra') for i in range(3)), "adopting builds nothing"
+
+    def test_try_specialize_tree_adopts_them_under_a_valid_stack(self, built):
+        over(built).try_specialize_tree()
+        assert nomarkers(built).tablets_redirected(parallelization='inline').all()
+
+    def test_a_deep_it_does_not_know_is_refused(self, built):
+        with pytest.raises(ValueError, match="'try_specialize_children'"):
+            over(built).build_tree(deep='adopt')

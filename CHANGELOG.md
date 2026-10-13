@@ -25,6 +25,14 @@ All notable changes to this project will be documented in this file.
   name the same events.
 
 ### Added
+- **`build_tree(deep='try_specialize_children')`: a valid child vouches for
+  itself, not for its children.** Its children -- its VAR subtrees and, a
+  stack's, its blocks -- are tried for specializations, as
+  `try_specialize_tree()` tries them, and nothing is built. A child that moved
+  to a new hash under a parent that kept its own adopts its earlier build,
+  rather than being found unbuilt by whatever reads it. See DATASTACK.md, "A
+  Valid Stack and Its Children". Any other `deep` but `False` or `True` is
+  refused.
 - **`pipejournal(construct_only=True, extra_construction_events=[...])`, and
   `hyp --journal --extra-construction-events ...` (`--ece`).** Events
   that also make an entry block count as constructed, besides `build:end`,
@@ -72,6 +80,9 @@ All notable changes to this project will be documented in this file.
   [HYP.md](HYP.md).
 
 ### Fixed
+- **`try_specialize_tree()` specializes the blocks of a valid stack too.** It
+  asked only blocks that were not valid, so a valid stack's blocks were never
+  reached, however many had moved under it.
 - **A pinned interpreter makes no work repo, asked for a revision or not.**
   `gitwrkreposetup` returned early for `DBX_PINNED_REVISION` only when given a
   revision, so the import of `dbx.datablocks` in a pinned process went on to

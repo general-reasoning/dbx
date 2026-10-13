@@ -52,6 +52,9 @@ to -- and each row is a point:
     journaled under the session of the entry shown, from the index a
     `dbx.exec` command keeps (`DataJournal.session_entries`), to show in its
     place. A block built outside `dbx.exec` has no index to list.
+  - session blocks: every block journaled under the pipeline's own session,
+    as the entry blocks' windows list theirs: picking one opens its journal,
+    as a constructed entry block's opens
   - *read* and *ls*, beside them, list the shown block's recorded topics.
     *ls* lists what is at a topic's recorded path, over ssh, with nothing
     instantiated. *read* calls the entry's `trueinst()` here, against a Ray
@@ -141,7 +144,7 @@ over the layers behind it. Opening a window brings its layer to the front.
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space |
 | Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
 | (lower left) | a spinning wheel while data are being loaded or prepared; an error, in red, for 15 s or until the next read -- its full traceback in the terminal |
-| points (top left) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center |
+| points (top right) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center |
 | settings (top right) | names and versions (`--pipejournal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
 | in a text window: the triangle by a line | a line whose next line is indented deeper folds the deeper lines after it into `… N lines`, and unfolds them. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |

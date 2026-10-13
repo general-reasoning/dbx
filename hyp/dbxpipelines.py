@@ -955,7 +955,15 @@ class HypDbxPipelines(Hyp):
             match=lambda k: self._is_entry_(k, viewer.row),
         )
         roots = Dropdown("constructed entry blocks", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color), empty="none constructed")
-        viewer.menus = [times, roots, self._output_button_(viewer)]
+        # The blocks journaled under the pipeline's session -- as an entry block's window lists them -- each opened as one.
+        session = Dropdown(
+            "session blocks",
+            lambda: self._session_blocks_(viewer, viewer.row),
+            lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color),
+            empty="none indexed: the session was no dbx.exec command's",
+            visible=lambda: bool(viewer.row) and not _is_blank_(viewer.row.get("session")),
+        )
+        viewer.menus = [times, roots, session, self._output_button_(viewer)]
         self.viewers = [viewer]
 
     # Helpers -----------------------------------------------------------------

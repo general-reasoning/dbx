@@ -1501,10 +1501,12 @@ class Hyp:
         w = surf.get_width()
         sx = w - self.small.size("settings")[0] - 30
         self.settings_menu.draw_button(surf, self.small, sx, 10, STATUS)
-        self.reload_button.draw_button(surf, self.small, sx - self.small.size("reload")[0] - 22, 10, STATUS)
-        x = 14 + self.points_menu.draw_button(surf, self.small, 14, 10, STATUS) + 12
+        rx = sx - self.small.size("reload")[0] - 22
+        self.reload_button.draw_button(surf, self.small, rx, 10, STATUS)
+        # points, on the right with the rest: its list opens leftward from the window's edge.
+        self.points_menu.draw_button(surf, self.small, rx - self.points_menu.width(self.small) - 14, 10, STATUS)
         if len(self.layers) > 1:
-            self.layers_menu.draw_button(surf, self.small, x, 10, STATUS)
+            self.layers_menu.draw_button(surf, self.small, 14, 10, STATUS)
         for viewer in self.viewers:
             viewer.draw(surf, self.font, self.mono, numbers=self.settings.get("line numbers"))
         self.settings_menu.draw_list(surf, self.small)

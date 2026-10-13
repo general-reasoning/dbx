@@ -768,3 +768,20 @@ def test_ece_is_the_short_of_extra_construction_events_and_is_for_pipejournal(mo
     with pytest.raises(RuntimeError, match="parsed"):
         app_mod.main(["--pipejournal", "--ece", "ckpt", "fit:end"])
     assert parsed["extra_construction_events"] == ["ckpt", "fit:end"]
+
+
+def test_a_pipelines_window_lists_its_sessions_blocks_and_opens_them(pipelines_app, monkeypatch):
+    app = pipelines_app
+    app.snap.positions = np.array([0.2 + 0j])
+    row = {**app.snap.points[0]["row"], "session": "s1", "entry_path": "/lake/.pipelines/x/e.parquet"}
+    app.snap.points[0]["row"] = row
+    app.sessions["s1"] = [("/lake/pkg.Model/v1", "build:end"), ("/lake/pkg.Data/d1", "build:end")]
+    dbxpipelines.HypDbxPipelines.__open_point__(app, 0)
+    viewer = app.viewers[-1]
+    session = next(m for m in viewer.menus if getattr(m, "label", "") == "session blocks")
+    assert session.visible()
+    assert [v for _, v in session.current()] == ["/lake/pkg.Model/v1", "/lake/pkg.Data/d1"]
+    session.select("/lake/pkg.Data/d1")
+    assert app.opened == [("entrypoint", "/lake/pkg.Data/d1")]
+    viewer.row = {**row, "session": None}
+    assert not session.visible()

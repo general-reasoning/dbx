@@ -81,3 +81,27 @@ def test_a_plain_tables_slices_are_its_tablets(tmp_path):
     assert set(slices) == set(table.slices(recursive=True))
     assert slices == {s: table.tablet(0).declared_schema(s) for s in slices}
 
+
+
+
+def test_rebuilding_a_valid_tables_tablets_is_journaled_on_the_table(tmp_path):
+    """build_blocks leaves an entry of the table's own, with its slices -- beside its build:end, not over it."""
+    table = DummySampleTable(datalake=str(tmp_path), spec=dict(samples_per_tablet=5), tag='samples').build()
+    events = lambda: sorted(table.datajournal()['event'])
+    assert events() == ['build:end']
+    table.build_blocks()                            # every tablet valid: nothing built, nothing written
+    assert events() == ['build:end']
+    table.build_blocks([0])                         # the same instance that wrote build:end
+    assert events() == ['build:end', 'build_blocks:end']
+    entry = table.datajournal(event='build_blocks:end').iloc[-1]
+    assert ast.literal_eval(entry['slices']) == table.readable_slices()
+    assert entry['note'] == f"1 of {table.n_blocks} blocks: [0]"
+
+
+def test_update_is_a_note_under_its_own_event(tmp_path):
+    table = _feature_table(str(tmp_path), 'features')
+    assert table.update('slices re-recorded', inline=True) is table
+    entry = table.datajournal(event='update').iloc[-1]
+    assert entry['note'] == 'slices re-recorded'
+    assert ast.literal_eval(entry['slices']) == table.readable_slices()
+    assert 'build:end' in set(table.datajournal()['event']), "beside the build's entry, not over it"

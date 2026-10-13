@@ -1115,7 +1115,8 @@ class HypDbxJournal(Hyp):
         row = self.snap.points[i].get("row", {})
         if self.anchor is not None:
             return self._block_context_(i, row, pos)
-        self.open_popup(lambda: self._entrypoints_(row), lambda p: self._open_entrypoint_(row, p, self.title_color(i)), pos, empty="none constructed")
+        self.open_popup(lambda: self._entrypoints_(row), lambda p: self._open_entrypoint_(row, p, self.title_color(i)), pos,
+                        empty="none constructed", **self._copies_anchorkey_(row))
 
     def __open_point__(self, i):
         row = self.snap.points[i].get("row", {})
@@ -1133,7 +1134,8 @@ class HypDbxJournal(Hyp):
             empty="no entries",
             match=lambda k: self._is_entry_(k, viewer.row),
         )
-        roots = Dropdown("constructed entry blocks", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color), empty="none constructed")
+        roots = Dropdown("constructed entry blocks", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color),
+                         empty="none constructed", **self._copies_anchorkey_(viewer.row))
         # The blocks journaled under the pipeline's session -- as an entry block's window lists them -- each opened as one.
         session = Dropdown(
             "session blocks",
@@ -1141,6 +1143,7 @@ class HypDbxJournal(Hyp):
             lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color),
             empty="none indexed: the session was no dbx.exec command's",
             visible=lambda: bool(viewer.row) and not _is_blank_(viewer.row.get("session")),
+            **self._copies_anchorkey_(viewer.row),
         )
         viewer.menus = [times, roots, session, self._output_button_(viewer)]
         self.viewers = [viewer]
@@ -1212,6 +1215,7 @@ class HypDbxJournal(Hyp):
                 lambda p: self._show_entrypoint_(window, row, p),
                 empty="none constructed",
                 value=entrypath,
+                **self._copies_anchorkey_(row),
             ),
             Dropdown(
                 "session blocks",
@@ -1219,6 +1223,7 @@ class HypDbxJournal(Hyp):
                 lambda p: self._show_session_block_(window, row, p),
                 empty="none indexed: the session was no dbx.exec command's",
                 visible=lambda: bool(window.row) and not _is_blank_(window.row.get("session")),
+                **self._copies_anchorkey_(row),
             ),
             Dropdown(
                 "read",
@@ -1471,7 +1476,12 @@ class HypDbxJournal(Hyp):
             self.viewers = []
             self._open_entrypoint_(row, path, self.title_color(i))
 
-        self.open_popup(lambda: self._session_blocks_(held, row), opened, pos, empty="none indexed: the session was no dbx.exec command's")
+        self.open_popup(lambda: self._session_blocks_(held, row), opened, pos, empty="none indexed: the session was no dbx.exec command's",
+                        **self._copies_anchorkey_(row))
+
+    def _copies_anchorkey_(self, row):
+        """A block menu's Dropdown kwargs: right-click copies an item's anchorkey -- its path less *row*'s lake -- for a journal filter."""
+        return dict(copy=lambda path: self._relative_(row, path), copy_hint="right-click: copy anchorkey")
 
     @staticmethod
     def _relative_(row, path):

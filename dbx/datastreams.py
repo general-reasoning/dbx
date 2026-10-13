@@ -350,27 +350,45 @@ def project_column(value, keys, *, where: str = '', allow_none: bool = False):
     return out
 
 
+def conform_structure(value, schema: dict):
+    """*value* as its declared dict *schema* shapes it: every declared key there, None where the row has none.
+
+    What a dict-structured column reads as, so that a ``(slice, column, key)``
+    read -- or a collator's pick, made of the whole column -- takes None for a
+    declared key a row left out, or one under a None, as `check_structure`
+    lets it: a column of Nones where the row did not have the field. A key
+    the schema does not declare is kept as it is.
+    """
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        return value
+    out = dict(value)
+    for key, sub in schema.items():
+        v = value.get(key)
+        out[key] = conform_structure(v, sub) if isinstance(sub, dict) else v
+    return out
+
+
 def check_structure(value, schema: dict, *, where: str = ''):
-    """Refuse a dict that does not have exactly the keys *schema* declares, at every level.
+    """Refuse a dict with a key *schema* does not declare, at any level.
 
     The keys, not their types: a declared ``'int'`` is written by json, and a
     numpy integer and a Python one are the same value to it. What matters is
-    the shape -- a missing key is a ``(slice, column, key)`` read that fails
-    later, far from the row that caused it, and an undeclared one is data the
-    hash says is not there.
+    the shape -- an undeclared key is data the hash says is not there. A
+    declared key may be left out, and a declared dict may be None: either
+    reads back as None (see `project_column`), as a record that does not
+    have the field.
     """
+    if value is None:
+        return
     if not isinstance(value, dict):
         raise TypeError(f"{where}: declared a dict of {sorted(schema)}, got a {type(value).__name__}")
-    missing = [k for k in schema if k not in value]
     extra = [k for k in value if k not in schema]
-    if missing or extra:
-        raise ValueError(
-            f"{where}: declared keys {list(schema)}"
-            + (f"; missing {missing}" if missing else '')
-            + (f"; not declared {extra}" if extra else '')
-        )
+    if extra:
+        raise ValueError(f"{where}: declared keys {list(schema)}; not declared {extra}")
     for key, sub in schema.items():
-        if isinstance(sub, dict):
+        if isinstance(sub, dict) and key in value:
             check_structure(value[key], sub, where=f"{where}[{key!r}]")
 
 
@@ -455,7 +473,7 @@ class ZipBase:
     def __init__(self, *datasets, names, nested=True,
                  columns=None, shared=None,
                  validate_shared=False, skip_none=True,
-                 zip_validator=None):
+                 zip_validator=None, structures=None):
         what = self.__class__.__name__
         if not datasets:
             raise ValueError(f"{what} needs at least one dataset")
@@ -492,6 +510,8 @@ class ZipBase:
         self.names = names
         self.nested = bool(nested)
         self.columns = [None if cols is None else list(cols) for cols in columns]
+        # Per source, {column: declared dict structure}: the shape each such column is read as -- see conform_structure.
+        self.structures = [dict(st or {}) for st in (structures or [None] * len(datasets))]
         self.shared = set(shared or ())
         self.validate_shared = validate_shared
         # Whether the shared keys have been shown to be comparable -- carried by
@@ -517,6 +537,9 @@ class ZipBase:
         axis rather than fail.
         """
         cols = self.columns[pos]
+        structures = self.structures[pos]
+        if structures:
+            sample = {c: conform_structure(v, structures[c]) if c in structures else v for c, v in sample.items()}
         if cols is None:
             items = list(sample.items())
         else:

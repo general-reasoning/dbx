@@ -514,3 +514,66 @@ def test_a_disabled_menu_does_not_open():
     assert menu.handle(click) and not menu.open
     ready[0] = True
     assert menu.handle(click) and menu.open
+
+
+# -- a dropdown's right-click copy ----------------------------------------------
+
+
+@pytest.fixture
+def menu(monkeypatch):
+    """An open dropdown of three blocks, drawn once so that its rows are where a click finds them."""
+    import pygame
+    from hyp import app as app_mod
+    from hyp.app import Dropdown
+
+    pygame.font.init()
+    copied, picked = [], []
+    monkeypatch.setattr(app_mod, "_copy_", lambda text: copied.append(text) or True)
+    lake = "/lake"
+    items = [(f"A/{k}", f"{lake}/A/{k}") for k in ("1111aaaa", "2222bbbb", "3333cccc")]
+    d = Dropdown("blocks", items, picked.append, copy=lambda p: p[len(lake) + 1 :], copy_hint="right-click: copy anchorkey")
+    d.button = pygame.Rect(10, 10, 60, 16)
+    d.open = True
+    font = pygame.font.Font(None, 16)
+    d.draw_list(pygame.Surface((400, 300)), font)
+    return d, copied, picked, font
+
+
+def click(d, button, row):
+    import pygame
+
+    pos = (d.list.x + 12, d.list.y + 4 + row * d.row_h + d.row_h // 2)
+    return d.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=button, pos=pos))
+
+
+def test_a_right_click_copies_an_items_anchorkey_and_keeps_the_list_open(menu):
+    d, copied, picked, _ = menu
+    assert click(d, 3, 1)
+    assert copied == ["A/2222bbbb"] and picked == [] and d.open
+    assert d.note[0] == "copied A/2222bbbb"
+    assert click(d, 3, 2) and copied[-1] == "A/3333cccc", "several, one after another"
+
+
+def test_a_left_click_still_picks(menu):
+    d, copied, picked, _ = menu
+    assert click(d, 1, 0)
+    assert picked == ["/lake/A/1111aaaa"] and copied == [] and not d.open
+
+
+def test_the_footer_is_no_row(menu):
+    """A right-click on the footer -- the hint, or what was copied -- copies nothing."""
+    d, copied, _, _ = menu
+    assert not click(d, 3, 3)
+    assert copied == [] and d.open
+
+
+def test_without_copy_a_right_click_is_not_the_menus(menu):
+    import pygame
+    from hyp.app import Dropdown
+
+    d, copied, picked, font = menu
+    plain = Dropdown("blocks", d.items, picked.append)
+    plain.button, plain.open = d.button, True
+    plain.draw_list(pygame.Surface((400, 300)), font)
+    assert not click(plain, 3, 1)
+    assert copied == [] and picked == [] and plain.open

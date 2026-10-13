@@ -975,3 +975,12 @@ def test_a_block_of_a_switched_to_anchor_opens_its_window(switching, anchor_jour
                                texts=[e.text for e in found], points=[{**e.extra} for e in found])
     dbxpipelines.HypDbxJournal.__open_point__(app, 0)
     assert app.opened == [("entrypoint", "/lake/pkg.Model/v2")], "the block's own window, as an entry block's"
+
+
+def test_a_block_menu_copies_the_anchorkey_a_journal_filter_matches():
+    """Right-click on a block menu's item: its path less the row's lake -- what anchorkeypath= matches by containment."""
+    cls = dbxpipelines.HypDbxJournal
+    kw = cls._copies_anchorkey_(cls, {"datalake": "ssh://host/lake"})
+    assert kw["copy"]("ssh://host/lake/pkg.Block/version=2/1234abcd") == "pkg.Block/version=2/1234abcd"
+    assert kw["copy"]("/elsewhere/pkg.Block/1234abcd") == "/elsewhere/pkg.Block/1234abcd", "another lake's, whole"
+    assert "anchorkey" in kw["copy_hint"]

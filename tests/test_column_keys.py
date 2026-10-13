@@ -241,7 +241,6 @@ class NestedTablet(Datatablet):
 class TestTheDeclaredStructureIsChecked:
 
     @pytest.mark.parametrize('row, error, match', [
-        ({'cohort': 'c'}, ValueError, r"missing \['recurrence'\]"),
         ({'cohort': 'c', 'recurrence': 1, 'extra': 2}, ValueError, r"not declared \['extra'\]"),
         ('not a dict', TypeError, "declared a dict"),
     ])
@@ -254,9 +253,13 @@ class TestTheDeclaredStructureIsChecked:
         assert t.data(('annotations', 'annotations', 'cohort')) == {'annotations': {'annotations': ['c']}}
 
     def test_nested_structure_too(self, tmp_path):
-        with pytest.raises(ValueError, match=r"\['site'\].*missing \['code'\]"):
-            NestedTablet(datalake=str(tmp_path), spec=dict(row={'site': {'name': 'x'}})).build()
+        with pytest.raises(ValueError, match=r"\['site'\].*not declared \['zip'\]"):
+            NestedTablet(datalake=str(tmp_path), spec=dict(row={'site': {'name': 'x', 'zip': 1}})).build()
         NestedTablet(datalake=str(tmp_path / 'ok'), spec=dict(row={'site': {'name': 'x', 'code': 1}})).build()
+
+    @pytest.mark.parametrize('row', [{'cohort': 'c'}, {'recurrence': 1}, {}, None])
+    def test_a_declared_key_may_be_left_out_and_a_record_may_be_none(self, tmp_path, row):
+        BadRowTablet(datalake=str(tmp_path), spec=dict(row=row)).build()
 
     def test_a_key_the_slice_does_not_declare_is_refused_before_reading(self, tmp_path):
         t = DeclaredTablet(datalake=str(tmp_path))            # not built: nothing is read
@@ -343,8 +346,8 @@ class TestNested:
             def __build__(self):
                 with self.slice_writers() as writers:
                     writers['annotations'].write({'annotations': {
-                        'label': 0, 'site': {'code': 1, 'geo': {'lat': 0.0}}}, 'idx': 0})
-        with pytest.raises(ValueError, match=r"\['site'\]\['geo'\].*missing \['lon'\]"):
+                        'label': 0, 'site': {'code': 1, 'geo': {'lat': 0.0, 'alt': 9.0}}}, 'idx': 0})
+        with pytest.raises(ValueError, match=r"\['site'\]\['geo'\].*not declared \['alt'\]"):
             Bad(datalake=str(tmp_path)).build()
 
     def test_a_collator_path(self, tmp_path):
@@ -393,3 +396,49 @@ class TestListsSideBySideTuplesDeeper:
             ('annotations', 'annotations', 'label'),
             ('annotations', 'idx'),
         )
+
+
+class SparseTablet(DeepTablet):
+    """Records the declaration covers but does not fill: a key left out, a sub-record None, a record None."""
+
+    def __build__(self):
+        rows = [{'label': 0, 'site': {'code': 10, 'geo': {'lat': 0.0, 'lon': 0.0}}},
+                {'label': 1, 'site': {'code': 11}},
+                {'site': None},
+                None]
+        with self.slice_writers() as writers:
+            for i, row in enumerate(rows):
+                writers['annotations'].write({'annotations': row, 'idx': i})
+
+
+class TestADeclaredKeyARowLacksReadsAsNone:
+
+    def test_by_data(self, tmp_path):
+        t = SparseTablet(datalake=str(tmp_path)).build()
+        assert t.data(('annotations', 'annotations', 'label'), concat=False) == {
+            'annotations': {'annotations': [0, 1, None, None]}}
+        assert t.data(('annotations', 'annotations', ('site', 'geo', 'lat')), concat=False) == {
+            'annotations': {'annotations': [0.0, None, None, None]}}
+
+    def test_by_dataset(self, tmp_path):
+        t = SparseTablet(datalake=str(tmp_path)).build()
+        ds = t.dataset(('annotations', 'annotations', ['label', ('site', 'code')]))
+        assert [ds[i]['annotations']['annotations'] for i in range(4)] == [
+            {'label': 0, 'site': {'code': 10}}, {'label': 1, 'site': {'code': 11}},
+            {'label': None, 'site': {'code': None}}, {'label': None, 'site': {'code': None}}]
+
+    def test_by_a_collator(self, tmp_path):
+        t = SparseTablet(datalake=str(tmp_path)).build()
+        c = Datacollator(spec=dict(columns={'labels': [('annotations', 'annotations', ('site', 'code'))]}))
+        rows = [t.dataset(*c.slices())[i] for i in range(4)]
+        assert [Datacollator._pick_pair_(r, c.label_pairs[0], 'test') for r in rows] == [10, 11, None, None]
+
+    def test_the_whole_column_reads_in_the_declared_shape(self, tmp_path):
+        t = SparseTablet(datalake=str(tmp_path)).build()
+        rows = t.data(('annotations', 'annotations'), concat=False)['annotations']['annotations']
+        assert rows[1] == {'label': 1, 'site': {'code': 11, 'geo': {'lat': None, 'lon': None}}}
+        assert rows[3] == {'label': None, 'site': {'code': None, 'geo': {'lat': None, 'lon': None}}}
+
+    def test_a_plain_json_column_still_says_a_key_is_missing(self, tablet):
+        with pytest.raises(KeyError, match="no key"):
+            tablet.data(('annotations', 'annotations', 'no_such_key'))

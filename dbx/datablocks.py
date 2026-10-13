@@ -3119,6 +3119,10 @@ class Datablock:
         )
         return self
 
+    def update(self, note: str | None = None, *, inline: bool = False, message: str | None = None):
+        """`note`, under the event ``'update'``: what this block's journal entry says now -- its slices, say -- re-recorded."""
+        return self.note(note, event='update', inline=inline, message=message)
+
     def leave_breadcrumbs(self):
         """Touch a breadcrumb for every topic that has a location.
 
@@ -8033,6 +8037,11 @@ class Datastack(Datablock):
         `__build__` builds them, by the stack's executor. Raises
         `InvalidBlocksError` for blocks that fail validate(), which a build
         does not repair.
+
+        Journaled on the stack, as well as by each block it builds: a
+        ``build_blocks:end`` entry -- or ``build_blocks:exception`` -- noting
+        which blocks, in a file of its own beside any ``build:end``. A pass
+        with every block valid builds nothing and writes nothing.
         """
         validation = self._validation_(validation)
         # Within a build(), that build's: its journal read is shared, and it clears it.
@@ -8050,11 +8059,22 @@ class Datastack(Datablock):
             callables, callable_kwargs = self.__split__(**kwargs)
             callables = [callables[i] for i in indices]
             self.log.info(f"{self.anchorkeypath}: building {len(indices)} of {self.n_blocks} blocks")
-            executor = self._build_executor_(f"BUILDING {len(indices)} of {self.n_blocks} blocks [{self.__class__.__name__}]")
-            callable_kwargs = self._with_build_journal_(callables, callable_kwargs)
-            executor.exec_callables(callables, self, **callable_kwargs)
-            # A full pass, which records the manifest when every block is valid.
-            self._check_blocks_('validate' if validation == 'validate' else 'valid')
+            # The stack's own entry: each block journals its build, and without this the
+            # stack's journal would not say its blocks were rebuilt, when, or at what revision.
+            # A file of its own, as a note's, so a build:end of this instance is not overwritten.
+            note = f"{len(indices)} of {self.n_blocks} blocks: {indices}"
+            journal = dict(note=note, inline_note=True, journal_prefix='build_blocks-')
+            self.write_journal_entry(event='build_blocks:begin', **journal)
+            try:
+                executor = self._build_executor_(f"BUILDING {len(indices)} of {self.n_blocks} blocks [{self.__class__.__name__}]")
+                callable_kwargs = self._with_build_journal_(callables, callable_kwargs)
+                executor.exec_callables(callables, self, **callable_kwargs)
+                # A full pass, which records the manifest when every block is valid.
+                self._check_blocks_('validate' if validation == 'validate' else 'valid')
+            except BaseException:
+                self.write_journal_entry(event='build_blocks:exception', **journal)
+                raise
+            self.write_journal_entry(event='build_blocks:end', **journal)
             return self
         finally:
             if owns_build:

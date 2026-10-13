@@ -59,6 +59,7 @@ from .datastreams import (
     key_path,
     merge_column_specs,
     open_datastream,
+    conform_structure,
     project_column,
     slice_spec,
     read_mds_shard,
@@ -339,9 +340,13 @@ class _Database_(Datablock):
                         f"column(s) {missing}; it provides {sorted(rows[0])}"
                     )
             out[name] = {}
+            structures = self._dict_columns_(name)
             for c, keys in specs:
                 where = f"{self.__class__.__name__}.data: slice {name!r} column {c!r}"
-                vals = [project_column(r[c], keys, where=where) for r in rows]
+                if c in structures:
+                    vals = [project_column(conform_structure(r[c], structures[c]), keys, where=where) for r in rows]
+                else:
+                    vals = [project_column(r[c], keys, where=where) for r in rows]
                 out[name][c] = concat_data(vals) if concat else vals
 
         if nested:
@@ -449,6 +454,7 @@ class _Database_(Datablock):
             validate_shared=validate_shared,
             skip_none=skip_none,
             zip_validator=zip_validator,
+            structures=[self._dict_columns_(name) for name in names],
         )
 
     def stats(self, *slices, **kwargs):
@@ -706,16 +712,27 @@ class _Database_(Datablock):
         Never raises for that: a journal entry must not break the build it records.
         """
         out = {}
-        # A block reading nothing upstream owns every slice it has; one that does says whose each is.
-        route = getattr(self, '_route_', None)
         for s in self.slices(recursive=True):
             try:
-                owner = route([s])[0][0] if route is not None else self
-                declared = owner._slice_declaration_(s)
-                out[s] = dict(declared) if declared else None
+                out[s] = self.slice_declaration(s) or None
             except Exception:
                 out[s] = None
         return out
+
+    def _dict_columns_(self, slice) -> dict:
+        """``{column: structure}``: *slice*'s columns declared by their dict structure, ``{}`` when it cannot be told."""
+        try:
+            declared = self.slice_declaration(slice)
+        except Exception:
+            return {}
+        return {c: d for c, d in declared.items() if isinstance(d, dict)}
+
+    def slice_declaration(self, slice) -> dict:
+        """*slice*'s columns as its owner declares them -- this block's own, or the upstream one it reads it from -- else ``{}``."""
+        # A block reading nothing upstream owns every slice it has; one that does says whose each is.
+        route = getattr(self, '_route_', None)
+        owner = route([slice])[0][0] if route is not None else self
+        return dict(owner._slice_declaration_(slice) or {})
 
     def _slice_declaration_(self, slice) -> dict:
         """*slice*'s declared schema wherever it is declared -- here, or on a table's tablets -- else ``{}``.
@@ -2003,6 +2020,7 @@ class DataslicesUpstream:
             validate_shared=validate_shared,
             skip_none=skip_none,
             zip_validator=zip_validator,
+            structures=[owner._dict_columns_(s_name) for owner, s_name, _ in routed],
         )
 
     def data(self, *slices, upstream: list | None = None, nested=True,

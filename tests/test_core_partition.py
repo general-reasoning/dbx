@@ -173,6 +173,15 @@ def test_core_tablets_carry_what_the_collator_names_and_point_back(tmp_path):
         assert n == len(fl)
 
 
+def test_core_tablets_declare_the_carried_columns_as_the_table_declares_them(tmp_path):
+    tbl = points(tmp_path)
+    p = core(tmp_path, tbl, carry=[LABEL], rows_per_tablet=16)
+    assert p.carried_declarations() == {'pts': {'x': 'ndarray:float32', 'label': 'int'}}
+    part = p.part(0)
+    assert part.tablet(0).declared_schema('pts') == {'x': 'ndarray:float32', 'label': 'int'}
+    assert part.readable_slices() == {'pts': {'x': 'ndarray:float32', 'label': 'int'}, 'source': {'tab': 'int', 'row': 'int'}}
+
+
 def test_distributed_clustering_finds_the_same_blobs_and_leaves_no_scratch(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, clustering='distributed', parallelization='multiprocessing', n_workers=2)

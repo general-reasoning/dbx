@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`Datablock.touch()`: a `note` under the event `touch`**, as `update()`
+  is under `update`. `touch` is a construction event, in `CONSTRUCTED_EVENTS`
+  and `PipeJournal.ENTRYPOINT_EVENTS`, so a touched block counts as
+  constructed.
+
 ### Changed
 - **hyp switches journals in place, and filters an anchor's.** A **journal**
   menu in the top bar lists the pipelines and every anchor of the datalake.

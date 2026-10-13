@@ -146,7 +146,7 @@ dbx.execjournal(date='2026-09-28').constructed()      # {anchor: DataJournalFram
 | `e.output(basename='…')` | prints the one capture whose file name the regex matches at its start (below) |
 
 "Constructed" means an entry whose `event` is one of `CONSTRUCTED_EVENTS`:
-`build:end`, `UNSAFE_redirect`, `UNSAFE_copy_from:END`, `update` or `note` (what
+`build:end`, `UNSAFE_redirect`, `UNSAFE_copy_from:END`, `update`, `touch` or `note` (what
 `Datablock.note()` writes by default), matched exactly. The
 default `event` filter is applied **in addition** to any other filter you pass.
 Passing `event=` yourself replaces it.
@@ -411,7 +411,7 @@ positions.
 
 With `construct_only=True`, an entrypath is kept only if its own journal
 (the `.journal` under it) has a `build:end`, `UNSAFE_redirect`,
-`UNSAFE_copy_from:END`, `update` or `note` entry -- `CONSTRUCTED_EVENTS`. A
+`UNSAFE_copy_from:END`, `update`, `touch` or `note` entry -- `CONSTRUCTED_EVENTS`. A
 pipeline left with no entrypaths is dropped. `extra_construction_events` adds
 events that count as well: each matches an event alone, or followed by `=` or
 `:` and the rest, so `'ckpt'` takes a still that has checkpointed

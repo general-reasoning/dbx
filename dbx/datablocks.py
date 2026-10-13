@@ -3123,6 +3123,10 @@ class Datablock:
         """`note`, under the event ``'update'``: what this block's journal entry says now -- its slices, say -- re-recorded."""
         return self.note(note, event='update', inline=inline, message=message)
 
+    def touch(self, note: str | None = None, *, inline: bool = False, message: str | None = None):
+        """`note`, under the event ``'touch'``: the block marked constructed, as it stands -- its data there, however they got there."""
+        return self.note(note, event='touch', inline=inline, message=message)
+
     def leave_breadcrumbs(self):
         """Touch a breadcrumb for every topic that has a location.
 

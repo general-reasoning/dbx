@@ -696,12 +696,13 @@ class TestConstructed:
     def test_the_events_are_matched_exactly(self):
         from dbx.journals import _constructed_
         frame = DataJournalFrame(pd.DataFrame({
-            'anchor': ['s.S'] * 9,
-            'hash': ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9'],
+            'anchor': ['s.S'] * 11,
+            'hash': ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9', 'h10', 'h11'],
             'event': ['UNSAFE_redirect', 'UNSAFE_redirect_blocks:end', 'build:end',
-                      'build_tree:x:end', 'UNSAFE_copy_from:END', 'note', 'note:checked', 'update', 'update:begin'],
+                      'build_tree:x:end', 'UNSAFE_copy_from:END', 'note', 'note:checked', 'update', 'update:begin',
+                      'touch', 'touched'],
         }))
-        assert list(_constructed_(frame, 's.S', {})['hash']) == ['h1', 'h3', 'h5', 'h6', 'h8']
+        assert list(_constructed_(frame, 's.S', {})['hash']) == ['h1', 'h3', 'h5', 'h6', 'h8', 'h10']
 
     def test_over_a_frame_of_commands(self, tmp_path):
         a, b, o = self._run(tmp_path)

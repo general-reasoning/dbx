@@ -643,13 +643,13 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
 
 #: The events a block journal entry holds when the command that wrote it
 #: CONSTRUCTED the block: built it, made it readable by redirection, copied
-#: its data in, updated it, or noted it (`Datablock.note`, whose event is
-#: 'note' unless told otherwise). Anchored, because a filter string is a pattern and a bare
+#: its data in, updated it, touched it, or noted it (`Datablock.note`, whose
+#: event is 'note' unless told otherwise; `update` and `touch` are notes too). Anchored, because a filter string is a pattern and a bare
 #: 'UNSAFE_redirect' would also match a stack's 'UNSAFE_redirect_blocks:end'.
 #: A block instance rewrites its one entry file, so a build that failed ends
 #: at 'build:exception', and one that never finished at 'build:start': neither
 #: is here.
-CONSTRUCTED_EVENTS = ['^build:end$', '^UNSAFE_redirect$', '^UNSAFE_copy_from:END$', '^update$', '^note$']
+CONSTRUCTED_EVENTS = ['^build:end$', '^UNSAFE_redirect$', '^UNSAFE_copy_from:END$', '^update$', '^touch$', '^note$']
 
 
 def _constructed_(frame, anchor, filters):
@@ -751,7 +751,7 @@ class ExecJournalEntry(pd.Series):
         given: ``{anchor: DataJournalFrame}`` for every anchor with any.
 
         *filters* are `DataJournalFrame` filters. ``event`` defaults to
-        `CONSTRUCTED_EVENTS` -- a block built, redirected, copied in, updated, or noted -- and
+        `CONSTRUCTED_EVENTS` -- a block built, redirected, copied in, updated, touched, or noted -- and
         applies alongside any other filter unless given itself;
         ``event=None`` drops it. A block the command found already built was
         not constructed by it, and wrote no entry: it is not here.
@@ -3315,8 +3315,8 @@ class PipeJournal(DataJournal):
 
     #: The events in an entrypoint's OWN journal that make its entrypath count
     #: under ``collect(construct_only=True)``: `CONSTRUCTED_EVENTS`' -- built,
-    #: redirected, copied in, updated, or noted -- matched exactly here too.
-    ENTRYPOINT_EVENTS = ('build:end', 'UNSAFE_redirect', 'UNSAFE_copy_from:END', 'update', 'note')
+    #: redirected, copied in, updated, touched, or noted -- matched exactly here too.
+    ENTRYPOINT_EVENTS = ('build:end', 'UNSAFE_redirect', 'UNSAFE_copy_from:END', 'update', 'touch', 'note')
 
     # 2. Declared API ------------------------------------------------------
 

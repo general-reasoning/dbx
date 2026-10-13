@@ -263,7 +263,7 @@ def test_entrypoint_events_are_the_constructed_events():
     assert {f'^{e}$' for e in PipeJournal.ENTRYPOINT_EVENTS} == set(CONSTRUCTED_EVENTS)
 
 
-@pytest.mark.parametrize('event', ['UNSAFE_copy_from:END', 'update'])
+@pytest.mark.parametrize('event', ['UNSAFE_copy_from:END', 'update', 'touch'])
 def test_collect_construct_only_counts_a_copied_or_updated_entrypoint(lake, event):
     p = Flat(spec={'n': 7})
     p.create()

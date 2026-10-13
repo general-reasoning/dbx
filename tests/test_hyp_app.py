@@ -369,3 +369,22 @@ def test_line_numbers_are_of_the_texts_own_lines(app):
     app.settings["line numbers"] = False
     app.draw(0)
     assert v._body[0] < tx_numbered, "without numbers, the text starts further left"
+
+
+def test_the_reload_button_reloads(app):
+    import pygame
+
+    jobs, hooked, snapshots = [], [], []
+    app.worker.submit = jobs.append
+    app.__reload__ = lambda: hooked.append(True)
+    app.engine = SimpleNamespace(reload=lambda progress: None, snapshot=lambda: "SNAP")
+    app.draw(0)
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=app.reload_button.button.center), 1.0)
+    assert hooked == [True] and len(jobs) == 1
+
+    app.worker.events.put = lambda ev: snapshots.append(ev)
+    jobs[0](lambda msg: None)
+    assert snapshots[0] == ("snapshot", ("SNAP", None))
+
+
+from types import SimpleNamespace  # noqa: E402

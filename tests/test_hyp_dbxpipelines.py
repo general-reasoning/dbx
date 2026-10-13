@@ -50,7 +50,7 @@ def write_run(lake, anchor, key, i, spec, signature=None):
 
 def test_urls():
     # Side file paths are as the datalake's host wrote them.
-    assert dbxpipelines.rebase("/data/lake/x.yaml", "ssh://wheelbarrow/data/lake") == "ssh://wheelbarrow/data/lake/x.yaml"
+    assert dbxpipelines.rebase("/data/lake/x.yaml", "ssh://host/data/lake") == "ssh://host/data/lake/x.yaml"
     assert dbxpipelines.rebase("/data/lake/x.yaml", "/data/lake") == "/data/lake/x.yaml"
 
 
@@ -86,7 +86,7 @@ def test_pipelines_aggregate_runs(tmp_path, monkeypatch):
     assert "spec-0.yaml" not in train.text and "spec-1.yaml" not in train.text
     # A spec is shown, and embedded, as the dict it is.
     assert "── spec ──\n{\n    'lr': 0.1\n}" in train.text
-    assert train.embed == "pkg.TrainPipeline\n{'lr': 0.1}\nTrain(lr: float)"
+    assert train.embed == "trainpipeline\npkg.TrainPipeline\n{'lr': 0.1}\nTrain(lr: float)"
     # cite right below the table, which ends at paths; the repos and
     # entry_path below everything.
     # paths, as topics would be, one key per line.
@@ -324,6 +324,9 @@ def remote_dbx(monkeypatch):
             calls["trueinst"].append(kwargs)
             return Block()
 
+        def read(self, thing, raw=False):
+            return "$pkg.Block()" if thing == "quote" else None
+
     monkeypatch.setattr(dbx.DataJournal, "read_entries", lambda paths, **kw: [Entry(gitrepo="/home/me/dbx:/home/me/proj")])
     monkeypatch.setattr(dbx.DataJournalEntry, "column", staticmethod(lambda entry, name: entry.get(name)))
     monkeypatch.setattr(dbx.SshRay, "session", classmethod(lambda cls, host, python: calls["session"].append((host, python)) or SimpleNamespace(address="ray://localhost:9")))
@@ -335,11 +338,11 @@ from types import SimpleNamespace  # noqa: E402
 
 
 def test_read_instantiates_on_the_datalakes_host_and_keeps_the_block(remote_dbx):
-    row = {"entry_path": "ssh://wheelbarrow/data/lake/e.parquet", "id": "e1", "anchorkeypath": "/data/lake/pkg.Probe/aa20"}
+    row = {"entry_path": "ssh://host/data/lake/e.parquet", "id": "e1", "anchorkeypath": "/data/lake/pkg.Probe/aa20"}
     text = dbxpipelines.read_text(row, ("classes",), python="~/envs/x/bin/python")
-    assert text.splitlines()[0].endswith("trueinst() on wheelbarrow")
-    assert text.splitlines()[1:] == ["(a proxy to the value on wheelbarrow)", "", "['a', 'b']"]
-    assert remote_dbx["session"] == [("wheelbarrow", "~/envs/x/bin/python")]
+    assert text.splitlines()[0].endswith("trueinst() on host")
+    assert text.splitlines()[1:] == ["(a proxy to the value on host)", "", "['a', 'b']"]
+    assert remote_dbx["session"] == [("host", "~/envs/x/bin/python")]
     assert remote_dbx["trueinst"] == [{"address": "ray://localhost:9", "gitrepo": "/home/me/dbx:/home/me/proj"}]
     # Read again: the same block, not another worker.
     assert dbxpipelines.read_text(row, ("n",)).splitlines()[1:] == ["builtins.int", "", "3"]
@@ -406,3 +409,279 @@ def test_a_pipelines_version_is_its_recorded_one(pipelines_app):
     point["row"]["version"] = "2"
     assert pipelines_app.__point_version__(0) == "2"
     assert "versions" in pipelines_app.settings and pipelines_app.settings["versions"]
+
+
+def test_note_follows_slices_and_dfn_follows_cite_deslashed(tmp_path):
+    dfn = r"""table: '$pkg.T(spec={\'n\': 1})'""" + "\n"
+    for name, text in (("cite.txt", "$pkg.T(spec={})"), ("dfn.txt", dfn), ("spec.yaml", "n: 1\n"),
+                       ("note.txt", "slices recorded:\nwhat can be read")):
+        (tmp_path / name).write_text(text)
+    row = {"anchor": "pkg.T", "tag": "pkg.t", "datetime": "2026-10-12T20-54-57.071615",
+           "topics": "{'done': DATAFILE('done')}", "paths": "{'done': '/x/done'}",
+           "slices": "{'features': None, 'labels': None}", "note": str(tmp_path / "note.txt"),
+           "session": "s1", "cite": str(tmp_path / "cite.txt"), "dfn": str(tmp_path / "dfn.txt"),
+           "spec": str(tmp_path / "spec.yaml"), "entry_path": str(tmp_path / "e.parquet")}
+    lines = dbxpipelines.entry(row).text.split("\n")
+    at = {ln.split()[0]: i for i, ln in enumerate(lines) if ln and not ln.startswith(" ")}
+    assert at["slices"] < at["note"] < at["session"], "the note right after what can be read"
+    assert lines[at["note"]].endswith("slices recorded:") and lines[at["note"] + 1].strip() == "what can be read"
+    sections = [ln for ln in lines if ln.startswith("── ")]
+    assert sections[:3] == ["── cite ──", "── dfn ──", "── spec ──"]
+    dfn = lines[lines.index("── dfn ──") + 1 :]
+    assert dfn[0] == "table: '$pkg.T(spec={'n': 1})'", "shown deslashed"
+
+
+def test_reload_picks_up_new_pipelines_and_lays_out_afresh(tmp_path, monkeypatch):
+    from hyp import layout
+
+    lake, data = tmp_path / "lake", tmp_path / "data"
+    monkeypatch.setenv("DBX_DATALAKE", str(lake))
+    for i, name in enumerate("ABCDEF"):
+        write_run(lake, f"{name}Pipeline", f"k{i}", i, f"x: {i}\n")
+    engine = Engine(Store(data), HashEmbedder(), EchoSummarizer(), source=lambda progress: dbxpipelines.pipelines(progress))
+    engine.start(quiet)
+    assert len(engine.store) == 6
+    write_run(lake, "GPipeline", "k6", 6, "x: 6\n")
+    laid = []
+    real = layout.compute
+    monkeypatch.setattr(layout, "compute", lambda emb, **kw: laid.append(kw) or real(emb, **kw))
+    engine.reload(quiet)
+    assert len(engine.store) == 7 and engine.store.layout.shape == (7,)
+    assert laid == [{"seed": 0}], "laid out afresh, not seeded from the old layout"
+    assert len(Store(data)) == 7, "and saved"
+
+
+def test_reload_rereads_what_pipeline_windows_keep(pipelines_app):
+    reads = []
+    pipelines_app.run_async = lambda fn, then: reads.append(fn)
+    pipelines_app.sessions = {"s1": []}
+    pipelines_app.__reload__()
+    assert pipelines_app.journal is None and pipelines_app.constructed is None and pipelines_app.sessions == {}
+    assert len(reads) == 2
+
+
+class RestEmbedder:
+    """A base embedder whose vectors are what the test says: by the text after the label."""
+    name = "fake:rest"
+
+    def __init__(self, vectors):
+        self.vectors = vectors
+
+    def prepare(self, progress=print):
+        pass
+
+    def __call__(self, texts):
+        return np.array([self.vectors[t] for t in texts], dtype=np.float32)
+
+
+def cosine(a, b):
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+
+def test_a_labels_vector_is_its_own_and_near_its_neighbours():
+    v = dbxpipelines.LabelFirstEmbedder.label_vector
+    assert np.allclose(v("gigapath_probe_partition"), v("gigapath_probe_partition"))
+    assert abs(np.linalg.norm(v("x")) - 1) < 1e-6
+    assert cosine(v("gigapath_probe_partition"), v("gigapath_probe")) > cosine(v("gigapath_probe_partition"), v("pancan_tile_fold"))
+
+
+def test_one_label_outweighs_any_difference_in_the_rest():
+    rest = {"a": [1.0, 0.0], "b": [-1.0, 0.0], "c": [1.0, 0.0]}
+    emb = dbxpipelines.LabelFirstEmbedder(RestEmbedder(rest))
+    same_a, same_b, other = emb(["gigapath_probe_partition\na", "gigapath_probe_partition\nb", "pancan_tile_fold\nc"])
+    assert cosine(same_a, same_b) >= 0.8 - 1e-6, "opposite rests, one label: still alike"
+    assert cosine(same_a, same_b) > cosine(same_a, other), "identical rests, other labels: less alike"
+    assert emb.name == "label-first(3):fake:rest"
+
+
+def test_pipelines_sharing_a_label_lie_together():
+    from hyp import layout
+
+    rng = np.random.default_rng(0)
+    labels = ["gigapath_probe_partition", "gigapath_deep_feature_clip", "pancan_tile_fold", "pancan_tile_clip"]
+    texts = [f"{lab}\n{lab}-{i}" for lab in labels for i in range(12)]
+    rest = {t.split("\n")[1]: rng.normal(size=32) for t in texts}
+    positions = layout.compute(dbxpipelines.LabelFirstEmbedder(RestEmbedder(rest))(texts), seed=0)
+    near = layout.nearest(np.stack([positions.real, positions.imag], axis=1), 3)
+    agree = np.mean([texts[j].split("\n")[0] == texts[i].split("\n")[0] for i in range(len(texts)) for j in near[i]])
+    assert agree > 0.9
+
+
+def test_a_pipelines_embed_text_starts_with_its_label(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBX_DATALAKE", str(tmp_path))
+    write_run(tmp_path, "TrainPipeline", "aaaa", 0, "lr: 0.1\n")
+    (e,) = dbxpipelines.pipelines(quiet)
+    assert e.embed.split("\n")[:2] == ["trainpipeline", "pkg.TrainPipeline"]
+    assert isinstance(dbxpipelines.HypDbxPipelines.__embedder__(RestEmbedder({})), dbxpipelines.LabelFirstEmbedder)
+
+
+class FakeTablet:
+    """A tablet of FakeTable: *n* rows, a vector and a label each."""
+
+    def __init__(self, i, n):
+        self.i, self.n = i, n
+
+    def n_rows(self, s):
+        return self.n
+
+    def data(self, *specs):
+        vec = [np.full(4, self.i * 100 + r, dtype=np.int16) for r in range(self.n)]
+        lab = [f"bag{self.i}"] * self.n
+        return {"features": {"final": vec}, "bag_name": {"bag_name": lab}}
+
+
+class FakeTable:
+    n_tablets = 5
+
+    def tablet(self, i):
+        return FakeTablet(i, 10 + i)
+
+
+@pytest.fixture
+def fake_table(monkeypatch):
+    import dbx
+
+    monkeypatch.setattr(dbx, "eval", lambda quote: FakeTable(), raising=False)
+    return FakeTable()
+
+
+SLICED_ROW = {"entry_path": "ssh://host/lake/e.parquet", "id": "e1", "anchorkeypath": "/lake/pkg.T/k",
+              "datalake": "/lake",
+              "slices": "{'features': {'final': 'ndarray:int8'}, 'bag_name': {'bag_name': 'str'}, 'tiles': None}"}
+
+
+def test_declared_columns_are_the_journals():
+    assert dbxpipelines.declared_columns(SLICED_ROW) == {"features": {"final": "ndarray:int8"}, "bag_name": {"bag_name": "str"}}
+    assert dbxpipelines.recorded_slices(SLICED_ROW) == ["features", "bag_name", "tiles"]
+    assert dbxpipelines.declared_columns({"slices": "{'tiles': None}"}) == {}, "a bare DATASLICE declares nothing to view"
+    assert dbxpipelines.declared_columns({"slices": "None"}) == {} and dbxpipelines.declared_columns(None) == {}
+
+
+def test_describe_plans_by_the_first_tablet(fake_table):
+    describe, _ = dbxpipelines._remote_fns_()
+    assert describe("$q", ["features"]) == {"tablets": 5, "rows0": {"features": 10}}
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_sample_takes_rows_of_each_tablet(fake_table, workers):
+    _, sample = dbxpipelines._remote_fns_()
+    specs = [("features", ["final"]), ("bag_name", ["bag_name"])]
+    got = sample("$q", specs, [1, 3], 1.0, 4, 0, workers, ("features", "final"), ("bag_name", "bag_name"))
+    assert got["X"].shape == (8, 4) and got["X"].dtype == np.float32 and got["errors"] == []
+    assert [t for t, _ in got["rows"]] == [1] * 4 + [3] * 4, "per_tablet rows of each, in tablet order"
+    assert got["labels"] == ["bag1"] * 4 + ["bag3"] * 4
+    assert all(got["X"][k][0] == t * 100 + r for k, (t, r) in enumerate(got["rows"])), "each vector its row's"
+    half = sample("$q", specs[:1], [0, 4], 0.5, None, 0, workers, ("features", "final"), None)
+    assert len(half["X"]) == 5 + 7 and half["labels"] is None
+
+
+def test_slice_sample_runs_in_the_pinned_worker(fake_table, monkeypatch):
+    class Handle:
+        def run(self, fn, *args):
+            return fn(*args)
+
+    monkeypatch.setattr(dbxpipelines, "_quote_and_handle_", lambda row, python: ("$q", Handle()))
+    X, L, rows, errors = dbxpipelines.slice_sample(SLICED_ROW, ("features", "final"), ("bag_name", "bag_name"),
+                                                   tablets=[0, 2], workers=1, per_tablet=3)
+    assert X.shape == (6, 4) and L == ["bag0"] * 3 + ["bag2"] * 3 and rows[0][0] == 0 and not errors
+
+
+def test_the_window_samples_what_is_picked_and_shows_it(pipelines_app, monkeypatch):
+    from types import SimpleNamespace as NS
+
+    from hyp import layout
+
+    app = pipelines_app
+    app.run_async = lambda fn, then: then(fn())
+    calls = []
+    monkeypatch.setattr(dbxpipelines, "slice_plan", lambda row, python: {"tablets": 532, "rows0": {"features": 286}})
+    monkeypatch.setattr(dbxpipelines, "slice_sample", lambda row, data, labels, fraction, **kw: calls.append((data, labels, fraction, kw))
+                        or (np.eye(6, dtype=np.float32), ["a", "a", "b", "b", "c", "c"], [(0, r) for r in range(6)], []))
+    monkeypatch.setattr(layout, "compute", lambda X, seed=0: np.linspace(0, 0.5, len(X)).astype(complex))
+    window = NS(row=SLICED_ROW)
+    menus = app._slice_menus_(window)
+    data = window.slice_menus["data"]
+    assert [v for _, v in data.current()] == [("features", "final", ()), ("bag_name", "bag_name", ())]
+    data.select(("features", "final", ()))
+    window.slice_menus["labels"].select(("bag_name", "bag_name", ()))
+    count, fraction, per, expect = app._plan_(window)
+    assert (count, per, expect) == (64, 63, 63 * 64), "auto: 64 tablets, 4,000 rows split among them"
+    menus[-1].on_click()
+    (data_, labels_, fraction_, kw), = calls
+    assert data_ == ("features", "final", ()) and labels_ == ("bag_name", "bag_name", ())
+    assert len(kw["tablets"]) == 64 and kw["per_tablet"] == 63 and kw["workers"] == dbxpipelines.DEFAULT_WORKERS
+    disk = app.viewers[-1]
+    assert len(disk.positions) == 6 and disk.note is None and [l for _, l, _ in disk.legend] == ["a", "b", "c"]
+
+
+def test_undeclared_slices_can_not_be_viewed(pipelines_app):
+    from types import SimpleNamespace as NS
+
+    window = NS(row={**SLICED_ROW, "slices": "{'tiles': None, 'annotations': None}"})
+    app = pipelines_app
+    menus = app._slice_menus_(window)
+    assert window.slice_menus["data"].visible() and window.slice_menus["data"].current() == []
+    assert "declare none" in window.slice_menus["data"].empty
+    assert not window.slice_menus["rows"].visible() and not menus[-1].visible()
+
+
+DICT_ROW = {**SLICED_ROW, "slices": ("{'features': {'final': 'ndarray:int8'}, "
+                                     "'annotations': {'annotations': {'cohort': 'str', 'gdc': {'stage': 'str', 'age': 'int'}}}}")}
+
+
+def test_a_dict_column_is_offered_key_by_key():
+    assert dbxpipelines.column_choices(DICT_ROW) == [
+        ("features", "final", (), "ndarray:int8"),
+        ("annotations", "annotations", ("cohort",), "str"),
+        ("annotations", "annotations", ("gdc", "stage"), "str"),
+        ("annotations", "annotations", ("gdc", "age"), "int"),
+    ]
+
+
+class FakeDictTable(FakeTable):
+    """Its rows' annotations a dict, as data() reads a dict column narrowed to the keys asked: one key, the leaf; two, a pruned dict."""
+
+    asked = []
+
+    def tablet(self, i):
+        table = self
+
+        class Tablet(FakeTablet):
+            def data(self, *specs):
+                table.asked.append(specs)
+                got = super().data()
+                selections = dict(specs).get("annotations", [])
+                rows = [{"cohort": f"c{self.i}", "gdc": {"stage": f"s{r % 2}"}} for r in range(self.n)]
+                if len(selections) == 1 and isinstance(selections[0], tuple):
+                    path = selections[0][1:]
+                    leaf = rows
+                    for k in path:
+                        leaf = [v[k] for v in leaf]
+                    got["annotations"] = {"annotations": leaf}
+                else:
+                    got["annotations"] = {"annotations": rows}
+                return got
+
+        return Tablet(i, 10 + i)
+
+
+def test_a_key_of_a_dict_column_labels_the_points(monkeypatch):
+    import dbx
+
+    monkeypatch.setattr(dbx, "eval", lambda quote: FakeDictTable(), raising=False)
+
+    class Handle:
+        def run(self, fn, *args):
+            return fn(*args)
+
+    monkeypatch.setattr(dbxpipelines, "_quote_and_handle_", lambda row, python: ("$q", Handle()))
+    FakeDictTable.asked = []
+    X, L, rows, errors = dbxpipelines.slice_sample(DICT_ROW, ("features", "final", ()), ("annotations", "annotations", ("gdc", "stage")),
+                                                   tablets=[0, 1], workers=1, per_tablet=4)
+    assert FakeDictTable.asked[0] == (("features", ["final"]), ("annotations", [("annotations", "gdc", "stage")]))
+    assert set(L) <= {"s0", "s1"} and len(L) == 8 and not errors
+    # Two keys of one column: dbx hands back the dict pruned to both, and each pick is walked to its own.
+    FakeDictTable.asked = []
+    X, L, rows, errors = dbxpipelines.slice_sample(DICT_ROW, ("features", "final", ()), ("annotations", "annotations", ("cohort",)),
+                                                   tablets=[1], workers=1, per_tablet=3)
+    assert L == ["c1"] * 3

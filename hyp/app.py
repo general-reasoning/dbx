@@ -272,6 +272,10 @@ class Dropdown:
             return True
         return False
 
+    def width(self, font):
+        """The button's width, as drawn with *font*."""
+        return font.size(self.label)[0] + 22
+
     def draw_button(self, surf, font, x, y, color, max_width=None):
         """Draw the button at (*x*, *y*), its label shortened with … to fit *max_width*; returns its width."""
         label = self.label
@@ -331,6 +335,9 @@ class Button:
             self.on_click()
             return True
         return False
+
+    def width(self, font):
+        return font.size(self.label)[0] + 8
 
     def draw_button(self, surf, font, x, y, color, max_width=None):
         img = font.render(self.label, True, color)
@@ -573,11 +580,13 @@ class TextViewer:
         if self.menus:
             self.menus[0].draw_button(surf, font, x + pad, y + pad, EDGE, max_width=title_w)
             rest = [m for m in self.menus[1:] if getattr(m, "visible", lambda: True)()]
-            bx = x + pad
+            bx, by = x + pad, y + pad + row_h
             for m in rest:
-                bx += m.draw_button(surf, font, bx, y + pad + row_h, EDGE) + 12
+                if bx > x + pad and bx + m.width(font) > x + rw - pad:
+                    bx, by = x + pad, by + row_h  # a row full: the next one
+                bx += m.draw_button(surf, font, bx, by, EDGE) + 12
             if rest:
-                bottom += row_h
+                bottom = by + font.get_linesize()
         else:
             surf.blit(font.render(_fit_(font, self.title, title_w), True, EDGE), (x + pad, y + pad))
         self.header_bottom = bottom + 4
@@ -692,6 +701,204 @@ def _copy_(text) -> bool:
     return False
 
 
+class DiskViewer:
+    """A window with a Poincaré disk of its own: points laid out from some data, colored by label.
+
+    Navigated as the main disk is -- click to center, drag to move, scroll to
+    zoom, Home to go back -- and closed as a text window is. Until
+    :meth:`set_points` gives it points it shows *note*: what it is waiting on.
+    Labels are colored by how many points have them, the most first; past
+    `PALETTE`, the rest share one gray, as "other".
+    """
+
+    PALETTE = [(230, 120, 100), (110, 175, 235), (140, 205, 120), (235, 190, 90), (190, 140, 230),
+               (90, 205, 195), (235, 140, 190), (175, 175, 110), (120, 140, 230), (220, 160, 120)]
+    OTHER = (120, 125, 135)
+
+    def __init__(self, title, note="laying out …"):
+        self.title = title
+        self.note = note
+        self.menus = []
+        self.inset = 0
+        self.over = None
+        self.header_bottom = 0
+        self.rect = pygame.Rect(0, 0, 0, 0)
+        self.close = pygame.Rect(0, 0, 0, 0)
+        self.view = View()
+        self.positions = np.zeros(0, dtype=complex)
+        self.labels = None
+        self.tips = []
+        self.colors = []
+        self.legend = []  # [(color, label, count)]
+        self.press = None
+        self.dragging = False
+        self.last = None
+        self.hover = None
+        self._frame = (0, 0, 1)
+        self.grid = _grid_()
+
+    def set_note(self, note):
+        self.note = note
+
+    def set_points(self, positions, labels=None, tips=None):
+        """Show *positions* -- complex, inside the unit disk -- each colored by its label, *tips* shown on hover."""
+        from collections import Counter
+
+        self.positions = np.asarray(positions, dtype=complex)
+        self.labels = None if labels is None else [str(l) for l in labels]
+        self.tips = list(tips) if tips is not None else [l or "" for l in (self.labels or [""] * len(self.positions))]
+        self.note = None
+        if self.labels is None:
+            self.colors, self.legend = [], []
+            return
+        counts = Counter(self.labels).most_common()
+        named = {label: self.PALETTE[i] for i, (label, _) in enumerate(counts[: len(self.PALETTE)])}
+        self.colors = [named.get(l, self.OTHER) for l in self.labels]
+        self.legend = [(named[l], l, n) for l, n in counts[: len(self.PALETTE)]]
+        rest = sum(n for _, n in counts[len(self.PALETTE) :])
+        if rest:
+            self.legend.append((self.OTHER, f"other ({len(counts) - len(self.PALETTE)} labels)", rest))
+
+    def animating(self):
+        return self.view.anim is not None
+
+    # -- geometry -------------------------------------------------------------
+
+    def to_screen(self, z):
+        cx, cy, R = self._frame
+        return cx + R * z.real, cy - R * z.imag
+
+    def to_disk(self, pos):
+        cx, cy, R = self._frame
+        return complex((pos[0] - cx) / R, -(pos[1] - cy) / R)
+
+    def display(self, data, M):
+        return P.zoom(M(data), self.view.k)
+
+    def view_point(self, pos, limit):
+        z = self.to_disk(pos)
+        if abs(z) > limit:
+            z = z / abs(z) * limit
+        return complex(P.unzoom(np.array(z), self.view.k))
+
+    # -- events and drawing ---------------------------------------------------
+
+    def handle(self, ev):
+        """Returns "close" or None."""
+        now = time.monotonic()
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.close.collidepoint(ev.pos):
+            return "close"
+        if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+            return "close"
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button in (1, 3) and not self.rect.collidepoint(ev.pos):
+            return "close"
+        if ev.type == pygame.KEYDOWN and ev.key == pygame.K_HOME:
+            self.view.k = 1.0
+            self.view.center_on(self.view.isometry(now)(0j), now)
+        elif ev.type == pygame.MOUSEWHEEL:
+            self.view.zoom_by(ZOOM_STEP ** getattr(ev, "precise_y", ev.y))
+        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and abs(self.to_disk(ev.pos)) < 1:
+            self.press, self.dragging = ev.pos, False
+        elif ev.type == pygame.MOUSEMOTION and self.press is not None:
+            if not self.dragging:
+                dx, dy = ev.pos[0] - self.press[0], ev.pos[1] - self.press[1]
+                if dx * dx + dy * dy < DRAG_PX**2:
+                    return None
+                self.dragging, self.last = True, self.press
+                self.view.M, self.view.anim = self.view.isometry(now), None
+            self.view.drag(self.view_point(self.last, DRAG_RADIUS), self.view_point(ev.pos, DRAG_RADIUS))
+            self.last = ev.pos
+        elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1 and self.press is not None:
+            if not self.dragging:
+                if self.hover is not None:
+                    z = self.display(self.positions[self.hover], self.view.isometry(now))
+                else:
+                    z = self.to_disk(self.press)
+                self.view.center_on(complex(P.unzoom(np.array(z), self.view.k)), now)
+            self.press, self.dragging = None, False
+        return None
+
+    def draw(self, surf, font, mono, numbers=False):
+        now = time.monotonic()
+        w, h = surf.get_size()
+        self.rect = pygame.Rect(0, 0, int(w * 0.8) - 2 * self.inset, int(h * 0.82) - 2 * self.inset)
+        self.rect.center = (w // 2, (h - 24) // 2)
+        if self.over is not None:
+            bottom = self.rect.bottom
+            self.rect.top = self.over.header_bottom + 6
+            self.rect.height = max(200, bottom - self.rect.top)
+        x, y, rw, rh = self.rect
+        pad = 14
+        pygame.draw.rect(surf, (24, 28, 36), self.rect, border_radius=8)
+        pygame.draw.rect(surf, EDGE, self.rect, 1, border_radius=8)
+        self.close = pygame.Rect(x + rw - 34, y + 8, 24, 24)
+        hot = self.close.collidepoint(pygame.mouse.get_pos())
+        if hot:
+            pygame.draw.rect(surf, (52, 60, 76), self.close, border_radius=4)
+        c = self.close.inflate(-12, -12)
+        for a, b in ((c.topleft, c.bottomright), (c.topright, c.bottomleft)):
+            pygame.draw.line(surf, EDGE if hot else LABEL, a, b, 2)
+        surf.blit(font.render(_fit_(font, self.title, self.close.x - 12 - (x + pad)), True, EDGE), (x + pad, y + pad))
+        self.header_bottom = y + pad + font.get_linesize() + 4
+
+        # The disk on the left of the body, the legend on the right.
+        top, bottom = self.header_bottom + 6, y + rh - pad - font.get_linesize() - 4
+        legend_w = min(260, rw // 3) if self.legend else 0
+        body_w = rw - 2 * pad - legend_w
+        R = max(10, 0.47 * min(body_w, bottom - top))
+        cx, cy = x + pad + body_w / 2, (top + bottom) / 2
+        self._frame = (cx, cy, R)
+        pygame.draw.circle(surf, DISK, (cx, cy), R)
+        M = self.view.isometry(now)
+        for line in self.grid:
+            pts = np.asarray(self.to_screen(self.display(line, M))).T
+            if len(pts) > 1:
+                pygame.draw.aalines(surf, GRID, False, pts)
+        pygame.draw.circle(surf, RIM, (cx, cy), R, 2)
+
+        self.hover = None
+        if self.note:
+            img = font.render(self.note, True, STATUS)
+            surf.blit(img, img.get_rect(center=(cx, cy)))
+        elif len(self.positions):
+            z = self.display(self.positions, M)
+            sx, sy = self.to_screen(z)
+            r2 = np.abs(z) ** 2
+            mx, my = pygame.mouse.get_pos()
+            if self.rect.collidepoint(mx, my):
+                d2 = (sx - mx) ** 2 + (sy - my) ** 2
+                i = int(np.argmin(d2))
+                if d2[i] <= HOVER_PX**2:
+                    self.hover = i
+            for i in np.argsort(-r2):
+                if self.colors:
+                    col = self.colors[i]
+                else:
+                    ang = math.degrees(math.atan2(self.positions[i].imag, self.positions[i].real)) % 360
+                    col = pygame.Color(0)
+                    col.hsva = (ang, 60, 95, 100)
+                rad = 1.2 + 4.0 * (1.0 - r2[i])
+                pygame.draw.circle(surf, col, (sx[i], sy[i]), rad)
+                if i == self.hover:
+                    pygame.draw.circle(surf, EDGE, (sx[i], sy[i]), rad + 3, 2)
+        ly = top
+        for color, label, count in self.legend:
+            lx = x + rw - pad - legend_w + 8
+            pygame.draw.circle(surf, color, (lx + 5, ly + font.get_linesize() // 2), 5)
+            text = _fit_(font, f"{label}  {count:,}", legend_w - 24)
+            surf.blit(font.render(text, True, LABEL), (lx + 16, ly))
+            ly += font.get_linesize() + 2
+        n = len(self.positions)
+        hint = f"{n:,} points   click: center · drag: move · scroll: zoom · Home: reset · Esc: close"
+        surf.blit(font.render(_fit_(font, hint, rw - 2 * pad), True, STATUS), (x + pad, y + rh - pad - font.get_linesize() + 2))
+        if self.hover is not None and self.tips:
+            tip = font.render(_fit_(font, self.tips[self.hover], 500), True, TIP_FG)
+            r = tip.get_rect(topleft=(pygame.mouse.get_pos()[0] + 14, pygame.mouse.get_pos()[1] + 14)).inflate(16, 10)
+            r.clamp_ip(surf.get_rect())
+            pygame.draw.rect(surf, TIP_BG, r, border_radius=4)
+            surf.blit(tip, tip.get_rect(center=r.center))
+
+
 def _grid_():
     """Polylines in data coordinates: diameters, and circles of hyperbolic radius 1..6."""
     d = np.linspace(-9, 9, 240)
@@ -705,7 +912,7 @@ class Hyp:
     """The disk, its navigation, and the hooks a specialization overrides.
 
     A specialization -- `dbxpipelines.HypDbxPipelines` -- changes where the
-    corpus comes from (`__source__`, `__default_data__`,
+    corpus comes from and how it is embedded (`__source__`, `__embedder__`, `__default_data__`,
     `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
     `__context_point__`), and how a point is labeled (`__point_label__`,
@@ -734,9 +941,17 @@ class Hyp:
         return None
 
     @classmethod
+    def __embedder__(cls, embedder):
+        """The embedder the corpus is embedded with, made from the one --embedder names: here, that one."""
+        return embedder
+
+    @classmethod
     def __source__(cls, args):
         """The corpus source the `Engine` syncs from, or None for the seed labels."""
         return None
+
+    def __reload__(self):
+        """What reload does besides reloading the corpus: here, nothing."""
 
     def __click_point__(self, i, now):
         """Left click on point *i*: slide it to the center."""
@@ -826,6 +1041,7 @@ class Hyp:
         self.settings = {"datetimes": True, "line numbers": False}
         self.settings_menu = Dropdown("settings", self._settings_items_, self._toggle_setting_)
         self.popup = None  # a menu opened on the disk, at the mouse: see open_popup
+        self.reload_button = Button("reload", self.reload)
         self.grid = _grid_()
 
         pygame.init()
@@ -892,6 +1108,18 @@ class Hyp:
             M = self.view.isometry(now)
             self.view.center_on(M(snap.positions[focus]), now)
 
+    def reload(self):
+        """Read the corpus's source again, re-embed what changed, lay it all out afresh, and redraw it."""
+        engine = self.engine
+
+        def job(progress):
+            engine.reload(progress)
+            self.worker.events.put(("snapshot", (engine.snapshot(), None)))
+            progress("reloaded")
+
+        self.__reload__()
+        self.worker.submit(job)
+
     def submit(self, text):
         engine = self.engine
 
@@ -903,7 +1131,7 @@ class Hyp:
         self.worker.submit(job)
 
     def handle(self, ev, now):
-        if self.settings_menu.handle(ev):
+        if self.settings_menu.handle(ev) or (not self.viewers and self.reload_button.handle(ev)):
             return
         if self.popup is not None and ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEWHEEL, pygame.KEYDOWN):
             # The menu's, whatever it is: a click picks an item or, elsewhere, only closes it.
@@ -1103,7 +1331,9 @@ class Hyp:
         if self.box is not None:
             self.box.draw(surf, self.font)
         w = surf.get_width()
-        self.settings_menu.draw_button(surf, self.small, w - self.small.size("settings")[0] - 30, 10, STATUS)
+        sx = w - self.small.size("settings")[0] - 30
+        self.settings_menu.draw_button(surf, self.small, sx, 10, STATUS)
+        self.reload_button.draw_button(surf, self.small, sx - self.small.size("reload")[0] - 22, 10, STATUS)
         for viewer in self.viewers:
             viewer.draw(surf, self.font, self.mono, numbers=self.settings.get("line numbers"))
         self.settings_menu.draw_list(surf, self.small)
@@ -1171,7 +1401,8 @@ class Hyp:
             news = self.drain(now)
             # Redraw only while something can change on screen; an idle frame
             # at 60 fps costs half a core for nothing.
-            moving = self.view.anim is not None or self.tween is not None
+            moving = (self.view.anim is not None or self.tween is not None
+                      or any(getattr(v, "animating", lambda: False)() for v in self.viewers))
             if events or news or moving or self.busy() or self.box is not None:
                 self.draw(now)
             self.clock.tick(60 if moving else 30)
@@ -1181,7 +1412,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="hyp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)")
     ap.add_argument("--pipejournal", action="store_true", help="the pipelines of dbx's datalake (DBX_DATALAKE), from dbx.pipejournal(), one point each")
-    ap.add_argument("--remote-python", default=None, help="with --pipejournal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: ~/miniconda3/envs/autopath/bin/python)")
+    ap.add_argument("--remote-python", default=None, help="with --pipejournal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: $HYP_REMOTE_PYTHON, else python3)")
     ap.add_argument("--n-workers", type=int, default=16, help="threads reading a remote source, e.g. the dbx journal and its side files (default: 16)")
     ap.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama", help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
     ap.add_argument("--embed-model", default=None, help=f"default: {EMBED_MODEL} for ollama")
@@ -1201,7 +1432,7 @@ def main(argv=None):
     ollama = Ollama()
     engine = Engine(
         store,
-        make_embedder(args.embedder, args.embed_model, ollama),
+        cls.__embedder__(make_embedder(args.embedder, args.embed_model, ollama)),
         Summarizer(ollama, args.summary_model),
         seed=args.seed,
         source=cls.__source__(args),

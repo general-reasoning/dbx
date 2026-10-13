@@ -25,7 +25,7 @@ On first run it pulls `nomic-embed-text` (embeddings) and `deepseek-r1:1.5b`
 ## A datalake's pipelines
 
 ```bash
-DBX_DATALAKE=ssh://wheelbarrow/home/t-9dkarp/datalake hyp --pipejournal
+DBX_DATALAKE=ssh://host/path/to/datalake hyp --pipejournal
 ```
 
 runs `HypDbxPipelines`, the specialization of the app over a datalake's
@@ -62,6 +62,16 @@ to -- and each row is a point:
     read there and its repr shown. The first read of a block takes about a
     minute; the block is kept, and reading it again takes seconds. Ray here
     must be the version Ray there is.
+  - *data*, *labels*, *rows*, *tablets* and *workers*, where the block's
+    entry records `slices`: the columns its `DATASLICE(...)` declarations
+    record -- a dict column key by key, as declared -- one as the data, and
+    another, or none, as the labels. *hyp* samples them in the pinned worker
+    on the datalake's host: of a table, *tablets* of its tablets, each read
+    whole -- its rows together, as its shards hold them -- in one of *workers*
+    processes forked there, *rows* of each kept. Auto is 64 tablets and 4,000
+    rows split among them. The sample is laid out with hyperbolic UMAP here,
+    on a disk in a window of its own, colored by label. A slice that declares
+    no columns -- a bare `DATASLICE` -- cannot be viewed.
 - in either window, an `output` button, where the entry shown had its output
   captured (dbx records the capture as `log`): it opens the process's
   captured stdout and stderr -- its last 1 MB, escape codes dropped, a
@@ -103,8 +113,10 @@ hyp --data DIR               # the corpus directory, local or an fsspec url
 hyp --reset                  # discard the corpus and start over
 hyp --pipejournal            # the pipelines of DBX_DATALAKE (HypDbxPipelines)
 hyp --n-workers N            # threads reading the datalake (default 16)
-hyp --remote-python PATH     # the python on the datalake's host whose Ray read's trueinst() runs in
-                             # (default ~/miniconda3/envs/autopath/bin/python)
+hyp --remote-python PATH     # the python on the datalake's host whose Ray read's and hyp's trueinst() run in,
+                             # with dbx, ray (the version here) and the project; a path there, quoted so ~
+                             # expands there (default $HYP_REMOTE_PYTHON, else python3, whose ray is rarely
+                             # on a non-interactive PATH)
 hyp --embedder deepseek      # DeepSeek-R1-Distill-Qwen-1.5B's pooled hidden states,
                              # through transformers: `pip install -e '.[hyp-deepseek]'`
 hyp --embed-model M          # another Ollama embedding model

@@ -72,6 +72,16 @@ class Engine:
                 s.layout = layout.compute(s.embeddings, previous=keep, seed=self.seed)
             s.save()
 
+    def reload(self, progress=print):
+        """Read the source again -- new entries embedded, changed ones re-embedded -- and lay everything out afresh."""
+        with self.lock:
+            s = self.store
+            if self.source is not None:
+                self._sync_(progress)
+            progress(f"computing hyperbolic UMAP layout of {len(s)} texts")
+            s.layout = layout.compute(s.embeddings, seed=self.seed)
+            s.save()
+
     def _sync_(self, progress):
         """Add the source's new entries and update changed ones; True if any embedding changed."""
         s = self.store

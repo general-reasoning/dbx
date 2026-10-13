@@ -24,38 +24,104 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from .app import Button, Dropdown, Hyp, TextViewer
+from .app import Button, DiskViewer, Dropdown, Hyp, TextViewer
 
 # Columns shown first, in this order; the rest follow as the frame has them,
 # then the side files, then TAIL_COLUMNS.
 HEAD_COLUMNS = ("anchor", "tag", "key", "event", "datetime", "entrypaths")
 TAIL_COLUMNS = ("gitrepo", "entry_path", "wrkrepo")
 # Columns holding paths to side files: their contents are shown, in this
-# order, in place of the paths -- cite first, right below the table.
-SIDE_FILES = ("cite", "spec", "dfn", "kwargs", "signature", "type", "repr", "quote", "note")
+# order, in place of the paths -- cite first, right below the table, and dfn
+# right after it. The note is shown in the table, right after what can be
+# read from the block: NOTE_AFTER.
+SIDE_FILES = ("cite", "dfn", "spec", "kwargs", "signature", "type", "repr", "quote")
+# The note follows the first of these the row has: as dbx records it.
+NOTE_AFTER = ("slices", "paths", "topics")
+# Side files shown deslashed: a dfn's speclines are dumped with their quotes escaped.
+DESLASHED = ("dfn",)
 # Side files that are yaml dumps of dicts: shown as the dicts they hold.
 DICT_FILES = ("spec", "dfn", "kwargs")
 # Path columns shown relative to the datalake, which is shown once.
 LAKE_PATHS = ("anchorkeypath", "entrypaths")
 # Columns holding a dict's repr: shown one key per line.
-DICT_COLUMNS = ("topics", "paths")
+DICT_COLUMNS = ("topics", "paths", "slices")
 SIDE_FILE_LIMIT = 16_000
 # A captured output longer than this is shown by its end: what a run came to.
 OUTPUT_LIMIT = 1_000_000
 # The repr of what a topic reads is cut short past this.
 READ_LIMIT = 200_000
+# A slice's disk samples about this many rows unless told otherwise: "auto".
+AUTO_ROWS = 4000
+# Of a table's tablets, "auto" reads this many: each one costs a construction.
+AUTO_TABLETS = 64
+# The fractions of each tablet's rows, and of a table's tablets, the menus offer; None is auto.
+ROW_FRACTIONS = (None, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0)
+TABLET_FRACTIONS = (None, 0.01, 0.1, 0.25, 0.5, 1.0)
+# Processes the pinned worker forks to read tablets in parallel; 1 reads them in it.
+WORKERS = (1, 4, 8, 16, 32)
+DEFAULT_WORKERS = 16
 # The interpreter on the datalake's host whose Ray -- started there, for the
 # session, by dbx.SshRay -- trueinst() instantiates blocks in: it needs dbx,
 # ray (the version this one is) and the project's package.
-REMOTE_PYTHON = "~/miniconda3/envs/autopath/bin/python"
+# HYP_REMOTE_PYTHON names it, as --remote-python does for one launch.
+REMOTE_PYTHON = __import__("os").environ.get("HYP_REMOTE_PYTHON", "python3")
 EMBED_LIMIT = 4_000
+
+
+class LabelFirstEmbedder:
+    """An embedder for texts whose first line is a label: texts sharing a label are made to cluster.
+
+    Each vector is two unit vectors side by side: the label's own, *weight*
+    times over, and *base*'s embedding of the rest of the text. Under the
+    cosine metric the layout uses, two texts with one label are then at
+    least ``(w**2 - 1) / (w**2 + 1)`` alike -- 0.8 for the default 3 --
+    however their rests differ, so they lie together; their rests place
+    them within that. A label's vector is its character trigrams, hashed
+    into `DIM` dimensions: one label is one vector, and labels sharing
+    words -- ``gigapath_probe``, ``gigapath_probe_partition`` -- lie near.
+    """
+
+    DIM = 256
+
+    def __init__(self, base, weight=3.0):
+        self.base = base
+        self.weight = weight
+        self.name = f"label-first({weight:g}):{base.name}"
+
+    def prepare(self, progress=print):
+        self.base.prepare(progress)
+
+    def __call__(self, texts):
+        import numpy as np
+
+        if not texts:
+            return np.zeros((0, self.DIM), dtype=np.float32)
+        parts = [(t.split("\n", 1) + [""])[:2] for t in texts]
+        rest = np.asarray(self.base([r or l for l, r in parts]), dtype=np.float32)
+        rest = rest / np.maximum(np.linalg.norm(rest, axis=1, keepdims=True), 1e-12)
+        labels = np.stack([self.label_vector(l) for l, _ in parts])
+        return np.concatenate([self.weight * labels, rest], axis=1).astype(np.float32)
+
+    @classmethod
+    def label_vector(cls, label):
+        """*label* as a unit vector: its character trigrams, each hashed to a dimension and a sign."""
+        import zlib
+
+        import numpy as np
+
+        v = np.zeros(cls.DIM, dtype=np.float32)
+        padded = f"_{label.strip().lower()}_"
+        for i in range(max(1, len(padded) - 2)):
+            h = zlib.crc32(padded[i : i + 3].encode())
+            v[h % cls.DIM] += 1.0 if (h >> 16) & 1 else -1.0
+        return v / max(float(np.linalg.norm(v)), 1e-12)
 
 
 @dataclass(frozen=True)
 class Entry:
     key: str  # the pipeline's anchorkeypath: what a re-sync matches by
     text: str  # every column and side file, shown on right click
-    embed: str  # anchor, spec, and signature or type
+    embed: str  # the label, on a line of its own; then anchor, spec, and signature or type
     summary: str  # the tag's last component and the datetime: the tooltip
     extra: dict = field(default_factory=dict)  # stored with the point
 
@@ -200,7 +266,11 @@ def entry(row):
     row = {k: v for k, v in dict(row).items() if not _is_blank_(v)}
     url = row.get("entry_path", "")
     read = {c: t for c in SIDE_FILES if c in row and (t := _side_file_(c, row[c], url))}
-    sides = {c: shown for c, (shown, _) in read.items()}
+    sides = {c: shown.replace("\\", "") if c in DESLASHED else shown for c, (shown, _) in read.items()}
+    # The note, inline or in a side file of its own: shown as its text.
+    note = row.get("note")
+    if isinstance(note, str) and (t := _side_file_("note", note, url)):
+        note = t[0]
     compact = {c: text for c, (_, text) in read.items()}
     lake = str(row.get("datalake", ""))
 
@@ -211,10 +281,15 @@ def entry(row):
             return [p[len(lake) :].lstrip("/") if lake and str(p).startswith(lake) else str(p) for p in paths]
         if c in DICT_COLUMNS:
             return dict_lines(str(v))
+        if c == "note":
+            return str(note).rstrip().split("\n")
         return [str(v)]
 
     cols = [c for c in HEAD_COLUMNS if c in row] + [c for c in row if c not in HEAD_COLUMNS + TAIL_COLUMNS]
-    cols = [c for c in cols if c not in sides]
+    cols = [c for c in cols if c not in sides and c != "note"]
+    if note is not None:
+        after = next((c for c in NOTE_AFTER if c in cols), None)
+        cols.insert(cols.index(after) + 1 if after else len(cols), "note")
     tails = [c for c in TAIL_COLUMNS if c in row]
     width = max((len(c) for c in cols + tails), default=0)
 
@@ -227,11 +302,12 @@ def entry(row):
     if tails:
         lines += [""] + table(tails)
 
-    embed = [str(row.get("anchor", ""))]
-    embed += [compact[c] for c in ("spec",) if c in compact]
-    embed += [compact[c] for c in ("signature", "type") if c in compact][:1]
     key = str(row.get("anchorkeypath") or f"{row.get('anchor')}/{row.get('hash')}")
     label = tail(row.get("tag", row.get("anchor", "?")))
+    # The label first, on a line of its own: what LabelFirstEmbedder clusters by.
+    embed = [label, str(row.get("anchor", ""))]
+    embed += [compact[c] for c in ("spec",) if c in compact]
+    embed += [compact[c] for c in ("signature", "type") if c in compact][:1]
     name = var_name(row)
     return Entry(
         key=key,
@@ -411,8 +487,277 @@ def ls_text(row, topic):
 # The block read_text last instantiated, and what it is of: kept, so that
 # reading it again does not start another worker. One at a time: each
 # trueinst() connects Ray afresh, which the one before does not survive.
-_REMOTE_ = {"key": None, "block": None}
+_REMOTE_ = {"key": None, "block": None, "quote": None}
 _REMOTE_LOCK_ = threading.Lock()
+
+
+def _where_(row):
+    """The host *row*'s entry is on -- as its entry_path names it -- or None for this one."""
+    m = re.match(r"^(?:ssh|sftp)://([^/:]+)(?::\d+)?/", str(row.get("entry_path", "")))
+    return m[1] if m else None
+
+
+def _remote_block_(row, python):
+    """*row*'s block, by ``trueinst()`` where its data are: kept for the next call. Called holding `_REMOTE_LOCK_`."""
+    dbx = _dbx_()
+    url = str(row.get("entry_path", ""))
+    key = (url, str(row.get("id")))
+    if _REMOTE_["key"] != key:
+        entry = dbx.DataJournal.read_entries([url])[0]
+        kwargs = {}
+        host = _where_(row)
+        if host:
+            cluster = dbx.SshRay.session(host, python=python)
+            kwargs = {"address": cluster.address, "gitrepo": dbx.DataJournalEntry.column(entry, "gitrepo")}
+        _REMOTE_.update(key=None, block=None, quote=None)
+        _REMOTE_["block"] = entry.trueinst(**kwargs)
+        _REMOTE_["quote"] = entry.read("quote", raw=True)
+        _REMOTE_["key"] = key
+    return _REMOTE_["block"]
+
+
+def recorded_slices(row):
+    """The slices *row*'s entry records its block can be read by -- its ``slices`` -- by name; none where it records none."""
+    import ast
+
+    text = row.get("slices") if row else None
+    if _is_blank_(text):
+        return []
+    try:
+        slices = ast.literal_eval(str(text))
+    except (ValueError, SyntaxError):
+        return []
+    return list(slices) if isinstance(slices, dict) else []
+
+
+def declared_columns(row):
+    """``{slice: {column: type}}``: the columns *row*'s recorded slices declare -- their ``DATASLICE(...)`` -- by slice.
+
+    What can be viewed of a block, and how: a slice that declares none -- a
+    bare ``DATASLICE`` -- says nothing of what its rows hold, and is left out.
+    """
+    import ast
+
+    text = row.get("slices") if row else None
+    if _is_blank_(text):
+        return {}
+    try:
+        slices = ast.literal_eval(str(text))
+    except (ValueError, SyntaxError):
+        return {}
+    return {s: dict(cols) for s, cols in slices.items() if isinstance(cols, dict) and cols} if isinstance(slices, dict) else {}
+
+
+def column_choices(row):
+    """``[(slice, column, path, type)]``: what can be viewed of *row*'s block, a column or -- a dict column -- each key in it.
+
+    A column the journal records by its declared structure, a dict, is
+    offered key by key, down to its leaves -- *path* the keys -- and read as
+    ``data((slice, [(column, *path)]))`` reads one; a column recorded by its
+    type alone is offered whole, *path* empty.
+    """
+    out = []
+
+    def leaves(node, path):
+        if isinstance(node, dict) and node:
+            for k, v in node.items():
+                yield from leaves(v, path + (k,))
+        else:
+            yield path, node
+
+    for s, cols in declared_columns(row).items():
+        for c, declared in cols.items():
+            for path, kind in leaves(declared, ()):
+                out.append((s, c, path, kind if isinstance(kind, str) else type(kind).__name__))
+    return out
+
+
+def _selection_(pick):
+    """What ``data()`` reads for a *pick*, ``(slice, column, path)``: the column, or ``(column, *path)``."""
+    _, c, path = pick
+    return (c, *path) if path else c
+
+
+def _remote_fns_():
+    """``(describe, sample)``: what runs in the pinned worker, defined here so that it is sent by value.
+
+    The worker runs the entry's revision of dbx and the project, and no hyp:
+    a function of this module's would be sent by reference, and not found
+    there. Nested, each is pickled whole. Both rebuild the block from its
+    quote -- the instance trueinst() made, made again where it is -- and send
+    back only plain values: a streaming dataset, or anything else bound to
+    the process it was made in, cannot travel.
+    """
+
+    def describe(quote, slices):
+        """``{"tablets": n, "rows0": {slice: rows}}``: a table's tablets, and each slice's rows in its first -- what a sample is planned by."""
+        import dbx
+
+        b = dbx.eval(quote)
+        n = getattr(b, "n_tablets", None)
+        first = b.tablet(0) if n else b
+        rows0 = {}
+        for s in slices:
+            try:
+                rows0[s] = int(first.n_rows(s))
+            except Exception:
+                rows0[s] = None
+        return {"tablets": n or 1, "rows0": rows0}
+
+    def sample(quote, specs, tablets, fraction, per_tablet, seed, workers, data, labels):
+        """A *fraction* of the rows of each of *tablets* -- or *per_tablet* of them -- read *workers* at a time: ``{"X", "labels", "rows", "errors"}``.
+
+        Each tablet is constructed and read whole -- its rows together, as its
+        shards hold them -- in a process forked from this one, which has the
+        pinned code already; then its sample is taken, the rows `sample_rows`
+        picks with *seed* + its index. *rows* are ``(tablet, row)``.
+        """
+        import multiprocessing
+        import queue as queues
+
+        import dbx
+        import numpy as np
+
+        b = dbx.eval(quote)
+        tabled = bool(getattr(b, "n_tablets", None))
+        data = (*data, ()) if len(data) == 2 else tuple(data)
+        labels = None if labels is None else ((*labels, ()) if len(labels) == 2 else tuple(labels))
+
+        def picked(n, i):
+            if n <= 0:
+                return []
+            k = min(n, per_tablet) if per_tablet else min(n, max(1, round(n * fraction)))
+            if k == n:
+                return list(range(n))
+            return sorted(np.random.default_rng(seed + i).choice(n, size=k, replace=False).tolist())
+
+        def at(value, path):
+            """*value* at *path*, where data() handed back more of it -- a dict pruned to two keys of one column."""
+            for k in path:
+                if not (isinstance(value, dict) and k in value):
+                    break
+                value = value[k]
+            return value
+
+        def scalar(v):
+            return v.item() if hasattr(v, "item") and getattr(v, "ndim", 0) == 0 else v
+
+        def one(i):
+            got = (b.tablet(i) if tabled else b).data(*specs)
+            values = got[data[0]][data[1]]
+            rows = picked(len(values), i)
+            X = np.stack([np.asarray(at(values[r], data[2]), dtype=np.float32).reshape(-1) for r in rows]) if rows else None
+            L = None
+            if labels is not None:
+                lv = got[labels[0]][labels[1]]
+                L = [str(scalar(at(lv[r], labels[2]))) for r in rows]
+            return i, X, L, rows
+
+        results, errors = [], []
+        if workers <= 1 or len(tablets) <= 1:
+            for i in tablets:
+                try:
+                    results.append(one(i))
+                except Exception as e:
+                    errors.append(f"tablet {i}: {type(e).__name__}: {e}"[:400])
+        else:
+            ctx = multiprocessing.get_context("fork")
+            q = ctx.Queue()
+
+            def run(chunk):
+                for i in chunk:
+                    try:
+                        q.put(("ok", one(i)))
+                    except Exception as e:
+                        q.put(("error", f"tablet {i}: {type(e).__name__}: {e}"[:400]))
+
+            procs = [ctx.Process(target=run, args=(tablets[k::workers],), daemon=True) for k in range(min(workers, len(tablets)))]
+            for p in procs:
+                p.start()
+            while len(results) + len(errors) < len(tablets):
+                try:
+                    status, payload = q.get(timeout=10)
+                except queues.Empty:
+                    if not any(p.is_alive() for p in procs):
+                        errors.append(f"{len(tablets) - len(results) - len(errors)} tablets never came back: a worker died")
+                        break
+                    continue
+                (results if status == "ok" else errors).append(payload)
+            for p in procs:
+                p.join(timeout=5)
+        results = [r for r in sorted(results, key=lambda r: r[0]) if r[1] is not None]
+        if not results:
+            raise RuntimeError("no rows read: " + ("; ".join(errors[:3]) or "no tablets"))
+        return {
+            "X": np.concatenate([r[1] for r in results]),
+            "labels": [l for r in results for l in r[2]] if labels is not None else None,
+            "rows": [(r[0], row) for r in results for row in r[3]],
+            "errors": errors,
+        }
+
+    return describe, sample
+
+
+def _quote_and_handle_(row, python):
+    """The quote of *row*'s block and the pinned worker its ``trueinst()`` runs in. Called holding `_REMOTE_LOCK_`."""
+    block = _remote_block_(row, python)
+    return _REMOTE_["quote"], block._origin
+
+
+def slice_plan(row, python=REMOTE_PYTHON):
+    """What a sample of *row*'s block is planned by: ``{"tablets": n, "rows0": {slice: rows}}``.
+
+    A table's tablets, and the rows of each declared slice in its first --
+    a table has about *tablets* times as many. Read in the worker
+    ``trueinst()`` pins to the entry's revision, where the data are.
+    """
+    describe, _ = _remote_fns_()
+    with _REMOTE_LOCK_:
+        quote, handle = _quote_and_handle_(row, python)
+        return handle.run(describe, quote, list(declared_columns(row)))
+
+
+def slice_sample(row, data, labels=None, fraction=1.0, tablets=None, workers=DEFAULT_WORKERS, python=REMOTE_PYTHON, seed=0,
+                 per_tablet=None):
+    """A sample of *row*'s block -- *fraction* of the rows of each of *tablets*, or *per_tablet* of them -- as ``(X, labels, rows, errors)``.
+
+    *data* and *labels* are ``(slice, column, path)`` -- *path* the keys of a
+    dict column, empty for all of it -- labels None for none. Read
+    in the pinned worker on the datalake's host, *workers* tablets at a time;
+    *X* is the data column, a row a vector. *tablets* are indices, all of a
+    table's when None.
+    """
+    _, sample = _remote_fns_()
+    data = (*data, ()) if len(data) == 2 else tuple(data)
+    labels = None if labels is None else ((*labels, ()) if len(labels) == 2 else tuple(labels))
+    specs = {}
+    for pick in [data] + ([labels] if labels is not None else []):
+        selections = specs.setdefault(pick[0], [])
+        if _selection_(pick) not in selections:
+            selections.append(_selection_(pick))
+    specs = list(specs.items())
+    with _REMOTE_LOCK_:
+        quote, handle = _quote_and_handle_(row, python)
+        got = handle.run(sample, quote, specs, list(tablets) if tablets is not None else [0], fraction, per_tablet, seed, workers,
+                         data, labels)
+    return got["X"], got["labels"], got["rows"], got["errors"]
+
+
+def _sample_indices_(n, fraction, seed=0):
+    """The rows dbx's ``sample_rows`` picks of *n*, sorted: as it does, here."""
+    import numpy as np
+
+    if n <= 0:
+        return np.zeros(0, dtype=np.int64)
+    k = min(n, max(1, round(n * fraction)))
+    if k == n:
+        return np.arange(n)
+    return np.sort(np.random.default_rng(seed).choice(n, size=k, replace=False))
+
+
+def pick_tablets(n, fraction, seed=0):
+    """Which of a table's *n* tablets a *fraction* of them is, sorted."""
+    return [int(i) for i in _sample_indices_(n, fraction, seed)]
 
 
 def read_text(row, topic, python=REMOTE_PYTHON, limit=READ_LIMIT):
@@ -429,24 +774,11 @@ def read_text(row, topic, python=REMOTE_PYTHON, limit=READ_LIMIT):
     """
     import traceback
 
-    dbx = _dbx_()
-    url = str(row.get("entry_path", ""))
-    m = re.match(r"^(?:ssh|sftp)://([^/:]+)(?::\d+)?/", url)
-    where = m[1] if m else "here"
+    where = _where_(row) or "here"
     head = f"read {'/'.join(topic)} of {row.get('anchorkeypath', '?')}  -- trueinst() on {where}"
     try:
         with _REMOTE_LOCK_:
-            key = (url, str(row.get("id")))
-            if _REMOTE_["key"] != key:
-                entry = dbx.DataJournal.read_entries([url])[0]
-                kwargs = {}
-                if m:
-                    cluster = dbx.SshRay.session(m[1], python=python)
-                    kwargs = {"address": cluster.address, "gitrepo": dbx.DataJournalEntry.column(entry, "gitrepo")}
-                _REMOTE_.update(key=None, block=None)
-                _REMOTE_["block"] = entry.trueinst(**kwargs)
-                _REMOTE_["key"] = key
-            value = _REMOTE_["block"].read(*topic)
+            value = _remote_block_(row, python).read(*topic)
             if type(value).__name__ == "Remote":
                 # Left there, behind a proxy: it forwards a dunder only when
                 # asked for by name -- repr() would describe the proxy.
@@ -497,6 +829,11 @@ class HypDbxPipelines(Hyp):
         return f"{datalake().rstrip('/')}/.hyp"
 
     @classmethod
+    def __embedder__(cls, embedder):
+        """Pipelines sharing a label cluster: LabelFirstEmbedder, over the embedder --embedder names for the rest."""
+        return LabelFirstEmbedder(embedder)
+
+    @classmethod
     def __storage_options__(cls, args):
         return _dbx_().default_storage_options()
 
@@ -513,6 +850,15 @@ class HypDbxPipelines(Hyp):
         self.journal = None  # every pipeline journal entry, newest first; None until read
         self.constructed = None  # {anchorkeypath: [entrypath]}; None until read
         self.sessions = {}  # {session: [(anchorkeypath, last event)]}; None while read
+        self.slice_info = {}  # {(entry_path, id): {slice: (rows, {column: kind})}}; None while read
+        self.run_async(lambda: journal_entries(self.n_workers), lambda df: setattr(self, "journal", df))
+        self.run_async(lambda: constructed_entrypaths(self.n_workers), lambda d: setattr(self, "constructed", d))
+
+    def __reload__(self):
+        """The journal, the constructed entrypoints and the session indexes, read again with the pipelines."""
+        self.journal = self.constructed = None
+        self.sessions = {}
+        self.slice_info = {}
         self.run_async(lambda: journal_entries(self.n_workers), lambda df: setattr(self, "journal", df))
         self.run_async(lambda: constructed_entrypaths(self.n_workers), lambda d: setattr(self, "constructed", d))
 
@@ -638,6 +984,7 @@ class HypDbxPipelines(Hyp):
                 empty="no stored topics",
                 visible=lambda: bool(window.row) and not _is_blank_(window.row.get("topics")),
             ),
+            *self._slice_menus_(window),
             self._output_button_(window),
         ]
         self.push_viewer(window)
@@ -649,6 +996,7 @@ class HypDbxPipelines(Hyp):
         menu.label = self._relative_(row, entrypath)
         window.row = None
         window.set_text(f"reading the journal of {menu.label} …")
+        self._reset_slice_menus_(window)
 
         def shown(result):
             if menu.value == entrypath:  # not stepped on past it meanwhile
@@ -697,6 +1045,139 @@ class HypDbxPipelines(Hyp):
             fn = lambda: read_text(row, topic, self.remote_python)  # noqa: E731
         self.push_viewer(window)
         self.run_async(fn, window.set_text)
+
+    # -- a block's slices, on a disk of their own -------------------------------
+
+    MENU_LABELS = {"data": "data", "labels": "labels: none", "rows": "rows: auto", "tablets": "tablets: auto",
+                   "workers": f"workers: {DEFAULT_WORKERS}"}
+
+    def _slice_menus_(self, window):
+        """A block window's ``data``, ``labels``, ``rows``, ``tablets`` and ``workers`` menus, and its ``hyp`` button: where the block records slices."""
+        shown = lambda: bool(recorded_slices(window.row))  # noqa: E731
+        declared = lambda: bool(declared_columns(window.row))  # noqa: E731
+        empty = "no declared columns: its DATASLICEs declare none, so nothing of it can be viewed"
+        # Only a plan already read: asking for one here would read it at every draw of every block with slices.
+        tabled = lambda: declared() and (self._known_plan_(window) or {}).get("tablets", 1) > 1  # noqa: E731
+        menu = lambda which, items, **kw: Dropdown(self.MENU_LABELS[which], items, lambda v: self._pick_slice_(window, which, v), **kw)  # noqa: E731
+        window.slice_menus = {
+            "data": menu("data", lambda: self._slice_items_(window), empty=empty, visible=shown),
+            "labels": menu("labels", lambda: self._slice_items_(window, none=True), empty=empty, visible=shown),
+            "rows": menu("rows", lambda: self._fraction_items_(window, "rows"), visible=declared),
+            "tablets": menu("tablets", lambda: self._fraction_items_(window, "tablets"), visible=tabled),
+            "workers": menu("workers", [(str(n), n) for n in WORKERS], visible=tabled),
+        }
+        self._reset_slice_menus_(window)
+        button = Button("hyp", lambda: self._open_slice_disk_(window), visible=lambda: declared() and window.slice_pick.get("data") is not None)
+        return [*window.slice_menus.values(), button]
+
+    def _reset_slice_menus_(self, window):
+        window.slice_pick = {"data": None, "labels": None, "rows": None, "tablets": None, "workers": DEFAULT_WORKERS}
+        for name, m in getattr(window, "slice_menus", {}).items():
+            m.label = self.MENU_LABELS[name]
+
+    def _known_plan_(self, window):
+        """The plan of the block *window* shows, if read -- reading none."""
+        row = window.row or {}
+        return self.slice_info.get((str(row.get("entry_path")), str(row.get("id"))))
+
+    def _slice_info_(self, window):
+        """What a sample of the block *window* shows is planned by -- `slice_plan` -- or None while read, the first time asked."""
+        row = window.row
+        key = (str(row.get("entry_path")), str(row.get("id")))
+        if key not in self.slice_info:
+            self.slice_info[key] = None
+
+            def read():
+                try:
+                    return slice_plan(row, self.remote_python)
+                except Exception:
+                    self.slice_info[key] = {"tablets": 1, "rows0": {}}  # not read: planned without, the error in the status line
+                    raise
+
+            self.run_async(read, lambda info: self.slice_info.__setitem__(key, info))
+        return self.slice_info[key]
+
+    def _slice_items_(self, window, none=False):
+        """The columns -- and dict columns' keys -- the block *window* shows declares, as dropdown items: from its journal row, at once."""
+        items = [(f"{'/'.join((s, c, *path))}   {kind}", (s, c, path)) for s, c, path, kind in column_choices(window.row)]
+        if items:
+            self._slice_info_(window)  # start planning the sample: the tablets, and their rows
+        return ([("none", None)] if none and items else []) + items
+
+    def _plan_(self, window):
+        """``(tablets, fraction, per tablet, expected rows)`` the picks come to.
+
+        Auto: AUTO_TABLETS of the tablets, and AUTO_ROWS rows split among
+        them -- a number per tablet, since tablets differ in size. *expected*
+        is by the first tablet's rows, so a guess; None before they are read.
+        """
+        info = self._slice_info_(window) or {}
+        n = info.get("tablets", 1)
+        data = window.slice_pick.get("data")
+        rows0 = info.get("rows0", {}).get(data[0]) if data else None
+        tf = window.slice_pick.get("tablets")
+        count = max(1, round(n * tf)) if tf is not None else min(n, AUTO_TABLETS)
+        rf = window.slice_pick.get("rows")
+        per = None if rf is not None else max(1, -(-AUTO_ROWS // count))
+        expect = (round(rows0 * count * rf) if rf is not None else min(rows0, per) * count) if rows0 else None
+        return count, rf if rf is not None else 1.0, per, expect
+
+    def _fraction_items_(self, window, which):
+        info = self._slice_info_(window) or {}
+        n = info.get("tablets", 1)
+        items = []
+        for f in (ROW_FRACTIONS if which == "rows" else TABLET_FRACTIONS):
+            name = "auto" if f is None else f"{f:.0%}" if f >= 0.01 else f"{f:.1%}"
+            if which == "tablets":
+                count = min(n, AUTO_TABLETS) if f is None else max(1, round(n * f))
+                name += f"   {count:,} of {n:,}"
+            items.append((name, f))
+        return items
+
+    def _pick_slice_(self, window, which, value):
+        window.slice_pick[which] = value
+        m = window.slice_menus[which]
+        if which in ("data", "labels"):
+            m.label = f"{which}: {'/'.join((value[0], value[1], *value[2]))}" if value is not None else self.MENU_LABELS[which]
+        elif which == "workers":
+            m.label = f"workers: {value}"
+        else:
+            m.label = f"{which}: auto" if value is None else f"{which}: {value:.0%}" if value >= 0.01 else f"{which}: {value:.1%}"
+
+    def _open_slice_disk_(self, window):
+        """Sample the slice columns picked in the pinned worker, lay the sample out with hyperbolic UMAP, and show it on a disk over *window*."""
+        from . import layout
+
+        row, pick = window.row, dict(window.slice_pick)
+        data, labels, workers = pick["data"], pick["labels"], pick["workers"]
+        info = self._slice_info_(window) or {}
+        n = info.get("tablets", 1)
+        count, fraction, per, expect = self._plan_(window)
+        tablets = pick_tablets(n, count / n) if n > 1 else None
+        named = lambda pick: "/".join((pick[0], pick[1], *pick[2]))  # noqa: E731
+        title = f"{self._relative_(row, str(row.get('anchorkeypath', '')))} · {named(data)}" + (f" by {named(labels)}" if labels else "")
+        each = f"{per:,} rows of each" if per else f"{fraction:.1%} of each"
+        where = f"{count:,} of {n:,} tablets, {each}" if n > 1 else (f"{per:,} rows" if per else f"{fraction:.1%} of the rows")
+        about = f"≈ {expect:,} rows -- " if expect else ""
+        disk = DiskViewer(title, note=f"reading {about}{where} -- on {workers} workers …")
+        self.push_viewer(disk)
+
+        def work():
+            try:
+                X, L, rows, errors = slice_sample(row, data, labels, fraction, tablets=tablets, workers=workers,
+                                                  python=self.remote_python, per_tablet=per)
+                disk.set_note(f"laying out {len(X):,} points with hyperbolic UMAP …")
+                positions = layout.compute(X, seed=0)
+            except Exception as e:
+                disk.set_note(f"could not: {type(e).__name__}: {str(e).splitlines()[0] if str(e) else ''}")
+                raise
+            tips = [" · ".join(p for p in ((L[i] if L else None), f"tablet {t:,} row {r:,}" if n > 1 else f"row {r:,}") if p)
+                    for i, (t, r) in enumerate(rows)]
+            if errors:
+                self.status = f"{len(errors)} tablets could not be read: {errors[0]}"
+            return positions, L, tips
+
+        self.run_async(work, lambda result: disk.set_points(*result))
 
     def _output_button_(self, viewer):
         """The ``output`` button of a journal entry's window: shown while the entry it shows -- ``viewer.row`` -- had its output captured."""

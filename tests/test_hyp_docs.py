@@ -310,3 +310,23 @@ def test_docs_and_dir_are_checked():
         main(["--dir", "/somewhere"])
     with pytest.raises(SystemExit):
         main(["--docs", "--pipejournal"])
+
+
+def test_a_click_on_a_layer_brings_it_to_the_front(app):
+    app.place(0, "left half")
+    app.place(1, "center")
+    app.draw(0)
+    assert app.layers[-1] == "center"
+    w, h = app.screen.get_size()
+    app.center = None  # the center layer, empty: the tile and the disk show
+    tile = app.tiles["left half"]
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(tile.rect.x + 20, tile.rect.bottom - 20)), 0.0)
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=(tile.rect.x + 20, tile.rect.bottom - 20)), 0.0)
+    assert app.layers[-1] == "tiles"
+    on_disk = (w * 3 // 4, h // 2)
+    assert app.layer_at(on_disk) == "disk"
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=on_disk), 0.0)
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=on_disk), 0.0)
+    assert app.layers[-1] == "disk"
+    inside_tile_and_disk = (tile.rect.right - 30, h // 2)
+    assert app.layer_at(inside_tile_and_disk) == "disk", "now in front, the disk takes what it covers"

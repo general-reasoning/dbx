@@ -127,7 +127,8 @@ three layers. What is under the mouse in the front-most of them gets the
 clicks and the wheel -- the disk, inside its circle -- so the disk can be
 navigated with windows open: bring it to the front with the **layers** menu
 (top left), which brings any layer to the front or sends it to the back, or
-with Tab, which brings the back layer to the front. The disk is see-through
+with Tab, which brings the back layer to the front -- or by clicking it
+wherever it shows. The disk is see-through
 over the layers behind it. Opening a window brings its layer to the front.
 
 ## Controls

@@ -1259,6 +1259,8 @@ class Hyp:
                 return
             pos = getattr(ev, "pos", None) or pygame.mouse.get_pos()
             layer = self.layer_at(pos) if self.press is None else "disk"  # a drag of the disk stays the disk's
+            if ev.type == pygame.MOUSEBUTTONDOWN and ev.button in (1, 3):
+                self.bring_to_front(layer)  # a click on a layer, wherever it shows, brings it to the front
             if layer != "disk" and self.__layer_event__(layer, ev, now):
                 return
             if self.__layer_event__(None, ev, now):  # a layer's drag, or its keys: wherever the mouse is

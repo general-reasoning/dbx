@@ -685,3 +685,12 @@ def test_a_key_of_a_dict_column_labels_the_points(monkeypatch):
     X, L, rows, errors = dbxpipelines.slice_sample(DICT_ROW, ("features", "final", ()), ("annotations", "annotations", ("cohort",)),
                                                    tablets=[1], workers=1, per_tablet=3)
     assert L == ["c1"] * 3
+
+
+def test_a_block_menu_copies_the_anchorkey_a_journal_filter_matches():
+    """Right-click on a block menu's item: its path less the row's lake -- what anchorkeypath= matches by containment."""
+    cls = dbxpipelines.HypDbxPipelines
+    kw = cls._copies_anchorkey_(cls, {"datalake": "ssh://host/lake"})
+    assert kw["copy"]("ssh://host/lake/pkg.Block/version=2/1234abcd") == "pkg.Block/version=2/1234abcd"
+    assert kw["copy"]("/elsewhere/pkg.Block/1234abcd") == "/elsewhere/pkg.Block/1234abcd", "another lake's, whole"
+    assert "anchorkey" in kw["copy_hint"]

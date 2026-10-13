@@ -206,11 +206,18 @@ class Dropdown:
     each time the list opens -- None from it while the items are still being
     read. Picking an item calls ``on_select(value)``. Shown only while
     *visible()*.
+
+    With *copy*, a function from an item's value to text, right-clicking an
+    item puts that text on the clipboard instead of picking it -- a block's
+    anchorkey, say, to paste into a journal filter -- and leaves the list open,
+    saying what it copied, in a footer that otherwise says *copy_hint*.
     """
 
     ROWS = 16
+    NOTE_S = 2.5
 
-    def __init__(self, label, items, on_select, empty="none", value=None, match=None, visible=lambda: True):
+    def __init__(self, label, items, on_select, empty="none", value=None, match=None, visible=lambda: True,
+                 copy=None, copy_hint="right-click: copy"):
         self.label = label
         self.visible = visible
         self.items = items
@@ -225,6 +232,9 @@ class Dropdown:
         self.button = pygame.Rect(0, 0, 0, 0)
         self.list = pygame.Rect(0, 0, 0, 0)
         self.row_h = 18
+        self.copy = copy
+        self.copy_hint = copy_hint
+        self.note = None  # (text, time): what the last right-click copied, shown in the footer for NOTE_S
 
     def current(self):
         return self.items() if callable(self.items) else self.items
@@ -257,10 +267,17 @@ class Dropdown:
                 return False
             self.open = False
             items = self.current() or []
-            if self.list.collidepoint(ev.pos):
-                i = self.top + (ev.pos[1] - self.list.y - 4) // self.row_h
-                if 0 <= i < len(items):
-                    self.select(items[i][1])
+            i = self._row_at_(ev.pos)
+            if i is not None and i < len(items):
+                self.select(items[i][1])
+            return True
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3 and self.open and self.copy is not None:
+            items = self.current() or []
+            i = self._row_at_(ev.pos)
+            if i is None or i >= len(items):
+                return False
+            text = str(self.copy(items[i][1]))
+            self.note = (f"copied {text}" if _copy_(text) else "could not copy: no clipboard", time.monotonic())
             return True
         if ev.type == pygame.MOUSEWHEEL and self.open:
             dy = getattr(ev, "precise_y", ev.y)
@@ -271,6 +288,13 @@ class Dropdown:
             self.open = False
             return True
         return False
+
+    def _row_at_(self, pos):
+        """The index of the item at *pos* in the open list, or None off its rows."""
+        if not self.list.collidepoint(pos):
+            return None
+        i = (pos[1] - self.list.y - 4) // self.row_h
+        return self.top + i if 0 <= i < min(self.ROWS, len(self.current() or []) - self.top) else None
 
     def width(self, font):
         """The button's width, as drawn with *font*."""
@@ -299,8 +323,13 @@ class Dropdown:
         texts = [t for t, _ in items] if items else ["loading…" if items is None else self.empty]
         self.row_h = font.get_linesize() + 2
         shown = texts[self.top : self.top + self.ROWS]
-        width = max(self.button.width, max(font.size(t)[0] for t in shown) + 24)
-        self.list = pygame.Rect(self.button.x, self.button.bottom + 2, width, self.row_h * len(shown) + 8)
+        footer = None
+        if items and self.copy is not None:
+            recent = self.note is not None and time.monotonic() - self.note[1] < self.NOTE_S
+            footer = self.note[0] if recent else self.copy_hint
+        width = max(self.button.width, max(font.size(t)[0] for t in shown + ([footer] if footer else [])) + 24)
+        width = min(width, surf.get_width() - 8)
+        self.list = pygame.Rect(self.button.x, self.button.bottom + 2, width, self.row_h * (len(shown) + bool(footer)) + 8)
         self.list.right = min(self.list.right, surf.get_width() - 4)
         if self.list.bottom > surf.get_height() - 4:
             self.list.bottom = self.button.top - 2  # no room below: open upwards
@@ -312,9 +341,13 @@ class Dropdown:
             if items and row.collidepoint(mx, my):
                 pygame.draw.rect(surf, (52, 60, 76), row)
             surf.blit(font.render(t, True, LABEL if items else STATUS), (row.x + 10, row.y + 1))
+        if footer:
+            y = self.list.y + 4 + len(shown) * self.row_h
+            pygame.draw.line(surf, EDGE, (self.list.x + 6, y), (self.list.right - 6, y))
+            surf.blit(font.render(_fit_(font, footer, self.list.width - 20), True, STATUS), (self.list.x + 10, y + 1))
         if items and len(items) > self.ROWS:
             more = font.render(f"{self.top + 1}–{self.top + len(shown)} of {len(items)}", True, STATUS)
-            surf.blit(more, (self.list.right - more.get_width() - 8, self.list.bottom - self.row_h))
+            surf.blit(more, (self.list.right - more.get_width() - 8, self.list.bottom - self.row_h * (1 + bool(footer))))
 
 
 class Button:
@@ -988,9 +1021,9 @@ class Hyp:
         sub = self.sublabel(i, full=True)
         return f"{self.__point_label__(i)}\n{sub}" if sub else self.__point_label__(i)
 
-    def open_popup(self, items, on_select, pos, empty="none"):
-        """Open a menu of *items* on the disk at *pos* -- as a Dropdown takes them -- calling *on_select* with the one picked."""
-        self.popup = Dropdown("", items, on_select, empty=empty)
+    def open_popup(self, items, on_select, pos, empty="none", **kw):
+        """Open a menu of *items* on the disk at *pos* -- as a Dropdown takes them, *kw* too -- calling *on_select* with the one picked."""
+        self.popup = Dropdown("", items, on_select, empty=empty, **kw)
         self.popup.button = pygame.Rect(pos[0], pos[1], 0, 0)
         self.popup.open = True
 

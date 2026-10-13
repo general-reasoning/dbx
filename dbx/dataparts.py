@@ -1,4 +1,4 @@
-"""dataparts — partitions of a `Datatable` into parts: `DatatablePartition`, `DatatableCorePartition`, and their tablets.
+"""dataparts — partitions of a `Datatable` into parts: `DatatablePartition`, `DatatableCorePartition`, `DatatableCarbonCorePartition`, and their tablets.
 
 A partition is an index: it reads the table's partition columns, deals its rows
 to parts, and records which rows went where. A part is the table that reads that
@@ -1454,11 +1454,8 @@ class DatatableCorePartition(DatatablePartition):
     read a few neighbouring tablets; a shuffled one reads up to as many tablets as
     it has rows.
 
-    *layout* -- another core partition, whose layout this one takes: the
-    same rows, in the same folds and tablets, of THIS table -- a table laid out
-    as that one's is, tablet for tablet and row for row, such as a feature table
-    and the table it was computed from. Nothing is clustered or dealt, and
-    its collator names only *carry*.
+    A table laid out as this one's is -- a feature table and the table it was
+    computed from -- takes its layout by a `DatatableCarbonCorePartition`.
 
     Topics: ``tablets`` -- per fold, each core tablet's ``[start, end)`` in its
     layout; ``layout`` -- per fold, ``(tablet, row, cluster)`` per row;
@@ -1494,6 +1491,8 @@ class DatatableCorePartition(DatatablePartition):
         shuffle: bool = False
         coverage_sample: int = 10000
         coverage_clusters: int = 3
+        # Retired on 2026-10-13 for DatatableCarbonCorePartition's template; kept, always None, because a
+        # VAR's defaults are its identity: removed, it would move the hash of every core partition built.
         layout: DatatablePartition = None
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -1513,42 +1512,30 @@ class DatatableCorePartition(DatatablePartition):
         if not var.fractions or any(f < 0 for f in var.fractions) or sum(var.fractions) > 1 + 1e-9:
             raise ValueError(f"{what}: fractions are of the rows, and must be non-negative and sum to at most 1 "
                              f"-- less for a coreset -- got {var.fractions}")
+        if var.layout is not None:
+            raise ValueError(f"{what}: layout is retired; take another core partition's layout with "
+                             f"DatatableCarbonCorePartition(spec=dict(datatable=..., template=..., collator=...))")
         if var.collator is None:
             raise ValueError(f"{what}: a collator naming the columns, by role, is required")
-        roles = var.collator.roles
-        other = [r for r in roles if r not in CORE_ROLES]
+        other = [r for r in var.collator.roles if r not in CORE_ROLES]
         if other:
             raise ValueError(f"{what}: a core partition reads the roles {CORE_ROLES}; its collator declares {other} too")
-        if var.layout is not None:
-            if not isinstance(var.layout, DatatableCorePartition):
-                raise ValueError(f"{what}: layout must be a DatatableCorePartition, got {type(var.layout).__name__}")
-            if [r for r in roles if r != 'carry']:
-                raise ValueError(f"{what}: with a layout nothing is clustered or dealt; its collator names only "
-                                 f"'carry', the columns to take, not {[r for r in roles if r != 'carry']}")
-        elif not var.collator.pairs('coreby'):
+        if not var.collator.pairs('coreby'):
             raise ValueError(f"{what}: its collator names no 'coreby' columns to cluster the rows by")
         for name in PARTITION_ROLES:
             spec = var.collator.var.columns.get(name)
             if spec is not None and not (isinstance(spec, tuple) and len(spec) >= 2 and all(isinstance(p, str) for p in spec)):
                 raise ValueError(f"{what}: the collator's {name} must be one column spec, a tuple "
                                  f"(slice, column[, key, ...]) of strings, got {spec!r}")
-        if SOURCE_SLICE in self.carried_slices():
-            raise ValueError(f"{what}: a carried slice is named {SOURCE_SLICE!r}, the slice a core tablet points back "
-                             f"with; rename it")
-        if any('/' in s for s in self.carried_slices()):
-            raise NotImplementedError(f"{what}: nested slices ({self.carried_slices()}) are not carried yet")
+        self._check_carried_slices_()
 
     def __build__(self):
-        var, table = self.var, self.var.datatable
-        var.collator.slices(table)       # raises for a column the table does not hold
-        if var.layout is not None:
-            layouts, centers, summary, coverage = self._reuse_layout_()
-        else:
-            layouts, centers, summary, coverage = self._cluster_and_deal_()
+        self.var.collator.slices(self.var.datatable)       # raises for a column the table does not hold
+        layouts, centers, summary, coverage = self._lay_out_()
         with self.fs.open(self.path('coverage', ensure_dirpath=True), 'wb') as f:
             np.savez(f, **coverage)
-        tablets = [[[lo, min(lo + var.rows_per_tablet, len(fl))] for lo in range(0, len(fl), var.rows_per_tablet)]
-                for fl in layouts]
+        n = self.rows_per_tablet
+        tablets = [[[lo, min(lo + n, len(fl))] for lo in range(0, len(fl), n)] for fl in layouts]
         for k, fl in enumerate(layouts):
             with self.fs.open(os.path.join(self.path('layout', ensure_dirpath=True), f'{k}.npy'), 'wb') as f:
                 np.save(f, fl)
@@ -1629,7 +1616,26 @@ class DatatableCorePartition(DatatablePartition):
             out[s] = {c: declared[c] for c in cols} if all(c in declared for c in cols) else None
         return out
 
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def rows_per_tablet(self) -> int:
+        """The rows of each core tablet, the last of a fold holding what is left."""
+        return self.var.rows_per_tablet
+
     # 4. Helpers -----------------------------------------------------------
+
+    def _lay_out_(self):
+        """``(layouts, centers, summary, coverage)``: each fold's rows, as `layout` reads them, and how they were chosen."""
+        return self._cluster_and_deal_()
+
+    def _check_carried_slices_(self):
+        what = type(self).__name__
+        if SOURCE_SLICE in self.carried_slices():
+            raise ValueError(f"{what}: a carried slice is named {SOURCE_SLICE!r}, the slice a core tablet points back "
+                             f"with; rename it")
+        if any('/' in s for s in self.carried_slices()):
+            raise NotImplementedError(f"{what}: nested slices ({self.carried_slices()}) are not carried yet")
 
     def _carried_columns_(self) -> dict:
         """``{slice: [column, ...]}``: every column a role of the collator names, whole, in the order named."""
@@ -1949,29 +1955,103 @@ class DatatableCorePartition(DatatablePartition):
                    'seed': var.seed, 'folds': folds, 'skipped': skipped}
         return layouts, summary
 
-    def _reuse_layout_(self):
-        """Another core partition's layout, over this table -- checked to be laid out as that one's is."""
-        var, source = self.var, self.var.layout
-        mine, theirs = var.datatable, source.datatable
+
+class DatatableCarbonCorePartition(DatatableCorePartition):
+    """A `DatatableCorePartition` of a table laid out as its *template*'s is: the template's layout, its columns copied.
+
+    Laid out alike -- the same number of tablets, each holding the same number of
+    rows -- such as a feature table and the table it was computed from, or a
+    bipolar feature table and the feature table it was computed from. Row i of
+    tablet t is then the same sample in both, and the template's layout -- which
+    rows went to which fold, in which order -- is this table's as it stands.
+    Nothing is scanned, clustered or dealt: the build checks the two tables are
+    laid out alike, refusing them when they are not, and takes the template's
+    layout, centers, summary and coverage. What is left is the copy, which the
+    parts do, as a core partition's do.
+
+    Its folds hold the same rows as the template's, in the same order; its
+    ``source`` slices agree with the template's. The template is any core
+    partition -- a carbon one too, so a chain of tables computed one from
+    another all take the first one's layout.
+
+    *collator* -- the columns copied: its *carry*, its only role. Nothing else
+    is read.
+
+    *rows_per_tablet* -- the rows of each core tablet; None, the default, the
+    template's, so its core tablets are the template's, tablet for tablet.
+    Another cuts the same rows, in the same order, differently.
+
+    The template's choices -- fractions, clustering, seed, shuffle -- are not
+    in this one's VAR: they are the template's, and enter this one's identity
+    through it.
+    """
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        datatable: Datatable
+        template: DatatableCorePartition
+        collator: Datacollator
+        rows_per_tablet: int | None = None
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        Datablock.__post_init__(self)
+        var, what = self.var, type(self).__name__
+        if not isinstance(var.template, DatatableCorePartition):
+            raise ValueError(f"{what}: template must be a DatatableCorePartition, got {type(var.template).__name__}")
+        if not isinstance(var.collator, Datacollator):
+            raise ValueError(f"{what}: a collator naming the columns to copy, as 'carry', is required")
+        other = [r for r in var.collator.roles if r != 'carry']
+        if other:
+            raise ValueError(f"{what}: its template's layout is taken, nothing is clustered or dealt; its collator "
+                             f"names only 'carry', the columns to copy, not {other}")
+        if not var.collator.pairs('carry'):
+            raise ValueError(f"{what}: its collator names no 'carry' columns to copy")
+        if var.rows_per_tablet is not None and not (isinstance(var.rows_per_tablet, int) and var.rows_per_tablet >= 1):
+            raise ValueError(f"{what}: rows_per_tablet must be None, the template's, or a positive int, "
+                             f"got {var.rows_per_tablet!r}")
+        self._check_carried_slices_()
+
+    # 2. Declared API ------------------------------------------------------
+
+    def n_folds(self) -> int:
+        return self.var.template.n_folds()
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def rows_per_tablet(self) -> int:
+        """Its own *rows_per_tablet*, or the template's."""
+        return self.var.rows_per_tablet or self.var.template.rows_per_tablet
+
+    @property
+    def _partition_slice_name_(self) -> str:
+        """The slice its tablets' rows are counted in: the first it copies."""
+        return self.carried_slices()[0]
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _lay_out_(self):
+        """The template's layout, over this table -- checked to be laid out as the template's is."""
+        template, what = self.var.template, type(self).__name__
+        mine, theirs = self.var.datatable, template.datatable
         if mine.n_tablets != theirs.n_tablets:
-            raise ValueError(f"{type(self).__name__}: the layout is of a table of {theirs.n_tablets} tablets, this one "
+            raise ValueError(f"{what}: the template is of a table of {theirs.n_tablets} tablets, this one "
                              f"has {mine.n_tablets}: it is not laid out alike")
         counts = [self._executor_(f"COUNTING {t.n_tablets} tablets' rows").exec_callables(
             [TabletRowCountCallable(t, i, s) for i in range(t.n_tablets)])
-            for t, s in ((mine, self._partition_slice_name_), (theirs, source._partition_slice_name_))]
+            for t, s in ((mine, self._partition_slice_name_), (theirs, template._partition_slice_name_))]
         if counts[0] != counts[1]:
             bad = next(i for i, (a, b) in enumerate(zip(*counts)) if a != b)
-            raise ValueError(f"{type(self).__name__}: tablet {bad} has {counts[0][bad]} rows here and {counts[1][bad]} "
-                             f"in the layout's table: they are not laid out alike, row for row")
-        if len(var.fractions) != source.n_folds():
-            raise ValueError(f"{type(self).__name__}: the layout has {source.n_folds()} folds, fractions "
-                             f"{var.fractions} name {len(var.fractions)}")
-        layouts = [source.layout(k) for k in range(source.n_folds())]
-        summary = {**source.read('summary'), 'layout': source.hash}
-        for k, f in enumerate(summary['folds']):
+            raise ValueError(f"{what}: tablet {bad} has {counts[0][bad]} rows here and {counts[1][bad]} "
+                             f"in the template's table: they are not laid out alike, row for row")
+        layouts = [template.layout(k) for k in range(template.n_folds())]
+        summary = {**template.read('summary'), 'template': template.hash}
+        for f in summary['folds']:
             f.pop('core_tabs', None)
-        # The layout's coverage: of the rows it took, measured where they were clustered.
-        return layouts, source.read('centers'), summary, source.read('coverage')
+        # The template's coverage: of the rows it took, measured where they were clustered.
+        return layouts, template.read('centers'), summary, template.read('coverage')
 
 
 class DatatableCorePart(DatatablePart):

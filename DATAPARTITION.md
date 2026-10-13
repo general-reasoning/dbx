@@ -665,26 +665,48 @@ How to read them:
 - Fractions summing to 1 put every row in some part, so the all-parts row of
   `coverage` is 0.
 
-A partition built from a `layout` takes the layout's coverage: it describes
-the rows the layout took, measured where they were clustered.
+A `DatatableCarbonCorePartition` takes its template's coverage: it describes
+the rows the template took, measured where they were clustered.
 
-### Reusing a layout
+### A carbon copy: another table, the same layout
 
 The layout records, for every row of every part, the tablet and row of the
 partitioned table it came from. A table **laid out alike**, with the same
-tablets holding the same number of rows, such as a feature table and the table
-it was computed from, takes it whole:
+tablets holding the same number of rows, takes it whole. A feature table and
+the table it was computed from are laid out alike, and so are a bipolar
+feature table and the feature table it was computed from. A
+`DatatableCarbonCorePartition` takes a core partition's layout over such a
+table and copies other columns:
 
 ```python
-again = DatatableCorePartition(spec=dict(
-    datatable=samples, fractions=[0.05, 0.05], partition_slice='tiles', layout=core,
-    collator=Datacollator(spec=dict(columns={'carry': [('tiles', 'image')]}))))
+features_core = DatatableCarbonCorePartition(spec=dict(
+    datatable=features, template=core,
+    collator=Datacollator(spec=dict(columns={'carry': [('features', 'cls')]}))))
 ```
 
-Nothing is scanned, clustered or dealt. Its collator names only `carry`, its
+| VAR | What it is |
+|---|---|
+| `datatable` | the table laid out as the template's is |
+| `template` | the core partition whose layout it takes: a carbon one too |
+| `collator` | the columns copied, as `carry`, its only role |
+| `rows_per_tablet` | the rows of each core tablet; None, the default, the template's |
+
+Nothing is scanned, clustered or dealt. Every tablet's row count is checked
+against the template's table first, and a table that differs is refused. Its
 core tablets hold the same rows in the same places, and their `source` slices
-agree with `core`'s. Every tablet's row count is checked against the layout's
-table first, and a table that differs is refused.
+agree with the template's. The template's choices (fractions, clustering, seed,
+shuffle) are not in its VAR: they enter its identity through the template. A
+chain of tables computed one from another, each a carbon copy of the one before,
+all take the first one's layout.
+
+**Which columns a core tablet holds.** A `DatatableCorePartition`'s core
+tablets hold every column any role of its collator names: `coreby`,
+`stratifyby`, `partitionby` and `carry`, each whole, a dict column's key
+dropped. A carbon copy's hold its `carry`. Both hold `source` besides.
+
+`DatatableCorePartition`'s `layout` VAR, which did this before, is retired. It
+is kept, always None, since a VAR's defaults are its identity, and removing it
+would move the hash of every core partition built.
 
 ### Probes on core parts
 
@@ -716,7 +738,8 @@ All in `dbx/dataparts.py`, except the probe.
 | The packed tablet | `DatatablePartitionTablet`: `__build__`, `segments`, `_segment_rows_` |
 | Selecting a tablet's rows by value; copying a tablet's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
 | The back-pointing slice | `SOURCE_SLICE`, `SOURCE`, `_source_index_` |
-| Core: scan, cluster, deal, layout | `DatatableCorePartition`: `_cluster_and_deal_`, `_cluster_master_`, `_cluster_distributed_`, `_deal_rows_`, `_reuse_layout_` |
+| Core: scan, cluster, deal | `DatatableCorePartition`: `_lay_out_`, `_cluster_and_deal_`, `_cluster_master_`, `_cluster_distributed_`, `_deal_rows_` |
+| Core: a template's layout, over another table | `DatatableCarbonCorePartition._lay_out_` |
 | Core: the workers | `TabletCoreScanCallable`, `TabletCoreStepCallable`, `TabletRowCountCallable`, `TabletCoverageCallable`, `TabletVectorsCallable` |
 | Core: coverage | `DatatableCorePartition._coverage_` |
 | Core: a part and its tablets | `DatatableCorePart`, `DatatableCoreTablet` |

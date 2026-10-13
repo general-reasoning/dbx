@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`DatatableCorePartition`'s `layout` is retired** for
+  `DatatableCarbonCorePartition`, and refused when given. It stays in the VAR,
+  always None, so that no core partition built moves its hash.
 - **hyp switches journals in place, and filters an anchor's.** A **journal**
   menu in the top bar lists the pipelines and every anchor of the datalake.
   A **filter** field, shown for an anchor, takes `key=pattern, ...` and passes
@@ -25,6 +28,13 @@ All notable changes to this project will be documented in this file.
   name the same events.
 
 ### Added
+- **`DatatableCarbonCorePartition`: a core partition's layout, over a table
+  laid out as its table is, other columns copied.** A feature table and the
+  table it was computed from, say. Its VAR is the `datatable`, the `template`
+  (any core partition, a carbon one too), a `collator` naming only `carry`, and
+  `rows_per_tablet`, the template's by default. Nothing is clustered or dealt;
+  the tables are checked to be laid out alike, tablet for tablet and row for row.
+  See DATAPARTITION.md, "A carbon copy".
 - **`build_tree(deep='try_specialize_children')`: a valid child vouches for
   itself, not for its children.** Its children -- its VAR subtrees and, a
   stack's, its blocks -- are tried for specializations, as

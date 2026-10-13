@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import DatatableCorePart, DatatableCorePartition, DatatableCoreTablet
+from dbx.dataparts import DatatableCarbonCorePartition, DatatableCorePart, DatatableCorePartition, DatatableCoreTablet
 
 
 @pytest.fixture(autouse=True)
@@ -195,15 +195,22 @@ def test_distributed_clustering_finds_the_same_blobs_and_leaves_no_scratch(tmp_p
     assert p.read('summary')['clustering'] == 'distributed'
 
 
-def test_a_table_laid_out_alike_takes_the_layout_without_clustering(tmp_path):
+def carbon(tmp_path, table, template, carry=(('img', 'big'),), name='core', build=True, **spec):
+    q = DatatableCarbonCorePartition(datalake=str(tmp_path / name), spec=dict(
+        datatable=table, template=template, collator=Datacollator(spec=dict(columns={'carry': list(carry)})), **spec))
+    return q.build() if build else q
+
+
+def test_a_table_laid_out_alike_takes_the_template_s_layout_without_clustering(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, rows_per_tablet=16)
     other = PointTable(datalake=str(tmp_path / 'other'), spec=dict(offset=100)).build()
-    q = DatatableCorePartition(datalake=str(tmp_path / 'core'), spec=dict(
-        datatable=other, fractions=[0.8, 0.2], partition_slice='pts', layout=p, rows_per_tablet=16,
-        collator=Datacollator(spec=dict(columns={'carry': [('img', 'big')]})))).build()
+    q = carbon(tmp_path, other, p)
+    assert q.n_folds() == p.n_folds() and q.rows_per_tablet == 16, "the template's folds and tablets"
+    assert q.read('summary')['template'] == p.hash
     for k in range(2):
         np.testing.assert_array_equal(q.layout(k), p.layout(k))
+        assert q.tablets_indices(k) == p.tablets_indices(k)
         part = q.part(k).build()
         assert part.slices() == ('img', 'source')
         src = np.concatenate([part.tablet(i).source_index() for i in range(part.n_tablets)])
@@ -212,9 +219,64 @@ def test_a_table_laid_out_alike_takes_the_layout_without_clustering(tmp_path):
         np.testing.assert_array_equal(big[:, 0], src[:, 0] * 1000 + src[:, 1])
     unlike = PointTable(datalake=str(tmp_path / 'unlike'), spec=dict(n=39)).build()
     with pytest.raises(ValueError, match="not laid out alike"):
-        DatatableCorePartition(datalake=str(tmp_path / 'core'), spec=dict(
-            datatable=unlike, fractions=[0.8, 0.2], partition_slice='pts', layout=p,
-            collator=Datacollator(spec=dict(columns={'carry': [('img', 'big')]})))).build()
+        carbon(tmp_path, unlike, p, name='unlike_core')
+
+
+def test_its_own_rows_per_tablet_cuts_the_same_rows_differently(tmp_path):
+    tbl = points(tmp_path)
+    p = core(tmp_path, tbl, rows_per_tablet=16)
+    q = carbon(tmp_path, tbl, p, carry=[X], rows_per_tablet=5)
+    for k in range(2):
+        np.testing.assert_array_equal(q.layout(k), p.layout(k))
+        assert all(end - start <= 5 for start, end in q.tablets_indices(k))
+        assert len(q.tablets_indices(k)) > len(p.tablets_indices(k))
+
+
+def test_a_carbon_copy_is_a_template_too(tmp_path):
+    """A chain of tables computed one from another all take the first one's layout."""
+    tbl = points(tmp_path)
+    p = core(tmp_path, tbl, rows_per_tablet=16)
+    other = PointTable(datalake=str(tmp_path / 'other'), spec=dict(offset=100)).build()
+    q = carbon(tmp_path, other, p, name='q')
+    third = PointTable(datalake=str(tmp_path / 'third'), spec=dict(offset=200)).build()
+    r = carbon(tmp_path, third, q, carry=[X], name='r')
+    assert r.rows_per_tablet == 16 and r.read('summary')['template'] == q.hash
+    for k in range(2):
+        np.testing.assert_array_equal(r.layout(k), p.layout(k))
+        x = np.concatenate([r.part(k).build().tablet(i).data('pts', concat=True)['pts']['x']
+                            for i in range(len(r.tablets_indices(k)))])
+        assert (x >= 200 - 10).all(), "its own table's values"
+
+
+@pytest.mark.parametrize('spec, match', [
+    (dict(carry=()), "no 'carry'"),
+    (dict(rows_per_tablet=0), "rows_per_tablet must be"),
+])
+def test_what_a_carbon_copy_refuses(tmp_path, spec, match):
+    tbl = points(tmp_path)
+    p = core(tmp_path, tbl, build=False)
+    with pytest.raises(ValueError, match=match):
+        carbon(tmp_path, tbl, p, build=False, **spec)
+
+
+def test_a_carbon_copy_takes_only_carry_and_a_core_template(tmp_path):
+    tbl = points(tmp_path)
+    p = core(tmp_path, tbl, build=False)
+    with pytest.raises(ValueError, match="names only 'carry'"):
+        DatatableCarbonCorePartition(datalake=str(tmp_path / 'core'), spec=dict(
+            datatable=tbl, template=p, collator=Datacollator(spec=dict(columns={'coreby': [X], 'carry': [X]}))))
+    with pytest.raises(ValueError, match="template must be a DatatableCorePartition"):
+        DatatableCarbonCorePartition(datalake=str(tmp_path / 'core'), spec=dict(
+            datatable=tbl, template=tbl, collator=Datacollator(spec=dict(columns={'carry': [X]}))))
+
+
+def test_a_core_partition_s_layout_is_retired_but_its_hash_is_kept(tmp_path):
+    tbl = points(tmp_path)
+    p = core(tmp_path, tbl, build=False)
+    with pytest.raises(ValueError, match="layout is retired"):
+        core(tmp_path, tbl, build=False, name='again', layout=p)
+    assert 'layout' in DatatableCorePartition.VAR.__dataclass_fields__, (
+        "a VAR's defaults are its identity: removing the field moves every core partition's hash")
 
 
 def test_the_same_spec_is_the_same_partition(tmp_path):
@@ -325,15 +387,13 @@ def test_a_coreset_s_coverage_has_a_random_baseline_to_be_read_against(tmp_path)
     assert np.all(cov['coverage'] > 0)
 
 
-def test_coverage_is_measured_in_the_workers_too_and_taken_with_a_layout(tmp_path):
+def test_coverage_is_measured_in_the_workers_too_and_taken_by_a_carbon_copy(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, clustering='distributed', parallelization='multiprocessing', n_workers=2,
              coverage_sample=50)
     cov = p.read('coverage')
     np.testing.assert_array_equal(cov['coverage'][2], 0)
     other = PointTable(datalake=str(tmp_path / 'other'), spec=dict(offset=100)).build()
-    q = DatatableCorePartition(datalake=str(tmp_path / 'core'), spec=dict(
-        datatable=other, fractions=[0.8, 0.2], partition_slice='pts', layout=p,
-        collator=Datacollator(spec=dict(columns={'carry': [('img', 'big')]})))).build()
+    q = carbon(tmp_path, other, p)
     for key, value in q.read('coverage').items():
         np.testing.assert_array_equal(value, cov[key])

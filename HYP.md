@@ -87,6 +87,46 @@ An `ssh://` datalake is read through fsspec's sshfs, on asyncssh, which applies
 `~/.ssh/config`: `ssh://host/path` names the host as `ssh host` does, user and
 all.
 
+## A directory's documents
+
+```bash
+hyp --docs                          # the current directory
+hyp --docs --dir ssh://host/notes   # or any directory, local or an fsspec url
+```
+
+Every `.md`, `.markdown` and `.pdf` under the directory -- hidden
+directories, `node_modules`, `__pycache__`, `site-packages`, `venv`, `env`,
+`build` and `dist` aside, and at most 5,000 -- is a point: embedded by its name
+and the start of its text (a pdf's first 30 pages), labeled by its name, its
+modification time beneath. A document whose time and size are unchanged is
+not read again. The corpus is kept under `~/.hyp/docs/<hash of the
+directory>`: nothing is written to the directory scanned. A document removed
+from it stays on the disk, for now, until `--reset`.
+
+- **left click** opens a document in the center, filling the window;
+- **right click** places it instead: a quarter (top left, top right, bottom
+  left, bottom right), a half (left, right, top, bottom), or the center. A
+  window placed replaces the windows it would overlap.
+
+A markdown is rendered -- headings, lists, quotes, code, tables, links -- and
+its ` ```mermaid ` diagrams are drawn by the mermaid CLI, `mmdc` (or the one
+`HYP_MMDC` names), on this machine; without it a diagram is shown as its
+source. `npm install -g @mermaid-js/mermaid-cli` installs it. A pdf is shown
+page under page, as wide as its window at 100%, rendered by pdfium.
+
+In a document's window: the wheel, or the arrows and Page Up/Down, scroll; a
+sideways swipe, or Shift and the wheel, scroll across; a drag pans; + and -
+zoom, 0 back to 100%; Home and End go to its ends; × or Esc closes it. The
+keys go to the window under the mouse, else to the one last clicked.
+
+**Layers.** The disk, the placed windows ("tiles") and the center window are
+three layers. What is under the mouse in the front-most of them gets the
+clicks and the wheel -- the disk, inside its circle -- so the disk can be
+navigated with windows open: bring it to the front with the **layers** menu
+(top left), which brings any layer to the front or sends it to the back, or
+with Tab, which brings the back layer to the front. The disk is see-through
+over the layers behind it. Opening a window brings its layer to the front.
+
 ## Controls
 
 | Input | Effect |
@@ -115,6 +155,7 @@ hyp --data DIR               # the corpus directory, local or an fsspec url
                              # (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)
 hyp --reset                  # discard the corpus and start over
 hyp --pipejournal            # the pipelines of DBX_DATALAKE (HypDbxPipelines)
+hyp --docs [--dir DIR]       # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
 hyp --n-workers N            # threads reading the datalake (default 16)
 hyp --remote-python PATH     # the python on the datalake's host whose Ray read's and hyp's trueinst() run in,
                              # with dbx, ray (the version here) and the project; a path there, quoted so ~

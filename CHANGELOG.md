@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`hyp --docs [--dir DIR]`: a directory's markdowns and pdfs on the disk.**
+  Local or any fsspec url; each document labeled by its name and modification
+  time. A left click opens it in the center; a right click places it in a
+  quarter or a half. Markdown is rendered with its tables, code and mermaid
+  diagrams (through `mmdc`, when installed); pdfs page by page, by pdfium.
+  Windows scroll both ways and zoom with + and -. The disk, the placed windows
+  and the center window are layers, rearranged by the layers menu or Tab, so
+  the disk stays navigable with windows open. New `[hyp]` dependencies:
+  `markdown-it-py`, `pypdfium2`.
 - **A build entry records `python` and `host`: the interpreter its build ran
   in, and where.** Revision pins a block's code; this names its environment,
   so that `trueinst()` from another machine can run it again in the same one.

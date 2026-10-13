@@ -65,6 +65,7 @@ TIP_FG = (30, 30, 30)
 EDGE = (250, 200, 90)
 STATUS = (150, 160, 175)
 DIMMED = (85, 92, 105)  # a menu shown but not yet usable
+DISK_SEE_THROUGH = 150  # the disk's alpha, out of 255, over layers behind it
 
 
 def make_embedder(kind, model, ollama):
@@ -1037,6 +1038,57 @@ class Hyp:
         sub = self.sublabel(i, full=True)
         return f"{self.__point_label__(i)}\n{sub}" if sub else self.__point_label__(i)
 
+    def __animating__(self):
+        """What of the specialization's layers asks to be redrawn: anything with an ``animating()`` that says so."""
+        return []
+
+    def __draw_layer__(self, layer, now):
+        """Draw the specialization's layer *layer*: here, there are none."""
+
+    def __layer_covers__(self, layer, pos):
+        """Whether *layer* -- not the disk -- has something at screen *pos*: here, none does."""
+        return False
+
+    def __layer_event__(self, layer, ev, now):
+        """Handle *ev*, which is *layer*'s -- the frontmost at the mouse, not the disk; whether it was handled."""
+        return False
+
+    def layer_at(self, pos):
+        """The frontmost layer with something at *pos*: the disk, inside its circle or where no other layer is."""
+        for layer in reversed(self.layers):
+            if layer == "disk":
+                if abs(self.to_disk(pos)) < 1:
+                    return "disk"
+            elif self.__layer_covers__(layer, pos):
+                return layer
+        return "disk"
+
+    def bring_to_front(self, layer):
+        self.layers.remove(layer)
+        self.layers.append(layer)
+
+    def send_to_back(self, layer):
+        self.layers.remove(layer)
+        self.layers.insert(0, layer)
+
+    def rotate_layers(self):
+        """The back layer to the front: Tab."""
+        self.layers.append(self.layers.pop(0))
+
+    def _layers_items_(self):
+        """The layers menu: front first, each with what can be done with it."""
+        items = []
+        for layer in reversed(self.layers):
+            if layer != self.layers[-1]:
+                items.append((f"{layer}: bring to front", ("front", layer)))
+            if layer != self.layers[0]:
+                items.append((f"{layer}: send to back", ("back", layer)))
+        return items
+
+    def _arrange_(self, pick):
+        how, layer = pick
+        (self.bring_to_front if how == "front" else self.send_to_back)(layer)
+
     def open_popup(self, items, on_select, pos, empty="none"):
         """Open a menu of *items* on the disk at *pos* -- as a Dropdown takes them -- calling *on_select* with the one picked."""
         self.popup = Dropdown("", items, on_select, empty=empty)
@@ -1091,10 +1143,13 @@ class Hyp:
         self.labels = {}
         self.settings = {"datetimes": True, "line numbers": False, "title colors": True}
         self.settings_menu = Dropdown("settings", self._settings_items_, self._toggle_setting_)
+        self.layers_menu = Dropdown("layers", self._layers_items_, self._arrange_)
         self.points_menu = Dropdown("points", self._points_items_, self.go_to, empty="no points")
         self._points_ = (None, None, [])  # (snapshot, settings, items): what the points menu last listed
         self.popup = None  # a menu opened on the disk, at the mouse: see open_popup
         self.reload_button = Button("reload", self.reload)
+        # Back to front. A specialization adds layers of its own: see __draw_layer__.
+        self.layers = ["disk"]
         self.grid = _grid_()
 
         pygame.init()
@@ -1186,6 +1241,8 @@ class Hyp:
     def handle(self, ev, now):
         if self.settings_menu.handle(ev) or (not self.viewers and (self.reload_button.handle(ev) or self.points_menu.handle(ev))):
             return
+        if len(self.layers) > 1 and not self.viewers and self.layers_menu.handle(ev):
+            return
         if self.popup is not None and ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEWHEEL, pygame.KEYDOWN):
             # The menu's, whatever it is: a click picks an item or, elsewhere, only closes it.
             self.popup.handle(ev)
@@ -1196,6 +1253,16 @@ class Hyp:
             if ev.type in (pygame.KEYDOWN, pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN, pygame.MOUSEMOTION, pygame.MOUSEBUTTONUP) and self.viewers[-1].handle(ev) == "close":
                 self.viewers.pop()
             return
+        if len(self.layers) > 1:
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_TAB and self.box is None:
+                self.rotate_layers()
+                return
+            pos = getattr(ev, "pos", None) or pygame.mouse.get_pos()
+            layer = self.layer_at(pos) if self.press is None else "disk"  # a drag of the disk stays the disk's
+            if layer != "disk" and self.__layer_event__(layer, ev, now):
+                return
+            if self.__layer_event__(None, ev, now):  # a layer's drag, or its keys: wherever the mouse is
+                return
         if self.box is not None and ev.type in (pygame.TEXTINPUT, pygame.KEYDOWN):
             action = self.box.handle(ev)
             if action == "submit" and self.box.text.strip():
@@ -1360,8 +1427,25 @@ class Hyp:
     def draw(self, now):
         surf = self.screen
         surf.fill(BG)
+        # The layers, back to front: the disk, and a specialization's own --
+        # the disk see-through over any behind it.
+        for layer in self.layers:
+            if layer == "disk":
+                self.draw_disk(now, see_through=layer != self.layers[0])
+            else:
+                self.__draw_layer__(layer, now)
+        self.draw_chrome(now)
+
+    def draw_disk(self, now, see_through=False):
+        """The disk, its points and their labels: opaque, or see-through over the layers behind it."""
+        surf = self.screen
         cx, cy, R = self.frame()
-        pygame.draw.circle(surf, DISK, (cx, cy), R)
+        if see_through:
+            veil = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+            pygame.draw.circle(veil, (*DISK, DISK_SEE_THROUGH), (cx, cy), R)
+            surf.blit(veil, (0, 0))
+        else:
+            pygame.draw.circle(surf, DISK, (cx, cy), R)
         M = self.view.isometry(now)
         for line in self.grid:
             self.polyline(line, M, GRID)
@@ -1375,7 +1459,7 @@ class Hyp:
             r2 = np.abs(z) ** 2
 
             mx, my = pygame.mouse.get_pos()
-            if self.box is None and not self.viewers and self.popup is None:
+            if self.box is None and not self.viewers and self.popup is None and self.layer_at((mx, my)) == "disk":
                 d2 = (sx - mx) ** 2 + (sy - my) ** 2
                 i = int(np.argmin(d2))
                 if d2[i] <= HOVER_PX**2:
@@ -1409,18 +1493,24 @@ class Hyp:
             if self.hover is not None:
                 self.tooltip(self.__point_tooltip__(self.hover), (mx, my))
 
+    def draw_chrome(self, now):
+        """What is over every layer: the text box, the top bar's menus, the text windows, the status line."""
+        surf = self.screen
         if self.box is not None:
             self.box.draw(surf, self.font)
         w = surf.get_width()
         sx = w - self.small.size("settings")[0] - 30
         self.settings_menu.draw_button(surf, self.small, sx, 10, STATUS)
         self.reload_button.draw_button(surf, self.small, sx - self.small.size("reload")[0] - 22, 10, STATUS)
-        self.points_menu.draw_button(surf, self.small, 14, 10, STATUS)
+        x = 14 + self.points_menu.draw_button(surf, self.small, 14, 10, STATUS) + 12
+        if len(self.layers) > 1:
+            self.layers_menu.draw_button(surf, self.small, x, 10, STATUS)
         for viewer in self.viewers:
             viewer.draw(surf, self.font, self.mono, numbers=self.settings.get("line numbers"))
         self.settings_menu.draw_list(surf, self.small)
         if not self.viewers:
             self.points_menu.draw_list(surf, self.small)
+            self.layers_menu.draw_list(surf, self.small)
         if self.popup is not None:
             self.popup.draw_list(surf, self.small)
         self.statusline(now)
@@ -1488,7 +1578,7 @@ class Hyp:
             # Redraw only while something can change on screen; an idle frame
             # at 60 fps costs half a core for nothing.
             moving = (self.view.anim is not None or self.tween is not None
-                      or any(getattr(v, "animating", lambda: False)() for v in self.viewers))
+                      or any(getattr(v, "animating", lambda: False)() for v in [*self.viewers, *self.__animating__()]))
             if events or news or moving or self.busy() or self.box is not None:
                 self.draw(now)
             self.clock.tick(60 if moving else 30)
@@ -1498,6 +1588,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="hyp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)")
     ap.add_argument("--pipejournal", action="store_true", help="the pipelines of dbx's datalake (DBX_DATALAKE), from dbx.pipejournal(), one point each")
+    ap.add_argument("--docs", action="store_true", help="the documents -- markdowns and pdfs -- under --dir, one point each")
+    ap.add_argument("--dir", default=None, help="with --docs: the directory scanned, local or an fsspec url (default: the current one)")
     ap.add_argument("--remote-python", default=None, help="with --pipejournal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: $HYP_REMOTE_PYTHON, else the one each entry records its build ran in, else python3)")
     ap.add_argument("--n-workers", type=int, default=16, help="threads reading a remote source, e.g. the dbx journal and its side files (default: 16)")
     ap.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama", help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
@@ -1508,8 +1600,14 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     cls = Hyp
+    if args.pipejournal and args.docs:
+        ap.error("--pipejournal and --docs are two corpora: one at a time")
+    if args.dir is not None and not args.docs:
+        ap.error("--dir is the directory --docs scans")
     if args.pipejournal:
         from .dbxpipelines import HypDbxPipelines as cls
+    elif args.docs:
+        from .docs import HypDocs as cls
     if args.data is None:
         args.data = cls.__default_data__(args)
     store = Store(args.data, cls.__storage_options__(args))

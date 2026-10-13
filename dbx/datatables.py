@@ -706,16 +706,19 @@ class _Database_(Datablock):
         Never raises for that: a journal entry must not break the build it records.
         """
         out = {}
-        # A block reading nothing upstream owns every slice it has; one that does says whose each is.
-        route = getattr(self, '_route_', None)
         for s in self.slices(recursive=True):
             try:
-                owner = route([s])[0][0] if route is not None else self
-                declared = owner._slice_declaration_(s)
-                out[s] = dict(declared) if declared else None
+                out[s] = self.slice_declaration(s) or None
             except Exception:
                 out[s] = None
         return out
+
+    def slice_declaration(self, slice) -> dict:
+        """*slice*'s columns as its owner declares them -- this block's own, or the upstream one it reads it from -- else ``{}``."""
+        # A block reading nothing upstream owns every slice it has; one that does says whose each is.
+        route = getattr(self, '_route_', None)
+        owner = route([slice])[0][0] if route is not None else self
+        return dict(owner._slice_declaration_(slice) or {})
 
     def _slice_declaration_(self, slice) -> dict:
         """*slice*'s declared schema wherever it is declared -- here, or on a table's tablets -- else ``{}``.

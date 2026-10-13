@@ -1397,13 +1397,16 @@ class DatatableCoreTablet(Datatablet):
 
     @forward_property({SOURCE_SLICE: SOURCE})
     def TOPICS(self):
-        """The slices its partition carries, and ``source``.
+        """The slices its partition carries, declared as the partitioned table declares them, and ``source``.
 
-        Declared bare: their columns are what the partitioned table holds,
-        read when the partition is built -- its ``columns`` topic -- and not
-        known to a core tablet before then.
+        A carried slice's columns -- a dict column with its keys -- are the
+        partitioned table's declaration of them; a slice it leaves undeclared
+        is declared bare, its columns what the partition's ``columns`` topic
+        read off the table when it was built.
         """
-        return {**{s: DATASLICE for s in self.var.partition.carried_slices()}, SOURCE_SLICE: SOURCE}
+        carried = {s: DATASLICE(**declared) if declared else DATASLICE
+                   for s, declared in self.var.partition.carried_declarations().items()}
+        return {**carried, SOURCE_SLICE: SOURCE}
 
 
 class DatatableCorePartition(DatatablePartition):
@@ -1611,6 +1614,20 @@ class DatatableCorePartition(DatatablePartition):
     def carried_slices(self) -> list[str]:
         """The slices the core tablets hold, in the order the collator first names them: every role's."""
         return list(self._carried_columns_())
+
+    def carried_declarations(self) -> dict:
+        """``{slice: {column: type or structure} | None}``: the carried columns as the partitioned table declares them.
+
+        None for a slice any of whose carried columns the table leaves undeclared.
+        """
+        table, out = self.var.datatable, {}
+        for s, cols in self._carried_columns_().items():
+            try:
+                declared = table.slice_declaration(s)
+            except Exception:
+                declared = {}
+            out[s] = {c: declared[c] for c in cols} if all(c in declared for c in cols) else None
+        return out
 
     # 4. Helpers -----------------------------------------------------------
 

@@ -1,4 +1,4 @@
-"""Hyp over a journal of a dbx datalake: its pipelines (`HypDbxPipelines`, ``hyp --journal``), or an anchor's blocks (`HypDbxJournal`, ``hyp --journal ANCHOR``).
+"""Hyp over a journal of a dbx datalake (`HypDbxJournal`): its pipelines, ``hyp --journal``, or an anchor's blocks, ``hyp --journal ANCHOR``.
 
 `dbx.pipejournal()` reads the datalake's pipeline journal and aggregates it:
 one row per pipeline, its newest entry, with ``entrypaths`` -- every entrypoint
@@ -395,19 +395,22 @@ def pipelines(progress=print, n_workers=16):
         return list(ex.map(lambda i: entry(df.iloc[i]), range(len(df))))
 
 
-def blocks(anchor, progress=print, n_workers=16):
+def blocks(anchor, progress=print, n_workers=16, filters=None):
     """Every block of *anchor* in dbx's datalake, from its block journal: one each, its newest entry, newest first.
 
-    A pipeline's entries -- filed under the pipeline journal, ``.pipelines`` --
-    are not among them.
+    *filters* -- ``{column: pattern}``, as `parse_filters` makes them -- are
+    the journal's own: `DataJournal.read` applies them, to the entries, before
+    a block's newest is taken. A pipeline's entries -- filed under the pipeline
+    journal, ``.pipelines`` -- are not among them.
     """
     import pandas as pd
 
-    progress(f"dbx.DataJournal.read({anchor!r})")
+    filters = dict(filters or {})
+    progress(f"dbx.DataJournal.read({anchor!r}{''.join(f', {k}={v!r}' for k, v in filters.items())})")
     try:
-        df = pd.DataFrame(_dbx_().DataJournal.read(anchor, datalake=datalake(), n_workers=n_workers, index=None))
+        df = pd.DataFrame(_dbx_().DataJournal.read(anchor, datalake=datalake(), n_workers=n_workers, index=None, **filters))
     except FileNotFoundError as e:
-        raise SystemExit(f"hyp --journal {anchor}: no journal for it in {datalake()}: {e}")
+        raise FileNotFoundError(f"no journal of {anchor} in {datalake()}: {e}") from e
     if not len(df):
         return []
     if "entry_path" in df.columns:
@@ -420,6 +423,50 @@ def blocks(anchor, progress=print, n_workers=16):
     progress(f"reading the side files of {len(df)} blocks of {anchor}")
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
         return list(ex.map(lambda i: entry(df.iloc[i]), range(len(df))))
+
+
+#: What the journal menu calls the pipeline journal: no anchor can be named so, starting with a dot.
+PIPELINES = ".pipelines"
+
+
+def anchor_of(journal):
+    """The anchor ``--journal`` names, or None for the pipelines: none named, ``pipelines`` or ``.pipelines``."""
+    return None if journal in (None, "pipelines", PIPELINES) else journal
+
+
+def corpus_dir(anchor=None):
+    """Where a journal's corpus is kept: the pipelines', ``{datalake}/.hyp``; an anchor's, ``{datalake}/.hyp/anchors/{anchor}``."""
+    lake = datalake().rstrip("/")
+    return f"{lake}/.hyp" if anchor is None else f"{lake}/.hyp/anchors/{anchor}"
+
+
+def journal_source(anchor=None, filters=None, n_workers=16):
+    """The corpus source of a journal: the pipelines, or *anchor*'s blocks with *filters*."""
+    if anchor is None:
+        return lambda progress: pipelines(progress, n_workers=n_workers)
+    return lambda progress: blocks(anchor, progress, n_workers=n_workers, filters=filters)
+
+
+def parse_filters(text):
+    """``key=value, key=value, ...`` as ``{key: value}``: each value a pattern, as the journal's filters take them.
+
+    A comma splits only before another ``key=``, so a value may hold one --
+    ``tag=a{1,3}`` -- and ``|`` alternates, as in any pattern: ``event=build:end|note``.
+    """
+    out = {}
+    for part in re.split(r",\s*(?=[\w.:-]+\s*=)", (text or "").strip()):
+        part = part.strip().rstrip(",").strip()
+        if not part:
+            continue
+        key, eq, value = part.partition("=")
+        if not eq or not key.strip():
+            raise ValueError(f"{part!r} is not key=value")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def format_filters(filters):
+    return ", ".join(f"{k}={v}" for k, v in (filters or {}).items())
 
 
 def journal_entries(n_workers=16):
@@ -900,15 +947,29 @@ def entrypoint_text(entrypath, row, n_workers=16):
     return "\n".join(["── events ──", *events, "", newest.text]), newest.extra["row"]
 
 
-class HypDbxPipelines(Hyp):
-    """One point per pipeline of a dbx datalake; right click shows its journal row and side files."""
+class HypDbxJournal(Hyp):
+    """A journal of a dbx datalake on the disk: its pipelines, one point each, or an anchor's blocks.
+
+    Which, the journal menu in the top bar says -- ``--journal [ANCHOR]`` at
+    the start -- and switches, each journal a corpus of its own. An anchor's
+    blocks may be filtered, by the filter field beside it: ``key=value, ...``,
+    each a pattern on the journal's column *key*.
+
+    A pipeline opens its window, its entry blocks and session blocks listed;
+    a block opens the window an entry block does. A right click lists a
+    pipeline's entry blocks, or a block's session's blocks.
+    """
 
     title = "hyp: dbx pipelines"
-    HINT = "click: open · right-click: entrypoints · drag: move · scroll: zoom · Home or double-click outside: reset"
+    HINTS = {
+        "pipelines": "click: open · right-click: entry blocks · drag: move · scroll: zoom · Home or double-click outside: reset",
+        "anchor": "click: open · right-click: session blocks · drag: move · scroll: zoom · Home or double-click outside: reset",
+    }
+    HINT = HINTS["pipelines"]
 
     @classmethod
     def __default_data__(cls, args):
-        return f"{datalake().rstrip('/')}/.hyp"
+        return corpus_dir(anchor_of(getattr(args, "journal", None)))
 
     @classmethod
     def __embedder__(cls, embedder):
@@ -921,10 +982,20 @@ class HypDbxPipelines(Hyp):
 
     @classmethod
     def __source__(cls, args):
-        return lambda progress: pipelines(progress, n_workers=args.n_workers)
+        return journal_source(anchor_of(getattr(args, "journal", None)), parse_filters(getattr(args, "filter", None)), args.n_workers)
 
     def __init__(self, engine, worker, args=None):
+        from .app import TextField
+
+        self.anchor = anchor_of(getattr(args, "journal", None))
+        self.filters = parse_filters(getattr(args, "filter", None))
         super().__init__(engine, worker, args)
+        self.anchors = None  # every anchor of the datalake, for the journal menu; None until read
+        self.journal_menu = Dropdown(self._journal_label_(), self._journal_items_, self._pick_journal_, empty="no anchors")
+        self.filter_field = TextField("filter", self._apply_filter_, placeholder="key=pattern, key=pattern, ...",
+                                      visible=lambda: self.anchor is not None, text=format_filters(self.filters))
+        self.controls = [self.journal_menu, self.filter_field]  # right to left from points: the journal, then its filter
+        self._titled_()
         # A pipeline's VAR.name and version, under its label before the datetime: listed first.
         self.settings = {"names": True, "versions": True, **self.settings}
         self.n_workers = getattr(args, "n_workers", 16)
@@ -936,16 +1007,85 @@ class HypDbxPipelines(Hyp):
         self.sessions = {}  # {session: [(anchorkeypath, last event)]}; None while read
         self.slice_info = {}  # {(entry_path, id): {slice: (rows, {column: kind})}}; None while read
         self._read_journals_()
+        self.run_async(lambda: _dbx_().anchors(datalake()), lambda a: setattr(self, "anchors", a))
 
     def __reload__(self):
-        """The journal, the constructed entry blocks and the session indexes, read again with the pipelines."""
+        """The journal, the constructed entry blocks, the session indexes and the anchors, read again with the points."""
         self.journal = self.constructed = None
         self.sessions = {}
         self.slice_info = {}
         self._read_journals_()
+        self.run_async(lambda: _dbx_().anchors(datalake()), lambda a: setattr(self, "anchors", a))
+
+    # The journal shown, and switching it ------------------------------------------
+
+    def _titled_(self):
+        self.title = "hyp: dbx pipelines" if self.anchor is None else f"hyp: dbx {self.anchor}"
+        self.HINT = self.HINTS["pipelines" if self.anchor is None else "anchor"]
+        try:
+            import pygame
+
+            pygame.display.set_caption(self.title)
+        except Exception:
+            pass
+
+    def _journal_label_(self):
+        name = "pipelines" if self.anchor is None else self.anchor
+        if len(name) > 44:
+            name = "…" + name[-43:]
+        return f"journal: {name}"
+
+    def _journal_items_(self):
+        """The journal menu: the pipelines, then every anchor of the datalake; None while the anchors are read."""
+        if self.anchors is None:
+            return None
+        return [("pipelines", PIPELINES)] + [(a, a) for a in self.anchors]
+
+    def _pick_journal_(self, value):
+        anchor = anchor_of(value)
+        self.switch(anchor, self.filters if anchor == self.anchor else {})
+
+    def _apply_filter_(self, text):
+        try:
+            filters = parse_filters(text)
+        except ValueError as e:
+            self.error, self.error_at = f"filter: {e}", __import__("time").monotonic()
+            return
+        self.switch(self.anchor, filters)
+
+    def switch(self, anchor, filters=None):
+        """Show another journal -- the pipelines, for *anchor* None, or *anchor*'s blocks with *filters* -- read, embedded and laid out in the background."""
+        from .store import Store
+
+        self.anchor, self.filters = anchor, dict(filters or {})
+        self.filter_field.text = self.filter_field.committed = format_filters(self.filters)
+        self.journal_menu.label = self._journal_label_()
+        self._titled_()
+        self.viewers, self.popup, self.snap, self.tween = [], None, None, None
+        self.journal = self.constructed = None
+        self.sessions, self.slice_info = {}, {}
+        self._read_journals_()
+        data, source = corpus_dir(anchor), journal_source(anchor, self.filters, self.n_workers)
+        options = _dbx_().default_storage_options()
+        engine, events = self.engine, self.worker.events
+
+        def job(progress):
+            progress(f"opening the corpus at {data}")
+            engine.switch(Store(data, options), source)
+            engine.start(progress)
+            events.put(("snapshot", (engine.snapshot(), None)))
+            progress("ready")
+
+        self.worker.submit(job)
 
     def _read_journals_(self):
-        """What the windows list besides the points, read in the background: every entry of the pipeline journal, and the entry blocks."""
+        """What the windows list besides the points, read in the background: every entry of the pipeline journal, and the entry blocks.
+
+        An anchor's blocks need neither: they are the points, and a block's window reads its own journal.
+        """
+        if self.anchor is not None:
+            self.journal, self.constructed = None, {}
+            return
         self.run_async(lambda: journal_entries(self.n_workers), lambda df: setattr(self, "journal", df))
         self.run_async(lambda: constructed_entrypaths(self.n_workers, self.extra_events), lambda d: setattr(self, "constructed", d))
 
@@ -964,16 +1104,25 @@ class HypDbxPipelines(Hyp):
         return when(dt) if dt else None
 
     def __click_point__(self, i, now):
-        """Left click on a pipeline: its window."""
+        """Left click on a pipeline, or a block: its window."""
         self.__open_point__(i)
 
     def __context_point__(self, i, pos):
-        """Right click on a pipeline: its constructed entry blocks, at the mouse; picking one opens its window, over the disk."""
+        """Right click on a pipeline: its constructed entry blocks, at the mouse; picking one opens its window, over the disk.
+
+        On a block: the blocks of its session, likewise.
+        """
         row = self.snap.points[i].get("row", {})
+        if self.anchor is not None:
+            return self._block_context_(i, row, pos)
         self.open_popup(lambda: self._entrypoints_(row), lambda p: self._open_entrypoint_(row, p, self.title_color(i)), pos, empty="none constructed")
 
     def __open_point__(self, i):
         row = self.snap.points[i].get("row", {})
+        if self.anchor is not None:
+            # A block: the window an entry block opens in, its title a menu of the anchor's blocks.
+            self.viewers = []
+            return self._open_entrypoint_(row, str(row.get("anchorkeypath", "")), self.title_color(i))
         viewer = TextViewer(self.snap.summaries[i], self.snap.texts[i])
         viewer.row = row
         viewer.title_color = self.title_color(i)
@@ -1041,6 +1190,9 @@ class HypDbxPipelines(Hyp):
         self.run_async(lambda: entry(row), shown)
 
     def _entrypoints_(self, row):
+        """The title menu of an entry block's window: its pipeline's constructed entry blocks -- or, of an anchor's block, the anchor's blocks."""
+        if self.anchor is not None:
+            return self._anchor_blocks_(row)
         if self.constructed is None:
             return None
         lake = str(row.get("datalake", ""))
@@ -1292,42 +1444,8 @@ class HypDbxPipelines(Hyp):
         self.push_viewer(window)
         self.run_async(lambda: output_text(row), window.set_text)
 
-    @staticmethod
-    def _relative_(row, path):
-        lake = str(row.get("datalake", ""))
-        return path[len(lake) :].lstrip("/") if lake and path.startswith(lake) else path
-
-
-class HypDbxJournal(HypDbxPipelines):
-    """One point per block of an anchor -- ``hyp --journal <anchor>`` -- from its block journal; a click opens the block's window.
-
-    The block's window is the one an entry block opens in under a pipeline:
-    its journal's events and newest entry, with *session blocks*, *read*,
-    *ls*, the slice menus and *output*; its title, a menu of the anchor's
-    blocks to step through. A right click lists the blocks of its session.
-    """
-
-    HINT = "click: open · right-click: session blocks · drag: move · scroll: zoom · Home or double-click outside: reset"
-
-    @classmethod
-    def __default_data__(cls, args):
-        return f"{datalake().rstrip('/')}/.hyp/anchors/{args.journal}"
-
-    @classmethod
-    def __source__(cls, args):
-        return lambda progress: blocks(args.journal, progress, n_workers=args.n_workers)
-
-    def __init__(self, engine, worker, args=None):
-        self.anchor = getattr(args, "journal", None)
-        self.title = f"hyp: dbx {self.anchor}"
-        super().__init__(engine, worker, args)
-
-    def _read_journals_(self):
-        """Nothing: an anchor's blocks are its points, and a block's window reads its own journal."""
-        self.journal, self.constructed = None, {}
-
-    def _entrypoints_(self, row):
-        """The title menu of a block's window: the anchor's blocks -- the points -- by label, newest first."""
+    def _anchor_blocks_(self, row):
+        """The anchor's blocks -- the points -- as dropdown items, newest first."""
         if self.snap is None:
             return []
         lake = str(row.get("datalake", ""))
@@ -1340,23 +1458,23 @@ class HypDbxJournal(HypDbxPipelines):
                 out.append((f"{shown}   {when(r.get('datetime', ''), seconds=True)}", path))
         return out
 
-    def __click_point__(self, i, now):
-        """Left click on a block: its window."""
-        self.__open_point__(i)
-
-    def __open_point__(self, i):
-        row = self.snap.points[i].get("row", {})
-        self.viewers = []
-        self._open_entrypoint_(row, str(row.get("anchorkeypath", "")), self.title_color(i))
-
-    def __context_point__(self, i, pos):
+    def _block_context_(self, i, row, pos):
         """Right click on a block: the blocks journaled under its session, at the mouse; picking one opens its window."""
         from types import SimpleNamespace
 
-        row = self.snap.points[i].get("row", {})
         if _is_blank_(row.get("session")):
             self.status = "no session: the block was built outside dbx.exec"
             return
         held = SimpleNamespace(row=row)
-        self.open_popup(lambda: self._session_blocks_(held, row), lambda p: (setattr(self, "viewers", []), self._open_entrypoint_(row, p, self.title_color(i))),
-                        pos, empty="none indexed: the session was no dbx.exec command's")
+
+        def opened(path):
+            self.viewers = []
+            self._open_entrypoint_(row, path, self.title_color(i))
+
+        self.open_popup(lambda: self._session_blocks_(held, row), opened, pos, empty="none indexed: the session was no dbx.exec command's")
+
+    @staticmethod
+    def _relative_(row, path):
+        lake = str(row.get("datalake", ""))
+        return path[len(lake) :].lstrip("/") if lake and path.startswith(lake) else path
+

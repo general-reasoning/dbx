@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **hyp switches journals in place, and filters an anchor's.** A **journal**
+  menu in the top bar lists the pipelines and every anchor of the datalake.
+  A **filter** field, shown for an anchor, takes `key=pattern, ...` and passes
+  it to `DataJournal.read`; `--filter` sets it at the start. Each journal
+  keeps its own corpus. Points a filter hides keep their embeddings and are
+  laid out without them, and a deleted `--docs` file leaves the disk the same
+  way. **reload** moves to the top left. `HypDbxPipelines` is now
+  `HypDbxJournal`, one class for both journals.
 - **`hyp --journal [ANCHOR]` replaces `hyp --pipejournal`.** With no anchor,
   or `pipelines`, it is the pipelines, as before. With an anchor, it is that
   anchor's blocks from its block journal, one point each (`HypDbxJournal`).

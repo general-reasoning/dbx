@@ -28,7 +28,7 @@ On first run it pulls `nomic-embed-text` (embeddings) and `deepseek-r1:1.5b`
 DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal     # or: --journal pipelines
 ```
 
-runs `HypDbxPipelines`, the specialization of the app over a datalake's
+runs `HypDbxJournal`, the specialization of the app over a datalake's
 pipelines. The datalake is dbx's own -- `DBX_DATALAKE`, then `DBX_ROOT`,
 `DBX_URL` -- as every block resolves it; hyp names none. Its corpus --
 embeddings, layout, points -- is kept in the datalake, under
@@ -94,12 +94,24 @@ all.
 
 ```bash
 DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal dbx.dataparts.DatatableCorePart
+DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal pkg.Model --filter 'tag=TRAIN, event=build:end|note'
 ```
 
-runs `HypDbxJournal`: one point per block of the anchor, from its block
-journal -- each block's newest entry, embedded and labeled as a pipeline is;
-pipeline entries, filed in the pipeline journal, are not among them. Its
-corpus is kept under `{DBX_DATALAKE}/.hyp/anchors/<anchor>`.
+shows one point per block of the anchor, from its block journal -- each
+block's newest entry, embedded and labeled as a pipeline is; pipeline
+entries, filed in the pipeline journal, are not among them. Its corpus is
+kept under `{DBX_DATALAKE}/.hyp/anchors/<anchor>`.
+
+**Switching.** The **journal** menu in the top bar lists the pipelines and
+every anchor of the datalake (`dbx.anchors()`); picking one shows it in
+place, read, embedded and laid out in the background, each in its own corpus.
+With an anchor shown, the **filter** field beside it takes `key=pattern,
+key=pattern, ...` -- each *key* a journal column, each *pattern* matched
+against it, as `DataJournal.read`'s filters are (a comma splits only before
+another `key=`, so a pattern may hold one; `|` alternates) -- and Enter
+applies it; Esc puts it back. `--filter` gives it at the start. Blocks a
+filter leaves out keep their embeddings, so widening it again embeds
+nothing; those shown are laid out by themselves.
 
 - **left click** opens the block's window -- the one a constructed entry
   block opens in under a pipeline: its journal's events and newest entry,
@@ -122,7 +134,7 @@ and the start of its text (a pdf's first 30 pages), labeled by its name, its
 modification time beneath. A document whose time and size are unchanged is
 not read again. The corpus is kept under `~/.hyp/docs/<hash of the
 directory>`: nothing is written to the directory scanned. A document removed
-from it stays on the disk, for now, until `--reset`.
+from it leaves the disk at the next start or reload.
 
 - **left click** opens a document in the center, filling the window;
 - **right click** places it instead, picked from a 3×3 grid of little
@@ -157,6 +169,7 @@ over the layers behind it. Opening a window brings its layer to the front.
 | Input | Effect |
 |---|---|
 | left click | slide the clicked point to the center along a geodesic; time ∝ distance |
+| reload (top left) | read the corpus's source again, re-embed what changed, and lay it out afresh |
 | left click on a pipeline (`--journal`) | its window, as a right click opens a point otherwise |
 | right click on a pipeline (`--journal`) | its constructed entry blocks, in a menu at the mouse: picking one opens that block's window directly |
 | left drag | move the plane rigidly (a hyperbolic translation); the grabbed point stays under the cursor |
@@ -179,8 +192,9 @@ over the layers behind it. Opening a window brings its layer to the front.
 hyp --data DIR               # the corpus directory, local or an fsspec url
                              # (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)
 hyp --reset                  # discard the corpus and start over
-hyp --journal                # the pipelines of DBX_DATALAKE (HypDbxPipelines); also: --journal pipelines
-hyp --journal ANCHOR         # the blocks of ANCHOR, from its block journal (HypDbxJournal)
+hyp --journal                # the pipelines of DBX_DATALAKE (HypDbxJournal); also: --journal pipelines
+hyp --journal ANCHOR         # the blocks of ANCHOR, from its block journal; the journal menu switches either
+hyp --journal ANCHOR --filter 'key=pattern, ...'   # its blocks filtered; the filter field changes it
 hyp --journal --ece ckpt     # --extra-construction-events: events that also make an entry block count as
                              # constructed, each alone or followed by = or : -- here, a still that checkpointed
 hyp --docs [--dir DIR]       # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
@@ -205,7 +219,7 @@ stored corpus.
 those: `__source__` and `__default_data__` (where the corpus comes from),
 `__open_point__` (a right click on a point), and `__point_label__`,
 `__point_datetime__`, `__point_tooltip__` (how a point is labeled).
-`hyp.dbxpipelines.HypDbxPipelines` is the example.
+`hyp.dbxpipelines.HypDbxJournal` is the example.
 
 ## Tests
 

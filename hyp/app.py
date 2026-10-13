@@ -397,6 +397,90 @@ class Button:
         pass
 
 
+class TextField:
+    """A one-line text field in the top bar: *label*, then its text; a click edits it, Enter calls *on_submit(text)*, Esc puts it back.
+
+    Shown only while *visible()*. A click elsewhere while editing puts it back too.
+    """
+
+    WIDTH = 300
+
+    def __init__(self, label, on_submit, placeholder="", visible=lambda: True, text=""):
+        self.label = label
+        self.on_submit = on_submit
+        self.placeholder = placeholder
+        self.visible = visible
+        self.text = self.committed = text
+        self.editing = False
+        self.button = pygame.Rect(0, 0, 0, 0)
+
+    def width(self, font):
+        return self.WIDTH
+
+    def _stop_(self, keep):
+        if not keep:
+            self.text = self.committed
+        self.editing = False
+        pygame.key.stop_text_input()
+
+    def handle(self, ev):
+        """Whether *ev* was this field's to handle."""
+        if not self.visible():
+            if self.editing:
+                self._stop_(keep=False)
+            return False
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            if self.button.collidepoint(ev.pos):
+                if not self.editing:
+                    self.editing = True
+                    pygame.key.start_text_input()
+                return True
+            if self.editing:
+                self._stop_(keep=False)
+            return False
+        if not self.editing:
+            return False
+        if ev.type == pygame.TEXTINPUT:
+            self.text += ev.text
+        elif ev.type == pygame.KEYDOWN:
+            mods = pygame.key.get_mods()
+            if ev.key == pygame.K_ESCAPE:
+                self._stop_(keep=False)
+            elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.committed = self.text
+                self._stop_(keep=True)
+                self.on_submit(self.text)
+            elif ev.key == pygame.K_BACKSPACE:
+                self.text = self.text[:-1]
+            elif ev.key == pygame.K_v and mods & (pygame.KMOD_META | pygame.KMOD_CTRL):
+                try:
+                    self.text += (pygame.scrap.get_text() or "").replace("\n", " ")
+                except Exception:
+                    pass
+        elif ev.type not in (pygame.KEYUP, pygame.TEXTEDITING):
+            return False
+        return True
+
+    def draw_button(self, surf, font, x, y, color, max_width=None):
+        self.button = pygame.Rect(x - 4, y - 2, self.WIDTH, font.get_linesize() + 4)
+        pygame.draw.rect(surf, (20, 24, 31) if self.editing else (36, 42, 54), self.button, border_radius=4)
+        pygame.draw.rect(surf, EDGE if self.editing else (36, 42, 54), self.button, 1, border_radius=4)
+        label = font.render(f"{self.label}: ", True, color)
+        surf.blit(label, (x, y))
+        room = self.WIDTH - label.get_width() - 12
+        shown = self.text + ("|" if self.editing and time.time() % 1 < 0.5 else "")
+        if shown:
+            while len(shown) > 1 and font.size(shown)[0] > room:
+                shown = shown[1:]  # the end in view, as it is typed
+            surf.blit(font.render(shown, True, LABEL), (x + label.get_width(), y))
+        else:
+            surf.blit(font.render(_fit_(font, self.placeholder, room), True, DIMMED), (x + label.get_width(), y))
+        return self.WIDTH
+
+    def draw_list(self, surf, font):
+        pass
+
+
 class TextViewer:
     """A read-only, scrollable view of one stored text, with optional header menus.
 
@@ -969,7 +1053,7 @@ def _grid_():
 class Hyp:
     """The disk, its navigation, and the hooks a specialization overrides.
 
-    A specialization -- `dbxpipelines.HypDbxPipelines` -- changes where the
+    A specialization -- `dbxpipelines.HypDbxJournal` -- changes where the
     corpus comes from and how it is embedded (`__source__`, `__embedder__`, `__default_data__`,
     `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
@@ -1159,6 +1243,8 @@ class Hyp:
         self._points_ = (None, None, [])  # (snapshot, settings, items): what the points menu last listed
         self.popup = None  # a menu opened on the disk, at the mouse: see open_popup
         self.reload_button = Button("reload", self.reload)
+        # A specialization's own controls in the top bar, right to left from the points menu: see draw_chrome.
+        self.controls = []
         # Back to front. A specialization adds layers of its own: see __draw_layer__.
         self.layers = ["disk"]
         self.grid = _grid_()
@@ -1214,14 +1300,14 @@ class Hyp:
     # -- events ---------------------------------------------------------------
 
     def on_snapshot(self, snap, focus, now):
-        if self.snap is not None and len(self.snap.positions):
+        if self.snap is not None and len(self.snap.positions) and len(self.snap.positions) <= len(snap.positions):
             old = self.positions(now)
             start = snap.positions.copy()
             start[: len(old)] = old
             self.tween = (start, snap.positions, now)
         else:
-            # First layout: open on the corpus center.
-            self.view.M = P.Mobius()
+            # First layout -- or another corpus, or fewer points: open on its center.
+            self.view.M, self.view.anim, self.tween = P.Mobius(), None, None
         self.snap = snap
         if focus is not None:
             M = self.view.isometry(now)
@@ -1250,6 +1336,8 @@ class Hyp:
         self.worker.submit(job)
 
     def handle(self, ev, now):
+        if any(c.handle(ev) for c in self.controls if c.visible()) and not self.viewers:
+            return
         if self.settings_menu.handle(ev) or (not self.viewers and (self.reload_button.handle(ev) or self.points_menu.handle(ev))):
             return
         if len(self.layers) > 1 and not self.viewers and self.layers_menu.handle(ev):
@@ -1514,18 +1602,25 @@ class Hyp:
         w = surf.get_width()
         sx = w - self.small.size("settings")[0] - 30
         self.settings_menu.draw_button(surf, self.small, sx, 10, STATUS)
-        rx = sx - self.small.size("reload")[0] - 22
-        self.reload_button.draw_button(surf, self.small, rx, 10, STATUS)
         # points, on the right with the rest: its list opens leftward from the window's edge.
-        self.points_menu.draw_button(surf, self.small, rx - self.points_menu.width(self.small) - 14, 10, STATUS)
+        px = sx - self.points_menu.width(self.small) - 14
+        self.points_menu.draw_button(surf, self.small, px, 10, STATUS)
+        for control in self.controls:
+            if control.visible():
+                px -= control.width(self.small) + 14
+                control.draw_button(surf, self.small, px, 10, STATUS)
+        x = 14 + self.reload_button.draw_button(surf, self.small, 14, 10, STATUS) + 12
         if len(self.layers) > 1:
-            self.layers_menu.draw_button(surf, self.small, 14, 10, STATUS)
+            self.layers_menu.draw_button(surf, self.small, x, 10, STATUS)
         for viewer in self.viewers:
             viewer.draw(surf, self.font, self.mono, numbers=self.settings.get("line numbers"))
         self.settings_menu.draw_list(surf, self.small)
         if not self.viewers:
             self.points_menu.draw_list(surf, self.small)
             self.layers_menu.draw_list(surf, self.small)
+            for control in self.controls:
+                if control.visible():
+                    control.draw_list(surf, self.small)
         if self.popup is not None:
             self.popup.draw_list(surf, self.small)
         self.statusline(now)
@@ -1594,7 +1689,8 @@ class Hyp:
             # at 60 fps costs half a core for nothing.
             moving = (self.view.anim is not None or self.tween is not None
                       or any(getattr(v, "animating", lambda: False)() for v in [*self.viewers, *self.__animating__()]))
-            if events or news or moving or self.busy() or self.box is not None:
+            editing = any(getattr(c, "editing", False) for c in self.controls)
+            if events or news or moving or self.busy() or self.box is not None or editing:
                 self.draw(now)
             self.clock.tick(60 if moving else 30)
 
@@ -1605,6 +1701,9 @@ def main(argv=None):
     ap.add_argument("--journal", nargs="?", const="pipelines", default=None, metavar="ANCHOR",
                     help="a journal of dbx's datalake (DBX_DATALAKE): with no ANCHOR, or 'pipelines', its pipelines, from "
                          "dbx.pipejournal(), one point each; with an ANCHOR, that anchor's blocks, from its block journal")
+    ap.add_argument("--filter", default=None, metavar="'KEY=PATTERN, ...'",
+                    help="with --journal ANCHOR: the anchor's journal filtered, each KEY a column, each PATTERN matched against it; "
+                         "the filter field in the top bar changes it")
     ap.add_argument("--extra-construction-events", "--ece", nargs="+", default=[], metavar="EVENT",
                     help="with --journal (pipelines): events that also make an entry block count as constructed -- each alone, or "
                          "followed by = or : and the rest: `--ece ckpt` takes a block that has checkpointed (ckpt=<tag>)")
@@ -1627,10 +1726,15 @@ def main(argv=None):
         ap.error("--extra-construction-events is for the entry blocks of --journal's pipelines")
     if args.dir is not None and not args.docs:
         ap.error("--dir is the directory --docs scans")
-    if pipelines:
-        from .dbxpipelines import HypDbxPipelines as cls
-    elif args.journal is not None:
-        from .dbxpipelines import HypDbxJournal as cls
+    if args.filter and (args.journal is None or pipelines):
+        ap.error("--filter filters an anchor's journal: --journal ANCHOR --filter 'key=pattern, ...'")
+    if args.journal is not None:
+        from .dbxpipelines import HypDbxJournal as cls, parse_filters
+
+        try:
+            parse_filters(args.filter)
+        except ValueError as e:
+            ap.error(f"--filter: {e}")
     elif args.docs:
         from .docs import HypDocs as cls
     if args.data is None:

@@ -37,6 +37,17 @@ class Engine:
         self.summarizer = summarizer
         self.seed = seed
         self.lock = threading.Lock()
+        # The keys the source gave at its last sync -- what is shown -- or None
+        # for every point stored. A point the source no longer gives (a filter
+        # narrowed it, its file went) is kept, embedding and all, but not shown.
+        self.keys = None
+        self._shown_ = None  # (indices, layout) of the points shown, where not all are
+
+    def switch(self, store, source):
+        """Another corpus: *store*, synced from *source*. `start` brings it up to date."""
+        with self.lock:
+            self.store, self.source = store, source
+            self.keys, self._shown_ = None, None
 
     def start(self, progress=print):
         """Make the models available and bring the store up to date."""
@@ -66,7 +77,9 @@ class Engine:
                 texts, _ = seeds.texts_and_topics()
                 progress(f"embedding {len(texts)} seed texts")
                 s.add(texts, list(texts), self.embedder(texts))
-            if s.layout is None or len(s.layout) != len(s) or moved:
+            if self._shown_indices_() is not None:
+                self._lay_out_shown_(progress)
+            elif s.layout is None or len(s.layout) != len(s) or moved:
                 progress("computing hyperbolic UMAP layout")
                 keep = previous if previous is not None and len(previous) <= len(s) else None
                 s.layout = layout.compute(s.embeddings, previous=keep, seed=self.seed)
@@ -78,15 +91,32 @@ class Engine:
             s = self.store
             if self.source is not None:
                 self._sync_(progress)
-            progress(f"computing hyperbolic UMAP layout of {len(s)} texts")
-            s.layout = layout.compute(s.embeddings, seed=self.seed)
+            if self._shown_indices_() is not None:
+                self._lay_out_shown_(progress)
+            else:
+                progress(f"computing hyperbolic UMAP layout of {len(s)} texts")
+                s.layout = layout.compute(s.embeddings, seed=self.seed)
             s.save()
+
+    def _shown_indices_(self):
+        """The indices of the points shown, where the source gives fewer than are stored; None where it gives them all."""
+        if self.keys is None:
+            return None
+        shown = [i for i, p in enumerate(self.store.points) if p.get("key") in self.keys]
+        return None if len(shown) == len(self.store) else np.array(shown, dtype=int)
+
+    def _lay_out_shown_(self, progress):
+        """Lay out the points shown, by themselves: kept apart from the stored layout, which is of them all."""
+        shown = self._shown_indices_()
+        progress(f"computing hyperbolic UMAP layout of {len(shown)} of {len(self.store)} texts")
+        self._shown_ = (shown, layout.compute(self.store.embeddings[shown], seed=self.seed) if len(shown) else np.zeros(0, dtype=complex))
 
     def _sync_(self, progress):
         """Add the source's new entries and update changed ones; True if any embedding changed."""
         s = self.store
         index = {p.get("key"): i for i, p in enumerate(s.points)}
         entries = self.source(progress)
+        self.keys, self._shown_ = {e.key for e in entries}, None
         new = [e for e in entries if e.key not in index]
         changed = [e for e in entries if e.key in index and s.points[index[e.key]].get("embed") != e.embed]
         for e in entries:
@@ -127,6 +157,16 @@ class Engine:
     def snapshot(self):
         with self.lock:
             s = self.store
+            if self._shown_ is not None:
+                shown, positions = self._shown_
+                points = [s.points[i] for i in shown]
+                return Snapshot(
+                    texts=tuple(p["text"] for p in points),
+                    summaries=tuple(p["summary"] for p in points),
+                    positions=np.array(positions, dtype=complex),
+                    neighbors=layout.nearest(s.embeddings[shown], NEIGHBORS) if len(shown) else np.zeros((0, 0), dtype=int),
+                    points=tuple(dict(p) for p in points),
+                )
             return Snapshot(
                 texts=tuple(p["text"] for p in s.points),
                 summaries=tuple(p["summary"] for p in s.points),

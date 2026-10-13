@@ -103,3 +103,55 @@ def test_store_over_an_fsspec_url():
     again.clear()
     assert len(Store(url)) == 0
     fsspec.filesystem("memory").rm("/hyp-store-test", recursive=True)
+
+
+
+def test_points_the_source_no_longer_gives_are_kept_but_not_shown(tmp_path):
+    """A filter narrowed, a file gone: its embedding stays, so widening again embeds nothing; what is shown is laid out by itself."""
+    from types import SimpleNamespace as NS
+
+    from hyp.engine import Engine
+    from hyp.store import Store
+
+    texts = {k: f"text {k} " * 3 for k in "abcdefgh"}
+    given = list(texts)
+    source = lambda progress: [NS(key=k, text=texts[k], embed=texts[k], summary=k, extra={}) for k in given]  # noqa: E731
+
+    class Counting:
+        name = "fake"
+        embedded = 0
+
+        def prepare(self, progress=print):
+            pass
+
+        def __call__(self, batch):
+            Counting.embedded += len(batch)
+            return np.random.default_rng(len(batch)).normal(size=(len(batch), 8)).astype(np.float32)
+
+    engine = Engine(Store(str(tmp_path)), Counting(), EchoSummarizer(), source=source)
+    engine.start(quiet)
+    assert len(engine.snapshot().positions) == 8 and Counting.embedded == 8
+    given = list("abcde")
+    engine.reload(quiet)
+    snap = engine.snapshot()
+    assert sorted(snap.summaries) == list("abcde") and len(snap.positions) == 5 and snap.neighbors.shape[0] == 5
+    assert len(engine.store) == 8, "kept"
+    given = list(texts)
+    engine.reload(quiet)
+    assert len(engine.snapshot().positions) == 8 and Counting.embedded == 8, "nothing embedded again"
+
+
+def test_an_engine_switches_corpora(tmp_path):
+    from types import SimpleNamespace as NS
+
+    from hyp.engine import Engine
+    from hyp.store import Store
+
+    one = lambda progress: [NS(key=f"a{i}", text=f"alpha {i}", embed=f"alpha {i}", summary=f"a{i}", extra={}) for i in range(6)]  # noqa: E731
+    two = lambda progress: [NS(key=f"b{i}", text=f"beta {i}", embed=f"beta {i}", summary=f"b{i}", extra={}) for i in range(7)]  # noqa: E731
+    engine = Engine(Store(str(tmp_path / "one")), TopicEmbedder(), EchoSummarizer(), source=one)
+    engine.start(quiet)
+    engine.switch(Store(str(tmp_path / "two")), two)
+    engine.start(quiet)
+    assert len(engine.snapshot().positions) == 7 and engine.snapshot().summaries[0] == "b0"
+    assert len(Store(str(tmp_path / "one"))) == 6, "the first corpus, kept where it was"

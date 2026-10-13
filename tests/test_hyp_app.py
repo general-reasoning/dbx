@@ -65,7 +65,7 @@ def test_the_busy_frame_draws(app):
 
 
 class Named(Hyp):
-    """A Hyp whose points have names and datetimes, as HypDbxPipelines' do."""
+    """A Hyp whose points have names and datetimes, as HypDbxJournal' do."""
 
     NAMES = {0: "gigapath clip", 1: None, 2: "a name far too long to leave the datetime any room at all"}
 

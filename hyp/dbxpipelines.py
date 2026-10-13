@@ -938,7 +938,7 @@ class HypDbxPipelines(Hyp):
     def __context_point__(self, i, pos):
         """Right click on a pipeline: its constructed entry blocks, at the mouse; picking one opens its window, over the disk."""
         row = self.snap.points[i].get("row", {})
-        self.open_popup(lambda: self._entrypoints_(row), lambda p: self._open_entrypoint_(row, p), pos, empty="none constructed")
+        self.open_popup(lambda: self._entrypoints_(row), lambda p: self._open_entrypoint_(row, p, self.title_color(i)), pos, empty="none constructed")
 
     def __open_point__(self, i):
         row = self.snap.points[i].get("row", {})
@@ -952,7 +952,7 @@ class HypDbxPipelines(Hyp):
             empty="no entries",
             match=lambda k: self._is_entry_(k, viewer.row),
         )
-        roots = Dropdown("constructed entry blocks", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p), empty="none constructed")
+        roots = Dropdown("constructed entry blocks", lambda: self._entrypoints_(viewer.row), lambda p: self._open_entrypoint_(viewer.row, p, viewer.title_color), empty="none constructed")
         viewer.menus = [times, roots, self._output_button_(viewer)]
         self.viewers = [viewer]
 
@@ -1007,9 +1007,11 @@ class HypDbxPipelines(Hyp):
         paths = self.constructed.get(str(row.get("anchorkeypath")), [])
         return [(p[len(lake) :].lstrip("/") if lake and p.startswith(lake) else p, p) for p in paths]
 
-    def _open_entrypoint_(self, row, entrypath):
-        """Open a window over the pipeline's, its title a menu of the pipeline's constructed blocks."""
+    def _open_entrypoint_(self, row, entrypath, title_color=None):
+        """Open a window over the pipeline's, its title a menu of the pipeline's constructed blocks -- in *title_color*, the pipeline's."""
         window = TextViewer(None, "")
+        if title_color is not None:
+            window.title_color = title_color
         window.row = None  # the newest entry of the block shown, once read
         window.menus = [
             Dropdown(

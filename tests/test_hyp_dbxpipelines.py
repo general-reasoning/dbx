@@ -400,7 +400,7 @@ def pipelines_app(monkeypatch):
     app.constructed = {"/lake/pkg.Train/k": ["/lake/pkg.Model/v1", "/lake/pkg.Model/v2"]}
     app.opened = []
     monkeypatch.setattr(app, "__open_point__", lambda i: app.opened.append(("pipeline", i)))
-    monkeypatch.setattr(app, "_open_entrypoint_", lambda row, p: app.opened.append(("entrypoint", p)))
+    monkeypatch.setattr(app, "_open_entrypoint_", lambda row, p, color=None: app.opened.append(("entrypoint", p)))
     return app
 
 
@@ -736,3 +736,12 @@ def test_a_dumps_blocks_are_shown_not_made(tmp_path, monkeypatch):
     assert repr(data["spec"]["fn"]) == "nowhere_pkg.fn"
     shown, _ = dbxpipelines._side_file_("dfn", str(dump), "")
     assert "nowhere_pkg.Block({" in shown and "'fold': 1" in shown
+
+
+def test_an_entry_blocks_title_takes_its_pipelines_color(pipelines_app, monkeypatch):
+    app = pipelines_app
+    app.settings["title colors"] = True
+    monkeypatch.setattr(app, "_show_entrypoint_", lambda window, row, p: None)
+    pipeline_color = lambda: (1, 2, 3)  # noqa: E731
+    dbxpipelines.HypDbxPipelines._open_entrypoint_(app, {"datalake": "/lake"}, "/lake/pkg.Block/aa", pipeline_color)
+    assert app.viewers[-1].title_color is pipeline_color

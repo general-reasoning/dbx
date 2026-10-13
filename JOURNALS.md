@@ -146,7 +146,8 @@ dbx.execjournal(date='2026-09-28').constructed()      # {anchor: DataJournalFram
 | `e.output(basename='…')` | prints the one capture whose file name the regex matches at its start (below) |
 
 "Constructed" means an entry whose `event` is one of `CONSTRUCTED_EVENTS`:
-`build:end`, `UNSAFE_redirect` or `UNSAFE_copy_from:END`, matched exactly. The
+`build:end`, `UNSAFE_redirect`, `UNSAFE_copy_from:END` or `note` (what
+`Datablock.note()` writes by default), matched exactly. The
 default `event` filter is applied **in addition** to any other filter you pass.
 Passing `event=` yourself replaces it.
 
@@ -408,7 +409,7 @@ The rows are numbered 0..N-1, newest first. `loc=` and `iloc=` are both
 positions.
 
 With `construct_only=True`, an entrypath is kept only if its own journal
-(the `.journal` under it) has a `build:end` or `UNSAFE_redirect` entry. A
+(the `.journal` under it) has a `build:end`, `UNSAFE_redirect` or `note` entry. A
 pipeline left with no entrypaths is dropped.
 
 ```python

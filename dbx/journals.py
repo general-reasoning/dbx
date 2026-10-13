@@ -642,13 +642,14 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
 
 
 #: The events a block journal entry holds when the command that wrote it
-#: CONSTRUCTED the block: built it, made it readable by redirection, or copied
-#: its data in. Anchored, because a filter string is a pattern and a bare
+#: CONSTRUCTED the block: built it, made it readable by redirection, copied
+#: its data in, or noted it (`Datablock.note`, whose event is 'note' unless
+#: told otherwise). Anchored, because a filter string is a pattern and a bare
 #: 'UNSAFE_redirect' would also match a stack's 'UNSAFE_redirect_blocks:end'.
 #: A block instance rewrites its one entry file, so a build that failed ends
 #: at 'build:exception', and one that never finished at 'build:start': neither
 #: is here.
-CONSTRUCTED_EVENTS = ['^build:end$', '^UNSAFE_redirect$', '^UNSAFE_copy_from:END$']
+CONSTRUCTED_EVENTS = ['^build:end$', '^UNSAFE_redirect$', '^UNSAFE_copy_from:END$', '^note$']
 
 
 def _constructed_(frame, anchor, filters):
@@ -750,7 +751,7 @@ class ExecJournalEntry(pd.Series):
         given: ``{anchor: DataJournalFrame}`` for every anchor with any.
 
         *filters* are `DataJournalFrame` filters. ``event`` defaults to
-        `CONSTRUCTED_EVENTS` -- a block built, redirected, or copied in -- and
+        `CONSTRUCTED_EVENTS` -- a block built, redirected, copied in, or noted -- and
         applies alongside any other filter unless given itself;
         ``event=None`` drops it. A block the command found already built was
         not constructed by it, and wrote no entry: it is not here.
@@ -1373,7 +1374,7 @@ def journal(cls_anchor_or_df=None, loc=None, **kwargs):
 
 def constructed(anchor=None, *, event=..., datalake=None, storage_options=None,
                 n_workers=8, url=None, **filters) -> 'DataJournalFrame':
-    """The block journal entries of what was CONSTRUCTED: built, redirected, or copied in.
+    """The block journal entries of what was CONSTRUCTED: built, redirected, copied in, or noted.
 
     *anchor* -- a Datablock class, an anchor string or a block -- reads that
     anchor's journal; None reads every anchor in the datalake (`anchors`)
@@ -3284,8 +3285,8 @@ class PipeJournal(DataJournal):
     ANCHOR = '.pipelines'
 
     #: The events in an entrypoint's OWN journal that make its entrypath count
-    #: under ``collect(construct_only=True)``: built, or redirected.
-    ENTRYPOINT_EVENTS = ('build:end', 'UNSAFE_redirect')
+    #: under ``collect(construct_only=True)``: built, redirected, or noted.
+    ENTRYPOINT_EVENTS = ('build:end', 'UNSAFE_redirect', 'note')
 
     # 2. Declared API ------------------------------------------------------
 

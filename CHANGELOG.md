@@ -63,6 +63,12 @@ All notable changes to this project will be documented in this file.
   datalake's filesystem.
 
 ### Changed
+- **A noted block counts as constructed.** `CONSTRUCTED_EVENTS` -- what
+  `dbx.constructed()` and `ExecJournalEntry.constructed()` select -- and
+  `PipeJournal.ENTRYPOINT_EVENTS` -- what `pipejournal(construct_only=True)`
+  keeps an entrypath for -- both take `note`, the event `Datablock.note()`
+  writes by default. Matched exactly: `note:checked` and the like still are
+  not constructions.
 - **`quote()` and `cite()` render a set `tag` before `spec`.** The tag names
   the block where the spec, often dozens of entries, says how it was made, so
   it is read first rather than found under the spec. An unset tag stays after

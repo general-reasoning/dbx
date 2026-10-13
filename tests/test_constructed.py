@@ -66,3 +66,9 @@ def test_another_event_filter(lake):
 def test_an_empty_lake(tmp_path):
     frame = dbx.constructed(datalake=str(tmp_path))
     assert isinstance(frame, DataJournalFrame) and len(frame) == 0
+
+
+def test_a_noted_block_counts_as_constructed(tmp_path):
+    Apple(datalake=str(tmp_path), tag='noted').note('looked at it')
+    frame = dbx.constructed(Apple, datalake=str(tmp_path))
+    assert list(frame['event']) == ['note'] and list(frame['tag']) == ['noted']

@@ -226,3 +226,10 @@ def test_constructed_entrypaths_are_on_the_datalakes_filesystem():
     found = PipeJournal._constructed_entrypaths_({built, unbuilt}, datalake='memory:///remote-lake',
                                                  storage_options={}, n_workers=2, log=Datalog())
     assert found == {built}
+
+
+def test_collect_construct_only_counts_a_noted_entrypoint(lake):
+    noted = Flat(spec={'n': 4})
+    noted.create()
+    noted.entrypoint.note('checked by hand')
+    assert list(PipeJournal.collect(construct_only=True)['hash']) == [noted.hash]

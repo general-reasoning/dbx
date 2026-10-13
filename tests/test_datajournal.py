@@ -653,7 +653,7 @@ class Other(Datablock):
 
 
 class TestConstructed:
-    """What a command CONSTRUCTED: built, redirected, or copied in -- by anchor."""
+    """What a command CONSTRUCTED: built, redirected, copied in, or noted -- by anchor."""
 
     @pytest.fixture(autouse=True)
     def lake(self, tmp_path, monkeypatch):
@@ -668,15 +668,16 @@ class TestConstructed:
 
     def test_by_anchor(self, tmp_path):
         a, b, o = self._run(tmp_path)
+        n = Built(datalake=str(tmp_path), spec={'x': 3})
         entry = dbx.journal(iloc=0)
         assert entry.anchors() == sorted({a.anchor, o.anchor})
         got = entry.constructed()
         assert set(got) == {a.anchor, o.anchor}
-        assert sorted(got[a.anchor]['hash']) == sorted([a.hash, b.hash]), "the note is not a construction"
+        assert sorted(got[a.anchor]['hash']) == sorted([a.hash, b.hash, n.hash]), "a noted block is constructed too"
         assert list(got[o.anchor]['hash']) == [o.hash]
         one = entry.constructed(a.anchor)
-        assert isinstance(one, DataJournalFrame) and len(one) == 2
-        assert set(one['event']) == {'build:end'}
+        assert isinstance(one, DataJournalFrame) and len(one) == 3
+        assert set(one['event']) == {'build:end', 'note'}
 
     def test_a_failed_build_was_not_constructed(self, tmp_path):
         with pytest.raises(RuntimeError):
@@ -695,18 +696,18 @@ class TestConstructed:
     def test_the_events_are_matched_exactly(self):
         from dbx.journals import _constructed_
         frame = DataJournalFrame(pd.DataFrame({
-            'anchor': ['s.S'] * 5,
-            'hash': ['h1', 'h2', 'h3', 'h4', 'h5'],
+            'anchor': ['s.S'] * 7,
+            'hash': ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7'],
             'event': ['UNSAFE_redirect', 'UNSAFE_redirect_blocks:end', 'build:end',
-                      'build_tree:x:end', 'UNSAFE_copy_from:END'],
+                      'build_tree:x:end', 'UNSAFE_copy_from:END', 'note', 'note:checked'],
         }))
-        assert list(_constructed_(frame, 's.S', {})['hash']) == ['h1', 'h3', 'h5']
+        assert list(_constructed_(frame, 's.S', {})['hash']) == ['h1', 'h3', 'h5', 'h6']
 
     def test_over_a_frame_of_commands(self, tmp_path):
         a, b, o = self._run(tmp_path)
         dbx.exec("Built(datalake=root, spec={'x': 9}).build()", Built=Built, root=str(tmp_path))
         got = dbx.journal().constructed()
-        assert len(got[a.anchor]) == 3 and len(got[o.anchor]) == 1
+        assert len(got[a.anchor]) == 4 and len(got[o.anchor]) == 1, "two builds and a note, then a build"
 
 
 class TestExecJournalDataJournalParameters:

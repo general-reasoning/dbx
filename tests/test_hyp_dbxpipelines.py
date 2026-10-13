@@ -363,3 +363,46 @@ def test_a_long_read_is_cut_short(remote_dbx):
 def test_a_failed_read_shows_its_traceback(remote_dbx):
     text = dbxpipelines.read_text({"entry_path": "/e.parquet", "id": "e1"}, ("nope",))
     assert "KeyError: 'nope'" in text
+
+
+@pytest.fixture
+def pipelines_app(monkeypatch):
+    """A HypDbxPipelines with one point and no reads behind it."""
+    import os
+
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    from hyp.app import Worker
+
+    monkeypatch.setattr(dbxpipelines.HypDbxPipelines, "run_async", lambda self, fn, then: None)
+    app = dbxpipelines.HypDbxPipelines(engine=None, worker=Worker())
+    row = {"anchorkeypath": "/lake/pkg.Train/k", "datalake": "/lake", "tag": "pkg.train"}
+    app.snap = SimpleNamespace(points=[{"row": row}], summaries=["train"], texts=["t"])
+    app.constructed = {"/lake/pkg.Train/k": ["/lake/pkg.Model/v1", "/lake/pkg.Model/v2"]}
+    app.opened = []
+    monkeypatch.setattr(app, "__open_point__", lambda i: app.opened.append(("pipeline", i)))
+    monkeypatch.setattr(app, "_open_entrypoint_", lambda row, p: app.opened.append(("entrypoint", p)))
+    return app
+
+
+def test_a_left_click_on_a_pipeline_opens_it(pipelines_app):
+    pipelines_app.__click_point__(0, 1.0)
+    assert pipelines_app.opened == [("pipeline", 0)]
+
+
+def test_a_right_click_on_a_pipeline_lists_its_entrypoints_there(pipelines_app):
+    pipelines_app.__context_point__(0, (200, 150))
+    popup = pipelines_app.popup
+    assert popup.open and popup.button.topleft == (200, 150)
+    assert popup.current() == [("pkg.Model/v1", "/lake/pkg.Model/v1"), ("pkg.Model/v2", "/lake/pkg.Model/v2")]
+    popup.select("/lake/pkg.Model/v2")
+    assert pipelines_app.opened == [("entrypoint", "/lake/pkg.Model/v2")], "no pipeline window under it"
+
+
+def test_a_pipelines_version_is_its_recorded_one(pipelines_app):
+    point = pipelines_app.snap.points[0]
+    assert pipelines_app.__point_version__(0) is None
+    point["row"]["version"] = "None"
+    assert pipelines_app.__point_version__(0) is None
+    point["row"]["version"] = "2"
+    assert pipelines_app.__point_version__(0) == "2"
+    assert "versions" in pipelines_app.settings and pipelines_app.settings["versions"]

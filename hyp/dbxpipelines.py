@@ -490,6 +490,7 @@ class HypDbxPipelines(Hyp):
     """One point per pipeline of a dbx datalake; right click shows its journal row and side files."""
 
     title = "hyp: dbx pipelines"
+    HINT = "click: open · right-click: entrypoints · drag: move · scroll: zoom · Home or double-click outside: reset"
 
     @classmethod
     def __default_data__(cls, args):
@@ -505,8 +506,8 @@ class HypDbxPipelines(Hyp):
 
     def __init__(self, engine, worker, args=None):
         super().__init__(engine, worker, args)
-        # A pipeline's VAR.name, under its label before the datetime: listed first.
-        self.settings = {"names": True, **self.settings}
+        # A pipeline's VAR.name and version, under its label before the datetime: listed first.
+        self.settings = {"names": True, "versions": True, **self.settings}
         self.n_workers = getattr(args, "n_workers", 16)
         self.remote_python = getattr(args, "remote_python", None) or REMOTE_PYTHON
         self.journal = None  # every pipeline journal entry, newest first; None until read
@@ -521,9 +522,22 @@ class HypDbxPipelines(Hyp):
     def __point_name__(self, i):
         return self.snap.points[i].get("name")
 
+    def __point_version__(self, i):
+        version = self.snap.points[i].get("row", {}).get("version")
+        return None if _is_blank_(version) else str(version)
+
     def __point_datetime__(self, i):
         dt = self.snap.points[i].get("row", {}).get("datetime")
         return when(dt) if dt else None
+
+    def __click_point__(self, i, now):
+        """Left click on a pipeline: its window."""
+        self.__open_point__(i)
+
+    def __context_point__(self, i, pos):
+        """Right click on a pipeline: its constructed entrypoints, at the mouse; picking one opens its window, over the disk."""
+        row = self.snap.points[i].get("row", {})
+        self.open_popup(lambda: self._entrypoints_(row), lambda p: self._open_entrypoint_(row, p), pos, empty="none constructed")
 
     def __open_point__(self, i):
         row = self.snap.points[i].get("row", {})

@@ -14,6 +14,7 @@ import math
 import os
 import queue
 import re
+import sys
 import textwrap
 import threading
 import time
@@ -297,6 +298,8 @@ class Dropdown:
         width = max(self.button.width, max(font.size(t)[0] for t in shown) + 24)
         self.list = pygame.Rect(self.button.x, self.button.bottom + 2, width, self.row_h * len(shown) + 8)
         self.list.right = min(self.list.right, surf.get_width() - 4)
+        if self.list.bottom > surf.get_height() - 4:
+            self.list.bottom = self.button.top - 2  # no room below: open upwards
         pygame.draw.rect(surf, (30, 35, 45), self.list, border_radius=4)
         pygame.draw.rect(surf, EDGE, self.list, 1, border_radius=4)
         mx, my = pygame.mouse.get_pos()
@@ -347,52 +350,96 @@ class TextViewer:
     Without *menus* the header is *title*; with them, it is their buttons --
     the first usually standing in for the title. *inset* shrinks the window,
     so that one opened over another shows the one beneath around its edges.
+
+    A line whose next line is indented deeper has a triangle in the gutter:
+    clicking it folds the lines indented deeper that follow -- into ``… N
+    lines`` -- and unfolds them. The ``fold`` menu at the right of the title
+    row (and the keys 0-9) folds every such line at a level at once. With
+    *numbers*, the gutter numbers the text's own lines. Text is selected by
+    dragging over it, every line by Cmd+A, and copied by Cmd+C -- the
+    selection, or all of it when there is none.
     """
+
+    #: Spaces per level of nesting, for the fold menu: as `dbxpipelines.dict_lines` lays a dict out.
+    INDENT = 4
+    #: The levels the fold menu offers; the keys reach 1-9.
+    FOLD_LEVELS = 6
+    #: Seconds a note -- "copied ..." -- stays in the hint line.
+    NOTE_S = 2.5
 
     def __init__(self, title, text, menus=(), inset=0):
         self.title = title
         self.menus = list(menus)
         self.inset = inset
         self.over = None  # the viewer this one was opened over: it opens below that one's header
-        self.fold = None  # nesting level past which lines are collapsed; None shows every line
+        self.fold_menu = Dropdown("fold", [("unfold all", None)] + [(f"fold past level {n}", n) for n in range(1, self.FOLD_LEVELS + 1)],
+                                  self.set_fold)
         self.header_bottom = 0  # where the header ends, as last drawn
         self.rect = pygame.Rect(0, 0, 0, 0)
         self.close = pygame.Rect(0, 0, 0, 0)
+        self.note = None  # (text, time): shown in the hint line for NOTE_S
+        self._body = None  # (text x, top, line height, char width, rows, gutter x): where the text was last drawn
         self.set_text(text)
-
-    #: Spaces per level of nesting, for folding: as `dbxpipelines.dict_lines` lays a dict out.
-    INDENT = 4
 
     def set_text(self, text):
         self.text = text.replace("\t", "    ")
-        self.top = 0  # first visible line
-        self._wrapped = (None, None, [])
+        self.paras = self.text.split("\n")  # the text's own lines
+        self.collapsed = set()  # indices of the lines folded
+        self.top = 0  # first visible row
+        self._wrapped = (None, None, [], [])
+        self.clear_selection()
 
-    def folded(self):
-        """The text's lines, those nested deeper than ``fold`` levels -- by indentation -- collapsed, a run to one line."""
-        paras = self.text.split("\n")
-        if self.fold is None:
-            return paras
-        out, run = [], 0
+    # -- folding --------------------------------------------------------------
 
-        def flush():
-            if run:
-                out.append(" " * (self.INDENT * (self.fold + 1)) + f"… {run} line{'s' if run > 1 else ''}")
+    @staticmethod
+    def _indent_(line):
+        return len(line) - len(line.lstrip(" "))
 
-        for para in paras:
-            if len(para) - len(para.lstrip(" ")) > self.INDENT * self.fold:
-                run += 1
-                continue
-            flush()
-            run = 0
-            out.append(para)
-        flush()
+    def foldable(self, i):
+        """Whether line *i* has a fold: its next line is indented deeper."""
+        nxt = self.paras[i + 1] if i + 1 < len(self.paras) else ""
+        return bool(nxt.strip()) and self._indent_(nxt) > self._indent_(self.paras[i])
+
+    def toggle(self, i):
+        """Fold line *i*'s deeper lines, or unfold them."""
+        self.collapsed ^= {i}
+        self.clear_selection()
+
+    def set_fold(self, level):
+        """Fold every line at *level* levels of indentation or deeper that has a fold; None unfolds them all."""
+        self.collapsed = set() if level is None else {
+            i for i in range(len(self.paras)) if self.foldable(i) and self._indent_(self.paras[i]) >= self.INDENT * level}
+        self.top = 0
+        self.clear_selection()
+
+    def shown(self):
+        """``[(line, hidden)]``: the lines shown, by index, each with how many deeper lines its fold hides."""
+        out, i, n = [], 0, len(self.paras)
+        while i < n:
+            if i in self.collapsed and self.foldable(i):
+                depth, j = self._indent_(self.paras[i]), i + 1
+                while j < n and self.paras[j].strip() and self._indent_(self.paras[j]) > depth:
+                    j += 1
+                out.append((i, j - i - 1))
+                i = j
+            else:
+                out.append((i, 0))
+                i += 1
         return out
 
+    def folded(self):
+        """The lines shown, as text: a folded one ends with ``… N lines``."""
+        return [self.paras[i] + (f"  … {k} line{'s' if k > 1 else ''}" if k else "") for i, k in self.shown()]
+
     def lines(self, cols):
-        if self._wrapped[:2] != (cols, self.fold):
-            out = []
-            for para in self.folded():
+        """The rows shown, wrapped to *cols*; `_rows_` says which line each is of."""
+        key = (cols, frozenset(self.collapsed))
+        if self._wrapped[:2] != key:
+            if self._wrapped[0] is not None:
+                self.clear_selection()  # its rows and columns are of the old layout
+            out, meta = [], []
+            for i, hidden in self.shown():
+                para = self.paras[i]
                 # Continuation lines hang under the value of a "column  value"
                 # row, or under the indentation of a yaml line. The value is
                 # wrapped in the width beside its column, so that a long
@@ -402,46 +449,100 @@ class TextViewer:
                 head = m[0][: cols // 2]
                 body = para[len(m[0]) :]
                 wrapped = textwrap.wrap(body, cols - len(head), replace_whitespace=False, drop_whitespace=False, break_on_hyphens=False) or [""]
-                out += [(head if i == 0 else " " * len(head)) + w for i, w in enumerate(wrapped)]
-            self._wrapped = (cols, self.fold, out)
+                for k, w in enumerate(wrapped):
+                    out.append((head if k == 0 else " " * len(head)) + w)
+                    # (line, first row of it, lines its fold hides -- on its last row)
+                    meta.append((i, k == 0, hidden if k == len(wrapped) - 1 else 0))
+            self._wrapped = (cols, frozenset(self.collapsed), out, meta)
         return self._wrapped[2]
 
     def scroll(self, n):
         self.top = max(0, self.top + n)
 
+    # -- selection ------------------------------------------------------------
+
+    def clear_selection(self):
+        self.anchor = self.head = None  # (row, column) in the rows shown
+        self.selecting = False
+
+    def selection(self):
+        """The selected span, ``((row, col), (row, col))`` start first; None when nothing is selected."""
+        if self.anchor is None or self.head is None or self.anchor == self.head:
+            return None
+        return tuple(sorted((self.anchor, self.head)))
+
+    def selected_text(self):
+        """The text selected, as shown -- folded and wrapped -- or None."""
+        span = self.selection()
+        if span is None:
+            return None
+        (r0, c0), (r1, c1) = span
+        lines = self._wrapped[2]
+        if r0 == r1:
+            return lines[r0][c0:c1]
+        return "\n".join([lines[r0][c0:]] + lines[r0 + 1 : r1] + [lines[r1][:c1]])
+
+    def copy(self, now=None):
+        """Put the selection -- or, with none, the whole text -- on the clipboard, and say so."""
+        text = self.selected_text()
+        what = f"copied {len(text):,} characters" if text is not None else f"copied all {len(self.text):,} characters"
+        if text is None:
+            text = self.text
+        self.note = (what if _copy_(text) else "could not copy: no clipboard", now if now is not None else time.monotonic())
+
+    # -- events and drawing ---------------------------------------------------
+
     def handle(self, ev):
         """Returns "close" or None."""
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.close.collidepoint(ev.pos):
             return "close"
-        if any(m.handle(ev) for m in self.menus):
+        if self.fold_menu.handle(ev) or any(m.handle(ev) for m in self.menus):
             return None
+        mods = pygame.key.get_mods() & (pygame.KMOD_META | pygame.KMOD_CTRL)
         if ev.type == pygame.MOUSEWHEEL:
             dy = getattr(ev, "precise_y", ev.y)
             self.scroll(-round(3 * dy) or (-1 if dy > 0 else 1))
+        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self._in_gutter_(ev.pos):
+            line = self._fold_at_(ev.pos)
+            if line is not None:
+                self.toggle(line)
+        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self._in_body_(ev.pos):
+            self.anchor = self.head = self._at_(ev.pos)
+            self.selecting = True
+        elif ev.type == pygame.MOUSEMOTION and self.selecting:
+            self.head = self._at_(ev.pos, scroll=True)
+        elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1 and self.selecting:
+            self.selecting = False
+            if self.anchor == self.head:
+                self.clear_selection()  # a click, not a drag
         elif ev.type == pygame.KEYDOWN:
             page = max(1, self.rect.height // 18 - 4)
             step = {pygame.K_UP: -1, pygame.K_DOWN: 1, pygame.K_PAGEUP: -page, pygame.K_PAGEDOWN: page, pygame.K_SPACE: page}
             if ev.key == pygame.K_ESCAPE:
+                if self.selection() is not None:
+                    self.clear_selection()
+                    return None
                 return "close"
-            if ev.key in (pygame.K_LEFT, pygame.K_RIGHT) and self.menus:
+            if ev.key == pygame.K_c and mods:
+                self.copy()
+            elif ev.key == pygame.K_a and mods:
+                lines = self._wrapped[2]
+                if lines:
+                    self.anchor, self.head = (0, 0), (len(lines) - 1, len(lines[-1]))
+            elif ev.key in (pygame.K_LEFT, pygame.K_RIGHT) and self.menus:
                 self.menus[0].step(1 if ev.key == pygame.K_RIGHT else -1)
             elif ev.key in step:
                 self.scroll(step[ev.key])
             elif ev.key == pygame.K_HOME:
                 self.top = 0
-            elif pygame.K_0 <= ev.key <= pygame.K_9 and not pygame.key.get_mods() & (pygame.KMOD_META | pygame.KMOD_CTRL):
-                self.fold = (ev.key - pygame.K_0) or None
-                self.top = 0
-            elif ev.key == pygame.K_c and pygame.key.get_mods() & (pygame.KMOD_META | pygame.KMOD_CTRL):
-                try:
-                    pygame.scrap.put_text(self.text)
-                except Exception:
-                    pass
+            elif pygame.K_0 <= ev.key <= pygame.K_9 and not mods:
+                self.set_fold((ev.key - pygame.K_0) or None)
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button in (1, 3) and not self.rect.collidepoint(ev.pos):
             return "close"
         return None
 
-    def draw(self, surf, font, mono):
+    def draw(self, surf, font, mono, numbers=False):
+        """Draw the window; with *numbers*, the text's lines are numbered in the gutter."""
         w, h = surf.get_size()
         self.rect = pygame.Rect(0, 0, int(w * 0.8) - 2 * self.inset, int(h * 0.82) - 2 * self.inset)
         self.rect.center = (w // 2, (h - 24) // 2)
@@ -462,12 +563,15 @@ class TextViewer:
         for a, b in ((c.topleft, c.bottomright), (c.topright, c.bottomleft)):
             pygame.draw.line(surf, EDGE if hot else LABEL, a, b, 2)
         # The header: the title -- the first menu, if any -- has the top row to
-        # itself, as wide as it needs up to the close button; the other menus
-        # and buttons sit in a row underneath.
+        # itself, as wide as it needs up to the fold menu by the close button;
+        # the other menus and buttons sit in a row underneath.
+        fold_x = self.close.x - 12 - (font.size(self.fold_menu.label)[0] + 22)
+        self.fold_menu.draw_button(surf, font, fold_x, y + pad, STATUS)
+        title_w = fold_x - 12 - (x + pad)
         row_h = font.get_linesize() + 10
         bottom = y + pad + font.get_linesize()
         if self.menus:
-            self.menus[0].draw_button(surf, font, x + pad, y + pad, EDGE, max_width=self.close.x - 8 - (x + pad))
+            self.menus[0].draw_button(surf, font, x + pad, y + pad, EDGE, max_width=title_w)
             rest = [m for m in self.menus[1:] if getattr(m, "visible", lambda: True)()]
             bx = x + pad
             for m in rest:
@@ -475,23 +579,117 @@ class TextViewer:
             if rest:
                 bottom += row_h
         else:
-            surf.blit(font.render(self.title, True, EDGE), (x + pad, y + pad))
+            surf.blit(font.render(_fit_(font, self.title, title_w), True, EDGE), (x + pad, y + pad))
         self.header_bottom = bottom + 4
 
-        lh = mono.get_linesize()
+        # The gutter: line numbers, if asked for, then the fold triangles.
+        lh, cw = mono.get_linesize(), mono.size("M")[0]
+        digits = len(str(len(self.paras))) if numbers else 0
+        gutter_x = x + pad
+        tri_x = gutter_x + (digits + 1) * cw if numbers else gutter_x
+        text_x = tri_x + 2 * cw
         body_top = bottom + 10
         rows = max(1, (y + rh - pad - lh - 6 - body_top) // lh)
-        lines = self.lines(max(20, (rw - 2 * pad) // mono.size("M")[0]))
+        lines = self.lines(max(20, (x + rw - pad - text_x) // cw))
+        meta = self._wrapped[3]
         self.top = min(self.top, max(0, len(lines) - rows))
-        for i, ln in enumerate(lines[self.top : self.top + rows]):
-            surf.blit(mono.render(ln, True, LABEL), (x + pad, body_top + i * lh))
+        self._body = (text_x, body_top, lh, cw, rows, gutter_x)
+        span = self.selection()
+        mouse = pygame.mouse.get_pos()
+        for k, ln in enumerate(lines[self.top : self.top + rows]):
+            r, ty = self.top + k, body_top + k * lh
+            i, first, hidden = meta[r]
+            if first and numbers:
+                surf.blit(mono.render(str(i + 1).rjust(digits), True, GRID if not hidden else STATUS), (gutter_x, ty))
+            if first and self.foldable(i):
+                cx, cy, t = tri_x + cw // 2, ty + lh // 2, max(3, cw // 2)
+                color = EDGE if pygame.Rect(tri_x - 2, ty, 2 * cw, lh).collidepoint(mouse) else STATUS
+                if i in self.collapsed:
+                    pygame.draw.polygon(surf, color, [(cx - t // 2, cy - t), (cx - t // 2, cy + t), (cx + t, cy)])  # ▸
+                else:
+                    pygame.draw.polygon(surf, color, [(cx - t, cy - t // 2), (cx + t, cy - t // 2), (cx, cy + t)])  # ▾
+            if span is not None and span[0][0] <= r <= span[1][0]:
+                c0 = span[0][1] if r == span[0][0] else 0
+                c1 = span[1][1] if r == span[1][0] else len(ln) + 1  # a line break selected shows as a cell
+                pygame.draw.rect(surf, (60, 74, 104), (text_x + c0 * cw, ty, max(cw // 2, (c1 - c0) * cw), lh))
+            surf.blit(mono.render(ln, True, LABEL), (text_x, ty))
+            if hidden:
+                surf.blit(mono.render(f"  … {hidden} line{'s' if hidden > 1 else ''}", True, STATUS), (text_x + len(ln) * cw, ty))
         where = f"lines {self.top + 1}–{min(len(lines), self.top + rows)} of {len(lines)}"
         cycle = "   Left / Right: previous / next" if self.menus else ""
-        folding = f"folded past level {self.fold} (0: unfold)" if self.fold else "1–9: fold"
-        hint = font.render(f"{where}   scroll / Up Down / PgUp PgDn: move{cycle}   {folding}   Cmd+C: copy   Esc: close", True, STATUS)
-        surf.blit(hint, (x + pad, y + rh - pad - lh + 2))
+        copy = "Cmd+C: copy selection" if span is not None else "drag: select   Cmd+A: all   Cmd+C: copy"
+        note = self.note[0] if self.note and time.monotonic() - self.note[1] < self.NOTE_S else None
+        hint = f"{where}   {note}" if note else f"{where}   {copy}{cycle}   Esc: close"
+        surf.blit(font.render(_fit_(font, hint, rw - 2 * pad), True, EDGE if note else STATUS), (x + pad, y + rh - pad - lh + 2))
         for m in self.menus:
             m.draw_list(surf, font)
+        self.fold_menu.draw_list(surf, font)
+
+    # 4. Helpers -------------------------------------------------------------
+
+    def _in_body_(self, pos):
+        if self._body is None:
+            return False
+        tx, top, lh, _, rows, _ = self._body
+        return self.rect.collidepoint(pos) and pos[0] >= tx - 4 and top <= pos[1] < top + rows * lh
+
+    def _in_gutter_(self, pos):
+        if self._body is None:
+            return False
+        tx, top, lh, _, rows, gx = self._body
+        return gx <= pos[0] < tx - 4 and top <= pos[1] < top + rows * lh
+
+    def _fold_at_(self, pos):
+        """The line whose fold triangle is in the gutter at *pos*, or None."""
+        _, top, lh, _, _, _ = self._body
+        r = self.top + (pos[1] - top) // lh
+        meta = self._wrapped[3]
+        if 0 <= r < len(meta):
+            i, first, _ = meta[r]
+            if first and self.foldable(i):
+                return i
+        return None
+
+    def _at_(self, pos, scroll=False):
+        """The (row, column) of the text at screen *pos*; past the top or bottom, with *scroll*, the text scrolls a row."""
+        tx, top, lh, cw, rows, _ = self._body
+        lines = self._wrapped[2]
+        if not lines:
+            return (0, 0)
+        if scroll and pos[1] < top:
+            self.scroll(-1)
+        elif scroll and pos[1] >= top + rows * lh:
+            self.top = min(self.top + 1, max(0, len(lines) - rows))
+        r = min(len(lines) - 1, max(0, self.top + (pos[1] - top) // lh))
+        c = min(len(lines[r]), max(0, round((pos[0] - tx) / cw)))
+        return (r, c)
+
+
+def _fit_(font, text, width):
+    """*text*, shortened with … until *font* renders it within *width*."""
+    if font.size(text)[0] <= width:
+        return text
+    while len(text) > 1 and font.size(text + "…")[0] > width:
+        text = text[:-1]
+    return text + "…"
+
+
+def _copy_(text) -> bool:
+    """Put *text* on the clipboard: SDL's, through pygame, else macOS's pbcopy. Whether it got there."""
+    try:
+        pygame.scrap.put_text(text)
+        return True
+    except Exception:
+        pass
+    if sys.platform == "darwin":
+        import subprocess
+
+        try:
+            subprocess.run(["pbcopy"], input=text, text=True, check=True, timeout=5)
+            return True
+        except Exception:
+            pass
+    return False
 
 
 def _grid_():
@@ -509,12 +707,17 @@ class Hyp:
     A specialization -- `dbxpipelines.HypDbxPipelines` -- changes where the
     corpus comes from (`__source__`, `__default_data__`,
     `__storage_options__`), what opening a point
-    does (`__open_point__`), and how a point is labeled (`__point_label__`,
-    `__point_name__`, `__point_datetime__`, `__point_tooltip__`). The hooks are the only methods
+    does (`__open_point__`), what clicking one does (`__click_point__`,
+    `__context_point__`), and how a point is labeled (`__point_label__`,
+    `__point_name__`, `__point_version__`, `__point_datetime__`,
+    `__point_tooltip__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
     """
 
     title = "hyp"
+
+    #: The controls, at the right of the status line.
+    HINT = "click: center · drag: move · scroll: zoom · right-click: open / add · Home or double-click outside: reset"
 
     #: Where corpora are kept unless --data says otherwise: one directory each.
     HOME = os.path.join(os.path.expanduser("~"), ".hyp")
@@ -535,6 +738,15 @@ class Hyp:
         """The corpus source the `Engine` syncs from, or None for the seed labels."""
         return None
 
+    def __click_point__(self, i, now):
+        """Left click on point *i*: slide it to the center."""
+        z = self.display(self.positions(now)[i], self.view.isometry(now))
+        self.view.center_on(complex(P.unzoom(np.array(z), self.view.k)), now)
+
+    def __context_point__(self, i, pos):
+        """Right click on point *i*, at screen *pos*: open it."""
+        self.__open_point__(i)
+
     def __open_point__(self, i):
         """Right click on point *i*: show its stored text."""
         self.viewers = [TextViewer(self.snap.summaries[i], self.snap.texts[i])]
@@ -547,6 +759,10 @@ class Hyp:
         """A name for point *i*, as text, drawn under its label before its datetime; or None: here, none."""
         return None
 
+    def __point_version__(self, i):
+        """A version of point *i*, as text, drawn under its label after its name, as ``v<version>``; or None: here, none."""
+        return None
+
     def __point_datetime__(self, i):
         """When point *i* is from, as text, or None: here, when it was added."""
         added = self.snap.points[i].get("added") if self.snap.points else None
@@ -556,6 +772,12 @@ class Hyp:
         """The tooltip of point *i*: its label, both lines, as the settings show them -- in full, where the label is cut short."""
         sub = self.sublabel(i, full=True)
         return f"{self.__point_label__(i)}\n{sub}" if sub else self.__point_label__(i)
+
+    def open_popup(self, items, on_select, pos, empty="none"):
+        """Open a menu of *items* on the disk at *pos* -- as a Dropdown takes them -- calling *on_select* with the one picked."""
+        self.popup = Dropdown("", items, on_select, empty=empty)
+        self.popup.button = pygame.Rect(pos[0], pos[1], 0, 0)
+        self.popup.open = True
 
     def push_viewer(self, viewer):
         """Open *viewer* over the ones open: inset so that they show around it, and below the header of the top one."""
@@ -601,8 +823,9 @@ class Hyp:
         self.dragging = False
         self.last = None
         self.labels = {}
-        self.settings = {"datetimes": True}
+        self.settings = {"datetimes": True, "line numbers": False}
         self.settings_menu = Dropdown("settings", self._settings_items_, self._toggle_setting_)
+        self.popup = None  # a menu opened on the disk, at the mouse: see open_popup
         self.grid = _grid_()
 
         pygame.init()
@@ -682,8 +905,14 @@ class Hyp:
     def handle(self, ev, now):
         if self.settings_menu.handle(ev):
             return
+        if self.popup is not None and ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEWHEEL, pygame.KEYDOWN):
+            # The menu's, whatever it is: a click picks an item or, elsewhere, only closes it.
+            self.popup.handle(ev)
+            if not self.popup.open:
+                self.popup = None
+            return
         if self.viewers:
-            if ev.type in (pygame.KEYDOWN, pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN) and self.viewers[-1].handle(ev) == "close":
+            if ev.type in (pygame.KEYDOWN, pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN, pygame.MOUSEMOTION, pygame.MOUSEBUTTONUP) and self.viewers[-1].handle(ev) == "close":
                 self.viewers.pop()
             return
         if self.box is not None and ev.type in (pygame.TEXTINPUT, pygame.KEYDOWN):
@@ -717,10 +946,11 @@ class Hyp:
             self.last = ev.pos
         elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1 and self.press is not None:
             if not self.dragging:
-                z = self.to_disk(self.press)
                 if self.hover is not None:
-                    z = self.display(self.positions(now)[self.hover], self.view.isometry(now))
-                self.view.center_on(complex(P.unzoom(np.array(z), self.view.k)), now)
+                    self.__click_point__(self.hover, now)
+                else:
+                    z = self.to_disk(self.press)
+                    self.view.center_on(complex(P.unzoom(np.array(z), self.view.k)), now)
             self.press = None
             self.dragging = False
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
@@ -728,7 +958,7 @@ class Hyp:
                 self.box.close()
                 self.box = None
             if self.hover is not None:
-                self.__open_point__(self.hover)
+                self.__context_point__(self.hover, ev.pos)
             else:
                 self.box = TextBox(ev.pos)
         elif ev.type == pygame.MOUSEWHEEL:
@@ -794,14 +1024,15 @@ class Hyp:
         return self.labels[key]
 
     def sublabel(self, i, full=False):
-        """The second line of point *i*'s label: its name and its datetime, each as the settings say; None for neither.
+        """The second line of point *i*'s label: its name, ``v<version>`` and datetime, each as the settings say; None for none.
 
-        A long name is cut short, so that the datetime stays readable, unless *full*.
+        A long name is cut short, so that the rest stays readable, unless *full*.
         """
         name = self.__point_name__(i) if self.settings.get("names") else None
         if name and len(name) > 30 and not full:
-            name = name[:29] + "…"  # so that a long one leaves the datetime readable
-        parts = [name, self.__point_datetime__(i) if self.settings.get("datetimes") else None]
+            name = name[:29] + "…"  # so that a long one leaves the rest readable
+        version = self.__point_version__(i) if self.settings.get("versions") else None
+        parts = [name, f"v{version}" if version else None, self.__point_datetime__(i) if self.settings.get("datetimes") else None]
         return " · ".join(p for p in parts if p) or None
 
     def _settings_items_(self):
@@ -833,7 +1064,7 @@ class Hyp:
             r2 = np.abs(z) ** 2
 
             mx, my = pygame.mouse.get_pos()
-            if self.box is None and not self.viewers:
+            if self.box is None and not self.viewers and self.popup is None:
                 d2 = (sx - mx) ** 2 + (sy - my) ** 2
                 i = int(np.argmin(d2))
                 if d2[i] <= HOVER_PX**2:
@@ -874,8 +1105,10 @@ class Hyp:
         w = surf.get_width()
         self.settings_menu.draw_button(surf, self.small, w - self.small.size("settings")[0] - 30, 10, STATUS)
         for viewer in self.viewers:
-            viewer.draw(surf, self.font, self.mono)
+            viewer.draw(surf, self.font, self.mono, numbers=self.settings.get("line numbers"))
         self.settings_menu.draw_list(surf, self.small)
+        if self.popup is not None:
+            self.popup.draw_list(surf, self.small)
         self.statusline(now)
         pygame.display.flip()
 
@@ -910,7 +1143,7 @@ class Hyp:
         n = len(self.snap.texts) if self.snap else 0
         msg = f"error: {self.error}" if self.error else self.status
         left = self.small.render(f"{n} texts · zoom {self.view.k:.2f} · {msg}", True, (240, 120, 110) if self.error else STATUS)
-        right = self.small.render("click: center · drag: move · scroll: zoom · right-click: open / add · Home or double-click outside: reset", True, STATUS)
+        right = self.small.render(self.HINT, True, STATUS)
         x = 10
         if self.busy():
             self.spinner((x + 8, h - 20 + left.get_height() // 2), now)

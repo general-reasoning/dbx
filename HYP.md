@@ -38,7 +38,7 @@ to -- and each row is a point:
 
 - embedded from the pipeline's fqcn (`anchor`), spec, and signature (or type)
 - labeled with the last component of its `tag`, and below it its `VAR.name`,
-  where its spec has one, and its datetime
+  where its spec has one, `v{version}`, where it has one, and its datetime
 - on right click, its row's columns and its side files' contents -- spec, dfn
   and kwargs as the dicts they hold, `topics` and `paths` one key per line --
   under a title -- the tag, `VAR.name` where its spec has one, and the
@@ -80,6 +80,8 @@ all.
 | Input | Effect |
 |---|---|
 | left click | slide the clicked point to the center along a geodesic; time ∝ distance |
+| left click on a pipeline (`--pipejournal`) | its window, as a right click opens a point otherwise |
+| right click on a pipeline (`--pipejournal`) | its constructed entrypoints, in a menu at the mouse: picking one opens that block's window directly |
 | left drag | move the plane rigidly (a hyperbolic translation); the grabbed point stays under the cursor |
 | scroll | hyperbolic zoom: a point at distance *d* is drawn at *k·d* |
 | right click on a point | its stored text |
@@ -87,9 +89,11 @@ all.
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space |
 | Home, or double click off the disk | back to the original view: the corpus center, zoom 1 |
 | (lower left) | a spinning wheel while data are being loaded or prepared |
-| settings (top right) | names (`--pipejournal`) and datetimes, each on and off: under labels, and datetimes in tooltips |
+| settings (top right) | names and versions (`--pipejournal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default) |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
-| in a text window, 1–9 | fold: lines nested deeper than that many levels collapse, each run to one `… N lines`; 0 unfolds. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |
+| in a text window: the triangle by a line | a line whose next line is indented deeper folds the deeper lines after it into `… N lines`, and unfolds them. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |
+| in a text window: *fold* (top right), or 1–9, 0 | fold every such line at that many levels of indentation or deeper; *unfold all*, or 0, unfolds them all |
+| in a text window: drag, Cmd+A, Cmd+C | select text, select all; copy the selection -- or, with none, all of it |
 
 ## Options
 

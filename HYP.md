@@ -97,8 +97,8 @@ all.
 | right click on a point | its stored text |
 | right click elsewhere | type a text; Enter embeds, summarizes, stores and places it |
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space |
-| Home, or double click off the disk | back to the original view: the corpus center, zoom 1 |
-| (lower left) | a spinning wheel while data are being loaded or prepared |
+| Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
+| (lower left) | a spinning wheel while data are being loaded or prepared; an error, in red, for 15 s or until the next read -- its full traceback in the terminal |
 | settings (top right) | names and versions (`--pipejournal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default) |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
 | in a text window: the triangle by a line | a line whose next line is indented deeper folds the deeper lines after it into `… N lines`, and unfolds them. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |

@@ -1,5 +1,6 @@
 """Hyperbolic UMAP: embeddings to Poincare disk positions."""
 
+import threading
 import warnings
 
 import numpy as np
@@ -42,7 +43,19 @@ def _align_(new, old):
     return best
 
 
+# One layout at a time: UMAP's numba kernels run parallel, and numba's default
+# threading layer aborts the process -- uncatchably -- when two threads launch
+# them at once, as a slice disk laid out during a reload would.
+_LOCK_ = threading.Lock()
+
+
 def compute(embeddings, previous=None, seed=0):
+    """Disk positions for embeddings, centered on their hyperbolic barycenter; one call at a time."""
+    with _LOCK_:
+        return _compute_(embeddings, previous, seed)
+
+
+def _compute_(embeddings, previous=None, seed=0):
     """Disk positions for embeddings, centered on their hyperbolic barycenter.
 
     previous, if given, are positions for the first len(previous) rows: they

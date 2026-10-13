@@ -388,3 +388,77 @@ def test_the_reload_button_reloads(app):
 
 
 from types import SimpleNamespace  # noqa: E402
+
+
+def test_a_failed_reads_traceback_goes_to_the_terminal(app, capsys):
+    def fail():
+        raise OSError("gone")
+
+    app.run_async(fail, lambda _: None)
+    settle(app, lambda: not app.busy())
+    err = capsys.readouterr().err
+    assert "Traceback (most recent call last)" in err and "in fail" in err and "OSError: gone" in err
+
+
+def test_a_failed_engine_jobs_traceback_goes_to_the_terminal(app, capsys):
+    def job(progress):
+        raise TypeError("'NoneType' object is not callable")
+
+    app.worker.submit(job)
+    settle(app, lambda: not app.busy())
+    assert app.error == "TypeError: 'NoneType' object is not callable"
+    assert "in job" in capsys.readouterr().err
+
+
+def test_an_error_clears_after_a_while_and_with_the_next_read(app):
+    from hyp import app as app_mod
+
+    app.run_async(lambda: 1 / 0, lambda _: None)
+    settle(app, lambda: not app.busy())
+    assert app.error
+    app.statusline(app.error_at + 1)
+    assert app.error, "still shown, a moment later"
+    app.statusline(app.error_at + app_mod.ERROR_S + 1)
+    assert app.error is None
+    app.error = "stale"
+    app.run_async(lambda: 1, lambda _: None)
+    assert app.error is None, "another read: the last one's error is no longer news"
+
+
+def test_a_double_click_off_a_slice_disk_resets_it(app):
+    import pygame
+
+    from hyp.app import DiskViewer
+
+    disk = DiskViewer("d")
+    app.push_viewer(disk)
+    app.draw(0)
+    inside_off_disk = (disk.rect.right - 20, disk.rect.bottom - 20)
+    assert disk.rect.collidepoint(inside_off_disk) and abs(disk.to_disk(inside_off_disk)) > 1
+    disk.view.k = 3.0
+    down = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=inside_off_disk)
+    assert disk.handle(down) is None
+    assert disk.view.k == 3.0, "one click is not a reset"
+    assert disk.handle(down) is None
+    assert disk.view.k == 1.0
+
+
+def test_layouts_run_one_at_a_time(monkeypatch):
+    """Numba's default threading layer aborts the process when two threads run UMAP at once."""
+    from hyp import layout
+
+    inside, most = [0], [0]
+
+    def compute(*a):
+        inside[0] += 1
+        most[0] = max(most[0], inside[0])
+        time.sleep(0.05)
+        inside[0] -= 1
+
+    monkeypatch.setattr(layout, "_compute_", compute)
+    threads = [threading.Thread(target=layout.compute, args=(None,)) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert most[0] == 1

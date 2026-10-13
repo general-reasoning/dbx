@@ -18,6 +18,7 @@ import sys
 import textwrap
 import threading
 import time
+import traceback
 
 import numpy as np
 import pygame
@@ -41,6 +42,8 @@ DRAG_PX = 4
 # Two left clicks off the disk this close, in time and place, reset the view.
 DOUBLE_CLICK_S = 0.4
 DOUBLE_CLICK_PX = 6
+# Seconds an error stays on the status line -- its traceback stays in the terminal.
+ERROR_S = 15
 # Dragging is clamped inside this radius: near the rim one pixel spans a huge
 # hyperbolic distance, and the plane would lurch.
 DRAG_RADIUS = 0.97
@@ -68,6 +71,22 @@ def ease(s):
     return 0.5 - 0.5 * math.cos(math.pi * s)
 
 
+def _double_click_(last, pos, now):
+    """``(whether, last')``: whether a click at *pos* is the second of a double click after *last* -- ``(pos, time)`` or None -- and what to keep for the next."""
+    if last is not None:
+        (x, y), t = last
+        if now - t <= DOUBLE_CLICK_S and (pos[0] - x) ** 2 + (pos[1] - y) ** 2 <= DOUBLE_CLICK_PX**2:
+            return True, None  # a third click starts another
+    return False, (pos, now)
+
+
+def _failed_(e) -> str:
+    """*e*, raised on a background thread: its traceback to the terminal, whole; a line for the status line, returned."""
+    traceback.print_exception(e, file=sys.stderr)
+    sys.stderr.flush()
+    return f"{type(e).__name__}: {e}"
+
+
 class Worker:
     """One background thread running engine jobs in order, reporting through a queue."""
 
@@ -90,7 +109,7 @@ class Worker:
             try:
                 fn(self.status)
             except Exception as e:  # shown in the status line; the UI keeps running
-                self.events.put(("error", f"{type(e).__name__}: {e}"))
+                self.events.put(("error", _failed_(e)))
             finally:
                 self.events.put(("finished", None))
 
@@ -705,7 +724,7 @@ class DiskViewer:
     """A window with a Poincaré disk of its own: points laid out from some data, colored by label.
 
     Navigated as the main disk is -- click to center, drag to move, scroll to
-    zoom, Home to go back -- and closed as a text window is. Until
+    zoom, Home or a double click off the disk to go back -- and closed as a text window is. Until
     :meth:`set_points` gives it points it shows *note*: what it is waiting on.
     Labels are colored by how many points have them, the most first; past
     `PALETTE`, the rest share one gray, as "other".
@@ -734,6 +753,7 @@ class DiskViewer:
         self.dragging = False
         self.last = None
         self.hover = None
+        self.last_off_disk = None  # (pos, time) of the last left click off the disk: half a double click
         self._frame = (0, 0, 1)
         self.grid = _grid_()
 
@@ -793,12 +813,15 @@ class DiskViewer:
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button in (1, 3) and not self.rect.collidepoint(ev.pos):
             return "close"
         if ev.type == pygame.KEYDOWN and ev.key == pygame.K_HOME:
-            self.view.k = 1.0
-            self.view.center_on(self.view.isometry(now)(0j), now)
+            self.reset_view(now)
         elif ev.type == pygame.MOUSEWHEEL:
             self.view.zoom_by(ZOOM_STEP ** getattr(ev, "precise_y", ev.y))
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and abs(self.to_disk(ev.pos)) < 1:
             self.press, self.dragging = ev.pos, False
+        elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            double, self.last_off_disk = _double_click_(self.last_off_disk, ev.pos, now)
+            if double:
+                self.reset_view(now)
         elif ev.type == pygame.MOUSEMOTION and self.press is not None:
             if not self.dragging:
                 dx, dy = ev.pos[0] - self.press[0], ev.pos[1] - self.press[1]
@@ -817,6 +840,11 @@ class DiskViewer:
                 self.view.center_on(complex(P.unzoom(np.array(z), self.view.k)), now)
             self.press, self.dragging = None, False
         return None
+
+    def reset_view(self, now):
+        """Back to the original view: zoom 1, the center sliding back to the middle."""
+        self.view.k = 1.0
+        self.view.center_on(self.view.isometry(now)(0j), now)
 
     def draw(self, surf, font, mono, numbers=False):
         now = time.monotonic()
@@ -889,7 +917,7 @@ class DiskViewer:
             surf.blit(font.render(text, True, LABEL), (lx + 16, ly))
             ly += font.get_linesize() + 2
         n = len(self.positions)
-        hint = f"{n:,} points   click: center · drag: move · scroll: zoom · Home: reset · Esc: close"
+        hint = f"{n:,} points   click: center · drag: move · scroll: zoom · double-click outside or Home: reset · Esc: close"
         surf.blit(font.render(_fit_(font, hint, rw - 2 * pad), True, STATUS), (x + pad, y + rh - pad - font.get_linesize() + 2))
         if self.hover is not None and self.tips:
             tip = font.render(_fit_(font, self.tips[self.hover], 500), True, TIP_FG)
@@ -1011,13 +1039,14 @@ class Hyp:
             try:
                 result = fn()
             except Exception as e:  # shown in the status line
-                self.worker.events.put(("error", f"{type(e).__name__}: {e}"))
+                self.worker.events.put(("error", _failed_(e)))
             else:
                 self.worker.events.put(("call", lambda: then(result)))
             finally:
                 self.worker.events.put(("read", None))
 
         self.reading += 1
+        self.error = None  # the last error was the last thing asked's: this is another
         threading.Thread(target=run, daemon=True).start()
 
     def __init__(self, engine, worker, args=None):
@@ -1029,6 +1058,7 @@ class Hyp:
         self.tween = None  # (from positions, to positions, start time)
         self.status = "starting"
         self.error = None
+        self.error_at = 0.0
         self.reading = 0  # run_async reads under way: with the worker's jobs, what the spinner shows
         self.box = None
         self.viewers = []  # open text windows, the last on top
@@ -1201,14 +1231,8 @@ class Hyp:
 
     def double_click_off_disk(self, pos, now):
         """Whether a left click at *pos*, off the disk, is the second of a double click there."""
-        last, self.last_off_disk = self.last_off_disk, (pos, now)
-        if last is None:
-            return False
-        (x, y), t = last
-        if now - t <= DOUBLE_CLICK_S and (pos[0] - x) ** 2 + (pos[1] - y) ** 2 <= DOUBLE_CLICK_PX**2:
-            self.last_off_disk = None  # a third click starts another
-            return True
-        return False
+        double, self.last_off_disk = _double_click_(self.last_off_disk, pos, now)
+        return double
 
     def drain(self, now):
         """Handle what the worker and async reads sent; whether there was any."""
@@ -1222,7 +1246,7 @@ class Hyp:
             if kind == "status":
                 self.status, self.error = payload, None
             elif kind == "error":
-                self.error = payload
+                self.error, self.error_at = payload, now
             elif kind == "snapshot":
                 self.on_snapshot(*payload, now)
             elif kind == "call":
@@ -1371,6 +1395,8 @@ class Hyp:
     def statusline(self, now):
         w, h = self.screen.get_size()
         n = len(self.snap.texts) if self.snap else 0
+        if self.error and now - self.error_at > ERROR_S:
+            self.error = None
         msg = f"error: {self.error}" if self.error else self.status
         left = self.small.render(f"{n} texts · zoom {self.view.k:.2f} · {msg}", True, (240, 120, 110) if self.error else STATUS)
         right = self.small.render(self.HINT, True, STATUS)

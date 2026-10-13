@@ -402,7 +402,8 @@ class MyClip(Datastack):
                 source = stack._worker_source_clip.block(self.idx)     # lazy
 
             block = stack.__block__(self.idx, device=self.device)
-            block.keyby = stack.keyby
+            if stack._keyby_given_():       # a stack at its KEYBY leaves each block its own
+                block.keyby = stack.keyby
             if build:
                 kwargs = {'source': source}
                 # Evaluator: shared (inline) or worker-local cache (mp).

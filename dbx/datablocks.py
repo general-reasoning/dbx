@@ -22,6 +22,7 @@ import collections
 import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import copy
+import copyreg
 from dataclasses import dataclass, field, fields, asdict, replace
 import datetime
 import functools
@@ -262,6 +263,31 @@ class TopicMarkerMeta(type):
         return f"{cls.__name__}({_render_columns_(columns)})"
 
     __str__ = __repr__
+
+    def __init_subclass__(meta, **kwargs):
+        super().__init_subclass__(**kwargs)
+        copyreg.pickle(meta, _reduce_marker_)
+
+
+def _reduce_marker_(marker):
+    """Pickle a topic marker: a declared one by its name, a parameterised one as the call that made it.
+
+    ``DATAFILE('tabs.json', 'a note')`` is a class made on the call, under the name ``DATAFILE``, which
+    is another class: pickled by name, it would be refused as "not the same object". Its rendering is
+    its identity and `literal_topics` reads it back, so that is what travels -- to a worker, say, inside
+    a specialization naming a narrower block's topics.
+    """
+    if any(marker.__dict__.get(k) for k in ('columns', 'filename', 'note')):
+        return _marker_from_rendering_, (repr(marker),)
+    return marker.__qualname__
+
+
+def _marker_from_rendering_(text: str):
+    """The marker *text* renders -- see `_reduce_marker_`."""
+    return literal_topics(f"{{'marker': {text}}}")['marker']
+
+
+copyreg.pickle(TopicMarkerMeta, _reduce_marker_)
 
 
 class TOPICMARKER(metaclass=TopicMarkerMeta):
@@ -1424,13 +1450,20 @@ class Datablock:
         UNSAFE_redirect_all_topics: bool = field(default=False, kw_only=True)
         #: Specific subset of topics to redirect from the matched build. If None,
         #: redirects all topics declared in `topics` (or all recorded topics if
-        #: `UNSAFE_redirect_all_topics` is True).
-        redirect_topics: tuple[str, ...] | list[str] | None = field(default=None, kw_only=True)
+        #: `UNSAFE_redirect_all_topics` is True). A mapping
+        #: ``{current_name: historical_name}`` redirects each topic to the one
+        #: the narrower block recorded under its old name -- a topic renamed, as
+        #: `redirect_vars` is for a VAR field; iterated, it is the current names.
+        redirect_topics: tuple[str, ...] | list[str] | dict | None = field(default=None, kw_only=True)
         #: Mapping from current VAR field names to historical ones,
         #: ``{current_name: historical_name}``.  Mirrors `redirect_topics`
         #: for vars: when a VAR field has been renamed, the specialization
         #: reconstructs the historical identity under the old key name so
-        #: the hash matches what was built before the rename.
+        #: the hash matches what was built before the rename.  A dotted
+        #: current name moves an entry out of a nested field: to the top level
+        #: under a plain historical name, or to where a dotted one says -- a
+        #: key renamed within its dict, ``{'collator.columns.stratifyby':
+        #: 'collator.columns.groupby'}``.
         redirect_vars: dict | None = field(default=None, kw_only=True)
         #: How this block's nested VAR blocks rendered then: ``{field: their
         #: Specialization}``, each one of THAT block's own -- never written by
@@ -1552,7 +1585,8 @@ class Datablock:
             if self.UNSAFE_redirect_all_topics:
                 d['UNSAFE_redirect_all_topics'] = self.UNSAFE_redirect_all_topics
             if self.redirect_topics is not None:
-                d['redirect_topics'] = list(self.redirect_topics)
+                d['redirect_topics'] = (dict(self.redirect_topics) if isinstance(self.redirect_topics, dict)
+                                        else list(self.redirect_topics))
             if self.redirect_vars is not None:
                 d['redirect_vars'] = dict(self.redirect_vars)
             if self.nested:
@@ -1632,7 +1666,9 @@ class Datablock:
                     None if self.anchor is SAME else self.anchor,
                     self.legacy,
                     self.UNSAFE_redirect_all_topics,
-                    tuple(self.redirect_topics) if self.redirect_topics is not None else None,
+                    (None if self.redirect_topics is None
+                     else tuple(sorted(self.redirect_topics.items())) if isinstance(self.redirect_topics, dict)
+                     else tuple(self.redirect_topics)),
                     tuple(sorted(self.redirect_vars.items())) if self.redirect_vars is not None else None,
                     tuple(sorted((k, v.key) for k, v in self.nested.items())) if self.nested else None,
                     # A subclass's field at SAME overrides nothing: that
@@ -1800,11 +1836,19 @@ class Datablock:
     # what the block IS, so they are noise in a citation and they dominate it.
     #
     # `tag` is the one that cannot be dropped silently. It is NOT part of the
-    # identity hash (subsignature() is built from _rootkwargs_ + spec), but
-    # keyby='tag_version_shorthash' puts it in the artifact PATH, so a citation
+    # identity hash (subsignature() is built from _rootkwargs_ + spec), but a
+    # tag-keyed layout (a Datatablet's KEYBY, or an explicit
+    # keyby='tag_version_shorthash') puts it in the artifact PATH, so a citation
     # without it re-evaluates to the same hash at a DIFFERENT key -- i.e. it
     # points at storage that does not hold the artifact you cited.
     CITE_KEEP_TAILKWARGS = ('tag',)
+
+    #: The keyby a block is given when its constructor is not: what its key,
+    #: and so its path, is made of. 'version_shorthash' leaves the tag out, so
+    #: a tag is a label and tagging a built block does not move it; for an
+    #: untagged block it is the key 'tag_version_shorthash' made. `Datatablet`
+    #: keeps 'tag_version_shorthash': a tablet's tag has always been in its path.
+    KEYBY = 'version_shorthash'
 
     Diff = collections.namedtuple('Diff', ['subsig', 'topics', 'version'])
 
@@ -1884,7 +1928,8 @@ class Datablock:
         # its journal entry records the capture open around its build.
         capture_output: bool = None,
         revision: str = None,
-        keyby: str = 'tag_version_shorthash',
+        # 'default' is the class's KEYBY. None is a keyby of its own: no key.
+        keyby: 'str | None' = 'default',
         uuid16: bool = False,
         # Shared by every block of one build tree, and generated when not given. A
         # block's own identity does not depend on it, so it stays out of the
@@ -2099,9 +2144,14 @@ class Datablock:
         self._revision_ = _unquote(state.get('revision'))
         if self._revision_ == 'None':
             self._revision_ = None
+        # A state with no keyby predates the class KEYBY, when every block was
+        # keyed 'tag_version_shorthash'; 'default' is what __init__ says when
+        # it was given none.
         self.keyby = _unquote(state.get('keyby', 'tag_version_shorthash'))
-        if self.keyby not in (None, 'hash', 'code', 'subhash', 'superhash', 'norm', 'signature', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
-            raise ValueError(f"keyby must be None, 'hash', 'code', 'signature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
+        if self.keyby == 'default':
+            self.keyby = type(self).KEYBY
+        if self.keyby not in (None, 'hash', 'code', 'subhash', 'superhash', 'norm', 'signature', 'subsignature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'version_shorthash', 'tag_version_hash', 'tag_version_shorthash', 'custom'):
+            raise ValueError(f"keyby must be None, 'hash', 'code', 'signature', 'tag', 'taghash', 'tag_hash', 'version_hash', 'version_shorthash', 'tag_version_hash', 'tag_version_shorthash', 'custom', got {self.keyby!r}")
         if self.keyby == 'tag' and self._tag_ is None:
             raise ValueError(
                 f"keyby='tag' requires an explicit tag= argument, but none was provided for {self.__class__.__name__}"
@@ -3111,6 +3161,30 @@ class Datablock:
         if not exclude_self:
             self.build(*args, deep=deep, **kwargs)
         return self
+
+    def try_specialize_tree(self) -> dict:
+        """Specialize every block of this one's tree whose specialization resolves -- and build none.
+
+        Bottom up, as `build_tree` builds: each block not valid is asked to `specialize`, which installs
+        what resolves -- a stack's blocks too -- and computes nothing. What is left not valid, or owing
+        topics, stays so, to be built deliberately rather than as a side effect of adopting the rest.
+
+        Returns ``{anchorkey: ('valid' | 'not-valid', owed topics)}`` for every block of the tree, each
+        once, in the order they were tried.
+        """
+        status = {}
+
+        def visit(block):
+            if block.anchorkey in status:
+                return
+            for _, child in block._iter_var_blocks_('TREE_SKIP_VALIDATION'):
+                visit(child)
+            if not block.valid():
+                block.specialize()
+            status[block.anchorkey] = ('valid' if block.valid() else 'not-valid', block.owedtopics())
+
+        visit(self)
+        return status
 
     def valid_var(self, *, reduce=False):
         if not self.validate_vars:
@@ -5081,6 +5155,11 @@ class Datablock:
                 key = f"version={self.version}/{self.hash[:8]}"
             else:
                 key = self.hash
+        elif self.keyby == 'version_shorthash':
+            if self.version is not None:
+                key = f"version={self.version}/{self.hash[:8]}"
+            else:
+                key = self.hash[:8]
         elif self.keyby == 'tag_version_hash' or self.keyby == 'tag_version_shorthash':
             parts = []
             if self._tag_ is not None:
@@ -5304,16 +5383,33 @@ class Datablock:
                 raise KeyError(f"{what}: {path!r} names no entry of this block's spec")
             return holder, rest[-1]
 
-        for path, historical in moves.items():
-            holder, leaf = holder_of(path)
-            out[historical] = holder.pop(leaf, None)
+        # Every entry out before any goes in: a key renamed within a dict -- roles swapped, say,
+        # partitionby to stratifyby as stratifyby goes to groupby -- reads what was there before.
+        taken = [(historical, holder.pop(leaf, None))
+                 for path, historical in moves.items() for holder, leaf in [holder_of(path)]]
+        for historical, value in taken:
+            if '.' not in historical:
+                out[historical] = value
+                continue
+            # A dotted historical name puts it back within a field: a key renamed where it is.
+            head, *rest = historical.split('.')
+            if out.get(head, ...) is None:
+                continue        # the field holds nothing -- a collator left None, say: nothing was renamed
+            if not isinstance(out.get(head), dict):
+                raise KeyError(f"{what}: {historical!r} names no dict field of this block's spec to put it in")
+            holder = out[head]
+            for part in rest[:-1]:
+                holder = holder.setdefault(part, {})
+            holder[rest[-1]] = value
         for path in deep_omit:
             holder, leaf = holder_of(path)
             if out[head_of(path)] is not None and leaf not in holder:
                 raise KeyError(f"{what}: pin {path!r} names no entry of this block's spec")
             holder.pop(leaf, None)
-        # A field holding no block had none of the entries now gathered in it.
-        for head in {head_of(p) for p in [*moves, *deep_omit]}:
+        # A field holding no block had none of the entries now gathered in it -- one an entry
+        # moved OUT of; a key renamed where it is says the field was there, as it is.
+        moved_out = [p for p, historical in moves.items() if '.' not in historical]
+        for head in {head_of(p) for p in [*moved_out, *deep_omit]}:
             if out.get(head, ...) is None:
                 del out[head]
 
@@ -6316,11 +6412,20 @@ class Datablock:
         that only overrides ``__block__`` never has to think about it.
         """
         kw = {'tree': self.tree}
-        if keyby:
-            keyby_val = getattr(self, 'keyby', None)
-            if keyby_val is not None:
-                kw['keyby'] = keyby_val
+        if keyby and self._keyby_given_():
+            kw['keyby'] = self.keyby
         return child.set(**kw)
+
+    def _keyby_given_(self) -> bool:
+        """Whether this block's keyby is one it was given, rather than its class's KEYBY.
+
+        What decides whether a stack hands its keyby to its blocks: a table at
+        its default leaves each tablet its own (tag-keyed) KEYBY, so a tablet's
+        path is the same built by the table and read back by ``tablet(i)``.
+        Judged by value, not by how the block was constructed, so a pickled
+        or re-quoted stack, which always spells its keyby, says the same.
+        """
+        return self.keyby != type(self).KEYBY
 
     @functools.cached_property
     def _rootkwargs_(self):
@@ -6950,7 +7055,10 @@ class Datablock:
                 wanted = list(self._toplevel_topics_(specialization.redirect_topics))
             else:
                 wanted = self._toplevel_topics_(self._specialization_topics_(specialization))
-            paths = {t: recorded[t] for t in wanted if t in recorded}
+            # A topic renamed since is recorded under its old name, and read under its new one.
+            renamed = (specialization.redirect_topics
+                       if isinstance(getattr(specialization, 'redirect_topics', None), dict) else {})
+            paths = {t: recorded[renamed.get(t, t)] for t in wanted if renamed.get(t, t) in recorded}
             if len(paths) < len(wanted):
                 missing = sorted(set(wanted) - set(paths))
                 self.log.verbose(
@@ -7001,7 +7109,7 @@ class Datablock:
         anchor = self._specialization_anchor_(specialization)
         version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
         j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
-                                  datalake=self.datalake, storage_options=self.storage_options, log=self.log)
+                                  keyby=self.keyby, datalake=self.datalake, storage_options=self.storage_options, log=self.log)
         if j is not None or not fallback:
             # *fallback* False -- `BY_HASH` -- takes "filed nowhere" for "never built".
             return j
@@ -7017,7 +7125,8 @@ class Datablock:
         version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
         try:
             j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
-                                      datalake=self.datalake, storage_options=self.storage_options, log=self.log)
+                                      keyby=self.keyby, datalake=self.datalake,
+                                      storage_options=self.storage_options, log=self.log)
         except FileNotFoundError:
             return False
         return j is not None and len(j) > 0
@@ -7688,7 +7797,8 @@ class Datastack(Datablock):
             # specializations against, rather than reading the journal itself.
             with forming_with_journal(journal), stack._block_specializations_in_force_():
                 block = stack.__block__(self.idx)
-                block.keyby = stack.keyby
+                if stack._keyby_given_():
+                    block.keyby = stack.keyby
                 if build:
                     block.build()
             del block

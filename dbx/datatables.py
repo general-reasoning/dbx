@@ -820,6 +820,11 @@ class _Database_(Datablock):
 class Datatablet(_Database_):
     """One tablet of a `Datatable`: a Datablock writing MDS slices."""
 
+    #: A tablet's tag is in its path, as it always was: thousands of built
+    #: tablets per table are keyed so, and a table's tablets are found where
+    #: they were built only if the table at its default does not re-key them.
+    KEYBY = 'tag_version_shorthash'
+
     @dataclass
     class VAR(Datablock.VAR):
         datapoints_per_row: int = 1

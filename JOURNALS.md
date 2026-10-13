@@ -386,8 +386,9 @@ dbx.pipejournal(loc=None, *, iloc=None, construct_only=False, datalake=None, **f
 
 A `Pipeline` is a Datablock tree defined flat. Its `__create__()` arranges
 the tree out of the pipeline's VAR and returns the root, its **entrypoint**.
-`p.create()`, `p.entrypoint` and `p.read('entrypoint')` create the tree
-afresh, and each writes a `create` entry to the `PipeJournal`.
+`p.create()`, `p.entrypoint` (or `p.entry`, for short) and
+`p.read('entrypoint')` create the tree afresh, and each writes a `create`
+entry to the `PipeJournal`.
 
 `PipeJournal` is a `DataJournal` whose entries are laid out exactly as a
 block's are, under `<datalake>/.pipelines` instead of the datalake itself:
@@ -418,8 +419,8 @@ dbx.pipejournal(construct_only=True)           # ... whose entrypoints were buil
 dbx.pipejournal(anchor='Train', iloc=0)['entrypaths']
 ```
 
-**Reading `entrypoint` or `entrypath` writes an entry.** Both create the
-tree. A pipeline instance rewrites its one entry file, so the entry's
+**Reading `entrypoint`, `entry` or `entrypath` writes an entry.** Each creates
+the tree. A pipeline instance rewrites its one entry file, so the entry's
 `datetime` moves to the time of the read, and the pipeline becomes the newest.
 
 ## `dbx.journal()`

@@ -128,7 +128,8 @@ Every Datablock maps to a deterministic directory tree:
 
 - **root** — storage root (local path or fsspec URL)
 - **anchor** — defaults to the fully-qualified class name
-- **key** — derived from the content hash (configurable via `keyby`)
+- **key** — derived from the content hash and VERSION (configurable via `keyby`); a block's
+  tag is a label and stays out of it, except a tablet's, which is keyed by its tag
 - **topic** — named output channel
 - **TOPICFILE** — the filename within the topic directory
 

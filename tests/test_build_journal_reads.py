@@ -287,13 +287,16 @@ class Narrow(Datablock):
             f.write('rows')
 
 
-def _built_narrow(tmp_path, tag, n):
-    Narrow(datalake=str(tmp_path), anchor='Grown', tag=tag, spec={'n': n}).build()
+def _built_narrow(tmp_path, tag, n, keyby='default'):
+    Narrow(datalake=str(tmp_path), anchor='Grown', tag=tag, spec={'n': n}, keyby=keyby).build()
 
 
-def test_a_block_on_its_own_reads_only_its_narrower_blocks_entries(tmp_path, monkeypatch):
+@pytest.mark.parametrize('narrow_keyby', ['default', 'tag_version_shorthash'])
+def test_a_block_on_its_own_reads_only_its_narrower_blocks_entries(tmp_path, monkeypatch, narrow_keyby):
+    """Found by directory whether the narrower block is filed beside the untagged or, as
+    every block was before 'version_shorthash', under its tag."""
     for n in range(5):                          # other blocks' entries, under the same anchor
-        _built_narrow(tmp_path, f't{n}', n)
+        _built_narrow(tmp_path, f't{n}', n, keyby=narrow_keyby)
     reads = _count_full_reads(monkeypatch)
     block = Grown(datalake=str(tmp_path), anchor='Grown', tag='t3', spec={'n': 3})
     row = block.find_specialization()
@@ -306,7 +309,7 @@ def test_a_block_on_its_own_reads_only_its_narrower_blocks_entries(tmp_path, mon
 
 def test_one_filed_under_another_tag_is_still_found(tmp_path, monkeypatch):
     """A specialization resolves to any build of the narrower hash, whatever its tag: then the whole journal is read."""
-    _built_narrow(tmp_path, 'elsewhere', 7)
+    _built_narrow(tmp_path, 'elsewhere', 7, keyby='tag_version_shorthash')
     reads = _count_full_reads(monkeypatch)
     block = Grown(datalake=str(tmp_path), anchor='Grown', tag='here', spec={'n': 7})
     assert block.find_specialization() is not None

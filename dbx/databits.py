@@ -32,6 +32,7 @@ import threading
 import time as time_module
 import tokenize
 import traceback as tb
+import weakref
 import types
 from typing import Union, Optional, Sequence, Callable
 import uuid
@@ -1150,7 +1151,12 @@ class _CallableExecutorBase_(_CarriesDataJournal_):
 
         Always returns a plain list regardless of *batch_size*.  Use
         :meth:`exec_callables_streaming` explicitly when you need a generator.
+
+        With *reuse_workers*, the workers started by the first call are reused:
+        every later call's callables go to them -- see `_exec_callables_reused_`.
         """
+        if getattr(self, 'reuse_workers', False) and len(callables) > 0:
+            return self._exec_callables_reused_(callables, *ctx_args, **ctx_kwargs)
         payloads = [None] * len(callables)
         if len(callables) > 0:
             result_queue = self._make_queue_()
@@ -1715,6 +1721,128 @@ class _CallableExecutorBase_(_CarriesDataJournal_):
     def _worker_label_(self, worker_idx) -> str:
         return f"worker {worker_idx}"
 
+    # -- Reused workers (reuse_workers=True) ------------------------------------
+
+    def close(self):
+        """Stop the workers reused between calls (*reuse_workers*), if any; harmless when there are none, or again."""
+        pool, self._pool_ = getattr(self, '_pool_', None), None
+        if pool is None:
+            return
+        pool['finalizer'].detach()
+        _stop_reused_workers_(pool['workers'], pool['work_queue'], pool['result_queue'])
+        self.log.verbose(f"{self.tag}: {len(pool['workers'])} reused worker(s) stopped")
+
+    def __getstate__(self):
+        # A worker's target is a bound method, so a spawned worker unpickles this
+        # executor: never with the pool -- live processes and queues -- it is in.
+        state = self.__dict__.copy()
+        state.pop('_pool_', None)
+        return state
+
+    def _reused_pool_(self) -> dict:
+        """The reused workers, started now if there are none -- or none alive, after a failure stopped them."""
+        pool = getattr(self, '_pool_', None)
+        if pool is not None and all(w.is_alive() for w in pool['workers']):
+            return pool
+        self.close()
+        work_queue, result_queue, abort_event = self._make_queue_(), self._make_queue_(), self._make_event_()
+        workers = [self._make_worker_(target=self._run_items_reused_,
+                                      args=(work_queue, idx, result_queue, abort_event), idx=idx)
+                   for idx in range(self._n_workers_)]
+        for w in workers:
+            w.start()
+        self._after_start_([], workers)
+        pool = dict(workers=workers, work_queue=work_queue, result_queue=result_queue, abort_event=abort_event,
+                    batch=0, finalizer=weakref.finalize(self, _stop_reused_workers_, workers, work_queue, result_queue))
+        self._pool_ = pool
+        self.log.verbose(f"{self.tag}: started {len(workers)} worker(s), reused by every call until close()")
+        return pool
+
+    def _exec_callables_reused_(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
+        """`_exec_callables_` on the reused workers: the same results, in input order, without starting any anew.
+
+        The callables are this call's batch, pulled by the workers one at a
+        time -- as with *work_stealing*; *batch_size* and *shuffle_callables*
+        have no part. A callable that raises stops the workers and raises here,
+        with what had arrived, as `_exec_callables_` does; the next call starts
+        new ones.
+        """
+        pool = self._reused_pool_()
+        pool['batch'] += 1
+        batch = pool['batch']
+        for i, c in enumerate(callables):
+            pool['work_queue'].put((batch, i, c, ctx_args, ctx_kwargs))
+        payloads, done = [None] * len(callables), 0
+        progress_bar = tqdm.tqdm(total=len(callables), desc=self._desc_(streaming=False))
+        try:
+            while done < len(callables):
+                msg = self._next_result_(pool['result_queue'], pool['workers'])
+                if msg[2] != batch:
+                    continue        # a result of an earlier call, which stopped short of it
+                if msg[0]:          # success: (True, worker_idx, batch, [(item_idx, payload), ...])
+                    for item_idx, payload in msg[3]:
+                        payloads[item_idx] = payload
+                        done += 1
+                    progress_bar.update(len(msg[3]))
+                else:               # failure: (False, worker_idx, batch, item_idx, (exc, tbstr))
+                    _, worker_idx, _, item_idx, (pexc, ptbstr) = msg
+                    self.log.info(f"Received exception from {self._worker_label_(worker_idx)}, callable {item_idx}. "
+                                  f"Stopping the reused workers.")
+                    self.log.info(f"Exception: {pexc}")
+                    self.log.info(f"Traceback:\n{ptbstr}")
+                    raise pexc
+        except BaseException as exc:
+            pool['abort_event'].set()
+            self.close()
+            raise _with_payloads_(exc, payloads)
+        finally:
+            progress_bar.close()
+        return payloads
+
+    def _run_items_reused_(self, work_queue, worker_idx, result_queue, abort_event):
+        """A reused worker: callables of any number of calls, one at a time, until a ``None``.
+
+        Each item is ``(batch, item_idx, callable, ctx_args, ctx_kwargs)``; the
+        context is evaluated once per batch, as `_run_items_` evaluates it once.
+        """
+        worker_label = self._worker_label_(worker_idx)
+        ctx_batch, ctx = None, None
+        while not abort_event.is_set():
+            try:
+                work = work_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            if work is None:
+                break
+            batch, item_idx, item, ctx_args, ctx_kwargs = work
+            try:
+                if batch != ctx_batch:
+                    ctx, ctx_batch = self._reused_ctx_(ctx_args, ctx_kwargs, worker_idx), batch
+                result = (True, worker_idx, batch, [(item_idx, self._call_reused_item_(item, ctx, worker_idx))])
+            except Exception as e:
+                self.log.info(f"ERROR executing callable {item_idx} on {worker_label}")
+                tbstr = '\n'.join(tb.format_tb(e.__traceback__))
+                result = (False, worker_idx, batch, item_idx, (e, tbstr))
+            finally:
+                self._after_item_(item)
+            try:
+                result_queue.put(result)
+            except Exception:
+                if result[0]:
+                    raise
+                safe_exc = RuntimeError(f"[unpicklable {type(result[4][0]).__name__}] {result[4][0]}")
+                result_queue.put((False, worker_idx, batch, item_idx, (safe_exc, result[4][1])))
+        self.log.debug(f"Reused worker {worker_label} stopping")
+
+    def _reused_ctx_(self, ctx_args, ctx_kwargs, worker_idx):
+        """The context a reused worker calls a batch's items with: ``(args, kwargs)``, evaluated in the worker."""
+        return self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
+
+    def _call_reused_item_(self, item, ctx, worker_idx):
+        """One callable of a reused worker's, called with its batch's context."""
+        args, kwargs = ctx
+        return item(*args, **kwargs)
+
     def _desc_(self, streaming: bool) -> str:
         """Helper to format the progress bar description."""
         label = self._worker_label_(0).split()[0].capitalize() # "Thread", "Process", etc.
@@ -1760,6 +1888,7 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
                  result_idle_timeout_sec: float = None,
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
+                 reuse_workers: bool = False,
                  devices: list | None = None,
                  log: 'Datalog' = _datalog_()):
         self.n_workers = n_workers
@@ -1769,6 +1898,7 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         self.result_idle_timeout_sec = result_idle_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
+        self.reuse_workers = reuse_workers
         self.devices = devices
         self.log = log
 
@@ -1790,6 +1920,30 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
 
     def _worker_label_(self, worker_idx) -> str:
         return f"thread {worker_idx}"
+
+
+def _stop_reused_workers_(workers, work_queue, result_queue, patience_sec: float = 60):
+    """Stop reused workers: a ``None`` each, their queue read until they exit -- see `_drain_until_workers_exit_` -- then joined.
+
+    Module-level, holding no executor, so that a `weakref.finalize` can call it
+    when an executor is collected, or at exit. A process still alive after
+    *patience_sec* is terminated: this is the backstop, not the protocol.
+    """
+    for _ in workers:
+        try:
+            work_queue.put(None)
+        except Exception:
+            pass
+    deadline = time_module.monotonic() + patience_sec
+    while any(w.is_alive() for w in workers) and time_module.monotonic() < deadline:
+        try:
+            result_queue.get(timeout=0.5)
+        except Exception:
+            pass
+    for w in workers:
+        if w.is_alive() and hasattr(w, 'terminate'):
+            w.terminate()
+        w.join(timeout=5)
 
 
 def _mp_worker_fn_(target, args):
@@ -1829,6 +1983,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
                  result_idle_timeout_sec: float = None,
                  shuffle_callables: bool = False,
                  work_stealing: bool = False,
+                 reuse_workers: bool = False,
                  devices: list | None = None,
                  log: 'Datalog' = _datalog_()):
         self.n_workers = n_workers
@@ -1838,6 +1993,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         self.result_idle_timeout_sec = result_idle_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
+        self.reuse_workers = reuse_workers
         self.devices = devices
         self.log = log
         # Use 'spawn' by default to avoid fork-safety issues with HTTP clients
@@ -1909,6 +2065,7 @@ class RayCallableExecutor(_CarriesDataJournal_):
                  batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
+                 reuse_workers: bool = False,
                  devices: list | None = None,
                  log: 'Datalog' = _datalog_()):
         if workers is not None:
@@ -1927,6 +2084,7 @@ class RayCallableExecutor(_CarriesDataJournal_):
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
+        self.reuse_workers = reuse_workers  # nothing to keep: close() is a no-op
         self.devices = devices
         self.log = log
 
@@ -2172,6 +2330,9 @@ class RayCallableExecutor(_CarriesDataJournal_):
                 self.log.debug(f"Done message received on the done_queue on worker {thread_idx}")
                 break
 
+    def close(self):
+        """Nothing to stop: this executor keeps no workers."""
+
 
 class InlineCallableExecutor:
     """Execute callables sequentially in the local process.
@@ -2184,6 +2345,7 @@ class InlineCallableExecutor:
     def __init__(self, *, n_workers: int = 1, batch_size: int = None, tag: str = "",
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
+                 reuse_workers: bool = False,
                  devices: list | None = None,
                  log: 'Datalog' = _datalog_()):
         self.n_workers = n_workers
@@ -2192,6 +2354,7 @@ class InlineCallableExecutor:
         self.worker_done_timeout_sec = worker_done_timeout_sec
         self.shuffle_callables = shuffle_callables
         self.work_stealing = work_stealing
+        self.reuse_workers = reuse_workers  # nothing to keep: close() is a no-op
         self.devices = devices
         self.log = log
 
@@ -2204,6 +2367,9 @@ class InlineCallableExecutor:
     def execute_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute callables and yield results in input order (same as exec_callables_streaming)."""
         return self.exec_callables_streaming(callables, *ctx_args, **ctx_kwargs)
+
+    def close(self):
+        """Nothing to stop: this executor keeps no workers."""
 
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         ctx_args, ctx_kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
@@ -2310,6 +2476,7 @@ class _TorchCallableExecutorMixin_:
                  batch_size: int = None,
                  worker_done_timeout_sec: int = 1000, shuffle_callables: bool = False,
                  work_stealing: bool = False,
+                 reuse_workers: bool = False,
                  tag: str = "", log: 'Datalog' = _datalog_()):
         if not _TORCH_AVAILABLE:
             raise ImportError(
@@ -2324,7 +2491,7 @@ class _TorchCallableExecutorMixin_:
         super().__init__(n_workers=n_workers, batch_size=batch_size, tag=tag,
                          worker_done_timeout_sec=worker_done_timeout_sec,
                          shuffle_callables=shuffle_callables,
-                         work_stealing=work_stealing, log=log)
+                         work_stealing=work_stealing, reuse_workers=reuse_workers, log=log)
         self.devices = devices
 
     # 4. Helpers -----------------------------------------------------------
@@ -2332,6 +2499,19 @@ class _TorchCallableExecutorMixin_:
     def _device_for_worker_(self, worker_idx: int) -> str:
         """Return the device for *worker_idx* (round-robin over ``self.devices``)."""
         return self.devices[worker_idx % len(self.devices)]
+
+    def _reused_ctx_(self, ctx_args, ctx_kwargs, worker_idx):
+        """The batch's context, evaluated and moved to this reused worker's device."""
+        args, kwargs = self._eval_ctx_args_kwargs_(ctx_args, ctx_kwargs)
+        return self._args_kwargs_to_device_(args, kwargs, self._device_for_worker_(worker_idx))
+
+    def _call_reused_item_(self, item, ctx, worker_idx):
+        """One callable, moved to this reused worker's device, called, and moved back -- as `_run_items_` does."""
+        args, kwargs = ctx
+        item = self._maybe_to_device_(item, self._device_for_worker_(worker_idx))
+        payload = item(*args, **kwargs)
+        self._maybe_to_device_(item, 'cpu')
+        return payload
 
     @staticmethod
     def _maybe_to_device_(item, device):

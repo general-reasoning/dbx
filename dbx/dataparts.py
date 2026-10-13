@@ -1646,14 +1646,25 @@ class DatatableCorePartition(DatatablePartition):
         return os.path.join(self.anchorkeypath, '.scratch', 'vectors', f'{idx}.npy')
 
     def _executor_(self, tag: str):
+        """The executor a stage runs on: while clustering, the one whose workers every stage reuses, retagged."""
+        tag = f"{tag} [{type(self).__name__}]"
+        reusing = self.__dict__.get('_reusing_')
+        if reusing is not None:
+            reusing.tag = tag
+            return reusing
         return callable_executor(getattr(self, 'parallelization', None) or 'inline',
-                                 n_workers=getattr(self, 'n_workers', 1) or 1, tag=f"{tag} [{type(self).__name__}]")
+                                 n_workers=getattr(self, 'n_workers', 1) or 1, tag=tag)
 
     def _cluster_and_deal_(self):
         """Scan, cluster, deal and measure: ``(layouts, centers, summary, coverage)``."""
         var, table = self.var, self.var.datatable
         if var.clustering == 'distributed':
             self.fs.makedirs(os.path.dirname(self._scratch_path_(0)), exist_ok=True)
+        # One set of workers for every stage -- the scan, each of up to max_iter passes, the
+        # assignment, the coverage -- rather than a set started anew for each: minutes apiece.
+        self.__dict__['_reusing_'] = callable_executor(
+            getattr(self, 'parallelization', None) or 'inline', n_workers=getattr(self, 'n_workers', 1) or 1,
+            tag=type(self).__name__, reuse_workers=True)
         try:
             scans = self._executor_(f"SCANNING {table.n_tablets} tablets").exec_callables(
                 [TabletCoreScanCallable(self, i) for i in range(table.n_tablets)])
@@ -1681,6 +1692,7 @@ class DatatableCorePartition(DatatablePartition):
                 self.log.info(f"{type(self).__name__}: MEASURING coverage from {var.coverage_sample} sampled rows")
             coverage = self._coverage_(scans, labels, layouts, centers) if var.coverage_sample else {}
         finally:
+            self.__dict__.pop('_reusing_').close()
             if var.clustering == 'distributed':
                 scratch = os.path.dirname(os.path.dirname(self._scratch_path_(0)))
                 if self.fs.exists(scratch):

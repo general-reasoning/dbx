@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A partition's parts build with its workers.** `part()` of a
+  `DatatablePartition` and of a `DatatableCorePartition` (a carbon one too)
+  gives the part the partition's `parallelization` and `n_workers`, so its
+  pieces, packed tablets or core tablets are built in parallel, as the partition
+  scanned. Each part is built by its own `build()`, one after another. Workers
+  are no identity: no hash moves.
 - **`DatatableCorePartition`'s `layout` is retired** for
   `DatatableCarbonCorePartition`, and refused when given. It stays in the VAR,
   always None, so that no core partition built moves its hash.

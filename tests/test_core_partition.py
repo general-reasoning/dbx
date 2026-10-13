@@ -397,3 +397,13 @@ def test_coverage_is_measured_in_the_workers_too_and_taken_by_a_carbon_copy(tmp_
     q = carbon(tmp_path, other, p)
     for key, value in q.read('coverage').items():
         np.testing.assert_array_equal(value, cov[key])
+
+
+def test_a_core_part_and_a_carbon_copy_s_build_with_their_partitions_workers(tmp_path):
+    tbl = points(tmp_path)
+    p = core(tmp_path, tbl, build=False, parallelization='multiprocessing', n_workers=2)
+    q = DatatableCarbonCorePartition(datalake=str(tmp_path / 'core'), parallelization='multithreading', n_workers=4,
+                                     spec=dict(datatable=tbl, template=p,
+                                               collator=Datacollator(spec=dict(columns={'carry': [X]}))))
+    assert (p.part(0).parallelization, p.part(0).n_workers) == ('multiprocessing', 2)
+    assert (q.part(0).parallelization, q.part(0).n_workers) == ('multithreading', 4)

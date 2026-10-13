@@ -137,3 +137,16 @@ def test_a_part_resolves_its_tablets_redirections_through_the_table(table, tmp_p
     assert got.index.tolist() == list(range(fold.n_tablets))
     assert got[0].paths == other.tablet(real).paths()
     assert fold.tablets_redirected(parallelization='inline')[0]
+
+
+def test_a_part_builds_with_its_partitions_workers(table, tmp_path):
+    """Each part is built by its own build(), one after another: each takes the workers the partition has."""
+    spec = dict(datatable=table, fractions=[0.5, 0.5], partition_slice=0)
+    partition = DatatablePartition(datalake=str(tmp_path / 'partition'), spec=spec,
+                                   parallelization='multiprocessing', n_workers=3)
+    part = partition.part(1)
+    assert (part.parallelization, part.n_workers) == ('multiprocessing', 3)
+    assert part.hash == DatatablePartition(datalake=str(tmp_path / 'partition'), spec=spec).part(1).hash, \
+        "workers are no identity"
+    inline = DatatablePartition(datalake=str(tmp_path / 'partition'), spec=spec).part(0)
+    assert (inline.parallelization, inline.n_workers) == (None, 1)

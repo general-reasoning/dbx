@@ -458,7 +458,8 @@ mirrored part are not written yet.
 
 A core partition (below) already does both halves of this for its own
 kind: it copies a feature table's upstream columns into its core tablets, flat,
-and a table laid out alike takes its layout without clustering anything.
+and a table laid out alike takes its layout without clustering anything, by a
+`DatatableCarbonCorePartition`.
 
 ## Core partitions: coresets
 
@@ -717,6 +718,38 @@ stratum's rows are in one part, so fit and eval share no patient. A core tablet
 holds rows of many slides, so the probe takes a slide's rows by an
 `aggregateby` column, with `aggregation='mean'`. Carry that column into the
 core tablets, as a `carry` role.
+
+## TODO: three choices, untangled
+
+The partition classes bundle three independent choices into pairs that need not
+go together, and each new combination so far has meant a new class:
+
+1. **Which rows go to which fold.** `DatatablePartition` deals whole tablets and
+   pieces of them; `DatatableCorePartition` clusters rows and deals the nearest;
+   `DatatableCarbonCorePartition` takes a template's choice. Each records it its
+   own way: tablet indices and piece and pack records (`tablets`), or
+   `(tablet, row, cluster)` per row (`layout`).
+2. **What a part is.** A view of the partitioned table's own tablets
+   (`DatatablePart`), or copies of the rows (`DatatableCorePart`, whose
+   `DatatableCoreTablet`s hold the carried columns and `source`). The view goes
+   with the deal and the copy with the clustering, but neither needs the other:
+   a coreset could be read as a view through `source`, and a dealt fold copied
+   out, for locality.
+3. **What happens to upstream data.** A view keeps it, through the tablets, so
+   it cannot cut a tablet that reads upstream -- three `isinstance(...,
+   DataslicesUpstream)` refusals in `dataparts.py`, in the scan, for packing and
+   in `DatatabletPiece`. A copy flattens it into local slices.
+
+The refactor: one index -- per fold, `(tablet, row)` of the partitioned table,
+in order, which a whole tablet, a piece, a pack and a core layout all reduce to
+-- made by interchangeable choosers (deal, cluster, template), and read by
+interchangeable parts (a view, a copy). A carbon partition is then the template
+chooser, of a plain partition as of a core one -- the downstream part described
+under "Upstream and downstream tables", with pieces selected by row, not by
+value -- and the core partition's clustering stops implying a copy. Identities
+are the catch: the index of a built partition is in its topics, and today's
+classes and their hashes must stay reachable, by specializations, or be rebuilt
+knowingly.
 
 ## Where the code is
 

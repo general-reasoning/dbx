@@ -5,6 +5,16 @@ to parts, and records which rows went where. A part is the table that reads that
 record: a view of the partitioned table's own tablets, pieces of them, and packed
 tablets -- or, for a core partition, core tablets of rows repacked by cluster. See
 DATAPARTITION.md.
+
+TODO(untangle): three independent choices are bundled into class pairs here --
+which rows go to which fold (a deal, a clustering, a template's), what a part is
+(a view of the table's tablets, or copies of the rows), and what happens to
+upstream data (kept through a view, so a tablet reading upstream cannot be cut;
+flattened by a copy). Refactor to one index per fold, ``(tablet, row)`` in
+order, made by interchangeable choosers and read by interchangeable parts: a
+plain carbon partition and row-indexed pieces then come for free, and clustering
+stops implying a copy. Built partitions' identities must stay reachable. See
+DATAPARTITION.md, "TODO: three choices, untangled".
 """
 
 from __future__ import annotations
@@ -412,17 +422,7 @@ class DatatablePartition(Datablock):
 
         A fold is an index into ``tablets``; its part is the block that reads it.
         """
-        return DatatablePart(
-            # As a table gives its tablets its url: a fold of a partition belongs
-            # where the partition does, not wherever DBX_ROOT happens to point
-            # in the process that asks for it.
-            datalake=self._datalake_,
-            storage_options=self.storage_options,
-            spec=dict(
-                partition=self,
-                fold=fold,
-            )
-        )
+        return DatatablePart(spec=dict(partition=self, fold=fold), **self._part_kwargs_)
 
     def fold(self, fold: int | str) -> DatatablePart:
         """The name `part` had first."""
@@ -443,6 +443,20 @@ class DatatablePartition(Datablock):
     def _partition_slice_name_(self) -> str:
         p_slice = self.var.partition_slice
         return self.var.datatable.slices()[p_slice] if isinstance(p_slice, int) else p_slice
+
+    @property
+    def _part_kwargs_(self) -> dict:
+        """What a part takes from its partition: where it is, and the workers it builds its tablets with.
+
+        Where: as a table gives its tablets its url, a fold of a partition belongs
+        where the partition does, not wherever DBX_ROOT happens to point in the
+        process that asks for it. The workers: each part is built by its own
+        build(), one after another, and builds its tablets -- pieces, packed
+        tablets, core tablets -- in parallel, as the partition scanned in parallel.
+        """
+        return dict(datalake=self._datalake_, storage_options=self.storage_options,
+                    parallelization=getattr(self, 'parallelization', None),
+                    n_workers=getattr(self, 'n_workers', 1) or 1)
 
     # 4. Helpers -----------------------------------------------------------
 
@@ -1591,8 +1605,7 @@ class DatatableCorePartition(DatatablePartition):
 
     def part(self, fold: int | str) -> DatatableCorePart:
         """Fold *fold* as a table of core tablets, a `DatatableCorePart`."""
-        return DatatableCorePart(datalake=self._datalake_, storage_options=self.storage_options,
-                                 spec=dict(partition=self, fold=fold))
+        return DatatableCorePart(spec=dict(partition=self, fold=fold), **self._part_kwargs_)
 
     def collator_pairs(self, role: str) -> tuple:
         """The collator's pairs playing *role*, as `Datacollator.pairs` gives them."""

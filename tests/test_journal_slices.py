@@ -50,3 +50,10 @@ def test_slices_read_back_right_after_topics_and_paths(tmp_path):
     columns = list(_feature_table(str(tmp_path), 'features').datajournal().columns)
     assert columns[columns.index('topics'):columns.index('topics') + 3] == ['topics', 'paths', 'slices']
 
+
+def test_a_note_reads_back_right_after_slices(tmp_path):
+    table = _feature_table(str(tmp_path), 'features')
+    table.note('what this table is for', event='note', inline=True)
+    columns = list(table.datajournal().columns)
+    assert columns[columns.index('topics'):columns.index('topics') + 4] == ['topics', 'paths', 'slices', 'note']
+

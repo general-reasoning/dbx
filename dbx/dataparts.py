@@ -1646,14 +1646,25 @@ class DatatableCorePartition(DatatablePartition):
         return os.path.join(self.anchorkeypath, '.scratch', 'vectors', f'{idx}.npy')
 
     def _executor_(self, tag: str):
+        """The executor a stage runs on: while clustering, the one whose workers every stage reuses, retagged."""
+        tag = f"{tag} [{type(self).__name__}]"
+        reusing = self.__dict__.get('_reusing_')
+        if reusing is not None:
+            reusing.tag = tag
+            return reusing
         return callable_executor(getattr(self, 'parallelization', None) or 'inline',
-                                 n_workers=getattr(self, 'n_workers', 1) or 1, tag=f"{tag} [{type(self).__name__}]")
+                                 n_workers=getattr(self, 'n_workers', 1) or 1, tag=tag)
 
     def _cluster_and_deal_(self):
         """Scan, cluster, deal and measure: ``(layouts, centers, summary, coverage)``."""
         var, table = self.var, self.var.datatable
         if var.clustering == 'distributed':
             self.fs.makedirs(os.path.dirname(self._scratch_path_(0)), exist_ok=True)
+        # One set of workers for every stage -- the scan, each of up to max_iter passes, the
+        # assignment, the coverage -- rather than a set started anew for each: minutes apiece.
+        self.__dict__['_reusing_'] = callable_executor(
+            getattr(self, 'parallelization', None) or 'inline', n_workers=getattr(self, 'n_workers', 1) or 1,
+            tag=type(self).__name__, reuse_workers=True)
         try:
             scans = self._executor_(f"SCANNING {table.n_tablets} tablets").exec_callables(
                 [TabletCoreScanCallable(self, i) for i in range(table.n_tablets)])
@@ -1668,12 +1679,20 @@ class DatatableCorePartition(DatatablePartition):
             if k < var.n_clusters:
                 self.log.warning(f"{type(self).__name__}: {n_valid} rows to cluster, fewer than n_clusters="
                                  f"{var.n_clusters}: clustering into {k}")
+            self.log.info(f"{type(self).__name__}: SCANNED {n_valid} rows of width {widths.pop() if widths else 0} "
+                          f"in {len(scans)} tablets; clustering them into {k} ({var.clustering})")
             centers, labels, dist, inertia = (self._cluster_master_(scans, k) if var.clustering == 'master'
                                               else self._cluster_distributed_(scans, k))
+            self.log.info(f"{type(self).__name__}: DEALING the rows of {k} clusters to folds of fractions "
+                          f"{list(var.fractions)}")
             layouts, summary = self._deal_rows_(scans, labels, dist)
+            self.log.info(f"{type(self).__name__}: DEALT {[len(fl) for fl in layouts]} rows to the folds")
             # Before the scratch goes: the distances are measured on the vectors it holds.
+            if var.coverage_sample:
+                self.log.info(f"{type(self).__name__}: MEASURING coverage from {var.coverage_sample} sampled rows")
             coverage = self._coverage_(scans, labels, layouts, centers) if var.coverage_sample else {}
         finally:
+            self.__dict__.pop('_reusing_').close()
             if var.clustering == 'distributed':
                 scratch = os.path.dirname(os.path.dirname(self._scratch_path_(0)))
                 if self.fs.exists(scratch):
@@ -1686,9 +1705,13 @@ class DatatableCorePartition(DatatablePartition):
         from sklearn.cluster import MiniBatchKMeans
         var = self.var
         X = np.concatenate([s['vectors'][s['valid']] for s in scans], axis=0)
+        self.log.info(f"{type(self).__name__}: CLUSTERING {X.shape[0]} x {X.shape[1]} on the master "
+                      f"(MiniBatchKMeans, k={k}, max_iter={var.max_iter})")
         km = MiniBatchKMeans(n_clusters=k, batch_size=var.batch_size, max_iter=var.max_iter, tol=var.tol,
                              n_init=3, random_state=var.seed).fit(X)
         centers = km.cluster_centers_.astype(np.float32)
+        self.log.info(f"{type(self).__name__}: CLUSTERED after {km.n_iter_} passes, inertia {km.inertia_:.6g}; "
+                      f"ASSIGNING rows")
         labels, dist = [], []
         for s in scans:
             lab, d = _nearest_(s['vectors'], centers)
@@ -1701,12 +1724,14 @@ class DatatableCorePartition(DatatablePartition):
         from sklearn.cluster import kmeans_plusplus
         var, n = self.var, len(scans)
         sample = np.concatenate([s['sample'] for s in scans], axis=0)
+        self.log.info(f"{type(self).__name__}: SEEDING {min(k, len(sample))} centers by k-means++ "
+                      f"from {len(sample)} sampled rows")
         centers, _ = kmeans_plusplus(sample.astype(np.float64), n_clusters=min(k, len(sample)),
                                      random_state=var.seed)
         centers = centers.astype(np.float32)
-        inertia = None
+        inertia, converged = None, False
         for it in range(var.max_iter):
-            steps = self._executor_(f"CLUSTERING pass {it + 1}").exec_callables(
+            steps = self._executor_(f"CLUSTERING pass {it + 1}/{var.max_iter}").exec_callables(
                 [TabletCoreStepCallable(self, i, centers) for i in range(n)])
             sums = sum(s['sums'] for s in steps)
             counts = sum(s['counts'] for s in steps)
@@ -1715,8 +1740,16 @@ class DatatableCorePartition(DatatablePartition):
             shift = float(np.sqrt(((moved - centers) ** 2).sum(axis=1)).max())
             scale = float(np.sqrt((centers ** 2).sum(axis=1)).mean()) or 1.0
             centers = moved
-            if shift <= var.tol * scale:
+            converged = shift <= var.tol * scale
+            self.log.info(f"{type(self).__name__}: CLUSTERING pass {it + 1}/{var.max_iter}: inertia {inertia:.6g}, "
+                          f"{int((counts == 0).sum())} empty clusters, the centers moved {shift / scale:.3g} of "
+                          f"their scale (tol {var.tol}){' -- converged' if converged else ''}")
+            if converged:
                 break
+        if not converged:
+            self.log.warning(f"{type(self).__name__}: k-means did not converge in max_iter={var.max_iter} passes; "
+                             f"taking the centers as they are")
+        self.log.info(f"{type(self).__name__}: ASSIGNING the rows to {len(centers)} centers")
         finals = self._executor_("ASSIGNING rows").exec_callables(
             [TabletCoreStepCallable(self, i, centers, final=True) for i in range(n)])
         return centers, [f['labels'] for f in finals], [f['dist'] for f in finals], inertia

@@ -1159,7 +1159,7 @@ class Datablock:
         'datetime', 'build:start:datetime', 'build:end:datetime',
         'version', 'dbx_version', 'revision',
         'datalake', 'anchor', 'keyby', 'key', 'anchorkeypath', 'tag',
-        'topics', 'paths',
+        'topics', 'paths', 'slices', 'note',
         'spec', 'dfn', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type',
         'gitrepo', 'entry_path', 'event',
     ]

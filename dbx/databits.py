@@ -2756,8 +2756,11 @@ def gitwrkreposetup(revision=None, *, gitrepo=None, reason: str = "", log=None):
     # the project underneath a dbx that cannot follow it, which is precisely the
     # split that produces a confidently wrong hash.
     pinned = os.environ.get('DBX_PINNED_REVISION')
-    if pinned and revision is not None:
-        if revision == pinned:
+    if pinned:
+        # Pinned: its code is the revision's, whatever its source repos hold --
+        # no work repo to make, and no dirty check to make before one, even
+        # when asked for no revision, as the import of dbx.datablocks asks.
+        if revision is None or revision == pinned:
             log.verbose(f"already pinned to {pinned}; nothing to check out {reason}")
         else:
             log.warning(
@@ -3432,7 +3435,7 @@ class SshRay:
     So that a block can be instantiated where its data are -- the datalake's
     host -- and interrogated from here::
 
-        cluster = dbx.SshRay.session('wheelbarrow', python='~/miniconda3/envs/autopath/bin/python')
+        cluster = dbx.SshRay.session('host', python='~/envs/project/bin/python')
         block = entry.trueinst(address=cluster.address, gitrepo='/home/me/dbx:/home/me/autopath')
         block.hash, block.read('classes')        # forwarded to the pinned worker there
 
@@ -3574,6 +3577,11 @@ class SshRay:
         )
         script = (
             f'd=$(mktemp -d) && t=/tmp/ray-dbx-{tag} && cd "$d" || exit 1\n'
+            # The head's own processes import dbx only to unpickle what they
+            # are sent, and with DBX_GIT_REPO set an import makes a work repo
+            # of the checkout -- refused while it has uncommitted changes. Its
+            # workers are told their repos by remote(), as trueinst() passes them.
+            f'unset DBX_GIT_REPO\n'
             f'setsid {ray_bin} start --head --block --port={gcs} --ray-client-server-port={client} '
             f'--dashboard-agent-listen-port={agent} --include-dashboard=false '
             f'--disable-usage-stats --temp-dir="$t" </dev/null &\n'
@@ -3588,13 +3596,28 @@ class SshRay:
                                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, bufsize=1)
         lines = queue.Queue()
-        threading.Thread(target=lambda: [lines.put(ln) for ln in self._head.stdout], daemon=True).start()
+        reader = threading.Thread(target=lambda: [lines.put(ln) for ln in self._head.stdout], daemon=True)
+        reader.start()
+
+        def said():
+            """What the head printed, all of it: read to the end once it has exited."""
+            reader.join(timeout=5)
+            while not lines.empty():
+                seen.append(lines.get_nowait())
+            return ''.join(seen[-40:]).strip() or '(nothing)'
+
         deadline, seen, started = time_module.monotonic() + timeout, [], False
         while not started:
             try:
-                line = lines.get(timeout=max(0.1, deadline - time_module.monotonic()))
+                line = lines.get(timeout=1.0)
             except queue.Empty:
-                raise TimeoutError(f"SshRay: no Ray head on {self.host} after {timeout}s:\n" + ''.join(seen[-40:]))
+                # A head that never comes up -- no such ray, say -- exits at once: said so, rather than waited out.
+                if self._head.poll() is not None:
+                    raise RuntimeError(f"SshRay: the Ray head on {self.host} exited, started with {ray_bin} -- the ray of "
+                                       f"python={self.python!r}, which must be a path on {self.host}:\n{said()}") from None
+                if time_module.monotonic() > deadline:
+                    raise TimeoutError(f"SshRay: no Ray head on {self.host} after {timeout}s:\n" + ''.join(seen[-40:])) from None
+                continue
             seen.append(line)
             if line.startswith(self._MARK_):
                 _, pid, *dirs = line.split()
@@ -3602,7 +3625,8 @@ class SshRay:
             elif 'Ray runtime started' in line:
                 started = True
             elif self._head.poll() is not None and lines.empty():
-                raise RuntimeError(f"SshRay: the Ray head on {self.host} exited:\n" + ''.join(seen[-40:]))
+                raise RuntimeError(f"SshRay: the Ray head on {self.host} exited, started with {ray_bin} -- the ray of "
+                                   f"python={self.python!r}, which must be a path on {self.host}:\n{said()}")
         with socket.socket() as sock:
             sock.bind(('localhost', 0))
             port = sock.getsockname()[1]
@@ -3789,6 +3813,11 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
         # Tells the worker's gitwrkreposetup that it is already where it needs to
         # be, and lets it refuse a conflicting revision instead of half-applying one.
         dbx_env['DBX_PINNED_REVISION'] = revision
+        # Not every process of the job is pinned: Ray's client server runs it
+        # with the cluster's own dbx, which -- before the guard above reached
+        # it -- checked the source repos for uncommitted changes, and refused.
+        # A pinned job's code is the revision's, so their state is not its.
+        dbx_env.setdefault('DBX_DIRTY_REPO_OK', '1')
 
         if use_shim:
             if pin_source is None:

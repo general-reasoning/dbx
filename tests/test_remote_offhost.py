@@ -26,7 +26,8 @@ def stub_ray(monkeypatch):
     ray.init = lambda **kw: captured.update(init=kw)
     ray.remote = lambda cls: types.SimpleNamespace(remote=lambda **kw: object())
     ray.actor = types.SimpleNamespace(ActorHandle=type('ActorHandle', (), {}))
-    ray.runtime_env = types.SimpleNamespace(RuntimeEnv=type('RuntimeEnv', (), {'known_fields': {'env_vars'}}))
+    ray.runtime_env = types.SimpleNamespace(RuntimeEnv=type('RuntimeEnv', (), {
+        'known_fields': {'env_vars', 'working_dir', 'worker_process_setup_hook'}}))
     monkeypatch.setitem(sys.modules, 'ray', ray)
     return captured
 
@@ -184,3 +185,52 @@ def test_the_metrics_agent_complaints_are_dropped_and_nothing_else(monkeypatch, 
            "(gcs_server) Failed to establish connection to the event+metrics exporter agent. Events and metrics will not be exported.\n")
     LogstreamClient.stdstream(object.__new__(LogstreamClient), -2, msg)
     assert capsys.readouterr().err == "(RemoteDBX pid=1) building the probe\n"
+
+
+@pytest.fixture
+def dirty_repo(tmp_path):
+    import git
+
+    repo = git.Repo.init(tmp_path / "repo")
+    (tmp_path / "repo" / "f.txt").write_text("committed")
+    repo.index.add(["f.txt"])
+    repo.index.commit("one")
+    (tmp_path / "repo" / "f.txt").write_text("not committed")
+    return str(tmp_path / "repo")
+
+
+@pytest.fixture
+def wants_a_work_repo(dirty_repo, monkeypatch):
+    """An interpreter told to make a work repo of *dirty_repo* -- DBX_USE_WORK_REPO=True -- and not yet having one."""
+    monkeypatch.setenv('DBX_USE_WORK_REPO', 'True')
+    monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
+    monkeypatch.setattr(databits_mod, 'DBX_USE_WORK_REPO', None)
+    monkeypatch.setattr(databits_mod, 'DBX_GIT_REPO', f"{dirty_repo}:{dirty_repo}")
+    return f"{dirty_repo}:{dirty_repo}"
+
+
+def test_a_pinned_interpreter_makes_no_work_repo_even_unasked(wants_a_work_repo, monkeypatch):
+    """As at the import of dbx.datablocks: no revision asked for, and a dirty source repo that is not its code."""
+    monkeypatch.setenv('DBX_PINNED_REVISION', 'dbxsha:projsha')
+    databits_mod.gitwrkreposetup(gitrepo=wants_a_work_repo, reason="test")
+    assert databits_mod.DBX_USE_WORK_REPO is None, "no work repo made"
+
+
+def test_an_unpinned_interpreter_still_refuses_a_dirty_repo(wants_a_work_repo, monkeypatch):
+    monkeypatch.delenv('DBX_PINNED_REVISION', raising=False)
+    with pytest.raises(ValueError, match='Dirty git repo'):
+        databits_mod.gitwrkreposetup(gitrepo=wants_a_work_repo, reason="test")
+
+
+def test_a_pinned_jobs_processes_do_not_check_their_sources(stub_ray, monkeypatch):
+    monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
+    databits_mod.remote(revision='a:b', pin_source='/repos/dbx /repos/proj', address='ray://localhost:1',
+                        gitrepo='/repos/dbx:/repos/proj')
+    env = stub_ray['init']['runtime_env']['env_vars']
+    assert env['DBX_PINNED_REVISION'] == 'a:b' and env['DBX_DIRTY_REPO_OK'] == '1'
+
+
+def test_an_unpinned_job_keeps_the_dirty_check(stub_ray, monkeypatch):
+    monkeypatch.delenv('DBX_DIRTY_REPO_OK', raising=False)
+    databits_mod.remote()
+    assert 'DBX_DIRTY_REPO_OK' not in stub_ray['init']['runtime_env']['env_vars']

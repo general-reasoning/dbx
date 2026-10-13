@@ -170,3 +170,17 @@ def test_shquote_survives_single_quotes():
     text = "echo 'it''s' \"$HOME\" && echo done"
     out = subprocess.run(['bash', '-c', f"printf %s {databits_mod._shquote_(text)}"], capture_output=True, text=True).stdout
     assert out == text
+
+
+def test_the_metrics_agent_complaints_are_dropped_and_nothing_else(monkeypatch, capsys):
+    pytest.importorskip('ray')
+    from ray.util.client.logsclient import LogstreamClient
+
+    monkeypatch.setattr(LogstreamClient, 'stdstream', LogstreamClient.stdstream)
+    dbx.SshRay._quiet_()
+    dbx.SshRay._quiet_()  # installed once, however often asked
+    msg = ("(RemoteDBX pid=1) [E core_worker_process.cc:842] Failed to establish connection to the metrics exporter agent. x\n"
+           "(RemoteDBX pid=1) building the probe\n"
+           "(gcs_server) Failed to establish connection to the event+metrics exporter agent. Events and metrics will not be exported.\n")
+    LogstreamClient.stdstream(object.__new__(LogstreamClient), -2, msg)
+    assert capsys.readouterr().err == "(RemoteDBX pid=1) building the probe\n"

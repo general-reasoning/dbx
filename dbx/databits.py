@@ -3443,9 +3443,10 @@ class SshRay:
     named like a package shadows it -- on ports picked here, with a
     ``--temp-dir`` of its own: so nothing of another Ray on the host is
     touched, and ``ray stop``, which stops every Ray of the user's there, is
-    never needed. The shell stops the head, and removes both directories,
-    when told to -- :meth:`stop` -- and when its connection drops, since it
-    has a terminal that goes with it.
+    never needed. A watchdog there stops the head, and removes both
+    directories, once the shell is gone: told to go by :meth:`stop`, hung up
+    on when its connection drops, or killed. Worker output shown here leaves
+    out `QUIET` lines.
 
     The client port is reached through ``ssh -L``, so the host's ports need
     not be open: `address` is ``ray://localhost:<port>``. :meth:`session`
@@ -3455,6 +3456,11 @@ class SshRay:
 
     #: Printed by the head's shell before it starts Ray: its pid and directories.
     _MARK_ = 'DBX-SSHRAY'
+
+    #: Lines of the head's that are dropped where its workers' output is shown:
+    #: the metrics exporter needs packages a minimal Ray does not have, and
+    #: every Ray process says so -- often -- while running perfectly well.
+    QUIET = (re.compile(r'Failed to establish connection to the (event\+)?metrics exporter agent'),)
 
     _SESSIONS_ = {}
     _SESSIONS_LOCK_ = threading.Lock()
@@ -3511,18 +3517,17 @@ class SshRay:
             except Exception:
                 pass
         if self._pid is not None:
-            # TERM to the head's shell, whose trap stops Ray and cleans up --
-            # and exits, which closes its connection: waited for, so that the
-            # cleanup is done before this returns.
-            subprocess.run(['ssh', '-o', 'BatchMode=yes', self.host, f'kill -TERM {self._pid}'],
-                           capture_output=True, timeout=60)
+            # The head's shell goes, and its watchdog stops Ray and removes
+            # the head's directories: waited for, so that it is done before
+            # this returns.
+            done = subprocess.run(
+                ['ssh', '-o', 'BatchMode=yes', self.host,
+                 f'kill -TERM {self._pid}; for i in $(seq 60); do [ -e {self._dirs[1]} ] || exit 0; sleep 1; done; exit 1'],
+                capture_output=True, timeout=90)
+            if done.returncode != 0:
+                self.log.warning(f"SshRay: the Ray head on {self.host} was not cleaned up in 60s; "
+                                 f"look for processes under {self._dirs[1]}")
             self._pid = None
-            if self._head is not None:
-                try:
-                    self._head.wait(timeout=60)
-                except subprocess.TimeoutExpired:
-                    self.log.warning(f"SshRay: the Ray head on {self.host} did not stop in 60s; "
-                                     f"look for processes under {self._dirs}")
         for proc in (self._tunnel, self._head):
             if proc is not None and proc.poll() is None:
                 proc.terminate()
@@ -3547,37 +3552,36 @@ class SshRay:
         gcs, client, agent = rng.sample(range(20000, 40000), 3)
         ray_bin = f"{self.python.rsplit('/', 1)[0]}/ray" if '/' in self.python else 'ray'
         tag = uuid.uuid4().hex[:8]
-        # A shell that owns the head: it starts Ray in the background, says
-        # where, and on HUP (the connection dropped), TERM (stop()) or Ray's
-        # own exit, cleans up. `ray start --block` cannot be relied on to: on
-        # TERM it stops some of what it started and keeps running itself. So
-        # every process naming the head's own session directory -- GCS,
-        # raylet, monitor, workers, and no other Ray's -- is killed, then
-        # `ray start`, then the directories go. Signals are ignored meanwhile,
-        # so that a dropped connection cannot cut the cleanup short. The temp
-        # dir is short: Ray's socket paths live under it, and a unix socket
-        # path may not be long.
+        # The head's shell starts Ray, and a WATCHDOG that cleans up after
+        # it: once the shell is gone -- told to go by stop(), hung up on when
+        # the connection dropped, or killed -- the watchdog stops Ray and
+        # removes its directories. Cleanup that lives in the shell itself can
+        # be cut short with it; the watchdog is in a session of its own, as
+        # Ray is, which the terminal's hangup does not reach. Ray is stopped
+        # by hand: `ray start --block`, told to stop, stops only some of what
+        # it started and goes on running, so every process naming the head's
+        # own session directory -- GCS, raylet, agents, workers, no other
+        # Ray's -- is killed, then `ray start` itself. The temp dir is short:
+        # Ray's socket paths live under it, and a unix socket path may not be
+        # long.
+        reaper = (
+            'while kill -0 "$0" 2>/dev/null; do sleep 2; done; '
+            'kill -TERM "$1" 2>/dev/null; '
+            'for i in 1 2 3 4 5; do kill -0 "$1" 2>/dev/null || break; sleep 1; done; '
+            'for p in $(ps -u "$(id -un)" -o pid=,args= | grep -F -- "$3/" | grep -v grep | awk "{print \\$1}"); do '
+            'kill -KILL "$p" 2>/dev/null; done; '
+            'kill -KILL "$1" 2>/dev/null; rm -rf "$2" "$3"'
+        )
         script = (
             f'd=$(mktemp -d) && t=/tmp/ray-dbx-{tag} && cd "$d" || exit 1\n'
-            f'{ray_bin} start --head --block --port={gcs} --ray-client-server-port={client} '
+            f'setsid {ray_bin} start --head --block --port={gcs} --ray-client-server-port={client} '
             f'--dashboard-agent-listen-port={agent} --include-dashboard=false '
-            f'--disable-usage-stats --temp-dir="$t" &\n'
+            f'--disable-usage-stats --temp-dir="$t" </dev/null &\n'
             f'child=$!\n'
-            f'cleanup() {{\n'
-            f'  trap "" HUP TERM INT\n'
-            f'  kill -TERM $child 2>/dev/null\n'
-            f'  for i in 1 2 3 4 5; do kill -0 $child 2>/dev/null || break; sleep 1; done\n'
-            f'  for p in $(ps -u "$(id -un)" -o pid=,args= | grep -F -- "$t/" | grep -v grep | awk \'{{print $1}}\'); do\n'
-            f'    [ "$p" != "$$" ] && kill -KILL "$p" 2>/dev/null\n'
-            f'  done\n'
-            f'  kill -KILL $child 2>/dev/null\n'
-            f'  rm -rf "$d" "$t"\n'
-            f'  exit 0\n'
-            f'}}\n'
-            f'trap cleanup HUP TERM INT\n'
+            f'setsid bash -c {_shquote_(reaper)} $$ $child "$d" "$t" </dev/null >/dev/null 2>&1 &\n'
             f'echo "{self._MARK_} $$ $d $t"\n'
+            f'trap "exit 0" HUP TERM INT\n'
             f'wait $child\n'
-            f'cleanup\n'
         )
         self.log.info(f"SshRay: starting a Ray head on {self.host} with {ray_bin}, client port {client}")
         self._head = subprocess.Popen(['ssh', '-tt', '-o', 'BatchMode=yes', self.host, f"bash -c {_shquote_(script)}"],
@@ -3615,7 +3619,27 @@ class SshRay:
                 raise TimeoutError(f"SshRay: the tunnel to {self.host}:{client} did not come up in {timeout}s")
             time_module.sleep(0.2)
         self._address = f'ray://localhost:{port}'
+        self._quiet_()
         self.log.info(f"SshRay: Ray head on {self.host} at {self._address}")
+
+    @classmethod
+    def _quiet_(cls):
+        """Drop `QUIET` lines from the worker output Ray's client prints here, through the hook it offers for that."""
+        try:
+            from ray.util.client.logsclient import LogstreamClient
+        except ImportError:
+            return
+        if getattr(LogstreamClient.stdstream, '_dbx_quiet_', False):
+            return
+        printed = LogstreamClient.stdstream
+
+        def stdstream(self, level, msg):
+            kept = ''.join(ln for ln in msg.splitlines(keepends=True) if not any(q.search(ln) for q in cls.QUIET))
+            if kept:
+                printed(self, level, kept)
+
+        stdstream._dbx_quiet_ = True
+        LogstreamClient.stdstream = stdstream
 
 
 def _shquote_(text: str) -> str:

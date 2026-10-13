@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **`pipejournal(construct_only=True, extra_construction_events=[...])`, and
+  `hyp --pipejournal --extra-construction-events ...` (`--ece`).** Events
+  that also make an entry block count as constructed, besides `build:end`,
+  `UNSAFE_redirect` and `note`. Each matches an event alone, or followed by `=`
+  or `:` and the rest, so `ckpt` takes a still that has checkpointed
+  (`ckpt=<tag>`) but not finished building.
 - **`hyp --docs [--dir DIR]`: a directory's markdowns and pdfs on the disk.**
   Local or any fsspec url; each document labeled by its name and modification
   time. A left click opens it in the center; a right click places it in a

@@ -234,3 +234,23 @@ def test_collect_construct_only_counts_a_noted_entrypoint(lake):
     noted.create()
     noted.entrypoint.note('checked by hand')
     assert list(PipeJournal.collect(construct_only=True)['hash']) == [noted.hash]
+
+
+def test_extra_construction_events_count_too(lake):
+    """A still that only checkpointed -- ``ckpt=<tag>``, never build:end -- counts with ``ckpt`` among the extra events."""
+    ckpted, other = Flat(spec={'n': 5}), Flat(spec={'n': 6})
+    for p in (ckpted, other):
+        p.create()
+    ckpted.entrypoint.write_journal_entry(event='ckpt=epoch=3-step=900.ckpt')
+    other.entrypoint.write_journal_entry(event='ckptless')
+    assert len(PipeJournal.collect(construct_only=True)) == 0
+    assert list(PipeJournal.collect(construct_only=True, extra_construction_events=['ckpt'])['hash']) == [ckpted.hash]
+    assert list(dbx.pipejournal(construct_only=True, extra_construction_events='ckpt')['hash']) == [ckpted.hash]
+
+
+@pytest.mark.parametrize('event, counts', [('ckpt', True), ('ckpt=last', True), ('ckpt:save', True),
+                                           ('ckptless', False), ('preckpt=1', False), ('build:start', False)])
+def test_an_extra_event_matches_itself_and_what_follows_it_after_an_equals_or_a_colon(event, counts):
+    import re
+
+    assert bool(re.fullmatch(PipeJournal._is_event_(['ckpt']), event)) is counts

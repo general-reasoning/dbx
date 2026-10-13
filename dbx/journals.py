@@ -3325,8 +3325,8 @@ class PipeJournal(DataJournal):
         return super().write(block, event, columns={'entrypath': entrypath}, **kwargs)
 
     @classmethod
-    def collect(cls, *, construct_only: bool = False, datalake=None, storage_options=None, log=None,
-                n_workers=None, **filters) -> DataJournalFrame:
+    def collect(cls, *, construct_only: bool = False, extra_construction_events=(), datalake=None,
+                storage_options=None, log=None, n_workers=None, **filters) -> DataJournalFrame:
         """Every pipeline in the journal, one row each, with every entrypath it was created to.
 
         The entries are read and *filters* applied as `DataJournal.read`
@@ -3341,7 +3341,10 @@ class PipeJournal(DataJournal):
 
         *construct_only* keeps only the entrypaths whose own journals -- the
         ``.journal`` under each -- hold an `ENTRYPOINT_EVENTS` entry, and
-        drops a pipeline left with none.
+        drops a pipeline left with none. *extra_construction_events* count as
+        well: each an event's name, matching it alone or followed by ``=``
+        or ``:`` and the rest, as dbx names events -- ``ckpt`` matches every
+        ``ckpt=<tag>`` a `Still` writes as it checkpoints.
 
         *datalake* defaults to ``DBX_DATALAKE``, ``DBX_ROOT``, ``DBX_URL``.
         Rows are numbered 0..N-1, newest first.
@@ -3369,7 +3372,8 @@ class PipeJournal(DataJournal):
             entrypaths.append(list(dict.fromkeys(group['entrypath'].dropna())))
         if construct_only:
             built = cls._constructed_entrypaths_({p for ps in entrypaths for p in ps}, datalake=datalake,
-                                                 storage_options=storage_options, n_workers=n_workers, log=log)
+                                                 storage_options=storage_options, n_workers=n_workers, log=log,
+                                                 extra_events=extra_construction_events)
             entrypaths = [[p for p in ps if p in built] for ps in entrypaths]
             rows, entrypaths = (zip(*[(r, ps) for r, ps in zip(rows, entrypaths) if ps])
                                 if any(entrypaths) else ([], []))
@@ -3383,6 +3387,12 @@ class PipeJournal(DataJournal):
     #: What names one pipeline, and so one row of `collect`.
     _PIPELINE_COLUMNS_ = ('datalake', 'anchor', 'hash', 'keyby', 'key', 'anchorkeypath', 'tag', 'version')
 
+    @staticmethod
+    def _is_event_(names):
+        """A pattern an event fully matches when it is one of *names*: alone, or followed by ``=`` or ``:`` and the rest; None for no names."""
+        names = [n for n in ([names] if isinstance(names, str) else names or ()) if n]
+        return rf"(?:{'|'.join(map(re.escape, names))})(?:[=:].*)?" if names else None
+
     @classmethod
     def _lake_(cls, block):
         """``(fs, storage_options, {datalake}/.pipelines/{anchorkey})``, in *block*'s own datalake."""
@@ -3390,8 +3400,8 @@ class PipeJournal(DataJournal):
                 fs_full_path(block.fs, os.path.join(block.root, cls.ANCHOR, block.anchorkey)))
 
     @classmethod
-    def _constructed_entrypaths_(cls, entrypaths, *, datalake, storage_options, n_workers, log) -> set:
-        """The *entrypaths* whose own journal holds an `ENTRYPOINT_EVENTS` entry.
+    def _constructed_entrypaths_(cls, entrypaths, *, datalake, storage_options, n_workers, log, extra_events=()) -> set:
+        """The *entrypaths* whose own journal holds an `ENTRYPOINT_EVENTS` entry, or one `_is_event_` of *extra_events*.
 
         An entrypath is recorded as the host that wrote it named it: without a
         protocol when the datalake is that host's own disk. Read from anywhere
@@ -3399,6 +3409,7 @@ class PipeJournal(DataJournal):
         filesystem, not this machine's, and is looked for there.
         """
         lake_fs, _ = fsspec.url_to_fs(datalake, **storage_options)
+        extra = cls._is_event_(extra_events)
 
         def constructed(entrypath):
             if '://' in entrypath:
@@ -3412,7 +3423,7 @@ class PipeJournal(DataJournal):
                 except Exception as e:
                     log.warning(f"Skipping unreadable journal file {file}: {e}")
                     continue
-                if events.isin(cls.ENTRYPOINT_EVENTS).any():
+                if events.isin(cls.ENTRYPOINT_EVENTS).any() or (extra and events.astype(str).str.fullmatch(extra).any()):
                     return True
             return False
 
@@ -3423,13 +3434,14 @@ class PipeJournal(DataJournal):
             return {p for p, yes in zip(entrypaths, ex.map(constructed, entrypaths)) if yes}
 
 
-def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, datalake=None, storage_options=None,
-                log=None, n_workers=8, url=None, **filter_kwargs):
+def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, extra_construction_events=(), datalake=None,
+                storage_options=None, log=None, n_workers=8, url=None, **filter_kwargs):
     """Read the pipeline journal: every `Pipeline` created, one row each, newest first, then filtered.
 
     `PipeJournal.collect`: a `DataJournalFrame` with an ``entrypaths`` column,
     every entrypath the pipeline was created to -- with *construct_only*,
-    only those built or redirected -- or the `DataJournalEntry` at *loc* /
+    only those built, redirected or noted, or with an event of
+    *extra_construction_events* (``'ckpt'``, say) -- or the `DataJournalEntry` at *loc* /
     *iloc*, both positions here, as the rows are numbered. Filters are
     patterns, as on a block journal -- see :func:`datajournal`. *datalake*
     (``url``, its old name) defaults to ``DBX_DATALAKE``, then ``DBX_ROOT``,
@@ -3437,7 +3449,8 @@ def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, datalake=N
     """
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-    frame = PipeJournal.collect(construct_only=construct_only, datalake=one_datalake(datalake, url, 'pipejournal'),
+    frame = PipeJournal.collect(construct_only=construct_only, extra_construction_events=extra_construction_events,
+                                datalake=one_datalake(datalake, url, 'pipejournal'),
                                 storage_options=storage_options, log=log, n_workers=n_workers, **filter_kwargs)
     if loc is not None:
         return frame.get(loc, dropna=True)

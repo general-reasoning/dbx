@@ -745,3 +745,26 @@ def test_an_entry_blocks_title_takes_its_pipelines_color(pipelines_app, monkeypa
     pipeline_color = lambda: (1, 2, 3)  # noqa: E731
     dbxpipelines.HypDbxPipelines._open_entrypoint_(app, {"datalake": "/lake"}, "/lake/pkg.Block/aa", pipeline_color)
     assert app.viewers[-1].title_color is pipeline_color
+
+
+def test_extra_construction_events_reach_the_pipejournal(monkeypatch):
+    import dbx
+    import pandas as pd
+
+    seen = {}
+    monkeypatch.setattr(dbx, "pipejournal", lambda **kw: seen.update(kw) or pd.DataFrame())
+    assert dbxpipelines.constructed_entrypaths(4, ("ckpt",)) == {}
+    assert seen["construct_only"] and seen["extra_construction_events"] == ("ckpt",)
+
+
+def test_ece_is_the_short_of_extra_construction_events_and_is_for_pipejournal(monkeypatch):
+    from hyp import app as app_mod
+
+    with pytest.raises(SystemExit):
+        app_mod.main(["--ece", "ckpt"])
+    parsed = {}
+    monkeypatch.setattr(app_mod, "Store", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("parsed")))
+    monkeypatch.setattr(dbxpipelines.HypDbxPipelines, "__default_data__", classmethod(lambda cls, args: parsed.update(vars(args)) or "/x"))
+    with pytest.raises(RuntimeError, match="parsed"):
+        app_mod.main(["--pipejournal", "--ece", "ckpt", "fit:end"])
+    assert parsed["extra_construction_events"] == ["ckpt", "fit:end"]

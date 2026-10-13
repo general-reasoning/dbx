@@ -155,6 +155,8 @@ hyp --data DIR               # the corpus directory, local or an fsspec url
                              # (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)
 hyp --reset                  # discard the corpus and start over
 hyp --pipejournal            # the pipelines of DBX_DATALAKE (HypDbxPipelines)
+hyp --pipejournal --ece ckpt # --extra-construction-events: events that also make an entry block count as
+                             # constructed, each alone or followed by = or : -- here, a still that checkpointed
 hyp --docs [--dir DIR]       # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
 hyp --n-workers N            # threads reading the datalake (default 16)
 hyp --remote-python PATH     # the python on the datalake's host whose Ray read's and hyp's trueinst() run in,

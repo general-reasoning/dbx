@@ -411,9 +411,9 @@ def journal_entries(n_workers=16):
     return df
 
 
-def constructed_entrypaths(n_workers=16):
-    """``{anchorkeypath: [entrypath]}``: each pipeline's entrypoints that were built or redirected."""
-    df = _dbx_().pipejournal(construct_only=True, n_workers=n_workers)
+def constructed_entrypaths(n_workers=16, extra_events=()):
+    """``{anchorkeypath: [entrypath]}``: each pipeline's entry blocks that were built, redirected or noted -- or have an event of *extra_events*."""
+    df = _dbx_().pipejournal(construct_only=True, extra_construction_events=extra_events, n_workers=n_workers)
     if not len(df):
         return {}
     return {str(r["anchorkeypath"]): [str(p) for p in r["entrypaths"]] for _, r in df.iterrows()}
@@ -901,13 +901,15 @@ class HypDbxPipelines(Hyp):
         # A pipeline's VAR.name and version, under its label before the datetime: listed first.
         self.settings = {"names": True, "versions": True, **self.settings}
         self.n_workers = getattr(args, "n_workers", 16)
+        # Events that make an entry block count as constructed, besides dbx's own: --extra-construction-events.
+        self.extra_events = tuple(getattr(args, "extra_construction_events", None) or ())
         self.remote_python = getattr(args, "remote_python", None) or REMOTE_PYTHON
         self.journal = None  # every pipeline journal entry, newest first; None until read
         self.constructed = None  # {anchorkeypath: [entrypath]}; None until read
         self.sessions = {}  # {session: [(anchorkeypath, last event)]}; None while read
         self.slice_info = {}  # {(entry_path, id): {slice: (rows, {column: kind})}}; None while read
         self.run_async(lambda: journal_entries(self.n_workers), lambda df: setattr(self, "journal", df))
-        self.run_async(lambda: constructed_entrypaths(self.n_workers), lambda d: setattr(self, "constructed", d))
+        self.run_async(lambda: constructed_entrypaths(self.n_workers, self.extra_events), lambda d: setattr(self, "constructed", d))
 
     def __reload__(self):
         """The journal, the constructed entry blocks and the session indexes, read again with the pipelines."""
@@ -915,7 +917,7 @@ class HypDbxPipelines(Hyp):
         self.sessions = {}
         self.slice_info = {}
         self.run_async(lambda: journal_entries(self.n_workers), lambda df: setattr(self, "journal", df))
-        self.run_async(lambda: constructed_entrypaths(self.n_workers), lambda d: setattr(self, "constructed", d))
+        self.run_async(lambda: constructed_entrypaths(self.n_workers, self.extra_events), lambda d: setattr(self, "constructed", d))
 
     def __point_label__(self, i):
         return self.snap.points[i].get("label") or self.snap.summaries[i]

@@ -1588,6 +1588,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="hyp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --pipejournal, {DBX_DATALAKE}/.hyp)")
     ap.add_argument("--pipejournal", action="store_true", help="the pipelines of dbx's datalake (DBX_DATALAKE), from dbx.pipejournal(), one point each")
+    ap.add_argument("--extra-construction-events", "--ece", nargs="+", default=[], metavar="EVENT",
+                    help="with --pipejournal: events that also make an entry block count as constructed -- each alone, or "
+                         "followed by = or : and the rest: `--ece ckpt` takes a block that has checkpointed (ckpt=<tag>)")
     ap.add_argument("--docs", action="store_true", help="the documents -- markdowns and pdfs -- under --dir, one point each")
     ap.add_argument("--dir", default=None, help="with --docs: the directory scanned, local or an fsspec url (default: the current one)")
     ap.add_argument("--remote-python", default=None, help="with --pipejournal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: $HYP_REMOTE_PYTHON, else the one each entry records its build ran in, else python3)")
@@ -1602,6 +1605,8 @@ def main(argv=None):
     cls = Hyp
     if args.pipejournal and args.docs:
         ap.error("--pipejournal and --docs are two corpora: one at a time")
+    if args.extra_construction_events and not args.pipejournal:
+        ap.error("--extra-construction-events is for --pipejournal's entry blocks")
     if args.dir is not None and not args.docs:
         ap.error("--dir is the directory --docs scans")
     if args.pipejournal:

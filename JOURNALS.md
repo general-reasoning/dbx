@@ -381,7 +381,7 @@ dbx.constructed(date='2026-09-28')      # everything constructed that day, all a
 ## `dbx.pipejournal()`
 
 ```python
-dbx.pipejournal(loc=None, *, iloc=None, construct_only=False, datalake=None, **filters)
+dbx.pipejournal(loc=None, *, iloc=None, construct_only=False, extra_construction_events=(), datalake=None, **filters)
 ```
 
 A `Pipeline` is a Datablock tree defined flat. Its `__create__()` arranges
@@ -411,11 +411,15 @@ positions.
 
 With `construct_only=True`, an entrypath is kept only if its own journal
 (the `.journal` under it) has a `build:end`, `UNSAFE_redirect` or `note` entry. A
-pipeline left with no entrypaths is dropped.
+pipeline left with no entrypaths is dropped. `extra_construction_events` adds
+events that count as well: each matches an event alone, or followed by `=` or
+`:` and the rest, so `'ckpt'` takes a still that has checkpointed
+(`ckpt=<tag>`) without finishing its build.
 
 ```python
 dbx.pipejournal()                              # every pipeline, every entrypath
 dbx.pipejournal(construct_only=True)           # ... whose entrypoints were built or redirected
+dbx.pipejournal(construct_only=True, extra_construction_events=['ckpt'])   # ... or checkpointed
 dbx.pipejournal(anchor='Train', iloc=0)['entrypaths']
 ```
 

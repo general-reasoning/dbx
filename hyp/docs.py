@@ -46,6 +46,68 @@ SLOTS = {
     "top half": (0, 0, 1, 0.5), "bottom half": (0, 0.5, 1, 0.5),
 }
 GAP = 6
+# The placement picker's icons, as the screen has them: quarters in its corners, halves at its edges, the center in its middle.
+PICKER = (("top left", "top half", "top right"),
+          ("left half", "center", "right half"),
+          ("bottom left", "bottom half", "bottom right"))
+
+
+class TilePicker:
+    """Where to place a document, as a grid of little windows -- each showing, filled, the part of the window it takes.
+
+    A popup as `Hyp.open_popup` opens one: *open* until a click picks an icon
+    or lands elsewhere, or Esc. The slot under the mouse is named beneath.
+    """
+
+    ICON = (36, 26)
+    PAD = 6
+
+    def __init__(self, on_select, pos):
+        self.on_select = on_select
+        self.open = True
+        iw, ih = self.ICON
+        self.rect = pygame.Rect(pos[0], pos[1], 3 * iw + 4 * self.PAD, 3 * ih + 4 * self.PAD + 18)
+        self.icons = {}  # slot -> its rect, as last drawn
+
+    def _icons_(self):
+        iw, ih = self.ICON
+        return {slot: pygame.Rect(self.rect.x + self.PAD + c * (iw + self.PAD), self.rect.y + self.PAD + r * (ih + self.PAD), iw, ih)
+                for r, row in enumerate(PICKER) for c, slot in enumerate(row)}
+
+    def slot_at(self, pos):
+        return next((slot for slot, r in self._icons_().items() if r.collidepoint(pos)), None)
+
+    def handle(self, ev):
+        if ev.type == pygame.MOUSEBUTTONDOWN:
+            slot = self.slot_at(ev.pos) if ev.button == 1 else None
+            self.open = False
+            if slot is not None:
+                self.on_select(slot)
+        elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+            self.open = False
+        return True
+
+    def draw_list(self, surf, font):
+        from .docview import BAR, DIM, EDGE, TEXT
+
+        self.rect.clamp_ip(surf.get_rect())
+        pygame.draw.rect(surf, (30, 35, 45), self.rect, border_radius=6)
+        pygame.draw.rect(surf, EDGE, self.rect, 1, border_radius=6)
+        hover = self.slot_at(pygame.mouse.get_pos())
+        for slot, r in self._icons_().items():
+            hot = slot == hover
+            pygame.draw.rect(surf, (52, 60, 76) if hot else (24, 28, 36), r, border_radius=3)
+            if slot == "center":
+                part = r.inflate(-8, -8)
+            else:
+                fx, fy, fw, fh = SLOTS[slot]
+                inner = r.inflate(-4, -4)
+                part = pygame.Rect(inner.x + round(fx * inner.width), inner.y + round(fy * inner.height),
+                                   round(fw * inner.width), round(fh * inner.height)).inflate(-2, -2)
+            pygame.draw.rect(surf, EDGE if hot else TEXT, part, border_radius=2)
+            pygame.draw.rect(surf, EDGE if hot else BAR, r, 1, border_radius=3)
+        label = font.render(hover or "place it …", True, TEXT if hover else DIM)
+        surf.blit(label, label.get_rect(midbottom=(self.rect.centerx, self.rect.bottom - 4)))
 
 
 @dataclass(frozen=True)
@@ -261,9 +323,8 @@ class HypDocs(Hyp):
         self.place(i, "center")
 
     def __context_point__(self, i, pos):
-        """Right click on a document: where to place it, at the mouse."""
-        items = [(slot, slot) for slot in SLOTS] + [("center", "center")]
-        self.open_popup(items, lambda slot: self.place(i, slot), pos)
+        """Right click on a document -- on the disk, or in the points menu: where to place it, as a `TilePicker` at the mouse."""
+        self.popup = TilePicker(lambda slot: self.place(i, slot), pos)
 
     def __point_datetime__(self, i):
         mtime = self.snap.points[i].get("mtime") if self.snap.points else None

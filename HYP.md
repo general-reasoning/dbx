@@ -107,9 +107,12 @@ directory>`: nothing is written to the directory scanned. A document removed
 from it stays on the disk, for now, until `--reset`.
 
 - **left click** opens a document in the center, filling the window;
-- **right click** places it instead: a quarter (top left, top right, bottom
-  left, bottom right), a half (left, right, top, bottom), or the center. A
-  window placed replaces the windows it would overlap.
+- **right click** places it instead, picked from a 3×3 grid of little
+  windows, each showing the part of the window it takes -- the quarters in
+  its corners, the halves at its edges, the center in its middle; the one
+  under the mouse is named beneath. A window placed replaces the windows it
+  would overlap. A right click on a document in the **points** menu offers
+  the same.
 
 A markdown is rendered -- headings, lists, quotes, code, tables, links -- and
 its ` ```mermaid ` diagrams are drawn by the mermaid CLI, `mmdc` (or the one
@@ -145,7 +148,7 @@ over the layers behind it. Opening a window brings its layer to the front.
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space |
 | Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
 | (lower left) | a spinning wheel while data are being loaded or prepared; an error, in red, for 15 s or until the next read -- its full traceback in the terminal |
-| points (top right) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center |
+| points (top right) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center; a right click on one does what a right click on its point does |
 | settings (top right) | names and versions (`--pipejournal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
 | in a text window: the triangle by a line | a line whose next line is indented deeper folds the deeper lines after it into `… N lines`, and unfolds them. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |

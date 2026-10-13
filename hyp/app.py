@@ -243,8 +243,10 @@ class Dropdown:
     ROWS = 16
 
     def __init__(self, label, items, on_select, empty="none", value=None, match=None, visible=lambda: True,
-                 enabled=lambda: True):
+                 enabled=lambda: True, on_context=None):
         self.label = label
+        # Right click on an item: ``on_context(value, pos)``; None, and a right click only closes the list.
+        self.on_context = on_context
         self.visible = visible
         self.enabled = enabled
         self.items = items
@@ -295,6 +297,14 @@ class Dropdown:
                 i = self.top + (ev.pos[1] - self.list.y - 4) // self.row_h
                 if 0 <= i < len(items):
                     self.select(items[i][1])
+            return True
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3 and self.open:
+            self.open = False
+            items = self.current() or []
+            if self.on_context is not None and self.list.collidepoint(ev.pos):
+                i = self.top + (ev.pos[1] - self.list.y - 4) // self.row_h
+                if 0 <= i < len(items) and items[i][1] is not None:
+                    self.on_context(items[i][1], ev.pos)
             return True
         if ev.type == pygame.MOUSEWHEEL and self.open:
             dy = getattr(ev, "precise_y", ev.y)
@@ -1144,7 +1154,8 @@ class Hyp:
         self.settings = {"datetimes": True, "line numbers": False, "title colors": True}
         self.settings_menu = Dropdown("settings", self._settings_items_, self._toggle_setting_)
         self.layers_menu = Dropdown("layers", self._layers_items_, self._arrange_)
-        self.points_menu = Dropdown("points", self._points_items_, self.go_to, empty="no points")
+        self.points_menu = Dropdown("points", self._points_items_, self.go_to, empty="no points",
+                                    on_context=lambda i, pos: self.__context_point__(i, pos))
         self._points_ = (None, None, [])  # (snapshot, settings, items): what the points menu last listed
         self.popup = None  # a menu opened on the disk, at the mouse: see open_popup
         self.reload_button = Button("reload", self.reload)

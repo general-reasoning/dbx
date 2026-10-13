@@ -236,12 +236,38 @@ def test_a_left_click_opens_a_document_in_the_center(app):
     assert app.center.rect == app.slot_rect("center")
 
 
-def test_a_right_click_offers_quarters_halves_and_the_center(app):
+def test_a_right_click_offers_quarters_halves_and_the_center_as_icons(app):
     app.__context_point__(2, (100, 100))
-    labels = [t for t, _ in app.popup.current()]
-    assert labels == [*docs.SLOTS, "center"]
-    app.popup.select("bottom left")
-    assert isinstance(app.tiles["bottom left"].doc, docview.PdfDoc)
+    picker = app.popup
+    assert isinstance(picker, docs.TilePicker)
+    assert {slot for row in docs.PICKER for slot in row} == {*docs.SLOTS, "center"}
+    app.draw(0)
+    icons = picker._icons_()
+    assert icons["top left"].x < icons["top half"].x < icons["top right"].x
+    assert icons["top left"].y < icons["left half"].y < icons["bottom left"].y
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=icons["bottom left"].center), 0.0)
+    assert app.popup is None and isinstance(app.tiles["bottom left"].doc, docview.PdfDoc)
+
+
+def test_a_click_off_the_icons_places_nothing(app):
+    app.__context_point__(0, (100, 100))
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(900, 900)), 0.0)
+    assert app.popup is None and not app.tiles and app.center is None
+
+
+def test_a_right_click_in_the_points_menu_offers_the_placements(app):
+    app.draw(0)
+    menu = app.points_menu
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=menu.button.center), 0.0)
+    app.draw(0)
+    items = menu.current()
+    k = [v for _, v in items].index(2)
+    row = (menu.list.x + 20, menu.list.y + 4 + k * menu.row_h + menu.row_h // 2)
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=row), 0.0)
+    assert not menu.open and isinstance(app.popup, docs.TilePicker)
+    app.draw(0)
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=app.popup._icons_()["center"].center), 0.0)
+    assert app.center is not None and app.center.title == app.snap.summaries[2]
 
 
 def test_a_placed_window_replaces_those_it_overlaps(app):

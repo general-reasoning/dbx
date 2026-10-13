@@ -210,6 +210,51 @@ def _is_blank_(v):
         return False
 
 
+class _Tagged_:
+    """A python object a yaml dump records -- ``!!python/object:...`` and kin -- as its tag and contents: never made."""
+
+    def __init__(self, name, value):
+        self.name, self.value = name, value
+
+    def __repr__(self):
+        return self.name if self.value is None else f"{self.name}({self.value!r})"
+
+
+def _inert_loader_():
+    """A yaml loader making only data of a dbx dump: tuples as tuples, any other python tag as a `_Tagged_` -- importing and running nothing.
+
+    The unsafe loader, which dbx reads its dumps back with, makes the objects
+    a dump names -- a block's dfn holds its upstream blocks, and making them
+    instantiates each, here, with whatever of their code this process has.
+    """
+    import yaml
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    def tagged(loader, suffix, node):
+        if suffix == "tuple":
+            return tuple(loader.construct_sequence(node, deep=True))
+        name = suffix.split(":", 1)[-1]
+        if isinstance(node, yaml.MappingNode):
+            return _Tagged_(name, loader.construct_mapping(node, deep=True))
+        if isinstance(node, yaml.SequenceNode):
+            return _Tagged_(name, loader.construct_sequence(node, deep=True))
+        value = loader.construct_scalar(node)
+        return _Tagged_(name, value or None)
+
+    Loader.add_multi_constructor("tag:yaml.org,2002:python/", tagged)
+    return Loader
+
+
+def read_dump(path):
+    """The yaml dump at *path* -- a spec, dfn or kwargs side file -- as data, with `_inert_loader_`."""
+    import yaml
+    from dbx.databits import read_str
+
+    return yaml.load(read_str(path), Loader=_inert_loader_())
+
+
 def _side_file_(column, path, url):
     """The side file *path* names, as ``(shown, compact)`` text; None where it cannot be read.
 
@@ -221,7 +266,7 @@ def _side_file_(column, path, url):
     import pprint
 
     import yaml
-    from dbx.databits import read_str, read_yaml
+    from dbx.databits import read_str
 
     if not isinstance(path, str) or not re.search(r"\.(txt|yaml|yml|json)$", path):
         return None
@@ -230,9 +275,9 @@ def _side_file_(column, path, url):
         shown = compact = None
         if column in DICT_FILES and path.endswith((".yaml", ".yml")):
             try:
-                # dbx's own reader, as it reads them back: the dumps hold
-                # python tuples, which only the unsafe loader makes.
-                data = read_yaml(path, safe=False)
+                # As data: the dumps hold python tuples, which the safe
+                # loader does not make, and blocks, which must not be made.
+                data = read_dump(path)
                 shown = "\n".join(dict_lines(repr(data)))
                 compact = pprint.pformat(data, width=100, sort_dicts=False)
             except yaml.YAMLError:
@@ -251,13 +296,12 @@ def _side_file_(column, path, url):
 def var_name(row):
     """The pipeline's ``VAR.name``, from the spec side file *row* names; None where it has none, or it cannot be read."""
     import yaml
-    from dbx.databits import read_yaml
 
     path = row.get("spec")
     if not isinstance(path, str) or not path.endswith((".yaml", ".yml")):
         return None
     try:
-        spec = read_yaml(rebase(path, row.get("entry_path", "")), safe=False)
+        spec = read_dump(rebase(path, row.get("entry_path", "")))
     except (FileNotFoundError, OSError, yaml.YAMLError):
         return None
     name = spec.get("name") if isinstance(spec, dict) else None

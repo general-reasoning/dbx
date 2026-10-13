@@ -1,6 +1,7 @@
 """HypDbxPipelines' corpus, from a fake datalake on local disk read by dbx itself."""
 
 import re
+import sys
 
 import numpy as np
 import pandas as pd
@@ -701,3 +702,22 @@ def test_a_key_of_a_dict_column_labels_the_points(monkeypatch):
     X, L, rows, errors = dbxpipelines.slice_sample(DICT_ROW, ("features", "final", ()), ("annotations", "annotations", ("cohort",)),
                                                    tablets=[1], workers=1, per_tablet=3)
     assert L == ["c1"] * 3
+
+
+def test_a_dumps_blocks_are_shown_not_made(tmp_path, monkeypatch):
+    """A dfn holds its upstream blocks: reading it for show must not instantiate them -- here, with whatever code this process has."""
+    monkeypatch.setitem(sys.modules, "nowhere_pkg", None)  # not importable: making it would fail
+    dump = tmp_path / "dfn.yaml"
+    dump.write_text(
+        "spec:\n"
+        "  columns: !!python/tuple [annotations, case_id]\n"
+        "  upstream: !!python/object:nowhere_pkg.Block\n"
+        "    spec: {fold: 1}\n"
+        "  fn: !!python/name:nowhere_pkg.fn ''\n"
+    )
+    data = dbxpipelines.read_dump(str(dump))
+    assert data["spec"]["columns"] == ("annotations", "case_id")
+    assert repr(data["spec"]["upstream"]) == "nowhere_pkg.Block({'spec': {'fold': 1}})"
+    assert repr(data["spec"]["fn"]) == "nowhere_pkg.fn"
+    shown, _ = dbxpipelines._side_file_("dfn", str(dump), "")
+    assert "nowhere_pkg.Block({" in shown and "'fold': 1" in shown

@@ -851,6 +851,15 @@ change form.
 
 ### Settled (2026-10-13)
 
+- **A pullback copies what its collator names, layer by layer, and no more**
+  (2026-10-14). Each layer of a table reading upstream copies the named columns
+  it owns; a layer naming none is passed over, the layer above taking the next
+  one down as its upstream. A pure pullback of the whole stack -- every layer
+  copied whole -- would be work a user could not escape: a coreset of the bipolar
+  codes would copy every tile and every deep feature. Further layers are pulled
+  back along the same maps when wanted, by `datamap.pullback(table, collator)`,
+  as autopath's `carbon_core_*` entrypoints do.
+
 - **A part is the table pulled back along its fold's map.** One `DatamapTable` per
   part; the part is a `MappedDatatable` (or `MappedFeaturetable`). It does not keep
   `DatatablePart`'s API (`tablet_indices`, `source_index()`, `dealt`): what a probe

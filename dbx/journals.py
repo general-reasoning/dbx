@@ -3112,8 +3112,11 @@ class DataJournal:
         ``dfn/``, ``kwargs/``, with parquet files of their own that are not
         entries -- are never entered.
 
-        *progress*, if given, is told ``progress(desc, n, None)`` after each
-        level, *n* the files found so far.
+        *progress*, if given, is told ``progress(desc, n, None)`` as each
+        directory is listed, *n* the files found so far: a level of an anchor
+        with thousands of blocks is thousands of round trips, and is not
+        passed in silence. An exception it raises cancels the directories not
+        yet begun, and is raised on.
         """
         root = fs._strip_protocol(anchordirpath).rstrip('/')
 
@@ -3126,20 +3129,25 @@ class DataJournal:
         files, level = [], [root]
         with ThreadPoolExecutor(max_workers=max(1, n_workers)) as ex:
             while level:
-                listings = list(ex.map(listing, level))
+                futures = [ex.submit(listing, d) for d in level]
                 level = []
-                for infos in listings:
-                    for info in infos:
-                        name = info['name'].rstrip('/')
-                        rel = name[len(root):].lstrip('/')
-                        if info['type'] == 'directory':
-                            if not DataJournal._NOT_JOURNAL_DIR_.match(rel):
-                                level.append(name)
-                        elif DataJournal._ENTRY_FILE_.match(rel):
-                            files.append(name)
+                try:
+                    for future in as_completed(futures):
+                        for info in future.result():
+                            name = info['name'].rstrip('/')
+                            rel = name[len(root):].lstrip('/')
+                            if info['type'] == 'directory':
+                                if not DataJournal._NOT_JOURNAL_DIR_.match(rel):
+                                    level.append(name)
+                            elif DataJournal._ENTRY_FILE_.match(rel):
+                                files.append(name)
+                        if progress is not None:
+                            progress(desc or 'Listing journal files', len(files), None)
+                except BaseException:
+                    for future in futures:
+                        future.cancel()
+                    raise
                 log.detailed(f"Listing journal files under {anchordirpath}: {len(files)} so far, {len(level)} directories next")
-                if progress is not None:
-                    progress(desc or 'Listing journal files', len(files), None)
         return sorted(files)
 
     #: The keybys that put a block's tag in its path.

@@ -335,7 +335,7 @@ frame = dbx.DataJournal.read_frame(files, event='build:end')
 `DataJournal.read`, `list`, `read_frame` and `dbx.pipejournal` all take a
 callable `progress=`, which they call as `progress(desc, done, total)`.
 While listing, `total` is None and `done` is the number of files found so
-far. While reading, `done` counts the files read out of `total`. If the
+far, reported after every directory is listed. While reading, `done` counts the files read out of `total`. If the
 callable raises an exception, the files not yet started are cancelled and
 the exception reaches the caller; that is how a user interrupts a read.
 

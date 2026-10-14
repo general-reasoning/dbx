@@ -107,3 +107,24 @@ def test_progress_raising_interrupts_the_read(tmp_path):
 
     with pytest.raises(_Stop_):
         DataJournal.read('Block', datalake=str(tmp_path), n_workers=1, storage_options={}, progress=progress)
+
+
+def test_the_listing_reports_each_directory_not_each_level(tmp_path):
+    fs = fsspec.filesystem('file')
+    for i in range(5):
+        _parquet_(fs, str(tmp_path / f'Block/k{i}/.journal/pkg.Block/journal/h{i}/e.parquet'))
+    told = []
+    DataJournal.list('Block', datalake=str(tmp_path), n_workers=2, storage_options={},
+                     progress=lambda desc, n, total: told.append(n))
+    # The root, its five k*, then each level below them five at a time: far more reports than levels.
+    assert len(told) > 20 and told[-1] == 5
+
+
+def test_progress_raising_interrupts_the_listing(tmp_path):
+    _lake_(fsspec.filesystem('file'), str(tmp_path / 'Block'))
+
+    def progress(desc, n, total):
+        raise _Stop_()
+
+    with pytest.raises(_Stop_):
+        DataJournal.list('Block', datalake=str(tmp_path), n_workers=1, storage_options={}, progress=progress)

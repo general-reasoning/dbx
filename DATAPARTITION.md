@@ -719,7 +719,7 @@ holds rows of many slides, so the probe takes a slide's rows by an
 `aggregateby` column, with `aggregation='mean'`. Carry that column into the
 core tablets, as a `carry` role.
 
-## TODO: three choices, untangled
+## TODO: three choices, untangled -- datamaps, and tables mapped along them
 
 The partition classes bundle three independent choices into pairs that need not
 go together, and each new combination so far has meant a new class:
@@ -730,26 +730,111 @@ go together, and each new combination so far has meant a new class:
    own way: tablet indices and piece and pack records (`tablets`), or
    `(tablet, row, cluster)` per row (`layout`).
 2. **What a part is.** A view of the partitioned table's own tablets
-   (`DatatablePart`), or copies of the rows (`DatatableCorePart`, whose
-   `DatatableCoreTablet`s hold the carried columns and `source`). The view goes
-   with the deal and the copy with the clustering, but neither needs the other:
-   a coreset could be read as a view through `source`, and a dealt fold copied
-   out, for locality.
+   (`DatatablePart`), or copies of the rows (`DatatableCorePart`). The view goes
+   with the deal and the copy with the clustering, but neither needs the other.
 3. **What happens to upstream data.** A view keeps it, through the tablets, so
    it cannot cut a tablet that reads upstream -- three `isinstance(...,
-   DataslicesUpstream)` refusals in `dataparts.py`, in the scan, for packing and
-   in `DatatabletPiece`. A copy flattens it into local slices.
+   DataslicesUpstream)` refusals in `dataparts.py`. A copy flattens it into
+   local slices, losing the layers.
 
-The refactor: one index -- per fold, `(tablet, row)` of the partitioned table,
-in order, which a whole tablet, a piece, a pack and a core layout all reduce to
--- made by interchangeable choosers (deal, cluster, template), and read by
-interchangeable parts (a view, a copy). A carbon partition is then the template
-chooser, of a plain partition as of a core one -- the downstream part described
-under "Upstream and downstream tables", with pieces selected by row, not by
-value -- and the core partition's clustering stops implying a copy. Identities
-are the catch: the index of a built partition is in its topics, and today's
-classes and their hashes must stay reachable, by specializations, or be rebuilt
-knowingly.
+### The design
+
+**A datamap is the layout, as a table.** Its rows say, for each tablet of a fold
+of the table being mapped, which rows of which source tablets it takes:
+
+- `DatamapTable(Datatable)`: the map of one fold. Its VAR is the deal block and
+  the fold (see Identities, below), and through the deal, the table being mapped.
+- `DatamapTablet(Datatablet)`: the map of one output tablet. Its VAR names its
+  `DatamapTable` and its index. A tablet naming its own table is circular for
+  `build_tree`, as `DatatableCoreTablet` naming its partition already is: the
+  field is in `TREE_SKIP_BUILDING` and `TREE_SKIP_VALIDATION`. Its record is
+  written by the deal, once, for every tablet; its own build is nothing.
+
+**The record** is one format for every kind of output tablet: `[(source tablet,
+rows | ALL), ...]`. A whole tablet is `[(t, ALL)]`; a piece, `[(t, rows)]`; a
+packed tablet, several; a core tablet, a run of the fold's layout. Rows are
+**indices, never values**: a stratum's values may live in one layer only
+(`annotations`, upstream of the features), and every layer must take the same
+rows. The compact forms stay compact: a whole tablet is still written as its
+index, as `tabs.json` writes it today. A `DatamapCoreTablet(DatamapTablet)` is
+warranted only if a core map carries more per row -- its cluster.
+
+**The deal makes the map, and stops there.** SCAN, ITEMS, DEAL and COALESCE --
+`whole` and `pack` decide what the output tablets are -- run once for every
+fold, since fold 0's tablets depend on every tablet's scan. So the deal is a
+block of its own, today's `DatatablePartition` less its parts, and the
+`DatamapTable` of fold *k* reads its fold's records from it. A clustering deal
+writes its layout, a template deal takes another map's. WRITE is no longer the
+partition's: it is the pull.
+
+**A mapped table is a table pulled back along a map.** `MappedDatatable(Datatable)`
+of `MappedDatatablet(Datatablet)`s, one per `DatamapTablet`. Each pulls its rows
+of the source tablets' own slices, by its record:
+
+- `[(t, ALL)]` -- the identity map -- pulls back to **source tablet *t* itself**:
+  the same block, the same hash, nothing written. A fold of whole tablets is
+  a view, as `DatatablePart` is today.
+- anything else is copied: the rows named, of every slice the source tablets
+  hold themselves, into slices of the mapped tablet's own.
+
+**A layered table is pulled back layer by layer**, keeping its layers: the
+functorial pullback. A `Featuretable` over an upstream `Datatable` is pulled
+back as two tables: the upstream along the map -- a `MappedDatatable`, or, if the
+upstream is itself a `Featuretable`, the same construction recursively -- and
+the feature layer along the same map, as a `MappedFeaturetable(DataslicesUpstream,
+Datatable)` of `MappedFeaturetablet(DataslicesUpstream, Datatablet)`s. A mapped
+feature tablet copies only the feature table's own slices, and its `upstream` is
+the mapped upstream tablet. Nothing is flattened, and nothing is computed again:
+a mapped feature tablet selects rows of features already computed; it never runs
+its source's `__build__`. So the mapped classes are generic, one per kind --
+plain, upstream-reading -- not one per user class.
+
+This rests on row *i* of a feature tablet being row *i* of its upstream tablet,
+for every pull, not only for the probes. The `shared_upstream_column` TODO on
+`Featuretablet` -- with `tile_index`, carried into autopath's `DeepFeatureBag` --
+is what makes it checkable, and should come with this.
+
+### Identities: what must not move
+
+A block enters the identity of a block built on it as its **rendered spec only**
+-- no class, no version. A CPTAC fold renders, in every deep feature clip built
+over it, as `{'fold': k, 'partition': {balance, coalesce, collator, datatable,
+fractions, max_tablet_rows, method, min_tablet_rows, partition_slice, seed}}`.
+Its own hash adds `TAB=<its table's TABLET>`, its version (1), and the TOPICS it
+forwards from its table; the partition's adds its version (2) and its topics,
+`tablets` (`tabs.json`) and `summary`. The classes are in their paths only.
+
+So, for the CPTAC folds and everything downstream of them -- deep feature
+clips, bipolar clips, stats probes, probes -- to keep their hashes, with no
+specializations:
+
+- **the deal block keeps today's `DatatablePartition` VAR, version 2, and topics**,
+  `tablets` as `tabs.json` with its whole-tablet entries as indices;
+- **the mapped fold keeps the VAR `{partition, fold}`**, its version, its
+  table's TABLET as its BLOCK, and its table's TOPICS. Its `DatamapTable` is
+  then derived from it -- formed from `(partition, fold)` -- not held in its VAR;
+- **a whole tablet pulls back to itself**, so the 3692 bags are untouched.
+
+`PancanTilePartition` and `PancanTileFold` keep their names, and so their paths,
+as subclasses of the deal and of `MappedDatatable`. Every CPTAC partition and
+fold built is then adopted as it stands. What does not carry over: pieces dealt
+by value (the CPTAC partitions have none), packed tablets, and every core
+partition and core part, which are recomputed -- their topics and tablets
+change form.
+
+### Settled (2026-10-13)
+
+- **A part is the table pulled back along its fold's map.** One `DatamapTable` per
+  part; the part is a `MappedDatatable` (or `MappedFeaturetable`). It does not keep
+  `DatatablePart`'s API (`tablet_indices`, `source_index()`, `dealt`): what a probe
+  needs of a part, it asks of the part's map.
+- **A carbon map is per fold.** The map of fold *k* of a table laid out alike is a
+  `DatamapTable` whose VAR is `{template: <the template's DatamapTable of fold k>,
+  datatable: <this table>}`: it takes the template's records, after checking the
+  two tables are laid out alike, tablet for tablet and row for row. No deal block;
+  a chain of carbon copies is a chain of maps.
+- **A collator names what a mapped tablet copies**, slices and columns; by default,
+  every slice the source tablet holds itself.
 
 ## Where the code is
 

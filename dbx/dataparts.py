@@ -10,11 +10,12 @@ TODO(untangle): three independent choices are bundled into class pairs here --
 which rows go to which fold (a deal, a clustering, a template's), what a part is
 (a view of the table's tablets, or copies of the rows), and what happens to
 upstream data (kept through a view, so a tablet reading upstream cannot be cut;
-flattened by a copy). Refactor to one index per fold, ``(tablet, row)`` in
-order, made by interchangeable choosers and read by interchangeable parts: a
-plain carbon partition and row-indexed pieces then come for free, and clustering
-stops implying a copy. Built partitions' identities must stay reachable. See
-DATAPARTITION.md, "TODO: three choices, untangled".
+flattened by a copy). The design: a datamap -- `DatamapTable` of `DatamapTablet`s,
+each output tablet's ``[(source tablet, rows | ALL)]`` -- made by the deal, and
+tables pulled back along it, layer by layer -- `MappedDatatable`,
+`MappedFeaturetable` -- a whole tablet pulling back to itself. The CPTAC folds
+keep their hashes. See DATAPARTITION.md, "TODO: three choices, untangled --
+datamaps, and tables mapped along them".
 """
 
 from __future__ import annotations

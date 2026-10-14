@@ -436,8 +436,11 @@ class DatatablePartition(Datablock):
         """Whether it has dealt: its ``tablets`` topic is there, built or redirected."""
         return self.valid_topic('tablets')
 
-    def all_copies(self, fold: int | str) -> bool:
-        """Whether every tablet of fold *fold* is a copy, none a whole tablet -- False until it has dealt, reading nothing."""
+    def _is_copies_only_(self, fold: int | str) -> bool:
+        """Whether fold *fold* is copies only, no tablet taken whole -- False until it has dealt, reading nothing.
+
+        What a mapped table asks to know whether every tablet holds ``source`` -- see `MappedDatatable._is_copies_only_`.
+        """
         if not self.dealt():
             return False
         n = len(self._dealt_tablets_[int(fold)])
@@ -1157,7 +1160,7 @@ class MappedDatatable(Datatable):
 
     def _block_specializations_(self):
         """None for a table of copies: its block class's specializations are its source tablets', and no copy is one."""
-        return [] if self._all_copies_() else super()._block_specializations_()
+        return [] if self._is_copies_only_() else super()._block_specializations_()
 
     # 2. Declared API ------------------------------------------------------
 
@@ -1174,7 +1177,7 @@ class MappedDatatable(Datatable):
         named = self._named_slices_()
         if named is not None:
             own = [s for s in own if s in named]
-        if not isinstance(table, DataslicesUpstream) and self._all_copies_():
+        if not isinstance(table, DataslicesUpstream) and self._is_copies_only_():
             own.append(SOURCE_SLICE)
         return tuple(own)
 
@@ -1338,13 +1341,13 @@ class MappedDatatable(Datatable):
             return None
         return {pair[0] for role in collator.roles for pair in collator.pairs(role)}
 
-    def _all_copies_(self) -> bool:
+    def _is_copies_only_(self) -> bool:
         """Whether every tablet is a copy -- so every one holds ``source`` -- and none the mapped table's own.
 
         Its deal's to say, and asked before anything is built -- a journal entry of a tree
         about to build records its slices -- so it must not need the deal dealt.
         """
-        return self.datamap.var.partition.all_copies(self.datamap.var.fold)
+        return self.datamap.var.partition._is_copies_only_(self.datamap.var.fold)
 
     def _read_slice_(self, slice, *, tablets=None, **kwargs):
         indices = range(self.n_tablets) if tablets is None else tablets
@@ -1879,7 +1882,7 @@ class DatatableCorePartition(DatatablePartition):
         """Whether it has laid the folds out: built, or adopted."""
         return self.valid()
 
-    def all_copies(self, fold: int | str) -> bool:
+    def _is_copies_only_(self, fold: int | str) -> bool:
         """True: every core tablet is a copy, dealt or not."""
         return True
 

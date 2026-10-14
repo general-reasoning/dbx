@@ -8,12 +8,15 @@ named by its collator's stratifyby and partitionby roles.
 import json
 from dataclasses import dataclass
 
+import os
+
 import numpy as np
 import pytest
 
 from dbx.datablocks import Datablock
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import DatatablePartition
+from dbx.dataparts import (DatamapTable, DatatablePart, DatatablePartition, FeaturetablePart,
+                           MappedDatatable, MappedDatatablet, MappedFeaturetablet)
 
 
 @pytest.fixture(autouse=True)
@@ -324,7 +327,7 @@ def test_a_pieces_source_slice_points_back_and_takes_the_same_piece_of_the_sourc
             if not isinstance(entry, dict):
                 continue
             piece, source = part.tablet(i), p.datatable.tablet(entry['tab'])
-            rows = piece.source_rows()
+            rows = piece.source_index()[:, 1]
             assert rows.dtype == np.int64 and list(rows) == sorted(rows)
             assert set(piece.data(('source', 'tab'))['source']['tab']) == {entry['tab']}
             # The indices, applied to the source, are the piece -- what a tablet built from the source row by row reuses.
@@ -355,8 +358,11 @@ def test_the_same_seed_deals_the_same_pieces_with_the_same_hashes(tmp_path):
     assert pieces
     again = DatatablePartition(datalake=str(tmp_path / 'a'), spec=dict(
         datatable=tbl, fractions=[0.5, 0.5], partition_slice='meta', collator=collator(PATIENT, COHORT), seed=5))
-    assert [one.tablet(e).hash for e in pieces] == [again.tablet(e).hash for e in pieces]
-    assert len({one.tablet(e).hash for e in pieces}) == len(pieces)
+    def piece_hashes(partition):
+        return [partition.part(k).tablet(i).hash for k in range(partition.n_folds())
+                for i, e in enumerate(partition.tablets_indices(k)) if isinstance(e, dict)]
+    assert piece_hashes(one) == piece_hashes(again)
+    assert len(set(piece_hashes(one))) == len(pieces)
 
 
 def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
@@ -373,21 +379,100 @@ def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
 def test_a_piece_that_cannot_be_recovered_says_so(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
     with pytest.raises(ValueError, match="cannot be recovered"):
-        p.tablet({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}).build()
+        p._lot_rows_({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}, 0)
 
 
-def test_a_mixed_tablet_upstream_of_a_feature_table_is_not_implemented(tmp_path):
+def _features(url):
     from test_probes import DummyModelEvaluatorFactory, DummySampleTable
     from dbx import Featuretable
-    url = str(tmp_path)
     samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=4), tag='samples').build()
-    features = Featuretable(datalake=url, devices=['cpu'], tag='features', spec=dict(
+    return Featuretable(datalake=url, devices=['cpu'], tag='features', spec=dict(
         upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
         collator=Datacollator(spec=dict(columns={'signals': [('samples', 'samples')], 'labels': [('labels', 'labels')]})))).build()
-    with pytest.raises(NotImplementedError, match="DataslicesUpstream"):
-        DatatablePartition(datalake=url, spec=dict(
-            datatable=features, fractions=[0.5, 0.5], partition_slice='features',
-            collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)))).build()
+
+
+@pytest.mark.parametrize('coalesce', [None, 'pack'])
+def test_a_mixed_feature_tablet_is_cut_layer_by_layer(tmp_path, coalesce):
+    """A piece of a feature tablet is the same rows of its features and, as its upstream, of its samples.
+
+    Every tablet alternates its label, so every one is cut, by a column upstream of
+    the features: each piece copies its own rows of the features, and its upstream
+    copies the same rows of the samples -- the layers kept, nothing re-evaluated.
+    """
+    url = str(tmp_path)
+    features = _features(url)
+    # Seed 2 splits each tablet's pieces across the folds, so a packed tablet pools pieces of both tablets.
+    spec = dict(coalesce='pack', min_tablet_rows=3) if coalesce else {}
+    p = DatatablePartition(datalake=url, spec=dict(
+        datatable=features, fractions=[0.5, 0.5], partition_slice='features', seed=2,
+        collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)), **spec)).build()
+    copies = 0
+    for k in range(p.n_folds()):
+        part = p.part(k).build()
+        for i in range(part.n_tablets):
+            tablet = part.tablet(i)
+            if part.datamap.whole(i) is not None:
+                continue
+            copies += 1
+            assert isinstance(tablet, MappedFeaturetablet) and isinstance(tablet.var.upstream, MappedDatatablet)
+            assert 'source' not in tablet.slices() and 'source' in tablet.var.upstream.slices(), "written once, below"
+            src = tablet.source_index()                         # read through the upstream
+            got = tablet.data('features', 'samples', 'labels')
+            feats = [features.tablet(int(t)).data('features')['features'] for t, _ in src]
+            ups = [features.tablet(int(t)).var.upstream.data('samples', 'labels') for t, _ in src]
+            for j, (t, r) in enumerate(src):
+                for c, v in got['features'].items():
+                    assert np.array_equal(v[j], feats[j][c][r])
+                assert np.array_equal(got['samples']['samples'][j], ups[j]['samples']['samples'][r])
+                assert got['labels']['labels'][j] == ups[j]['labels']['labels'][r]
+    assert copies
+
+
+def test_a_table_not_laid_out_alike_is_refused_by_its_copies(tmp_path):
+    from test_probes import DummySampleTable
+    url = str(tmp_path)
+    features = _features(url)
+    p = DatatablePartition(datalake=url, spec=dict(
+        datatable=features, fractions=[0.5, 0.5], partition_slice='features', seed=2,
+        collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)))).build()
+    datamap = p.part(0).datamap
+    alike = datamap.pullback(features.var.upstream)
+    assert alike.datatable.hash == features.var.upstream.hash and alike.datamap.hash == datamap.hash
+    alike.tablet(0).build()
+    unlike = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag='unlike').build()
+    with pytest.raises(ValueError, match="not laid out alike"):
+        datamap.pullback(unlike).tablet(0).build()
+
+
+def _feature_partition(url, **spec):
+    return DatatablePartition(datalake=url, spec=dict(
+        datatable=_features(url), fractions=[0.5, 0.5], partition_slice='features', seed=2,
+        collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)), **spec)).build()
+
+
+def test_a_feature_table_s_part_keeps_its_layers(tmp_path):
+    """A part of a feature table reads its annotations as the feature table does: through its upstream, pulled back."""
+    p = _feature_partition(str(tmp_path))
+    part = p.part(0).build()
+    assert isinstance(part, FeaturetablePart) and isinstance(part.upstream_mapped, MappedDatatable)
+    assert set(part.slices(recursive=True)) >= {'features', 'samples', 'labels'}
+    labels = part.data('labels')['labels']['labels']
+    rows = sum(part.tablet(i).n_rows('features') for i in range(part.n_tablets))
+    assert len(labels) == rows
+
+
+def test_a_feature_table_s_part_built_as_a_datatable_part_is_adopted_where_it_is(tmp_path):
+    """Until 2026-10-13 a feature table's part was a DatatablePart, under that class's path: it is reached, not rebuilt."""
+    url = str(tmp_path)
+    p = _feature_partition(url, coalesce='whole')
+    old = DatatablePart(spec=dict(partition=p, fold=1), **p._part_kwargs_).build()
+    assert old.valid()
+    new = p.part(1)
+    assert type(new) is FeaturetablePart and new.hash == old.hash and new.anchorkeypath != old.anchorkeypath
+    new.build()
+    assert new.redirected() and new.valid()
+    # At the new path, the record of the adoption only -- the redirection, the journal, the manifest -- and no data.
+    assert set(os.listdir(new.anchorkeypath)) <= {'.redirection', '.journal', '.blocks'}
 
 
 # Probes on folds holding pieces.
@@ -446,3 +531,43 @@ def test_a_part_of_a_partition_not_built_is_not_valid(tmp_path):
     p.build()
     assert p.part(0).dealt and p.part(0).build().valid()
 
+
+
+def test_a_map_is_a_table_its_tablets_storing_their_lots(tmp_path):
+    """A fold's map builds its tablets, in parallel, each storing its lot -- resolved once, from the deal."""
+    p = bag_partition(tmp_path / 'p', bags(tmp_path))
+    pieces = [i for i, e in enumerate(p.tablets_indices(0)) if isinstance(e, dict)]
+    assert pieces
+    datamap = p.datamap(0)
+    assert not datamap.valid() and not datamap.tablet(pieces[0]).valid()
+    with pytest.raises(ValueError, match="not built"):
+        datamap.lot(pieces[0])
+    DatamapTable(datalake=str(tmp_path / 'p'), spec=dict(partition=p, fold=0),
+                 parallelization='multiprocessing', n_workers=2).build()
+    assert datamap.valid()
+    for i in range(datamap.n_tablets):
+        stored, dealt = datamap.lot(i), p.lot(0, i)
+        assert [t for t, _ in stored] == [t for t, _ in dealt] == datamap.lot_tablets(i)
+        for (_, a), (_, b) in zip(stored, dealt):
+            assert (a is None and b is None) or list(a) == list(b)
+
+
+def test_a_copy_builds_its_map_tablet_first(tmp_path):
+    p = bag_partition(tmp_path / 'p', bags(tmp_path))
+    part = p.part(0)
+    i = next(i for i, e in enumerate(p.tablets_indices(0)) if isinstance(e, dict))
+    copy = part.tablet(i)
+    assert not copy.var.map.valid()
+    copy.build()
+    assert copy.var.map.valid() and copy.valid()
+
+
+def test_a_part_s_tree_builds_from_nothing(tmp_path):
+    """build_tree of a part whose partition is not built: nothing asks the deal for its tablets before it deals."""
+    p = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
+        datatable=bags(tmp_path), fractions=[0.5, 0.5], partition_slice='meta', collator=collator(PATIENT, COHORT)))
+    assert not p.dealt()
+    part = p.part(0)
+    part.slices()
+    part.build_tree()
+    assert p.dealt() and part.valid()

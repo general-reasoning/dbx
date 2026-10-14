@@ -20,6 +20,76 @@ All notable changes to this project will be documented in this file.
   constructed.
 
 ### Changed
+- **A partition's stages say what they are.** A deal's build opens with a
+  `DEAL` line naming its stages; a mapped table's with a `PULLBACK` summary --
+  the deal, dealt and kept or not; the map, built or to build; how many tablets
+  are copies, and each layer's slices -- and the progress bars read `MAP:
+  resolving n lots ...` and `COPY: n tablets, layer by layer`. A stack names its
+  stage by overriding `Datastack._build_tag_`. A table of copies no longer
+  searches for earlier builds of them: its block class's specializations are its
+  source tablets', and no copy is one. DATAPARTITION.md opens with every class at
+  a glance.
+- **A map is a real table.** `DatamapTable` builds its `DatamapTablet`s, in
+  parallel with its deal's workers, each storing its lot -- resolved once from the
+  deal -- as its `lot` slice; `DatamapTablet.lot` reads it, and raises while it is
+  not built. A copy builds its map tablet first; a mapped table naming a map
+  builds it first. The deal answers `lot_tablets(fold, i)` -- the tablets a lot
+  draws on -- without resolving a row, for what a copy needs before anything is
+  built. A part of whole tablets builds no map.
+- **One map for every deal, and a fold tablet's rows are its lot.** A deal answers
+  for its lots -- `DatatablePartition.lot(fold, i)`, `whole`, `tag_of`, `dealt` --
+  in the form it wrote them, a core deal's a run of its layout; `DatamapTable`
+  only asks, and `DatamapTablet.lot` is the resolved `[(tablet, rows | None)]`
+  (`record` until now). A pullback to another table is a `MappedDatatable` whose
+  VAR names it, its copies checking it is laid out alike. `DatamapCoreTable`,
+  `DatamapCarbonTable`, `DatatableCorePart` and `FeaturetableCorePart` are gone;
+  `DatatableCorePartition.part(k)` is `datamap(k).pullback(table, collator)`. A
+  mapped table has `source_index()`.
+- **A core part is its table pulled back along the fold's map.** A core fold's
+  map is a `DatamapCoreTable`, each core tablet a run of the layout; a
+  `DatatableCorePart` -- a `FeaturetableCorePart` for a feature table, keeping
+  its layers -- copies what the collator names, along it. A carbon copy is
+  `core.datamap(k).pullback(table, collator)`, a `DatamapCarbonTable` over a
+  table laid out alike. `DatatableCoreTablet`, `DatatableCarbonCorePartition`,
+  `core_tablet()` and `carried_declarations()` are gone. Core partitions keep
+  their hashes and layouts; core parts are rebuilt. A mapped table's `slices()`
+  are what it holds: its collator's, and `source` when every tablet is a copy.
+- **A part of a feature table is a `FeaturetablePart`**, a `DataslicesUpstream`
+  whose upstream is the feature table's upstream pulled back along the fold's
+  map, so the part routes an upstream slice -- an annotation -- as the feature
+  table does. Generally, a table that reads upstream pulls back to a
+  `MappedFeaturetable`. Its hash is a `DatatablePart`'s, as it was; its path is
+  its class's, and a part built as a `DatatablePart` is adopted where it is by
+  `FeaturetablePart`'s specialization.
+- **A feature table is cut and packed, layer by layer.** A piece or packed
+  tablet of a `Featuretable` is a `MappedFeaturetablet`: a copy of its own
+  slices' rows, whose `upstream` is the same rows of the upstream table, pulled
+  back along a `DatamapCarbonTable` -- a fold's map over a table laid out alike,
+  checked record by record. `source` is written once, at the bottom. The
+  `NotImplementedError`s for a mixed feature tablet and for `coalesce='pack'` of
+  a feature table are gone. A partition column read as a numpy scalar is
+  recorded as the Python value it is.
+- **A part is its table pulled back along its fold's map.** New in
+  `dbx.dataparts`: `DatamapTable`, a fold's layout, a `DatamapTablet` per tablet
+  of the fold, each with its `record`, `[(tablet, rows | None)]`; and
+  `MappedDatatable`, a table pulled back along a map, whose tablets are the
+  mapped table's own where the record takes them whole, and otherwise
+  `MappedDatatablet`s copying the rows. `DatatablePart` is a `MappedDatatable`
+  whose map is derived from its VAR `{partition, fold}`, so every part, and
+  everything built on one, keeps its hash. `DatatabletPiece` and
+  `DatatablePartitionTablet` are gone, both now `MappedDatatablet`s:
+  pieces and packed tablets are rebuilt. `DatatablePartition.tablet(entry)` is
+  gone; `tablets(fold)` reads its part's. See DATAPARTITION.md, "Parts are
+  tables pulled back along maps".
+- **A partition's parts build with its workers.** `part()` of a
+  `DatatablePartition` and of a `DatatableCorePartition` (a carbon one too)
+  gives the part the partition's `parallelization` and `n_workers`, so its
+  pieces, packed tablets or core tablets are built in parallel, as the partition
+  scanned. Each part is built by its own `build()`, one after another. Workers
+  are no identity: no hash moves.
+- **`DatatableCorePartition`'s `layout` is retired** for
+  `DatatableCarbonCorePartition`, and refused when given. It stays in the VAR,
+  always None, so that no core partition built moves its hash.
 - **hyp switches journals in place, and filters an anchor's.** A **journal**
   menu in the top bar lists the pipelines and every anchor of the datalake.
   A **filter** field, shown for an anchor, takes `key=pattern, ...` and passes
@@ -40,6 +110,21 @@ All notable changes to this project will be documented in this file.
   name the same events.
 
 ### Added
+- **`DatatableCarbonCorePartition`: a core partition's layout, over a table
+  laid out as its table is, other columns copied.** A feature table and the
+  table it was computed from, say. Its VAR is the `datatable`, the `template`
+  (any core partition, a carbon one too), a `collator` naming only `carry`, and
+  `rows_per_tablet`, the template's by default. Nothing is clustered or dealt;
+  the tables are checked to be laid out alike, tablet for tablet and row for row.
+  See DATAPARTITION.md, "A carbon copy".
+- **`build_tree(deep='try_specialize_children')`: a valid child vouches for
+  itself, not for its children.** Its children -- its VAR subtrees and, a
+  stack's, its blocks -- are tried for specializations, as
+  `try_specialize_tree()` tries them, and nothing is built. A child that moved
+  to a new hash under a parent that kept its own adopts its earlier build,
+  rather than being found unbuilt by whatever reads it. See DATASTACK.md, "A
+  Valid Stack and Its Children". Any other `deep` but `False` or `True` is
+  refused.
 - **`pipejournal(construct_only=True, extra_construction_events=[...])`, and
   `hyp --journal --extra-construction-events ...` (`--ece`).** Events
   that also make an entry block count as constructed, besides `build:end`,
@@ -87,6 +172,9 @@ All notable changes to this project will be documented in this file.
   [HYP.md](HYP.md).
 
 ### Fixed
+- **`try_specialize_tree()` specializes the blocks of a valid stack too.** It
+  asked only blocks that were not valid, so a valid stack's blocks were never
+  reached, however many had moved under it.
 - **A pinned interpreter makes no work repo, asked for a revision or not.**
   `gitwrkreposetup` returned early for `DBX_PINNED_REVISION` only when given a
   revision, so the import of `dbx.datablocks` in a pinned process went on to

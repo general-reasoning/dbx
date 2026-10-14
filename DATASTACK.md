@@ -486,6 +486,44 @@ class MyBag(Datablock):
 | Inline (1 GPU)   | Load once, share via `_shared_evaluator`   | Precomputed list       |
 | Multiprocessing  | Load once per worker via `_worker_evaluator`| Worker-local clip cache|
 
+## A Valid Stack and Its Children
+
+A block's **children** are what it is built on: its VAR subtrees -- the
+blocks its VAR holds, and theirs, down to the leaves -- and, for a stack, its
+blocks. Both have identities of their own, and either can move to a new hash
+while the block above it keeps its own. Change a stack's `BLOCK`'s `TOPICS`
+or `VERSION` and every block of the stack moves; the stack, and whatever is
+built on it, do not. They are still valid, and the blocks are not built.
+
+A block's validity therefore vouches for **itself, not for its children**,
+and `build_tree()` says how much it takes it to vouch for:
+
+| `build_tree(deep=...)` | A child that is already valid |
+|---|---|
+| `False` (default) | Vouches for its whole subtree: skipped. |
+| `'try_specialize_children'` | Vouches for itself only: its children are tried for specializations, as `try_specialize_tree()` tries them, and nothing is built. |
+| `True` | Vouches for nothing: every block is built anew. |
+
+A child that is not valid is built in every case.
+
+`'try_specialize_children'` is what to use after a change that moves children
+but not their parents. Each moved child adopts the earlier build its
+specialization resolves to, and whatever reads it later finds it built. With
+`False`, they stay unadopted until something reads one and fails:
+
+```
+FileNotFoundError: .../PancanTileBag/.../5a2ded32: cannot read slice 'annotations':
+this tablet is not valid: it was never built, but a specialization resolves for it
+and was never adopted
+```
+
+A stack checks its blocks against its blocks' manifest, a sample of them by
+default (`validation='cross_check'`). A block whose path no longer matches the
+manifest invalidates the cross-check, and every block is then asked. Where
+nothing moved, this costs forming a sample of the blocks. Children that are not
+valid and whose specializations do not resolve stay unbuilt: their data is
+computed only by `deep=True`, or a build of the block itself.
+
 ## Gotchas
 
 | Issue | Cause | Fix |

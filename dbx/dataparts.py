@@ -390,7 +390,8 @@ class DatatablePartition(Datablock):
 
         A fold is an index into ``tablets``; its part is the block that reads it.
         """
-        return DatatablePart(spec=dict(partition=self, fold=fold), **self._part_kwargs_)
+        cls = FeaturetablePart if isinstance(self.var.datatable, DataslicesUpstream) else DatatablePart
+        return cls(spec=dict(partition=self, fold=fold), **self._part_kwargs_)
 
     def fold(self, fold: int | str) -> DatatablePart:
         """The name `part` had first."""
@@ -1193,8 +1194,8 @@ class MappedDatatable(Datatable):
         upstream = self.datatable._upstream_block_()
         datamap = DatamapCarbonTable(datalake=self.datamap._datalake_, storage_options=self.storage_options,
                                      spec=dict(template=self.datamap, datatable=upstream))
-        return MappedDatatable(datalake=self.datamap._datalake_, storage_options=self.storage_options,
-                               spec=dict(datamap=datamap, collator=self.copy_collator))
+        return _mapped_table_(datamap, self.copy_collator, datalake=self.datamap._datalake_,
+                              storage_options=self.storage_options)
 
     @property
     def datatable(self) -> Datatable:
@@ -1254,6 +1255,29 @@ class MappedDatatable(Datatable):
         except Exception:
             return None
         return table._block_class_() if table is not None else None
+
+
+class MappedFeaturetable(DataslicesUpstream, MappedDatatable):
+    """A table that reads upstream -- a `Featuretable` -- pulled back along a map, keeping its layers.
+
+    Its own slices are the mapped table's; its upstream is the mapped table's
+    upstream, pulled back along a `DatamapCarbonTable` of the same map --
+    `upstream_mapped` -- a `MappedDatatable`, or another of these, and so on down.
+    So it routes a request for an upstream slice as the table it maps does, and
+    its copying tablets are `MappedFeaturetablet`s whose upstreams are that table's
+    tablets.
+    """
+
+    SPECIALIZATIONS = []
+
+    def _upstream_block_(self):
+        return self.upstream_mapped
+
+
+def _mapped_table_(datamap: DatamapTable, collator: Datacollator | None = None, **kwargs) -> MappedDatatable:
+    """The table *datamap* maps, pulled back along it: a `MappedFeaturetable` for one that reads upstream."""
+    cls = MappedFeaturetable if isinstance(datamap.datatable, DataslicesUpstream) else MappedDatatable
+    return cls(spec=dict(datamap=datamap, collator=collator), **kwargs)
 
 
 class DatatablePart(MappedDatatable):
@@ -1339,6 +1363,28 @@ class DatatablePart(MappedDatatable):
         table = getattr(getattr(self, 'var', None), 'partition', None)
         table = getattr(table, 'datatable', None)
         return table._block_class_() if table is not None else None
+
+
+class FeaturetablePart(DataslicesUpstream, DatatablePart):
+    """Part *fold* of a `DatatablePartition` of a table that reads upstream -- a `Featuretable` -- keeping its layers.
+
+    As a `DatatablePart`, and its upstream is the partitioned table's upstream,
+    pulled back along the fold's map -- `upstream_mapped` -- so it routes a request
+    for an upstream slice, an annotation, as the feature table does.
+
+    Until 2026-10-13 a part of a feature table was a `DatatablePart`, stored under
+    that class's path; its identity is unchanged -- the class is no part of a hash
+    -- and a part built then is adopted where it is, by its specialization.
+    """
+
+    SPECIALIZATIONS = [
+        Datablock.Specialization(
+            spec={}, topics=SAME, anchor=f'{__name__}.DatatablePart',
+            note="this very part, built as a DatatablePart, under that class's path, until 2026-10-13"),
+    ]
+
+    def _upstream_block_(self):
+        return self.upstream_mapped
 
 
 #: The roles a `DatatableCorePartition`'s collator may hold -- see its docstring.

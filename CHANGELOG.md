@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A part of a feature table is a `FeaturetablePart`**, a `DataslicesUpstream`
+  whose upstream is the feature table's upstream pulled back along the fold's
+  map, so the part routes an upstream slice -- an annotation -- as the feature
+  table does. Generally, a table that reads upstream pulls back to a
+  `MappedFeaturetable`. Its hash is a `DatatablePart`'s, as it was; its path is
+  its class's, and a part built as a `DatatablePart` is adopted where it is by
+  `FeaturetablePart`'s specialization.
 - **A feature table is cut and packed, layer by layer.** A piece or packed
   tablet of a `Featuretable` is a `MappedFeaturetablet`: a copy of its own
   slices' rows, whose `upstream` is the same rows of the upstream table, pulled

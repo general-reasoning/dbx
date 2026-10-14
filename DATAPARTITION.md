@@ -839,9 +839,13 @@ change form.
 3. Done: the layered pull. A piece or packed tablet of a feature table is a
    `MappedFeaturetablet` whose upstream is the same rows of the upstream table,
    along a `DatamapCarbonTable`; the upstream refusals are gone. The tables
-   pulled back keep their classes' layering, not their classes: a mapped part
-   is still a `MappedDatatable` (a `MappedFeaturetable` is not needed while a
-   part's tablets carry their own upstream).
+   pulled back keep their classes' layering, not their classes. A table that
+   reads upstream pulls back to a `MappedFeaturetable` -- a part of one, to a
+   `FeaturetablePart` -- whose upstream is its upstream pulled back along the
+   carbon map, so the part routes an upstream slice as the feature table does.
+   A feature table's part was a `DatatablePart` until 2026-10-13, under that
+   class's path; its hash is unchanged, and `FeaturetablePart`'s specialization
+   adopts it where it is.
 4. The core deal writes maps; core parts are mapped tables; a carbon map per fold.
 5. The callers: probes (`tablet_indices`, `source_index`), autopath's
    `tomography.py`, `PancanTileFold`'s specializations.
@@ -878,6 +882,7 @@ All in `dbx/dataparts.py`, except the probe.
 | A part's rows, as the table's | `DatatablePart.source_index` |
 | A piece, a packed tablet: a copy of the rows a record names | `MappedDatatablet`: `__build__`, `_sources_`, `_copied_`, `source_index` |
 | A copy of a feature table's rows, layer by layer | `MappedFeaturetablet`, `MappedDatatable.upstream_mapped` |
+| A feature table pulled back, its upstream with it | `MappedFeaturetable`, `FeaturetablePart`, `_mapped_table_` |
 | A map's records over a table laid out alike | `DatamapCarbonTable.record` |
 | Selecting a tablet's rows by value; copying a tablet's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
 | The back-pointing slice | `SOURCE_SLICE`, `SOURCE`, `_source_index_` |

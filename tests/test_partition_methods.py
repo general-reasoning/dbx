@@ -8,13 +8,15 @@ named by its collator's stratifyby and partitionby roles.
 import json
 from dataclasses import dataclass
 
+import os
+
 import numpy as np
 import pytest
 
 from dbx.datablocks import Datablock
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import (DatamapCarbonTable, DatamapTable, DatatablePart, DatatablePartition, MappedDatatablet,
-                           MappedFeaturetablet)
+from dbx.dataparts import (DatamapCarbonTable, DatamapTable, DatatablePart, DatatablePartition, FeaturetablePart,
+                           MappedDatatable, MappedDatatablet, MappedFeaturetablet)
 
 
 @pytest.fixture(autouse=True)
@@ -440,6 +442,37 @@ def test_a_carbon_map_refuses_a_table_not_laid_out_alike(tmp_path):
     unlike = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag='unlike').build()
     with pytest.raises(ValueError, match="not laid out alike"):
         DatamapCarbonTable(datalake=url, spec=dict(template=datamap, datatable=unlike)).record(0)
+
+
+def _feature_partition(url, **spec):
+    return DatatablePartition(datalake=url, spec=dict(
+        datatable=_features(url), fractions=[0.5, 0.5], partition_slice='features', seed=2,
+        collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)), **spec)).build()
+
+
+def test_a_feature_table_s_part_keeps_its_layers(tmp_path):
+    """A part of a feature table reads its annotations as the feature table does: through its upstream, pulled back."""
+    p = _feature_partition(str(tmp_path))
+    part = p.part(0).build()
+    assert isinstance(part, FeaturetablePart) and isinstance(part.upstream_mapped, MappedDatatable)
+    assert set(part.slices(recursive=True)) >= {'features', 'samples', 'labels'}
+    labels = part.data('labels')['labels']['labels']
+    rows = sum(part.tablet(i).n_rows('features') for i in range(part.n_tablets))
+    assert len(labels) == rows
+
+
+def test_a_feature_table_s_part_built_as_a_datatable_part_is_adopted_where_it_is(tmp_path):
+    """Until 2026-10-13 a feature table's part was a DatatablePart, under that class's path: it is reached, not rebuilt."""
+    url = str(tmp_path)
+    p = _feature_partition(url, coalesce='whole')
+    old = DatatablePart(spec=dict(partition=p, fold=1), **p._part_kwargs_).build()
+    assert old.valid()
+    new = p.part(1)
+    assert type(new) is FeaturetablePart and new.hash == old.hash and new.anchorkeypath != old.anchorkeypath
+    new.build()
+    assert new.redirected() and new.valid()
+    # At the new path, the record of the adoption only -- the redirection, the journal, the manifest -- and no data.
+    assert set(os.listdir(new.anchorkeypath)) <= {'.redirection', '.journal', '.blocks'}
 
 
 # Probes on folds holding pieces.

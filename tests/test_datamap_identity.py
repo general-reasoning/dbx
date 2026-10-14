@@ -80,3 +80,23 @@ PINNED = {
     'part': '0f44b7a7d4a4439b3981eb1f1fa6445170d59a029706ae99af8aa445c48286cb',
     'downstream': '35aa6d78373ccd416530a9bf73cdd08325a86810e6e39c0644e3cfa898c6b5b0',
 }
+
+
+@pytest.mark.pinned
+def test_a_feature_table_s_part_hashes_as_it_did_as_a_datatable_part(tmp_path):
+    """A part of a feature table is a FeaturetablePart since 2026-10-13, and its identity is what it was.
+
+    The class is in its path, not its hash: a part built as a DatatablePart is
+    adopted where it is, by FeaturetablePart's specialization, only because the
+    hashes agree.
+    """
+    import sys
+    sys.path.insert(0, __import__('os').path.dirname(__file__))
+    from test_partition_methods import _features
+    from dbx.dataparts import DatatablePart, FeaturetablePart
+    url = str(tmp_path)
+    p = DatatablePartition(datalake=url, spec=dict(datatable=_features(url), fractions=[0.5, 0.5],
+                                                   partition_slice='features'))
+    new = p.part(0)
+    assert type(new) is FeaturetablePart
+    assert new.hash == DatatablePart(datalake=url, spec=dict(partition=p, fold=0)).hash

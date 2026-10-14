@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A core part is its table pulled back along the fold's map.** A core fold's
+  map is a `DatamapCoreTable`, each core tablet a run of the layout; a
+  `DatatableCorePart` -- a `FeaturetableCorePart` for a feature table, keeping
+  its layers -- copies what the collator names, along it. A carbon copy is
+  `core.datamap(k).pullback(table, collator)`, a `DatamapCarbonTable` over a
+  table laid out alike. `DatatableCoreTablet`, `DatatableCarbonCorePartition`,
+  `core_tablet()` and `carried_declarations()` are gone. Core partitions keep
+  their hashes and layouts; core parts are rebuilt. A mapped table's `slices()`
+  are what it holds: its collator's, and `source` when every tablet is a copy.
 - **A part of a feature table is a `FeaturetablePart`**, a `DataslicesUpstream`
   whose upstream is the feature table's upstream pulled back along the fold's
   map, so the part routes an upstream slice -- an annotation -- as the feature

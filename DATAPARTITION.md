@@ -463,18 +463,19 @@ checks counts, not rows. Where the feature tablet carries a
 `shared_upstream_column`, a copy could compare it against its upstream copy's
 and refuse a mismatch: the TODO on `Featuretablet`.
 
-A core partition (below) copies a feature table's upstream columns into its core
-tablets, flat, and a table laid out alike takes its layout without clustering
-anything, by a `DatatableCarbonCorePartition` -- until the core deal writes maps,
-"TODO: three choices, untangled", step 4.
+A core partition (below) is pulled back the same way: a core part of a feature
+table copies each layer's named columns into that layer's copy. And any table
+laid out alike takes a core partition's folds without clustering anything:
+`core.datamap(k).pullback(table, collator)`.
 
 ## Core partitions: coresets
 
 A `DatatableCorePartition` deals **rows**, not tablets, by what they hold. It
 clusters the table's rows by their values and deals each cluster's rows to
-the parts, nearest the center first. Its parts are new tables of new tablets,
-`DatatableCorePart`s of `DatatableCoreTablet`s, holding only the columns asked
-for.
+the parts, nearest the center first. Fold *k*'s map, `core.datamap(k)`, a
+`DatamapCoreTable`, makes each core tablet a run of the fold's layout; its part,
+a `DatatableCorePart`, is the table pulled back along it, every tablet a copy
+holding only the columns asked for.
 
 ```python
 from dbx.datatables import Datacollator
@@ -504,9 +505,11 @@ By role:
 
 A core tablet carries the columns of every role and no others: nothing is pulled
 by default. With `recursive=True` a column may be upstream of the table, a
-feature table's annotations. It is copied like any other, so a core tablet is a
-plain tablet that reads nothing upstream. Features and annotations stay row for
-row together because they are copied together.
+feature table's annotations. A core part of a feature table, a
+`FeaturetableCorePart`, keeps the layers: each copies the named columns it owns,
+the features in the core tablet, the annotations in its upstream copy, a layer
+naming none passed over, and `source` at the bottom. Features and annotations
+stay row for row together because both are the same rows of one map.
 
 ### Fractions are of the rows
 
@@ -673,53 +676,45 @@ How to read them:
 - Fractions summing to 1 put every row in some part, so the all-parts row of
   `coverage` is 0.
 
-A `DatatableCarbonCorePartition` takes its template's coverage: it describes
-the rows the template took, measured where they were clustered.
-
-### A carbon copy: another table, the same layout
+### A carbon copy: another table, the same maps
 
 The layout records, for every row of every part, the tablet and row of the
 partitioned table it came from. A table **laid out alike**, with the same
 tablets holding the same number of rows, takes it whole. A feature table and
-the table it was computed from are laid out alike, and so are a bipolar
-feature table and the feature table it was computed from. A
-`DatatableCarbonCorePartition` takes a core partition's layout over such a
-table and copies other columns:
+the table it was computed from are laid out alike, and so are a bipolar feature
+table and the feature table it was computed from. Any of them is pulled back
+along a core partition's maps, with other columns copied:
 
 ```python
-features_core = DatatableCarbonCorePartition(spec=dict(
-    datatable=features, template=core,
-    collator=Datacollator(spec=dict(columns={'carry': [('features', 'cls')]}))))
+tiles_core = core.datamap(0).pullback(tiles, collator=Datacollator(spec=dict(
+    columns={'carry': [('tiles', 'tile'), ('bag_name', 'bag_name')]})))
 ```
 
-| VAR | What it is |
-|---|---|
-| `datatable` | the table laid out as the template's is |
-| `template` | the core partition whose layout it takes: a carbon one too |
-| `collator` | the columns copied, as `carry`, its only role |
-| `rows_per_tablet` | the rows of each core tablet; None, the default, the template's |
+The map is a `DatamapCarbonTable` of `core.datamap(0)` over the table: the core's
+records, checked as each is resolved -- every tablet a record names must hold as
+many rows as in the core's table, or it raises. Nothing is scanned, clustered
+or dealt. Its tablets are the core's, tablet for tablet, and their `source`
+slices agree with the core part's. A pullback's map is a template too: a chain
+of tables computed one from another takes the first one's maps.
 
-Nothing is scanned, clustered or dealt. Every tablet's row count is checked
-against the template's table first, and a table that differs is refused. Its
-core tablets hold the same rows in the same places, and their `source` slices
-agree with the template's. The template's choices (fractions, clustering, seed,
-shuffle) are not in its VAR: they enter its identity through the template. A
-chain of tables computed one from another, each a carbon copy of the one before,
-all take the first one's layout.
+**Which columns a copy holds.** A `DatatableCorePart`'s copies hold every
+column any role of the core's collator names: `coreby`, `stratifyby`,
+`partitionby` and `carry`, each whole, a dict column's key dropped. A
+pullback's hold what its collator names, every slice by default. All hold
+`source` besides, at the bottom layer.
 
-**Which columns a core tablet holds.** A `DatatableCorePartition`'s core
-tablets hold every column any role of its collator names: `coreby`,
-`stratifyby`, `partitionby` and `carry`, each whole, a dict column's key
-dropped. A carbon copy's hold its `carry`. Both hold `source` besides.
-
-`DatatableCorePartition`'s `layout` VAR, which did this before, is retired. It
-is kept, always None, since a VAR's defaults are its identity, and removing it
-would move the hash of every core partition built.
+Until 2026-10-13 a core part was a table of `DatatableCoreTablet`s, a carbon
+copy a `DatatableCarbonCorePartition`, and before that a core partition's
+`layout` VAR. All three are gone; the `layout` VAR is kept, always None, since a
+VAR's defaults are its identity and removing it would move the hash of every
+core partition built. Core partitions keep their hashes and their layouts; core
+parts are rebuilt.
 
 ### Probes on core parts
 
-A core part's tablets are its own, holding every slice they read, so a probe
-reads it as it reads any table, with a collator that is not `recursive`.
+A core part's tablets are its own copies, so a probe reads it as it reads any
+table; for a core part of a feature table, with a `recursive` collator, its
+upstream columns read through the layers.
 `check_probe_inputs` checks the core tablets themselves. With `stratifyby`, a
 stratum's rows are in one part, so fit and eval share no patient. A core tablet
 holds rows of many slides, so the probe takes a slide's rows by an
@@ -733,7 +728,7 @@ go together, and each new combination so far has meant a new class:
 
 1. **Which rows go to which fold.** `DatatablePartition` deals whole tablets and
    pieces of them; `DatatableCorePartition` clusters rows and deals the nearest;
-   `DatatableCarbonCorePartition` takes a template's choice. Each records it its
+   a template's choice was taken by a carbon core partition. Each records it its
    own way: tablet indices and piece and pack records (`tablets`), or
    `(tablet, row, cluster)` per row (`layout`).
 2. **What a part is.** A view of the partitioned table's own tablets
@@ -753,7 +748,7 @@ of the table being mapped, which rows of which source tablets it takes:
   the fold (see Identities, below), and through the deal, the table being mapped.
 - `DatamapTablet(Datatablet)`: the map of one output tablet. Its VAR names its
   `DatamapTable` and its index. A tablet naming its own table is circular for
-  `build_tree`, as `DatatableCoreTablet` naming its partition already is: the
+  `build_tree`, as a core tablet naming its partition was: the
   field is in `TREE_SKIP_BUILDING` and `TREE_SKIP_VALIDATION`. Its record is
   written by the deal, once, for every tablet; its own build is nothing.
 
@@ -846,7 +841,11 @@ change form.
    A feature table's part was a `DatatablePart` until 2026-10-13, under that
    class's path; its hash is unchanged, and `FeaturetablePart`'s specialization
    adopts it where it is.
-4. The core deal writes maps; core parts are mapped tables; a carbon map per fold.
+4. Done: a core fold's map is a `DatamapCoreTable`; a core part is the table
+   pulled back along it (`DatatableCorePart`, `FeaturetableCorePart`, layered); a
+   carbon copy is `datamap.pullback(table, collator)`. `DatatableCoreTablet` and
+   `DatatableCarbonCorePartition` are gone. Core partitions keep their hashes and
+   layouts; core parts are rebuilt.
 5. The callers: probes (`tablet_indices`, `source_index`), autopath's
    `tomography.py`, `PancanTileFold`'s specializations.
 
@@ -887,10 +886,10 @@ All in `dbx/dataparts.py`, except the probe.
 | Selecting a tablet's rows by value; copying a tablet's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
 | The back-pointing slice | `SOURCE_SLICE`, `SOURCE`, `_source_index_` |
 | Core: scan, cluster, deal | `DatatableCorePartition`: `_lay_out_`, `_cluster_and_deal_`, `_cluster_master_`, `_cluster_distributed_`, `_deal_rows_` |
-| Core: a template's layout, over another table | `DatatableCarbonCorePartition._lay_out_` |
+| Core: a fold's map; a table laid out alike pulled back along it | `DatamapCoreTable`, `DatamapTable.pullback`, `DatamapCarbonTable` |
 | Core: the workers | `TabletCoreScanCallable`, `TabletCoreStepCallable`, `TabletRowCountCallable`, `TabletCoverageCallable`, `TabletVectorsCallable` |
 | Core: coverage | `DatatableCorePartition._coverage_` |
-| Core: a part and its tablets | `DatatableCorePart`, `DatatableCoreTablet` |
+| Core: a part and its copies | `DatatableCorePart`, `FeaturetableCorePart`, `MappedDatatablet`, `MappedFeaturetablet` |
 | The probe's check before reading | `check_probe_inputs` in `dbx/probes.py` |
 | Rows aggregated by a column; the checks by its value and by row | `aggregateby_vector`, `FeatureAffineLogisticProbe._aggregate_means_`, `_check_disjoint_` in `dbx/probes.py` |
 

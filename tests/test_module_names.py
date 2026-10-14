@@ -25,7 +25,7 @@ def setup_env(monkeypatch):
                                  dataparts.DatatablePart, featuretables.Featuretablet, featuretables.Featuretable,
                                  featuretables.BipolarFeaturetablet, featuretables.BipolarFeaturetable,
                                  datatables.Datacollator, dataparts.MappedDatatablet, dataparts.DatatableCorePartition,
-                                 dataparts.DatatableCorePart, dataparts.DatatableCoreTablet, dataparts.DatamapTable,
+                                 dataparts.DatatableCorePart, dataparts.DatamapCoreTable, dataparts.DatamapTable,
                                  dataparts.DatamapTablet, dataparts.MappedDatatable, dataparts.DatamapCarbonTable,
                                  dataparts.MappedFeaturetablet,
                                  probes.FeatureStatsProbe])

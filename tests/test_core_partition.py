@@ -11,7 +11,8 @@ import numpy as np
 import pytest
 
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import DatatableCarbonCorePartition, DatatableCorePart, DatatableCorePartition, DatatableCoreTablet
+from dbx.dataparts import (DatamapCarbonTable, DatamapCoreTable, DatatableCorePart, DatatableCorePartition,
+                           MappedDatatable, MappedDatatablet)
 
 
 @pytest.fixture(autouse=True)
@@ -151,7 +152,8 @@ def test_core_tablets_carry_what_the_collator_names_and_point_back(tmp_path):
     for k in range(2):
         part = DatatableCorePart(datalake=str(tmp_path / 'core'), spec=dict(partition=p, fold=k),
                                  parallelization='multiprocessing', n_workers=2)
-        assert part.hash == p.part(k).hash and isinstance(part.tablet(0), DatatableCoreTablet)
+        assert part.hash == p.part(k).hash and isinstance(part.tablet(0), MappedDatatablet)
+        assert isinstance(part.datamap, DatamapCoreTable)
         part.build()
         assert part.slices() == ('pts', 'source')
         fl = p.layout(k)
@@ -176,7 +178,6 @@ def test_core_tablets_carry_what_the_collator_names_and_point_back(tmp_path):
 def test_core_tablets_declare_the_carried_columns_as_the_table_declares_them(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, carry=[LABEL], rows_per_tablet=16)
-    assert p.carried_declarations() == {'pts': {'x': 'ndarray:float32', 'label': 'int'}}
     part = p.part(0)
     assert part.tablet(0).declared_schema('pts') == {'x': 'ndarray:float32', 'label': 'int'}
     assert part.readable_slices() == {'pts': {'x': 'ndarray:float32', 'label': 'int'}, 'source': {'tab': 'int', 'row': 'int'}}
@@ -195,23 +196,20 @@ def test_distributed_clustering_finds_the_same_blobs_and_leaves_no_scratch(tmp_p
     assert p.read('summary')['clustering'] == 'distributed'
 
 
-def carbon(tmp_path, table, template, carry=(('img', 'big'),), name='core', build=True, **spec):
-    q = DatatableCarbonCorePartition(datalake=str(tmp_path / name), spec=dict(
-        datatable=table, template=template, collator=Datacollator(spec=dict(columns={'carry': list(carry)})), **spec))
-    return q.build() if build else q
+def carbon(table, template, fold, carry=(('img', 'big'),)):
+    """*table*, laid out as *template*'s table is, pulled back along fold *fold* of *template*: a carbon copy."""
+    return template.datamap(fold).pullback(table, collator=Datacollator(spec=dict(columns={'carry': list(carry)})))
 
 
-def test_a_table_laid_out_alike_takes_the_template_s_layout_without_clustering(tmp_path):
+def test_a_table_laid_out_alike_is_pulled_back_along_the_core_s_maps_without_clustering(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, rows_per_tablet=16)
     other = PointTable(datalake=str(tmp_path / 'other'), spec=dict(offset=100)).build()
-    q = carbon(tmp_path, other, p)
-    assert q.n_folds() == p.n_folds() and q.rows_per_tablet == 16, "the template's folds and tablets"
-    assert q.read('summary')['template'] == p.hash
     for k in range(2):
-        np.testing.assert_array_equal(q.layout(k), p.layout(k))
-        assert q.tablets_indices(k) == p.tablets_indices(k)
-        part = q.part(k).build()
+        part = carbon(other, p, k)
+        assert isinstance(part, MappedDatatable) and isinstance(part.datamap, DatamapCarbonTable)
+        assert part.n_tablets == p.part(k).n_tablets, "the template's core tablets, tablet for tablet"
+        part.build()
         assert part.slices() == ('img', 'source')
         src = np.concatenate([part.tablet(i).source_index() for i in range(part.n_tablets)])
         np.testing.assert_array_equal(src, p.layout(k)[:, :2])
@@ -219,17 +217,7 @@ def test_a_table_laid_out_alike_takes_the_template_s_layout_without_clustering(t
         np.testing.assert_array_equal(big[:, 0], src[:, 0] * 1000 + src[:, 1])
     unlike = PointTable(datalake=str(tmp_path / 'unlike'), spec=dict(n=39)).build()
     with pytest.raises(ValueError, match="not laid out alike"):
-        carbon(tmp_path, unlike, p, name='unlike_core')
-
-
-def test_its_own_rows_per_tablet_cuts_the_same_rows_differently(tmp_path):
-    tbl = points(tmp_path)
-    p = core(tmp_path, tbl, rows_per_tablet=16)
-    q = carbon(tmp_path, tbl, p, carry=[X], rows_per_tablet=5)
-    for k in range(2):
-        np.testing.assert_array_equal(q.layout(k), p.layout(k))
-        assert all(end - start <= 5 for start, end in q.tablets_indices(k))
-        assert len(q.tablets_indices(k)) > len(p.tablets_indices(k))
+        carbon(unlike, p, 0).build()
 
 
 def test_a_carbon_copy_is_a_template_too(tmp_path):
@@ -237,37 +225,14 @@ def test_a_carbon_copy_is_a_template_too(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, rows_per_tablet=16)
     other = PointTable(datalake=str(tmp_path / 'other'), spec=dict(offset=100)).build()
-    q = carbon(tmp_path, other, p, name='q')
     third = PointTable(datalake=str(tmp_path / 'third'), spec=dict(offset=200)).build()
-    r = carbon(tmp_path, third, q, carry=[X], name='r')
-    assert r.rows_per_tablet == 16 and r.read('summary')['template'] == q.hash
     for k in range(2):
-        np.testing.assert_array_equal(r.layout(k), p.layout(k))
-        x = np.concatenate([r.part(k).build().tablet(i).data('pts', concat=True)['pts']['x']
-                            for i in range(len(r.tablets_indices(k)))])
+        q = carbon(other, p, k)
+        r = q.datamap.pullback(third, collator=Datacollator(spec=dict(columns={'carry': [X]}))).build()
+        src = np.concatenate([r.tablet(i).source_index() for i in range(r.n_tablets)])
+        np.testing.assert_array_equal(src, p.layout(k)[:, :2])
+        x = np.concatenate([r.tablet(i).data('pts', concat=True)['pts']['x'] for i in range(r.n_tablets)])
         assert (x >= 200 - 10).all(), "its own table's values"
-
-
-@pytest.mark.parametrize('spec, match', [
-    (dict(carry=()), "no 'carry'"),
-    (dict(rows_per_tablet=0), "rows_per_tablet must be"),
-])
-def test_what_a_carbon_copy_refuses(tmp_path, spec, match):
-    tbl = points(tmp_path)
-    p = core(tmp_path, tbl, build=False)
-    with pytest.raises(ValueError, match=match):
-        carbon(tmp_path, tbl, p, build=False, **spec)
-
-
-def test_a_carbon_copy_takes_only_carry_and_a_core_template(tmp_path):
-    tbl = points(tmp_path)
-    p = core(tmp_path, tbl, build=False)
-    with pytest.raises(ValueError, match="names only 'carry'"):
-        DatatableCarbonCorePartition(datalake=str(tmp_path / 'core'), spec=dict(
-            datatable=tbl, template=p, collator=Datacollator(spec=dict(columns={'coreby': [X], 'carry': [X]}))))
-    with pytest.raises(ValueError, match="template must be a DatatableCorePartition"):
-        DatatableCarbonCorePartition(datalake=str(tmp_path / 'core'), spec=dict(
-            datatable=tbl, template=tbl, collator=Datacollator(spec=dict(columns={'carry': [X]}))))
 
 
 def test_a_core_partition_s_layout_is_retired_but_its_hash_is_kept(tmp_path):
@@ -285,7 +250,7 @@ def test_the_same_spec_is_the_same_partition(tmp_path):
     assert one.hash == two.hash
     for k in range(2):
         np.testing.assert_array_equal(one.layout(k), two.layout(k))
-        assert one.core_tablet(k, 0).hash == two.core_tablet(k, 0).hash
+        assert one.part(k).tablet(0).hash == two.part(k).tablet(0).hash
     assert core(tmp_path, tbl, name='c', seed=1, build=False).hash != one.hash
 
 
@@ -302,7 +267,8 @@ def test_what_a_core_partition_refuses(tmp_path, spec, match):
 
 
 def test_a_probe_fits_on_core_parts_of_a_feature_table(tmp_path):
-    """Features clustered, labels carried from upstream: the core tablets hold both, and read nothing upstream."""
+    """Features clustered, labels carried from upstream: the core tablets keep the layers -- the features theirs,
+    the labels their upstream copy's -- and a probe reads both, the labels through the upstream."""
     from test_probes import DummyModelEvaluatorFactory, DummySampleTable
     from dbx import FeatureAffineLogisticProbe, Featuretable
     url = str(tmp_path)
@@ -315,10 +281,12 @@ def test_a_probe_fits_on_core_parts_of_a_feature_table(tmp_path):
         collator=Datacollator(spec=dict(columns={'coreby': [('features', 'final')], 'carry': [('labels', 'labels')]},
                                         recursive=True)))).build()
     fit, ev = p.part(0).build(), p.part(1).build()
-    assert fit.slices() == ('features', 'labels', 'source')
+    assert fit.slices() == ('features',)
+    assert fit.slices(recursive=True) == ('features', 'labels', 'source'), "the samples layer copies only the labels"
     probe = FeatureAffineLogisticProbe(datalake=url, spec=dict(
         fit_table=fit, eval_table=ev,
-        collator=Datacollator(spec=dict(columns={'signals': [('features', 'final')], 'labels': [('labels', 'labels')]})))).build()
+        collator=Datacollator(spec=dict(columns={'signals': [('features', 'final')], 'labels': [('labels', 'labels')]},
+                                        recursive=True)))).build()
     assert sorted(probe.read('classes').tolist()) == [0, 1]
     assert len(probe.read('fit', 'labels')) + len(probe.read('eval', 'labels')) == 80
 
@@ -387,23 +355,17 @@ def test_a_coreset_s_coverage_has_a_random_baseline_to_be_read_against(tmp_path)
     assert np.all(cov['coverage'] > 0)
 
 
-def test_coverage_is_measured_in_the_workers_too_and_taken_by_a_carbon_copy(tmp_path):
+def test_coverage_is_measured_in_the_workers_too(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, clustering='distributed', parallelization='multiprocessing', n_workers=2,
              coverage_sample=50)
-    cov = p.read('coverage')
-    np.testing.assert_array_equal(cov['coverage'][2], 0)
-    other = PointTable(datalake=str(tmp_path / 'other'), spec=dict(offset=100)).build()
-    q = carbon(tmp_path, other, p)
-    for key, value in q.read('coverage').items():
-        np.testing.assert_array_equal(value, cov[key])
+    np.testing.assert_array_equal(p.read('coverage')['coverage'][2], 0)
 
 
 def test_a_core_part_and_a_carbon_copy_s_build_with_their_partitions_workers(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, build=False, parallelization='multiprocessing', n_workers=2)
-    q = DatatableCarbonCorePartition(datalake=str(tmp_path / 'core'), parallelization='multithreading', n_workers=4,
-                                     spec=dict(datatable=tbl, template=p,
-                                               collator=Datacollator(spec=dict(columns={'carry': [X]}))))
+    q = p.datamap(0).pullback(tbl, collator=Datacollator(spec=dict(columns={'carry': [X]})),
+                              parallelization='multithreading', n_workers=4)
     assert (p.part(0).parallelization, p.part(0).n_workers) == ('multiprocessing', 2)
-    assert (q.part(0).parallelization, q.part(0).n_workers) == ('multithreading', 4)
+    assert (q.parallelization, q.n_workers) == ('multithreading', 4)

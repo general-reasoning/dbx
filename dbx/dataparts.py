@@ -436,6 +436,13 @@ class DatatablePartition(Datablock):
         """Whether it has dealt: its ``tablets`` topic is there, built or redirected."""
         return self.valid_topic('tablets')
 
+    def all_copies(self, fold: int | str) -> bool:
+        """Whether every tablet of fold *fold* is a copy, none a whole tablet -- False until it has dealt, reading nothing."""
+        if not self.dealt():
+            return False
+        n = len(self._dealt_tablets_[int(fold)])
+        return n > 0 and all(self.whole(fold, i) is None for i in range(n))
+
     def part(self, fold: int | str) -> DatatablePart:
         """Fold *fold* as a table: the `DatatablePart` holding its tablets and pieces.
 
@@ -1332,8 +1339,12 @@ class MappedDatatable(Datatable):
         return {pair[0] for role in collator.roles for pair in collator.pairs(role)}
 
     def _all_copies_(self) -> bool:
-        """Whether every tablet is a copy -- so every one holds ``source`` -- and none the mapped table's own."""
-        return self.n_tablets > 0 and all(self.datamap.whole(i) is None for i in range(self.n_tablets))
+        """Whether every tablet is a copy -- so every one holds ``source`` -- and none the mapped table's own.
+
+        Its deal's to say, and asked before anything is built -- a journal entry of a tree
+        about to build records its slices -- so it must not need the deal dealt.
+        """
+        return self.datamap.var.partition.all_copies(self.datamap.var.fold)
 
     def _read_slice_(self, slice, *, tablets=None, **kwargs):
         indices = range(self.n_tablets) if tablets is None else tablets
@@ -1867,6 +1878,10 @@ class DatatableCorePartition(DatatablePartition):
     def dealt(self) -> bool:
         """Whether it has laid the folds out: built, or adopted."""
         return self.valid()
+
+    def all_copies(self, fold: int | str) -> bool:
+        """True: every core tablet is a copy, dealt or not."""
+        return True
 
     def part(self, fold: int | str) -> MappedDatatable:
         """Fold *fold*: its table pulled back along its map, copying what the collator names, of every role.

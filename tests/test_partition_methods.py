@@ -560,3 +560,14 @@ def test_a_copy_builds_its_map_tablet_first(tmp_path):
     assert not copy.var.map.valid()
     copy.build()
     assert copy.var.map.valid() and copy.valid()
+
+
+def test_a_part_s_tree_builds_from_nothing(tmp_path):
+    """build_tree of a part whose partition is not built: nothing asks the deal for its tablets before it deals."""
+    p = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
+        datatable=bags(tmp_path), fractions=[0.5, 0.5], partition_slice='meta', collator=collator(PATIENT, COHORT)))
+    assert not p.dealt()
+    part = p.part(0)
+    part.slices()
+    part.build_tree()
+    assert p.dealt() and part.valid()

@@ -371,3 +371,14 @@ def test_a_core_part_and_a_carbon_copy_s_build_with_their_partitions_workers(tmp
                               parallelization='multithreading', n_workers=4)
     assert (p.part(0).parallelization, p.part(0).n_workers) == ('multiprocessing', 2)
     assert (q.parallelization, q.n_workers) == ('multithreading', 4)
+
+
+def test_a_core_part_s_tree_builds_from_nothing(tmp_path):
+    """build_tree of a core part whose deal is not built: its journal records its slices before the deal deals."""
+    tbl = points(tmp_path)
+    p = core(tmp_path, tbl, build=False, rows_per_tablet=16)
+    assert not p.dealt()
+    part = p.part(0)
+    assert part.slices() == ('pts', 'source'), "known before the deal deals"
+    part.build_tree()
+    assert p.dealt() and part.datamap.valid() and part.valid()

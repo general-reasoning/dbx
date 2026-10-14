@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A partition's stages say what they are.** A deal's build opens with a
+  `DEAL` line naming its stages; a mapped table's with a `PULLBACK` summary --
+  the deal, dealt and kept or not; the map, built or to build; how many tablets
+  are copies, and each layer's slices -- and the progress bars read `MAP:
+  resolving n lots ...` and `COPY: n tablets, layer by layer`. A stack names its
+  stage by overriding `Datastack._build_tag_`. A table of copies no longer
+  searches for earlier builds of them: its block class's specializations are its
+  source tablets', and no copy is one. DATAPARTITION.md opens with every class at
+  a glance.
 - **A map is a real table.** `DatamapTable` builds its `DatamapTablet`s, in
   parallel with its deal's workers, each storing its lot -- resolved once from the
   deal -- as its `lot` slice; `DatamapTablet.lot` reads it, and raises while it is

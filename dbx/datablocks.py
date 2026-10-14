@@ -8114,7 +8114,7 @@ class Datastack(Datablock):
             f"Building {self.__class__.__name__}: blocks using {len(callables)} callables, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
         )
-        executor = self._build_executor_(f"EXECUTING {len(callables)} callables [{self.__class__.__name__}]")
+        executor = self._build_executor_(self._build_tag_(len(callables)))
         callable_kwargs = self._with_build_journal_(callables, callable_kwargs)
         callable_results = executor.exec_callables(callables, self, **callable_kwargs)
         self.log.info(f"Stacking the results of {len(callable_results)} callables of {self.__class__.__name__}")
@@ -9158,6 +9158,10 @@ class Datastack(Datablock):
     def _block_class_(self):
         """The class this stack's blocks are: its BLOCK, or None when it declares none."""
         return getattr(self, 'BLOCK', None)
+
+    def _build_tag_(self, n: int) -> str:
+        """What the progress of building *n* blocks is labelled: a stack names its stage by overriding it."""
+        return f"EXECUTING {n} callables [{self.__class__.__name__}]"
 
     def _block_specializations_(self):
         """The specializations for this stack's blocks: from instance attributes, or the BLOCK class."""

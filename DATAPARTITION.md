@@ -1,5 +1,46 @@
 # Partitions, parts and pieces
 
+## At a glance
+
+Three layers, each built in parallel: a **deal** decides which rows go to which
+fold; a **map** records, per fold, which rows each tablet of the fold takes -- its
+**lot**; a **pullback** makes a table of the fold, its tablets the table's own or
+copies of the rows.
+
+```
+deal ── datamap(k) ──▶ DatamapTable ── tablet i ──▶ DatamapTablet: lot i = [(t, rows | ALL), ...]
+table ─ pullback along a DatamapTable ─▶ MappedDatatable ── tablet i ──▶ the table's tablet t   (lot [(t, ALL)])
+                                                                     └─▶ MappedDatatablet: a copy of lot i's rows
+```
+
+| Class | Base | VAR | Builds, holds | Notes |
+|---|---|---|---|---|
+| `DatatablePartition` | `Datablock` | `datatable`, `fractions`, `partition_slice`, `collator`, `method`, `seed`, `balance`, `coalesce`, `min/max_tablet_rows` | the deal of tablets and pieces: `tablets` (each fold's entries), `summary` | answers `lot`, `whole`, `tag_of`, `lot_tablets`, `dealt`; `datamap(k)`; `part(k)` |
+| `DatatableCorePartition` | `DatatablePartition` | + `clustering`, `n_clusters`, `rows_per_tablet`, `shuffle`, ... | the deal of rows, by cluster, folds disjoint: `layout`, `tablets` (each core tablet's `[start, end)`), `centers`, `coverage`, `summary` | a lot is a run of the layout; `part(k)` is `datamap(k).pullback(datatable, collator)` |
+| `DatamapTable` | `Datatable` | `partition`, `fold` | its `DatamapTablet`s, in parallel, with the deal's workers | `pullback(table, collator)` |
+| `DatamapTablet` | `Datatablet` | `datamap`, `index` | slice `lot`: one row per run -- `tab`, `rows`, `whole` | `.lot` reads it; `datamap` is in `TREE_SKIP_*` |
+| `MappedDatatable` | `Datatable` | `datamap`, `datatable` (None: the map's), `collator` (None: every slice) | its map, then its copies, in parallel | BLOCK, TOPICS: the table's; another table must be laid out alike |
+| `MappedFeaturetable` | `DataslicesUpstream`, `MappedDatatable` | as above | as above | its upstream: the table's upstream pulled back along the same map; a layer the collator names nothing of is passed over |
+| `MappedDatatablet` | `Datatablet` | `map` (a `DatamapTablet`), `datatable`, `collator` | the lot's rows of the slices it copies, and `source` | builds its map tablet first; checks the rows' counts |
+| `MappedFeaturetablet` | `DataslicesUpstream`, `MappedDatatablet` | + `upstream` | the table's own slices only; no `source` | its upstream: the same rows one layer down, built first |
+| `DatatablePart` | `MappedDatatable` | `partition`, `fold` (its map derived) | as `MappedDatatable`; copies every slice | the identity of every CPTAC fold, and all built on them |
+| `FeaturetablePart` | `DataslicesUpstream`, `DatatablePart` | as above | as above | a `Featuretable`'s part; adopts one built as a `DatatablePart` |
+
+**Terms.** A *lot*: `[(tablet, rows | None)]`, runs of one tablet each, None for
+every row -- a whole tablet's `[(t, None)]`, a piece's `[(t, rows)]`, a packed or
+core tablet's several runs. *Laid out alike*: tablet *t* of both tables holds as
+many rows, row *i* the same sample -- a feature table and the table it was
+computed from. `source`: row *i* of a copy is `(tab, row)` of the table it was
+copied from.
+
+**Contents.** What decides the deal -- When a tablet is cut -- How the units are
+dealt -- What a part's tablets are: coalesce -- The flow -- Pieces (maps and
+copies) -- Identities -- Probes -- Upstream and downstream tables -- Core
+partitions -- TODO: three choices, untangled (design, identities, progress,
+settled) -- Where the code is.
+
+## Partitions
+
 A `DatatablePartition` splits a `Datatable` into **parts**: tables, each a
 `DatatablePart`, such as a probe's fit and eval tables. Part *k* takes the
 *k*-th of `fractions` of the rows (or of the tablets), and `partition.part(k)`

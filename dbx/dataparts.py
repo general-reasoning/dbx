@@ -336,6 +336,8 @@ class DatatablePartition(Datablock):
         table = self.var.datatable
         if table is None:
             raise ValueError(f"{self.__class__.__name__}: VAR.datatable is required")
+        self.log.info(f"DEAL {type(self).__name__}/{self.hash[:8]}: {type(table).__name__} into "
+                      f"{len(self.var.fractions or [])} folds -- SCAN, ITEMS, DEAL, COALESCE; the parts copy, later")
         if self.var.collator is not None:
             self.var.collator.slices(table)       # raises for a column the table does not hold
         if not self.var.fractions:
@@ -845,6 +847,10 @@ class DatamapTable(Datatable):
 
     # 1. Protocol and hooks ------------------------------------------------
 
+    def _build_tag_(self, n: int) -> str:
+        deal = self.var.partition
+        return f"MAP: resolving {n} lots of fold {self.var.fold} of {type(deal).__name__}/{deal.hash[:8]} [{type(self).__name__}]"
+
     def __tablet__(self, idx: int, *, tag=None, **spec) -> DatamapTablet:
         return DatamapTablet(datalake=self._datalake_, storage_options=self.storage_options, verbose=False,
                              tag=tag if tag is not None else f"map{self.hash[:8]}_{int(idx):06d}",
@@ -1114,10 +1120,37 @@ class MappedDatatable(Datatable):
 
     def build(self, *args, **kwargs):
         """Its map first, when it names one -- the lots, built in parallel -- then its copies, in parallel."""
+        if not self.valid():
+            self._log_stages_()
         datamap = getattr(self.var, 'datamap', None)
         if datamap is not None and not datamap.valid():
             datamap.build()
         return super().build(*args, **kwargs)
+
+    def _build_tag_(self, n: int) -> str:
+        return f"COPY: {n} tablets, layer by layer [{type(self).__name__}]"
+
+    def _log_stages_(self):
+        """The pullback's stages, said once, before it builds: the deal, the map, the copies and their layers."""
+        datamap, what = self.datamap, f"{type(self).__name__}/{self.hash[:8]}"
+        deal = datamap.var.partition
+        n = self.n_tablets
+        copies = sum(datamap.whole(i) is None for i in range(n))
+        layers, table = [], self
+        while table is not None:
+            layers.append(f"{type(table.datatable).__name__} {list(table.slices())}")
+            table = table.upstream_mapped if isinstance(table, DataslicesUpstream) else None
+        self.log.info(
+            f"PULLBACK {what}: {type(self.datatable).__name__} along fold {datamap.var.fold} of "
+            f"{type(deal).__name__}/{deal.hash[:8]}\n"
+            f"  DEAL {type(deal).__name__}/{deal.hash[:8]}: {'dealt, kept' if deal.dealt() else 'NOT DEALT'}\n"
+            f"  MAP  {type(datamap).__name__}/{datamap.hash[:8]}: {datamap.n_tablets} lots, "
+            f"{'built' if datamap.valid() else 'to build' if datamap is getattr(self.var, 'datamap', None) else 'built by each copy, as it needs its lot'}\n"
+            f"  COPY {copies} of {n} tablets ({n - copies} taken whole), layers: {' <- '.join(layers)}")
+
+    def _block_specializations_(self):
+        """None for a table of copies: its block class's specializations are its source tablets', and no copy is one."""
+        return [] if self._all_copies_() else super()._block_specializations_()
 
     # 2. Declared API ------------------------------------------------------
 
@@ -1759,6 +1792,8 @@ class DatatableCorePartition(DatatablePartition):
         self._check_carried_slices_()
 
     def __build__(self):
+        self.log.info(f"DEAL {type(self).__name__}/{self.hash[:8]}: {type(self.var.datatable).__name__} into "
+                      f"{self.n_folds()} folds -- SCAN, CLUSTER, DEAL, COVERAGE, LAYOUT; the parts copy, later")
         self.var.collator.slices(self.var.datatable)       # raises for a column the table does not hold
         layouts, centers, summary, coverage = self._lay_out_()
         with self.fs.open(self.path('coverage', ensure_dirpath=True), 'wb') as f:

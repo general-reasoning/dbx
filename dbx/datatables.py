@@ -1388,8 +1388,7 @@ class Datatable(_Database_, Datastack):
             callable_results = []
 
         if to_build_callables:
-            build_executor = self._build_executor_(
-                f"EXECUTING {len(to_build_callables)} callables [{self.__class__.__name__}]")
+            build_executor = self._build_executor_(self._build_tag_(len(to_build_callables)))
             callable_kwargs = self._with_build_journal_(to_build_callables, callable_kwargs)
             built_results = build_executor.exec_callables(to_build_callables, self, **callable_kwargs)
             callable_results.extend(built_results)

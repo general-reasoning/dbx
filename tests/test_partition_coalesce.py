@@ -16,7 +16,7 @@ import pytest
 
 from dbx.datablocks import Datablock
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import DatatablePartitionTablet, DatatablePartition, DatatabletPiece
+from dbx.dataparts import DatatablePartition, MappedDatatablet
 from test_partition_methods import COHORT, PATIENT, bag_partition, bags, built_parts  # noqa: E402
 
 
@@ -104,7 +104,7 @@ def test_whole_rejoins_a_cut_tablet_whose_pieces_went_to_one_part(tmp_path):
     assert p.read('tablets') == [[0, {'tab': 1, 'stratifyby': 's2'}, 2], [{'tab': 1, 'stratifyby': 's3'}, 3, 4]]
     assert p.read('summary')['rejoined'] == ['tab_000003', 'tab_000004']
     # Rejoined, a tablet is the table's own, read where it is: no piece of it to build.
-    assert not any(isinstance(p.part(1).tablet(i), DatatabletPiece) for i in (1, 2))
+    assert not any(isinstance(p.part(1).tablet(i), MappedDatatablet) for i in (1, 2))
 
 
 def test_whole_rejoins_a_tablet_whose_pieces_lie_in_two_partitions_and_counts_it_in_both(tmp_path):
@@ -145,7 +145,7 @@ def test_pack_pools_the_small_entries_and_keeps_the_rest(tmp_path):
         for i, e in enumerate(entries):
             if e in packs:
                 tablet = part.tablet(i)
-                assert isinstance(tablet, DatatablePartitionTablet)
+                assert isinstance(tablet, MappedDatatablet)
                 assert sum(seg[2] for seg in e['segments']) == tablet.n_rows('meta') <= 4
         assert p.read('summary')['folds'][k]['packed']['tabs'] == len(packs)
 
@@ -201,22 +201,6 @@ def test_a_partition_from_before_the_roles_were_renamed_is_not_taken_for_one_now
         assert old_hash not in [new.get_hash(sp) for sp in new._specialization_variants_()]
         assert not [sp for sp in DatatablePartition.SPECIALIZATIONS if new._pins_match_(sp)]
 
-
-def test_a_piece_from_before_tablets_is_reached_under_its_old_names(tmp_path):
-    """Until 2026-10-10 it was DatatabPiece -- under dbx.datatables, then dbx.dataparts -- and its VAR
-    named its source tab and tab_index: what it reconstructs names them so, where they were."""
-    p = split(tmp_path / 'p', rows_table(tmp_path))
-    piece = next(p.tablet(e) for e in p.read('tablets')[0] if isinstance(e, dict))
-    sps = type(piece).SPECIALIZATIONS
-    assert {piece._specialization_anchor_(sp) for sp in sps} == {'dbx.datatables.DatatabPiece',
-                                                                  'dbx.dataparts.DatatabPiece'}
-    for sp in sps:
-        old = piece.get_signature(sp)['spec']
-        assert {'tab', 'tab_index'} <= set(old) and not {'tablet', 'tablet_index'} & set(old)
-        assert piece.get_hash(sp) != piece.hash
-
-
-# The probe: rows aggregated by a column, wherever they lie.
 
 def agg_probe(tmp_path, fit, ev, aggregateby=PATIENT, **spec):
     from dbx import FeatureAffineLogisticProbe

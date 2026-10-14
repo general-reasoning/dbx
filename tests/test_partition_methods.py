@@ -13,7 +13,7 @@ import pytest
 
 from dbx.datablocks import Datablock
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import DatatablePartition
+from dbx.dataparts import DatamapTable, DatatablePart, DatatablePartition
 
 
 @pytest.fixture(autouse=True)
@@ -324,7 +324,7 @@ def test_a_pieces_source_slice_points_back_and_takes_the_same_piece_of_the_sourc
             if not isinstance(entry, dict):
                 continue
             piece, source = part.tablet(i), p.datatable.tablet(entry['tab'])
-            rows = piece.source_rows()
+            rows = piece.source_index()[:, 1]
             assert rows.dtype == np.int64 and list(rows) == sorted(rows)
             assert set(piece.data(('source', 'tab'))['source']['tab']) == {entry['tab']}
             # The indices, applied to the source, are the piece -- what a tablet built from the source row by row reuses.
@@ -355,8 +355,11 @@ def test_the_same_seed_deals_the_same_pieces_with_the_same_hashes(tmp_path):
     assert pieces
     again = DatatablePartition(datalake=str(tmp_path / 'a'), spec=dict(
         datatable=tbl, fractions=[0.5, 0.5], partition_slice='meta', collator=collator(PATIENT, COHORT), seed=5))
-    assert [one.tablet(e).hash for e in pieces] == [again.tablet(e).hash for e in pieces]
-    assert len({one.tablet(e).hash for e in pieces}) == len(pieces)
+    def piece_hashes(partition):
+        return [partition.part(k).tablet(i).hash for k in range(partition.n_folds())
+                for i, e in enumerate(partition.tablets_indices(k)) if isinstance(e, dict)]
+    assert piece_hashes(one) == piece_hashes(again)
+    assert len(set(piece_hashes(one))) == len(pieces)
 
 
 def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
@@ -372,8 +375,9 @@ def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
 
 def test_a_piece_that_cannot_be_recovered_says_so(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
+    datamap = DatamapTable(datalake=str(tmp_path / 'p'), spec=dict(partition=p, fold=0))
     with pytest.raises(ValueError, match="cannot be recovered"):
-        p.tablet({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}).build()
+        datamap._entry_rows_({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}, 0)
 
 
 def test_a_mixed_tablet_upstream_of_a_feature_table_is_not_implemented(tmp_path):

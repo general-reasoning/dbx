@@ -191,7 +191,7 @@ def test_a_parts_pieces_and_packed_tablets_are_tag_keyed_built_and_read(tmp_path
             tablet = part.tablet(i)
             kinds.add(type(tablet).__name__)
             assert _tag_keyed(tablet) and tablet.valid(), (type(tablet).__name__, tablet.anchorkeypath)
-    assert ('DatatablePartitionTablet' if coalesce else 'DatatabletPiece') in kinds
+    assert 'MappedDatatablet' in kinds
 
 
 def test_core_tablets_are_tag_keyed_built_and_read(tmp_path):

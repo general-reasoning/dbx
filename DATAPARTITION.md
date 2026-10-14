@@ -19,10 +19,11 @@ Two optional columns constrain which rows go to which part:
 
 A tablet is dealt to a part whole when all of its rows carry the same stratum
 and, with partitionby, the same partition. Otherwise it is cut into
-`DatatabletPiece`s. "When a tablet is cut" below says exactly when and how. Once
+pieces. "When a tablet is cut" below says exactly when and how. Once
 the deal is done, *coalesce* can make a cut tablet whole again, and pool small
-tablets and pieces into packed tablets, `DatatablePartitionTablet`s: "What a part's tablets
-are" below.
+tablets and pieces into packed tablets: "What a part's tablets are" below. A
+part's piece or packed tablet is a `MappedDatatablet`, copying the rows its
+fold's map names: "Parts are tables pulled back along maps" below.
 
 The partition and the classes it makes live in `dbx.dataparts`; the collator
 naming its columns, in `dbx.datatables`:
@@ -257,13 +258,13 @@ for a piece; and, with `coalesce='pack'`, a packed tablet's record,
 `{"fold": 0, "pack": 0, "segments": [[{"tab": 1, "stratifyby": "s2"}, 0, 2], [2, 0, 3]]}`:
 rows *offset* to *offset + length* of each entry, in order.
 
-A part, `partition.part(k)`, is a `DatatablePart` reading part *k*'s list.
-Its tablet *i* is what entry *i* names: for a tablet index, the table's own tablet,
-with nothing copied; for a piece's record, a `DatatabletPiece`; for a packed
-tablet's record, a `DatatablePartitionTablet`, both made by `partition.tablet(entry)`.
-`part.build()` is the ordinary table build, in parallel. The whole tablets are
-built already and are skipped; each piece is built from its source tablet, and
-each packed tablet from the tablets its segments name.
+A part, `partition.part(k)`, is a `DatatablePart`: the table pulled back along
+part *k*'s map, a `DatamapTable` read from part *k*'s list. Its tablet *i* is what
+entry *i* names: for a tablet index, the table's own tablet, with nothing copied;
+for a piece's or a packed tablet's record, a `MappedDatatablet` copying the rows
+the record resolves to. `part.build()` is the ordinary table build, in parallel.
+The whole tablets are built already and are skipped; each copy is built from the
+tablets its record names.
 
 ### Why DEAL is not parallel
 
@@ -285,42 +286,46 @@ works on counts in memory.
 Only mixed tablets are split. A tablet holding one value per role is dealt whole,
 and its part reads it where it is.
 
-A `DatatabletPiece` is an ordinary `Datatablet`, so everything that reads tablets
-reads it unchanged: `data()`, `datastream()`, a probe. Its VAR:
+### Parts are tables pulled back along maps
 
-- `tablet`: the source tablet;
-- `columns`: the column spec of each role;
-- `values`: the value each role holds in the piece's rows, as read.
+A fold's layout is a `DatamapTable`, `DatamapTable(spec=dict(partition=p,
+fold=k))`, a `DatamapTablet` per tablet of the fold. A map tablet's `record` is
+`[(tablet, rows), ...]`: tablet *t* of the partitioned table and the indices of
+its rows taken, in order, None for all of them. It is resolved from the deal's
+entries, which stay compact: a whole tablet's index, a piece's values, a packed
+tablet's segments. A piece's rows are read off its tablet by its values, as they
+always were, and a packed tablet's are its segments' rows, in order. A map is not
+built; its deal writes it, and it is valid when the deal has dealt.
 
-So a piece is defined by its value, not by a list of rows. Its hash says
-"these rows of that tablet": readable, small however many rows it holds, and
-the same whatever the deal. Its tag is the source's and the values,
-`tab_000004#s5#p2`, which is how a probe tells two pieces of one slide apart.
+A part is the table pulled back along its fold's map, a `MappedDatatable`. Its
+tablet *i* is, for a record `[(t, None)]`, tablet *t* itself, the same block and
+hash, nothing written; for any other record, a `MappedDatatablet` copying the
+rows. A piece and a packed tablet are both of these; only the record differs.
+The part's map is derived from its VAR, `{partition, fold}`, not held in it, so
+its identity, and that of everything built on it, is what it was. See
+"TODO: three choices, untangled" below, for where this goes next.
+
+A `MappedDatatablet` is an ordinary `Datatablet`, so everything that reads
+tablets reads it unchanged: `data()`, `datastream()`, a probe. Its VAR is its
+map tablet and a collator, None for a part, naming the slices and columns it
+copies, every slice by default. Its identity is its place in the map. Its tag
+is its map's word for it: a piece's, the source's and the values,
+`tab_000004#s5#p2`, which is how a probe tells two pieces of one slide apart;
+a packed tablet's, its place, `pack<partition hash>_f0_000000`.
 
 Its slices are the source tablet's, declared as the source declares them, and
 `source`. A topic of the source that is not a slice belongs to the whole tablet,
-not to a subset of its rows, and is left out.
+not to a subset of its rows, and is left out. Its build takes its record's runs
+in order, and writes their rows to every slice, one slice at a time and a run at
+a time, so only one source slice is held whole and row *i* of each slice is
+still row *i* of the others. Resolving the record raises if the source's slices
+have different lengths, or if no row holds a piece's values any more, as when
+the source was rebuilt after it was partitioned.
 
-Its build re-reads the source's partition columns and finds the rows that
-hold its values. It writes those rows, in the same order, to every slice, one
-slice at a time, so row *i* of each slice is still row *i* of the others.
-It raises if the source's slices have different lengths, or if no row holds
-the values any more, as when the source was rebuilt after it was
-partitioned.
-
-### Packed tablets
-
-A `DatatablePartitionTablet` is an ordinary `Datatablet` too. Its VAR is its place,
-`partition`, `fold` and `index`, as a core tablet's is: what it holds is what
-its partition's record says that place holds. Its tag says the same,
-`pack<partition hash>_f0_000000`.
-
-Its slices are the partitioned table's, declared as its tablets declare them,
-and `source`. Its build takes its segments in order. A whole tablet's segment
-takes rows of all of that tablet's; a piece's selects the piece's rows by value
-first, as the piece does. The rows are written to every slice, one slice at
-a time and a segment at a time, so only one source slice is held whole. It
-raises if a segment's tablet no longer holds the rows the record counted.
+Until 2026-10-13 a piece was a `DatatabletPiece`, whose VAR was its source
+tablet and values, and a packed tablet a `DatatablePartitionTablet`, whose VAR
+was its place. Neither is reached: pieces and packed tablets are rebuilt. No
+CPTAC partition has either.
 
 ### The `source` slice
 
@@ -329,8 +334,8 @@ back with one slice, **`source`**, declared `DATASLICE(tab='int', row='int')`. R
 it is the tablet of the partitioned table, and the row of that tablet, that row *i*
 of every other slice was copied from. It is written in lockstep with them,
 so it is read like any other slice: `tablet.data('source')`, a zip with the
-others, a datastream. `piece.source_rows()` reads it as an array, and so
-does `source_index()`, on a piece, a packed tablet or a core tablet.
+others, a datastream. `source_index()` reads it as an array, on a
+`MappedDatatablet` or a core tablet.
 `part.source_index()` reads a whole part's: every row of it, as the
 `(tablet, row)` of the partitioned table, whatever tablet holds it.
 
@@ -822,6 +827,19 @@ by value (the CPTAC partitions have none), packed tablets, and every core
 partition and core part, which are recomputed -- their topics and tablets
 change form.
 
+### Progress
+
+1. Done: the identities pinned (`tests/test_datamap_identity.py`).
+2. Done: `DatamapTable`/`DatamapTablet` over today's deal, and `MappedDatatable`/
+   `MappedDatatablet`; `DatatablePart` is a `MappedDatatable`, and pieces and
+   packed tablets are `MappedDatatablet`s. The CPTAC folds keep their hashes,
+   their bags pulled back to themselves.
+3. Next: the layered pull, `MappedFeaturetable`/`MappedFeaturetablet`, and the
+   three upstream refusals gone.
+4. The core deal writes maps; core parts are mapped tables; a carbon map per fold.
+5. The callers: probes (`tablet_indices`, `source_index`), autopath's
+   `tomography.py`, `PancanTileFold`'s specializations.
+
 ### Settled (2026-10-13)
 
 - **A part is the table pulled back along its fold's map.** One `DatamapTable` per
@@ -848,12 +866,11 @@ All in `dbx/dataparts.py`, except the probe.
 | The per-tablet scan worker | `TabletPartitionScanCallable` |
 | SCAN, ITEMS, DEAL, the summary | `DatatablePartition._scan_`, `_items_`, `_deal_`, `_summary_` |
 | COALESCE | `DatatablePartition._rejoin_`, `_pack_`, `_entry_rows_` |
-| An entry to its tablet, piece or packed tablet | `DatatablePartition.tablet` |
-| A part as a table | `DatatablePartition.part`, `DatatablePart` |
-| A part accepting pieces and packed tablets as blocks | `DatatablePart.tablet`, `valid_tablet`, `_form_block_` |
+| A fold's map; an entry to its record | `DatamapTable`: `record`, `whole`, `tag_of`, `_entry_rows_`; `DatamapTablet.record` |
+| A part as a table: the table pulled back along its map | `DatatablePartition.part`, `MappedDatatable`, `DatatablePart` |
+| A mapped table accepting copies as blocks | `MappedDatatable.tablet`, `valid_tablet`, `_form_block_` |
 | A part's rows, as the table's | `DatatablePart.source_index` |
-| The piece | `DatatabletPiece`: `__build__`, `source_rows`, `source_index` |
-| The packed tablet | `DatatablePartitionTablet`: `__build__`, `segments`, `_segment_rows_` |
+| A piece, a packed tablet: a copy of the rows a record names | `MappedDatatablet`: `__build__`, `_sources_`, `_copied_`, `source_index` |
 | Selecting a tablet's rows by value; copying a tablet's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
 | The back-pointing slice | `SOURCE_SLICE`, `SOURCE`, `_source_index_` |
 | Core: scan, cluster, deal | `DatatableCorePartition`: `_lay_out_`, `_cluster_and_deal_`, `_cluster_master_`, `_cluster_distributed_`, `_deal_rows_` |

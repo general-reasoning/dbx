@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A part is its table pulled back along its fold's map.** New in
+  `dbx.dataparts`: `DatamapTable`, a fold's layout, a `DatamapTablet` per tablet
+  of the fold, each with its `record`, `[(tablet, rows | None)]`; and
+  `MappedDatatable`, a table pulled back along a map, whose tablets are the
+  mapped table's own where the record takes them whole, and otherwise
+  `MappedDatatablet`s copying the rows. `DatatablePart` is a `MappedDatatable`
+  whose map is derived from its VAR `{partition, fold}`, so every part, and
+  everything built on one, keeps its hash. `DatatabletPiece` and
+  `DatatablePartitionTablet` are gone, both now `MappedDatatablet`s:
+  pieces and packed tablets are rebuilt. `DatatablePartition.tablet(entry)` is
+  gone; `tablets(fold)` reads its part's. See DATAPARTITION.md, "Parts are
+  tables pulled back along maps".
 - **A partition's parts build with its workers.** `part()` of a
   `DatatablePartition` and of a `DatatableCorePartition` (a carbon one too)
   gives the part the partition's `parallelization` and `n_workers`, so its

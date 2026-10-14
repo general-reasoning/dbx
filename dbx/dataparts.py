@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 from streaming import StreamingDataset
 
-from .datablocks import DATADICT, DATADIR, DATAFILE, SAME, Datablock, Datastack, forward_property
+from .datablocks import DATADICT, DATADIR, DATAFILE, SAME, SYNTHETIC, Datablock, Datastack, forward_property
 from .databits import callable_executor
 from .datastreams import SharedMemoryManager, release_shared_memory_when_collected
 from .datatables import DATASLICE, Datacollator, DataslicesUpstream, Datatablet, Datatable
@@ -57,7 +57,7 @@ def _value_key_(value) -> str:
 
 PARTITION_ROLES = ('stratifyby', 'partitionby')
 
-#: The slice a repartitioned tablet -- a `DatatabletPiece`, a `DatatableCoreTablet` -- points back
+#: The slice a copying tablet -- a `MappedDatatablet`, a `DatatableCoreTablet` -- points back
 #: with: row i of it names the tablet and the row of the partitioned table that row i of
 #: every other slice was copied from.
 SOURCE_SLICE = 'source'
@@ -207,7 +207,7 @@ class DatatablePartition(Datablock):
     A tablet whose *stratifyby* and *partitionby* columns hold one value throughout is
     dealt whole. A tablet holding several -- several patients in one bag, tiles
     annotated one by one -- is cut: into PIECES, one per combination of its
-    values, each a `DatatabletPiece` -- the rows of that tablet holding those values.
+    values, each a `MappedDatatablet` of the rows of that tablet holding those values.
     A piece is dealt as a tablet is: with every tablet and piece of its stratum,
     within its partition.
 
@@ -223,7 +223,7 @@ class DatatablePartition(Datablock):
     - ``'pack'``: as ``'whole'``, and then a part's entries of fewer than
       *min_tablet_rows* rows -- tablets and pieces both -- are pooled, in source
       order, into packed tablets of *max_tablet_rows* rows (twice *min_tablet_rows* by
-      default), each a `DatatablePartitionTablet`. An entry may run across two packed
+      default), each a `MappedDatatablet`. An entry may run across two packed
       tablets; the last one of a part holds what is left. Larger entries stay as
       they are, so nothing is copied that is not small.
 
@@ -386,37 +386,9 @@ class DatatablePartition(Datablock):
         return data[int(fold)]
 
     def tablets(self, fold: int | str) -> list[Datatablet]:
-        return [self.tablet(entry) for entry in self.tablets_indices(fold)]
-
-    def tablet(self, entry: 'int | dict') -> Datatablet:
-        """The block an entry of ``tablets`` names: the table's tablet, the `DatatabletPiece` of it, or a `DatatablePartitionTablet`."""
-        table = self.var.datatable
-        if not isinstance(entry, dict):
-            return table.tablet(int(entry))
-        if 'pack' in entry:
-            fold, index = int(entry['fold']), int(entry['pack'])
-            return DatatablePartitionTablet(
-                datalake=self._datalake_,
-                storage_options=self.storage_options,
-                verbose=False,
-                tag=f"pack{self.hash[:8]}_f{fold}_{index:06d}",
-                spec=dict(datapoints_per_row=getattr(table.var, 'datapoints_per_row', 1),
-                          partition=self, fold=fold, index=index),
-            )
-        source = table.tablet(int(entry['tab']))
-        values = {role: entry[role] for role in PARTITION_ROLES if role in entry}
-        return DatatabletPiece(
-            # Where the partition is, as its folds are: a piece is derived from
-            # the partition, and the table's lake may be one nothing writes to.
-            datalake=self._datalake_,
-            storage_options=self.storage_options,
-            cache=getattr(source, 'cache', None),
-            cache_limit=getattr(source, 'cache_limit', None),
-            verbose=False,
-            tag=_piece_tag_(source.tag, values),
-            spec=dict(datapoints_per_row=source.var.datapoints_per_row, tablet=source, tablet_index=int(entry['tab']),
-                      columns={role: tuple(self.column_spec(role)) for role in values}, values=values),
-        )
+        """Part *fold*'s tablets: its table's, where it takes them whole, and the copies of the rest."""
+        part = self.part(fold)
+        return [part.tablet(i) for i in range(part.n_tablets)]
 
     def part(self, fold: int | str) -> DatatablePart:
         """Fold *fold* as a table: the `DatatablePart` holding its tablets and pieces.
@@ -731,19 +703,65 @@ class DatatablePartition(Datablock):
                 **coalesced, 'folds': folds, 'skipped': skipped}
 
 
-class DatatablePart(Datatable):
-    """Part *fold* of a `DatatablePartition`: a table of the tablets dealt to it.
+class DatamapTablet(Datatablet):
+    """The map of one tablet of a fold: which rows of which tablets of the mapped table it takes.
 
-    Its tablets are its table's own, pieces of them -- a `DatatabletPiece` for each
-    entry of ``tablet_indices`` that is a piece's record -- and, with
-    ``coalesce='pack'``, packed tablets, a `DatatablePartitionTablet` for each packed
-    tablet's record. The table's tablets are built where they are; the pieces and the
-    packed tablets are this part's to build, and its build() builds them, in
-    parallel, as any table builds its tablets, skipping the ones already built.
+    Its `record` is ``[(tablet, rows), ...]``: tablet *t* of the mapped table, and
+    the indices of its rows taken, in order -- None for all of them, a whole
+    tablet. A table pulled back along the map -- a `MappedDatatable` -- holds, as
+    its tablet of the same index, tablet *t* itself for a record ``[(t, None)]``,
+    and otherwise a `MappedDatatablet` copying those rows.
+
+    The record is its map's, written by the deal: a map tablet is not built. It is
+    resolved from the deal's compact entries -- a whole tablet's index, a piece's
+    values, a packed tablet's segments -- once per instance; a piece's rows are
+    read off its tablet, by its values, as they always were.
     """
 
-    # None: a part is its partition's, and no partition with a collator is reached from before
-    # the roles were renamed.
+    TOPICS = {'map': SYNTHETIC("[(tablet, rows)]: the rows of the mapped table's tablets it takes, read from its map")}
+    SPECIALIZATIONS = []
+
+    @dataclass
+    class VAR(Datatablet.VAR):
+        datamap: Datatable = None       # a DatamapTable, defined below: it names this class as its TABLET
+        index: int = 0
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not isinstance(self.var.datamap, DatamapTable):
+            raise ValueError(f"{type(self).__name__}: VAR.datamap must be a DatamapTable, "
+                             f"got {type(self.var.datamap).__name__}")
+
+    def __build__(self):
+        raise RuntimeError(f"{type(self).__name__}: a map tablet is not built -- its record is its map's, written by "
+                           f"its deal: build {self.var.datamap.var.partition.anchorkeypath}")
+
+    def valid(self) -> bool:
+        return self.var.datamap.valid()
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @functools.cached_property
+    def record(self) -> list:
+        """``[(tablet, rows | None), ...]``: the rows of the mapped table's tablets this tablet takes, in order."""
+        return self.var.datamap.record(self.var.index)
+
+
+class DatamapTable(Datatable):
+    """The map of fold *fold* of a partition: a `DatamapTablet` per tablet of the fold.
+
+    The layout of the fold, and nothing else: which rows of which tablets of the
+    mapped table -- the partition's table -- each tablet of the fold takes. The
+    deal -- the partition -- writes it, every fold at once; a table is then pulled
+    back along it, into a `MappedDatatable` -- a part -- and any table laid out as
+    the mapped one is, tablet for tablet and row for row, can be pulled back along
+    the same map. See DATAPARTITION.md, "TODO: three choices, untangled".
+    """
+
+    TABLET = DatamapTablet
+    TOPICS = {'map': SYNTHETIC("per tablet, [(tablet, rows)]: read from its partition's tablets")}
     SPECIALIZATIONS = []
 
     @dataclass
@@ -753,10 +771,210 @@ class DatatablePart(Datatable):
 
     # 1. Protocol and hooks ------------------------------------------------
 
+    def __build__(self):
+        raise RuntimeError(f"{type(self).__name__}: a map is not built -- its deal writes it: build "
+                           f"{self.var.partition.anchorkeypath}")
+
+    def __tablet__(self, idx: int, **kwargs) -> DatamapTablet:
+        return self.tablet(idx)
+
+    def __block__(self, idx: int) -> DatamapTablet:
+        return self.tablet(idx)
+
+    def valid(self) -> bool:
+        """Whether its deal has dealt: the partition's ``tablets`` topic is there, built or redirected."""
+        return self.var.partition.valid_topic('tablets')
+
+    # 2. Declared API ------------------------------------------------------
+
+    def tablet(self, idx: int) -> DatamapTablet:
+        return DatamapTablet(datalake=self._datalake_, storage_options=self.storage_options, verbose=False,
+                             tag=f"map{self.hash[:8]}_{int(idx):06d}", spec=dict(datamap=self, index=int(idx)))
+
+    def whole(self, idx: int) -> int | None:
+        """The tablet tablet *idx* of the fold is, whole -- or None, when it takes some rows only. Reads nothing."""
+        entry = self.entries[idx]
+        return None if isinstance(entry, dict) else int(entry)
+
+    def record(self, idx: int) -> list:
+        """Tablet *idx*'s ``[(tablet, rows | None), ...]`` -- see `DatamapTablet`."""
+        entry = self.entries[idx]
+        if not isinstance(entry, dict):
+            return [(int(entry), None)]
+        if 'pack' in entry:
+            return [(t, self._entry_rows_(e, t)[int(offset):int(offset) + int(length)])
+                    for e, offset, length in entry['segments'] for t in (self._entry_tablet_(e),)]
+        t = int(entry['tab'])
+        return [(t, self._entry_rows_(entry, t))]
+
+    def tag_of(self, idx: int) -> str:
+        """What a tablet copying tablet *idx*'s rows is tagged: a piece by its tablet and values, a packed tablet by its place."""
+        entry = self.entries[idx]
+        if not isinstance(entry, dict):
+            return self.datatable.tablet(int(entry)).tag
+        if 'pack' in entry:
+            return f"pack{self.var.partition.hash[:8]}_f{int(entry['fold'])}_{int(entry['pack']):06d}"
+        return _piece_tag_(self.datatable.tablet(int(entry['tab'])).tag, self._entry_values_(entry))
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @functools.cached_property
+    def entries(self) -> list:
+        """Its fold's entries, as its partition wrote them -- see `DatatablePartition.tablets_indices`."""
+        return self.var.partition.tablets_indices(self.var.fold)
+
+    @property
+    def n_tablets(self) -> int:
+        return len(self.entries)
+
+    @property
+    def datatable(self) -> Datatable:
+        """The mapped table: its partition's."""
+        return self.var.partition.datatable
+
+    # 4. Helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _entry_tablet_(entry) -> int:
+        return int(entry['tab']) if isinstance(entry, dict) else int(entry)
+
+    @staticmethod
+    def _entry_values_(entry) -> dict:
+        return {role: entry[role] for role in PARTITION_ROLES if role in entry}
+
+    def _entry_rows_(self, entry, t: int) -> np.ndarray:
+        """The rows of tablet *t* an entry takes: a whole tablet's every row, a piece's those holding its values."""
+        values = self._entry_values_(entry) if isinstance(entry, dict) else {}
+        columns = {role: tuple(self.var.partition.column_spec(role)) for role in values}
+        rows = _selected_rows_(self.datatable.tablet(t), columns, values, type(self).__name__)
+        return np.asarray(rows, dtype=np.int64)
+
+
+class MappedDatatablet(Datatablet):
+    """A tablet of a `MappedDatatable` that takes some rows of the mapped table: those its map tablet's record names.
+
+    Its slices are the mapped table's -- those its *collator* names, of every
+    role, or all of them -- declared as the mapped table's tablets declare them,
+    and it writes every one with the same rows in the same order; ``source``
+    names the tablet and the row each came from. A piece of a mixed tablet, a
+    packed tablet and a core tablet are all one of these: what differs is the
+    record.
+
+    Its identity is its map tablet's and its collator: what it holds is what that
+    place of the map takes.
+    """
+
+    SPECIALIZATIONS = []
+
+    @dataclass
+    class VAR(Datatablet.VAR):
+        map: DatamapTablet = None
+        collator: Datacollator | None = None
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not isinstance(self.var.map, DatamapTablet):
+            raise ValueError(f"{type(self).__name__}: VAR.map must be a DatamapTablet, got {type(self.var.map).__name__}")
+
+    def __build__(self):
+        what = type(self).__name__
+        sources = self._sources_()
+        first = sources[0][1]
+        copied = self._copied_(first)
+        columns = {s: {c: t for c, t in (self.declared_columns(s) or _written_columns_(first, s, what)).items()
+                       if cols is None or c in cols}
+                   for s, cols in copied.items()}
+        # A slice at a time, and within it a source tablet at a time, so only one
+        # source slice is held whole; the writers refuse unequal slices.
+        with self.slice_writers({**columns, SOURCE_SLICE: SOURCE.columns}) as writers:
+            for s, cols in copied.items():
+                for _, source, rows in sources:
+                    data = source._read_slice_(s)
+                    for i in rows:
+                        writers[s].write(data[i] if cols is None else {c: data[i][c] for c in cols})
+                    del data
+            for t, _, rows in sources:
+                for i in rows:
+                    writers[SOURCE_SLICE].write({'tab': int(t), 'row': int(i)})
+
+    # 2. Declared API ------------------------------------------------------
+
+    def source_index(self) -> np.ndarray:
+        """``(tablet, row)`` of the mapped table for each of this tablet's rows -- its ``source`` slice."""
+        return _source_index_(self)
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @forward_property({SOURCE_SLICE: SOURCE})
+    def TOPICS(self):
+        """The mapped table's slices it copies, as the tablet its first rows come from declares them, and ``source``.
+
+        On the class, with no map to ask, ``source`` alone.
+        """
+        t = self.var.map.record[0][0]
+        first = self.var.map.var.datamap.datatable.tablet(int(t))
+        topics = _slice_topics_(first, type(self).__name__)
+        copied = self._copied_(first)
+        out = {}
+        for s, cols in copied.items():
+            node = topics[s]
+            if cols is not None:
+                declared = first.declared_columns(s) or {}
+                node = DATASLICE(**{c: declared[c] for c in cols}) if all(c in declared for c in cols) else DATASLICE
+            out[s] = node
+        return {**out, SOURCE_SLICE: SOURCE}
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _copied_(self, first) -> dict:
+        """``{slice: [column, ...] | None}``: what it copies -- its collator's columns, by slice; every slice, whole, by default."""
+        collator = self.var.collator
+        if collator is None:
+            return {s: None for s in first.slices()}
+        out = {}
+        for role in collator.roles:
+            for pair in collator.pairs(role):
+                cols = out.setdefault(pair[0], [])
+                if pair[1] not in cols:
+                    cols.append(pair[1])
+        return out
+
+    def _sources_(self) -> list[tuple]:
+        """``(tablet index, tablet, rows)`` of the mapped table, for each run of its record: every row, for None."""
+        table, what = self.var.map.var.datamap.datatable, type(self).__name__
+        out = []
+        for t, rows in self.var.map.record:
+            source = table.tablet(int(t))
+            if rows is None:
+                rows = _selected_rows_(source, {}, {}, what)
+            out.append((int(t), source, [int(r) for r in rows]))
+        return out
+
+
+class MappedDatatable(Datatable):
+    """A table pulled back along a `DatamapTable`: a tablet per tablet of the map, of the mapped table's rows.
+
+    Its tablet *i* takes the rows map tablet *i* records: the mapped table's
+    tablet *t* itself, built where it is, for a whole tablet -- the identity map
+    pulls back to the identity, nothing copied -- and otherwise a
+    `MappedDatatablet`, this table's to build, copying the rows. Its build() builds
+    those, in parallel, as any table builds its tablets, skipping the ones built.
+
+    Its BLOCK and TOPICS are the mapped table's: it is a view of its tablets.
+    Subclasses say where the map comes from -- `datamap` -- and what a copying tablet
+    copies -- `copy_collator`, every slice by default.
+    """
+
+    SPECIALIZATIONS = []
+
+    # 1. Protocol and hooks ------------------------------------------------
+
     def __init__(self, *args, filter_built_tablets: bool = True, **kwargs):
-        # True by default: a part's tablets are its table's, so the ones the table
-        # has built are checked here, in the parent, and no callable is sent
-        # to form and check each one again in a worker.
+        # True by default: a mapped table's whole tablets are its mapped table's, so the ones it
+        # has built are checked here, in the parent, and no callable is sent to form and check
+        # each one again in a worker.
         super().__init__(*args, filter_built_tablets=filter_built_tablets, **kwargs)
 
     def __tablet__(self, idx: int, *, tag=None, **spec) -> Datatablet:
@@ -771,39 +989,49 @@ class DatatablePart(Datatable):
         return self.datatable.slices(recursive=recursive)
 
     def tablet(self, idx: int) -> Datatablet:
-        """Tablet *idx* of this part: its table's tablet, or the `DatatabletPiece` or `DatatablePartitionTablet` its entry records."""
-        entry = self.tablet_indices[idx]
-        if isinstance(entry, dict):
-            return self.var.partition.tablet(entry)
-        return self.datatable.tablet(entry)
+        """Tablet *idx*: the mapped table's tablet, taken whole, or the `MappedDatatablet` copying the rows its map names."""
+        whole = self.datamap.whole(idx)
+        if whole is not None:
+            return self.datatable.tablet(whole)
+        first = self.datatable.tablet(int(self.datamap.record(idx)[0][0]))
+        return MappedDatatablet(
+            # Where the map is: a copying tablet is derived from the map, and the mapped
+            # table's lake may be one nothing writes to.
+            datalake=self.datamap._datalake_,
+            storage_options=self.storage_options,
+            cache=getattr(first, 'cache', None),
+            cache_limit=getattr(first, 'cache_limit', None),
+            verbose=False,
+            tag=self.datamap.tag_of(idx),
+            spec=dict(datapoints_per_row=getattr(self.datatable.var, 'datapoints_per_row', 1),
+                      map=self.datamap.tablet(idx), collator=self.copy_collator),
+        )
 
     def valid_tablet(self, idx: int, validation: str | None = None) -> bool:
-        """Whether tablet *idx* is valid: this part's manifest, or its table's tablet, or the piece -- see `Datastack.valid_blocks`."""
+        """Whether tablet *idx* is valid: this table's manifest, or the mapped table's tablet, or the copy -- see `Datastack.valid_blocks`."""
         validation = self._validation_(validation)
         if validation == 'cross_check' and self._blocks_cross_checked_():
             return True
-        entry = self.tablet_indices[idx]
-        if isinstance(entry, dict):
-            piece = self.tablet(idx)
-            return bool(piece.validate() if validation == 'validate' else piece.valid())
+        whole = self.datamap.whole(idx)
+        if whole is None:
+            copy = self.tablet(idx)
+            return bool(copy.validate() if validation == 'validate' else copy.valid())
         full = 'validate' if validation == 'validate' else 'valid'
-        return self.datatable.valid_tablet(entry, validation=full)
+        return self.datatable.valid_tablet(whole, validation=full)
 
     valid_block = valid_tablet
 
     def redirected_tablet(self, idx: int) -> bool:
-        entry = self.tablet_indices[idx]
-        if isinstance(entry, dict):
-            return self.tablet(idx).redirected()
-        return self.datatable.redirected_tablet(entry)
+        whole = self.datamap.whole(idx)
+        return self.tablet(idx).redirected() if whole is None else self.datatable.redirected_tablet(whole)
 
     redirected_block = redirected_tablet
 
     def validate_tablet(self, idx: int, **kwargs) -> bool:
-        entry = self.tablet_indices[idx]
-        if isinstance(entry, dict):
+        whole = self.datamap.whole(idx)
+        if whole is None:
             return Datastack.validate_block(self, idx, **kwargs)
-        return self.datatable.validate_tablet(entry, **kwargs)
+        return self.datatable.validate_tablet(whole, **kwargs)
 
     validate_block = validate_tablet
 
@@ -832,32 +1060,22 @@ class DatatablePart(Datatable):
             streaming_kwargs['streams'] = self._tablet_streams_(slice, local)
             return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
 
-    def source_index(self) -> np.ndarray:
-        """``(tablet, row)`` of the partitioned table for each of this part's rows, tablet by tablet -- an ``(N, 2)`` array.
-
-        Which rows of the table it holds, however they are kept: a whole tablet is
-        all of that tablet's rows, a piece or a packed tablet what its ``source``
-        slice names -- so it must be built.
-        """
-        out, rows_slice = [], self.var.partition._partition_slice_name_
-        for idx, entry in enumerate(self.tablet_indices):
-            if isinstance(entry, dict):
-                out.append(self.tablet(idx).source_index())
-            else:
-                n = int(self.datatable.tablet(entry).n_rows(rows_slice))
-                out.append(np.stack([np.full(n, int(entry), dtype=np.int64), np.arange(n, dtype=np.int64)], axis=1))
-        return np.concatenate(out) if out else np.zeros((0, 2), dtype=np.int64)
-
     # 3. Accessors ---------------------------------------------------------
 
-    @functools.cached_property
-    def tablet_indices(self) -> list:
-        """The partition's entries for this fold: tablet indices, and the records of pieces -- see `DatatablePartition.tablets_indices`."""
-        return self.var.partition.tablets_indices(self.var.fold)
+    @property
+    def datamap(self) -> DatamapTable:
+        """The map it is pulled back along."""
+        raise NotImplementedError(f"{type(self).__name__}: a mapped table says where its map comes from")
+
+    @property
+    def copy_collator(self) -> Datacollator | None:
+        """What a copying tablet copies: None, every slice the mapped table's tablets hold."""
+        return None
 
     @property
     def datatable(self) -> Datatable:
-        return self.var.partition.datatable
+        """The mapped table: the one its map maps."""
+        return self.datamap.datatable
 
     @property
     def datapoints_per_row(self) -> int:
@@ -865,12 +1083,12 @@ class DatatablePart(Datatable):
 
     @forward_property(Datatablet)
     def TABLET(self):
-        """The partitioned table's TABLET: on the class, `Datatablet` -- what every part's tablets are."""
+        """The mapped table's TABLET: on the class, `Datatablet` -- what every mapped table's tablets are."""
         return getattr(self.datatable, 'TABLET', None)
 
     @forward_property({})
     def TOPICS(self):
-        """The partitioned table's TOPICS: a part is a view of its tablets, and declares nothing of its own.
+        """The mapped table's TOPICS: a mapped table is a view of its tablets, and declares nothing of its own.
 
         On the class, with no table to ask, ``{}``.
         """
@@ -878,7 +1096,97 @@ class DatatablePart(Datatable):
 
     @property
     def n_tablets(self) -> int:
-        return len(self.tablet_indices)
+        return self.datamap.n_tablets
+
+    # 4. Helpers -----------------------------------------------------------
+
+    def _read_slice_(self, slice, *, tablets=None, **kwargs):
+        indices = range(self.n_tablets) if tablets is None else tablets
+        datapoints = []
+        for idx in indices:
+            datapoints.extend(self.tablet(idx)._read_slice_(slice, **kwargs))
+        return datapoints
+
+    def _blocks_datalake_(self):
+        """A mapped table's whole tablets are its mapped table's, and are stored where they are."""
+        return self.datatable._blocks_datalake_()
+
+    def _form_block_(self, idx: int, *, use_specializations='stack'):
+        """As `Datastack._form_block_`, and a copying tablet passes for the TABLET of the tablets it copies.
+
+        A mapped table's BLOCK is its mapped table's TABLET, and is in its hash, so it
+        stays that for a mapped table holding copies; a copy copies the mapped table's
+        own tablets, which are of that class by that table's own check.
+        """
+        if self.datamap.whole(idx) is not None:
+            return super()._form_block_(idx, use_specializations=use_specializations)
+        with self._block_specializations_in_force_(use_specializations):
+            return self._adopt_(self.__block__(idx), keyby=True)
+
+    def _block_class_(self):
+        """A mapped table's tablets are its mapped table's, and so is its BLOCK."""
+        try:
+            table = self.datatable
+        except Exception:
+            return None
+        return table._block_class_() if table is not None else None
+
+
+class DatatablePart(MappedDatatable):
+    """Part *fold* of a `DatatablePartition`: its table, pulled back along the fold's map.
+
+    Its map is the `DatamapTable` of ``(partition, fold)``, derived, not held: its
+    VAR is ``{partition, fold}``, as it has always been, and so is every identity
+    built on a part. Its tablets are its table's own, where the fold takes them
+    whole, and otherwise `MappedDatatablet`s -- a piece of a mixed tablet, a packed
+    tablet -- this part's to build.
+    """
+
+    # None: a part is its partition's, and no partition with a collator is reached from before
+    # the roles were renamed.
+    SPECIALIZATIONS = []
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        partition: DatatablePartition
+        fold: int
+
+    # 2. Declared API ------------------------------------------------------
+
+    def source_index(self) -> np.ndarray:
+        """``(tablet, row)`` of the partitioned table for each of this part's rows, tablet by tablet -- an ``(N, 2)`` array.
+
+        Which rows of the table it holds, however they are kept: a whole tablet is
+        all of that tablet's rows, a copy what its ``source`` slice names -- so it
+        must be built.
+        """
+        out, rows_slice = [], self.var.partition._partition_slice_name_
+        for idx in range(self.n_tablets):
+            whole = self.datamap.whole(idx)
+            if whole is None:
+                out.append(self.tablet(idx).source_index())
+            else:
+                n = int(self.datatable.tablet(whole).n_rows(rows_slice))
+                out.append(np.stack([np.full(n, whole, dtype=np.int64), np.arange(n, dtype=np.int64)], axis=1))
+        return np.concatenate(out) if out else np.zeros((0, 2), dtype=np.int64)
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @functools.cached_property
+    def datamap(self) -> DatamapTable:
+        """The map of its fold: derived from ``(partition, fold)``, so that its VAR -- and every identity built on it -- is as it was."""
+        partition = self.var.partition
+        return DatamapTable(datalake=partition._datalake_, storage_options=partition.storage_options,
+                            spec=dict(partition=partition, fold=self.var.fold))
+
+    @property
+    def tablet_indices(self) -> list:
+        """The partition's entries for this fold -- see `DatatablePartition.tablets_indices`."""
+        return self.datamap.entries
+
+    @property
+    def datatable(self) -> Datatable:
+        return self.var.partition.datatable
 
     @property
     def dealt(self) -> bool:
@@ -897,258 +1205,11 @@ class DatatablePart(Datatable):
         """Nothing to specialize while its tablets are not dealt -- see `valid`; else as any table."""
         return super().specialize(*args, **kwargs) if self.dealt else self
 
-    # 4. Helpers -----------------------------------------------------------
-
-
-    def _read_slice_(self, slice, *, tablets=None, **kwargs):
-        if tablets is None:
-            indices = range(self.n_tablets)
-        else:
-            indices = tablets
-        datapoints = []
-        for idx in indices:
-            datapoints.extend(self.tablet(idx)._read_slice_(slice, **kwargs))
-        return datapoints
-
-    def _blocks_datalake_(self):
-        """A part's tablets are its table's, and are stored where they are."""
-        return self.datatable._blocks_datalake_()
-
-    def _form_block_(self, idx: int, *, use_specializations='stack'):
-        """As `Datastack._form_block_`, and a piece passes for the TABLET it is a piece of, a packed tablet for the TABLET it packs.
-
-        A part's BLOCK is its table's TABLET, and is in its hash, so it stays that
-        for a part holding pieces and packed tablets; a piece is a `DatatabletPiece`
-        of a tablet of that class, and is checked as one. A packed tablet packs the
-        table's own tablets, which are of that class by the table's own check.
-        """
-        if not isinstance(self.tablet_indices[idx], dict):
-            return super()._form_block_(idx, use_specializations=use_specializations)
-        with self._block_specializations_in_force_(use_specializations):
-            piece = self._adopt_(self.__block__(idx), keyby=True)
-        if isinstance(piece, DatatablePartitionTablet):
-            return piece
-        declared = self._block_class_()
-        if declared is not None and not isinstance(piece.var.tablet, declared):
-            raise TypeError(
-                f"{self.__class__.__name__}.block({idx}) is a piece of a {type(piece.var.tablet).__name__}, "
-                f"not of the {declared.__name__} its BLOCK declares"
-            )
-        return piece
-
     def _block_class_(self):
         """A part's tablets are its table's, and so is its BLOCK."""
         table = getattr(getattr(self, 'var', None), 'partition', None)
         table = getattr(table, 'datatable', None)
         return table._block_class_() if table is not None else None
-
-class DatatabletPiece(Datatablet):
-    """The rows of one tablet holding one value of each partition column: a piece of a mixed tablet.
-
-    What a `DatatablePartition` deals in place of a tablet whose *stratifyby* or
-    *partitionby* column holds several values. A piece is defined by its value,
-    not by a list of rows: *tablet* is the source tablet, *columns* the column spec
-    of each role, ``{role: (slice, column[, key, ...])}``, and *values* the
-    value each role holds in the piece's rows, as read. So its identity is
-    readable -- these rows of that tablet -- stable whatever the deal, and small,
-    however many rows it holds; its build re-reads the columns and selects the
-    rows itself.
-
-    Its slices are the source tablet's, declared as the source declares them, and
-    it writes every one of them with the same rows, in the same order, so row
-    i of each is still row i of the others. Only the slices: a topic of the
-    source that is not a slice is the tablet's, not of any subset of its rows.
-
-    Its ``source`` slice records which rows those were: row i of it is the
-    source tablet's index in the partitioned table, and the row of it that row i
-    of every other slice was copied from. The value says which rows a piece
-    holds; the indices say it in a form another tablet can apply -- a tablet built
-    from the source row by row (a feature tablet over a sample tablet) takes the
-    same piece of itself by taking the same rows, without reading any
-    partition column, and a check that two tablets still agree has something to
-    compare.
-
-    A piece of a tablet that reads slices upstream (`DataslicesUpstream`, a
-    `Featuretablet`) is not implemented: it would have to be the same piece of
-    its upstream tablet too, and nothing says row i of the one is row i of the
-    other (see the TODO on `Featuretablet` about ``shared_upstream_column``).
-    """
-
-    # As DatatabPiece -- under dbx.datatables until 2026-10-09, then dbx.dataparts -- its VAR named its
-    # source tab and tab_index, until 2026-10-10.
-    SPECIALIZATIONS = [
-        Datablock.Specialization(
-            spec={}, topics=SAME, anchor=anchor, redirect_vars={'tablet': 'tab', 'tablet_index': 'tab_index'},
-            note=f"this very block, stored as {anchor}, its tablet and tablet_index then tablet and tablet_index")
-        for anchor in (f'{_DATATABLES_}.DatatabPiece', f'{__name__}.DatatabPiece')
-    ]
-
-    @dataclass
-    class VAR(Datatablet.VAR):
-        tablet: Datatablet = None
-        tablet_index: int = None
-        columns: dict = None
-        values: dict = None
-
-    # 1. Protocol and hooks ------------------------------------------------
-
-    def __post_init__(self):
-        super().__post_init__()
-        var = self.var
-        if var.tablet is None or var.tablet_index is None or not var.columns or var.values is None:
-            raise ValueError(f"{type(self).__name__}: VAR.tablet, VAR.tablet_index, VAR.columns and VAR.values are required")
-        if sorted(var.columns) != sorted(var.values):
-            raise ValueError(f"{type(self).__name__}: columns name the roles {sorted(var.columns)}, "
-                             f"values {sorted(var.values)}: each role's value is read from its column")
-        if isinstance(var.tablet, DataslicesUpstream):
-            raise NotImplementedError(
-                f"{type(self).__name__}: a piece of a {type(var.tablet).__name__}, which reads slices upstream, "
-                f"is not implemented -- it would have to be the same piece of its upstream tablet too. Split the "
-                f"upstream tablet, which holds the rows.")
-
-    def __build__(self):
-        source, what = self.var.tablet, type(self).__name__
-        rows = _selected_rows_(source, self.var.columns, self.var.values, what)
-        copied = [s for s in self.slices() if s != SOURCE_SLICE]
-        columns = {s: self.declared_columns(s) or _written_columns_(source, s, what) for s in copied}
-        # A slice at a time, so only one is held whole; the writers count, and refuse
-        # a build that wrote the slices unequally.
-        with self.slice_writers({**columns, SOURCE_SLICE: SOURCE.columns}) as writers:
-            for s in copied:
-                data = source._read_slice_(s)
-                for i in rows:
-                    writers[s].write(data[i])
-                del data
-            tablet = int(self.var.tablet_index)
-            for i in rows:
-                writers[SOURCE_SLICE].write({'tab': tablet, 'row': int(i)})
-
-    # 2. Declared API ------------------------------------------------------
-
-    def source_rows(self) -> np.ndarray:
-        """The rows of the source tablet this piece holds, in the order its slices hold them -- its ``source`` slice's."""
-        return np.asarray(self.data((SOURCE_SLICE, 'row'))[SOURCE_SLICE]['row'], dtype=np.int64)
-
-    def source_index(self) -> np.ndarray:
-        """``(tablet, row)`` of the partitioned table for each of this piece's rows -- its ``source`` slice."""
-        return _source_index_(self)
-
-    # 3. Accessors ---------------------------------------------------------
-
-    @forward_property({SOURCE_SLICE: SOURCE})
-    def TOPICS(self):
-        """The source tablet's slices, declared as it declares them, and ``source`` -- nothing else of its topics.
-
-        On the class, with no tablet to ask, ``source`` alone.
-        """
-        return _slice_topics_(self.var.tablet, type(self).__name__)
-
-
-class DatatablePartitionTablet(Datatablet):
-    """Rows of several of a part's entries, pooled into one tablet: what ``coalesce='pack'`` makes of small ones.
-
-    A `DatatablePartition` with ``coalesce='pack'`` pools each part's entries
-    of fewer than *min_tablet_rows* rows -- whole tablets and pieces -- into packed
-    tablets, so that a part is not a great many small tablets. A packed tablet's rows
-    are its record's segments, ``[entry, offset, length]``, in order: rows
-    *offset* to *offset + length* of the entry's, which are a whole tablet's rows,
-    or a piece's, selected by its value as a `DatatabletPiece` selects them.
-
-    Its slices are the partitioned table's, declared as its tablets declare them,
-    and it writes every one with the same rows in the same order; ``source``
-    names the tablet and the row of the partitioned table each came from.
-
-    Its identity is its place -- *partition*, *fold*, *index* -- as a core
-    tablet's is, since what it holds is what that partition's record says that
-    place holds.
-
-    A packed tablet holds rows of several source tablets, and so, typically, of
-    several slides: a probe takes the rows of one by a column, its
-    ``aggregateby``.
-    """
-
-    SPECIALIZATIONS = []
-
-    @dataclass
-    class VAR(Datatablet.VAR):
-        partition: DatatablePartition = None
-        fold: int = 0
-        index: int = 0
-
-    # 1. Protocol and hooks ------------------------------------------------
-
-    def __post_init__(self):
-        super().__post_init__()
-        if not isinstance(self.var.partition, DatatablePartition):
-            raise ValueError(f"{type(self).__name__}: VAR.partition must be a DatatablePartition, "
-                             f"got {type(self.var.partition).__name__}")
-
-    def __build__(self):
-        what = type(self).__name__
-        segments = self._segment_rows_()
-        copied = [s for s in self.slices() if s != SOURCE_SLICE]
-        first = segments[0][1]
-        columns = {s: self.declared_columns(s) or _written_columns_(first, s, what) for s in copied}
-        # A slice at a time, and within it a segment at a time, so only one
-        # source slice is held whole; the writers refuse unequal slices.
-        with self.slice_writers({**columns, SOURCE_SLICE: SOURCE.columns}) as writers:
-            for s in copied:
-                for _, source, rows in segments:
-                    data = source._read_slice_(s)
-                    for i in rows:
-                        writers[s].write(data[i])
-                    del data
-            for t, _, rows in segments:
-                for i in rows:
-                    writers[SOURCE_SLICE].write({'tab': int(t), 'row': int(i)})
-
-    # 2. Declared API ------------------------------------------------------
-
-    def segments(self) -> list:
-        """This packed tablet's segments, ``[entry, offset, length]``, as its partition recorded them."""
-        for entry in self.var.partition.tablets_indices(self.var.fold):
-            if isinstance(entry, dict) and entry.get('pack') == self.var.index:
-                return entry['segments']
-        raise ValueError(f"{type(self).__name__}: part {self.var.fold} of {self.var.partition.tag} holds no "
-                         f"packed tablet {self.var.index}")
-
-    def source_index(self) -> np.ndarray:
-        """``(tablet, row)`` of the partitioned table for each of this packed tablet's rows -- its ``source`` slice."""
-        return _source_index_(self)
-
-    # 3. Accessors ---------------------------------------------------------
-
-    @forward_property({SOURCE_SLICE: SOURCE})
-    def TOPICS(self):
-        """The partitioned table's slices, as the tablet of its first segment declares them, and ``source``.
-
-        On the class, with no partition to ask, ``source`` alone.
-        """
-        entry = self.segments()[0][0]
-        tablet = entry['tab'] if isinstance(entry, dict) else entry
-        return _slice_topics_(self.var.partition.datatable.tablet(int(tablet)), type(self).__name__)
-
-    # 4. Helpers -----------------------------------------------------------
-
-    def _segment_rows_(self) -> list[tuple]:
-        """``(tablet index, source tablet, rows)`` for each segment: the rows of that tablet it takes, in order."""
-        partition, what = self.var.partition, type(self).__name__
-        out = []
-        for entry, offset, length in self.segments():
-            if isinstance(entry, dict):
-                t = int(entry['tab'])
-                values = {role: entry[role] for role in PARTITION_ROLES if role in entry}
-                columns = {role: tuple(partition.column_spec(role)) for role in values}
-            else:
-                t, values, columns = int(entry), {}, {}
-            source = partition.datatable.tablet(t)
-            rows = _selected_rows_(source, columns, values, what)[int(offset):int(offset) + int(length)]
-            if len(rows) != int(length):
-                raise ValueError(f"{what}: {source.tag} holds {len(rows)} of the {length} rows its segment "
-                                 f"{[entry, offset, length]} takes. Was the tablet rebuilt since it was partitioned? "
-                                 f"Build the partition again over the table as it is now.")
-            out.append((t, source, rows))
-        return out
 
 
 #: The roles a `DatatableCorePartition`'s collator may hold -- see its docstring.

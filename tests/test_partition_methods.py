@@ -531,3 +531,32 @@ def test_a_part_of_a_partition_not_built_is_not_valid(tmp_path):
     p.build()
     assert p.part(0).dealt and p.part(0).build().valid()
 
+
+
+def test_a_map_is_a_table_its_tablets_storing_their_lots(tmp_path):
+    """A fold's map builds its tablets, in parallel, each storing its lot -- resolved once, from the deal."""
+    p = bag_partition(tmp_path / 'p', bags(tmp_path))
+    pieces = [i for i, e in enumerate(p.tablets_indices(0)) if isinstance(e, dict)]
+    assert pieces
+    datamap = p.datamap(0)
+    assert not datamap.valid() and not datamap.tablet(pieces[0]).valid()
+    with pytest.raises(ValueError, match="not built"):
+        datamap.lot(pieces[0])
+    DatamapTable(datalake=str(tmp_path / 'p'), spec=dict(partition=p, fold=0),
+                 parallelization='multiprocessing', n_workers=2).build()
+    assert datamap.valid()
+    for i in range(datamap.n_tablets):
+        stored, dealt = datamap.lot(i), p.lot(0, i)
+        assert [t for t, _ in stored] == [t for t, _ in dealt] == datamap.lot_tablets(i)
+        for (_, a), (_, b) in zip(stored, dealt):
+            assert (a is None and b is None) or list(a) == list(b)
+
+
+def test_a_copy_builds_its_map_tablet_first(tmp_path):
+    p = bag_partition(tmp_path / 'p', bags(tmp_path))
+    part = p.part(0)
+    i = next(i for i, e in enumerate(p.tablets_indices(0)) if isinstance(e, dict))
+    copy = part.tablet(i)
+    assert not copy.var.map.valid()
+    copy.build()
+    assert copy.var.map.valid() and copy.valid()

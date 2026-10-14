@@ -300,8 +300,17 @@ The deal answers for its lots, in the form it wrote them -- `partition.lot(k, i)
 for every deal. A plain deal's entries stay compact: a whole tablet's index, a
 piece's values, a packed tablet's segments; a piece's rows are read off its
 tablet by its values, as they always were. A core deal's lot is a run of its
-layout. A map is not built; its deal writes it, and it is valid when the deal has
-dealt.
+layout.
+
+A map is a table like any other: its build builds its map tablets, in parallel,
+with its deal's workers, and each stores its lot, resolved once, as its `lot`
+slice -- one row per run: the tablet, its rows, whether it is whole. `.lot` reads
+it, and raises while it is not built. A copy builds its own map tablet first, in
+its worker, so a part's copies build its map lazily and in parallel; a mapped
+table naming a map builds it first, in parallel, then its copies. A part of whole
+tablets -- every CPTAC fold -- needs no map built at all. A map tablet's VAR
+names its map, which forms it: `datamap` is in `TREE_SKIP_BUILDING` and
+`TREE_SKIP_VALIDATION`.
 
 A part is the table pulled back along its fold's map, a `MappedDatatable`. Its
 tablet *i* is, for a lot `[(t, None)]`, tablet *t* itself, the same block and
@@ -863,6 +872,10 @@ change form.
    table whose VAR names it, its copies checking it is laid out alike.
    `DatamapCoreTable`, `DatamapCarbonTable`, `DatatableCorePart` and
    `FeaturetableCorePart` are gone; `core.part(k)` is a pullback.
+4b. Done (2026-10-14): a map is a real table. Its build builds its `DatamapTablet`s
+   in parallel, each storing its lot, resolved once from the deal, as its `lot`
+   slice; a copy builds its map tablet first. The deal still answers `whole`,
+   `tag_of` and `lot_tablets` -- what a lot draws on, no row resolved -- cheaply.
 5. The callers: probes (`tablet_indices`, `source_index`), autopath's
    `tomography.py`, `PancanTileFold`'s specializations.
 
@@ -902,7 +915,7 @@ All in `dbx/dataparts.py`, except the probe.
 | SCAN, ITEMS, DEAL, the summary | `DatatablePartition._scan_`, `_items_`, `_deal_`, `_summary_` |
 | COALESCE | `DatatablePartition._rejoin_`, `_pack_`, `_entry_rows_` |
 | A fold's lots, as the deal wrote them | `DatatablePartition.lot`, `whole`, `tag_of`, `dealt`, `_lot_rows_`; `DatatableCorePartition.lot` |
-| A fold's map, and its tablets' lots | `DatamapTable`, `DatamapTablet.lot` |
+| A fold's map, and its tablets' lots, built and stored | `DatamapTable`, `DatamapTablet.__build__`, `DatamapTablet.lot`; `lot_tablets` |
 | A part as a table: the table pulled back along its map | `DatatablePartition.part`, `MappedDatatable`, `DatatablePart` |
 | A mapped table accepting copies as blocks | `MappedDatatable.tablet`, `valid_tablet`, `_form_block_` |
 | A part's rows, as the table's | `DatatablePart.source_index` |

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A map is a real table.** `DatamapTable` builds its `DatamapTablet`s, in
+  parallel with its deal's workers, each storing its lot -- resolved once from the
+  deal -- as its `lot` slice; `DatamapTablet.lot` reads it, and raises while it is
+  not built. A copy builds its map tablet first; a mapped table naming a map
+  builds it first. The deal answers `lot_tablets(fold, i)` -- the tablets a lot
+  draws on -- without resolving a row, for what a copy needs before anything is
+  built. A part of whole tablets builds no map.
 - **One map for every deal, and a fold tablet's rows are its lot.** A deal answers
   for its lots -- `DatatablePartition.lot(fold, i)`, `whole`, `tag_of`, `dealt` --
   in the form it wrote them, a core deal's a run of its layout; `DatamapTable`

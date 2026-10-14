@@ -28,7 +28,7 @@ from dataclasses import dataclass
 import numpy as np
 from streaming import StreamingDataset
 
-from .datablocks import DATADICT, DATADIR, DATAFILE, SAME, SYNTHETIC, Datablock, Datastack, forward_property
+from .datablocks import DATADICT, DATADIR, DATAFILE, SAME, Datablock, Datastack, forward_property
 from .databits import callable_executor
 from .datastreams import SharedMemoryManager, release_shared_memory_when_collected
 from .datatables import DATASLICE, SLICETOPIC, Datacollator, DataslicesUpstream, Datatablet, Datatable
@@ -387,8 +387,8 @@ class DatatablePartition(Datablock):
 
     def datamap(self, fold: int | str) -> DatamapTable:
         """Fold *fold*'s map: which rows of which of its table's tablets each of the fold's tablets takes."""
-        return DatamapTable(datalake=self._datalake_, storage_options=self.storage_options,
-                            spec=dict(partition=self, fold=fold))
+        # The deal's workers: the map builds its tablets, in parallel, as a part does.
+        return DatamapTable(spec=dict(partition=self, fold=fold), **self._part_kwargs_)
 
     def lot(self, fold: int | str, idx: int) -> list:
         """Tablet *idx* of fold *fold*'s lot: ``[(tablet, rows | None), ...]``, the rows of the table's tablets it takes.
@@ -406,6 +406,15 @@ class DatatablePartition(Datablock):
                     for t in (int(e['tab']) if isinstance(e, dict) else int(e),)]
         t = int(entry['tab'])
         return [(t, self._lot_rows_(entry, t))]
+
+    def lot_tablets(self, fold: int | str, idx: int) -> list[int]:
+        """The tablets tablet *idx* of fold *fold*'s lot takes rows of, in order: its entry's, no row resolved."""
+        entry = self._dealt_tablets_[int(fold)][int(idx)]
+        if not isinstance(entry, dict):
+            return [int(entry)]
+        if 'pack' in entry:
+            return [int(e['tab']) if isinstance(e, dict) else int(e) for e, _, _ in entry['segments']]
+        return [int(entry['tab'])]
 
     def whole(self, fold: int | str, idx: int) -> int | None:
         """The tablet tablet *idx* of fold *fold* is, whole -- or None, when it takes some rows only. Reads no rows."""
@@ -758,12 +767,21 @@ class DatamapTablet(Datatablet):
     map -- a `MappedDatatable` -- holds, as its tablet of the same index, tablet *t*
     itself for a lot ``[(t, None)]``, and otherwise a copy of the rows.
 
-    The lot is its deal's -- `DatatablePartition.lot` -- written by the deal: a map
-    tablet is not built, and holds nothing else.
+    Its build resolves its lot from its deal -- `DatatablePartition.lot` -- once: a
+    piece's rows read off its tablet by its values, a core tablet's sliced out of
+    the layout. It stores it as its ``lot`` slice, one row per run: the tablet, its
+    rows, and whether it is taken whole. Built by its map, in parallel, or by a copy
+    that needs it, first.
+
+    Its VAR names its map, which forms it: ``datamap`` is in `TREE_SKIP_BUILDING`
+    and `TREE_SKIP_VALIDATION`, so building it does not build its map, which builds
+    it.
     """
 
-    TOPICS = {'map': SYNTHETIC("[(tablet, rows)]: its lot, the rows of the mapped table's tablets it takes, read from its deal")}
+    TOPICS = {'lot': DATASLICE(tab='int', rows='ndarray:int64', whole='int')}
     SPECIALIZATIONS = []
+    TREE_SKIP_BUILDING = ('datamap',)
+    TREE_SKIP_VALIDATION = ('datamap',)
 
     @dataclass
     class VAR(Datatablet.VAR):
@@ -779,18 +797,29 @@ class DatamapTablet(Datatablet):
                              f"got {type(self.var.datamap).__name__}")
 
     def __build__(self):
-        raise RuntimeError(f"{type(self).__name__}: a map tablet is not built -- its lot is its deal's: build "
-                           f"{self.var.datamap.var.partition.anchorkeypath}")
-
-    def valid(self) -> bool:
-        return self.var.datamap.valid()
+        datamap = self.var.datamap
+        deal = datamap.var.partition
+        if not deal.dealt():
+            raise ValueError(f"{type(self).__name__}: its deal has not dealt -- build {deal.anchorkeypath} first: "
+                             f"a map tablet's lot is its deal's")
+        with self.slice_writers() as writers:
+            for t, rows in deal.lot(datamap.var.fold, self.var.index):
+                # A whole tablet's rows are [-1], read as None: MDS encodes no empty array.
+                writers['lot'].write({'tab': int(t), 'whole': int(rows is None),
+                                      'rows': np.full(1, -1, dtype=np.int64) if rows is None
+                                      else np.asarray(rows, dtype=np.int64)})
 
     # 3. Accessors ---------------------------------------------------------
 
     @functools.cached_property
     def lot(self) -> list:
-        """``[(tablet, rows | None), ...]``: the rows of the mapped table's tablets this tablet takes, in order."""
-        return self.var.datamap.lot(self.var.index)
+        """``[(tablet, rows | None), ...]``: the rows of the mapped table's tablets this tablet takes, in order -- as built."""
+        if not self.valid():
+            raise ValueError(f"{type(self).__name__} {self.tag}: not built -- build it, or its map, "
+                             f"{self.var.datamap.anchorkeypath}, which builds its tablets in parallel")
+        lot = self.data('lot', concat=False)['lot']
+        return [(int(t), None if w else np.asarray(r, dtype=np.int64))
+                for t, r, w in zip(lot['tab'], lot['rows'], lot['whole'])]
 
 
 class DatamapTable(Datatable):
@@ -806,7 +835,7 @@ class DatamapTable(Datatable):
     """
 
     TABLET = DatamapTablet
-    TOPICS = {'map': SYNTHETIC("per tablet, [(tablet, rows)]: its lot, read from its deal")}
+    TOPICS = Datatable.TOPICS
     SPECIALIZATIONS = []
 
     @dataclass
@@ -816,29 +845,20 @@ class DatamapTable(Datatable):
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __build__(self):
-        raise RuntimeError(f"{type(self).__name__}: a map is not built -- its deal writes it: build "
-                           f"{self.var.partition.anchorkeypath}")
-
-    def __tablet__(self, idx: int, **kwargs) -> DatamapTablet:
-        return self.tablet(idx)
-
-    def __block__(self, idx: int) -> DatamapTablet:
-        return self.tablet(idx)
-
-    def valid(self) -> bool:
-        """Whether its deal has dealt."""
-        return self.var.partition.dealt()
+    def __tablet__(self, idx: int, *, tag=None, **spec) -> DatamapTablet:
+        return DatamapTablet(datalake=self._datalake_, storage_options=self.storage_options, verbose=False,
+                             tag=tag if tag is not None else f"map{self.hash[:8]}_{int(idx):06d}",
+                             spec=dict(datamap=self, index=int(idx)))
 
     # 2. Declared API ------------------------------------------------------
 
-    def tablet(self, idx: int) -> DatamapTablet:
-        return DatamapTablet(datalake=self._datalake_, storage_options=self.storage_options, verbose=False,
-                             tag=f"map{self.hash[:8]}_{int(idx):06d}", spec=dict(datamap=self, index=int(idx)))
-
     def lot(self, idx: int) -> list:
-        """Tablet *idx*'s lot, ``[(tablet, rows | None), ...]`` -- see `DatamapTablet`."""
-        return self.var.partition.lot(self.var.fold, idx)
+        """Tablet *idx*'s lot, ``[(tablet, rows | None), ...]``, as its map tablet stores it -- see `DatamapTablet`."""
+        return self.tablet(idx).lot
+
+    def lot_tablets(self, idx: int) -> list[int]:
+        """The tablets tablet *idx*'s lot takes rows of, in order, from the deal: no row resolved, nothing built."""
+        return self.var.partition.lot_tablets(self.var.fold, idx)
 
     def whole(self, idx: int) -> int | None:
         """The tablet tablet *idx* of the fold is, whole -- or None, when it takes some rows only."""
@@ -942,6 +962,12 @@ class MappedDatatablet(Datatablet):
                     for i in rows:
                         writers[SOURCE_SLICE].write({'tab': int(t), 'row': int(i)})
 
+    def build(self, *args, **kwargs):
+        """Its map tablet first -- its lot, resolved once, stored -- then itself."""
+        if not self.var.map.valid():
+            self.var.map.build()
+        return super().build(*args, **kwargs)
+
     # 2. Declared API ------------------------------------------------------
 
     def source_index(self) -> np.ndarray:
@@ -961,7 +987,8 @@ class MappedDatatablet(Datatablet):
 
         On the class, with no map to ask, nothing: even ``source`` is spelled as the slices it copies are.
         """
-        first = self.source_table.tablet(int(self.var.map.lot[0][0]))
+        mt = self.var.map
+        first = self.source_table.tablet(mt.var.datamap.lot_tablets(mt.var.index)[0])
         topics = _slice_topics_(first, type(self).__name__)
         copied = self._copied_(first)
         out = {}
@@ -1085,6 +1112,13 @@ class MappedDatatable(Datatable):
     def __block__(self, idx: int) -> Datatablet:
         return self.tablet(idx)
 
+    def build(self, *args, **kwargs):
+        """Its map first, when it names one -- the lots, built in parallel -- then its copies, in parallel."""
+        datamap = getattr(self.var, 'datamap', None)
+        if datamap is not None and not datamap.valid():
+            datamap.build()
+        return super().build(*args, **kwargs)
+
     # 2. Declared API ------------------------------------------------------
 
     def slices(self, recursive: bool = False):
@@ -1109,7 +1143,7 @@ class MappedDatatable(Datatable):
         whole = self.datamap.whole(idx)
         if whole is not None:
             return self.datatable.tablet(whole)
-        first = self.datatable.tablet(int(self.datamap.lot(idx)[0][0]))
+        first = self.datatable.tablet(self.datamap.lot_tablets(idx)[0])
         spec = dict(datapoints_per_row=getattr(self.datatable.var, 'datapoints_per_row', 1),
                     map=self.datamap.tablet(idx), datatable=self._target_, collator=self.copy_collator)
         cls = MappedDatatablet
@@ -1779,6 +1813,14 @@ class DatatableCorePartition(DatatablePartition):
             return []
         cut = np.flatnonzero(np.diff(layout[:, 0])) + 1
         return [(int(run[0, 0]), run[:, 1].astype(np.int64)) for run in np.split(layout, cut)]
+
+    def lot_tablets(self, fold: int | str, idx: int) -> list[int]:
+        """The tablets core tablet *idx* of fold *fold* takes rows of, in the layout's order."""
+        start, end = self._dealt_tablets_[int(fold)][int(idx)]
+        tabs = self._layouts_(int(fold))[int(start):int(end), 0]
+        if not len(tabs):
+            return []
+        return [int(t) for t in tabs[np.r_[0, np.flatnonzero(np.diff(tabs)) + 1]]]
 
     def whole(self, fold: int | str, idx: int) -> int | None:
         """None: a core tablet is a copy, never a whole tablet."""

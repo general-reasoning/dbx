@@ -153,8 +153,9 @@ def test_core_tablets_carry_what_the_collator_names_and_point_back(tmp_path):
         part = p.datamap(k).pullback(None, p.var.collator, parallelization='multiprocessing', n_workers=2)
         assert part.hash == p.part(k).hash and isinstance(part.tablet(0), MappedDatatablet)
         assert type(part.datamap) is DatamapTable and part.datamap.whole(0) is None, "a core tablet is a copy"
-        assert sum(len(rows) for _, rows in part.datamap.lot(0)) == 16, "a core tablet's lot: a run of the layout"
         part.build()
+        assert part.datamap.valid(), "built before its copies"
+        assert sum(len(rows) for _, rows in part.datamap.lot(0)) == 16, "a core tablet's lot: a run of the layout"
         assert part.slices() == ('pts', 'source')
         fl = p.layout(k)
         assert part.n_tablets == -(-len(fl) // 16)

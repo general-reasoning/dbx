@@ -15,7 +15,7 @@ import pytest
 
 from dbx.datablocks import Datablock
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import (DatamapCarbonTable, DatamapTable, DatatablePart, DatatablePartition, FeaturetablePart,
+from dbx.dataparts import (DatamapTable, DatatablePart, DatatablePartition, FeaturetablePart,
                            MappedDatatable, MappedDatatablet, MappedFeaturetablet)
 
 
@@ -378,9 +378,8 @@ def test_a_fold_builds_its_pieces_in_parallel(tmp_path):
 
 def test_a_piece_that_cannot_be_recovered_says_so(tmp_path):
     p = bag_partition(tmp_path / 'p', bags(tmp_path))
-    datamap = DatamapTable(datalake=str(tmp_path / 'p'), spec=dict(partition=p, fold=0))
     with pytest.raises(ValueError, match="cannot be recovered"):
-        datamap._entry_rows_({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}, 0)
+        p._lot_rows_({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}, 0)
 
 
 def _features(url):
@@ -429,7 +428,7 @@ def test_a_mixed_feature_tablet_is_cut_layer_by_layer(tmp_path, coalesce):
     assert copies
 
 
-def test_a_carbon_map_refuses_a_table_not_laid_out_alike(tmp_path):
+def test_a_table_not_laid_out_alike_is_refused_by_its_copies(tmp_path):
     from test_probes import DummySampleTable
     url = str(tmp_path)
     features = _features(url)
@@ -437,11 +436,12 @@ def test_a_carbon_map_refuses_a_table_not_laid_out_alike(tmp_path):
         datatable=features, fractions=[0.5, 0.5], partition_slice='features', seed=2,
         collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)))).build()
     datamap = p.part(0).datamap
-    alike = DatamapCarbonTable(datalake=url, spec=dict(template=datamap, datatable=features.var.upstream))
-    assert [t for t, _ in alike.record(0)] == [t for t, _ in datamap.record(0)]
+    alike = datamap.pullback(features.var.upstream)
+    assert alike.datatable.hash == features.var.upstream.hash and alike.datamap.hash == datamap.hash
+    alike.tablet(0).build()
     unlike = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag='unlike').build()
     with pytest.raises(ValueError, match="not laid out alike"):
-        DatamapCarbonTable(datalake=url, spec=dict(template=datamap, datatable=unlike)).record(0)
+        datamap.pullback(unlike).tablet(0).build()
 
 
 def _feature_partition(url, **spec):

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **One map for every deal, and a fold tablet's rows are its lot.** A deal answers
+  for its lots -- `DatatablePartition.lot(fold, i)`, `whole`, `tag_of`, `dealt` --
+  in the form it wrote them, a core deal's a run of its layout; `DatamapTable`
+  only asks, and `DatamapTablet.lot` is the resolved `[(tablet, rows | None)]`
+  (`record` until now). A pullback to another table is a `MappedDatatable` whose
+  VAR names it, its copies checking it is laid out alike. `DatamapCoreTable`,
+  `DatamapCarbonTable`, `DatatableCorePart` and `FeaturetableCorePart` are gone;
+  `DatatableCorePartition.part(k)` is `datamap(k).pullback(table, collator)`. A
+  mapped table has `source_index()`.
 - **A core part is its table pulled back along the fold's map.** A core fold's
   map is a `DatamapCoreTable`, each core tablet a run of the layout; a
   `DatatableCorePart` -- a `FeaturetableCorePart` for a feature table, keeping

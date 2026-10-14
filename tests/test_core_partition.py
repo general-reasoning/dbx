@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import (DatamapCarbonTable, DatamapCoreTable, DatatableCorePart, DatatableCorePartition,
+from dbx.dataparts import (DatamapTable, DatatableCorePartition,
                            MappedDatatable, MappedDatatablet)
 
 
@@ -150,10 +150,10 @@ def test_core_tablets_carry_what_the_collator_names_and_point_back(tmp_path):
     p = core(tmp_path, tbl, carry=[LABEL], rows_per_tablet=16)
     assert p.carried_slices() == ['pts'] and p.read('columns') == {'pts': {'x': 'ndarray:float32', 'label': 'int'}}
     for k in range(2):
-        part = DatatableCorePart(datalake=str(tmp_path / 'core'), spec=dict(partition=p, fold=k),
-                                 parallelization='multiprocessing', n_workers=2)
+        part = p.datamap(k).pullback(None, p.var.collator, parallelization='multiprocessing', n_workers=2)
         assert part.hash == p.part(k).hash and isinstance(part.tablet(0), MappedDatatablet)
-        assert isinstance(part.datamap, DatamapCoreTable)
+        assert type(part.datamap) is DatamapTable and part.datamap.whole(0) is None, "a core tablet is a copy"
+        assert sum(len(rows) for _, rows in part.datamap.lot(0)) == 16, "a core tablet's lot: a run of the layout"
         part.build()
         assert part.slices() == ('pts', 'source')
         fl = p.layout(k)
@@ -207,7 +207,8 @@ def test_a_table_laid_out_alike_is_pulled_back_along_the_core_s_maps_without_clu
     other = PointTable(datalake=str(tmp_path / 'other'), spec=dict(offset=100)).build()
     for k in range(2):
         part = carbon(other, p, k)
-        assert isinstance(part, MappedDatatable) and isinstance(part.datamap, DatamapCarbonTable)
+        assert isinstance(part, MappedDatatable) and part.datatable.hash == other.hash
+        assert part.datamap.hash == p.datamap(k).hash, "the core's own map, another table pulled back along it"
         assert part.n_tablets == p.part(k).n_tablets, "the template's core tablets, tablet for tablet"
         part.build()
         assert part.slices() == ('img', 'source')

@@ -25,8 +25,8 @@ def setup_env(monkeypatch):
                                  dataparts.DatatablePart, featuretables.Featuretablet, featuretables.Featuretable,
                                  featuretables.BipolarFeaturetablet, featuretables.BipolarFeaturetable,
                                  datatables.Datacollator, dataparts.MappedDatatablet, dataparts.DatatableCorePartition,
-                                 dataparts.DatatableCorePart, dataparts.DatamapCoreTable, dataparts.DatamapTable,
-                                 dataparts.DatamapTablet, dataparts.MappedDatatable, dataparts.DatamapCarbonTable,
+                                 dataparts.DatamapTable,
+                                 dataparts.DatamapTablet, dataparts.MappedDatatable,
                                  dataparts.MappedFeaturetablet,
                                  probes.FeatureStatsProbe])
 def test_a_class_is_recorded_under_its_own_module(cls):

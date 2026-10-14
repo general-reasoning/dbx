@@ -319,6 +319,26 @@ Rows from older eras have their `type` and `signature` columns resolved per
 row, so a filter on them means the same thing on every row. Pass
 `unnormalized=True` to get the columns exactly as recorded.
 
+### Listing first
+
+Reading a journal is two stages: listing its entry files, and then reading
+them. `DataJournal.list(anchor)` is the first one alone: every entry file
+under `<datalake>/<anchor>/`, as full paths. `DataJournal.read_frame(files)`
+reads them, so a caller can learn how many files there are before it reads
+any:
+
+```python
+files = dbx.DataJournal.list('demo_blocks.Apple')
+frame = dbx.DataJournal.read_frame(files, event='build:end')
+```
+
+`DataJournal.read`, `list`, `read_frame` and `dbx.pipejournal` all take a
+callable `progress=`, which they call as `progress(desc, done, total)`.
+While listing, `total` is None and `done` is the number of files found so
+far. While reading, `done` counts the files read out of `total`. If the
+callable raises an exception, the files not yet started are cancelled and
+the exception reaches the caller; that is how a user interrupts a read.
+
 ### `DataJournalFrame`
 
 | call | returns |

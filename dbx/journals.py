@@ -2631,15 +2631,39 @@ class DataJournal:
         return [entry for _, entry in sorted(rows) if entry]
 
     @classmethod
+    def list(cls, anchor, *, datalake=None, storage_options=None, log=None, n_workers=None,
+             progress=None) -> 'list[str]':
+        """Every entry file of *anchor*'s journal under *datalake*, sorted: what `read` reads.
+
+        Full paths, protocol and all, as `read_frame` takes them -- so that a
+        caller can list first, to know how many there are, and then read them.
+        *progress*, a callable, is told ``progress(desc, n, None)`` as each
+        directory level is listed, *n* the files found so far; there is no
+        total until the listing is done. An exception it raises -- the user
+        interrupting -- stops the listing. Raises FileNotFoundError when
+        *anchor* has no directory under *datalake*.
+        """
+        log = log or Datalog()
+        fs, anchordirpath, _ = cls._anchordir_(anchor, one_datalake(datalake, None, 'DataJournal.list'),
+                                               storage_options, log)
+        return [fs_full_path(fs, f) for f in cls._list_(fs, anchordirpath, anchor, n_workers=n_workers or 8,
+                                                        log=log, progress=progress)]
+
+    @classmethod
     def read(cls, anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None,
              log=None, n_workers=None, index=None, unnormalized: bool = False, url=None, desc=None,
-             progress: bool | None = None, **filter_kwargs):
+             progress=None, **filter_kwargs):
         """Read *anchor*'s journal under *url*: every entry, newest first, then filtered.
 
-        *progress*: whether to show the read -- an INFO line around listing the
-        files and a bar over reading them. None, the default, shows them only
-        when *log* is verbose; a caller whose read the user is waiting on --
-        a stack resolving its blocks' specializations -- passes True.
+        The files `list` lists. *progress*: whether to show the read -- an INFO
+        line around listing the files and a bar over reading them. None, the
+        default, shows them only when *log* is verbose; a caller whose read
+        the user is waiting on -- a stack resolving its blocks'
+        specializations -- passes True. A callable is told instead, as
+        ``progress(desc, done, total)``: while listing, *total* None and *done*
+        the files found so far, as `list` tells it; while reading, the files
+        read of *total*. An exception it raises stops the read and reaches
+        the caller.
 
         Returns a `DataJournalFrame`, or the one `DataJournalEntry` at *loc*
         (a label) or *iloc* (a position). *datalake* (``url``, its old name)
@@ -2647,42 +2671,19 @@ class DataJournal:
         """
         log = log or Datalog()
         n_workers = n_workers or 8
-        url = one_datalake(datalake, url, 'DataJournal.read')
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
-        if url is None:
-            url = default_datalake()
-        # A url may arrive as a specline -- a block's `_url_` is one whenever it
-        # was constructed with env(...) -- and it is resolved here as
-        # __setstate__ resolves a block's own. Without this, fsspec takes
-        # "$dbx.getenv('LAKE')" for a protocol-less relative path and roots the
-        # journal at the CWD: a directory that cannot exist, reported as a
-        # journal that is merely missing.
-        if datablocks.Datablock.is_specline(url):
-            resolved = eval(url)
-            log.detailed(f"Journal: resolved url specline {url!r} to {resolved!r}")
-            url = resolved
-        if storage_options is None:
-            storage_options = default_storage_options()
-
-        fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
-
-        anchordirpath = fs_full_path(fs, os.path.join(root, anchor))
+        fs, anchordirpath, storage_options = cls._anchordir_(anchor, one_datalake(datalake, url, 'DataJournal.read'),
+                                                             storage_options, log)
+        report = progress if callable(progress) else None
 
         log.verbose(f"Retrieving journal files from {anchordirpath=} BEGIN")
-        if progress:
+        if progress is True:
             log.info(f"Listing the {anchor} journal files under {anchordirpath} ...")
         listing_started = time.time()
-        parquet_files = DataJournal._journal_files_(fs, anchordirpath, n_workers=n_workers, log=log)
-
-        if len(parquet_files) == 0 and not fs.exists(anchordirpath):
-            raise FileNotFoundError(
-                f"Journal directory not found for {anchor!r}: {anchordirpath}\n"
-                f"Check that the class name / anchor and url are correct."
-            )
-
+        parquet_files = cls._list_(fs, anchordirpath, anchor, n_workers=n_workers, log=log, progress=report)
         log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
-        if progress:
+        if progress is True:
             log.info(f"Listed {len(parquet_files)} {anchor} journal files in {time.time() - listing_started:.0f} s; reading them")
         log.verbose(f"Retrieving journal files from {anchordirpath=} END")
 
@@ -2772,7 +2773,7 @@ class DataJournal:
 
     @classmethod
     def read_frame(cls, paths, *, storage_options=None, log=None, n_workers=None,
-                   index: str | None = None, unnormalized: bool = False,
+                   index: str | None = None, unnormalized: bool = False, progress=None,
                    **filter_kwargs) -> 'DataJournalFrame':
         """The entries at *paths* -- journal entry files, as :meth:`written_entries` lists them.
 
@@ -2781,7 +2782,8 @@ class DataJournal:
         ``entry_path`` recorded, and *index*, *unnormalized* and
         *filter_kwargs* taken as it takes them. With no *index* the rows are
         numbered 0..N-1. A path that cannot be read -- cleared since, say --
-        is skipped with a warning, as :meth:`read` skips one.
+        is skipped with a warning, as :meth:`read` skips one. *progress* is
+        taken as :meth:`read` takes it, for the reading.
         """
         paths = [str(p) for p in paths]
         if not paths:
@@ -2794,7 +2796,7 @@ class DataJournal:
         fs, _ = fsspec.url_to_fs(paths[0], **storage_options)
         dfs = []
         for order, (path, d) in enumerate(zip(paths, DataJournal._read_files_(
-                fs, paths, n_workers=n_workers, log=log))):
+                fs, paths, n_workers=n_workers, log=log, progress=progress))):
             if d is not None:
                 d['entry_path'] = path
                 d['__order__'] = order
@@ -2983,7 +2985,7 @@ class DataJournal:
         with self._written_lock:
             return list(self._written)
 
-    def carry(self, callables, output_capture: 'OutputCapture | None' = None) -> list:
+    def carry(self, callables, output_capture: 'OutputCapture | None' = None) -> 'list':
         """*callables* wrapped to run under this session in a worker: `JournaledCallable`\\ s.
 
         For an executor about to hand work to another process, which this
@@ -3066,7 +3068,38 @@ class DataJournal:
     _NOT_JOURNAL_DIR_ = re.compile(r'^(?:\.dbx|(?:.*/)?\.journal)/[^/]+/(?!journal$)[^/]+$')
 
     @staticmethod
-    def _journal_files_(fs, anchordirpath, *, n_workers, log) -> list:
+    def _anchordir_(anchor, datalake, storage_options, log):
+        """``(fs, anchordirpath, storage_options)``: where *anchor*'s journal is under *datalake*, ``DBX_DATALAKE`` by default."""
+        url = datalake if datalake is not None else default_datalake()
+        # A url may arrive as a specline -- a block's `_url_` is one whenever it
+        # was constructed with env(...) -- and it is resolved here as
+        # __setstate__ resolves a block's own. Without this, fsspec takes
+        # "$dbx.getenv('LAKE')" for a protocol-less relative path and roots the
+        # journal at the CWD: a directory that cannot exist, reported as a
+        # journal that is merely missing.
+        if datablocks.Datablock.is_specline(url):
+            resolved = eval(url)
+            log.detailed(f"Journal: resolved url specline {url!r} to {resolved!r}")
+            url = resolved
+        if storage_options is None:
+            storage_options = default_storage_options()
+        fs, root = fsspec.url_to_fs(url, **(storage_options or {}))
+        return fs, fs_full_path(fs, os.path.join(root, anchor)), storage_options
+
+    @staticmethod
+    def _list_(fs, anchordirpath, anchor, *, n_workers, log, progress=None) -> 'list[str]':
+        """`_journal_files_`, and FileNotFoundError where *anchor* has no directory at all."""
+        files = DataJournal._journal_files_(fs, anchordirpath, n_workers=n_workers, log=log, progress=progress,
+                                            desc=f"Listing {anchor} journal files")
+        if len(files) == 0 and not fs.exists(anchordirpath):
+            raise FileNotFoundError(
+                f"Journal directory not found for {anchor!r}: {anchordirpath}\n"
+                f"Check that the class name / anchor and url are correct."
+            )
+        return files
+
+    @staticmethod
+    def _journal_files_(fs, anchordirpath, *, n_workers, log, progress=None, desc=None) -> 'list':
         """Every entry file under *anchordirpath*, listed a directory level at a time, in parallel.
 
         What the globs ``{anchordir}/.dbx/*/journal/**/*.parquet`` and
@@ -3078,6 +3111,9 @@ class DataJournal:
         ``journal/``'s siblings under ``.journal/{fqcn}/`` -- ``spec/``,
         ``dfn/``, ``kwargs/``, with parquet files of their own that are not
         entries -- are never entered.
+
+        *progress*, if given, is told ``progress(desc, n, None)`` after each
+        level, *n* the files found so far.
         """
         root = fs._strip_protocol(anchordirpath).rstrip('/')
 
@@ -3102,6 +3138,8 @@ class DataJournal:
                         elif DataJournal._ENTRY_FILE_.match(rel):
                             files.append(name)
                 log.detailed(f"Listing journal files under {anchordirpath}: {len(files)} so far, {len(level)} directories next")
+                if progress is not None:
+                    progress(desc or 'Listing journal files', len(files), None)
         return sorted(files)
 
     #: The keybys that put a block's tag in its path.
@@ -3176,7 +3214,7 @@ class DataJournal:
         return os.path.join(datalake, '.journal', 'sessions', session)
 
     @staticmethod
-    def _stack_() -> list:
+    def _stack_() -> 'list':
         """The stack a ``with`` opened in THIS thread goes on: the process's in the main thread, else the thread's own."""
         if threading.current_thread() is threading.main_thread():
             return _PROCESS_DATAJOURNALS
@@ -3186,8 +3224,14 @@ class DataJournal:
         return stack
 
     @staticmethod
-    def _read_files_(fs, files, *, n_workers, log, desc=None, progress: bool | None = None):
-        """One frame per entry file, aligned with *files*; None where one could not be read."""
+    def _read_files_(fs, files, *, n_workers, log, desc=None, progress=None):
+        """One frame per entry file, aligned with *files*; None where one could not be read.
+
+        *progress*: a bool, whether to show a bar -- see `read` -- or a
+        callable told ``progress(desc, done, total)`` as each file is read. An
+        exception the callable raises cancels the files not yet begun -- only
+        those under way are waited for -- and is raised on.
+        """
         def read_entry_file(file):
             # Through `fs`, not by path: a glob returns paths as that
             # filesystem names them -- protocol-stripped -- so handing one to
@@ -3198,21 +3242,31 @@ class DataJournal:
                 return pd.read_parquet(f, engine='pyarrow')
 
         desc = desc or 'Reading journal files'
+        report = progress if callable(progress) else None
         # Progress on reading a journal is VERBOSE detail, as its log lines are --
         # unless the caller says the user is waiting on it (*progress*).
-        quiet = (not progress) if progress is not None else not (hasattr(log, 'ist') and log.ist('verbose'))
+        quiet = (report is not None or not progress) if progress is not None \
+            else not (hasattr(log, 'ist') and log.ist('verbose'))
         results = [None] * len(files)
         with ThreadPoolExecutor(max_workers=max(1, min(n_workers, len(files)))) as ex:
             futures = {ex.submit(read_entry_file, file): i for i, file in enumerate(files)}
-            for future in tqdm.tqdm(as_completed(futures), desc=desc, total=len(files), disable=quiet):
-                i = futures[future]
-                try:
-                    _df = future.result()
-                    _df['entry_path'] = fs_full_path(fs, files[i])
-                except Exception as e:
-                    log.warning(f"Skipping unreadable journal file {files[i]}: {e}")
-                    continue
-                results[i] = _df
+            try:
+                for done, future in enumerate(tqdm.tqdm(as_completed(futures), desc=desc, total=len(files),
+                                                        disable=quiet), 1):
+                    i = futures[future]
+                    try:
+                        _df = future.result()
+                        _df['entry_path'] = fs_full_path(fs, files[i])
+                    except Exception as e:
+                        log.warning(f"Skipping unreadable journal file {files[i]}: {e}")
+                    else:
+                        results[i] = _df
+                    if report is not None:
+                        report(desc, done, len(files))
+            except BaseException:
+                for future in futures:
+                    future.cancel()
+                raise
         return results
 
     @staticmethod
@@ -3327,7 +3381,7 @@ class PipeJournal(DataJournal):
 
     @classmethod
     def collect(cls, *, construct_only: bool = False, extra_construction_events=(), datalake=None,
-                storage_options=None, log=None, n_workers=None, **filters) -> DataJournalFrame:
+                storage_options=None, log=None, n_workers=None, progress=None, **filters) -> DataJournalFrame:
         """Every pipeline in the journal, one row each, with every entrypath it was created to.
 
         The entries are read and *filters* applied as `DataJournal.read`
@@ -3348,7 +3402,8 @@ class PipeJournal(DataJournal):
         ``ckpt=<tag>`` a `Still` writes as it checkpoints.
 
         *datalake* defaults to ``DBX_DATALAKE``, ``DBX_ROOT``, ``DBX_URL``.
-        Rows are numbered 0..N-1, newest first.
+        Rows are numbered 0..N-1, newest first. *progress* is taken as
+        `DataJournal.read` takes it, for reading the journal.
         """
         datalake = datalake or default_datalake()
         if datalake is None:
@@ -3359,7 +3414,7 @@ class PipeJournal(DataJournal):
         n_workers = n_workers or 8
         try:
             df = pd.DataFrame(cls.read(cls.ANCHOR, datalake=datalake, storage_options=storage_options,
-                                       log=log, n_workers=n_workers, index=None, **filters))
+                                       log=log, n_workers=n_workers, index=None, progress=progress, **filters))
         except FileNotFoundError:
             df = pd.DataFrame()
         if df.empty or 'entrypath' not in df.columns:
@@ -3436,7 +3491,7 @@ class PipeJournal(DataJournal):
 
 
 def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, extra_construction_events=(), datalake=None,
-                storage_options=None, log=None, n_workers=8, url=None, **filter_kwargs):
+                storage_options=None, log=None, n_workers=8, url=None, progress=None, **filter_kwargs):
     """Read the pipeline journal: every `Pipeline` created, one row each, newest first, then filtered.
 
     `PipeJournal.collect`: a `DataJournalFrame` with an ``entrypaths`` column,
@@ -3446,13 +3501,14 @@ def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, extra_cons
     *iloc*, both positions here, as the rows are numbered. Filters are
     patterns, as on a block journal -- see :func:`datajournal`. *datalake*
     (``url``, its old name) defaults to ``DBX_DATALAKE``, then ``DBX_ROOT``,
-    then ``DBX_URL``.
+    then ``DBX_URL``. *progress* is taken as `DataJournal.read` takes it.
     """
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     frame = PipeJournal.collect(construct_only=construct_only, extra_construction_events=extra_construction_events,
                                 datalake=one_datalake(datalake, url, 'pipejournal'),
-                                storage_options=storage_options, log=log, n_workers=n_workers, **filter_kwargs)
+                                storage_options=storage_options, log=log, n_workers=n_workers, progress=progress,
+                                **filter_kwargs)
     if loc is not None:
         return frame.get(loc, dropna=True)
     if iloc is not None:

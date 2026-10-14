@@ -810,7 +810,7 @@ def anchor_journal(monkeypatch):
 
 
 def test_an_anchors_blocks_are_its_newest_entries_and_no_pipelines(anchor_journal):
-    found = dbxpipelines.blocks("pkg.Model", progress=lambda m: None, n_workers=2)
+    found = dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, n_workers=2)
     assert [e.key for e in found] == ["/lake/pkg.Model/v2", "/lake/pkg.Model/v1"]
     assert found[1].extra["row"]["event"] == "build:start", "a block's newest entry"
 
@@ -856,7 +856,7 @@ def journal_app(anchor_journal, monkeypatch):
 
     monkeypatch.setattr(dbxpipelines.HypDbxJournal, "run_async", lambda self, fn, then: None)
     app = dbxpipelines.HypDbxJournal(engine=None, worker=Worker(), args=NS(journal="pkg.Model", n_workers=2))
-    found = dbxpipelines.blocks("pkg.Model", progress=lambda m: None, n_workers=2)
+    found = dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, n_workers=2)
     app.snap = NS(positions=np.array([0.1 + 0j, 0.2 + 0j]), summaries=[e.summary for e in found], texts=[e.text for e in found],
                   points=[{**e.extra} for e in found])
     return app
@@ -906,7 +906,7 @@ def test_an_anchors_filters_reach_its_journal(monkeypatch):
     seen = {}
     monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
     monkeypatch.setattr(dbx.DataJournal, "read", lambda anchor, **kw: seen.update(kw) or pd.DataFrame())
-    assert dbxpipelines.blocks("pkg.Model", progress=lambda m: None, filters={"tag": "first"}) == []
+    assert dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, filters={"tag": "first"}) == []
     assert seen["tag"] == "first"
 
 
@@ -962,7 +962,7 @@ def test_a_switch_opens_the_journals_own_corpus_and_shows_it(switching, monkeypa
     app.engine = SimpleNamespace(switch=lambda store, source: calls.append(("switch", store)),
                                  start=lambda progress: calls.append(("start",)), snapshot=lambda: "SNAP")
     app.switch("pkg.Model", {"tag": "x"})
-    jobs[-1](lambda m: None)
+    jobs[-1](lambda *a: None)
     assert opened == ["ssh://host/lake/.hyp/anchors/pkg.Model"] and calls == [("switch", "STORE"), ("start",)]
     assert ("snapshot", ("SNAP", None)) in list(app.worker.events.queue)
 
@@ -970,7 +970,7 @@ def test_a_switch_opens_the_journals_own_corpus_and_shows_it(switching, monkeypa
 def test_a_block_of_a_switched_to_anchor_opens_its_window(switching, anchor_journal):
     app, jobs = switching
     app.switch("pkg.Model")
-    found = dbxpipelines.blocks("pkg.Model", progress=lambda m: None, n_workers=2)
+    found = dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, n_workers=2)
     app.snap = SimpleNamespace(positions=np.array([0.1 + 0j, 0.2 + 0j]), summaries=[e.summary for e in found],
                                texts=[e.text for e in found], points=[{**e.extra} for e in found])
     dbxpipelines.HypDbxJournal.__open_point__(app, 0)
@@ -984,3 +984,20 @@ def test_a_block_menu_copies_the_anchorkey_a_journal_filter_matches():
     assert kw["copy"]("ssh://host/lake/pkg.Block/version=2/1234abcd") == "pkg.Block/version=2/1234abcd"
     assert kw["copy"]("/elsewhere/pkg.Block/1234abcd") == "/elsewhere/pkg.Block/1234abcd", "another lake's, whole"
     assert "anchorkey" in kw["copy_hint"]
+
+
+def test_an_anchors_read_reports_its_listing_then_its_counts(anchor_journal, monkeypatch):
+    import dbx
+
+    def read(anchor, progress, **kw):
+        progress("listing", 3, None)
+        progress("reading", 1, 2)
+        return pd.DataFrame(JOURNAL_ROWS)
+
+    monkeypatch.setattr(dbx.DataJournal, "read", read)
+    told = []
+    dbxpipelines.blocks("pkg.Model", progress=lambda msg, done=None, total=None: told.append((msg, done, total)), n_workers=2)
+    assert told[:3] == [("dbx.DataJournal.read('pkg.Model')", None, None),
+                        ("dbx.DataJournal.read('pkg.Model'): listing the journal files", 3, None),
+                        ("dbx.DataJournal.read('pkg.Model')", 1, 2)]
+    assert told[-1][1:] == (2, 2), "and then the side files, counted"

@@ -47,7 +47,7 @@ class EchoSummarizer:
         return text[:40]
 
 
-def quiet(msg):
+def quiet(msg, done=None, total=None):
     pass
 
 
@@ -155,3 +155,30 @@ def test_an_engine_switches_corpora(tmp_path):
     engine.start(quiet)
     assert len(engine.snapshot().positions) == 7 and engine.snapshot().summaries[0] == "b0"
     assert len(Store(str(tmp_path / "one"))) == 6, "the first corpus, kept where it was"
+
+
+def test_a_sync_interrupted_while_embedding_leaves_the_store_as_it_was(tmp_path):
+    """The store changes only once everything is embedded: an interrupted job's next sync sees the same news."""
+    from types import SimpleNamespace as NS
+
+    import pytest
+
+    class Stop(Exception):
+        pass
+
+    version = {"a": "one", "b": "one"}
+    source = lambda progress: [NS(key=k, text=v, embed=v, summary=k, extra={}) for k, v in version.items()]  # noqa: E731
+    engine = Engine(Store(tmp_path), TopicEmbedder(), EchoSummarizer(), source=source)
+    engine.start(quiet)
+    version.update(a="two", c="new")
+
+    def stop_embedding(msg, done=None, total=None):
+        if msg.startswith("embedding"):
+            raise Stop()
+
+    with pytest.raises(Stop):
+        engine.reload(stop_embedding)
+    assert [p["embed"] for p in engine.store.points] == ["one", "one"]
+    told = []
+    engine.reload(lambda msg, done=None, total=None: told.append((msg, done, total)))
+    assert ("embedding 1 new and 1 changed entries", 2, 2) in told

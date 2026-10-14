@@ -64,6 +64,64 @@ def test_the_busy_frame_draws(app):
     app.draw(time.monotonic())
 
 
+def test_a_job_reports_its_counts(app):
+    release = threading.Event()
+
+    def job(progress):
+        progress("reading", 3, 10)
+        release.wait()
+
+    app.worker.submit(job)
+    settle(app, lambda: app.progress == (3, 10))
+    assert app.status == "reading" and app.loading()
+    app.draw(time.monotonic())
+    release.set()
+    settle(app, lambda: not app.loading())
+    assert app.progress is None
+
+
+def test_the_loading_card_draws_with_no_total_and_with_no_counts(app):
+    app.worker.pending = 1
+    for progress in [(12, None), None, (0, 0), (5, 5)]:
+        app.progress = progress
+        app.draw(time.monotonic())
+    app.worker.pending = 0
+
+
+def test_esc_interrupts_a_job_at_its_next_report_and_drops_those_queued(app):
+    import pygame
+
+    started, release, ran = threading.Event(), threading.Event(), []
+
+    def job(progress):
+        started.set()
+        release.wait()
+        progress("still going")
+        ran.append("past the report")
+
+    app.worker.submit(job)
+    app.worker.submit(lambda progress: ran.append("queued"))
+    started.wait(5)
+    app.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode=""), time.monotonic())
+    assert app.interrupting
+    release.set()
+    settle(app, lambda: not app.loading())
+    assert ran == [] and app.status == "interrupted" and not app.interrupting
+
+
+def test_while_loading_the_window_takes_no_input(app):
+    import pygame
+
+    release = threading.Event()
+    app.worker.submit(lambda progress: release.wait())
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=(550, 500)), time.monotonic())
+    assert app.box is None
+    release.set()
+    settle(app, lambda: not app.loading())
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=(550, 500)), time.monotonic())
+    assert app.box is not None
+
+
 class Named(Hyp):
     """A Hyp whose points have names and datetimes, as HypDbxJournal' do."""
 

@@ -21,7 +21,7 @@ without a protocol, and are read through the protocol and host of the row's
 
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
 from .app import Button, DiskViewer, Dropdown, Hyp, TextViewer
@@ -381,18 +381,47 @@ def datalake():
     return lake
 
 
+def _counted_(progress, msg):
+    """A progress callback for dbx's journal reads -- ``(desc, done, total)`` -- telling *progress* *msg*, with the counts.
+
+    `DataJournal.read` lists the journal's files before it reads them: while
+    it does, there is no total, and *done* is the files found so far.
+    """
+    return lambda desc, done, total: progress(msg if total is not None else f"{msg}: listing the journal files", done, total)
+
+
+def _entries_(df, progress, msg, n_workers):
+    """`entry` of each row of *df*, in order, on *n_workers* threads: *msg*, and how many are done, told to *progress* as each is.
+
+    An exception *progress* raises -- the user interrupting -- cancels the
+    rows not yet begun, and is raised on.
+    """
+    out = [None] * len(df)
+    progress(msg, 0, len(df))
+    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+        futures = {ex.submit(entry, df.iloc[i]): i for i in range(len(df))}
+        try:
+            for done, future in enumerate(as_completed(futures), 1):
+                out[futures[future]] = future.result()
+                progress(msg, done, len(df))
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+    return out
+
+
 def pipelines(progress=print, n_workers=16):
     """Every pipeline in dbx's datalake, from `dbx.pipejournal()`, newest first.
 
     *n_workers* threads list and read the journal -- `dbx.pipejournal()`
     parallelizes with threads only, which suits it: the work is round trips
-    to the datalake -- and then read the side files.
+    to the datalake -- and then read the side files. *progress* is told
+    each stage and, where they are counted, how many files of it are read.
     """
     progress("dbx.pipejournal()")
-    df = _dbx_().pipejournal(n_workers=n_workers)
-    progress(f"reading the side files of {len(df)} pipelines")
-    with ThreadPoolExecutor(max_workers=n_workers) as ex:
-        return list(ex.map(lambda i: entry(df.iloc[i]), range(len(df))))
+    df = _dbx_().pipejournal(n_workers=n_workers, progress=_counted_(progress, "dbx.pipejournal()"))
+    return _entries_(df, progress, f"reading the side files of {len(df)} pipelines", n_workers)
 
 
 def blocks(anchor, progress=print, n_workers=16, filters=None):
@@ -406,9 +435,11 @@ def blocks(anchor, progress=print, n_workers=16, filters=None):
     import pandas as pd
 
     filters = dict(filters or {})
-    progress(f"dbx.DataJournal.read({anchor!r}{''.join(f', {k}={v!r}' for k, v in filters.items())})")
+    msg = f"dbx.DataJournal.read({anchor!r}{''.join(f', {k}={v!r}' for k, v in filters.items())})"
+    progress(msg)
     try:
-        df = pd.DataFrame(_dbx_().DataJournal.read(anchor, datalake=datalake(), n_workers=n_workers, index=None, **filters))
+        df = pd.DataFrame(_dbx_().DataJournal.read(anchor, datalake=datalake(), n_workers=n_workers, index=None,
+                                                   progress=_counted_(progress, msg), **filters))
     except FileNotFoundError as e:
         raise FileNotFoundError(f"no journal of {anchor} in {datalake()}: {e}") from e
     if not len(df):
@@ -420,9 +451,7 @@ def blocks(anchor, progress=print, n_workers=16, filters=None):
     if "anchorkeypath" in df.columns:
         df = df.drop_duplicates("anchorkeypath", keep="first")
     df = df.reset_index(drop=True)
-    progress(f"reading the side files of {len(df)} blocks of {anchor}")
-    with ThreadPoolExecutor(max_workers=n_workers) as ex:
-        return list(ex.map(lambda i: entry(df.iloc[i]), range(len(df))))
+    return _entries_(df, progress, f"reading the side files of {len(df)} blocks of {anchor}", n_workers)
 
 
 #: What the journal menu calls the pipeline journal: no anchor can be named so, starting with a dot.

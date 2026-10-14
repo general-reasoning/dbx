@@ -31,7 +31,7 @@ from streaming import StreamingDataset
 from .datablocks import DATADICT, DATADIR, DATAFILE, SAME, SYNTHETIC, Datablock, Datastack, forward_property
 from .databits import callable_executor
 from .datastreams import SharedMemoryManager, release_shared_memory_when_collected
-from .datatables import DATASLICE, Datacollator, DataslicesUpstream, Datatablet, Datatable
+from .datatables import DATASLICE, SLICETOPIC, Datacollator, DataslicesUpstream, Datatablet, Datatable
 
 #: How `DatatablePartition` deals tablets to folds -- see its docstring.
 PARTITION_METHODS = ('random', 'largest_first')
@@ -46,7 +46,8 @@ def _column_values_(tablet, spec) -> list:
     for value in values:
         for key in keys:
             value = value.get(key) if isinstance(value, dict) else None
-        out.append(value)
+        # A numpy scalar as the Python value it is: what a deal records in JSON, and compares by.
+        out.append(value.item() if isinstance(value, np.generic) else value)
     return out
 
 
@@ -235,10 +236,9 @@ class DatatablePartition(Datablock):
     A tablet or a piece holding no value is skipped: in no part, said loudly, and
     recorded in ``summary`` -- a piece with the rows it leaves out. A stratum
     must lie in one partition. A table that reads slices upstream
-    (`DataslicesUpstream`, a `Featuretable`) is neither cut nor packed: a piece
-    of it would have to be the same piece of its upstream too, which is not
-    implemented, and a mixed tablet of one, or ``coalesce='pack'``, raises
-    `NotImplementedError`.
+    (`DataslicesUpstream`, a `Featuretable`) is cut and packed as any other: its
+    pieces and packed tablets are `MappedFeaturetablet`s, the same rows of its
+    own slices and, as their upstream, of its upstream's -- see `MappedDatatable`.
 
     *method* ``'largest_first'`` is the partition from before these choices:
     tablets in descending order of rows, each to the part with the largest deficit
@@ -340,11 +340,6 @@ class DatatablePartition(Datablock):
             self.var.collator.slices(table)       # raises for a column the table does not hold
         if not self.var.fractions:
             raise ValueError(f"{self.__class__.__name__}: VAR.fractions is required")
-        if self.var.coalesce == 'pack' and isinstance(table, DataslicesUpstream):
-            raise NotImplementedError(
-                f"{type(self).__name__}: coalesce='pack' copies rows into packed tablets, and a {type(table).__name__} "
-                f"reads slices upstream: a packed tablet of it would have to pack its upstream rows too. Partition "
-                f"the upstream table, whose tablets hold the rows.")
         scans = self._scan_()
         if self.valid_topic('tablets'):
             # Adopted -- a build from before the summary existed: its folds stand.
@@ -453,14 +448,6 @@ class DatatablePartition(Datablock):
         shown = "\n".join(f"  {s['tag']}: " + ", ".join(f"{name} holds {len(vals)} values, e.g. {vals[:3]!r}"
                                                          for name, vals in s['values'].items() if len(vals) > 1)
                           for s in mixed[:5])
-        if isinstance(table, DataslicesUpstream):
-            raise NotImplementedError(
-                f"{type(self).__name__}: {len(mixed)} tablet(s) of {type(table).__name__} hold more than one value "
-                f"of a partition column:\n{shown}\n"
-                f"A mixed tablet is split into pieces, one per value, and that is implemented for a plain Datatablet "
-                f"table only: a piece of a table that reads slices upstream ({type(table).__name__} is a "
-                f"DataslicesUpstream) would have to be the same piece of its upstream tablet too. Partition the "
-                f"upstream table, whose tablets hold the rows, or give this one tablets that each hold one value.")
         uneven = [s for s in mixed if len(set(s['column_rows'].values()) | set(s['slice_rows'].values())) > 1]
         if uneven:
             s = uneven[0]
@@ -850,6 +837,80 @@ class DatamapTable(Datatable):
         return np.asarray(rows, dtype=np.int64)
 
 
+class DatamapCarbonTable(DatamapTable):
+    """Another map's fold, over a table laid out as that map's table is: the same records, of this table's tablets.
+
+    Laid out alike -- tablet *t* here holding as many rows as tablet *t* there,
+    row *i* the same sample in both -- such as a feature table and the table it
+    was computed from: the template's records are this table's as they stand.
+    Nothing is dealt. Each record is checked as it is resolved: every tablet it
+    names must hold as many rows here as in the template's table, or the two are
+    not laid out alike, and it raises.
+
+    One per fold, as the maps are: a chain of tables computed one from another
+    is pulled back along one deal's maps, each carbon map templated on the one
+    below it, or on the deal's own.
+    """
+
+    SPECIALIZATIONS = []
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        template: DatamapTable
+        datatable: Datatable
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not isinstance(self.var.template, DatamapTable):
+            raise ValueError(f"{type(self).__name__}: VAR.template must be a DatamapTable, "
+                             f"got {type(self.var.template).__name__}")
+
+    def __build__(self):
+        raise RuntimeError(f"{type(self).__name__}: a carbon map is not built -- its template's deal writes it: "
+                           f"build {self.var.template.anchorkeypath}")
+
+    def valid(self) -> bool:
+        return self.var.template.valid()
+
+    # 2. Declared API ------------------------------------------------------
+
+    def whole(self, idx: int) -> int | None:
+        return self.var.template.whole(idx)
+
+    def record(self, idx: int) -> list:
+        """The template's record of tablet *idx*, checked to name rows this table's tablets hold alike."""
+        template, what = self.var.template, type(self).__name__
+        record = template.record(idx)
+        for t, _ in record:
+            here = len(_selected_rows_(self.datatable.tablet(int(t)), {}, {}, what))
+            there = len(_selected_rows_(template.datatable.tablet(int(t)), {}, {}, what))
+            if here != there:
+                raise ValueError(f"{what}: tablet {t} holds {here} rows here and {there} in the template's table: "
+                                 f"they are not laid out alike, row for row")
+        return record
+
+    def tag_of(self, idx: int) -> str:
+        """The template's word for it, as this table's: a whole tablet is this table's own, a copy keeps the template's tag."""
+        whole = self.whole(idx)
+        return self.datatable.tablet(whole).tag if whole is not None else self.var.template.tag_of(idx)
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def entries(self) -> list:
+        return self.var.template.entries
+
+    @property
+    def n_tablets(self) -> int:
+        return self.var.template.n_tablets
+
+    @property
+    def datatable(self) -> Datatable:
+        return self.var.datatable
+
+
 class MappedDatatablet(Datatablet):
     """A tablet of a `MappedDatatable` that takes some rows of the mapped table: those its map tablet's record names.
 
@@ -865,6 +926,9 @@ class MappedDatatablet(Datatablet):
     """
 
     SPECIALIZATIONS = []
+
+    #: Whether it writes ``source``: a layered copy writes it once, at the bottom -- see `MappedFeaturetablet`.
+    WRITES_SOURCE = True
 
     @dataclass
     class VAR(Datatablet.VAR):
@@ -888,16 +952,19 @@ class MappedDatatablet(Datatablet):
                    for s, cols in copied.items()}
         # A slice at a time, and within it a source tablet at a time, so only one
         # source slice is held whole; the writers refuse unequal slices.
-        with self.slice_writers({**columns, SOURCE_SLICE: SOURCE.columns}) as writers:
+        if self.WRITES_SOURCE:
+            columns[SOURCE_SLICE] = SOURCE.columns
+        with self.slice_writers(columns) as writers:
             for s, cols in copied.items():
                 for _, source, rows in sources:
                     data = source._read_slice_(s)
                     for i in rows:
                         writers[s].write(data[i] if cols is None else {c: data[i][c] for c in cols})
                     del data
-            for t, _, rows in sources:
-                for i in rows:
-                    writers[SOURCE_SLICE].write({'tab': int(t), 'row': int(i)})
+            if self.WRITES_SOURCE:
+                for t, _, rows in sources:
+                    for i in rows:
+                        writers[SOURCE_SLICE].write({'tab': int(t), 'row': int(i)})
 
     # 2. Declared API ------------------------------------------------------
 
@@ -907,11 +974,11 @@ class MappedDatatablet(Datatablet):
 
     # 3. Accessors ---------------------------------------------------------
 
-    @forward_property({SOURCE_SLICE: SOURCE})
+    @forward_property({})
     def TOPICS(self):
         """The mapped table's slices it copies, as the tablet its first rows come from declares them, and ``source``.
 
-        On the class, with no map to ask, ``source`` alone.
+        On the class, with no map to ask, nothing: even ``source`` is spelled as the slices it copies are.
         """
         t = self.var.map.record[0][0]
         first = self.var.map.var.datamap.datatable.tablet(int(t))
@@ -924,18 +991,25 @@ class MappedDatatablet(Datatablet):
                 declared = first.declared_columns(s) or {}
                 node = DATASLICE(**{c: declared[c] for c in cols}) if all(c in declared for c in cols) else DATASLICE
             out[s] = node
-        return {**out, SOURCE_SLICE: SOURCE}
+        if not self.WRITES_SOURCE:
+            return out
+        # Spelled as the slices it copies are: one declaration cannot mix the markers and the sentinels.
+        legacy = bool(out) and bool(self._topic_spellings_(out)[1]) and not self._topic_spellings_(out)[0]
+        return {**out, SOURCE_SLICE: SLICETOPIC if legacy else SOURCE}
 
     # 4. Helpers -----------------------------------------------------------
 
     def _copied_(self, first) -> dict:
         """``{slice: [column, ...] | None}``: what it copies -- its collator's columns, by slice; every slice, whole, by default."""
-        collator = self.var.collator
+        collator, own = self.var.collator, list(first.slices())
         if collator is None:
-            return {s: None for s in first.slices()}
+            return {s: None for s in own}
+        # Its own slices only: a layered copy's upstream takes the collator's others.
         out = {}
         for role in collator.roles:
             for pair in collator.pairs(role):
+                if pair[0] not in own:
+                    continue
                 cols = out.setdefault(pair[0], [])
                 if pair[1] not in cols:
                     cols.append(pair[1])
@@ -953,6 +1027,36 @@ class MappedDatatablet(Datatablet):
         return out
 
 
+class MappedFeaturetablet(DataslicesUpstream, MappedDatatablet):
+    """A copy of some rows of a table that reads upstream -- a `Featuretable` -- keeping its layers.
+
+    It copies only the mapped table's own slices -- features -- and its `upstream`
+    is the same rows of the mapped table's upstream, pulled back along a
+    `DatamapCarbonTable` of the same map: a `MappedDatatablet`, or, if that
+    table reads upstream too, another of these, and so on down. Nothing is
+    flattened and nothing computed again: the features are copied, never
+    re-evaluated. ``source`` is written once, at the bottom, and read through
+    the upstream from every layer above it: the tables are laid out alike, so
+    the indices are the same.
+    """
+
+    SPECIALIZATIONS = []
+    WRITES_SOURCE = False
+
+    @dataclass
+    class VAR(MappedDatatablet.VAR):
+        upstream: Datatablet = None
+
+    # 1. Protocol and hooks ------------------------------------------------
+
+    def build(self, *args, **kwargs):
+        """Its upstream copy first -- the same pull, one layer down, and so on to the bottom -- then itself."""
+        upstream = self.var.upstream
+        if not upstream.valid():
+            upstream.build(*args, **kwargs)
+        return super().build(*args, **kwargs)
+
+
 class MappedDatatable(Datatable):
     """A table pulled back along a `DatamapTable`: a tablet per tablet of the map, of the mapped table's rows.
 
@@ -963,11 +1067,18 @@ class MappedDatatable(Datatable):
     those, in parallel, as any table builds its tablets, skipping the ones built.
 
     Its BLOCK and TOPICS are the mapped table's: it is a view of its tablets.
-    Subclasses say where the map comes from -- `datamap` -- and what a copying tablet
-    copies -- `copy_collator`, every slice by default.
+    Its VAR is its map and a collator naming what a copy copies, every slice by
+    default. A table that reads upstream -- a `Featuretable` -- is pulled back
+    layer by layer: its copies are `MappedFeaturetablet`s, whose upstream is this
+    table's upstream pulled back along a carbon map of the same map.
     """
 
     SPECIALIZATIONS = []
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        datamap: DatamapTable
+        collator: Datacollator | None = None
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -994,7 +1105,12 @@ class MappedDatatable(Datatable):
         if whole is not None:
             return self.datatable.tablet(whole)
         first = self.datatable.tablet(int(self.datamap.record(idx)[0][0]))
-        return MappedDatatablet(
+        spec = dict(datapoints_per_row=getattr(self.datatable.var, 'datapoints_per_row', 1),
+                    map=self.datamap.tablet(idx), collator=self.copy_collator)
+        cls = MappedDatatablet
+        if isinstance(first, DataslicesUpstream):
+            cls, spec['upstream'] = MappedFeaturetablet, self.upstream_mapped.tablet(idx)
+        return cls(
             # Where the map is: a copying tablet is derived from the map, and the mapped
             # table's lake may be one nothing writes to.
             datalake=self.datamap._datalake_,
@@ -1003,8 +1119,7 @@ class MappedDatatable(Datatable):
             cache_limit=getattr(first, 'cache_limit', None),
             verbose=False,
             tag=self.datamap.tag_of(idx),
-            spec=dict(datapoints_per_row=getattr(self.datatable.var, 'datapoints_per_row', 1),
-                      map=self.datamap.tablet(idx), collator=self.copy_collator),
+            spec=spec,
         )
 
     def valid_tablet(self, idx: int, validation: str | None = None) -> bool:
@@ -1065,12 +1180,21 @@ class MappedDatatable(Datatable):
     @property
     def datamap(self) -> DatamapTable:
         """The map it is pulled back along."""
-        raise NotImplementedError(f"{type(self).__name__}: a mapped table says where its map comes from")
+        return self.var.datamap
 
     @property
     def copy_collator(self) -> Datacollator | None:
-        """What a copying tablet copies: None, every slice the mapped table's tablets hold."""
-        return None
+        """What a copying tablet copies: its collator's columns; None, every slice the mapped table's tablets hold."""
+        return self.var.collator
+
+    @functools.cached_property
+    def upstream_mapped(self) -> MappedDatatable:
+        """The mapped table's upstream, pulled back along a carbon map of this table's map: a layered copy's upstream."""
+        upstream = self.datatable._upstream_block_()
+        datamap = DatamapCarbonTable(datalake=self.datamap._datalake_, storage_options=self.storage_options,
+                                     spec=dict(template=self.datamap, datatable=upstream))
+        return MappedDatatable(datalake=self.datamap._datalake_, storage_options=self.storage_options,
+                               spec=dict(datamap=datamap, collator=self.copy_collator))
 
     @property
     def datatable(self) -> Datatable:
@@ -1178,6 +1302,11 @@ class DatatablePart(MappedDatatable):
         partition = self.var.partition
         return DatamapTable(datalake=partition._datalake_, storage_options=partition.storage_options,
                             spec=dict(partition=partition, fold=self.var.fold))
+
+    @property
+    def copy_collator(self) -> Datacollator | None:
+        """A part copies every slice."""
+        return None
 
     @property
     def tablet_indices(self) -> list:

@@ -26,7 +26,8 @@ def setup_env(monkeypatch):
                                  featuretables.BipolarFeaturetablet, featuretables.BipolarFeaturetable,
                                  datatables.Datacollator, dataparts.MappedDatatablet, dataparts.DatatableCorePartition,
                                  dataparts.DatatableCorePart, dataparts.DatatableCoreTablet, dataparts.DatamapTable,
-                                 dataparts.DatamapTablet, dataparts.MappedDatatable,
+                                 dataparts.DatamapTablet, dataparts.MappedDatatable, dataparts.DatamapCarbonTable,
+                                 dataparts.MappedFeaturetablet,
                                  probes.FeatureStatsProbe])
 def test_a_class_is_recorded_under_its_own_module(cls):
     assert cls.__module__ in ('dbx.datatables', 'dbx.dataparts', 'dbx.featuretables', 'dbx.probes')

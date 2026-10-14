@@ -13,7 +13,8 @@ import pytest
 
 from dbx.datablocks import Datablock
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import DatamapTable, DatatablePart, DatatablePartition
+from dbx.dataparts import (DatamapCarbonTable, DatamapTable, DatatablePart, DatatablePartition, MappedDatatablet,
+                           MappedFeaturetablet)
 
 
 @pytest.fixture(autouse=True)
@@ -380,18 +381,65 @@ def test_a_piece_that_cannot_be_recovered_says_so(tmp_path):
         datamap._entry_rows_({'tab': 0, 'stratifyby': 'p4', 'partitionby': 'B'}, 0)
 
 
-def test_a_mixed_tablet_upstream_of_a_feature_table_is_not_implemented(tmp_path):
+def _features(url):
     from test_probes import DummyModelEvaluatorFactory, DummySampleTable
     from dbx import Featuretable
-    url = str(tmp_path)
     samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=4), tag='samples').build()
-    features = Featuretable(datalake=url, devices=['cpu'], tag='features', spec=dict(
+    return Featuretable(datalake=url, devices=['cpu'], tag='features', spec=dict(
         upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
         collator=Datacollator(spec=dict(columns={'signals': [('samples', 'samples')], 'labels': [('labels', 'labels')]})))).build()
-    with pytest.raises(NotImplementedError, match="DataslicesUpstream"):
-        DatatablePartition(datalake=url, spec=dict(
-            datatable=features, fractions=[0.5, 0.5], partition_slice='features',
-            collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)))).build()
+
+
+@pytest.mark.parametrize('coalesce', [None, 'pack'])
+def test_a_mixed_feature_tablet_is_cut_layer_by_layer(tmp_path, coalesce):
+    """A piece of a feature tablet is the same rows of its features and, as its upstream, of its samples.
+
+    Every tablet alternates its label, so every one is cut, by a column upstream of
+    the features: each piece copies its own rows of the features, and its upstream
+    copies the same rows of the samples -- the layers kept, nothing re-evaluated.
+    """
+    url = str(tmp_path)
+    features = _features(url)
+    # Seed 2 splits each tablet's pieces across the folds, so a packed tablet pools pieces of both tablets.
+    spec = dict(coalesce='pack', min_tablet_rows=3) if coalesce else {}
+    p = DatatablePartition(datalake=url, spec=dict(
+        datatable=features, fractions=[0.5, 0.5], partition_slice='features', seed=2,
+        collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)), **spec)).build()
+    copies = 0
+    for k in range(p.n_folds()):
+        part = p.part(k).build()
+        for i in range(part.n_tablets):
+            tablet = part.tablet(i)
+            if part.datamap.whole(i) is not None:
+                continue
+            copies += 1
+            assert isinstance(tablet, MappedFeaturetablet) and isinstance(tablet.var.upstream, MappedDatatablet)
+            assert 'source' not in tablet.slices() and 'source' in tablet.var.upstream.slices(), "written once, below"
+            src = tablet.source_index()                         # read through the upstream
+            got = tablet.data('features', 'samples', 'labels')
+            feats = [features.tablet(int(t)).data('features')['features'] for t, _ in src]
+            ups = [features.tablet(int(t)).var.upstream.data('samples', 'labels') for t, _ in src]
+            for j, (t, r) in enumerate(src):
+                for c, v in got['features'].items():
+                    assert np.array_equal(v[j], feats[j][c][r])
+                assert np.array_equal(got['samples']['samples'][j], ups[j]['samples']['samples'][r])
+                assert got['labels']['labels'][j] == ups[j]['labels']['labels'][r]
+    assert copies
+
+
+def test_a_carbon_map_refuses_a_table_not_laid_out_alike(tmp_path):
+    from test_probes import DummySampleTable
+    url = str(tmp_path)
+    features = _features(url)
+    p = DatatablePartition(datalake=url, spec=dict(
+        datatable=features, fractions=[0.5, 0.5], partition_slice='features', seed=2,
+        collator=Datacollator(spec=dict(columns={'partitionby': ('labels', 'labels')}, recursive=True)))).build()
+    datamap = p.part(0).datamap
+    alike = DatamapCarbonTable(datalake=url, spec=dict(template=datamap, datatable=features.var.upstream))
+    assert [t for t, _ in alike.record(0)] == [t for t, _ in datamap.record(0)]
+    unlike = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag='unlike').build()
+    with pytest.raises(ValueError, match="not laid out alike"):
+        DatamapCarbonTable(datalake=url, spec=dict(template=datamap, datatable=unlike)).record(0)
 
 
 # Probes on folds holding pieces.

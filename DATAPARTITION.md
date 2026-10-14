@@ -433,38 +433,40 @@ of the same split, was removed when nothing used it any more.
 A feature table (`Featuretable`, a `DataslicesUpstream`) reads some slices
 from its upstream table: its features are its own, its annotations are the
 sample table's. Row *i* of a feature tablet is the features of row *i* of its
-upstream sample tablet.
+upstream sample tablet, and feature tablet *t* was computed from upstream
+tablet *t*: the two tables are laid out alike.
 
-Splitting a mixed feature tablet is **not implemented** and raises
-`NotImplementedError`. A piece of it would have to be the same piece of its
-upstream tablet as well, or its features and its annotations would describe
-different rows.
+A feature table is partitioned as any table is, its partition columns read
+upstream with a `recursive` collator. A tablet it takes whole is its own
+Featuretablet, still reading its upstream. A piece or a packed tablet of it is
+pulled back **layer by layer**: a `MappedFeaturetablet` copies the rows of the
+feature table's own slices, and its `upstream` is the same rows of the upstream
+table, pulled back along a `DatamapCarbonTable` -- the fold's map, over the
+upstream table -- a `MappedDatatablet`, or, if the upstream reads upstream too,
+another `MappedFeaturetablet`, and so on down. Nothing is flattened and nothing
+computed again: features are copied, never re-evaluated. Building a layered
+copy builds its upstream copy first.
 
-The way there is to partition once, upstream, and let downstream tables
-follow:
+`source` is written once, at the bottom, and read through the upstream from
+every layer above: the tables are laid out alike, so the indices are the same,
+and a row may not name one slice twice across layers.
 
-1. Partition the sample table, the one whose tablets hold the rows. Its pieces'
-   `source` slices record which rows they took.
-2. A downstream part needs no SCAN and no DEAL: its entries are the upstream
-   part's, mapped one to one. A whole tablet maps to the downstream tablet at the
-   same index. A piece maps to a downstream piece, defined by its downstream
-   tablet and the upstream piece, that takes the rows the upstream piece's
-   `source` slice names, of the downstream tablet.
-3. Building the downstream part builds those pieces in parallel, each
-   selecting by index. The upstream and downstream parts agree by
-   construction: one row selection, made once, upstream.
+A `DatamapCarbonTable` checks, as it resolves each record, that every tablet the
+record names holds as many rows in its table as in the template's, and raises
+when they are not laid out alike. The same per-fold carbon map takes a deal made
+over one table to any table laid out as it is: the tile clip, its deep features,
+their bipolar codes, all along one deal's maps.
 
-This still rests on row *i* of a feature tablet being row *i* of its upstream
-tablet, which every `Featuretablet` already assumes. Indices give that assumption
-a place to be checked: where the feature tablet carries a
-`shared_upstream_column`, a downstream piece can compare it against the
-upstream piece's and refuse a mismatch. The downstream piece class and the
-mirrored part are not written yet.
+All of this still rests on row *i* of a feature tablet being row *i* of its
+upstream tablet, which every `Featuretablet` already assumes; the record
+checks counts, not rows. Where the feature tablet carries a
+`shared_upstream_column`, a copy could compare it against its upstream copy's
+and refuse a mismatch: the TODO on `Featuretablet`.
 
-A core partition (below) already does both halves of this for its own
-kind: it copies a feature table's upstream columns into its core tablets, flat,
-and a table laid out alike takes its layout without clustering anything, by a
-`DatatableCarbonCorePartition`.
+A core partition (below) copies a feature table's upstream columns into its core
+tablets, flat, and a table laid out alike takes its layout without clustering
+anything, by a `DatatableCarbonCorePartition` -- until the core deal writes maps,
+"TODO: three choices, untangled", step 4.
 
 ## Core partitions: coresets
 
@@ -834,8 +836,12 @@ change form.
    `MappedDatatablet`; `DatatablePart` is a `MappedDatatable`, and pieces and
    packed tablets are `MappedDatatablet`s. The CPTAC folds keep their hashes,
    their bags pulled back to themselves.
-3. Next: the layered pull, `MappedFeaturetable`/`MappedFeaturetablet`, and the
-   three upstream refusals gone.
+3. Done: the layered pull. A piece or packed tablet of a feature table is a
+   `MappedFeaturetablet` whose upstream is the same rows of the upstream table,
+   along a `DatamapCarbonTable`; the upstream refusals are gone. The tables
+   pulled back keep their classes' layering, not their classes: a mapped part
+   is still a `MappedDatatable` (a `MappedFeaturetable` is not needed while a
+   part's tablets carry their own upstream).
 4. The core deal writes maps; core parts are mapped tables; a carbon map per fold.
 5. The callers: probes (`tablet_indices`, `source_index`), autopath's
    `tomography.py`, `PancanTileFold`'s specializations.
@@ -871,6 +877,8 @@ All in `dbx/dataparts.py`, except the probe.
 | A mapped table accepting copies as blocks | `MappedDatatable.tablet`, `valid_tablet`, `_form_block_` |
 | A part's rows, as the table's | `DatatablePart.source_index` |
 | A piece, a packed tablet: a copy of the rows a record names | `MappedDatatablet`: `__build__`, `_sources_`, `_copied_`, `source_index` |
+| A copy of a feature table's rows, layer by layer | `MappedFeaturetablet`, `MappedDatatable.upstream_mapped` |
+| A map's records over a table laid out alike | `DatamapCarbonTable.record` |
 | Selecting a tablet's rows by value; copying a tablet's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
 | The back-pointing slice | `SOURCE_SLICE`, `SOURCE`, `_source_index_` |
 | Core: scan, cluster, deal | `DatatableCorePartition`: `_lay_out_`, `_cluster_and_deal_`, `_cluster_master_`, `_cluster_distributed_`, `_deal_rows_` |

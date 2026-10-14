@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A feature table is cut and packed, layer by layer.** A piece or packed
+  tablet of a `Featuretable` is a `MappedFeaturetablet`: a copy of its own
+  slices' rows, whose `upstream` is the same rows of the upstream table, pulled
+  back along a `DatamapCarbonTable` -- a fold's map over a table laid out alike,
+  checked record by record. `source` is written once, at the bottom. The
+  `NotImplementedError`s for a mixed feature tablet and for `coalesce='pack'` of
+  a feature table are gone. A partition column read as a numpy scalar is
+  recorded as the Python value it is.
 - **A part is its table pulled back along its fold's map.** New in
   `dbx.dataparts`: `DatamapTable`, a fold's layout, a `DatamapTablet` per tablet
   of the fold, each with its `record`, `[(tablet, rows | None)]`; and

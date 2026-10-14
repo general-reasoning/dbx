@@ -804,7 +804,8 @@ def anchor_journal(monkeypatch):
     import dbx
 
     monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
-    monkeypatch.setattr(dbx.DataJournal, "read", lambda anchor, **kw: pd.DataFrame(JOURNAL_ROWS))
+    monkeypatch.setattr(dbx.DataJournal, "list", lambda anchor, **kw: [f"f{i}" for i in range(len(JOURNAL_ROWS))])
+    monkeypatch.setattr(dbx.DataJournal, "read_frame", lambda files, **kw: pd.DataFrame(JOURNAL_ROWS))
     monkeypatch.setattr(dbxpipelines, "_side_file_", lambda *a: None)
     monkeypatch.setattr(dbxpipelines, "var_name", lambda row: None)
 
@@ -905,7 +906,8 @@ def test_an_anchors_filters_reach_its_journal(monkeypatch):
 
     seen = {}
     monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
-    monkeypatch.setattr(dbx.DataJournal, "read", lambda anchor, **kw: seen.update(kw) or pd.DataFrame())
+    monkeypatch.setattr(dbx.DataJournal, "list", lambda anchor, **kw: [])
+    monkeypatch.setattr(dbx.DataJournal, "read_frame", lambda files, **kw: seen.update(kw) or pd.DataFrame())
     assert dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, filters={"tag": "first"}) == []
     assert seen["tag"] == "first"
 
@@ -986,18 +988,23 @@ def test_a_block_menu_copies_the_anchorkey_a_journal_filter_matches():
     assert "anchorkey" in kw["copy_hint"]
 
 
-def test_an_anchors_read_reports_its_listing_then_its_counts(anchor_journal, monkeypatch):
+def test_an_anchors_journal_is_listed_then_read_against_the_total(anchor_journal, monkeypatch):
     import dbx
 
-    def read(anchor, progress, **kw):
+    def list_(anchor, progress, **kw):
+        progress("listing", 1, None)
         progress("listing", 3, None)
-        progress("reading", 1, 2)
+        return ["f0", "f1", "f2"]
+
+    def read_frame(files, progress, **kw):
+        assert files == ["f0", "f1", "f2"]
+        progress("reading", 1, 3)
         return pd.DataFrame(JOURNAL_ROWS)
 
-    monkeypatch.setattr(dbx.DataJournal, "read", read)
+    monkeypatch.setattr(dbx.DataJournal, "list", list_)
+    monkeypatch.setattr(dbx.DataJournal, "read_frame", read_frame)
     told = []
     dbxpipelines.blocks("pkg.Model", progress=lambda msg, done=None, total=None: told.append((msg, done, total)), n_workers=2)
-    assert told[:3] == [("dbx.DataJournal.read('pkg.Model')", None, None),
-                        ("dbx.DataJournal.read('pkg.Model'): listing the journal files", 3, None),
-                        ("dbx.DataJournal.read('pkg.Model')", 1, 2)]
+    listing, reading = "dbx.DataJournal.list('pkg.Model')", "dbx.DataJournal.read_frame(3 journal files of pkg.Model)"
+    assert told[:5] == [(listing, None, None), (listing, 1, None), (listing, 3, None), (reading, 0, 3), (reading, 1, 3)]
     assert told[-1][1:] == (2, 2), "and then the side files, counted"

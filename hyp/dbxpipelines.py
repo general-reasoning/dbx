@@ -421,7 +421,7 @@ def pipelines(progress=print, n_workers=16):
     """
     progress("dbx.pipejournal()")
     df = _dbx_().pipejournal(n_workers=n_workers, progress=_counted_(progress, "dbx.pipejournal()"))
-    return _entries_(df, progress, f"reading the side files of {len(df)} pipelines", n_workers)
+    return _entries_(df, progress, f"reading the specs and renderings of {len(df):,} pipelines", n_workers)
 
 
 def blocks(anchor, progress=print, n_workers=16, filters=None):
@@ -435,13 +435,20 @@ def blocks(anchor, progress=print, n_workers=16, filters=None):
     import pandas as pd
 
     filters = dict(filters or {})
-    msg = f"dbx.DataJournal.read({anchor!r}{''.join(f', {k}={v!r}' for k, v in filters.items())})"
-    progress(msg)
+    DataJournal = _dbx_().DataJournal
+    # Listed first, as a stage of its own, so that the read has a total to count against.
+    listing = f"dbx.DataJournal.list({anchor!r})"
+    progress(listing)
     try:
-        df = pd.DataFrame(_dbx_().DataJournal.read(anchor, datalake=datalake(), n_workers=n_workers, index=None,
-                                                   progress=_counted_(progress, msg), **filters))
+        files = DataJournal.list(anchor, datalake=datalake(), n_workers=n_workers,
+                                 progress=lambda desc, n, total: progress(listing, n, None))
     except FileNotFoundError as e:
         raise FileNotFoundError(f"no journal of {anchor} in {datalake()}: {e}") from e
+    reading = f"dbx.DataJournal.read_frame({len(files):,} journal files of {anchor}" \
+              f"{''.join(f', {k}={v!r}' for k, v in filters.items())})"
+    progress(reading, 0, len(files))
+    df = pd.DataFrame(DataJournal.read_frame(files, n_workers=n_workers, index=None,
+                                             progress=lambda desc, done, total: progress(reading, done, total), **filters))
     if not len(df):
         return []
     if "entry_path" in df.columns:
@@ -451,7 +458,7 @@ def blocks(anchor, progress=print, n_workers=16, filters=None):
     if "anchorkeypath" in df.columns:
         df = df.drop_duplicates("anchorkeypath", keep="first")
     df = df.reset_index(drop=True)
-    return _entries_(df, progress, f"reading the side files of {len(df)} blocks of {anchor}", n_workers)
+    return _entries_(df, progress, f"reading the specs and renderings of {len(df):,} blocks of {anchor}", n_workers)
 
 
 #: What the journal menu calls the pipeline journal: no anchor can be named so, starting with a dot.

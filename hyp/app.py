@@ -1753,7 +1753,7 @@ class Hyp:
         else:
             done, total = self.progress
             if total is None:
-                detail, frac = f"{done:,} so far · {_duration_(elapsed)}", None
+                detail, frac = f"{done:,} found so far · {_duration_(elapsed)}", None
             else:
                 frac = min(1.0, done / total) if total else 1.0
                 detail = f"{done:,} of {total:,} · {frac:.0%} · {_duration_(elapsed)}"

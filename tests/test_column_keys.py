@@ -156,12 +156,12 @@ class TestSpecs:
         assert project_column(nested, [('k',), ('s', 'c', 'd')]) == {'k': 1, 's': {'c': {'d': 7}}}
 
 def test_a_feature_table_parses_the_triple_as_a_table_does():
-    from dbx.datatables import DataslicesUpstream
-    items = DataslicesUpstream._norm_items_((('annotations', 'annotations', 'label'), 'features'))
+    from dbx.datatables import Layered
+    items = Layered._norm_items_((('annotations', 'annotations', 'label'), 'features'))
     assert items == [('annotations', [('annotations', ('label',))]), ('features', None)]
-    assert DataslicesUpstream._norm_items_((('annotations', 'annotations', ['a', 'b']),)) == [
+    assert Layered._norm_items_((('annotations', 'annotations', ['a', 'b']),)) == [
         ('annotations', [('annotations', [('a',), ('b',)])])]
-    assert DataslicesUpstream._norm_items_((('annotations', 'annotations', 'a', 'b'),)) == [
+    assert Layered._norm_items_((('annotations', 'annotations', 'a', 'b'),)) == [
         ('annotations', [('annotations', ('a', 'b'))])]
 
 

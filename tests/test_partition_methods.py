@@ -16,7 +16,7 @@ import pytest
 from dbx.datablocks import Datablock
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
 from dbx.dataparts import (DatamapTable, DatatablePart, DatatablePartition, FeaturetablePart,
-                           MappedDatatable, MappedDatatablet, MappedFeaturetablet)
+                           MappedDatatable, MappedDatatablet, MappedFeaturetable, MappedFeaturetablet)
 
 
 @pytest.fixture(autouse=True)
@@ -454,11 +454,30 @@ def test_a_feature_table_s_part_keeps_its_layers(tmp_path):
     """A part of a feature table reads its annotations as the feature table does: through its upstream, pulled back."""
     p = _feature_partition(str(tmp_path))
     part = p.part(0).build()
-    assert isinstance(part, FeaturetablePart) and isinstance(part.upstream_mapped, MappedDatatable)
+    assert isinstance(part, FeaturetablePart) and isinstance(part.upstream, MappedDatatable)
     assert set(part.slices(recursive=True)) >= {'features', 'samples', 'labels'}
     labels = part.data('labels')['labels']['labels']
     rows = sum(part.tablet(i).n_rows('features') for i in range(part.n_tablets))
     assert len(labels) == rows
+
+
+def test_every_layered_block_answers_upstream(tmp_path):
+    """`.upstream` is the block below, whether a VAR field or, for a part or a mapped table, derived from the map."""
+    p = _feature_partition(str(tmp_path))
+    features = p.datatable
+    part = p.part(0).build()
+    mapped = part.datamap.pullback(features)
+    assert isinstance(mapped, MappedFeaturetable)
+    assert features.upstream is features.var.upstream
+    for derived in (part, mapped):
+        assert 'upstream' not in vars(derived.var)
+        assert isinstance(derived.upstream, MappedDatatable)
+        assert derived.upstream.datatable.hash == features.var.upstream.hash
+        assert derived.upstream.datamap.hash == derived.datamap.hash
+    plain = part.datamap.pullback(features.var.upstream)
+    assert type(plain) is MappedDatatable and not hasattr(plain, 'upstream')
+    copy = mapped.tablet(next(i for i in range(mapped.n_tablets) if isinstance(mapped.tablet(i), MappedFeaturetablet)))
+    assert copy.upstream is copy.var.upstream
 
 
 def test_a_feature_table_s_part_built_as_a_datatable_part_is_adopted_where_it_is(tmp_path):

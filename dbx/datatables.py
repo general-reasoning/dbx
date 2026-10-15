@@ -250,7 +250,7 @@ class _Database_(Datablock):
         """The names of this block's slice topics, in declaration order.
 
         *recursive* adds the slices of the blocks upstream of this one, for a
-        block that has them (`DataslicesUpstream`); a block reading only its
+        block that has them (`Layered`); a block reading only its
         own has nothing to add.
 
         A method rather than a property, mirroring :meth:`topics`, which it is
@@ -1955,7 +1955,7 @@ class Datacollator(Datablock):
             return np.concatenate(batch_items, axis=0)
 
 
-class DataslicesUpstream:
+class Layered:
     """Slice routing for a tablet or table that reads its own slices and an upstream one's.
 
     A mixin, ahead of `Datatablet` or `Datatable` in the bases. `Featuretablet` owns
@@ -1965,8 +1965,11 @@ class DataslicesUpstream:
     work out which block owns a requested slice, keep the caller's order, and
     refuse a name that two blocks both claim.
 
-    The upstream is the VAR field ``upstream``: a block of the same kind --
-    a tablet's a tablet, a table's a table -- that this one was built from.
+    The upstream is `upstream`: a block of the same kind -- a tablet's a
+    tablet, a table's a table -- that this one was built from. It is the VAR
+    field ``upstream``, or, for a mapped table or a part, whose identity its
+    map and source already fix, its source's upstream pulled back along the
+    same map.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -2062,6 +2065,11 @@ class DataslicesUpstream:
 
     def _upstream_block_(self):
         return self.var.upstream
+
+    @property
+    def upstream(self):
+        """The block it reads upstream of: its VAR's ``upstream``, or, for a mapped table or a part, its source's upstream pulled back along the same map."""
+        return self._upstream_block_()
 
     def slices(self, recursive: bool = False):
         """This block's own slices; *recursive*, those of its upstream chain after them."""

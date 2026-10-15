@@ -25,7 +25,7 @@ from dbx.backbones import ModelEvaluatorBuilder
 from dbx.datatables import (
     DATASLICE,
     Datacollator,
-    DataslicesUpstream,
+    Layered,
     Datatablet,
     Datatable,
     DatatableTablet,
@@ -118,7 +118,7 @@ def feature_map(feature_for_column, evaluator_factory) -> dict[str, str]:
     return {str(feature_for_column): str(feature_for_column)}
 
 
-class Featuretablet(DataslicesUpstream, Datatablet):
+class Featuretablet(Layered, Datatablet):
     """A tablet storing multi-layer feature activations captured by an evaluator.
 
     Inherits access to the slices of its ``upstream`` tablet, the one its features
@@ -358,7 +358,7 @@ def _featuretable_pasts_(tablet) -> list:
     ]
 
 
-class Featuretable(DataslicesUpstream, Datatable):
+class Featuretable(Layered, Datatable):
     """A table of `Featuretablet` blocks built across a `Datatable`."""
 
     TABLET = Featuretablet
@@ -535,7 +535,7 @@ class Featuretable(DataslicesUpstream, Datatable):
         return self.var.upstream.n_tablets
 
 
-class BipolarFeaturetablet(DataslicesUpstream, Datatablet):
+class BipolarFeaturetablet(Layered, Datatablet):
     """Bipolar encoding of a `Featuretablet`'s feature columns against a calibration.
 
     Each column is mapped to ``{-1, +1}`` elementwise: ``+1`` where the value
@@ -675,7 +675,7 @@ class BipolarFeaturetablet(DataslicesUpstream, Datatablet):
             )
 
 
-class BipolarFeaturetable(DataslicesUpstream, Datatable):
+class BipolarFeaturetable(Layered, Datatable):
     """A table of `BipolarFeaturetablet` blocks built over a `Featuretable`.
 
     Every tablet is calibrated by the one ``stats_probe``: that is what makes the
@@ -760,7 +760,7 @@ class BipolarFeaturetable(DataslicesUpstream, Datatable):
         return self.upstream.n_tablets
 
 
-class TernaryFeaturetablet(DataslicesUpstream, Datatablet):
+class TernaryFeaturetablet(Layered, Datatablet):
     """A `BipolarFeaturetablet`'s tiles, kept where their bag is sure of the sign and they agree with it, else 0.
 
     The bag-level estimate, per column and dimension, is the mean of the
@@ -866,7 +866,7 @@ class TernaryFeaturetablet(DataslicesUpstream, Datatablet):
         return list(declared)
 
 
-class TernaryFeaturetable(DataslicesUpstream, Datatable):
+class TernaryFeaturetable(Layered, Datatable):
     """A table of `TernaryFeaturetablet` blocks built over a `BipolarFeaturetable`, one threshold for all."""
 
     TABLET = TernaryFeaturetablet

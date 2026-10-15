@@ -20,11 +20,11 @@ table ─ pullback along a DatamapTable ─▶ MappedDatatable ── tablet i �
 | `DatamapTable` | `Datatable` | `partition`, `fold` | its `DatamapTablet`s, in parallel, with the deal's workers | `pullback(table, collator)` |
 | `DatamapTablet` | `Datatablet` | `datamap`, `index` | slice `lot`: one row per run -- `tab`, `rows`, `whole` | `.lot` reads it; `datamap` is in `TREE_SKIP_*` |
 | `MappedDatatable` | `Datatable` | `datamap`, `datatable` (None: the map's), `collator` (None: every slice) | its map, then its copies, in parallel | BLOCK, TOPICS: the table's; another table must be laid out alike |
-| `MappedFeaturetable` | `DataslicesUpstream`, `MappedDatatable` | as above | as above | its upstream: the table's upstream pulled back along the same map; a layer the collator names nothing of is passed over |
+| `MappedFeaturetable` | `Layered`, `MappedDatatable` | as above | as above | its upstream: the table's upstream pulled back along the same map; a layer the collator names nothing of is passed over |
 | `MappedDatatablet` | `Datatablet` | `map` (a `DatamapTablet`), `datatable`, `collator` | the lot's rows of the slices it copies, and `source` | builds its map tablet first; checks the rows' counts |
-| `MappedFeaturetablet` | `DataslicesUpstream`, `MappedDatatablet` | + `upstream` | the table's own slices only; no `source` | its upstream: the same rows one layer down, built first |
+| `MappedFeaturetablet` | `Layered`, `MappedDatatablet` | + `upstream` | the table's own slices only; no `source` | its upstream: the same rows one layer down, built first |
 | `DatatablePart` | `MappedDatatable` | `partition`, `fold` (its map derived) | as `MappedDatatable`; copies every slice | the identity of every CPTAC fold, and all built on them |
-| `FeaturetablePart` | `DataslicesUpstream`, `DatatablePart` | as above | as above | a `Featuretable`'s part; adopts one built as a `DatatablePart` |
+| `FeaturetablePart` | `Layered`, `DatatablePart` | as above | as above | a `Featuretable`'s part; adopts one built as a `DatatablePart` |
 
 **Terms.** A *lot*: `[(tablet, rows | None)]`, runs of one tablet each, None for
 every row -- a whole tablet's `[(t, None)]`, a piece's `[(t, rows)]`, a packed or
@@ -487,7 +487,7 @@ of the same split, was removed when nothing used it any more.
 
 ## Upstream and downstream tables
 
-A feature table (`Featuretable`, a `DataslicesUpstream`) reads some slices
+A feature table (`Featuretable`, a `Layered`) reads some slices
 from its upstream table: its features are its own, its annotations are the
 sample table's. Row *i* of a feature tablet is the features of row *i* of its
 upstream sample tablet, and feature tablet *t* was computed from upstream
@@ -798,7 +798,7 @@ go together, and each new combination so far has meant a new class:
    with the deal and the copy with the clustering, but neither needs the other.
 3. **What happens to upstream data.** A view keeps it, through the tablets, so
    it cannot cut a tablet that reads upstream -- three `isinstance(...,
-   DataslicesUpstream)` refusals in `dataparts.py`. A copy flattens it into
+   Layered)` refusals in `dataparts.py`. A copy flattens it into
    local slices, losing the layers.
 
 ### The design
@@ -845,8 +845,8 @@ of the source tablets' own slices, by its record:
 functorial pullback. A `Featuretable` over an upstream `Datatable` is pulled
 back as two tables: the upstream along the map -- a `MappedDatatable`, or, if the
 upstream is itself a `Featuretable`, the same construction recursively -- and
-the feature layer along the same map, as a `MappedFeaturetable(DataslicesUpstream,
-Datatable)` of `MappedFeaturetablet(DataslicesUpstream, Datatablet)`s. A mapped
+the feature layer along the same map, as a `MappedFeaturetable(Layered,
+Datatable)` of `MappedFeaturetablet(Layered, Datatablet)`s. A mapped
 feature tablet copies only the feature table's own slices, and its `upstream` is
 the mapped upstream tablet. Nothing is flattened, and nothing is computed again:
 a mapped feature tablet selects rows of features already computed; it never runs
@@ -961,7 +961,7 @@ All in `dbx/dataparts.py`, except the probe.
 | A mapped table accepting copies as blocks | `MappedDatatable.tablet`, `valid_tablet`, `_form_block_` |
 | A part's rows, as the table's | `DatatablePart.source_index` |
 | A piece, a packed or a core tablet: a copy of the rows a lot names | `MappedDatatablet`: `__build__`, `_sources_`, `_copied_`, `source_index` |
-| A copy of a feature table's rows, layer by layer | `MappedFeaturetablet`, `MappedDatatable.upstream_mapped` |
+| A copy of a feature table's rows, layer by layer | `MappedFeaturetablet`, `MappedFeaturetable.upstream` |
 | A feature table pulled back, its upstream with it | `MappedFeaturetable`, `FeaturetablePart`, `_mapped_table_` |
 | Selecting a tablet's rows by value; copying a tablet's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
 | The back-pointing slice | `SOURCE_SLICE`, `SOURCE`, `_source_index_` |

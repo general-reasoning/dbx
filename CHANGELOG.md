@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Every layered block answers `.upstream`, and the mixin is `Layered`.** The
+  block a table or tablet reads upstream of is `.upstream`: its VAR's
+  ``upstream`` for a `Featuretable(t)` or `MappedFeaturetablet`, and, for a
+  `MappedFeaturetable` or a `FeaturetablePart` -- whose map and source already
+  fix it, so it is in no identity -- its source's upstream pulled back along the
+  same map. `upstream_mapped` is gone; `.upstream` replaces it. The mixin
+  `DataslicesUpstream` is `Layered`; it is no block's class, so no anchor or
+  hash moves.
 - **A partition's stages say what they are.** A deal's build opens with a
   `DEAL` line naming its stages; a mapped table's with a `PULLBACK` summary --
   the deal, dealt and kept or not; the map, built or to build; how many tablets

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Each layer of a pullback says what it copies, as it is built.** In build
+  order, bottom up: `PULLBACK <table> along fold k of <deal>: n copies of
+  [slices]`, next to its `COPY: n tablets of <table>` bar -- the layers pulled back
+  independently along one map, a skipped layer saying nothing. The map says the
+  deal and itself once, as it builds: `DEAL <deal>: dealt; MAP <map>: fold k, n
+  lots`. The single summary with its arrows between layers is gone.
 - **`partition.map(k)` and `fold(k)`; a mapped feature table holds its upstream.**
   `map(k)` is fold *k*'s map -- `DatamapTable` and `DatamapTablet` are
   `PartitionDatamapTable` and `PartitionDatamapTablet` -- and `fold(k)` its own

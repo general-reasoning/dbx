@@ -24,7 +24,7 @@ datatables
     MDS slices, and the columns a consumer reads from them.
 dataparts
     :class:`DatatablePartition` and :class:`DatatableCorePartition`: a table
-    dealt into folds; :class:`DatamapTable`, a fold's map; and
+    dealt into folds; :class:`PartitionDatamapTable`, a fold's map; and
     :class:`MappedDatatable`, a table pulled back along a map -- a part.
 journals
     :class:`DataJournal` and the build records it reads and writes

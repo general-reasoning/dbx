@@ -104,7 +104,7 @@ def test_whole_rejoins_a_cut_tablet_whose_pieces_went_to_one_part(tmp_path):
     assert p.read('tablets') == [[0, {'tab': 1, 'stratifyby': 's2'}, 2], [{'tab': 1, 'stratifyby': 's3'}, 3, 4]]
     assert p.read('summary')['rejoined'] == ['tab_000003', 'tab_000004']
     # Rejoined, a tablet is the table's own, read where it is: no piece of it to build.
-    assert not any(isinstance(p.part(1).tablet(i), MappedDatatablet) for i in (1, 2))
+    assert not any(isinstance(p.fold(1).tablet(i), MappedDatatablet) for i in (1, 2))
 
 
 def test_whole_rejoins_a_tablet_whose_pieces_lie_in_two_partitions_and_counts_it_in_both(tmp_path):
@@ -137,7 +137,7 @@ def test_pack_pools_the_small_entries_and_keeps_the_rest(tmp_path):
     tbl = rows_table(tmp_path)
     p = split(tmp_path / 'p', tbl, coalesce='pack', min_tablet_rows=3, max_tablet_rows=4)
     for k, entries in enumerate(p.read('tablets')):
-        part = p.part(k).build()
+        part = p.fold(k).build()
         packs = [e for e in entries if isinstance(e, dict) and 'pack' in e]
         kept = [e for e in entries if e not in packs]
         # Whole tablets and pieces of at least 3 rows stay; every packed tablet takes at most 4.
@@ -255,7 +255,7 @@ def test_parts_of_two_partitions_of_one_table_sharing_rows_are_refused(tmp_path)
     tbl = bags(tmp_path)
     a = bag_partition(tmp_path / 'a', tbl, seed=0, coalesce='pack', min_tablet_rows=5)
     b = bag_partition(tmp_path / 'b', tbl, seed=1, coalesce='pack', min_tablet_rows=5)
-    fit, ev = a.part(0).build(), b.part(0).build()
+    fit, ev = a.fold(0).build(), b.fold(0).build()
     assert all(isinstance(e, dict) and 'pack' in e for e in fit.tablet_indices + ev.tablet_indices)
     assert set(map(tuple, fit.source_index().tolist())) & set(map(tuple, ev.source_index().tolist()))
     with pytest.raises(ValueError, match="share .* of its rows"):

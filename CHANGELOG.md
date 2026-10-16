@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`partition.map(k)` and `fold(k)`; a mapped feature table holds its upstream.**
+  `map(k)` is fold *k*'s map -- `DatamapTable` and `DatamapTablet` are
+  `PartitionDatamapTable` and `PartitionDatamapTablet` -- and `fold(k)` its own
+  table pulled back, the identity every fold built hashes through; `part(k)` and
+  `datamap(k)` are gone. `map.pullback(table, collator)` builds the stack from the
+  bottom: a `MappedFeaturetable`'s VAR ``upstream`` is the pullback of the nearest
+  layer below it copies, so `map.pullback(ft).upstream == map.pullback(ft.upstream)`
+  and so for every copy, and `build_tree` builds it bottom up, each layer in
+  parallel. A copy no longer builds its upstream copy: its table builds the layer
+  below first. A part of whole tablets builds no upstream. Every
+  `MappedFeaturetable` moves hash, the CPTAC 602020 cores' among them.
 - **Every layered block answers `.upstream`, and the mixin is `Layered`.** The
   block a table or tablet reads upstream of is `.upstream`: its VAR's
   ``upstream`` for a `Featuretable(t)` or `MappedFeaturetablet`, and, for a

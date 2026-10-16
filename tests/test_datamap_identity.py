@@ -70,7 +70,7 @@ def test_a_partition_its_parts_and_what_is_built_on_them_keep_their_hashes(tmp_p
     fold}``, version, BLOCK and TOPICS, are the identities of everything built.
     """
     partition = _partition(tmp_path)
-    part = partition.part(1)
+    part = partition.fold(1)
     downstream = Downstream(datalake=str(tmp_path), spec=dict(upstream=part))
     assert {'partition': partition.hash, 'part': part.hash, 'downstream': downstream.hash} == PINNED
 
@@ -97,6 +97,6 @@ def test_a_feature_table_s_part_hashes_as_it_did_as_a_datatable_part(tmp_path):
     url = str(tmp_path)
     p = DatatablePartition(datalake=url, spec=dict(datatable=_features(url), fractions=[0.5, 0.5],
                                                    partition_slice='features'))
-    new = p.part(0)
+    new = p.fold(0)
     assert type(new) is FeaturetablePart
     assert new.hash == DatatablePart(datalake=url, spec=dict(partition=p, fold=0)).hash

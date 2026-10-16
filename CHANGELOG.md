@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A part is its map; `DatatablePart`, `FeaturetablePart` and `fold` are gone.**
+  `partition.part(k)` is part *k*'s `PartitionDatamapTable`, VAR `{partition, part}`;
+  `part(k).pullback(table, collator)` is a table read along it, a `MappedDatatable`
+  or `MappedFeaturetable`, whose TOPICS are `Datatable`'s own, not its table's.
+  `fold(k)`, `map(k)` and `tablets()` are gone, `n_folds()` is `n_parts()`, and
+  every `fold` parameter is `part`. What a `DatatablePart` or `FeaturetablePart`
+  built is reached through `PART_PAST`: the pullback rendered as the part's VAR
+  `{partition, fold}`, its upstream `determined` by its map, table and collator.
+- **No more "deal": a partition is partitioned, and assigns.** `dealt()` is
+  `partitioned()`; `_dealt_tablets_` is `_assignments_`; `_deal_`,
+  `_cluster_and_deal_` and `_deal_rows_` are `_assign_`, `_cluster_and_assign_` and
+  `_assign_rows_`; the log says `PARTITION <partition>: partitioned`.
+- **A block whose fields a past moves out still composes the pasts nested in
+  them.** A dotted move -- `PART_PAST`'s `datamap.partition` -- renders that field's
+  own fields as they are now, and its nested blocks may still render as they were:
+  its pasts that rename and pin nothing. A `PartitionDatamapTable`'s past that
+  changes only how its partition renders is real when the partition's is, though no
+  map was built before 2026-10-16. A part built on a partition whose table changed
+  identity finds its past again.
+- **The most recent past wins.** `find_specialization` and `build` install the
+  most recently recorded of the pasts that resolve, ties in declaration order: a
+  later adoption of a build, redirecting to it, over the build itself.
 - **Each layer of a pullback says what it copies, as it is built.** In build
   order, bottom up: `PULLBACK <table> along fold k of <deal>: n copies of
   [slices]`, next to its `COPY: n tablets of <table>` bar -- the layers pulled back

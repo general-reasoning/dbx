@@ -120,6 +120,17 @@ All notable changes to this project will be documented in this file.
   name the same events.
 
 ### Added
+- **`Specialization(determined={field: (determining field, ...)})`**: VAR fields
+  the narrower block never had, left out of the past rendering whatever they
+  hold, because the fields named fix them -- which the past rendering keeps, or
+  pins. A pin leaves a field out only at the value it names; a field holding a
+  block that varies with the rest of the VAR -- a mapped feature table's
+  `upstream`, its source's upstream pulled back along its map -- has no one value
+  to name. The declarer states the dependency: no field both pinned and
+  determined, none determined by a field itself left out, every one named this
+  class's VAR field (raising otherwise, as a pin does). Recorded and keyed only
+  when set: no specialization from before keys differently. Blocks built on one
+  find their pasts through it, as through any nested past.
 - **`DatatableCarbonCorePartition`: a core partition's layout, over a table
   laid out as its table is, other columns copied.** A feature table and the
   table it was computed from, say. Its VAR is the `datatable`, the `template`

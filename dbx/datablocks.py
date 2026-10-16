@@ -1470,6 +1470,17 @@ class Datablock:
         #: hand, but composed when a block looks for its past (see
         #: `_specialization_variants_`). A field not named renders as it is now.
         nested: dict | None = field(default=None, kw_only=True)
+        #: VAR fields the narrower block never had that no pin can name, each
+        #: with the fields that determine it: ``{field: (determining field, ...)}``.
+        #: Left out of the past rendering whatever they hold -- a pin leaves a field
+        #: out only at the value it names -- because what they hold is fixed by
+        #: their determining fields, which the past rendering keeps, or pins. A
+        #: mapped feature table's ``upstream`` is its source's upstream pulled back
+        #: along its map: ``{'upstream': ('datamap', 'datatable', 'collator')}``.
+        #: The claim is the declarer's to make; it is what makes leaving the field
+        #: out safe, since two blocks alike in their determining fields are alike
+        #: in it too.
+        determined: dict | None = field(default=None, kw_only=True)
         #: Why the coincidence holds. Last -- and keyword-only, so that it is
         #: last in a subclass's constructor too, after its BLOCK or TABLET.
         note: str = field(default='', kw_only=True)
@@ -1542,6 +1553,24 @@ class Datablock:
                 if not all(isinstance(v, Datablock.Specialization) for v in nested.values()):
                     raise TypeError(f"Specialization nested= maps fields to Specializations, got {nested!r}")
                 object.__setattr__(self, 'nested', nested or None)
+            det = self.determined
+            if det is not None:
+                if not isinstance(det, dict):
+                    raise TypeError(f"Specialization determined= maps fields to the fields that determine them, "
+                                    f"got {det!r}")
+                det = {str(k): tuple(v) if isinstance(v, (list, tuple)) else (v,) for k, v in det.items()}
+                for k, by in det.items():
+                    if not by or not all(isinstance(b, str) and b for b in by):
+                        raise ValueError(f"Specialization determined=: {k!r} must name the fields that determine it, "
+                                         f"got {by!r}")
+                    if k in self.spec:
+                        raise ValueError(f"Specialization determined=: {k!r} is pinned in spec= too -- a field is "
+                                         f"left out at a value, or whatever it holds, not both")
+                    if set(by) & set(det):
+                        raise ValueError(f"Specialization determined=: {k!r} is determined by {sorted(set(by) & set(det))}, "
+                                         f"which are left out themselves -- what determines a field the past "
+                                         f"leaves out must be in the past rendering")
+                object.__setattr__(self, 'determined', det or None)
 
 
         def __hash__(self):
@@ -1566,6 +1595,7 @@ class Datablock:
                     + (f", UNSAFE_redirect_all_topics={self.UNSAFE_redirect_all_topics!r}" if self.UNSAFE_redirect_all_topics else "")
                     + (f", redirect_vars={self.redirect_vars!r}" if self.redirect_vars else "")
                     + (f", nested={self.nested!r}" if self.nested else "")
+                    + (f", determined={self.determined!r}" if self.determined else "")
                     + ''.join(f", {n}={v!r}" for n, v in self._extra_fields_() if v is not SAME)
                     + (f", note={self.note!r}" if self.note else "") + ")")
 
@@ -1591,6 +1621,8 @@ class Datablock:
                 d['redirect_vars'] = dict(self.redirect_vars)
             if self.nested:
                 d['nested'] = {k: v.to_dict() for k, v in self.nested.items()}
+            if self.determined:
+                d['determined'] = {k: list(v) for k, v in self.determined.items()}
             d.update((n, v) for n, v in self._extra_fields_() if v is not SAME)
             if self.note:
                 d['note'] = self.note
@@ -1626,6 +1658,11 @@ class Datablock:
         # 3. Accessors -----------------------------------------------------
 
         @property
+        def omitted(self) -> tuple[str, ...]:
+            """The VAR fields the past rendering leaves out: those pinned, and those determined by others."""
+            return tuple(self.spec) + tuple(self.determined or ())
+
+        @property
         def legacy_typing(self) -> bool:
             """Whether legacy typing is enabled for this specialization."""
             return bool(self.legacy and ('all' in self.legacy or 'typing' in self.legacy))
@@ -1641,7 +1678,7 @@ class Datablock:
         #: Datastack's BLOCK, a Datatable's TABLET -- are recorded and keyed too.
         _base_fields = frozenset({'spec', 'topics', 'version', 'note', 'anchor',
                                   'legacy', 'UNSAFE_redirect_all_topics', 'redirect_topics',
-                                  'redirect_vars', 'nested'})
+                                  'redirect_vars', 'nested', 'determined'})
 
         def _extra_fields_(self):
             """``(name, value)`` of the fields a subclass adds, in declaration order."""
@@ -1673,7 +1710,9 @@ class Datablock:
                     tuple(sorted((k, v.key) for k, v in self.nested.items())) if self.nested else None,
                     # A subclass's field at SAME overrides nothing: that
                     # specialization IS the plain one, and keys as it.
-                    tuple((n, v) for n, v in self._extra_fields_() if v is not SAME))
+                    tuple((n, v) for n, v in self._extra_fields_() if v is not SAME)) + (
+                    # Only when set: every specialization from before keys as it did.
+                    (('determined', tuple(sorted(self.determined.items()))),) if self.determined else ())
 
     @dataclass
     class Redirection:
@@ -4260,7 +4299,7 @@ class Datablock:
                 'topics': self._topics_signature_(),
             }
         version = self.version if specialization.version is ABSENT else specialization.version
-        omit = tuple(specialization.spec)
+        omit = specialization.omitted
         redirect_vars = getattr(specialization, 'redirect_vars', None)
         leg = legacy_typing if legacy_typing is not None else (legacy if legacy is not None else specialization.legacy_typing)
         return {
@@ -4442,7 +4481,7 @@ class Datablock:
         reconstructing a stack built then needs. See :meth:`_type_entries_`.
         """
         omit, topics = ((), None) if specialization is None else (
-            tuple(specialization.spec), list(self._specialization_topics_(specialization)))
+            specialization.omitted, list(self._specialization_topics_(specialization)))
         redirect_vars = getattr(specialization, 'redirect_vars', None) if specialization is not None else None
         nested = getattr(specialization, 'nested', None) if specialization is not None else None
         version = self.version
@@ -4542,7 +4581,7 @@ class Datablock:
         if specialization is None:
             return self.signaturestr(**kwargs)
         redirect_vars = getattr(specialization, 'redirect_vars', None)
-        return self.signaturestr(omit=tuple(specialization.spec),
+        return self.signaturestr(omit=specialization.omitted,
                                 redirect_vars=redirect_vars, **kwargs)
 
     def get_typestr(self, specialization: 'Datablock.Specialization | None' = None, **kwargs) -> str:
@@ -5362,7 +5401,7 @@ class Datablock:
             if k in nested:
                 block = value if isinstance(value, Datablock) else databits.eval(raw)
                 past = nested[k]
-                out[out_key] = block._typed_specdict_(legacy=legacy, omit=tuple(past.spec),
+                out[out_key] = block._typed_specdict_(legacy=legacy, omit=past.omitted,
                                                       redirect_vars=past.redirect_vars, nested=past.nested)
             elif isinstance(value, Datablock):
                 out[out_key] = value._typed_specdict_(legacy=legacy)
@@ -6985,6 +7024,13 @@ class Datablock:
                 f"{unknown}, which {self.VAR.__name__} does not declare. A pin names a "
                 f"VAR field this class has and the narrower block did not."
             )
+        named = [f for k, by in (getattr(specialization, 'determined', None) or {}).items() for f in (k, *by)]
+        unknown = [f for f in named if f.split('.')[0] not in fields]
+        if unknown:
+            raise ValueError(
+                f"{self.__class__.__name__}.SPECIALIZATIONS: {specialization!r} says {unknown} determine or are "
+                f"determined, which {self.VAR.__name__} does not declare. determined= names this class's VAR fields."
+            )
         read = (specialization.redirect_topics if getattr(specialization, 'redirect_topics', None) is not None
                 else self._specialization_topics_(specialization))
         self._topic_leaves_(read)   # raises on a topic we read and do not declare
@@ -7239,8 +7285,15 @@ class Datablock:
         return out
 
     def _pins_match_(self, specialization) -> bool:
-        """Whether *specialization*'s pins hold for this block -- what decides that a past was this block's."""
+        """Whether *specialization*'s pins hold for this block -- what decides that a past was this block's.
+
+        Its determined fields, and what determines them, must be this block's fields too: a
+        claim about fields it does not have is about some other block.
+        """
         fields, typed = self.VAR.__dataclass_fields__, self._typed_specdict_()
+        for k, by in (getattr(specialization, 'determined', None) or {}).items():
+            if k not in fields or not all(b.split('.')[0] in fields for b in by):
+                return False
         return all(k.split('.')[0] in fields
                    and repr(self._spec_entry_(typed, k)) == repr(self._specialization_pin_(k, v))
                    for k, v in specialization.spec.items())
@@ -7269,7 +7322,7 @@ class Datablock:
             for variant in self._composed_(sp, memo):
                 if variant is None:
                     continue
-                text = repr(self._typed_specdict_(legacy=False, omit=tuple(variant.spec),
+                text = repr(self._typed_specdict_(legacy=False, omit=variant.omitted,
                                                   redirect_vars=variant.redirect_vars, nested=variant.nested))
                 if text in seen:
                     continue

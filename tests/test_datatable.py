@@ -1162,7 +1162,7 @@ class TestValidTabletAndSentinels:
             ),
         ).build()
 
-        fold0 = partition.fold(0)
+        fold0 = partition.part(0).pullback()
         # fold0 covers a subset of tablets
         valid_res = fold0.valid_tablets()
         red_res = fold0.redirected_tablets()

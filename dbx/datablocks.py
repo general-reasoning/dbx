@@ -4670,8 +4670,9 @@ class Datablock:
     def find_specialization(self, journal=None):
         """The `SpecializationRow` build() would install here, or None -- found, NOT installed.
 
-        The first, in declaration order, that applies, finds this block unbuilt
-        where it covers, and resolves to data that is still there -- which is
+        The most recently recorded -- ties in declaration order -- that applies,
+        finds this block unbuilt where it covers, and resolves to data that is
+        still there (`_specialization_candidates_by_recency_`) -- which is
         what `_install_specialization_` installs. Asked of a block
         constructed with `use_specializations=False`, it says what WOULD be
         installed without anything being redirected or recorded. For why each
@@ -4680,7 +4681,7 @@ class Datablock:
         if isinstance(journal, BlocksJournal):
             journal = _shared_journal_(journal, self)
         memo = {'journal': journal}
-        for sp, (paths, entry) in self._specialization_candidates_(journal, _memo=memo):
+        for sp, (paths, entry) in self._specialization_candidates_by_recency_(journal, _memo=memo):
             if getattr(sp, 'UNSAFE_redirect_all_topics', False):
                 named = list(self.topics())
             elif getattr(sp, 'redirect_topics', None) is not None:
@@ -5546,7 +5547,7 @@ class Datablock:
         holding a marker is a modern one, and there is nothing else it could
         mean.  Derived on each call, so a TOPICS assigned or amended after the
         class body -- or computed per instance, as
-        :class:`~dbx.dataparts.DatatablePart`'s is -- is answered as it stands.
+        :class:`~dbx.dataparts.MappedDatatable`'s is -- is answered as it stands.
 
         A declaration holding both spellings has no era, and raises rather than
         rendering half of itself each way.
@@ -7347,11 +7348,16 @@ class Datablock:
             yield specialization
             return
         # A field this specialization reaches into -- a dotted pin or move --
-        # renders as it is now: its past is the one the specialization spells.
+        # renders its own fields as they are now: the specialization spells them.
+        # The blocks nested in it may still render as they were: its pasts that
+        # rename and pin nothing, only nest -- a part's partition, moved out of its
+        # map, as the partition rendered before its table's identity changed.
         reached = {p.split('.')[0] for p in [*(specialization.spec if specialization else ()),
                                              *((specialization.redirect_vars or {}) if specialization else ())]
                    if '.' in p}
-        choices = [(k, [None, *b._nested_pasts_(memo)]) for k, b in self._nested_var_blocks_() if k not in reached]
+        only_nesting = lambda p: not p.spec and not p.redirect_vars and not p.determined
+        choices = [(k, [None, *(p for p in b._nested_pasts_(memo) if k not in reached or only_nesting(p))])
+                   for k, b in self._nested_var_blocks_()]
         choices = [(k, c) for k, c in choices if len(c) > 1]
         names = [k for k, _ in choices]
         base = specialization if specialization is not None else self.Specialization(
@@ -7398,6 +7404,24 @@ class Datablock:
         if not topics:
             return False
         return not any(self.valid_path(self.__path__(t)) for t in topics)
+
+    def _specialization_candidates_by_recency_(self, journal=None, *, _memo=None) -> list:
+        """`_specialization_candidates_`, the most recently recorded first; ties in declaration order.
+
+        A block may reach several of its pasts that are each recorded -- a build, and a
+        later adoption of it under another identity, redirecting to it. The adoption is
+        the later word on that data, and what was last said is what is installed: not
+        whichever past the variants happen to list first.
+        """
+        candidates = list(self._specialization_candidates_(journal, _memo=_memo))
+
+        def recorded(candidate):
+            when = candidate[1][1].get('datetime')
+            try:
+                return pd.Timestamp(when).value if when is not None else -1
+            except (TypeError, ValueError):
+                return -1
+        return sorted(candidates, key=recorded, reverse=True)
 
     def _specialization_candidates_(self, journal=None, *, _memo=None):
         """Each specialization that could be installed, with its resolution, in declaration order.
@@ -7473,7 +7497,7 @@ class Datablock:
         memo = {'journal': journal}
         installed = []
         needed = {t for t in self.topics() if not self.valid_topic(t)}
-        for sp, (paths, entry) in self._specialization_candidates_(journal, _memo=memo):
+        for sp, (paths, entry) in self._specialization_candidates_by_recency_(journal, _memo=memo):
             offered = {t: p for t, p in paths.items() if t in needed and self.valid_path(p)}
             if not offered:
                 continue
@@ -9352,7 +9376,7 @@ class Datastack(Datablock):
         return callable_kwargs if journal is None else {**callable_kwargs, 'journal': journal}
 
     def _blocks_datalake_(self):
-        """Where this stack's blocks are stored: its own datalake -- a DatatablePart's are its table's."""
+        """Where this stack's blocks are stored: its own datalake -- a MappedDatatable's whole tablets are its table's."""
         return self.datalake
 
     @contextlib.contextmanager

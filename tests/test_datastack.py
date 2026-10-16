@@ -852,11 +852,11 @@ class TestBLOCK:
     def test_a_part_has_its_tables_block(self, tmp_path):
         import sys
         sys.path.insert(0, os.path.dirname(__file__))
-        from test_partition_fold import DummyTable
+        from test_partition_part import DummyTable
         from dbx.dataparts import DatatablePartition
         table = DummyTable(datalake=str(tmp_path / 'table')).build()
         part = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
-            datatable=table, fractions=[0.5, 0.5], partition_slice=0)).build().fold(0)
+            datatable=table, fractions=[0.5, 0.5], partition_slice=0)).build().part(0).pullback()
         assert part._block_class_() is DummyTable.BLOCK is DummyTable.TABLET
         assert isinstance(part.block(0), DummyTable.TABLET)
 

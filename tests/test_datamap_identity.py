@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from dbx.datablocks import DATAFILE, Datablock
+from dbx.datablocks import DATAFILE, SAME, Datablock
 from dbx.datatables import DATASLICE, Datacollator, Datatable, Datatablet
 from dbx.dataparts import DatatablePartition
 
@@ -61,18 +61,32 @@ def _partition(tmp_path):
         collator=collator))
 
 
-@pytest.mark.pinned
-def test_a_partition_its_parts_and_what_is_built_on_them_keep_their_hashes(tmp_path):
-    """Every CPTAC partition, fold, deep feature clip and probe built is reached only if these stay put.
+def _past(block, sp):
+    """*block*'s hash as *sp* says it rendered before -- the identity a specialization reaches."""
+    return block.get_hash(sp)
 
-    A part is the table pulled back along its fold's map, whatever classes do
-    it: the partition's VAR, version and topics, and the part's VAR ``{partition,
-    fold}``, version, BLOCK and TOPICS, are the identities of everything built.
+
+def _built_on(block, field, nested):
+    """The hash of a block built on *block*, as it hashed when *block* rendered as its past *nested*."""
+    return block.get_hash(type(block).Specialization(spec={}, topics=SAME, nested={field: nested}))
+
+
+@pytest.mark.pinned
+def test_a_partition_its_parts_and_what_is_built_on_them_are_reached(tmp_path):
+    """Every CPTAC partition, part, deep feature clip and probe built is reached only if these are.
+
+    The partition keeps its hash. A part was a `DatatablePart`, its VAR ``{partition,
+    fold}``; since 2026-10-16 it is the table pulled back along the part's map, a
+    `MappedDatatable` with a hash of its own -- and the specialization it declares
+    reaches the part's old identity, for itself and for every block built on it.
     """
     partition = _partition(tmp_path)
-    part = partition.fold(1)
+    part = partition.part(1).pullback()
+    (past,) = [sp for sp in type(part).SPECIALIZATIONS if part._pins_match_(sp)]
     downstream = Downstream(datalake=str(tmp_path), spec=dict(upstream=part))
-    assert {'partition': partition.hash, 'part': part.hash, 'downstream': downstream.hash} == PINNED
+    assert partition.hash == PINNED['partition']
+    assert _past(part, past) == PINNED['part']
+    assert _built_on(downstream, 'upstream', past) == PINNED['downstream']
 
 
 PINNED = {
@@ -83,20 +97,26 @@ PINNED = {
 
 
 @pytest.mark.pinned
-def test_a_feature_table_s_part_hashes_as_it_did_as_a_datatable_part(tmp_path):
-    """A part of a feature table is a FeaturetablePart since 2026-10-13, and its identity is what it was.
+def test_a_feature_table_s_part_is_reached_as_the_datatable_part_it_was(tmp_path):
+    """A part of a feature table was a DatatablePart, adopted as a FeaturetablePart; it is a MappedFeaturetable now.
 
-    The class is in its path, not its hash: a part built as a DatatablePart is
-    adopted where it is, by FeaturetablePart's specialization, only because the
-    hashes agree.
+    Its upstream -- the feature table's, pulled back along the part's map -- was never in
+    its VAR: its specialization leaves it out, determined by the map, the table and the
+    collator, and so reaches the identity it was built under. The hash was taken from the
+    code before the change (dbx 7fd8eea).
     """
     import sys
     sys.path.insert(0, __import__('os').path.dirname(__file__))
     from test_partition_methods import _features
-    from dbx.dataparts import DatatablePart, FeaturetablePart
+    from dbx.dataparts import MappedFeaturetable
     url = str(tmp_path)
     p = DatatablePartition(datalake=url, spec=dict(datatable=_features(url), fractions=[0.5, 0.5],
                                                    partition_slice='features'))
-    new = p.fold(0)
-    assert type(new) is FeaturetablePart
-    assert new.hash == DatatablePart(datalake=url, spec=dict(partition=p, fold=0)).hash
+    new = p.part(0).pullback()
+    assert type(new) is MappedFeaturetable
+    pasts = [sp for sp in type(new).SPECIALIZATIONS if new._pins_match_(sp)]
+    assert {sp.anchor for sp in pasts} == {'dbx.dataparts.FeaturetablePart', 'dbx.dataparts.DatatablePart'}
+    assert {_past(new, sp) for sp in pasts} == {OLD_FEATURE_PART}
+
+
+OLD_FEATURE_PART = 'fcbff0b55efe01efc65ac52154752edcf73880b866249ec9aece189558ed3f22'

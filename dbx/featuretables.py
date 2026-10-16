@@ -541,7 +541,7 @@ class BipolarFeaturetablet(Layered, Datatablet):
     Each column is mapped to ``{-1, +1}`` elementwise: ``+1`` where the value
     is at or above the column's median, ``-1`` below it. The median is the
     whole-table one in ``VAR.stats_probe`` -- a `FeatureStatsProbe` over a
-    calibration table, usually another fold than the one this tablet is in -- and
+    calibration table, usually another part than the one this tablet is in -- and
     the values are normalized first exactly as that probe normalized them
     before taking it (`normalize_features` with its ``normalization``, one
     column at a time), so value and median are in the same space.

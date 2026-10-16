@@ -35,11 +35,11 @@ def test_a_tablets_entry_says_the_same_of_itself(tmp_path):
 
 
 def test_slices_not_yet_readable_are_named_and_not_raised(tmp_path, monkeypatch):
-    """Journaled before its tablets can be asked -- a part's partition not dealt, say -- a slice's columns are None."""
+    """Journaled before its tablets can be asked -- a part's partition not assigned, say -- a slice's columns are None."""
     table = DummySampleTable(datalake=str(tmp_path), spec=dict(samples_per_tablet=5), tag='samples')
 
     def unreadable(self, idx):
-        raise FileNotFoundError("not dealt")
+        raise FileNotFoundError("not assigned")
     monkeypatch.setattr(type(table), 'tablet', unreadable)
     slices = table.readable_slices()
     assert set(slices) == set(table.slices(recursive=True)) and all(v is None for v in slices.values())

@@ -258,7 +258,7 @@ class _Database_(Datablock):
 
         Derived on each call rather than frozen at class creation, so a TOPICS
         assigned or amended after the class body still reports its slices, and
-        an instance overriding TOPICS -- as :class:`DatatablePart` does -- is
+        an instance overriding TOPICS -- as :class:`~dbx.dataparts.MappedDatatable` does -- is
         read through.
         """
         return _Database_._find_slice_topics_(getattr(self, 'TOPICS', None))
@@ -708,7 +708,7 @@ class _Database_(Datablock):
         a dict column by its structure, its keys and their types, not the
         ``'json'`` a writer is handed -- None when
         none is declared, or when the owner cannot be asked yet -- a table
-        whose tablets are not dealt, say, journaled before its tree is built.
+        whose partition is not built yet, say, journaled before its tree is built.
         Never raises for that: a journal entry must not break the build it records.
         """
         out = {}
@@ -1452,7 +1452,7 @@ class Datatable(_Database_, Datastack):
         `valid_slice()`) working.
 
         Falls back to its own TOPICS when TABLET is unset or is not a
-        `_Database_` -- as for :class:`DatatablePart`, which overrides
+        `_Database_` -- as for :class:`~dbx.dataparts.MappedDatatable`, which overrides
         TOPICS per instance and computes its TABLET dynamically.
         """
         tablet = getattr(self, 'TABLET', None)

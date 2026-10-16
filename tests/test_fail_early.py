@@ -147,8 +147,8 @@ def _probe(url):
     probe = FeatureAffineLogisticProbe(
         datalake=url,
         spec=dict(
-            fit_table=split.fold(0).build(),
-            eval_table=split.fold(1).build(),
+            fit_table=split.part(0).pullback().build(),
+            eval_table=split.part(1).pullback().build(),
             collator=Datacollator(spec=dict(columns={'signals': [("features", "final")], 'labels': [("labels", "labels")]}, recursive=True)),
         ),
         tag="log_probe",
@@ -161,17 +161,18 @@ class TestAProbeChecksWhatItWillRead:
     def test_before_any_worker_starts(self, tmp_path):
         sampletable, probe = _probe(str(tmp_path))
         sampletable.UNSAFE_clear_blocks('labels', indices=[1], OVERRIDE=True)
-        with pytest.raises(InvalidBlocksError, match=r"(?s)reading \['labels'\] from its tablets.*1 of 2 blocks"):
+        with pytest.raises(InvalidBlocksError, match=r"(?s)reading \['labels'\] from its tablets.*1 of \d+ blocks.*tab_1"):
             probe.build()
         assert not probe.valid()
 
     def test_a_read_that_misses_says_why(self, tmp_path):
-        # Removed behind the stack's back, so what vouches for its tablets cannot know:
-        # the read fails -- and says it is the tablet that is not valid, and why.
+        # Removed behind the stack's back: a pullback's tablets are another table's, so its manifest
+        # vouches for none of them and every one is asked -- the probe refuses before any worker starts,
+        # naming the tablet, rather than a read failing in one.
         sampletable, probe = _probe(str(tmp_path))
         tablet = sampletable.tablet(1)
         shutil.rmtree(tablet.path('labels'))
-        with pytest.raises(FileNotFoundError, match=r"cannot read slice 'labels': this tablet is not valid"):
+        with pytest.raises(InvalidBlocksError, match=r"(?s)reading \['labels'\] from its tablets.*tab_1"):
             probe.build()
 
 

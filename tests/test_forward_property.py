@@ -80,16 +80,17 @@ def test_a_different_declaration_on_a_subclass_stands(tmp_path):
 
 
 def test_a_partition_part_answers_on_the_class_with_a_dict():
-    """Its TOPICS are its table's, per instance; on the class there is no table, and it says so as a dict."""
-    from dbx.dataparts import DatatablePart
-    assert DatatablePart.TOPICS == {}
+    """A pullback declares what it writes itself, the done marker -- none of its table's own topics."""
+    from dbx.dataparts import MappedDatatable
+    from dbx.datatables import Datatable
+    assert MappedDatatable.TOPICS == Datatable.TOPICS
 
 
 def test_a_partition_part_declares_its_tablet_forward():
     """Every part's tablets are Datatablets; which one is the partitioned table's -- and so is its BLOCK."""
     from dbx.datatables import Datatablet
-    from dbx.dataparts import DatatablePart
-    assert DatatablePart.TABLET is Datatablet and DatatablePart.BLOCK is Datatablet
+    from dbx.dataparts import MappedDatatable
+    assert MappedDatatable.TABLET is Datatablet and MappedDatatable.BLOCK is Datatablet
 
 
 class Promising(Datablock):

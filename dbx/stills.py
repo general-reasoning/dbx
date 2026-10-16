@@ -1533,7 +1533,7 @@ class Still(CheckpointBuilder):
                 # split scatters both halves across the whole table, which
                 # defeats shard-cache locality just as badly as no split at
                 # all. Block order is shuffled once (seeded by dataset_seed)
-                # before blocks are dealt out, so the two splits stay
+                # before blocks are handed out, so the two splits stay
                 # interleaved across the whole table rather than being one
                 # contiguous chunk each -- only the split BOUNDARIES move to
                 # block granularity.

@@ -197,12 +197,12 @@ def test_a_parts_pieces_and_packed_tablets_are_tag_keyed_built_and_read(tmp_path
 def test_core_tablets_are_tag_keyed_built_and_read(tmp_path):
     partition = core(tmp_path, points(tmp_path, n_tablets=3, n=20))
     for fold in range(2):
-        part = partition.fold(fold).build()
+        part = partition.part(fold).pullback(None, partition.var.collator).build()
         for i in range(part.n_tablets):
             tablet = part.tablet(i)
             assert type(tablet).__name__ == 'MappedDatatablet'
             assert _tag_keyed(tablet) and tablet.valid()
-            assert tablet.anchorkeypath == partition.fold(fold).tablet(i).anchorkeypath
+            assert tablet.anchorkeypath == partition.part(fold).pullback(None, partition.var.collator).tablet(i).anchorkeypath
 
 
 # ---------------------------------------------------------------------------

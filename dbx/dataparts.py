@@ -1,6 +1,6 @@
 """dataparts — partitions of a `Datatable` into parts, the parts' maps, and the tables pulled back along them.
 
-A **partition** -- `DatatablePartition`, `DatatableCorePartition` -- decides once, for every part at
+A **partition** -- `DatatablePartition`, `DatatableClusterCorePartition` -- decides once, for every part at
 once, which rows of its table go to which part, and records that: whole tablets, pieces of them and
 packs, or rows clustered into core tablets. A **part** is a map, `partition.part(k)`, a
 `PartitionDatamapTable`: one `PartitionDatamapTablet` per tablet of the part, each listing the rows,
@@ -269,8 +269,8 @@ class DatatablePartition(Datablock):
     SPECIALIZATIONS = []
 
     @dataclass
-    class _DealVAR_(Datablock.VAR):
-        """What decides the partition: a `DatatableCorePartition`'s too, which takes no *coalesce*."""
+    class _PartitionVAR_(Datablock.VAR):
+        """What decides the partition: a `DatatableClusterCorePartition`'s too, which takes no *coalesce*."""
         datatable: Datatable
         fractions: list[float]
         partition_slice: int | str
@@ -280,7 +280,7 @@ class DatatablePartition(Datablock):
         balance: str = 'rows'
 
     @dataclass
-    class VAR(_DealVAR_):
+    class VAR(_PartitionVAR_):
         coalesce: str | None = None
         min_tablet_rows: int | None = None
         max_tablet_rows: int | None = None
@@ -820,7 +820,7 @@ class PartitionDatamapTable(Datatable):
 
     The layout of the part, and nothing else: which rows of which tablets of the
     mapped table -- the partition's -- each tablet of the part takes, its lot. The partition --
-    a `DatatablePartition`, a `DatatableCorePartition` -- writes every part at once,
+    a `DatatablePartition`, a `DatatableClusterCorePartition` -- writes every part at once,
     disjoint, and answers for each lot in the form it wrote it: the map only asks,
     and coordinates its tablets. A table is pulled back along it -- `pullback` --
     the map's own, or any laid out alike. See DATAPARTITION.md, "TODO: three
@@ -1485,10 +1485,10 @@ def _mapped_table_(datamap: PartitionDatamapTable, collator: Datacollator | None
                               **kwargs)
 
 
-#: The roles a `DatatableCorePartition`'s collator may hold -- see its docstring.
+#: The roles a `DatatableClusterCorePartition`'s collator may hold -- see its docstring.
 CORE_ROLES = ('coreby', 'stratifyby', 'partitionby', 'carry')
 
-#: Where a `DatatableCorePartition` clusters -- see its docstring.
+#: Where a `DatatableClusterCorePartition` clusters -- see its docstring.
 CORE_CLUSTERINGS = ('master', 'distributed')
 
 
@@ -1678,8 +1678,11 @@ class TabletVectorsCallable:
             return np.load(f)[self.rows]
 
 
-class DatatableCorePartition(DatatablePartition):
+class DatatableClusterCorePartition(DatatablePartition):
     """A `DatatablePartition` assigning ROWS, clustered by their values, into parts of fresh tablets: a coreset.
+
+    Named for how it chooses its rows: another way would take other arguments, and be a class of its
+    own. Until 2026-10-17 `DatatableCorePartition`, and reaching what was built at that class's path.
 
     Its collator names, by role, every column it touches:
 
@@ -1737,7 +1740,8 @@ class DatatableCorePartition(DatatablePartition):
 
     TOPICS = {
         'tablets': DATAFILE('tabs.json', "per fold, each core tablet's [start, end) in the fold's layout"),
-        'layout': DATADIR('per fold, (tablet, row, cluster) of each row assigned to it, as <fold>.npy'),
+        # Its words, as built: a topic's description is in the hash.
+        'layout': DATADIR('per fold, (tablet, row, cluster) of each row dealt to it, as <fold>.npy'),
         'centers': DATAFILE('centers.npy', 'the cluster centers'),
         'columns': DATAFILE('columns.json', 'the columns the core tablets carry: {slice: {column: type}}'),
         'summary': DATAFILE('summary.json', 'per fold its rows, strata, clusters and core tablets; what was skipped'),
@@ -1746,10 +1750,14 @@ class DatatableCorePartition(DatatablePartition):
                              baseline_mean='ndarray', separation='ndarray', cluster_rows='ndarray',
                              cluster_tv='ndarray', empty_clusters='ndarray'),
     }
-    SPECIALIZATIONS = []
+    SPECIALIZATIONS = [
+        DatatablePartition.Specialization(
+            spec={}, topics=SAME, anchor=f'{__name__}.DatatableCorePartition',
+            note="this very partition, built as a DatatableCorePartition, at that class's path, until 2026-10-17"),
+    ]
 
     @dataclass
-    class VAR(DatatablePartition._DealVAR_):
+    class VAR(DatatablePartition._PartitionVAR_):
         clustering: str = 'master'
         n_clusters: int = 64
         max_iter: int = 100
@@ -2213,11 +2221,11 @@ class DatatableCorePartition(DatatablePartition):
                 k = max(ok, key=lambda k: (target[k] - have[k]) / target[k])
                 fold_of[u] = k
                 have[k] += w
-        row_fold = fold_of[stratum]
+        row_part = fold_of[stratum]
         layouts = []
         rng = np.random.default_rng([var.seed, 1])
         for k in range(len(fractions)):
-            sel = at[row_fold == k]
+            sel = at[row_part == k]
             fl = np.stack([tablet[sel], row[sel], label[sel]], axis=1).astype(np.int64)
             fl = fl[np.lexsort((fl[:, 1], fl[:, 0]))] if not var.shuffle else fl[rng.permutation(len(fl))]
             layouts.append(fl)
@@ -2227,8 +2235,8 @@ class DatatableCorePartition(DatatablePartition):
             folds.append({'fold': k, 'fraction': fractions[k], 'rows': int(len(fl)),
                           ('strata' if keys['stratifyby'] is not None else 'units'): int(len(units_k)),
                           'clusters': int(len(np.unique(fl[:, 2]))) if len(fl) else 0})
-        summary = {'n_tablets': len(scans), 'n_rows': int(len(tablet)), 'n_dealt': int((row_fold >= 0).sum()),
-                   'n_undealt': int((row_fold < 0).sum()), 'coreby': self.collator_pairs('coreby'),
+        summary = {'n_tablets': len(scans), 'n_rows': int(len(tablet)), 'n_dealt': int((row_part >= 0).sum()),
+                   'n_undealt': int((row_part < 0).sum()), 'coreby': self.collator_pairs('coreby'),
                    'stratifyby': self.column_spec('stratifyby'), 'partitionby': self.column_spec('partitionby'),
                    'seed': var.seed, 'folds': folds, 'skipped': skipped}
         return layouts, summary

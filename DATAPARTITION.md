@@ -6,7 +6,7 @@
 
 - **A partition** decides which rows go to which part -- every part at once, the parts
   disjoint -- and writes the decision down compactly. `DatatablePartition` assigns
-  whole tablets, pieces of them and packs; `DatatableCorePartition` assigns rows, by
+  whole tablets, pieces of them and packs; `DatatableClusterCorePartition` assigns rows, by
   cluster.
 - **A part** is the partition's decision for one part, and nothing else: indices. For
   each tablet of the part, which rows of which of the partition's table's tablets it
@@ -23,7 +23,7 @@
 | Class | Role | Identity: VAR | Holds, writes | Made by |
 |---|---|---|---|---|
 | `DatatablePartition` | a partition | `datatable`, `fractions`, `partition_slice`, `collator`, `method`, `seed`, `balance`, `coalesce`, `min/max_tablet_rows` | `tablets` (each part's entries: a tablet's index, a piece, a pack), `summary` | you |
-| `DatatableCorePartition` | a partition of rows, by cluster | + `clustering`, `n_clusters`, `max_iter`, `tol`, `rows_per_tablet`, `shuffle`, ... | `layout`, `tablets` (each core tablet's `[start, end)` of it), `centers`, `columns`, `coverage`, `summary` | you |
+| `DatatableClusterCorePartition` | a partition of rows, by cluster | + `clustering`, `n_clusters`, `max_iter`, `tol`, `rows_per_tablet`, `shuffle`, ... | `layout`, `tablets` (each core tablet's `[start, end)` of it), `centers`, `columns`, `coverage`, `summary` | you |
 | `PartitionDatamapTable` | a part: indices only | `partition`, `part` | its tablets, built in parallel with the partition's workers; `done` | `partition.part(k)` |
 | `PartitionDatamapTablet` | one lot | `datamap` (its part), `index` (its place in the part) | slice `lot`: one row per run -- `tab`, `rows`, `whole` | its part |
 | `MappedDatatable` | a table pulled back along a part | `datamap` (the part), `datatable` (None: the partition's own), `collator` (None: every slice) | its copies, built in parallel; `done` | `part.pullback(table, collator)` |
@@ -56,7 +56,7 @@ includes them -- and writes only `done`: a pulled-back tile clip declares the cl
 ### Example: the CPTAC 602020 CALIBRATE bipolar core
 
 ```
-DatatableCorePartition                 the partition: the bipolar clip's tiles clustered; 20% of each cohort assigned to part 0
+DatatableClusterCorePartition          the partition: the bipolar clip's tiles clustered; 20% of each cohort assigned to part 0
  └─ part(0): PartitionDatamapTable     45 lots, each 4096 rows of some 16 bags
      └─ pullback(bipolar clip, collator)
          MappedFeaturetable            45 copies: bipolar
@@ -456,7 +456,7 @@ below).
 - **The roles were renamed on 2026-10-10.** `groupby` became `stratifyby`,
   and what was `stratifyby` became `partitionby`. A collator naming
   `stratifyby` spells, and so hashes, exactly as it did, and now means the
-  opposite. So `DatatablePartition` and `DatatableCorePartition` went to
+  opposite. So `DatatablePartition` and `DatatableClusterCorePartition` went to
   `VERSION = 2`, and no specialization reaches a partition built before:
   partitions, their parts, packed tablets and core tablets are rebuilt.
   `test_a_partition_from_before_the_roles_were_renamed_is_not_taken_for_one_now`
@@ -481,7 +481,7 @@ below).
 - **`coalesce`, `min_tablet_rows` and `max_tablet_rows`**, added on 2026-10-09,
   are in the hash at their defaults too. A core partition takes no
   *coalesce*: its VAR is built on the partition's fields alone,
-  `DatatablePartition._DealVAR_`.
+  `DatatablePartition._PartitionVAR_`.
 - A partition of constant tablets, under `coalesce=None`, assigns exactly as it
   always did, and writes the same `tabs.json`: plain ints, sorted the same
   way. `test_a_partition_of_constant_tablets_is_what_it_was` pins the partition of
@@ -573,7 +573,12 @@ laid out alike takes a core partition's parts without clustering anything:
 
 ## Core partitions: coresets
 
-A `DatatableCorePartition` assigns **rows**, not tablets, by what they hold. It
+A core partition is named for how it chooses its rows -- `Cluster`, by k-means -- since
+another way of choosing them would take other arguments, a class of its own rather than
+a `method` field. Until 2026-10-17 it was `DatatableCorePartition`; its specialization
+reaches what was built at that class's path.
+
+A `DatatableClusterCorePartition` assigns **rows**, not tablets, by what they hold. It
 clusters the table's rows by their values and assigns each cluster's rows to
 the parts, nearest the center first, every part disjoint: one partition, one scan,
 one clustering, for all of them. Part *k*, `core.part(k)`, makes each core
@@ -584,9 +589,9 @@ partition, `fractions=[0.2]`, and its `datamap(0)`.
 
 ```python
 from dbx.datatables import Datacollator
-from dbx.dataparts import DatatableCorePartition
+from dbx.dataparts import DatatableClusterCorePartition
 
-core = DatatableCorePartition(spec=dict(
+core = DatatableClusterCorePartition(spec=dict(
     datatable=features, fractions=[0.05, 0.05], partition_slice='features',
     n_clusters=256, rows_per_tablet=4096,
     collator=Datacollator(spec=dict(columns={
@@ -625,7 +630,7 @@ of it as `n_clusters` grows.
 
 ### The flow
 
-`DatatableCorePartition.build()` runs five steps, and the parts then build
+`DatatableClusterCorePartition.build()` runs five steps, and the parts then build
 the core tablets:
 
 ```
@@ -658,7 +663,7 @@ the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster a
    units are taken nearest first, by their rows' mean distance to their
    centers, and each goes to the part furthest below its target, provided
    it brings that part nearer its target rather than past it. A unit no part
-   has room for is left undealt, which is how fractions summing to less
+   has room for is left unassigned, which is how fractions summing to less
    than 1 make a coreset. A part's target is its fraction of the rows,
    accumulated over the cells of a partition, so what one cell rounds off,
    the next makes up. What comes out is each row's part, or none.
@@ -834,7 +839,7 @@ The partition classes bundle three independent choices into pairs that need not
 go together, and each new combination so far has meant a new class:
 
 1. **Which rows go to which part.** `DatatablePartition` assigns whole tablets and
-   pieces of them; `DatatableCorePartition` clusters rows and assigns the nearest;
+   pieces of them; `DatatableClusterCorePartition` clusters rows and assigns the nearest;
    a template's choice was taken by a carbon core partition. Each records it its
    own way: tablet indices and piece and pack records (`tablets`), or
    `(tablet, row, cluster)` per row (`layout`).
@@ -1010,7 +1015,7 @@ All in `dbx/dataparts.py`, except the probe.
 | The per-tablet scan worker | `TabletPartitionScanCallable` |
 | SCAN, ITEMS, ASSIGN, the summary | `DatatablePartition._scan_`, `_items_`, `_assign_`, `_summary_` |
 | COALESCE | `DatatablePartition._rejoin_`, `_pack_`, `_entry_rows_` |
-| A part's lots, as the partition wrote them | `DatatablePartition.lot`, `whole`, `tag_of`, `partitioned`, `_lot_rows_`; `DatatableCorePartition.lot` |
+| A part's lots, as the partition wrote them | `DatatablePartition.lot`, `whole`, `tag_of`, `partitioned`, `_lot_rows_`; `DatatableClusterCorePartition.lot` |
 | A part's map, and its tablets' lots, built and stored | `PartitionDatamapTable`, `PartitionDatamapTablet.__build__`, `PartitionDatamapTablet.lot`; `lot_tablets` |
 | A part, and a table pulled back along it | `DatatablePartition.part`, `PartitionDatamapTable.pullback`, `MappedDatatable` |
 | A mapped table accepting copies as blocks | `MappedDatatable.tablet`, `valid_tablet`, `_form_block_` |
@@ -1021,11 +1026,11 @@ All in `dbx/dataparts.py`, except the probe.
 | The identity of a part built before 2026-10-16 | `PART_PAST`, `MappedDatatable.SPECIALIZATIONS`, `Specialization.determined` |
 | Selecting a tablet's rows by value; copying a tablet's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
 | The back-pointing slice | `SOURCE_SLICE`, `SOURCE`, `_source_index_` |
-| Core: scan, cluster, assign | `DatatableCorePartition`: `_lay_out_`, `_cluster_and_assign_`, `_cluster_master_`, `_cluster_distributed_`, `_assign_rows_` |
+| Core: scan, cluster, assign | `DatatableClusterCorePartition`: `_lay_out_`, `_cluster_and_assign_`, `_cluster_master_`, `_cluster_distributed_`, `_assign_rows_` |
 | A table laid out alike pulled back along a map | `PartitionDatamapTable.pullback`, `MappedDatatablet._sources_` (the check) |
 | Core: the workers | `TabletCoreScanCallable`, `TabletCoreStepCallable`, `TabletRowCountCallable`, `TabletCoverageCallable`, `TabletVectorsCallable` |
-| Core: coverage | `DatatableCorePartition._coverage_` |
-| Core: a part, a pullback | `DatatableCorePartition.part`, `MappedDatatable`, `MappedFeaturetable` |
+| Core: coverage | `DatatableClusterCorePartition._coverage_` |
+| Core: a part, a pullback | `DatatableClusterCorePartition.part`, `MappedDatatable`, `MappedFeaturetable` |
 | The probe's check before reading | `check_probe_inputs` in `dbx/probes.py` |
 | Rows aggregated by a column; the checks by its value and by row | `aggregateby_vector`, `FeatureAffineLogisticProbe._aggregate_means_`, `_check_disjoint_` in `dbx/probes.py` |
 

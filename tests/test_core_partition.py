@@ -1,5 +1,5 @@
 """
-`DatatableCorePartition`: rows clustered by their values, assigned nearest first into folds of fresh tablets.
+`DatatableClusterCorePartition`: rows clustered by their values, assigned nearest first into folds of fresh tablets.
 
 Each tablet here holds points from four well-separated blobs, one per label, so
 the clusters k-means finds are the labels, and a row's distance to its
@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import (PartitionDatamapTable, DatatableCorePartition,
+from dbx.dataparts import (PartitionDatamapTable, DatatableClusterCorePartition,
                            MappedDatatable, MappedDatatablet)
 
 
@@ -78,7 +78,7 @@ def core(tmp_path, table, fractions=(0.8, 0.2), build=True, coreby=(X,), stratif
         columns['partitionby'] = partitionby
     if carry is not None:
         columns['carry'] = list(carry)
-    p = DatatableCorePartition(datalake=str(tmp_path / name), parallelization=parallelization, n_workers=n_workers,
+    p = DatatableClusterCorePartition(datalake=str(tmp_path / name), parallelization=parallelization, n_workers=n_workers,
                                spec=dict(datatable=table, fractions=list(fractions), partition_slice='pts',
                                          collator=Datacollator(spec=dict(columns=columns)),
                                          n_clusters=4, **spec))
@@ -89,7 +89,7 @@ def every_row(table):
     return {(t, r) for t in range(table.n_tablets) for r in range(table.var.n)}
 
 
-def test_fractions_summing_to_one_deal_every_row_once_and_sample_every_cluster(tmp_path):
+def test_fractions_summing_to_one_assign_every_row_once_and_sample_every_cluster(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl)
     layouts = [p.layout(k) for k in range(2)]
@@ -134,7 +134,7 @@ def test_a_coreset_takes_the_rows_nearest_each_center(tmp_path):
     assert s['n_undealt'] == len(xs) - len(taken)
 
 
-def test_a_group_is_dealt_whole(tmp_path):
+def test_a_group_is_assigned_whole(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, stratifyby=PATIENT, fractions=(0.5, 0.5))
     patients = {(t, r): pa for t in range(tbl.n_tablets) for r, pa in enumerate(tbl.tablet(t).data(PATIENT)['pts']['patient'])}
@@ -242,7 +242,7 @@ def test_a_core_partition_s_layout_is_retired_but_its_hash_is_kept(tmp_path):
     p = core(tmp_path, tbl, build=False)
     with pytest.raises(ValueError, match="layout is retired"):
         core(tmp_path, tbl, build=False, name='again', layout=p)
-    assert 'layout' in DatatableCorePartition.VAR.__dataclass_fields__, (
+    assert 'layout' in DatatableClusterCorePartition.VAR.__dataclass_fields__, (
         "a VAR's defaults are its identity: removing the field moves every core partition's hash")
 
 
@@ -278,7 +278,7 @@ def test_a_probe_fits_on_core_parts_of_a_feature_table(tmp_path):
     features = Featuretable(datalake=url, devices=['cpu'], tag='features', spec=dict(
         upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
         collator=Datacollator(spec=dict(columns={'signals': [('samples', 'samples')], 'labels': [('labels', 'labels')]})))).build()
-    p = DatatableCorePartition(datalake=url, spec=dict(
+    p = DatatableClusterCorePartition(datalake=url, spec=dict(
         datatable=features, fractions=[0.5, 0.5], partition_slice='features', n_clusters=4, rows_per_tablet=16,
         collator=Datacollator(spec=dict(columns={'coreby': [('features', 'final')], 'carry': [('labels', 'labels')]},
                                         recursive=True)))).build()
@@ -309,7 +309,7 @@ def test_the_fractions_hold_within_each_partition(tmp_path, fractions):
         assert np.all(np.abs(got - f * total) <= 1), (k, got, f * total)
 
 
-def test_strata_within_partitions_are_dealt_whole_and_a_stratum_across_partitions_is_refused(tmp_path):
+def test_strata_within_partitions_are_assigned_whole_and_a_stratum_across_partitions_is_refused(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, fractions=(0.5, 0.5), stratifyby=PATIENT, partitionby=LABEL)
     patient = column(tbl, PATIENT)

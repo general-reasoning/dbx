@@ -23,7 +23,7 @@ datatables
     :class:`Datatablet`, :class:`Datatable` and :class:`Datacollator`: tables of
     MDS slices, and the columns a consumer reads from them.
 dataparts
-    :class:`DatatablePartition` and :class:`DatatableCorePartition`: a table
+    :class:`DatatablePartition` and :class:`DatatableClusterCorePartition`: a table
     assigned into parts; :class:`PartitionDatamapTable`, a part's map; and
     :class:`MappedDatatable`, a table pulled back along a map -- a part.
 journals

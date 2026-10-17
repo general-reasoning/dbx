@@ -173,7 +173,7 @@ def test_largest_first_takes_none_of_the_new_choices(tmp_path):
 
 
 @pytest.mark.parametrize('mixed', [False, True])
-def test_largest_first_deals_as_before(tmp_path, mixed):
+def test_largest_first_assigns_as_before(tmp_path, mixed):
     # It reads no partition column, so a mixed tablet is a tablet like any other to it, and is not split.
     slides = SLIDES[:-1] + [('p9', 'OV', 20, True)] if mixed else SLIDES
     p = partition(tmp_path, table(tmp_path, slides), method='largest_first')
@@ -350,7 +350,7 @@ def test_the_fractions_hold_within_each_partition_counting_pieces(tmp_path):
         assert [f['partitions'][cohort]['tabs'] for f in folds] == [2, 2], cohort
 
 
-def test_the_same_seed_deals_the_same_pieces_with_the_same_hashes(tmp_path):
+def test_the_same_seed_assigns_the_same_pieces_with_the_same_hashes(tmp_path):
     tbl = bags(tmp_path)
     one, two = bag_partition(tmp_path / 'a', tbl, seed=5), bag_partition(tmp_path / 'b', tbl, seed=5)
     assert one.read('tablets') == two.read('tablets')

@@ -191,7 +191,7 @@ def test_a_partition_from_before_the_roles_were_renamed_is_not_taken_for_one_now
     spec = dict(datatable=tbl, fractions=[0.5, 0.5], partition_slice='meta', collator=collator)
     with monkeypatch.context() as m:
         m.setattr(DatatablePartition, '__module__', 'dbx.datatables')
-        m.setattr(DatatablePartition, 'VAR', DatatablePartition._DealVAR_)
+        m.setattr(DatatablePartition, 'VAR', DatatablePartition._PartitionVAR_)
         m.setattr(DatatablePartition, 'VERSION', 1)
         m.setattr(DatatablePartition, '__post_init__', Datablock.__post_init__)
         old_hash = DatatablePartition(datalake=str(tmp_path), spec=spec).hash

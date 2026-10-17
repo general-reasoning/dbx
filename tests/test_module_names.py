@@ -24,7 +24,7 @@ def setup_env(monkeypatch):
 @pytest.mark.parametrize('cls', [datatables.Datatablet, datatables.Datatable, dataparts.DatatablePartition,
                                  dataparts.MappedFeaturetable, featuretables.Featuretablet, featuretables.Featuretable,
                                  featuretables.BipolarFeaturetablet, featuretables.BipolarFeaturetable,
-                                 datatables.Datacollator, dataparts.MappedDatatablet, dataparts.DatatableCorePartition,
+                                 datatables.Datacollator, dataparts.MappedDatatablet, dataparts.DatatableClusterCorePartition,
                                  dataparts.PartitionDatamapTable,
                                  dataparts.PartitionDatamapTablet, dataparts.MappedDatatable,
                                  dataparts.MappedFeaturetablet,

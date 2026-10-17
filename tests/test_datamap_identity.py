@@ -120,3 +120,23 @@ def test_a_feature_table_s_part_is_reached_as_the_datatable_part_it_was(tmp_path
 
 
 OLD_FEATURE_PART = 'fcbff0b55efe01efc65ac52154752edcf73880b866249ec9aece189558ed3f22'
+
+
+@pytest.mark.pinned
+def test_a_core_partition_keeps_its_identity_and_reaches_its_old_path(tmp_path):
+    """A core partition's hash -- its spec, version and TOPICS, a topic's description included -- is pinned.
+
+    Every CPTAC core's clustering was built under it; on 2026-10-16 a reworded description of its
+    ``layout`` topic moved it, unseen. Its class was `DatatableCorePartition` until 2026-10-17, and its
+    specialization reaches what was built at that class's path. The hash is the code's at dbx 7fd8eea.
+    """
+    import sys
+    sys.path.insert(0, __import__('os').path.dirname(__file__))
+    from test_core_partition import core, PointTable
+    p = core(tmp_path, PointTable(datalake=str(tmp_path / 'points'), spec={}), build=False)
+    assert p.hash == CORE_PARTITION
+    (old,) = [sp for sp in type(p).SPECIALIZATIONS if p._pins_match_(sp)]
+    assert old.anchor == 'dbx.dataparts.DatatableCorePartition' and p.get_hash(old) == CORE_PARTITION
+
+
+CORE_PARTITION = 'b72da7e7d75a8ffe9da2d32a57ad1e2ba4e77d63c849ef5ebcc1ef292853b3d4'

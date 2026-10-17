@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`DatatableCorePartition` is `DatatableClusterCorePartition`.** A core partition is
+  named for how it chooses its rows; another way would take other arguments, and be a
+  class of its own. Its specialization reaches what was built at the old class's path,
+  and its hash is pinned. `DatatablePartition._DealVAR_` is `_PartitionVAR_`.
+- **Fixed: the core partition's hash, moved by a reworded topic description.** The
+  ``layout`` topic's description -- part of its identity -- is restored as built.
 - **A part is its map; `DatatablePart`, `FeaturetablePart` and `fold` are gone.**
   `partition.part(k)` is part *k*'s `PartitionDatamapTable`, VAR `{partition, part}`;
   `part(k).pullback(table, collator)` is a table read along it, a `MappedDatatable`

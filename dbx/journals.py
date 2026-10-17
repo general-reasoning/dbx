@@ -105,7 +105,7 @@ class Datalog:
     Levels, most to least severe: ``ERROR`` (always on), ``WARNING``, ``INFO``,
     ``VERBOSE``, ``SELECTED``, ``DEBUG``, ``DETAILED``. A line reads ::
 
-        main:        2026-10-01T12:03:44.123456: VERBOSE: anchor/key: message
+        main:-------- 2026-10-01T12:03:44.123456: VERBOSE: anchor/key: message
 
     An instance is a named VIEW of the log: its *name* leads its messages, and
     a level it is given wins over everything else. A level it is not given is
@@ -124,17 +124,17 @@ class Datalog:
     and no name -- only the worker and the time, which are the same width on
     every line -- so they line up, and indent with the nesting ::
 
-        main:        2026-...: ------------>>>--- BUILDING SUBTREE at a
-        main:        2026-...: ------------------>>>--- BUILDING SUBTREE at b
-        main:        2026-...: ------------------<<<--- BUILDING SUBTREE at b
-        main:        2026-...: ------------<<<--- BUILDING SUBTREE at a
+        main:-------- 2026-...: ------------>>>--- BUILDING SUBTREE at a
+        main:-------- 2026-...: ------------------>>>--- BUILDING SUBTREE at b
+        main:-------- 2026-...: ------------------<<<--- BUILDING SUBTREE at b
+        main:-------- 2026-...: ------------<<<--- BUILDING SUBTREE at a
 
     The scope and the nesting are per thread, and a dbx executor sends them to
     its workers with the work (:meth:`_carry_`, through `JournaledCallable`), as
     it sends the `DataJournal` session. A worker is ``main`` in the process and
     thread a command runs in, and a dbx executor's are named under the one that
-    dispatched to them: ``main/t0`` is its thread 0, ``main/p3`` its process 3,
-    ``main/p3/t1`` a thread of that.
+    dispatched to them: ``main:t0`` is its thread 0, ``main:3`` its process 3,
+    ``main:3:t1`` a thread of that.
 
     Parameters
     ----------
@@ -301,8 +301,9 @@ class Datalog:
 
         Its own is ``main`` in the main thread of a process no dbx executor
         started; in another process, the name a carried Datalog gave that
-        process, else the process's name, else ``p<pid>``; and in a thread
-        other than its process's main one, that, ``/`` the thread's name.
+        process, its number -- the ``<i>`` of an executor's ``p<i>`` -- else the
+        process's name, else its pid; and in a thread other than its process's
+        main one, that, ``:`` the thread's name.
         """
         worker = getattr(_THREAD_DATALOGS, 'worker', None)
         if worker is not None:
@@ -312,7 +313,7 @@ class Datalog:
         if proc is None:
             proc = 'main' if multiprocessing.parent_process() is None else Datalog._process_label_()
         thread = threading.current_thread()
-        return proc if thread is threading.main_thread() else f"{proc}/{thread.name}"
+        return proc if thread is threading.main_thread() else f"{proc}:{thread.name}"
 
     # 4. Helpers -----------------------------------------------------------
 
@@ -322,7 +323,7 @@ class Datalog:
 
         Its levels and selection are the scope's, innermost first, as they
         stand now; entering it in a worker opens them there, and sets the
-        worker's depth to this one's and its name to this one's, ``/`` the
+        worker's depth to this one's and its name to this one's, ``:`` the
         worker's own -- until it exits.
         """
         carried = Datalog()
@@ -337,21 +338,26 @@ class Datalog:
     def _worker_under_(worker, pid, ident) -> str:
         """This thread's name under *worker*, which dispatched to it from process *pid*, thread *ident*."""
         if os.getpid() != pid:
-            name = f"{worker}/{Datalog._process_label_()}"
+            name = f"{worker}:{Datalog._process_label_()}"
             thread = threading.current_thread()
             if thread is threading.main_thread():
                 _PROCESS_WORKERS.setdefault(os.getpid(), name)
                 return name
-            return f"{name}/{thread.name}"
+            return f"{name}:{thread.name}"
         if threading.get_ident() != ident:
-            return f"{worker}/{threading.current_thread().name}"
+            return f"{worker}:{threading.current_thread().name}"
         return worker
 
     @staticmethod
     def _process_label_() -> str:
-        """This process's name -- an executor names its workers ``p<i>`` -- or ``p<pid>`` for one nobody named."""
+        """This process's number in the log: *i* for the worker an executor named ``p<i>``, its pid for one nobody named.
+
+        Bare, as a thread is ``t<i>``: ``main:12`` is the command's process 12, ``main:t0`` its thread 0.
+        """
         name = multiprocessing.current_process().name
-        return f"p{os.getpid()}" if name == 'MainProcess' else name
+        if name == 'MainProcess':
+            return str(os.getpid())
+        return name[1:] if name[:1] == 'p' and name[1:].isdigit() else name
 
     @staticmethod
     def _scopes_() -> list:
@@ -405,8 +411,8 @@ class Datalog:
             return val
 
     def _lead_(self) -> str:
-        """What a line leads with: the worker, padded to :attr:`WORKER_WIDTH`, and the time -- the same width on every line of one worker."""
-        lead = f"{Datalog.worker() + ':':<{self.WORKER_WIDTH + 1}} "
+        """What a line leads with: the worker, dashed out to :attr:`WORKER_WIDTH`, and the time -- the same width on every line of one worker."""
+        lead = f"{(Datalog.worker() + ':').ljust(self.WORKER_WIDTH + 1, '-')} "
         if self.datetime:
             lead += f"{datetime.datetime.now().isoformat(timespec='microseconds')}: "
         return lead
@@ -3694,7 +3700,7 @@ class JournaledCallable:
 
     The `Datalog` scope goes out with it too, made where the callable was
     wrapped (`Datalog._carry_`): the call runs at the levels set there, as
-    many subtrees deep, and its lines are led by that worker's name ``/`` its
+    many subtrees deep, and its lines are led by that worker's name ``:`` its
     own. Nothing of it comes back.
 
     With an *output_capture* -- the `OutputCapture` open where it was

@@ -330,7 +330,7 @@ class DatatablePartition(Datablock):
         table = self.var.datatable
         if table is None:
             raise ValueError(f"{self.__class__.__name__}: VAR.datatable is required")
-        self.log.info(f"PARTITION {type(self).__name__}/{self.hash[:8]}: {type(table).__name__} into "
+        self.log.info(f"PARTITION {type(self).__name__}/{self.hash[:8]}: {_named_(table)} into "
                       f"{len(self.var.fractions or [])} parts -- SCAN, ITEMS, ASSIGN, COALESCE; the parts copy, later")
         if self.var.collator is not None:
             self.var.collator.slices(table)       # raises for a column the table does not hold
@@ -383,7 +383,8 @@ class DatatablePartition(Datablock):
         ``part(k).pullback()``, ``part(k).pullback(table, collator)``.
         """
         # The partition's workers: the map builds its tablets, in parallel, as a pullback does.
-        return PartitionDatamapTable(spec=dict(partition=self, part=part), **self._part_kwargs_)
+        tag = f"{self.tag}:part{int(part)}" if self.tag else None
+        return PartitionDatamapTable(spec=dict(partition=self, part=part), tag=tag, **self._part_kwargs_)
 
     def lot(self, part: int | str, idx: int) -> list:
         """Tablet *idx* of part *part*'s lot: ``[(tablet, rows | None), ...]``, the rows of the table's tablets it takes.
@@ -749,6 +750,12 @@ class DatatablePartition(Datablock):
                 **coalesced, 'folds': folds, 'skipped': skipped}
 
 
+def _named_(block) -> str:
+    """*block* as a log line names it: its class and hash, and its tag when it has one."""
+    named = f"{type(block).__name__}/{block.hash[:8]}"
+    return f"{named} [{block.tag}]" if getattr(block, 'tag', None) else named
+
+
 class PartitionDatamapTablet(Datatablet):
     """The map of one tablet of a part: its lot -- which rows of which tablets of the mapped table it takes.
 
@@ -860,14 +867,14 @@ class PartitionDatamapTable(Datatable):
 
     def _build_tag_(self, n: int) -> str:
         partition = self.var.partition
-        return f"MAP: resolving {n} lots of part {self.var.part} of {type(partition).__name__}/{partition.hash[:8]} [{type(self).__name__}]"
+        return f"MAP: resolving {n} lots of part {self.var.part} of {_named_(partition)} [{type(self).__name__}]"
 
     def build(self, *args, **kwargs):
         """Its tablets, in parallel -- each resolving its lot from the partition once -- said once, with the partition's state."""
         if not self.valid():
             partition = self.var.partition
-            self.log.info(f"PARTITION {type(partition).__name__}/{partition.hash[:8]}: {'partitioned' if partition.partitioned() else 'NOT PARTITIONED'}; "
-                          f"MAP {type(self).__name__}/{self.hash[:8]}: part {self.var.part}, {self.n_tablets} lots")
+            self.log.info(f"PARTITION {_named_(partition)}: {'partitioned' if partition.partitioned() else 'NOT PARTITIONED'}; "
+                          f"part {self.var.part}, {self.n_tablets} lots")
         return super().build(*args, **kwargs)
 
     def __tablet__(self, idx: int, *, tag=None, **spec) -> PartitionDatamapTablet:
@@ -1188,8 +1195,8 @@ class MappedDatatable(Datatable):
         datamap = self.datamap
         partition = datamap.var.partition
         self.log.info(
-            f"PARTITION {type(partition).__name__}/{partition.hash[:8]}: {'partitioned' if partition.partitioned() else 'NOT PARTITIONED'}; "
-            f"MAP {type(datamap).__name__}/{datamap.hash[:8]}: part {datamap.var.part}, {datamap.n_tablets} lots, "
+            f"PARTITION {_named_(partition)}: {'partitioned' if partition.partitioned() else 'NOT PARTITIONED'}; "
+            f"MAP {_named_(datamap)}: part {datamap.var.part}, {datamap.n_tablets} lots, "
             f"each built by the copy that needs it")
 
     def _log_pullback_(self):
@@ -1200,8 +1207,8 @@ class MappedDatatable(Datatable):
         copies = sum(datamap.whole(i) is None for i in range(n))
         whole = f", {n - copies} taken whole" if n - copies else ""
         self.log.info(
-            f"PULLBACK {type(self.datatable).__name__} along part {datamap.var.part} of "
-            f"{type(partition).__name__}/{partition.hash[:8]}: {copies} copies of {list(self.slices())}{whole}")
+            f"PULLBACK {_named_(self.datatable)} along part {datamap.var.part} of "
+            f"{_named_(partition)}: {copies} copies of {list(self.slices())}{whole}")
 
     def _block_specializations_(self):
         """None for a table of copies: its block class's specializations are its source tablets', and no copy is one."""
@@ -1474,9 +1481,12 @@ def _mapped_table_(datamap: PartitionDatamapTable, collator: Datacollator | None
     if datatable is not None and datatable.hash == datamap.datatable.hash:
         datatable = None            # the map's own table: one block, however it is reached
     table = datatable if datatable is not None else datamap.datatable
+    # A tag is for reading logs and journals -- in no identity: the one given is the top layer's; a
+    # layer below is named for what it is, its table along its map.
+    kwargs['tag'] = kwargs.get('tag') or (f"{table.tag} @ {datamap.tag}" if table.tag and datamap.tag else None)
     if not isinstance(table, Layered):
         return MappedDatatable(spec=dict(datamap=datamap, datatable=datatable, collator=collator), **kwargs)
-    below = _mapped_table_(datamap, collator, table._upstream_block_(), **kwargs)
+    below = _mapped_table_(datamap, collator, table._upstream_block_(), **{**kwargs, 'tag': None})
     if collator is not None:
         named = {pair[0] for role in collator.roles for pair in collator.pairs(role)}
         if not set(Layered.slices(table, recursive=False)) & named:
@@ -1807,7 +1817,7 @@ class DatatableClusterCorePartition(DatatablePartition):
         self._check_carried_slices_()
 
     def __build__(self):
-        self.log.info(f"PARTITION {type(self).__name__}/{self.hash[:8]}: {type(self.var.datatable).__name__} into "
+        self.log.info(f"PARTITION {type(self).__name__}/{self.hash[:8]}: {_named_(self.var.datatable)} into "
                       f"{self.n_parts()} parts -- SCAN, CLUSTER, ASSIGN, COVERAGE, LAYOUT; the parts copy, later")
         self.var.collator.slices(self.var.datatable)       # raises for a column the table does not hold
         layouts, centers, summary, coverage = self._lay_out_()

@@ -9,7 +9,7 @@ from dbx.databits import callable_executor
 from dbx.journals import Datalog
 
 
-LEAD = re.compile(r"^(?P<worker>\S+):\s+(?P<dt>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}): (?P<rest>.*)$")
+LEAD = re.compile(r"^(?P<worker>\S+?):-*\s+(?P<dt>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}): (?P<rest>.*)$")
 
 
 def _lines(capsys):
@@ -59,6 +59,7 @@ class TestLevels:
         m = LEAD.match(line)
         assert m['worker'] == 'main'
         assert m['rest'] == "INFO: x: hello"
+        assert line.startswith('main:' + '-' * (Datalog.WORKER_WIDTH - len('main')) + ' ')
 
 
 class TestSubtree:
@@ -109,9 +110,10 @@ class TestCarried:
         with Datalog(verbose=True):
             with Datalog().subtree('a'):
                 results = ex.exec_callables([functools.partial(_work, i) for i in range(2)])
-        assert sorted(results) == [(f"main/{kind}0", 1), (f"main/{kind}1", 1)]
+        label = 't' if kind == 't' else ''      # a process is its bare number, a thread t<i>
+        assert sorted(results) == [(f"main:{label}0", 1), (f"main:{label}1", 1)]
         out = capfd.readouterr().out
-        assert re.search(rf"^main/{kind}\d:\s+\S+: VERBOSE: w: 0 at 1$", out, re.M)
+        assert re.search(rf"^main:{label}\d:-*\s+\S+: VERBOSE: w: 0 at 1$", out, re.M)
         assert Datalog.worker() == 'main' and Datalog.depth() == 0
 
 

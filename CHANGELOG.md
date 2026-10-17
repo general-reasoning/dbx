@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Log lines: `main:12:------ <time>`.** A worker's name is dashed out to the
+  timestamp, not spaced, and its parts are joined by `:` -- a process by its bare
+  number (an executor's `p12` is `12`), a thread as `t<i>`: `main:12`, `main:t0`,
+  `main:12:t1`.
+- **A part's map and a pullback's layers carry tags, and log lines name tags.** A
+  map is tagged `<partition's tag>:part<k>`; a pullback layer not tagged otherwise,
+  `<its table's tag> @ <its map's tag>` -- the top layer takes a tag given to
+  `pullback`. A tag is in no identity, and no tablet's tag moves. `PARTITION`, `MAP`
+  and `PULLBACK` lines name the blocks they mention with their tags.
+- **Devices are checked as features are evaluated, not as `build` starts:** a
+  feature table that adopts an earlier build needs no GPU.
 - **`DatatableCorePartition` is `DatatableClusterCorePartition`.** A core partition is
   named for how it chooses its rows; another way would take other arguments, and be a
   class of its own. Its specialization reaches what was built at the old class's path,

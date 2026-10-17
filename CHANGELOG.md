@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`Specialization(tag=...)`: a past filed under a tag.** A block keyed by tag -- a
+  tablet, until now -- is looked for under its tag; a specialization naming the tag
+  its past was filed under reaches the same identity there, as `anchor` does for a
+  renamed class.
+- **Map tablets and mapped tablets are filed by their hash, and tagged by their
+  table: `<table's tag>:<i>`.** No tag in their paths. A mapped tablet filed under its
+  partition's `tag_of` until 2026-10-17 -- a cluster core's `core<hash>_f<k>_<i>`, a
+  piece's, a pack's -- is reached there by such a specialization, not copied again;
+  a map tablet filed under `map<hash>_<i>` is rebuilt, a lot each. A pullback layer
+  not tagged otherwise is tagged `<its table's tag> along <its map's tag>`.
+- **Log names show a tag without its entrypoint's module** (`shown_tag`): `f:NAME`
+  for `pkg.mod.f:NAME`. The tag itself, the journals and the paths keep it whole.
+- **`BUILD ELIDED` is a VERBOSE line.**
 - **`TREE`, a log level of its own: the `BUILDING`/`SKIPPING SUBTREE` banners.**
   `DBX_LOG_TREE=1`, `Datalog(tree=True)` or a `with Datalog(tree=...)` scope shows
   them without every VERBOSE line; set nowhere, they follow `VERBOSE`, as before.
@@ -14,7 +27,7 @@ All notable changes to this project will be documented in this file.
   `main:12:t1`.
 - **A part's map and a pullback's layers carry tags, and log lines name tags.** A
   map is tagged `<partition's tag>:part<k>`; a pullback layer not tagged otherwise,
-  `<its table's tag> @ <its map's tag>` -- the top layer takes a tag given to
+  `<its table's tag> along <its map's tag>` -- the top layer takes a tag given to
   `pullback`. A tag is in no identity, and no tablet's tag moves. `PARTITION`, `MAP`
   and `PULLBACK` lines name the blocks they mention with their tags.
 - **Devices are checked as features are evaluated, not as `build` starts:** a

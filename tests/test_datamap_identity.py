@@ -140,3 +140,61 @@ def test_a_core_partition_keeps_its_identity_and_reaches_its_old_path(tmp_path):
 
 
 CORE_PARTITION = 'b72da7e7d75a8ffe9da2d32a57ad1e2ba4e77d63c849ef5ebcc1ef292853b3d4'
+
+
+def test_map_and_mapped_tablets_are_filed_by_hash_and_tagged_by_their_table(tmp_path):
+    """A map tablet's and a mapped tablet's path is its hash alone; its tag, its table's and its index. No identity moves."""
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_core_partition import core, points
+    table = points(tmp_path).set(tag='clip')
+    partition = core(tmp_path, table).set(tag='deal')
+    datamap = partition.part(0)
+    assert datamap.tag == 'deal:part0'
+    lot = datamap.tablet(0)
+    assert lot.tag == 'deal:part0:000000'
+    assert os.path.basename(os.path.dirname(lot.anchorkeypath)) == 'dbx.dataparts.PartitionDatamapTablet'
+    mapped = datamap.pullback(table).tablet(0)
+    assert mapped.tag == 'clip along deal:part0:000000'
+    assert os.path.basename(os.path.dirname(mapped.anchorkeypath)) == 'dbx.dataparts.MappedDatatablet'
+    assert datamap.pullback(table).build().valid()
+
+
+def test_a_mapped_tablet_filed_under_its_tag_is_reached_where_it_was_filed(tmp_path, monkeypatch):
+    """Until 2026-10-17 a mapped tablet was filed under its tag, its partition's `tag_of`; now by its hash.
+
+    Its hash is unchanged, and a specialization naming that tag (`Specialization(tag=...)`) reaches it
+    where it was filed: rebuilt now, the pullback copies nothing again.
+    """
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_core_partition import core, points
+    from dbx.dataparts import MappedDatatablet
+    table = points(tmp_path)
+    monkeypatch.setattr(MappedDatatablet, 'KEYBY', 'tag_version_shorthash')
+    partition = core(tmp_path, table)
+    before = partition.part(0).pullback(table)
+    before_tag = lambda i: partition.tag_of(0, i)
+    # As then: each tablet tagged as its partition says, and filed under that tag.
+    monkeypatch.setattr(type(before), '__tablet__', _tagged_as_then_(type(before).__tablet__, before_tag))
+    before.build_tree()
+    built = {i: before.tablet(i).anchorkeypath for i in range(before.n_tablets)}
+    assert all(f"/{before_tag(i)}/" in p for i, p in built.items())
+    monkeypatch.undo()
+    after = core(tmp_path, table).part(0).pullback(table)
+    assert after.hash == before.hash and after.tablet(0).hash == before.tablet(0).hash
+    after.build_tree()
+    for i, path in built.items():
+        tablet = after.tablet(i)
+        assert tablet.valid() and tablet.anchorkeypath != path
+        assert os.path.dirname(tablet.path('source')).startswith(path)          # read where it was filed
+        assert not os.path.exists(os.path.join(tablet.anchorkeypath, 'source'))  # nothing copied again
+
+
+def _tagged_as_then_(tablet, tag_of):
+    """A pullback's `__tablet__`, tagging tablet *i* ``tag_of(i)`` as it did until 2026-10-17."""
+    def __tablet__(self, idx, **kw):
+        return tablet(self, idx, **kw).set(tag=tag_of(idx))
+    return __tablet__

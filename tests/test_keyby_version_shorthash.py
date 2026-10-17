@@ -150,6 +150,11 @@ def _tag_keyed(tablet):
             and tablet.anchorkeypath == tablet.set(keyby=OLD).anchorkeypath)
 
 
+def _hash_filed(tablet):
+    """Filed by its hash, its tag nowhere in its path."""
+    return tablet.keyby == 'version_shorthash' and not _keyed(tablet.anchorkeypath, tablet.tag)
+
+
 def test_a_tables_tablets_are_tag_keyed_built_and_read(tmp_path):
     table = RowsTable(datalake=str(tmp_path), spec={'tablets': [[list(r) for r in t] for t in TABLETS]})
     assert table.keyby == 'version_shorthash'
@@ -181,7 +186,8 @@ def test_an_explicit_keyby_on_a_table_is_handed_to_its_tablets(tmp_path):
 
 
 @pytest.mark.parametrize('coalesce', [None, 'pack'])
-def test_a_parts_pieces_and_packed_tablets_are_tag_keyed_built_and_read(tmp_path, coalesce):
+def test_a_parts_pieces_and_packed_tablets_are_hash_filed_built_and_read(tmp_path, coalesce):
+    """A mapped tablet -- a piece, a packed tablet -- is filed by its hash; a whole tablet is its table's own."""
     table = RowsTable(datalake=str(tmp_path), spec={'tablets': [[list(r) for r in t] for t in TABLETS]}).build()
     spec = {'coalesce': 'pack', 'min_tablet_rows': 3, 'max_tablet_rows': 4} if coalesce else {}
     partition = split(tmp_path, table, **spec)
@@ -190,18 +196,19 @@ def test_a_parts_pieces_and_packed_tablets_are_tag_keyed_built_and_read(tmp_path
         for i in range(part.n_tablets):
             tablet = part.tablet(i)
             kinds.add(type(tablet).__name__)
-            assert _tag_keyed(tablet) and tablet.valid(), (type(tablet).__name__, tablet.anchorkeypath)
+            filed = _hash_filed if type(tablet).__name__ == 'MappedDatatablet' else _tag_keyed
+            assert filed(tablet) and tablet.valid(), (type(tablet).__name__, tablet.anchorkeypath)
     assert 'MappedDatatablet' in kinds
 
 
-def test_core_tablets_are_tag_keyed_built_and_read(tmp_path):
+def test_core_tablets_are_hash_filed_built_and_read(tmp_path):
     partition = core(tmp_path, points(tmp_path, n_tablets=3, n=20))
     for fold in range(2):
         part = partition.part(fold).pullback(None, partition.var.collator).build()
         for i in range(part.n_tablets):
             tablet = part.tablet(i)
             assert type(tablet).__name__ == 'MappedDatatablet'
-            assert _tag_keyed(tablet) and tablet.valid()
+            assert _hash_filed(tablet) and tablet.valid()
             assert tablet.anchorkeypath == partition.part(fold).pullback(None, partition.var.collator).tablet(i).anchorkeypath
 
 

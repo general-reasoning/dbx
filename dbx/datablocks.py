@@ -1079,6 +1079,19 @@ def _forming_with_specializations_():
 gitwrkreposetup(reason="datablocks import")
 
 
+#: A dotted module path before a function's name and its ``:`` -- an entrypoint's tag, ``pkg.mod.f:NAME``.
+_TAG_MODULE_ = re.compile(r'\b(?:[A-Za-z_]\w*\.)+(?=[A-Za-z_]\w*:)')
+
+
+def shown_tag(tag: str) -> str:
+    """*tag* as a log line shows it: each entrypoint's module path dropped -- ``f:NAME`` for ``pkg.mod.f:NAME``.
+
+    A pipeline function's name is unique where it is used; the module adds a line's worth of
+    width and nothing to read. The journals keep the tag whole.
+    """
+    return _TAG_MODULE_.sub('', tag)
+
+
 class Datablock:
     """
     Declare topics via TOPICS::
@@ -1481,6 +1494,10 @@ class Datablock:
         #: out safe, since two blocks alike in their determining fields are alike
         #: in it too.
         determined: dict | None = field(default=None, kw_only=True)
+        #: The tag the narrower block was filed under, when it is not this block's: a block
+        #: keyed by tag -- a tablet -- is looked for under its tag, and the same identity
+        #: filed under a tag since renamed is found only where this says. None: this block's.
+        tag: str | None = field(default=None, kw_only=True)
         #: Why the coincidence holds. Last -- and keyword-only, so that it is
         #: last in a subclass's constructor too, after its BLOCK or TABLET.
         note: str = field(default='', kw_only=True)
@@ -1596,6 +1613,7 @@ class Datablock:
                     + (f", redirect_vars={self.redirect_vars!r}" if self.redirect_vars else "")
                     + (f", nested={self.nested!r}" if self.nested else "")
                     + (f", determined={self.determined!r}" if self.determined else "")
+                    + (f", tag={self.tag!r}" if self.tag is not None else "")
                     + ''.join(f", {n}={v!r}" for n, v in self._extra_fields_() if v is not SAME)
                     + (f", note={self.note!r}" if self.note else "") + ")")
 
@@ -1623,6 +1641,8 @@ class Datablock:
                 d['nested'] = {k: v.to_dict() for k, v in self.nested.items()}
             if self.determined:
                 d['determined'] = {k: list(v) for k, v in self.determined.items()}
+            if self.tag is not None:
+                d['tag'] = self.tag
             d.update((n, v) for n, v in self._extra_fields_() if v is not SAME)
             if self.note:
                 d['note'] = self.note
@@ -1678,7 +1698,7 @@ class Datablock:
         #: Datastack's BLOCK, a Datatable's TABLET -- are recorded and keyed too.
         _base_fields = frozenset({'spec', 'topics', 'version', 'note', 'anchor',
                                   'legacy', 'UNSAFE_redirect_all_topics', 'redirect_topics',
-                                  'redirect_vars', 'nested', 'determined'})
+                                  'redirect_vars', 'nested', 'determined', 'tag'})
 
         def _extra_fields_(self):
             """``(name, value)`` of the fields a subclass adds, in declaration order."""
@@ -1712,7 +1732,8 @@ class Datablock:
                     # specialization IS the plain one, and keys as it.
                     tuple((n, v) for n, v in self._extra_fields_() if v is not SAME)) + (
                     # Only when set: every specialization from before keys as it did.
-                    (('determined', tuple(sorted(self.determined.items()))),) if self.determined else ())
+                    (('determined', tuple(sorted(self.determined.items()))),) if self.determined else ()) + (
+                    (('tag', self.tag),) if self.tag is not None else ())
 
     @dataclass
     class Redirection:
@@ -5628,12 +5649,12 @@ class Datablock:
         return records
 
     def _log_name_(self):
-        """The logger's name: anchor and key -- so the hash -- and the tag when there is one."""
+        """The logger's name: anchor and key -- so the hash -- and the tag when there is one, as `shown_tag` shows it."""
         log_name = f"{self.anchor}/{self.key}"
         if self._anchor_ is not None:
             log_name = f"{self.fqcn}: {log_name}"
         if self._tag_ is not None:
-            log_name = f"{log_name} [{self._tag_}]"
+            log_name = f"{log_name} [{shown_tag(self._tag_)}]"
         return log_name
 
     def _process_redirect_(self):
@@ -7047,9 +7068,10 @@ class Datablock:
                         f"so it describes a different block -- which is what a pin is "
                         f"for, and not something to fix here")
         if (self.get_hash(specialization) == self.hash
-                and self._specialization_anchor_(specialization) == self.anchor):
-            # Under another anchor the same identity is the point: the block as
-            # it was built before its class was renamed.
+                and self._specialization_anchor_(specialization) == self.anchor
+                and not self._filed_elsewhere_(specialization)):
+            # Under another anchor, or filed under a tag, the same identity is the point: the
+            # block as it was built before its class was renamed, or before it was filed as it is.
             return ("it reconstructs this block's own identity -- it drops no field, "
                     "no topic and no version, so there is no narrower block to read")
         return None
@@ -7169,6 +7191,20 @@ class Datablock:
         """The anchor whose journal *specialization*'s narrower block is looked for in."""
         return self.anchor if specialization.anchor is SAME else specialization.anchor
 
+    def _filed_elsewhere_(self, specialization) -> bool:
+        """Whether *specialization* names a tag its past was filed under that is not where this block is filed.
+
+        Another tag; or this block's own, when this block is not filed under its tag -- a
+        tablet filed under its tag until its class came to be filed by hash.
+        """
+        tag = getattr(specialization, 'tag', None)
+        return tag is not None and (tag != self.tag or self.keyby not in DataJournal._TAG_KEYBYS_)
+
+    def _specialization_tag_(self, specialization) -> str | None:
+        """The tag *specialization*'s narrower block was filed under: its own, when it names one, else this block's."""
+        tag = getattr(specialization, 'tag', None)
+        return tag if tag is not None else self.tag
+
     def _hash_journal_(self, specialization, *, fallback: bool = True):
         """*specialization*'s narrower block's journal entries, for a block with no journal handed down.
 
@@ -7180,7 +7216,7 @@ class Datablock:
         """
         anchor = self._specialization_anchor_(specialization)
         version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
-        j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
+        j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self._specialization_tag_(specialization), version=version,
                                   keyby=self.keyby, datalake=self.datalake, storage_options=self.storage_options, log=self.log)
         if j is not None or not fallback:
             # *fallback* False -- `BY_HASH` -- takes "filed nowhere" for "never built".
@@ -7196,7 +7232,7 @@ class Datablock:
         anchor = self._specialization_anchor_(specialization)
         version = getattr(self, 'VERSION', None) if specialization.version is ABSENT else specialization.version
         try:
-            j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self.tag, version=version,
+            j = DataJournal.read_hash(anchor, self.get_hash(specialization), tag=self._specialization_tag_(specialization), version=version,
                                       keyby=self.keyby, datalake=self.datalake,
                                       storage_options=self.storage_options, log=self.log)
         except FileNotFoundError:

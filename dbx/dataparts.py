@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import numpy as np
 from streaming import StreamingDataset
 
-from .datablocks import DATADICT, DATADIR, DATAFILE, SAME, Datablock, Datastack, forward_property
+from .datablocks import DATADICT, DATADIR, DATAFILE, SAME, Datablock, Datastack, forward_property, shown_tag
 from .databits import callable_executor
 from .datastreams import SharedMemoryManager, release_shared_memory_when_collected
 from .datatables import DATASLICE, SLICETOPIC, Datacollator, Layered, Datatablet, Datatable
@@ -418,7 +418,7 @@ class DatatablePartition(Datablock):
         return None if isinstance(entry, dict) else int(entry)
 
     def tag_of(self, part: int | str, idx: int) -> str:
-        """What a copy of tablet *idx* of part *part* is tagged: a piece by its tablet and values, a packed tablet by its place."""
+        """The tag a mapped tablet of tablet *idx* of part *part* was filed under until 2026-10-17: a piece by its tablet and values, a packed tablet by its place."""
         entry = self._assignments_[int(part)][int(idx)]
         if not isinstance(entry, dict):
             return self.var.datatable.tablet(int(entry)).tag
@@ -751,9 +751,9 @@ class DatatablePartition(Datablock):
 
 
 def _named_(block) -> str:
-    """*block* as a log line names it: its class and hash, and its tag when it has one."""
+    """*block* as a log line names it: its class and hash, and its tag, as `shown_tag` shows it, when it has one."""
     named = f"{type(block).__name__}/{block.hash[:8]}"
-    return f"{named} [{block.tag}]" if getattr(block, 'tag', None) else named
+    return f"{named} [{shown_tag(block.tag)}]" if getattr(block, 'tag', None) else named
 
 
 class PartitionDatamapTablet(Datatablet):
@@ -780,6 +780,11 @@ class PartitionDatamapTablet(Datatablet):
 
     TOPICS = {'lot': DATASLICE(tab='int', rows='ndarray:int64', whole='int')}
     SPECIALIZATIONS = []
+    #: Filed by its hash alone, as a block is, not under its tag as a tablet is: maps arrived on
+    #: 2026-10-16 with no tablets built under tags to be found, and its tag is then free to say
+    #: whose lot it is -- ``<map's tag>:<i>``. Those built under ``map<hash>_<i>`` until
+    #: 2026-10-17 are rebuilt, a lot read off the partition each.
+    KEYBY = 'version_shorthash'
     TREE_SKIP_BUILDING = ('datamap',)
     TREE_SKIP_VALIDATION = ('datamap',)
 
@@ -879,7 +884,8 @@ class PartitionDatamapTable(Datatable):
 
     def __tablet__(self, idx: int, *, tag=None, **spec) -> PartitionDatamapTablet:
         return PartitionDatamapTablet(datalake=self._datalake_, storage_options=self.storage_options, verbose=False,
-                             tag=tag if tag is not None else f"map{self.hash[:8]}_{int(idx):06d}",
+                             tag=tag if tag is not None else (f"{self.tag}:{int(idx):06d}" if self.tag
+                                                              else f"map{self.hash[:8]}_{int(idx):06d}"),
                              spec=dict(datamap=self, index=int(idx)))
 
     # 2. Declared API ------------------------------------------------------
@@ -897,7 +903,7 @@ class PartitionDatamapTable(Datatable):
         return self.var.partition.whole(self.var.part, idx)
 
     def tag_of(self, idx: int) -> str:
-        """What a tablet copying tablet *idx*'s lot is tagged, in its partition's words."""
+        """The tag a mapped tablet of tablet *idx* was filed under until 2026-10-17, in its partition's words."""
         return self.var.partition.tag_of(self.var.part, idx)
 
     def pullback(self, datatable: Datatable | None = None, collator: Datacollator | None = None,
@@ -956,6 +962,10 @@ class MappedDatatablet(Datatablet):
     """
 
     SPECIALIZATIONS = []
+    #: Filed by its hash, as a block is, and tagged ``<its table's tag>:<i>``: until 2026-10-17 it
+    #: was filed under its tag, its partition's `tag_of` -- ``core<hash>_f<k>_<i>``, a piece's, a
+    #: pack's -- and its pullback gives each tablet the specialization that reaches it there.
+    KEYBY = 'version_shorthash'
 
     #: Whether it writes ``source``: a layered copy writes it once, at the bottom -- see `MappedFeaturetablet`.
     WRITES_SOURCE = True
@@ -1253,8 +1263,11 @@ class MappedDatatable(Datatable):
             cache=getattr(first, 'cache', None),
             cache_limit=getattr(first, 'cache_limit', None),
             verbose=False,
-            tag=self.datamap.tag_of(idx),
+            tag=f"{self.tag}:{int(idx):06d}" if self.tag else self.datamap.tag_of(idx),
             spec=spec,
+            SPECIALIZATIONS=[*(cls.SPECIALIZATIONS or []), cls.Specialization(
+                spec={}, topics=SAME, tag=self.datamap.tag_of(idx),
+                note="this very tablet, filed under its partition's tag for it until 2026-10-17")],
         )
 
     def valid_tablet(self, idx: int, validation: str | None = None) -> bool:
@@ -1483,7 +1496,7 @@ def _mapped_table_(datamap: PartitionDatamapTable, collator: Datacollator | None
     table = datatable if datatable is not None else datamap.datatable
     # A tag is for reading logs and journals -- in no identity: the one given is the top layer's; a
     # layer below is named for what it is, its table along its map.
-    kwargs['tag'] = kwargs.get('tag') or (f"{table.tag} @ {datamap.tag}" if table.tag and datamap.tag else None)
+    kwargs['tag'] = kwargs.get('tag') or (f"{table.tag} along {datamap.tag}" if table.tag and datamap.tag else None)
     if not isinstance(table, Layered):
         return MappedDatatable(spec=dict(datamap=datamap, datatable=datatable, collator=collator), **kwargs)
     below = _mapped_table_(datamap, collator, table._upstream_block_(), **{**kwargs, 'tag': None})
@@ -1887,6 +1900,7 @@ class DatatableClusterCorePartition(DatatablePartition):
         return None
 
     def tag_of(self, part: int | str, idx: int) -> str:
+        """``core<hash>_f<k>_<i>``: the tag a mapped tablet was filed under until 2026-10-17 -- see `MappedDatatablet.KEYBY`."""
         return f"core{self.hash[:8]}_f{int(part)}_{int(idx):06d}"
 
     def partitioned(self) -> bool:

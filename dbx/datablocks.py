@@ -2862,7 +2862,7 @@ class Datablock:
             entry = self.redirection.entry if self.redirection is not None else None
             whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
                        if entry is not None else f"the paths {self._redirected_paths_}")
-            self.log.info(
+            self.log.verbose(
                 f"BUILD ELIDED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
                 f"from there instead: nothing would read what a build of it wrote. Undo the "
                 f"redirection, or construct with redirect=False, to build it anyway."
@@ -2883,7 +2883,7 @@ class Datablock:
             entry = self.redirection.entry if self.redirection is not None else None
             whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
                        if entry is not None else f"the paths {self._redirected_paths_}")
-            self.log.info(
+            self.log.verbose(
                 f"BUILD ELIDED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
                 f"from there instead: nothing would read what a build of it wrote. Undo the "
                 f"redirection, or construct with redirect=False, to build it anyway."

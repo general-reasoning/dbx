@@ -386,13 +386,19 @@ class TestBuildDeclines:
         broken.build()
         assert not os.path.exists(os.path.join(broken.anchorkeypath, 'output', 'output.txt'))
 
-    def test_it_is_announced(self, source, broken, capsys):
+    def test_it_is_announced_in_verbose_only(self, source, broken, capsys, monkeypatch):
+        """VERBOSE, not INFO: a tree adopting thousands of tablets said so a line each."""
+        from dbx.journals import Datalog
+        monkeypatch.delenv('DBX_LOG_VERBOSE', raising=False)
         _, code = source
         broken.UNSAFE_redirect(filter={'entry_code': code}, OVERRIDE=True)
         capsys.readouterr()
         broken.build()
+        assert 'BUILD ELIDED' not in capsys.readouterr().out
+        with Datalog(verbose=True):
+            broken.build()
         out = capsys.readouterr().out
-        assert 'BUILD ELIDED' in out and 'INFO' in out
+        assert 'BUILD ELIDED' in out and 'VERBOSE' in out
 
     def test_it_journals_no_build(self, source, broken):
         _, code = source

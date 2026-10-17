@@ -428,13 +428,14 @@ class Featuretable(Layered, Datatable):
         self.devices = getattr(self, 'devices', None) or ["cpu"]
         self._devices = self.devices
 
-    def build(self, *args, **kwargs):
-        """As `Datatable.build`, after checking that its *devices* exist here -- before anything else is done."""
-        self._check_devices_()
-        return super().build(*args, **kwargs)
-
     def _build_executor_(self, tag: str):
-        """The feature evaluation's executor: one worker per device -- see `__init__`."""
+        """The feature evaluation's executor: one worker per device -- see `__init__` -- once its *devices* are here.
+
+        Checked here, as features are about to be evaluated, and not as `build` starts: a
+        table that adopts an earlier build, or finds every tablet built, evaluates nothing,
+        and needs no device -- it is built on a machine without the GPUs it was computed on.
+        """
+        self._check_devices_()
         devices = list(self.devices)
         key = (getattr(self, 'device_parallelization', None)
                or ('multiprocessing' if len(devices) > 1 else 'inline')).lower()
@@ -454,8 +455,9 @@ class Featuretable(Layered, Datatable):
 
         Each worker takes one of *devices*; one naming a GPU the job was not
         given fails as ``CUDA error: invalid device ordinal`` -- in a worker,
-        after the blocks are checked and the journal read, minutes in. Here it
-        fails first, saying how many devices there are.
+        after the blocks are checked and the journal read, minutes in. Here --
+        from `_build_executor_`, before any worker starts -- it fails saying how
+        many devices there are.
         """
         cuda = [str(d) for d in self.devices if str(d).startswith('cuda')]
         if not cuda:

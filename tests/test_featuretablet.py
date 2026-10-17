@@ -696,3 +696,20 @@ def test_feature_evaluation_queues_off_the_devices_and_the_rest_off_n_workers(tm
     one = table(["cpu"]).build()      # its checks at n_workers=5, its one device's evaluation inline
     assert one.valid() and all(one.tablet(i).valid() for i in range(one.n_tablets))
     assert one.data(("features", "final"), concat=True)["features"]["final"].shape == (10, 8)
+
+
+def test_a_built_feature_table_builds_where_its_devices_are_not(tmp_path):
+    """Devices are asked for only when features are evaluated: a table already built, or adopted, needs none.
+
+    A deep feature clip computed on GPUs is part of every tree built on it -- a core, a probe -- and
+    those are built on machines without GPUs, where its build has nothing to evaluate.
+    """
+    url = str(tmp_path)
+    built = _feature_table(url, "feature_table")
+    absent = [f"cuda:{torch.cuda.device_count() + 7}"]
+    elsewhere = Featuretable(datalake=url, spec=built.spec, devices=absent, tag="feature_table")
+    assert elsewhere.hash == built.hash
+    assert elsewhere.build().valid()
+    unbuilt = Featuretable(datalake=str(tmp_path / "other"), spec=built.spec, devices=absent, tag="unbuilt")
+    with pytest.raises((RuntimeError, ValueError), match="CUDA"):
+        unbuilt.build()

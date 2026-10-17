@@ -103,7 +103,9 @@ class Datalog:
     """dbx's log: printf-style lines gated by level, led by the worker that wrote them and when.
 
     Levels, most to least severe: ``ERROR`` (always on), ``WARNING``, ``INFO``,
-    ``VERBOSE``, ``SELECTED``, ``DEBUG``, ``DETAILED``. A line reads ::
+    ``VERBOSE``, ``SELECTED``, ``DEBUG``, ``DETAILED``; and ``TREE``, the
+    :meth:`subtree` banners alone -- ``DBX_LOG_TREE=1`` -- which, set nowhere,
+    follows ``VERBOSE``. A line reads ::
 
         main:-------- 2026-10-01T12:03:44.123456: VERBOSE: anchor/key: message
 
@@ -140,8 +142,9 @@ class Datalog:
     ----------
     name : str, optional
         Printed before every message.
-    warning, info, verbose, selected, debug, detailed : bool, optional
-        This view's level: None takes the scope's, the environment's, or the default.
+    warning, info, verbose, selected, debug, detailed, tree : bool, optional
+        This view's level: None takes the scope's, the environment's, or the default
+        -- for *tree*, *verbose*'s.
     selection : str or list[str], optional
         Fully-qualified function names that :meth:`selected` emits for.
         Comma-separated string or list. None takes the scope's, else
@@ -152,9 +155,9 @@ class Datalog:
         Caller-frame offset :meth:`selected` names the caller by (default 2).
     """
 
-    LEVELS = ('warning', 'info', 'verbose', 'selected', 'debug', 'detailed')
+    LEVELS = ('warning', 'info', 'verbose', 'selected', 'debug', 'detailed', 'tree')
 
-    #: Where a level no view, scope or ``DBX_LOG_<LEVEL>`` sets stands.
+    #: Where a level no view, scope or ``DBX_LOG_<LEVEL>`` sets stands -- ``tree`` where ``verbose`` does.
     DEFAULTS = {'warning': True, 'info': True, 'verbose': False,
                 'selected': True, 'debug': False, 'detailed': False}
 
@@ -174,6 +177,7 @@ class Datalog:
         debug: bool = None,
         selected: bool = None,
         detailed: bool = None,
+        tree: bool = None,
         selection: 'str | Sequence[str] | None' = None,
         datetime: bool = True,
         stack_depth: int = 2,
@@ -182,7 +186,7 @@ class Datalog:
         self.datetime = datetime
         self.stack_depth = stack_depth
         given = dict(warning=warning, info=info, verbose=verbose,
-                     debug=debug, selected=selected, detailed=detailed)
+                     debug=debug, selected=selected, detailed=detailed, tree=tree)
         self._levels = {k: v for k, v in given.items() if v is not None}
         self._selection = self._selection_list_(selection)
         # Set by _carry_() only: (depth, worker, pid, thread ident) where it was made.
@@ -219,7 +223,10 @@ class Datalog:
     # 2. Declared API ------------------------------------------------------
 
     def ist(self, level: str) -> bool:
-        """Whether *level* is on for this view: its own, else the scope's, else ``DBX_LOG_<LEVEL>``, else the default."""
+        """Whether *level* is on for this view: its own, else the scope's, else ``DBX_LOG_<LEVEL>``, else the default.
+
+        ``tree``, set nowhere, is ``verbose``: the banners were VERBOSE lines, and still come with them.
+        """
         v = self._levels.get(level)
         if v is None:
             for scope in reversed(self._scopes_()):
@@ -229,7 +236,7 @@ class Datalog:
         if v is None:
             v = self._env_(f"DBX_LOG_{level.upper()}")
         if v is None:
-            v = self.DEFAULTS[level]
+            v = self.ist('verbose') if level == 'tree' else self.DEFAULTS[level]
         return bool(v)
 
     def error(self, msg, *args, **kwargs):
@@ -272,7 +279,7 @@ class Datalog:
 
     @contextlib.contextmanager
     def subtree(self, at):
-        """Bracket the build of the subtree *at* in VERBOSE banners, everything built inside one level deeper.
+        """Bracket the build of the subtree *at* in TREE banners, everything built inside one level deeper.
 
         The closing banner is written however the body ends, and the depth put
         back, so a failed subtree leaves no level behind it.
@@ -287,7 +294,7 @@ class Datalog:
             self._banner_('<<<', f"BUILDING SUBTREE at {at}")
 
     def skip_subtree(self, at, why: str):
-        """The VERBOSE banner of a subtree *at* not built, and *why*, where its :meth:`subtree` banners would be."""
+        """The TREE banner of a subtree *at* not built, and *why*, where its :meth:`subtree` banners would be."""
         self._banner_('xxx', f"SKIPPING SUBTREE at {at}: {why}")
 
     @staticmethod
@@ -424,7 +431,7 @@ class Datalog:
         self._write_(f"{self._lead_()}{level}: {tag}{msg}")
 
     def _banner_(self, marker, text):
-        if not self.ist('verbose'):
+        if not self.ist('tree'):
             return
         self._write_(f"{self._lead_()}{'------' * (Datalog.depth() + 2)}{marker}--- {text}")
 

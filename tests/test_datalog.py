@@ -64,6 +64,26 @@ class TestLevels:
 
 class TestSubtree:
 
+    def test_tree_is_a_level_of_its_own_and_follows_verbose_where_unset(self, capsys, monkeypatch):
+        """DBX_LOG_TREE shows the banners alone; set nowhere, they come with VERBOSE, as they always did."""
+        for var in ('DBX_LOG_TREE', 'DBX_LOG_VERBOSE'):
+            monkeypatch.delenv(var, raising=False)
+        log = Datalog()
+
+        def shown():
+            with log.subtree('a'):
+                log.verbose('inside')
+            return [_rest(l) for l in _lines(capsys)]
+
+        assert shown() == []
+        with Datalog(verbose=True):
+            assert shown() == ["------------>>>--- BUILDING SUBTREE at a", "VERBOSE: inside",
+                               "------------<<<--- BUILDING SUBTREE at a"]
+        with Datalog(verbose=True, tree=False):
+            assert shown() == ["VERBOSE: inside"]
+        monkeypatch.setenv('DBX_LOG_TREE', '1')
+        assert shown() == ["------------>>>--- BUILDING SUBTREE at a", "------------<<<--- BUILDING SUBTREE at a"]
+
     def test_banners_nest_and_line_up(self, capsys):
         log = Datalog()
         with Datalog(verbose=True):

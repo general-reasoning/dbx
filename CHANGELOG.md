@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`TREE`, a log level of its own: the `BUILDING`/`SKIPPING SUBTREE` banners.**
+  `DBX_LOG_TREE=1`, `Datalog(tree=True)` or a `with Datalog(tree=...)` scope shows
+  them without every VERBOSE line; set nowhere, they follow `VERBOSE`, as before.
 - **Log lines: `main:12:------ <time>`.** A worker's name is dashed out to the
   timestamp, not spaced, and its parts are joined by `:` -- a process by its bare
   number (an executor's `p12` is `12`), a thread as `t<i>`: `main:12`, `main:t0`,

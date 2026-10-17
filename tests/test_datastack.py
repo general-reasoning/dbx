@@ -332,6 +332,9 @@ class TestDatastackClearBlocks(unittest.TestCase):
             VERSION = 1
             TOPICS = {'data': SLICETOPIC}
             COLUMNS = {'data': {'x': 'int'}}
+            @dataclass
+            class VAR(Datatablet.VAR):
+                index: int = 0
             def __build__(self):
                 with self.slice_writers(self.COLUMNS) as writers:
                     writers['data'].write({'x': 1})
@@ -342,6 +345,8 @@ class TestDatastackClearBlocks(unittest.TestCase):
             @property
             def n_tablets(self):
                 return 2
+            def __tablet__(self, idx, **kw):
+                return super().__tablet__(idx, index=idx, **kw)
 
         tbl = MinimalTable(datalake=os.path.join(self.tmpdir, 'tbl')).build()
         self.assertTrue(tbl.valid_tablet(0))
@@ -362,6 +367,9 @@ class TestDatastackClearBlocks(unittest.TestCase):
             VERSION = 1
             TOPICS = {'data': SLICETOPIC}
             COLUMNS = {'data': {'x': 'int'}}
+            @dataclass
+            class VAR(Datatablet.VAR):
+                index: int = 0
             def __build__(self):
                 with self.slice_writers(self.COLUMNS) as writers:
                     writers['data'].write({'x': 1})
@@ -374,6 +382,8 @@ class TestDatastackClearBlocks(unittest.TestCase):
             @property
             def n_tablets(self):
                 return 2
+            def __tablet__(self, idx, **kw):
+                return super().__tablet__(idx, index=idx, **kw)
 
         tbl = ValidatableTable(datalake=os.path.join(self.tmpdir, 'val_tbl')).build()
         self.assertTrue(os.path.exists(tbl._blocks_manifest_path_()))

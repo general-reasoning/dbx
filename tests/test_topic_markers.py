@@ -79,6 +79,7 @@ class MarkedTablet(Datatablet):
     @dataclass
     class VAR(Datatablet.VAR):
         n: int = 3
+        index: int = 0     # its place in its table: two tablets alike in all else are two blocks
 
     def __build__(self):
         with self.slice_writers() as writers:
@@ -100,6 +101,9 @@ class MarkedTable(Datatable):
     @property
     def n_tablets(self):
         return self.var.n_tablets_
+
+    def __tablet__(self, idx, **kw):
+        return super().__tablet__(idx, index=idx, **kw)
 
 
 def block(cls, tmp_path, **kwargs):

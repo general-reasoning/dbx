@@ -46,6 +46,7 @@ from .datablocks import (
     forming_with_journal,
     is_topicmarker,
 )
+from .databits import read_yaml
 from .datastreams import (
     ChunkShuffleSampler,
     SharedMemoryManager,
@@ -889,10 +890,58 @@ class _Database_(Datablock):
 class Datatablet(_Database_):
     """One tablet of a `Datatable`: a Datablock writing MDS slices."""
 
-    #: A tablet's tag is in its path, as it always was: thousands of built
-    #: tablets per table are keyed so, and a table's tablets are found where
-    #: they were built only if the table at its default does not re-key them.
-    KEYBY = 'tag_version_shorthash'
+    #: Filed by its hash, as a block is: no tag in its path. Until 2026-10-17 a tablet was
+    #: filed under its tag, and one built so is read where it was filed -- see `_redirected_paths_`.
+    KEYBY = 'version_shorthash'
+
+    @property
+    def _redirected_paths_(self):
+        """Its redirection, as a block's -- else, built where tablets were filed until 2026-10-17, there.
+
+        A tablet was filed under its tag, ``<anchor>/<tag>/[version=<v>/]<hash>``, until then, and
+        hundreds of thousands were built so, in tables valid as they stand and never built again --
+        which is when a block adopts what it finds. So a tablet not built where it is filed now, nor
+        redirected, reads the same tablet -- the same hash -- where its tag filed it: that
+        tablet's own redirection, if it has one, else its topics there. Looked for once per instance.
+        """
+        paths = Datablock._redirected_paths_.fget(self)
+        if paths is not None or not getattr(self, 'redirect', False):
+            return paths
+        if '__tag_filed_paths__' not in self.__dict__:
+            self.__dict__['__tag_filed_paths__'] = self._tag_filed_paths_()
+        return self.__dict__['__tag_filed_paths__']
+
+    @_redirected_paths_.setter
+    def _redirected_paths_(self, value):
+        Datablock._redirected_paths_.fset(self, value)
+        self.__dict__.pop('__tag_filed_paths__', None)
+
+    @_redirected_paths_.deleter
+    def _redirected_paths_(self):
+        Datablock._redirected_paths_.fdel(self)
+        self.__dict__.pop('__tag_filed_paths__', None)
+
+    _paths_ = _redirected_paths_
+
+    def _tags_filed_under_(self) -> list[str]:
+        """The tags it may have been filed under until 2026-10-17: its own."""
+        return [self._tag_] if self._tag_ else []
+
+    def _tag_filed_paths_(self):
+        """``{topic: path}`` where a tag filed it -- `_redirected_paths_` -- or None: not filed by its hash, built here, or not there."""
+        from .journals import Block, DataJournal
+        if self.keyby in DataJournal._TAG_KEYBYS_ or self.fs.exists(self.anchorkeypath):
+            return None
+        here = self.anchorkeypath
+        for tag in self._tags_filed_under_():
+            there = os.path.join(self._anchorpath_(), Block._key_from_('tag_version_shorthash', self.hash, tag, self.version))
+            if not self.fs.exists(there):
+                continue
+            redirection = os.path.join(there, '.redirection', 'paths.yaml')
+            if self.fs.exists(redirection):
+                return read_yaml(redirection, storage_options=self.storage_options)
+            return {t: self.__path__(t).replace(here, there, 1) for t in self._toplevel_topics_(self.topics())}
+        return None
 
     @dataclass
     class VAR(Datablock.VAR):

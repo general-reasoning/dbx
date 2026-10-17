@@ -38,6 +38,7 @@ class Tablet(Datatablet):
     @dataclass
     class VAR(Datatablet.VAR):
         n: int = 2
+        index: int = 0     # its place in its table: two tablets alike in all else are two blocks
 
     def __build__(self):
         with self.slice_writers({'numbers': {'idx': 'int'}}) as writers:
@@ -56,6 +57,9 @@ class Table(Datatable):
     @property
     def n_tablets(self):
         return self.var.n_tablets_
+
+    def __tablet__(self, idx, **kw):
+        return super().__tablet__(idx, index=idx, **kw)
 
 
 class RemoteTablet:

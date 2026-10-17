@@ -36,6 +36,7 @@ class DummySampleTablet(Datatablet):
     @dataclass
     class VAR(Datatablet.VAR):
         n_samples: int = 10
+        index: int = 0     # its place in its table: two tablets alike in all else are two blocks
 
     def __build__(self):
         specs = {
@@ -65,7 +66,7 @@ class DummySampleTable(Datatable):
     def __tablet__(self, idx: int) -> DummySampleTablet:
         return self.TABLET(
             datalake=self.url,
-            spec=dict(n_samples=self.var.samples_per_tablet),
+            spec=dict(n_samples=self.var.samples_per_tablet, index=idx),
             tag=f"tab_{idx}",
         )
 

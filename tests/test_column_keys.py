@@ -172,6 +172,10 @@ class DeclaredTablet(Datatablet):
     """Declares its dict column by structure, and so writes with no columns passed."""
     TOPICS = {'annotations': DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')}
 
+    @dataclass
+    class VAR(Datatablet.VAR):
+        index: int = 0     # its place in its table: two tablets alike in all else are two blocks
+
     def __build__(self):
         with self.slice_writers() as writers:
             for i in range(3):
@@ -287,6 +291,9 @@ def test_a_table_holds_a_key_to_its_tablets_declaration(tmp_path):
         @property
         def n_tablets(self):
             return 2
+
+        def __tablet__(self, idx, **kw):
+            return super().__tablet__(idx, index=idx, **kw)
 
     table = DeclaredTable(datalake=str(tmp_path))
     with pytest.raises(KeyError, match=r"not \['stage'\]"):

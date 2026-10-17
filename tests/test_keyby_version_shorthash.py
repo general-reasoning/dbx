@@ -142,7 +142,7 @@ def test_a_tag_keyed_narrower_build_is_found_by_its_directory(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# A table's tablets keep their tags in their paths, built and read back alike
+# A table's tablets are filed by hash; those filed under their tags until 2026-10-17 are read there
 # ---------------------------------------------------------------------------
 
 def _tag_keyed(tablet):
@@ -155,24 +155,45 @@ def _hash_filed(tablet):
     return tablet.keyby == 'version_shorthash' and not _keyed(tablet.anchorkeypath, tablet.tag)
 
 
-def test_a_tables_tablets_are_tag_keyed_built_and_read(tmp_path):
+def test_a_tables_tablets_are_hash_filed_built_and_read(tmp_path):
     table = RowsTable(datalake=str(tmp_path), spec={'tablets': [[list(r) for r in t] for t in TABLETS]})
     assert table.keyby == 'version_shorthash'
     formed = [table.__tablet__(i) for i in range(table.n_tablets)]     # as an override's super() forms it
-    assert all(_tag_keyed(t) for t in formed)
+    assert all(_hash_filed(t) for t in formed)
     table.build()
     for i in range(table.n_tablets):
         tablet = table.tablet(i)
-        assert _tag_keyed(tablet) and tablet.tag == f"tab_{i:06d}"
+        assert _hash_filed(tablet) and tablet.tag == f"tab_{i:06d}"
         assert tablet.anchorkeypath == formed[i].anchorkeypath
         assert tablet.valid(), "built where it is read"
+
+
+def test_a_tablet_filed_under_its_tag_is_read_where_it_was_filed_and_not_built_again(tmp_path, monkeypatch):
+    """Until 2026-10-17 a tablet was filed under its tag. Its table, valid as it stands, is read as it is; built, it builds nothing."""
+    from dbx.datatables import Datatablet
+    spec = {'tablets': [[list(r) for r in t] for t in TABLETS]}
+    monkeypatch.setattr(Datatablet, 'KEYBY', OLD)
+    then = RowsTable(datalake=str(tmp_path), spec=spec).build()
+    filed = [then.tablet(i).anchorkeypath for i in range(then.n_tablets)]
+    rows = [then.tablet(i).data() for i in range(then.n_tablets)]
+    assert all(_tag_keyed(then.tablet(i)) for i in range(then.n_tablets))
+    monkeypatch.undo()
+    now = RowsTable(datalake=str(tmp_path), spec=spec)
+    assert now.hash == then.hash and now.valid()
+    for i in range(now.n_tablets):
+        tablet = now.tablet(i)
+        assert _hash_filed(tablet) and tablet.hash == then.tablet(i).hash
+        assert tablet.valid() and str(tablet.data()) == str(rows[i]), "read where its tag filed it"
+        assert os.path.dirname(tablet.path(tablet._toplevel_topics_(tablet.topics())[0])) == filed[i]
+    now.build(deep=True)
+    assert not any(os.path.exists(now.tablet(i).anchorkeypath) for i in range(now.n_tablets)), "built again"
 
 
 def test_a_pickled_or_requoted_table_still_leaves_its_tablets_their_own_keyby(tmp_path):
     """A table spells its keyby once round-tripped; it is still the default, so it is handed to no tablet."""
     table = RowsTable(datalake=str(tmp_path), spec={'tablets': [[list(r) for r in t] for t in TABLETS]}).build()
     for again in (pickle.loads(pickle.dumps(table)), dbx.eval(table.quote()), table.set(verbose=True)):
-        assert all(_tag_keyed(again.tablet(i)) and again.tablet(i).valid() for i in range(again.n_tablets))
+        assert all(_hash_filed(again.tablet(i)) and again.tablet(i).valid() for i in range(again.n_tablets))
 
 
 def test_an_explicit_keyby_on_a_table_is_handed_to_its_tablets(tmp_path):
@@ -187,7 +208,7 @@ def test_an_explicit_keyby_on_a_table_is_handed_to_its_tablets(tmp_path):
 
 @pytest.mark.parametrize('coalesce', [None, 'pack'])
 def test_a_parts_pieces_and_packed_tablets_are_hash_filed_built_and_read(tmp_path, coalesce):
-    """A mapped tablet -- a piece, a packed tablet -- is filed by its hash; a whole tablet is its table's own."""
+    """A mapped tablet -- a piece, a packed tablet -- and a whole tablet, its table's own, are filed by their hashes."""
     table = RowsTable(datalake=str(tmp_path), spec={'tablets': [[list(r) for r in t] for t in TABLETS]}).build()
     spec = {'coalesce': 'pack', 'min_tablet_rows': 3, 'max_tablet_rows': 4} if coalesce else {}
     partition = split(tmp_path, table, **spec)
@@ -196,8 +217,7 @@ def test_a_parts_pieces_and_packed_tablets_are_hash_filed_built_and_read(tmp_pat
         for i in range(part.n_tablets):
             tablet = part.tablet(i)
             kinds.add(type(tablet).__name__)
-            filed = _hash_filed if type(tablet).__name__ == 'MappedDatatablet' else _tag_keyed
-            assert filed(tablet) and tablet.valid(), (type(tablet).__name__, tablet.anchorkeypath)
+            assert _hash_filed(tablet) and tablet.valid(), (type(tablet).__name__, tablet.anchorkeypath)
     assert 'MappedDatatablet' in kinds
 
 

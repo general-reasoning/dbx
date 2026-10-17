@@ -979,13 +979,13 @@ class TestValidTabletAndSentinels:
         assert tbl.find_tablets(signature="base=3", tag="sample_tag_1") == [1]
         assert tbl.find_tablets(signature="base=0", tag="sample_tag_1") == []
 
-        # Test path matching
+        # Test path matching -- a tablet is filed by its hash, its tag in no path
         assert tbl.find_tablets(path="note.txt") == [0, 1, 2, 3]
-        assert tbl.find_tablets(path="sample_tag_1") == [1]
-        assert tbl.find_tablets(path=("sample_tag_2", "letters")) == [2]
-        assert tbl.find_tablets(path=["tab_000000", "tab_000003"]) == [0, 3]
-        assert tbl.find_tablets(signature="base=3", path="sample_tag_1") == [1]
-        assert tbl.find_tablets(signature="base=0", path="sample_tag_1") == []
+        assert tbl.find_tablets(path=tbl.tablet(1).hash[:8]) == [1]
+        assert tbl.find_tablets(path=(tbl.tablet(2).hash[:8], "letters")) == [2]
+        assert tbl.find_tablets(path=[tbl.tablet(0).hash[:8], tbl.tablet(3).hash[:8]]) == [0, 3]
+        assert tbl.find_tablets(signature="base=3", path=tbl.tablet(1).hash[:8]) == [1]
+        assert tbl.find_tablets(signature="base=0", path=tbl.tablet(1).hash[:8]) == []
 
         # No match
         assert tbl.find_tablets("nonexistent") == []

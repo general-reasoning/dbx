@@ -780,11 +780,6 @@ class PartitionDatamapTablet(Datatablet):
 
     TOPICS = {'lot': DATASLICE(tab='int', rows='ndarray:int64', whole='int')}
     SPECIALIZATIONS = []
-    #: Filed by its hash alone, as a block is, not under its tag as a tablet is: maps arrived on
-    #: 2026-10-16 with no tablets built under tags to be found, and its tag is then free to say
-    #: whose lot it is -- ``<map's tag>:<i>``. Those built under ``map<hash>_<i>`` until
-    #: 2026-10-17 are rebuilt, a lot read off the partition each.
-    KEYBY = 'version_shorthash'
     TREE_SKIP_BUILDING = ('datamap',)
     TREE_SKIP_VALIDATION = ('datamap',)
 
@@ -800,6 +795,10 @@ class PartitionDatamapTablet(Datatablet):
         if not isinstance(self.var.datamap, PartitionDatamapTable):
             raise ValueError(f"{type(self).__name__}: VAR.datamap must be a PartitionDatamapTable, "
                              f"got {type(self.var.datamap).__name__}")
+
+    def _tags_filed_under_(self) -> list[str]:
+        """``map<hash>_<i>``: the tag a map tablet was filed under until 2026-10-17 -- see `Datatablet._redirected_paths_`."""
+        return [f"map{self.var.datamap.hash[:8]}_{int(self.var.index):06d}"]
 
     def __build__(self):
         datamap = self.var.datamap
@@ -962,10 +961,6 @@ class MappedDatatablet(Datatablet):
     """
 
     SPECIALIZATIONS = []
-    #: Filed by its hash, as a block is, and tagged ``<its table's tag>:<i>``: until 2026-10-17 it
-    #: was filed under its tag, its partition's `tag_of` -- ``core<hash>_f<k>_<i>``, a piece's, a
-    #: pack's -- and its pullback gives each tablet the specialization that reaches it there.
-    KEYBY = 'version_shorthash'
 
     #: Whether it writes ``source``: a layered copy writes it once, at the bottom -- see `MappedFeaturetablet`.
     WRITES_SOURCE = True
@@ -982,6 +977,11 @@ class MappedDatatablet(Datatablet):
         super().__post_init__()
         if not isinstance(self.var.map, PartitionDatamapTablet):
             raise ValueError(f"{type(self).__name__}: VAR.map must be a PartitionDatamapTablet, got {type(self.var.map).__name__}")
+
+    def _tags_filed_under_(self) -> list[str]:
+        """Its partition's `tag_of` it: the tag a mapped tablet was filed under until 2026-10-17 -- see `Datatablet._redirected_paths_`."""
+        lot = self.var.map
+        return [lot.var.datamap.tag_of(lot.var.index)]
 
     def __build__(self):
         what = type(self).__name__
@@ -1265,9 +1265,6 @@ class MappedDatatable(Datatable):
             verbose=False,
             tag=f"{self.tag}:{int(idx):06d}" if self.tag else self.datamap.tag_of(idx),
             spec=spec,
-            SPECIALIZATIONS=[*(cls.SPECIALIZATIONS or []), cls.Specialization(
-                spec={}, topics=SAME, tag=self.datamap.tag_of(idx),
-                note="this very tablet, filed under its partition's tag for it until 2026-10-17")],
         )
 
     def valid_tablet(self, idx: int, validation: str | None = None) -> bool:
@@ -1900,7 +1897,7 @@ class DatatableClusterCorePartition(DatatablePartition):
         return None
 
     def tag_of(self, part: int | str, idx: int) -> str:
-        """``core<hash>_f<k>_<i>``: the tag a mapped tablet was filed under until 2026-10-17 -- see `MappedDatatablet.KEYBY`."""
+        """``core<hash>_f<k>_<i>``: the tag a mapped tablet was filed under until 2026-10-17 -- see `Datatablet._redirected_paths_`."""
         return f"core{self.hash[:8]}_f{int(part)}_{int(idx):06d}"
 
     def partitioned(self) -> bool:

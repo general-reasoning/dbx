@@ -7842,7 +7842,8 @@ class InvalidBlocksError(RuntimeError):
                 else:
                     kind, why = block._invalidity_(validation)
                 kinds.add(kind)
-                lines.append(f"  block {i}: {block.anchorkeypath}: {why}")
+                named = f" [{shown_tag(block.tag)}]" if getattr(block, "tag", None) else ""
+                lines.append(f"  block {i}{named}: {block.anchorkeypath}: {why}")
             except Exception as e:
                 lines.append(f"  block {i}: cannot say why: {type(e).__name__}: {e}")
         if k > self.SHOWN:
@@ -8509,6 +8510,25 @@ class Datastack(Datablock):
             raise InvalidBlocksError(self, list(failed), validation=self._validation_(validation), reasons=failed)
         return specializations
 
+    def _refuse_one_path_for_two_blocks_(self, paths) -> None:
+        """Raise when two of its blocks are filed at one path -- the same hash -- before either is built.
+
+        A block is filed by its hash. Two blocks alike in everything their identity holds are one
+        block, built and read at one path: a table whose tablets differ only in their tags -- once
+        filed apart by them -- would read one tablet's data for both. Said here, with the indices.
+        """
+        first, twice = {}, []
+        for i, p in enumerate(paths):
+            if p in first:
+                twice.append((first[p], i))
+            else:
+                first[p] = i
+        if twice:
+            raise ValueError(
+                f"{self.anchorkeypath}: blocks {twice[:5]}{' ...' if len(twice) > 5 else ''} are filed at one "
+                f"path each pair -- the same hash, nothing in their identity telling them apart -- and would "
+                f"be built and read as one: give each block what tells it apart, its index say, in its spec")
+
     def _adopt_block_specializations_(self, parallelization: str | None = None,
                                       n_workers: int | None = None, journal=None,
                                       validation: str | None = None, **kwargs):
@@ -8537,6 +8557,8 @@ class Datastack(Datablock):
 
         valid, paths = self._check_blocks_(validation, parallelization=parallelization, n_workers=n_workers)
         invalid = list(valid[~valid].index)
+        if invalid and paths:
+            self._refuse_one_path_for_two_blocks_(paths)
         if not invalid:
             self.log.info(f"{self.anchorkeypath}: all {n} {item_label} already valid")
             return pd.Series([None] * n, dtype=object), [], {}, paths

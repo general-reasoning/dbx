@@ -44,6 +44,7 @@ class Samples(Datatablet):
     @dataclass
     class VAR(Datatablet.VAR):
         n: int = 4
+        index: int = 0     # its place in its table: two tablets alike in all else are two blocks
 
     def __build__(self):
         columns = {'a': {'idx': 'int', 'x': 'int'}, 'b': {'idx': 'int', 'y': 'int'}}
@@ -60,6 +61,9 @@ class SampleTable(Datatable):
     @property
     def n_tablets(self):
         return 2
+
+    def __tablet__(self, idx, **kw):
+        return super().__tablet__(idx, index=idx, **kw)
 
 
 class Derived(Layered, Datatablet):

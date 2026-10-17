@@ -5,16 +5,23 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
-- **`Specialization(tag=...)`: a past filed under a tag.** A block keyed by tag -- a
-  tablet, until now -- is looked for under its tag; a specialization naming the tag
-  its past was filed under reaches the same identity there, as `anchor` does for a
-  renamed class.
-- **Map tablets and mapped tablets are filed by their hash, and tagged by their
-  table: `<table's tag>:<i>`.** No tag in their paths. A mapped tablet filed under its
-  partition's `tag_of` until 2026-10-17 -- a cluster core's `core<hash>_f<k>_<i>`, a
-  piece's, a pack's -- is reached there by such a specialization, not copied again;
-  a map tablet filed under `map<hash>_<i>` is rebuilt, a lot each. A pullback layer
-  not tagged otherwise is tagged `<its table's tag> along <its map's tag>`.
+- **Every tablet is filed by its hash, and tagged by its table: no tag in any path.**
+  `Datatablet.KEYBY` is `version_shorthash`, as every block's. A tablet filed under its
+  tag until 2026-10-17 -- hundreds of thousands, in tables valid as they stand -- is
+  read where it was filed, its own redirection there followed: a tablet not built where
+  it is filed now, nor redirected, looks where its tag filed it (`_tags_filed_under_`:
+  its tag; a mapped tablet's, its partition's `tag_of`; a map tablet's,
+  `map<hash>_<i>`). Nothing is built again. A map tablet and a mapped tablet are tagged
+  `<table's tag>:<i>`; a part's map `<partition's tag>:part<k>`; a pullback layer not
+  tagged otherwise `<its table's tag> along <its map's tag>`.
+- **Two blocks of a stack at one path are refused before either is built.** Filed by
+  hash, tablets that differ only in their tags -- nothing in their identity telling
+  them apart -- would be built and read as one; a stack's build raises, naming them.
+  Give each what tells it apart, its index say, in its spec. An error naming invalid
+  blocks names each by its tag.
+- **`Specialization(tag=...)`: a past filed under a tag** -- a block keyed by tag is
+  looked for under its tag, and this names the tag its past was filed under, as
+  `anchor` does a renamed class.
 - **Log names show a tag without its entrypoint's module** (`shown_tag`): `f:NAME`
   for `pkg.mod.f:NAME`. The tag itself, the journals and the paths keep it whole.
 - **`BUILD ELIDED` is a VERBOSE line.**

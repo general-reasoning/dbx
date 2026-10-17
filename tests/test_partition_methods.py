@@ -585,7 +585,7 @@ def test_a_probe_says_a_piece_is_not_built_before_it_starts(tmp_path):
     i = next(i for i, e in enumerate(fit.datamap.entries) if isinstance(e, dict))
     fit.UNSAFE_clear_blocks('meta', indices=[i], clear_done=False, OVERRIDE=True)
     with pytest.raises(InvalidBlocksError, match=rf"(?s)reading \['x', 'meta'\] from its tablets; a pullback's copies "
-                                                 rf"are built by it: build_tree\(\).*block {i}:"):
+                                                 rf"are built by it: build_tree\(\).*block {i}\b"):
         probe(tmp_path / 'probe', fit, ev).build()
 
 

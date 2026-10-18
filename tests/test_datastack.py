@@ -891,7 +891,7 @@ class TestAnchorOnTheClass:
         class Anchored(CounterBlock):
             ANCHOR = 'lake.anchored2'
         Anchored(datalake=str(tmp_path), spec=dict(idx=0)).build()
-        assert len(dbx.datajournal(Anchored, datalake=str(tmp_path))) == 1
+        assert len(dbx.datajournal(Anchored, datalake=str(tmp_path), event='build:end')) == 1
 
     def test_a_stack_finds_its_blocks_journal_from_BLOCK_alone(self, tmp_path):
         class S(Datastack):

@@ -89,8 +89,8 @@ class TestTheCodeIsRecorded:
         for x in (1, 2, 3):
             block(tmp_path, x=x).build()
         codes = list(block(tmp_path).datajournal()['id'])
-        assert len(codes) == 3
-        assert len(set(codes)) == 3
+        assert len(codes) == 6, "a build:start and a build:end each"
+        assert len(set(codes)) == 6
 
 
 class TestDistinctFromTheTree:
@@ -102,11 +102,9 @@ class TestDistinctFromTheTree:
         assert code != b.tree
 
     def test_one_instance_two_entries_share_a_tree_but_not_a_code(self, tmp_path):
-        """Distinct journal_prefix values, so both entries survive -- an
-        instance otherwise overwrites its own file."""
         b = block(tmp_path)
-        first = b.write_journal_entry(event='one', journal_prefix='a-')
-        second = b.write_journal_entry(event='two', journal_prefix='b-')
+        first = b.write_journal_entry(event='one')
+        second = b.write_journal_entry(event='two')
         journal = block(tmp_path).datajournal()
         assert len(journal) == 2
         assert set(journal['id']) == {first, second}
@@ -127,25 +125,27 @@ class TestDistinctFromTheTree:
         assert block(tmp_path, tree='A').hash == block(tmp_path, tree='B').hash
 
 
-class TestOverwriteWithinOneInstance:
-    """A journal file is per instance, so rewriting replaces the row."""
+class TestEveryWriteKeepsItsEntry:
+    """A journal file is per entry, named by its id: nothing an instance writes replaces what it wrote."""
 
-    def test_a_second_write_replaces_the_first(self, tmp_path):
+    def test_a_second_write_keeps_the_first(self, tmp_path):
         b = block(tmp_path)
         first = b.write_journal_entry(event='one')
         second = b.write_journal_entry(event='two')
         journal = block(tmp_path).datajournal()
-        assert len(journal) == 1
-        assert list(journal['id']) == [second]
-        assert first not in set(journal['id'])
+        assert len(journal) == 2
+        assert set(journal['id']) == {first, second}
+        assert block(tmp_path).datajournal(id=first, loc=0).get('event') == 'one'
 
-    def test_build_leaves_the_end_entry_not_the_start(self, tmp_path):
-        """build() writes build:start then build:end from one instance, so the
-        start is overwritten -- which is why a code resolves only until its
-        instance writes again."""
+    def test_build_leaves_its_start_and_its_end(self, tmp_path):
         b = block(tmp_path)
         b.build()
-        assert list(block(tmp_path).datajournal()['event']) == ['build:end']
+        assert sorted(block(tmp_path).datajournal()['event']) == ['build:end', 'build:start']
+
+    def test_an_entry_is_filed_by_its_id(self, tmp_path):
+        b = block(tmp_path)
+        code = b.write_journal_entry(event='note')
+        assert block(tmp_path).datajournal(id=code, loc=0)['entry_path'].endswith(f'-{code}.parquet')
 
 
 class TestLegacyJournals:

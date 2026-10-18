@@ -240,7 +240,8 @@ wrote, open one around it:
 ```python
 with DataJournal() as dj:      # reads nothing; dj.session is fixed for its lifetime
     run_pipeline()             # every block it builds, however deep, and on dbx executors' workers
-dj.written_entries()           # every entry path written under dj.session
+dj.written_entries()           # a reference to every entry written under dj.session
+DataJournal.read_refs(dj.written_entries())                # those entries, wherever they are filed now
 DataJournal.read('my.module.MyBlock', event='build:end')   # read any anchor's journal
 ```
 

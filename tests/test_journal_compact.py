@@ -58,19 +58,19 @@ def test_compact_rewrites_an_anchors_entries_as_one_file(lake):
         Leaf(spec={'n': n}).note(f'noted {n}')
     Other().build()
     before = DataJournal.read(Leaf().anchor, datalake=lake)
-    assert len(_entry_files(lake, Leaf().anchor)) == 8
+    assert len(_entry_files(lake, Leaf().anchor)) == 12, "each build's start and end, and each note"
 
     dry = DataJournal.UNSAFE_compact([Leaf().anchor], dry_run=True)
-    assert len(_entry_files(lake, Leaf().anchor)) == 8 and dry['removed'].tolist() == [8]
+    assert len(_entry_files(lake, Leaf().anchor)) == 12 and dry['removed'].tolist() == [12]
 
     frame = DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
     (row,) = frame.to_dict('records')
-    assert (row['entries'], row['removed'], row['kept']) == (8, 8, 0)
+    assert (row['entries'], row['removed'], row['kept']) == (12, 12, 0)
     files = _entry_files(lake, Leaf().anchor)
     assert files == [os.path.join(lake, Leaf().anchor, DataJournal.COMPACTED.format(anchor=Leaf().anchor))]
     after = DataJournal.read(Leaf().anchor, datalake=lake)
     assert _rows(after) == _rows(before), "every entry, as it was"
-    assert len(_entry_files(lake, Other().anchor)) == 1, "another anchor is not touched"
+    assert len(_entry_files(lake, Other().anchor)) == 2, "another anchor is not touched: its build's start and end"
     assert Leaf(spec={'n': 2}).lastbuilt() is not None
 
 
@@ -78,11 +78,11 @@ def test_entries_written_after_are_compacted_with_the_compacted_ones(lake):
     Leaf(spec={'n': 1}).build()
     DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
     Leaf(spec={'n': 2}).build()
-    assert len(DataJournal.read(Leaf().anchor, datalake=lake)) == 2
-    assert len(_entry_files(lake, Leaf().anchor)) == 2
+    assert len(DataJournal.read(Leaf().anchor, datalake=lake)) == 4
+    assert len(_entry_files(lake, Leaf().anchor)) == 3, "the compacted file, and the second build's two"
     frame = DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
-    assert frame['entries'].tolist() == [2] and len(_entry_files(lake, Leaf().anchor)) == 1
-    assert len(DataJournal.read(Leaf().anchor, datalake=lake)) == 2
+    assert frame['entries'].tolist() == [4] and len(_entry_files(lake, Leaf().anchor)) == 1
+    assert len(DataJournal.read(Leaf().anchor, datalake=lake)) == 4
 
 
 def test_the_anchors_default_to_every_anchor(lake):
@@ -92,15 +92,17 @@ def test_the_anchors_default_to_every_anchor(lake):
     assert sorted(frame['anchor']) == sorted(dbx.anchors(lake))
 
 
-def test_redirections_are_left_where_they_are(lake):
+def test_a_redirection_is_compacted_and_still_found(lake):
+    """An entry recording a redirection is compacted like any other: a block finds its own by hash."""
     src, dst = Leaf(spec={'n': 1}), Leaf(spec={'n': 2})
     src.build()
     dst.UNSAFE_redirect(paths=src.paths(), OVERRIDE=True)
     assert dst.redirected()
     frame = DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
-    assert frame['kept'].tolist() == [1]
+    assert frame['kept'].tolist() == [0]
     again = Leaf(spec={'n': 2})
     assert again.redirected() and again.path('x') == src.path('x')
+    assert again.get_redirection() is not None
 
 
 def test_read_hash_reads_a_compacted_journal(lake):
@@ -159,7 +161,7 @@ def test_compact_asks_first(lake, monkeypatch):
     Leaf().build()
     monkeypatch.setattr('builtins.input', lambda prompt: 'n')
     assert DataJournal.UNSAFE_compact([Leaf().anchor]) is None
-    assert len(_entry_files(lake, Leaf().anchor)) == 1
+    assert len(_entry_files(lake, Leaf().anchor)) == 2, "the build's start and end, as they were"
 
 
 def test_a_compacted_entrypoint_still_counts_as_constructed(lake):

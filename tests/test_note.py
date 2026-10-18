@@ -83,59 +83,20 @@ class TestNoteDataJournalEntry:
         assert len(rows) == 1
 
 
-class TestNoteParquetPrefix:
-    """note() should produce a parquet file prefixed with '{event}-'."""
+class TestNoteKeepsItsEntry:
+    """A note is an entry of its own, filed by its id: no later write of the instance replaces it."""
 
-    def test_parquet_filename_starts_with_event(self, tmp_path):
+    def test_two_notes_and_a_build_all_kept(self, tmp_path):
         b = _make(tmp_path)
         b.note("hello", event="flag")
-        dbx_dir = str(tmp_path)
-        all_parquets = []
-        for root, dirs, files in os.walk(dbx_dir):
-            if os.path.basename(root) != b.hash:
-                continue
-            parent = os.path.basename(os.path.dirname(root))
-            if parent != 'journal':
-                continue
-            for f in files:
-                if f.endswith('.parquet'):
-                    all_parquets.append(f)
-        flag_parquets = [f for f in all_parquets if f.startswith('flag-')]
-        assert len(flag_parquets) >= 1, f"Expected flag- prefixed parquets, got: {all_parquets}"
-
-    def test_default_event_prefix_is_note(self, tmp_path):
-        b = _make(tmp_path)
         b.note("saved")
-        dbx_dir = str(tmp_path)
-        all_parquets = []
-        for root, dirs, files in os.walk(dbx_dir):
-            if os.path.basename(root) != b.hash:
-                continue
-            parent = os.path.basename(os.path.dirname(root))
-            if parent != 'journal':
-                continue
-            for f in files:
-                if f.endswith('.parquet'):
-                    all_parquets.append(f)
-        note_parquets = [f for f in all_parquets if f.startswith('note-')]
-        assert len(note_parquets) >= 1, f"Expected note- prefixed parquets, got: {all_parquets}"
+        assert sorted(b.datajournal()['event']) == ['flag', 'note']
 
-    def test_custom_event_prefix(self, tmp_path):
+    def test_filed_by_its_id(self, tmp_path):
         b = _make(tmp_path)
         b.note("saved", event="checkpoint")
-        dbx_dir = str(tmp_path)
-        all_parquets = []
-        for root, dirs, files in os.walk(dbx_dir):
-            if os.path.basename(root) != b.hash:
-                continue
-            parent = os.path.basename(os.path.dirname(root))
-            if parent != 'journal':
-                continue
-            for f in files:
-                if f.endswith('.parquet'):
-                    all_parquets.append(f)
-        cp_parquets = [f for f in all_parquets if f.startswith('checkpoint-')]
-        assert len(cp_parquets) >= 1, f"Expected checkpoint- prefixed parquets, got: {all_parquets}"
+        entry = b.datajournal(event='checkpoint', iloc=0)
+        assert entry['entry_path'].endswith(f"-{entry['id']}.parquet")
 
 
 class TestNoteMessageNotInline:

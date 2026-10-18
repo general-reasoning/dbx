@@ -135,7 +135,7 @@ dbx.execjournal(date='2026-09-28').constructed()      # {anchor: DataJournalFram
 | call | returns |
 |---|---|
 | `e.dataentries()` | Python **list** of `DataJournalEntry`, one per entry written under the command's session, in the order written |
-| `e.datajournal()` | `DataJournalFrame` of the **same records**, one row each: row *i* is `e.dataentries()[i]`, numbered 0..N-1, plus an `entry_path` column naming the file each row was read from |
+| `e.datajournal()` | `DataJournalFrame` of the **same records**, one row each: row *i* is `e.dataentries()[i]`, numbered 0..N-1, plus an `entry_path` column naming the file each row was read from -- its own, or its anchor's compacted journal. The command found them by reference, `(anchor, hash, id)`, not by that path |
 | `e.anchors()` | sorted list of the anchors the command wrote entries for |
 | `e.constructed()` | `{anchor: DataJournalFrame}` of what the command **constructed**, for every anchor that has any |
 | `e.constructed(anchor)` | that one anchor's `DataJournalFrame` |

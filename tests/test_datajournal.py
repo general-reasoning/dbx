@@ -3,10 +3,11 @@
 
 Constructing one touches no storage; ``read()`` reads, ``write()`` writes. A
 handle has a ``session`` fixed for its lifetime and written to every entry,
-and remembers every entry path it wrote (``written_entries()``).
+and remembers a reference to every entry it wrote (``written_entries()``).
 """
 import copy
 import functools
+import json
 import os
 import pickle
 import time
@@ -41,6 +42,16 @@ def block(tmp_path, x=1, **kwargs):
     return Built(datalake=str(tmp_path), spec={'x': x}, **kwargs)
 
 
+def ids(refs):
+    """The entry ids *refs* -- `DataJournal.entry_ref`s -- name, in order."""
+    return [json.loads(r)['id'] for r in refs]
+
+
+def written_order(b, **filters):
+    """The ids of *b*'s anchor's entries, oldest first: the order they were written."""
+    return list(b.datajournal(**filters).sort_values('datetime')['id'])
+
+
 class Stack(Datastack):
     BLOCK = Built
     TOPICS = {'meta': 'meta.txt'}
@@ -70,7 +81,7 @@ class TestReadingIsAQuery:
         b = block(tmp_path)
         b.build()
         frame = DataJournal.read(b.anchor, datalake=str(tmp_path))
-        assert isinstance(frame, DataJournalFrame) and len(frame) == 1
+        assert isinstance(frame, DataJournalFrame) and sorted(frame['event']) == ['build:end', 'build:start']
         assert isinstance(DataJournal.read(b.anchor, loc=0, datalake=str(tmp_path)), DataJournalEntry)
 
     def test_a_block_reads_under_its_own_datalake(self, tmp_path, monkeypatch):
@@ -78,7 +89,7 @@ class TestReadingIsAQuery:
         monkeypatch.setenv('DBX_ROOT', str(tmp_path / 'elsewhere'))
         b = block(tmp_path / 'lake')
         b.build()
-        assert len(b.datajournal()) == 1
+        assert len(b.datajournal(event='build:end')) == 1
 
 
 class TestABlockHasNoJournalOfItsOwn:
@@ -148,8 +159,8 @@ class TestSession:
     def test_written_to_every_entry(self, tmp_path):
         with DataJournal() as dj:
             b = block(tmp_path)
-            b.write_journal_entry(event='note', journal_prefix='a-')
-            b.write_journal_entry(event='note', journal_prefix='b-')
+            b.write_journal_entry(event='note')
+            b.write_journal_entry(event='note')
         j = b.datajournal()
         assert list(j['session']) == [dj.session] * 2
         assert b.datajournal(loc=0).block.session == dj.session
@@ -161,9 +172,9 @@ class TestSession:
         assert (entry.tree, entry.session) == ('TREE', dj.session)
 
     def test_survives_pickling(self):
-        """The session crosses; the written paths are the copy's own to collect."""
+        """The session crosses; the written entries are the copy's own to collect."""
         with DataJournal() as dj:
-            dj._record_('/some/entry.parquet')
+            dj._record_(json.dumps({'anchor': 'a.B', 'hash': 'h', 'id': 'i'}))
         again = pickle.loads(pickle.dumps(dj))
         assert again.session == dj.session and again.written_entries() == []
 
@@ -172,20 +183,27 @@ class TestSession:
             block(tmp_path, x=1).build()
         with DataJournal():
             block(tmp_path, x=2).build()
-        assert len(block(tmp_path).datajournal(session=mine.session)) == 1
+        assert len(block(tmp_path).datajournal(session=mine.session, event='build:end')) == 1
 
 
 class TestWrittenEntries:
 
-    def test_every_entry_path_once_in_write_order(self, tmp_path):
+    def test_every_entry_once_in_write_order(self, tmp_path):
         with DataJournal() as dj:
             b = block(tmp_path)
-            b.write_journal_entry(event='note', journal_prefix='a-')
-            b.write_journal_entry(event='note', journal_prefix='b-')
-            b.write_journal_entry(event='note', journal_prefix='a-')   # rewrites a-
-        paths = dj.written_entries()
-        assert [os.path.basename(p)[:2] for p in paths] == ['a-', 'b-']
-        assert all(os.path.exists(p) for p in paths)
+            written = [b.write_journal_entry(event=e) for e in ('one', 'two', 'three')]
+        refs = dj.written_entries()
+        assert ids(refs) == written
+        assert all(json.loads(r)['hash'] == b.hash and json.loads(r)['anchor'] == b.anchor for r in refs)
+
+    def test_read_back_by_reference_wherever_filed(self, tmp_path):
+        """The references find the entries in their own files, and compacted too."""
+        with DataJournal() as dj:
+            b = block(tmp_path)
+            b.build()
+        assert list(DataJournal.read_refs(dj.written_entries())['event']) == ['build:start', 'build:end']
+        DataJournal.UNSAFE_compact([b.anchor], datalake=str(tmp_path), OVERRIDE=True)
+        assert list(DataJournal.read_refs(dj.written_entries())['event']) == ['build:start', 'build:end']
 
     def test_only_this_handles(self, tmp_path):
         dj = DataJournal()
@@ -204,7 +222,7 @@ class TestLegacySessionColumn:
         with DataJournal() as dj:
             b = block(tmp_path, tree='NEW-TREE')
             b.write_journal_entry(event='note')
-        new_path = b.datajournal(loc=0)['entry_path']
+        new_path = b.datajournal(iloc=0)['entry_path']
         old = pd.read_parquet(new_path).drop(columns=['tree', 'session', 'id'])
         old['session'] = 'OLD-TREE'
         old['datetime'] = '2020-01-01T00-00-00.000000'
@@ -225,7 +243,7 @@ class TestWithScope:
             b = block(tmp_path)
             b.build()
         assert DataJournal.current() is DEFAULT_DATAJOURNAL
-        assert dj.written_entries() == [b.datajournal(loc=0)['entry_path']]
+        assert ids(dj.written_entries()) == written_order(b)
 
     def test_decided_when_it_writes_not_when_it_was_made(self, tmp_path):
         """Built after the inner ``with`` closed: the next one out, and nothing to the closed one."""
@@ -234,7 +252,7 @@ class TestWithScope:
                 b = block(tmp_path)
             b.build()
         assert inner.written_entries() == []
-        assert outer.written_entries() == [b.datajournal(loc=0)['entry_path']]
+        assert ids(outer.written_entries()) == written_order(b)
 
     def test_with_none_left_the_default(self, tmp_path):
         with DataJournal() as dj:
@@ -306,9 +324,9 @@ class TestExec:
         assert session != DEFAULT_DATAJOURNAL.session
         # The command is over, so its scope is closed and they write elsewhere now.
         assert DataJournal.current() is DEFAULT_DATAJOURNAL
-        entries = [blk.datajournal(hash=blk.hash, loc=0) for blk in (a, b)]
-        assert sorted(row['datajournal_entries']) == sorted(e['entry_path'] for e in entries)
-        assert {e.block.session for e in entries} == {session}
+        written = [blk.datajournal(hash=blk.hash) for blk in (a, b)]
+        assert sorted(ids(row['datajournal_entries'])) == sorted(i for j in written for i in j['id'])
+        assert {s for j in written for s in j['session']} == {session}
 
     def test_a_block_constructed_deep_inside_is_covered(self, tmp_path):
         def pipeline():
@@ -316,12 +334,12 @@ class TestExec:
             blk.build()
             return None
         dbx.exec("pipeline()", pipeline=pipeline)
-        assert len(self._row(tmp_path)['datajournal_entries']) == 1
+        assert len(self._row(tmp_path)['datajournal_entries']) == 2, "its build's start and end"
 
     def test_a_failing_command_still_records_what_it_wrote(self, tmp_path):
         with pytest.raises(ZeroDivisionError):
             dbx.exec("Built(datalake=root, spec={'x': 1}).build(); 1/0", Built=Built, root=str(tmp_path))
-        assert len(self._row(tmp_path)['datajournal_entries']) == 1
+        assert len(self._row(tmp_path)['datajournal_entries']) == 2, "its build's start and end"
 
     def test_one_row_written_when_the_command_is_over(self, tmp_path):
         from dbx.databits import read_exec_journal
@@ -371,15 +389,16 @@ class TestExecJournal:
         a, b = self._run(tmp_path)
         entries = dbx.journal(iloc=0).dataentries()
         assert all(isinstance(e, DataJournalEntry) for e in entries)
-        assert [e.block.hash for e in entries] == [a.hash, b.hash]
-        assert [e.block.typestr() for e in entries] == [a.typestr(), b.typestr()]
+        assert [(e.block.hash, e['event']) for e in entries] == [
+            (a.hash, 'build:start'), (a.hash, 'build:end'), (b.hash, 'build:start'), (b.hash, 'build:end')]
+        assert [e.block.typestr() for e in entries] == [a.typestr()] * 2 + [b.typestr()] * 2
 
     def test_a_filter_then_entries(self, tmp_path):
         self._run(tmp_path)
         dbx.exec("Built(datalake=root, spec={'x': 9}).build()  # other", Built=Built, root=str(tmp_path))
         row_id = dbx.journal(comment='two', iloc=0)['id']
-        assert len(dbx.journal(id=row_id).dataentries()) == 2
-        assert len(dbx.journal().dataentries()) == 3
+        assert len(dbx.journal(id=row_id).dataentries()) == 4
+        assert len(dbx.journal().dataentries()) == 6
 
     def test_a_command_that_wrote_nothing(self, tmp_path):
         dbx.exec("1 + 1")
@@ -576,7 +595,7 @@ class TestExecJournalShape:
         dbx.exec("2 + 2")
         rows = dbx.journal(index=None)
         assert 'written_entries' not in rows.columns
-        assert [len(v) for v in rows['datajournal_entries']] == [0, 1]
+        assert [len(v) for v in rows['datajournal_entries']] == [0, 2]
 
     def test_datajournal_is_a_frame_of_what_it_wrote(self, tmp_path):
         a, b = dbx.exec("a = Built(datalake=root, spec={'x': 1}); b = Built(datalake=root, spec={'x': 2}); "
@@ -584,9 +603,9 @@ class TestExecJournalShape:
         entry = dbx.journal(iloc=0)
         frame = entry.datajournal()
         assert isinstance(frame, DataJournalFrame)
-        assert list(frame['hash']) == [a.hash, b.hash]
-        assert list(frame['entry_path']) == [e['entry_path'] for e in entry.dataentries()]
-        assert list(dbx.journal().datajournal()['hash']) == [a.hash, b.hash]
+        assert list(frame['hash']) == [a.hash, a.hash, b.hash, b.hash]
+        assert list(frame['id']) == [e['id'] for e in entry.dataentries()]
+        assert list(dbx.journal().datajournal()['hash']) == [a.hash, a.hash, b.hash, b.hash]
 
     def test_a_command_that_wrote_nothing_has_an_empty_frame(self, tmp_path):
         dbx.exec("1 + 1")
@@ -683,15 +702,15 @@ class TestConstructed:
         with pytest.raises(RuntimeError):
             dbx.exec("Other(datalake=root, spec={'fail': True}).build()", Other=Other, root=str(tmp_path))
         entry = dbx.journal(iloc=0)
-        assert len(entry.datajournal()) == 1 and entry.datajournal().iloc[0]['event'] == 'build:exception'
+        assert list(entry.datajournal()['event']) == ['build:start', 'build:exception']
         assert entry.constructed() == {}
 
     def test_other_filters_add_to_the_event_default(self, tmp_path):
         a, b, o = self._run(tmp_path)
         entry = dbx.journal(iloc=0)
         assert list(entry.constructed(a.anchor, hash=f"^{b.hash}")['hash']) == [b.hash]
-        # event=None drops the default: the note is back.
-        assert len(entry.constructed(a.anchor, event=None)) == 3
+        # event=None drops the default: the note is back, and the builds' starts.
+        assert len(entry.constructed(a.anchor, event=None)) == 5
 
     def test_the_events_are_matched_exactly(self):
         from dbx.journals import _constructed_
@@ -727,15 +746,15 @@ class TestExecJournalDataJournalParameters:
         a, o, n = self._run(tmp_path)
         frame = dbx.execjournal(iloc=0).datajournal()
         assert list(frame.index) == list(frame['id'])
-        assert list(dbx.execjournal(iloc=0).datajournal(index=None).index) == [0, 1, 2]
+        assert list(dbx.execjournal(iloc=0).datajournal(index=None).index) == [0, 1, 2, 3, 4]
 
     def test_by_anchor_class_string_or_block(self, tmp_path):
         a, o, n = self._run(tmp_path)
         e = dbx.execjournal(iloc=0)
         for anchor in (Built, Built.anchor, a):
-            assert sorted(e.datajournal(anchor)['hash']) == sorted([a.hash, n.hash])
-        assert list(e.datajournal(Other)['hash']) == [o.hash]
-        assert list(dbx.execjournal().datajournal(Other)['hash']) == [o.hash]
+            assert sorted(e.datajournal(anchor)['hash']) == sorted([a.hash, a.hash, n.hash])
+        assert list(e.datajournal(Other)['hash']) == [o.hash, o.hash]
+        assert list(dbx.execjournal().datajournal(Other)['hash']) == [o.hash, o.hash]
 
     def test_an_anchor_is_exact_not_a_pattern(self, tmp_path):
         self._run(tmp_path)
@@ -847,7 +866,8 @@ class TestAcrossProcesses:
                      Stack=Stack, root=str(tmp_path))
         e = dbx.execjournal(iloc=0)
         frame = e.datajournal()
-        assert sorted(frame['hash']) == sorted([s.hash] + [b.hash for b in s.blocks()])
+        built = frame[frame['event'] == 'build:end']
+        assert sorted(built['hash']) == sorted([s.hash] + [b.hash for b in s.blocks()])
         assert set(frame['session']) == {e['session']}
 
     def test_a_block_that_failed_in_a_worker(self, tmp_path):
@@ -856,10 +876,10 @@ class TestAcrossProcesses:
                      FailingStack=FailingStack, root=str(tmp_path))
         frame = dbx.execjournal(iloc=0).datajournal()
         events = frame[frame['anchor'] == Timed.anchor]['event']
-        # The failed block's own entry, from its worker -- the stack records a
+        # The failed block's own entries, from its worker -- the stack records a
         # build:exception of its own, in this process -- and its sibling's,
         # which succeeded after the failure had stopped the collecting.
-        assert sorted(events) == ['build:end', 'build:exception']
+        assert sorted(events) == ['build:end', 'build:exception', 'build:start', 'build:start']
 
     def test_results_are_the_callables_values(self, tmp_path):
         from dbx.databits import callable_executor
@@ -867,7 +887,7 @@ class TestAcrossProcesses:
             hashes = callable_executor('multiprocessing', n_workers=2).exec_callables(
                 [functools.partial(_built_under_the_scope, i) for i in range(2)])
         assert hashes == [block(tmp_path, x=100 + i).hash for i in range(2)]
-        assert len(dj.written_entries()) == 2
+        assert len(dj.written_entries()) == 4, "each build's start and end"
 
     def test_with_no_scope_open_the_process_default_is_carried(self, tmp_path):
         """The default is the bottom of every stack: a worker writes under the dispatcher's, not its own."""
@@ -877,7 +897,7 @@ class TestAcrossProcesses:
         entry = block(tmp_path, x=100).datajournal(iloc=0)
         assert hashes == [entry.block.hash]
         assert entry.block.session == DEFAULT_DATAJOURNAL.session
-        assert entry['entry_path'] in DEFAULT_DATAJOURNAL.written_entries()
+        assert entry['id'] in ids(DEFAULT_DATAJOURNAL.written_entries())
 
     def test_a_stream_keeps_what_arrived_after_a_failure(self, tmp_path):
         from dbx.databits import callable_executor
@@ -886,7 +906,7 @@ class TestAcrossProcesses:
                 [functools.partial(_fails_after, 3.0), functools.partial(_built_under_the_scope, 0, 6.0)])
             with pytest.raises(RuntimeError, match="boom"):
                 list(stream)
-        assert dj.written_entries() == [block(tmp_path, x=100).datajournal(iloc=0)['entry_path']]
+        assert ids(dj.written_entries()) == written_order(block(tmp_path, x=100))
 
     def test_threads_are_not_wrapped(self):
         from dbx.databits import callable_executor
@@ -940,8 +960,7 @@ class TestSessionIndex:
     def test_a_command_indexes_its_entries(self, tmp_path):
         b = dbx.exec("b = Built(datalake=root, spec={'x': 1}); b.build(); b", Built=Built, root=str(tmp_path))
         row = dbx.execjournal(iloc=0)
-        entry_path = b.datajournal(loc=0)['entry_path']
-        assert DataJournal.session_entries(row['session'], datalake=str(tmp_path)) == [entry_path]
+        assert ids(DataJournal.session_entries(row['session'], datalake=str(tmp_path))) == written_order(b)
 
     def test_nothing_is_indexed_outside_a_command(self, tmp_path):
         block(tmp_path).build()
@@ -953,8 +972,8 @@ class TestSessionIndex:
         dbx.exec("run(\"Child(datalake=os.environ['DBX_ROOT']).build()\")", run=_run_child)
         row = dbx.execjournal(iloc=0)
         frame = row.datajournal()
-        assert list(frame['anchor']) == ['__main__.Child']
-        assert list(frame['session']) == [row['session']]
+        assert list(frame['anchor']) == ['__main__.Child'] * 2
+        assert list(frame['session']) == [row['session']] * 2
 
     def test_a_command_run_in_that_process_joins_the_session(self, tmp_path):
         dbx.exec("run(\"dbx.exec('Child(datalake=os.environ[\\\\'DBX_ROOT\\\\']).build()', Child=Child)\")",
@@ -962,7 +981,7 @@ class TestSessionIndex:
         rows = dbx.execjournal()
         assert rows['session'].nunique() == 1 and len(rows) == 2
         outer = rows[rows['exec'].str.startswith('run(')].iloc[0]
-        assert list(dbx.execjournal(id=outer['id'], iloc=0).datajournal()['anchor']) == ['__main__.Child']
+        assert list(dbx.execjournal(id=outer['id'], iloc=0).datajournal()['anchor']) == ['__main__.Child'] * 2
 
     def test_a_worker_that_never_returned(self, tmp_path):
         from dbx.databits import callable_executor
@@ -972,7 +991,7 @@ class TestSessionIndex:
         row = dbx.execjournal(iloc=0)
         assert list(row['datajournal_entries']) == []           # it never came back
         frame = row.datajournal()                                # but its index did
-        assert list(frame['hash']) == [block(tmp_path, x=107).hash]
+        assert list(frame['hash']) == [block(tmp_path, x=107).hash] * 2
 
     def test_the_environment_is_restored(self):
         from dbx.journals import JOURNAL_DATALAKE_ENV, JOURNAL_SESSION_ENV
@@ -983,7 +1002,25 @@ class TestSessionIndex:
         import shutil
         dbx.exec("Built(datalake=root, spec={'x': 1}).build()", Built=Built, root=str(tmp_path))
         shutil.rmtree(os.path.join(str(tmp_path), '.journal', 'sessions'))
-        assert len(dbx.execjournal(iloc=0).dataentries()) == 1
+        assert len(dbx.execjournal(iloc=0).dataentries()) == 2
+
+    def test_a_row_of_paths_compacted_since(self, tmp_path):
+        """A row from before references names its entries' files: compacted away, they are its session's entries of the block."""
+        import shutil
+        b = dbx.exec("b = Built(datalake=root, spec={'x': 1}); b.build(); b", Built=Built, root=str(tmp_path))
+        row = dbx.execjournal(iloc=0)
+        dbx.exec("Built(datalake=root, spec={'x': 1}).write_journal_entry(event='note')  # not this row's",
+                 Built=Built, root=str(tmp_path))
+        shutil.rmtree(os.path.join(str(tmp_path), '.journal', 'sessions'))
+        exec_dir = os.path.join(str(tmp_path), '.journal', 'exec')
+        [f] = [f for f in os.listdir(exec_dir) if row['id'] in f]
+        old = pd.read_parquet(os.path.join(exec_dir, f))
+        old['datajournal_entries'] = [list(b.datajournal(session=row['session'])['entry_path'])]
+        old.to_parquet(os.path.join(exec_dir, f))
+        DataJournal.UNSAFE_compact([b.anchor], datalake=str(tmp_path), OVERRIDE=True)
+        entries = dbx.execjournal(id=row['id'], iloc=0).dataentries()
+        assert sorted(e['event'] for e in entries) == ['build:end', 'build:start']
+        assert {e['session'] for e in entries} == {row['session']}
 
 
 class TestAPrefixIsEnough:
@@ -1014,7 +1051,7 @@ class TestAPrefixIsEnough:
         assert dbx.datajournal(raw, iloc=0)['id'] == full
 
     def test_not_exactly_one_is_an_error(self, frame, tmp_path):
-        with pytest.raises(KeyError, match='of 2'):
+        with pytest.raises(KeyError, match='of 4'):
             dbx.datajournal(Built, datalake=str(tmp_path), loc='')
         with pytest.raises(KeyError, match='of 0'):
             dbx.datajournal(Built, datalake=str(tmp_path), loc='zzzz')

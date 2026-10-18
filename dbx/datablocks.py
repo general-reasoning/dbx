@@ -3175,7 +3175,6 @@ class Datablock:
             event=event,
             note=note,
             inline_note=inline,
-            journal_prefix=f'{event}-',
         )
         return self
 
@@ -3692,7 +3691,6 @@ class Datablock:
         code = self.write_journal_entry(
             event='UNSAFE_redirect',
             redirection=redirect_record,
-            journal_prefix='redirect-',
         )
 
         if validate:
@@ -3736,7 +3734,7 @@ class Datablock:
         for cached in ('redirection', '__specialization__'):
             self.__dict__.pop(cached, None)
         self.write_journal_entry(event='UNSAFE_clear_redirection',
-                                 redirection={'cleared': True}, journal_prefix='unredirect-')
+                                 redirection={'cleared': True})
         self.log.verbose(f"UNSAFE_clear_redirection: {self.anchorkeypath} "
                          f"{'reads its own data again' if had else 'was not redirected'}")
         return had
@@ -6850,25 +6848,26 @@ class Datablock:
 
 
     def _journal_entry_(self, journal: dict) -> 'DataJournalEntry':
-        selectors = {k: journal[k] for k in ('entry_path', 'iloc', 'loc') if k in journal}
+        selectors = {k: journal[k] for k in ('id', 'iloc', 'loc') if k in journal}
         filters = {k: v for k, v in journal.items() if k not in selectors}
         if len(selectors) != 1:
             raise ValueError(
-                "journal must contain exactly one of 'entry_path', 'iloc', or "
+                "journal must contain exactly one of 'id', 'iloc', or "
                 f"'loc'; got {sorted(selectors)}"
             )
         (key, value), = selectors.items()
-        if key == 'entry_path':
+        if key == 'id':
             if filters:
                 raise ValueError(
-                    f"journal={{'entry_path': ...}} names one file, so the extra "
+                    f"journal={{'id': ...}} names one entry, so the extra "
                     f"filters {sorted(filters)} cannot be applied; drop them or "
                     f"select with 'iloc'/'loc' instead"
                 )
-            fs, _ = fsspec.url_to_fs(value, **(self.storage_options or {}))
-            with fs.open(value, 'rb') as f:
-                _df = pd.read_parquet(f)
-            return DataJournalEntry(_df.iloc[0].dropna(), storage_options=self.storage_options)
+            # By what the entry is -- its id -- wherever it is filed: a file of its own, or compacted.
+            frame = self.datajournal(id=value)
+            if len(frame) != 1:
+                raise LookupError(f"{self.anchor}'s journal holds {len(frame)} entries with id {value!r}, not one")
+            return DataJournalEntry(frame.iloc[0].dropna(), storage_options=self.storage_options)
         return self.datajournal(**{key: value}, **filters)
 
     def _topic_map_(self, topics):
@@ -8198,9 +8197,8 @@ class Datastack(Datablock):
             self.log.info(f"{self.anchorkeypath}: building {len(indices)} of {self.n_blocks} blocks")
             # The stack's own entry: each block journals its build, and without this the
             # stack's journal would not say its blocks were rebuilt, when, or at what revision.
-            # A file of its own, as a note's, so a build:end of this instance is not overwritten.
             note = f"{len(indices)} of {self.n_blocks} blocks: {indices}"
-            journal = dict(note=note, inline_note=True, journal_prefix='build_blocks-')
+            journal = dict(note=note, inline_note=True)
             self.write_journal_entry(event='build_blocks:begin', **journal)
             try:
                 executor = self._build_executor_(f"BUILDING {len(indices)} of {self.n_blocks} blocks [{self.__class__.__name__}]")

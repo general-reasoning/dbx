@@ -56,7 +56,7 @@ def test_what_is_not_a_construction_is_left_out(lake):
 
 def test_event_none_is_every_event(lake):
     everything = dbx.constructed(Apple, event=None, datalake=lake)
-    assert set(everything['event']) == {'build:end', 'note:checked'}
+    assert set(everything['event']) == {'build:start', 'build:end', 'note:checked'}
 
 
 def test_another_event_filter(lake):

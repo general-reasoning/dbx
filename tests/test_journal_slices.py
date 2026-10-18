@@ -85,14 +85,14 @@ def test_a_plain_tables_slices_are_its_tablets(tmp_path):
 
 
 def test_rebuilding_a_valid_tables_tablets_is_journaled_on_the_table(tmp_path):
-    """build_blocks leaves an entry of the table's own, with its slices -- beside its build:end, not over it."""
+    """build_blocks leaves entries of the table's own, with its slices -- beside its build's, not over them."""
     table = DummySampleTable(datalake=str(tmp_path), spec=dict(samples_per_tablet=5), tag='samples').build()
     events = lambda: sorted(table.datajournal()['event'])
-    assert events() == ['build:end']
+    assert events() == ['build:end', 'build:start']
     table.build_blocks()                            # every tablet valid: nothing built, nothing written
-    assert events() == ['build:end']
+    assert events() == ['build:end', 'build:start']
     table.build_blocks([0])                         # the same instance that wrote build:end
-    assert events() == ['build:end', 'build_blocks:end']
+    assert events() == ['build:end', 'build:start', 'build_blocks:begin', 'build_blocks:end']
     entry = table.datajournal(event='build_blocks:end').iloc[-1]
     assert ast.literal_eval(entry['slices']) == table.readable_slices()
     assert entry['note'] == f"1 of {table.n_blocks} blocks: [0]"

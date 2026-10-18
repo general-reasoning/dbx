@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A journal entry is found by what it is -- its `id` -- never by where it is filed.**
+  Every `DataJournal.write` keeps its entry: a file of its own, named by its `id`, so
+  a build leaves its `build:start` and its `build:end`, and the `journal_prefix`es
+  dbx passed to keep one write from overwriting another are gone. A session records
+  `DataJournal.entry_ref`s -- `anchor`, `hash`, `id`, and the `version`, `tag`,
+  `keyby` and `datalake` that finding a block's entries by hash takes -- in
+  `written_entries()`, its index's markers (named by `id`) and an exec-journal row's
+  `datajournal_entries`; `DataJournal.read_refs` reads them back from an entry's own
+  file or, compacted since, its anchor's compacted journal. An exec row from before
+  names paths: one whose file is gone is its block's entries under the row's
+  session. `journal={'id': ...}` selects an entry where `{'entry_path': ...}` did.
+  `UNSAFE_compact` compacts redirection entries too; `PipeJournal.UNSAFE_compact`
+  keeps the side files its kept entries name -- in their columns -- not the ones
+  whose file names share their instance's `dt`.
+- **`read_hash` reads a compacted journal too.** A block whose anchor was compacted
+  was "never recorded" to `_past_recorded_`, and no past nested in it composed.
 - **A pullback of whole tablets builds no map.** Every tablet taken whole, no lot is
   read: each tablet is its table's own, from the partition's entries. Its map is not
   built, nor asked for by its validity (`TREE_SKIP_BUILDING`/`TREE_SKIP_VALIDATION`,
@@ -31,11 +47,10 @@ All notable changes to this project will be documented in this file.
   is read and written back, row for row, to `<anchor>/.journal/<anchor>/journal/
   <anchor>-journal-compacted.parquet`, where `read` already finds entry files; the
   exec journal to `.journal/exec/exec-compacted.parquet`. Nothing is deduplicated.
-  An entry recording a redirection stays where it is, in its block's own journal.
   Anchors go to a `parallelization` executor (`'multithreading'` by default) of
   `n_workers`; `dry_run=True` touches nothing. A compacted entry's `entry_path` is the
-  compacted file, so `read_frame` of its old path -- a session's index -- no longer
-  finds it. `ExecJournal` is new: the exec journal's directory and its compaction.
+  compacted file; a session finds it by reference all the same (above). `ExecJournal`
+  is new: the exec journal's directory and its compaction.
 - **Every tablet is filed by its hash, and tagged by its table: no tag in any path.**
   `Datatablet.KEYBY` is `version_shorthash`, as every block's. A tablet filed under its
   tag until 2026-10-17 -- hundreds of thousands, in tables valid as they stand -- is

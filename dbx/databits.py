@@ -2257,7 +2257,7 @@ class RayCallableExecutor(_CarriesDataJournal_):
             yield # make it a generator
 
     def _journaled_(self, payload):
-        """A `Remote` proxy of the `JournaledResult` taken apart: its paths by value, its value as `Remote` returns one.
+        """A `Remote` proxy of the `JournaledResult` taken apart: its entries by value, its value as `Remote` returns one.
 
         A remote worker returns anything that is not a primitive as a proxy,
         and every carried callable returns a `JournaledResult`. Its paths are a

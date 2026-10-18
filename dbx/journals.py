@@ -25,6 +25,7 @@ import datetime
 import fnmatch
 import functools
 import hashlib
+import json
 import os
 import time
 import multiprocessing
@@ -750,8 +751,8 @@ class ExecJournalEntry(pd.Series):
         unless given.
         """
         return _written_datajournal_(
-            ExecJournalEntry._written_paths_(self, one_datalake(datalake, url, 'datajournal') or self.datalake,
-                                             self.storage_options),
+            ExecJournalEntry._written_refs_(self, one_datalake(datalake, url, 'datajournal') or self.datalake,
+                                            self.storage_options),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
             log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
 
@@ -855,12 +856,15 @@ class ExecJournalEntry(pd.Series):
             return []
 
     @staticmethod
-    def _written_paths_(row, datalake, storage_options) -> list:
-        """The entry paths of *row*'s command: its session's index, then any ``datajournal_entries`` it lacks.
+    def _written_refs_(row, datalake, storage_options) -> list:
+        """The entries of *row*'s command, for `DataJournal.read_refs`: its session's index, then any ``datajournal_entries`` it lacks.
 
         A row shares its session -- and so these -- with an exec nested in
         it, or run in a process it started. A row from before the index has
         only ``datajournal_entries``; one from before that column, neither.
+        One from before entries were referenced by ``id`` names their paths: a
+        path whose file is gone -- compacted since -- is its block's entries
+        under this session (`_legacy_ref_`).
         """
         listed = row.get('datajournal_entries')
         if listed is None or (isinstance(listed, float) and pd.isna(listed)):
@@ -871,7 +875,30 @@ class ExecJournalEntry(pd.Series):
             indexed = DataJournal.session_entries(session, datalake=datalake,
                                                   storage_options=storage_options or None)
         seen = set(indexed)
-        return indexed + [str(p) for p in listed if str(p) not in seen]
+        refs = indexed + [str(p) for p in listed if str(p) not in seen]
+        return list(dict.fromkeys(ExecJournalEntry._legacy_ref_(r, session, storage_options) for r in refs))
+
+    @staticmethod
+    def _legacy_ref_(ref: str, session, storage_options) -> str:
+        """*ref* as it is, unless it is a path whose file is gone: then its block's entries under *session*.
+
+        The path says the block: ``<datalake>/<anchor>/.../.journal/<fqcn>/journal/<hash>/<file>``,
+        the anchor being the block's class, ``<fqcn>``.
+        """
+        if ref.lstrip().startswith('{'):
+            return ref
+        fs, _ = fsspec.url_to_fs(ref, **(storage_options or default_storage_options()))
+        if fs.exists(ref):
+            return ref
+        head, sep, tail = ref.partition('/.journal/')
+        parts = tail.split('/')
+        if not sep or len(parts) < 4 or parts[1] != 'journal':
+            return ref
+        fqcn, hash = parts[0], parts[2]
+        datalake, found, _ = head.partition(f'/{fqcn}/') if f'/{fqcn}/' in head else head.rpartition(f'/{fqcn}')
+        if not found:
+            return ref
+        return json.dumps({'anchor': fqcn, 'hash': hash, 'session': session, 'datalake': datalake}, sort_keys=True)
 
 
 class ExecJournalFrame(pd.DataFrame):
@@ -969,7 +996,7 @@ class ExecJournalFrame(pd.DataFrame):
                     unnormalized: bool = False, url=None, **filter_kwargs):
         """What :meth:`dataentries` reads, as one `DataJournalFrame`. Takes what `ExecJournalEntry.datajournal` takes."""
         return _written_datajournal_(
-            self._written_paths_(one_datalake(datalake, url, 'datajournal') or self.datalake),
+            self._written_refs_(one_datalake(datalake, url, 'datajournal') or self.datalake),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
             log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
 
@@ -1031,13 +1058,13 @@ class ExecJournalFrame(pd.DataFrame):
                 df[c] = df[c].map(count)
         return df.drop(columns=['traceback'], errors='ignore')
 
-    def _written_paths_(self, datalake=None) -> list:
+    def _written_refs_(self, datalake=None) -> list:
         """Every row's, in row order: once each, since rows that share a session share them."""
-        paths = {}
+        refs = {}
         for _, row in self.iterrows():
-            for p in ExecJournalEntry._written_paths_(row, datalake or self.datalake, self.storage_options):
-                paths.setdefault(p, None)
-        return list(paths)
+            for r in ExecJournalEntry._written_refs_(row, datalake or self.datalake, self.storage_options):
+                refs.setdefault(r, None)
+        return list(refs)
 
 
 def _index_label_(index, entry):
@@ -1077,9 +1104,9 @@ def _derived_frame_(cls, defaults, args, kwargs):
     return obj
 
 
-def _written_datajournal_(paths, anchor, loc, iloc, *, storage_options, log, n_workers, index,
+def _written_datajournal_(refs, anchor, loc, iloc, *, storage_options, log, n_workers, index,
                           unnormalized, filters):
-    """The block journal entries at *paths*, narrowed and indexed as :func:`datajournal` would be.
+    """The block journal entries *refs* name (`DataJournal.read_refs`), narrowed and indexed as :func:`datajournal` would be.
 
     *anchor* is matched exactly, as :func:`datajournal` reads exactly one
     anchor's journal -- not as a filter pattern, where ``'a.B'`` would also
@@ -1090,8 +1117,8 @@ def _written_datajournal_(paths, anchor, loc, iloc, *, storage_options, log, n_w
     if anchor is not None:
         name = _anchor_of_(anchor)
         filters = {'anchor': lambda a: a == name, **filters}
-    frame = DataJournal.read_frame(paths, storage_options=storage_options or None, log=log,
-                                   n_workers=n_workers, index=index, unnormalized=unnormalized, **filters)
+    frame = DataJournal.read_refs(refs, storage_options=storage_options or None, log=log,
+                                  n_workers=n_workers, index=index, unnormalized=unnormalized, **filters)
     if loc is not None:
         return frame.get(loc, dropna=True)
     if iloc is not None:
@@ -2554,7 +2581,8 @@ class DataJournal:
     and :meth:`read` globs for exactly that under ``{datalake}/{anchor}``.
 
     An INSTANCE is a session: a ``session`` id written to every entry made
-    under it, and the paths of those entries (:meth:`written_entries`).
+    under it, and references to those entries (:meth:`written_entries`,
+    :meth:`entry_ref`) -- what each is, never where it is filed.
     Constructing one touches no storage. Which session an entry goes under is
     never a block's to say -- a block has no journal of its own -- but
     :meth:`current`'s: the innermost ``with DataJournal()`` open for this
@@ -2563,13 +2591,14 @@ class DataJournal:
 
         with DataJournal() as dj:
             run_pipeline()          # every block it builds, however deep
-        dj.written_entries()        # ... wrote here, under dj.session
+        dj.written_entries()        # ... wrote here, under dj.session: references
 
     which is how ``dbx.exec`` puts one command's blocks under one session.
     Another process has a stack of its own, and a dbx executor that sends
     work there (multiprocessing, torch_multiprocessing, ray) opens the
     current session around it and brings its written entries back
     (:meth:`carry`); a multithreading executor does the same for its threads.
+    :meth:`read_refs` reads the entries back, wherever they are filed by then.
     A session is operational, like ``tree``: nothing about it reaches a
     block's identity.
 
@@ -2587,7 +2616,7 @@ class DataJournal:
 
     def __init__(self):
         self._session = str(uuid.uuid4())
-        self._written = {}      # entry path -> None: a set that keeps write order
+        self._written = {}      # entry reference -> None: a set that keeps write order
         self._written_lock = threading.Lock()
         # Where this session's index goes; None for a session that keeps none.
         # Set by command_session(), and pinned then: a worker must index where
@@ -2601,7 +2630,7 @@ class DataJournal:
         # The session and where it is indexed: a handle crosses process
         # boundaries with the work an executor sends out, and the copy that
         # arrives is the same journal session, not a new one -- otherwise one
-        # command would be written under many. Its written paths stay here: the
+        # command would be written under many. Its written entries stay here: the
         # copy collects its own, and the executor brings them back (collect()).
         return {'session': self._session, 'datalake': self._datalake}
 
@@ -2693,7 +2722,10 @@ class DataJournal:
     @classmethod
     def session_entries(cls, session: str, *, datalake: str | None = None,
                         storage_options: dict | None = None) -> list:
-        """The entry paths indexed under *session*, in the order first written; empty where there is no index.
+        """The entry references indexed under *session*, in the order written; empty where there is no index.
+
+        A session indexed before entries were referenced by ``id`` holds their
+        paths instead: those are returned as they are, for `read_refs`.
 
         Every process's, from the index a command session keeps in storage --
         what `written_entries` cannot see in another process. *datalake* is
@@ -2911,36 +2943,107 @@ class DataJournal:
         frame = cls.read_frame(paths, storage_options=storage_options, log=log, n_workers=n_workers)
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
+    @staticmethod
+    def entry_ref(block, entry_id) -> str:
+        """The entry *entry_id* of *block*, as what it is and not where it is filed: a JSON string.
+
+        Its block -- ``anchor``, ``hash`` -- and its ``id``, with what finding a
+        block's entries by hash takes (``version``, ``tag``, ``keyby``,
+        ``datalake``): `read_refs` finds it again in its own file or, compacted
+        since, in its anchor's compacted journal.
+        """
+        return json.dumps({'anchor': block.anchor, 'hash': block.hash, 'id': entry_id, 'version': block.version,
+                           'tag': block.tag, 'keyby': block.keyby, 'datalake': block.datalake},
+                          sort_keys=True, default=str)
+
+    @classmethod
+    def read_refs(cls, refs, *, storage_options=None, log=None, n_workers=None, index: str | None = None,
+                  unnormalized: bool = False, **filter_kwargs) -> 'DataJournalFrame':
+        """The entries *refs* name, in the order given, as one `DataJournalFrame`: as `read_frame` reads files.
+
+        A reference is :meth:`entry_ref`'s: one entry. One with a ``session``
+        and no ``id`` is every entry of its block written under that session.
+        Each block's entries are read once, by hash (`read_hash`), or from its
+        anchor's whole journal when it is filed nowhere `read_hash` looks.
+
+        A path -- what a session recorded before references -- is read as
+        `read_frame` reads one; `ExecJournalEntry` turns one whose file is gone
+        into a session reference. An entry that cannot be found is skipped with
+        a warning, as `read_frame` skips an unreadable file.
+        """
+        log = log or Datalog()
+        if storage_options is None:
+            storage_options = default_storage_options()
+        parsed = [json.loads(str(r)) if str(r).lstrip().startswith('{') else str(r) for r in refs]
+        keys = ('datalake', 'anchor', 'hash', 'tag', 'version', 'keyby')
+        blocks = {}
+        for ref in parsed:
+            if isinstance(ref, dict):
+                blocks.setdefault(tuple(str(ref.get(k)) for k in keys), ref)
+        entries = {}
+        for key, ref in blocks.items():
+            found = cls.read_hash(ref['anchor'], ref['hash'], tag=ref.get('tag'), version=ref.get('version'),
+                                  keyby=ref.get('keyby') or 'tag_version_shorthash', datalake=ref.get('datalake'),
+                                  storage_options=storage_options, log=log, n_workers=n_workers)
+            if found is None:
+                try:
+                    found = cls.read(ref['anchor'], datalake=ref.get('datalake'), storage_options=storage_options,
+                                     log=log, n_workers=n_workers, hash=ref['hash'])
+                except FileNotFoundError:
+                    found = None
+            entries[key] = pd.DataFrame(found).reset_index(drop=True) if found is not None else None
+        dfs = []
+        for ref in parsed:
+            if isinstance(ref, str):
+                fs, _ = fsspec.url_to_fs(ref, **storage_options)
+                (d,) = cls._read_files_(fs, [ref], n_workers=1, log=log)
+            else:
+                rows = entries[tuple(str(ref.get(k)) for k in keys)]
+                if rows is None or rows.empty:
+                    d = None
+                elif ref.get('id') is not None:
+                    d = rows[rows['id'] == ref['id']]
+                else:
+                    d = rows[rows['session'] == ref.get('session')].sort_values('datetime')
+                if d is None or d.empty:
+                    log.warning(f"DataJournal.read_refs: no entry {ref.get('id') or 'of session ' + str(ref.get('session'))} "
+                                f"of {ref['anchor']}/{str(ref['hash'])[:8]}: skipped")
+                    d = None
+            if d is not None:
+                d = d.copy()
+                d['__order__'] = len(dfs)
+                dfs.append(d)
+        if not dfs:
+            return DataJournalFrame(None, storage_options=storage_options, index=index,
+                                    unnormalized=unnormalized, **filter_kwargs)
+        df = cls._normalize_columns_(pd.concat(dfs, ignore_index=True))
+        df = df.sort_values('__order__', kind='stable').drop(columns=['__order__']).reset_index(drop=True)
+        return DataJournalFrame(df, storage_options=storage_options, index=index,
+                                unnormalized=unnormalized, **filter_kwargs)
+
     @classmethod
     def write(cls, block, event: str, *, note: str = None, inline_note: bool = False,
               message: str = None, inline_message: bool = False, journal_prefix: str = '',
               redirection: 'str | dict | None' = None, columns: dict | None = None):
-        """Write one journal entry for *event*, under :meth:`current`'s session, and return its ``entry_code``.
+        """Write one journal entry for *event*, under :meth:`current`'s session, and return its ``id``.
 
-        ``entry_code`` is a fresh uuid per call, and it is the only field that
+        ``id`` is a fresh uuid per call, and it is the only field that
         identifies a *row*.  Everything else on an entry describes the block
         or the moment: ``hash`` and ``key`` are shared by every entry of that
         block, ``tree`` by every entry of one build tree, and ``datetime``
         is only as unique as its resolution -- two entries written inside the
         same microsecond, or by two processes at once, collide.  So a caller
-        holding an ``entry_code`` can address exactly the row it wrote:
+        holding an ``id`` can address exactly the row it wrote, wherever it
+        is filed -- its own file, or a compacted journal:
 
-            code = block.write_journal_entry(event='note')
-            entry = block.datajournal(entry_code=code, loc=0)
+            id = block.write_journal_entry(event='note')
+            entry = block.datajournal(id=id, iloc=0)
 
-        With one caveat that is a property of where entries live rather than
-        of the code.  A journal *file* is per live instance -- its path is
-        built from ``block.dt``, which does not move -- so a second call from
-        the same instance **overwrites** the first.  The new code is written;
-        the old one is gone from storage, though the call that made it still
-        returned it.  A code therefore resolves only until that instance
-        writes again, which is why ``build()`` leaves a ``build:end`` and no
-        ``build:start``: same instance, same file.  To keep both entries,
-        write them from separate instances, or pass distinct
-        *journal_prefix* values.
-
-        Journals written before this field have no such column; the
-        ``entry_code`` accessor on ``DataJournalEntry`` returns None for them.
+        Every call keeps its entry: each is a file of its own, named by its
+        ``id``, so a build leaves its ``build:start`` and its ``build:end``.
+        The session records the entry by reference -- :meth:`entry_ref`, what
+        it is and not where it is filed -- for :meth:`read_refs` to find again.
+        *journal_prefix* only prefixes the file's name.
 
         *redirection* -- an ``entry_code`` or a journal filter, normally passed
         by :meth:`UNSAFE_redirect` rather than directly -- is recorded IN the
@@ -3011,7 +3114,11 @@ class DataJournal:
         readable = getattr(block, 'readable_slices', None)
         slices_dict = readable() if readable is not None else None
         #
-        journal_path = cls.path(block, 'journal', 'parquet', ensure_dirpath=True, filename_prefix=journal_prefix)
+        # A file per entry, named by it: no entry overwrites another, whatever instance writes it.
+        journal_dir = cls.dirpath(block, 'journal')
+        cls._lake_(block)[0].makedirs(journal_dir, exist_ok=True)
+        journal_path = os.path.join(journal_dir,
+                                    f'{journal_prefix}{block.fqcn}-journal-{block.hash}-{dt}-{entry_id}.parquet')
         df = pd.DataFrame.from_records([{'datetime': dt,
                                          'build:start:datetime': block._build_start_dt,
                                          'build:end:datetime': block._build_end_dt,
@@ -3061,8 +3168,9 @@ class DataJournal:
         fs, _, _ = cls._lake_(block)
         with fs.open(journal_path, 'wb') as f:
             df.to_parquet(f)
-        if dj._record_(journal_path):
-            dj._index_(block, journal_path, dt)
+        ref = cls.entry_ref(block, entry_id)
+        if dj._record_(ref):
+            dj._index_(block, ref, entry_id, dt)
         
         tagstr = f"with tag {repr(block.tag)} " if block.tag is not None else ""
         block.log.debug(f"WROTE JOURNAL entry {entry_id} for event {repr(event)} {tagstr}"
@@ -3070,13 +3178,11 @@ class DataJournal:
         return entry_id
 
     def written_entries(self):
-        """Every journal entry path written under this session, in the order first written.
+        """A reference to every journal entry written under this session, in the order written: see :meth:`entry_ref`.
 
-        A path appears once however often it was written: an instance
-        rewrites its one entry file (see :meth:`write`), so the file holds the
-        latest entry and the path is listed where it first appeared. In
-        another process the session is a copy, which collects its own list;
-        work sent there by a dbx executor brings that list back: see :meth:`carry`.
+        In another process the session is a copy, which collects its own list;
+        work sent there by a dbx executor brings that list back: see
+        :meth:`carry`. :meth:`read_refs` reads the entries.
         """
         with self._written_lock:
             return list(self._written)
@@ -3088,7 +3194,7 @@ class DataJournal:
         one's stack does not reach, or to another thread, which may have
         opened a ``with`` of its own. Each wrapper runs its callable inside
         this handle -- in another process, a copy with the same session --
-        and returns its value with the entry paths it wrote, a
+        and returns its value with the entries it wrote, a
         `JournaledResult`, for :meth:`collect` to take back here.
 
         *output_capture*, the `OutputCapture` open here, if any, goes with
@@ -3099,22 +3205,22 @@ class DataJournal:
         return [JournaledCallable(c, self, output_capture) for c in callables]
 
     def collect(self, payload):
-        """The value a :meth:`carry` wrapper returned, its written paths added to this handle's.
+        """The value a :meth:`carry` wrapper returned, its written entries added to this handle's.
 
         Anything that is not a `JournaledResult` is handed back unchanged:
         the None of a result that never arrived, say.
         """
         if not isinstance(payload, JournaledResult):
             return payload
-        for path in payload.datajournal_entries:
-            self._record_(path)
+        for ref in payload.datajournal_entries:
+            self._record_(ref)
         return payload.value
 
     def collect_raised(self, exc: BaseException) -> None:
-        """Add the paths behind an executor's *exc* to this handle's: the failed call's, and its siblings'.
+        """Add the entries behind an executor's *exc* to this handle's: the failed call's, and its siblings'.
 
         A failed build writes an entry too -- ``build:exception`` -- and the
-        :meth:`carry` wrapper sends its paths home on the exception, as
+        :meth:`carry` wrapper sends its entries home on the exception, as
         ``datajournal_entries``, since an exception is all a failure returns.
         The calls that succeeded before it are on the exception as well, as
         ``executor_payloads``: an executor that raises returns no results, and
@@ -3222,10 +3328,9 @@ class DataJournal:
 
         Every entry file under an anchor -- as `read` lists them, the anchor's
         compacted file among them -- is read, and its rows are written back,
-        as they are, to `COMPACTED`; the entry files read are removed. An
-        entry recording a redirection is left where it is: a block finds its
-        own redirection in its own journal directory. Side files are not
-        touched. *anchors* defaults to `dbx.anchors`, and the anchors are
+        as they are, to `COMPACTED`; the entry files read are removed -- an
+        entry recording a redirection too, since a block finds its own by
+        hash (`read_hash`), compacted or not. Side files are not touched. *anchors* defaults to `dbx.anchors`, and the anchors are
         compacted on a *parallelization* executor of *n_workers*.
 
         The compacted file is written aside, read back and checked against the
@@ -3273,8 +3378,6 @@ class DataJournal:
         for file, df in zip(files, frames):
             if df is None:
                 kept.append(file)          # unreadable: left as it is
-            elif fs_full_path(fs, file) != fs_full_path(fs, compacted) and cls._records_redirection_(df, file):
-                kept.append(file)
             else:
                 absorbed.append((file, df.drop(columns=['entry_path'], errors='ignore')))
         row = {'anchor': anchor, 'files': len(files), 'entries': sum(len(df) for _, df in absorbed),
@@ -3292,15 +3395,6 @@ class DataJournal:
         log.info(f"{cls.__name__}.UNSAFE_compact: {anchor}: {row['entries']} entries from {len(absorbed)} file(s) "
                  f"into {compacted}; {len(kept)} kept")
         return row
-
-    @staticmethod
-    def _records_redirection_(df, file) -> bool:
-        """Whether the entry file *file*, read as *df*, records a redirection -- made or cleared."""
-        if os.path.basename(file).startswith('unredirect-'):
-            return True
-        if 'event' in df.columns and df['event'].astype(str).str.startswith(('UNSAFE_redirect', 'UNSAFE_clear')).any():
-            return True
-        return 'redirection' in df.columns and df['redirection'].notna().any()
 
     _ENTRY_FILE_ = re.compile(r'^(?:\.dbx|(?:.*/)?\.journal)/[^/]+/journal/.*\.parquet$')
     _NOT_JOURNAL_DIR_ = re.compile(r'^(?:\.dbx|(?:.*/)?\.journal)/[^/]+/(?!journal$)[^/]+$')
@@ -3384,30 +3478,29 @@ class DataJournal:
         assert fs.exists(path), f"scopepath {path} does not exist after writing"
         block.log.detailed(f"WROTE: {name.upper()}: txt: {path}")
 
-    def _record_(self, path) -> bool:
-        """Add *path* to :meth:`written_entries`; True when it was not there already."""
+    def _record_(self, ref) -> bool:
+        """Add the entry reference *ref* to :meth:`written_entries`; True when it was not there already."""
         with self._written_lock:
-            if path in self._written:
+            if ref in self._written:
                 return False
-            self._written[path] = None
+            self._written[ref] = None
             return True
 
-    def _index_(self, block, path, dt):
-        """Drop this session's marker for entry *path*, first written at *dt*: nothing, for a session that keeps no index.
+    def _index_(self, block, ref, entry_id, dt):
+        """Drop this session's marker for the entry *ref*, written at *dt*: nothing, for a session that keeps no index.
 
-        One file per entry, named by the path, so concurrent writers never
-        share one and an instance rewriting its entry rewrites its marker. A
-        failure is a warning: the build it records has already succeeded.
+        One file per entry, named by its *entry_id*, so concurrent writers
+        never share one. A failure is a warning: the build it records has
+        already succeeded.
         """
         if self._datalake is None:
             return
-        marker = os.path.join(self._index_dirpath_(self._datalake, self._session),
-                              hashlib.sha256(path.encode('utf-8')).hexdigest()[:32] + '.txt')
+        marker = os.path.join(self._index_dirpath_(self._datalake, self._session), f"{entry_id}.txt")
         try:
             fs, _ = fsspec.url_to_fs(self._datalake, **default_storage_options())
             fs.makedirs(os.path.dirname(marker), exist_ok=True)
             with fs.open(marker, 'w') as f:
-                f.write(f"{dt}\n{path}")
+                f.write(f"{dt}\n{ref}")
         except Exception as exc:
             block.log.warning(f"Journal session index: could not write {marker}: {exc}")
 
@@ -3688,18 +3781,25 @@ class PipeJournal(DataJournal):
             return getattr(pipeline_cls, 'JOURNAL', None)
 
         def newest_per_entrypath(files):
-            # The dt in each entry's file name -- the instance's -- and the entry's own datetime and entrypath.
+            # The newest entry of each entrypath, by its own datetime: its file, and the side files it names.
             def read(file):
                 with fs.open(file, 'rb') as f:
                     df = pd.read_parquet(f)
-                return (file, df['datetime'].iloc[0] if 'datetime' in df.columns else '',
-                        df['entrypath'].iloc[0] if 'entrypath' in df.columns else None)
+                row = df.iloc[0]
+                sides = {norm(row[c]) for c in cls._SIDE_COLUMNS_ if c in df.columns and isinstance(row[c], str)}
+                return file, row.get('datetime', ''), row.get('entrypath'), sides
             newest = {}
             with ThreadPoolExecutor(max_workers=8) as ex:
-                for file, dt, entrypath in ex.map(read, files):
+                for file, dt, entrypath, sides in ex.map(read, files):
                     if entrypath not in newest or dt > newest[entrypath][0]:
-                        newest[entrypath] = (dt, file)
-            return {file for _, file in newest.values()}
+                        newest[entrypath] = (dt, file, sides)
+            kept = {norm(file) for _, file, _ in newest.values()} | {p for *_, sides in newest.values() for p in sides}
+            # A side file a column names, under every extension it is written in: spec, dfn and kwargs
+            # are written as YAML -- the one named -- and as parquet.
+            return kept | {os.path.splitext(p)[0] for p in kept}
+
+        def norm(path):
+            return os.path.normpath(fs._strip_protocol(path))
 
         files = fs.find(anchor_dir) if fs.exists(anchor_dir) else []
         on = journaled(anchor)
@@ -3710,13 +3810,13 @@ class PipeJournal(DataJournal):
             for journal_dir in fs.glob(os.path.join(anchor_dir, '*', '.journal', '*', 'journal', '*')):
                 hash = os.path.basename(journal_dir.rstrip('/'))
                 entries = fs.glob(os.path.join(journal_dir, '*.parquet'))
+                # What is kept is what the kept entries name -- themselves and their side files -- not
+                # what their file names have in common with them.
                 kept = newest_per_entrypath(entries)
-                kept_dts = {cls._dt_of_(f, hash) for f in kept}
                 journal_root = os.path.dirname(os.path.dirname(journal_dir.rstrip('/')))
-                for side_file in fs.glob(os.path.join(journal_root, '*', hash, '*')):
-                    dt = cls._dt_of_(side_file, hash)
-                    if dt is not None and dt not in kept_dts:
-                        removed.append(side_file)
+                for file in fs.glob(os.path.join(journal_root, '*', hash, '*')):
+                    if norm(file) not in kept and os.path.splitext(norm(file))[0] not in kept:
+                        removed.append(file)
             action = ('compacted' if on is not None else 'compacted: class no longer imports') \
                 if removed else 'unchanged'
         if removed and not dry_run:
@@ -3734,12 +3834,8 @@ class PipeJournal(DataJournal):
     #: What names one pipeline, and so one row of `collect`.
     _PIPELINE_COLUMNS_ = ('datalake', 'anchor', 'hash', 'keyby', 'key', 'anchorkeypath', 'tag', 'version')
 
-    @staticmethod
-    def _dt_of_(path, hash):
-        """The instance ``dt`` a journal file of *hash* is named by -- ``...-{x}-{hash}-{dt}.{ext}`` -- or None."""
-        name = os.path.basename(path)
-        _, sep, rest = name.partition(f"-{hash}-")
-        return rest.rpartition('.')[0] or None if sep else None
+    #: An entry's columns naming its side files: what it keeps, beside itself.
+    _SIDE_COLUMNS_ = ('spec', 'dfn', 'kwargs', 'quote', 'cite', 'signature', 'type', 'repr', 'note')
 
     @staticmethod
     def _is_event_(names):
@@ -4060,13 +4156,13 @@ class JournaledCallable:
     thread's but not the dispatching thread's: a block built there would write
     under another session -- and to paths nobody in the dispatcher lists. Made by
     `DataJournal.carry`, this runs the callable inside the handle it carries
-    and returns a `JournaledResult` -- its value, and the entry paths the call
+    and returns a `JournaledResult` -- its value, and the entries the call
     wrote -- for `DataJournal.collect` to take back into the handle it came
     from. Only this call's paths: a worker that runs several callables holds
     one unpickled handle for all of them, and under ``fork`` that handle is a
-    copy of the parent's, holding its paths already.
+    copy of the parent's, holding its entries already.
 
-    A call that raises sends its paths home on the exception, as
+    A call that raises sends its entries home on the exception, as
     ``datajournal_entries``, for `DataJournal.collect_raised`.
 
     The `Datalog` scope goes out with it too, made where the callable was

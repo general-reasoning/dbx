@@ -73,7 +73,7 @@ def test_the_journal_is_carried_to_reused_workers(tmp_path, monkeypatch):
     finally:
         ex.close()
     assert first + second == [block(tmp_path, x=100 + i).hash for i in range(4)]
-    assert len(dj.written_entries()) == 4
+    assert len(dj.written_entries()) == 8, "each build's start and end"
 
 
 @pytest.mark.parametrize("parallelization", ['inline', 'multithreading'])

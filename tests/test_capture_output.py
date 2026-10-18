@@ -98,7 +98,9 @@ def _read(path):
 
 
 def _logs(row):
-    return [str(v) for v in row.datajournal(index=None)['log']]
+    """The capture each block's build recorded: its build:end's, its build:start recording the same."""
+    j = row.datajournal(index=None)
+    return [str(v) for v in j[j['event'] == 'build:end']['log']]
 
 
 class TestTheMasterCapture:

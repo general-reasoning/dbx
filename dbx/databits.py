@@ -599,14 +599,25 @@ def eval(name):
     return term
 
 
+# The variables a datalake is read from, in precedence order. DBX_DATALAKE is
+# its name; DBX_ROOT and DBX_URL are its names from before the rename --
+# deprecated, and still read, in the order they always were.
+DATALAKE_ENV_VARS = ('DBX_DATALAKE', 'DBX_ROOT', 'DBX_URL')
+
+
+def default_datalake_var() -> 'str | None':
+    """The variable `default_datalake()` reads: the first of `DATALAKE_ENV_VARS` set, or None."""
+    return next((v for v in DATALAKE_ENV_VARS if os.environ.get(v)), None)
+
+
 def default_datalake() -> 'str | None':
     """The datalake the environment names: ``DBX_DATALAKE``, else ``DBX_ROOT``, else ``DBX_URL``.
 
-    ``DBX_ROOT`` and ``DBX_URL`` are its names from before the rename, still
-    read, in the order they always were.
+    ``DBX_ROOT`` and ``DBX_URL`` are its names from before the rename,
+    deprecated, and still read, in the order they always were.
     """
-    return (os.environ.get('DBX_DATALAKE') or os.environ.get('DBX_ROOT')
-            or os.environ.get('DBX_URL'))
+    var = default_datalake_var()
+    return os.environ[var] if var else None
 
 
 def anchors(datalake: str | None = None, *, storage_options: dict | None = None,

@@ -1130,7 +1130,7 @@ class Hyp:
 
     A specialization -- `dbxpipelines.HypDbxJournal` -- changes where the
     corpus comes from and how it is embedded (`__source__`, `__embedder__`, `__default_data__`,
-    `__storage_options__`), what opening a point
+    `__data_origin__`, `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
     `__context_point__`), and how a point is labeled (`__point_label__`,
     `__point_name__`, `__point_version__`, `__point_datetime__`,
@@ -1151,6 +1151,11 @@ class Hyp:
     @classmethod
     def __default_data__(cls, args):
         return os.path.join(cls.HOME, "seeds")
+
+    @classmethod
+    def __data_origin__(cls, args):
+        """Where `__default_data__` got the corpus directory: named when it cannot be opened."""
+        return f"hyp's default, under {cls.HOME}"
 
     @classmethod
     def __storage_options__(cls, args):
@@ -1842,6 +1847,15 @@ class Hyp:
             self.clock.tick(60 if moving else 30)
 
 
+def _connection_errors_():
+    """What opening a corpus raises when its directory cannot be reached or made: OSError, and asyncssh's own over ssh."""
+    try:
+        import asyncssh
+    except ImportError:
+        return (OSError,)
+    return (OSError, asyncssh.Error)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hyp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)")
@@ -1884,9 +1898,16 @@ def main(argv=None):
             ap.error(f"--filter: {e}")
     elif args.docs:
         from .docs import HypDocs as cls
+    origin = "--data" if args.data is not None else cls.__data_origin__(args)
     if args.data is None:
         args.data = cls.__default_data__(args)
-    store = Store(args.data, cls.__storage_options__(args))
+    try:
+        store = Store(args.data, cls.__storage_options__(args))
+    except _connection_errors_() as e:
+        # The error alone -- "No route to host" -- names neither the corpus nor what chose it.
+        # A timeout says nothing at all: its type is all there is.
+        said = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+        raise SystemExit(f"hyp: cannot open the corpus {args.data} ({origin}):\n     {said}") from None
     if args.reset:
         store.clear()
     ollama = Ollama()

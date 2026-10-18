@@ -18,7 +18,14 @@ All notable changes to this project will be documented in this file.
   is under `update`. `touch` is a construction event, in `CONSTRUCTED_EVENTS`
   and `PipeJournal.ENTRYPOINT_EVENTS`, so a touched block counts as
   constructed.
-
+- **hyp says which corpus it cannot open, and why it chose it.** A corpus
+  that cannot be reached or made stops hyp with one line naming its path and
+  where the path came from (`--data`, `DBX_DATALAKE`, or a deprecated
+  `DBX_ROOT`/`DBX_URL`, and whether it is read as a local path), then the
+  error itself. Before, the traceback ended in a bare `OSError: [Errno 65] No
+  route to host`. A specialization says where its default came from with the
+  new hook `__data_origin__`, and `dbx.default_datalake_var()` names the
+  variable `default_datalake()` reads.
 ### Changed
 - **A partition's stages say what they are.** A deal's build opens with a
   `DEAL` line naming its stages; a mapped table's with a `PULLBACK` summary --

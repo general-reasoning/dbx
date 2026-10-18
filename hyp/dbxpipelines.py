@@ -1013,6 +1013,17 @@ class HypDbxJournal(Hyp):
         return LabelFirstEmbedder(embedder)
 
     @classmethod
+    def __data_origin__(cls, args):
+        """The variable the datalake came from; deprecated, if it is not DBX_DATALAKE; and local, if nothing gives it a protocol."""
+        from fsspec.core import split_protocol
+
+        var = _dbx_().default_datalake_var()
+        said = [var] if var == "DBX_DATALAKE" else [f"{var}, deprecated: set DBX_DATALAKE instead"]
+        if split_protocol(datalake())[0] is None and "protocol" not in cls.__storage_options__(args):
+            said.append("read as a local path")
+        return "from " + "; ".join(said)
+
+    @classmethod
     def __storage_options__(cls, args):
         return _dbx_().default_storage_options()
 

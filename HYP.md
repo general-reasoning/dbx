@@ -22,15 +22,15 @@ On first run it pulls `nomic-embed-text` (embeddings) and `deepseek-r1:1.5b`
 (one-line summaries) through Ollama. The seed corpus is kept under
 `~/.hyp/seeds`; a datalake's pipelines, in the datalake itself.
 
-## A datalake's pipelines
+## PIPELINES
 
 ```bash
 DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal     # or: --journal pipelines
 ```
 
 runs `HypDbxJournal`, the specialization of the app over a datalake's
-pipelines. The datalake is dbx's own -- `DBX_DATALAKE`, then `DBX_ROOT`,
-`DBX_URL` -- as every block resolves it; hyp names none. Its corpus --
+pipelines. The datalake is dbx's own -- `DBX_DATALAKE`, then the deprecated
+`DBX_ROOT` and `DBX_URL` -- as every block resolves it; hyp names none. Its corpus --
 embeddings, layout, points -- is kept in the datalake, under
 `{DBX_DATALAKE}/.hyp`, and `--reset` clears it there. `dbx.pipejournal()` reads the pipeline journal and aggregates it --
 one row per pipeline, every run of it, with every entrypoint it was created
@@ -90,7 +90,88 @@ An `ssh://` datalake is read through fsspec's sshfs, on asyncssh, which applies
 `~/.ssh/config`: `ssh://host/path` names the host as `ssh host` does, user and
 all.
 
-## An anchor's blocks
+### Pointing hyp at a remote datalake
+
+Put the host and the path into `DBX_DATALAKE` as one `ssh://` URL, and leave
+`DBX_STORAGE_OPTIONS` unset:
+
+```bash
+export DBX_DATALAKE=ssh://wheelbarrow/home/t-9dkarp/datalake
+unset DBX_STORAGE_OPTIONS
+hyp --journal
+```
+
+`wheelbarrow` is a `Host` entry in `~/.ssh/config`. Its `HostName`, `User`,
+`IdentityFile` and `ProxyJump` apply as they do to `ssh wheelbarrow`, so if
+`ssh wheelbarrow` logs in, hyp can read the datalake. The path is the
+datalake's directory on that host, the one holding `.journal`.
+
+The URL is for reaching the datalake from another machine. On the datalake's
+own host, set `DBX_DATALAKE` to the plain path:
+`export DBX_DATALAKE=/home/t-9dkarp/datalake`. With the `ssh://` URL there,
+hyp logs into its own host over ssh, and fails with `PermissionDenied` unless
+that host accepts a key from itself.
+
+`DBX_DATALAKE` wins over `DBX_ROOT` and `DBX_URL`, its names from before the
+rename, deprecated and still read. So a plain local path left
+in `DBX_ROOT` (`/home/...`) does not matter while `DBX_DATALAKE` is set. If
+`DBX_DATALAKE` is unset, hyp falls back to that path and reads it as a local
+directory, on this machine.
+
+`DBX_STORAGE_OPTIONS` (`key=val;key=val`) is passed to fsspec with every
+datalake path. An ssh datalake needs none of it, because the URL and
+`~/.ssh/config` say everything. If it holds a `protocol`, that protocol
+overrides the path's.
+
+When the corpus cannot be opened, hyp says which one, and where its path came
+from, and stops:
+
+```
+hyp: cannot open the corpus /home/t-9dkarp/datalake/.hyp (from DBX_ROOT, deprecated: set DBX_DATALAKE instead; read as a local path):
+     OSError: [Errno 45] Operation not supported: '/home/t-9dkarp'
+```
+
+Here a path meant for the datalake's host is being read on this machine:
+set `DBX_DATALAKE` to its `ssh://` URL. If `ssh wheelbarrow` works but hyp
+fails with `OSError: [Errno 65] No route to host`, the failing connection
+is the one to the `ProxyJump` host. macOS may be refusing Python access to
+local-network addresses: allow the terminal app under System Settings →
+Privacy & Security → Local Network, then restart it.
+
+To see what a shell will use: `echo "$DBX_DATALAKE | $DBX_ROOT | $DBX_URL |
+$DBX_STORAGE_OPTIONS"`.
+
+### How a pipeline is embedded
+
+A pipeline's embedding text has its label -- the last component of its `tag`
+-- on the first line by itself. The anchor, the spec and the signature (or
+type) follow it (`dbxpipelines.entry`). `HypDbxJournal.__embedder__` wraps
+the embedder `--embedder` names in a `LabelFirstEmbedder`, and that wrapper
+splits each text at its first line.
+
+- **The label** becomes a unit vector of its character trigrams: each one is
+  hashed (crc32) to one of 256 dimensions and given a sign. One label always
+  gives the same vector. Labels that share words, such as `gigapath_probe` and
+  `gigapath_probe_partition`, share trigrams and lie near each other.
+- **The rest** is embedded by the base embedder (nomic-embed-text by default)
+  and normalized to a unit vector.
+
+The point's vector is the label's vector, scaled by a weight *w* (3 by
+default), followed by the rest's vector. UMAP lays the points out under the
+cosine metric. Take two pipelines with the same label. The label parts give
+a dot product of *w²* and the rest parts give at least −1, while each vector
+has a squared norm of *w² + 1*. So their cosine similarity is at least
+(*w²* − 1)/(*w²* + 1), which is 0.8 at *w* = 3, however much their specs
+differ. Pipelines with one label therefore form one cluster, and their
+specs, signatures and `VAR.name` (a key of the spec) place them within it.
+Pipelines with different labels are held apart by up to the full weight of
+their label vectors.
+
+The embedder's name, `label-first(3):<base>`, is stored with the corpus.
+Changing the weight or the base embedder therefore re-embeds the corpus, as
+switching embedders does.
+
+## DATABLOCKS
 
 ```bash
 DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal dbx.dataparts.DatatableCorePart
@@ -218,7 +299,8 @@ stored corpus.
 ## Specializing
 
 `hyp.app.Hyp` is the app; a specialization overrides its hooks, and only
-those: `__source__` and `__default_data__` (where the corpus comes from),
+those: `__source__`, `__default_data__` and `__data_origin__` (where the
+corpus comes from, and what to name when it cannot be opened),
 `__open_point__` (a right click on a point), and `__point_label__`,
 `__point_datetime__`, `__point_tooltip__` (how a point is labeled).
 `hyp.dbxpipelines.HypDbxJournal` is the example.

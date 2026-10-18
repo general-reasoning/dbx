@@ -94,6 +94,27 @@ class TestUseBlockSpecializations:
         assert 'use_specializations=False' not in quiet.quote()
 
 
+    def test_off_the_stack_looks_for_no_past(self, grown, monkeypatch):
+        """use_block_specializations=False: no journal handed out, no tablet adopts -- each is built."""
+        from dbx.datablocks import DatablockSpecializationInstaller
+        installs, init = [], DatablockSpecializationInstaller.__init__
+
+        def spy(self, *args, install=True, **kwargs):
+            installs.append(install)
+            init(self, *args, install=install, **kwargs)
+        monkeypatch.setattr(DatablockSpecializationInstaller, '__init__', spy)
+        table = v1table(grown, spec={'n': 3}, use_block_specializations=False)
+        table.build()
+        assert installs and not any(installs), "its tablets classified, none looking for a past"
+        assert _redirected(table) == [False, False, False]
+        assert table.valid()
+
+    def test_on_the_same_tablets_adopt(self, grown):
+        table = v1table(grown, spec={'n': 3})
+        table.build()
+        assert _redirected(table) == [True, True, True]
+
+
 class TestClearRedirection:
 
     def test_a_block_reads_its_own_again(self, grown):

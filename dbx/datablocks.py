@@ -8613,7 +8613,10 @@ class Datastack(Datablock):
             return pd.Series([None] * n, dtype=object), [], {}, paths
 
         full = 'validate' if validation == 'validate' else 'valid'
-        specs = self._block_class_() is not None and self._block_specializations_()
+        # use_block_specializations=False: no block of it adopts a past, so none is looked for -- no
+        # journal handed out, no lookup per block; the invalid ones are classified and built.
+        specs = (self._block_class_() is not None and getattr(self, 'use_block_specializations', None) is not False
+                 and self._block_specializations_())
         self.log.info(f"{self.anchorkeypath}: {len(invalid)} of {n} {item_label} not valid"
                       + ("; looking for earlier builds of them to adopt, before computing any" if specs else ""))
         # The journal handed to the blocks: the caller's, or `_build_journal_`'s -- by

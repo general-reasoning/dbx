@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`use_block_specializations=False` looks for no past.** A stack with it off no
+  longer enters its "ATTEMPTING SPECIALIZATION" pass -- no journal handed to its
+  blocks, no lookup per block -- but classifies its invalid blocks and builds them:
+  what a run whose blocks are known to have no earlier build of themselves asks for.
 - **`BlocksJournal` is gone: a stack hands its blocks a `BuildJournalFrame`.** The
   build journal a stack reads once for its blocks -- or `BY_HASH` -- travels to the
   workers forming them as the frame itself, its new `read_anchor` and

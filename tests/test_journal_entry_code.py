@@ -56,7 +56,7 @@ class TestEveryCallGetsItsOwnCode:
         b = block(tmp_path)
         b.build()
         entry = b.buildjournal(loc=0)
-        assert entry.block.id
+        assert entry.pretty.id
         assert not hasattr(entry, 'entry_code')
         assert not hasattr(entry, 'subhash')
         assert not hasattr(entry, 'subsignature')
@@ -113,12 +113,12 @@ class TestDistinctFromTheTree:
     def test_tree_accessor_reads_the_column(self, tmp_path):
         b = block(tmp_path)
         b.write_journal_entry(event='note')
-        assert block(tmp_path).buildjournal(loc=0).block.tree == b.tree
+        assert block(tmp_path).buildjournal(loc=0).pretty.tree == b.tree
 
     def test_a_tree_can_be_given(self, tmp_path):
         b = block(tmp_path, tree='RUN-7')
         b.write_journal_entry(event='note')
-        assert block(tmp_path).buildjournal(loc=0).block.tree == 'RUN-7'
+        assert block(tmp_path).buildjournal(loc=0).pretty.tree == 'RUN-7'
 
     def test_a_tree_does_not_change_identity(self, tmp_path):
         """Which run built a block cannot change what the block IS."""
@@ -155,7 +155,7 @@ class TestLegacyJournals:
         b = block(tmp_path)
         b.write_journal_entry(event='note')
         entry = b.buildjournal(loc=0)
-        assert BuildJournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).block.id is None
+        assert BuildJournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).pretty.id is None
 
     @pytest.mark.parametrize('legacy', ['session', 'uuid'])
     def test_a_tree_recorded_under_an_older_name_still_reads(self, tmp_path, legacy):
@@ -166,8 +166,8 @@ class TestLegacyJournals:
         # A row as it was written then: no `tree`, and no BuildJournal session.
         old = BuildJournalEntry(entry.drop(['tree', 'session']).copy())
         old[legacy] = 'RUN-7'
-        assert old.block.tree == 'RUN-7'
-        assert old.block.session is None
+        assert old.pretty.tree == 'RUN-7'
+        assert old.pretty.session is None
 
 
 class TestUuid16:

@@ -98,7 +98,7 @@ e['exec'], e['session'], len(e['buildjournal_entries'])   # (..., '692e946a-…'
 | `ej.constructed(anchor=None, **filters)` | as on an entry (below), over every command in the frame |
 
 `dataentries()` and `buildjournal()` hold the same records. Use the list to work
-with one entry at a time (`e.dataentries()[0].block.paths()`), and the frame to
+with one entry at a time (`e.dataentries()[0].pretty.paths()`), and the frame to
 work with columns (`e.buildjournal()[['anchor', 'event', 'hash']]`,
 `e.buildjournal()['hash'].tolist()`).
 
@@ -159,7 +159,7 @@ e.buildjournal()[['anchor', 'event', 'hash']]
 # 1  demo_blocks.Apple  build:end  2e3ec8ff…
 e.anchors()                        # ['demo_blocks.Apple']
 e.constructed()                    # {'demo_blocks.Apple': BuildJournalFrame (2 rows)}
-e.dataentries()[0].block.paths()   # {'x': '…/demo_blocks.Apple/3c293846/x/x.txt'}
+e.dataentries()[0].pretty.paths()   # {'x': '…/demo_blocks.Apple/3c293846/x/x.txt'}
 
 dbx.execjournal(comment='again', iloc=0).dataentries()   # []
 ```
@@ -343,7 +343,7 @@ absent.
 | call | returns |
 |---|---|
 | `entry.read('spec')`, `entry.read('quote', 'note')` | **contents** behind a path column: YAML parsed, `.txt`/`.log` as text; several names give a dict |
-| `entry.block` | `Block`: the block **as recorded**, with `Datablock`'s API shape |
+| `entry.pretty` | `Pretty`: the block **as recorded**, with `Datablock`'s API shape |
 | `entry.inst()` | re-creates the block by evaluating its recorded `quote` in this interpreter |
 | `entry.rinst()` / `entry.inst(remote=True)` / `entry.trueinst()` | same, but on a Ray worker pinned to the entry's `revision`, so the hash matches the recorded one; returns a proxy |
 
@@ -352,10 +352,10 @@ which is already imported. So if `dbx`'s rendering has changed since the
 entry was written, the local instance comes back with a different hash and
 paths that hold nothing. Use `rinst()` when that matters.
 
-`entry.block` is read **off the row**, not recomputed:
+`entry.pretty` is read **off the row**, not recomputed:
 
 ```python
-blk = e.dataentries()[0].block       # Block(demo_blocks.Apple/3c2938466890…)
+blk = e.dataentries()[0].pretty       # Pretty(demo_blocks.Apple/3c2938466890…)
 blk.hash, blk.anchor, blk.key, blk.revision, blk.session, blk.tree   # properties
 blk.paths()        # {'x': '…/3c293846/x/x.txt'}: the paths actually written
 blk.topics()       # ['x']

@@ -92,7 +92,7 @@ class TestDIRTOPICInTheJournal:
         b = WithDIR(datalake=str(tmp_path))
         b.build()
         entry = b.buildjournal(iloc=-1)
-        assert entry.block.TOPICS['checkpoints'] is None
-        assert entry.block.TOPICS['logs'] == 'train.log'
-        assert entry.block._is_dir_topic_('checkpoints')
-        assert not entry.block._is_dir_topic_('logs')
+        assert entry.pretty.TOPICS['checkpoints'] is None
+        assert entry.pretty.TOPICS['logs'] == 'train.log'
+        assert entry.pretty._is_dir_topic_('checkpoints')
+        assert not entry.pretty._is_dir_topic_('logs')

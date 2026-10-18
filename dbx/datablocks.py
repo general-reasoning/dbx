@@ -36,6 +36,7 @@ import random
 import re
 import shutil
 import sys
+import traceback
 import tempfile
 import threading
 from typing import Callable, Optional, Union
@@ -101,7 +102,7 @@ from .journals import (
     CallableSig,
     CallableType,
     CallableTp,
-    Block,
+    Pretty,
     BuildJournalEntry,
     BuildJournalFrame,
     one_datalake,
@@ -1159,7 +1160,7 @@ class Datablock:
         'version', 'dbx_version', 'revision',
         'datalake', 'anchor', 'keyby', 'key', 'anchorkeypath', 'tag',
         'topics', 'paths', 'slices', 'note',
-        'spec', 'dfn', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type',
+        'spec', 'kwargs', 'quote', 'cite', 'repr', 'signature', 'type',
         'gitrepo', 'entry_path', 'event',
     ]
 
@@ -2351,7 +2352,7 @@ class Datablock:
     def valid(self):
         red = self.redirection
         entry = red.entry if red is not None else None
-        return self.__valid__(path=entry.block.anchorkeypath if entry is not None else None)
+        return self.__valid__(path=entry.pretty.anchorkeypath if entry is not None else None)
 
     def why_invalid(self, validation: str = 'valid') -> str | None:
         """Why this block is not valid, and what makes it so -- or None when it is.
@@ -2411,8 +2412,19 @@ class Datablock:
         self.write_journal_entry(event="build:start",)
         return self
 
-    def __post_build__(self, *args, event="build:end", **kwargs):
-        self.write_journal_entry(event=event,)
+    def __post_build__(self, *args, event="build:end", failure: BaseException | None = None, **kwargs):
+        """The journal entry for a build that ended: *event*, and -- for one that raised -- *failure*.
+
+        A failure is recorded in the entry itself, written in the process the
+        build failed in, a worker's too: ``exception``, ``'<Type>: <message>'`` as
+        the exec journal has it, and ``traceback`` as Python prints it. So why a
+        block failed is in its journal, whether or not anything captured output.
+        """
+        columns = None
+        if failure is not None:
+            columns = {'exception': f"{type(failure).__name__}: {failure}",
+                       'traceback': ''.join(traceback.format_exception(failure))}
+        self.write_journal_entry(event=event, columns=columns)
         return self
 
     def __build__(self, *args, **kwargs):
@@ -2867,7 +2879,7 @@ class Datablock:
         # instance, which redirection caches.
         if self._redirected_paths_ is not None and not self.ownedtopics():
             entry = self.redirection.entry if self.redirection is not None else None
-            whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
+            whither = (f"journal entry {entry.pretty.id} (hash {entry.pretty.hash})"
                        if entry is not None else f"the paths {self._redirected_paths_}")
             self.log.verbose(
                 f"BUILD ELIDED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
@@ -2888,7 +2900,7 @@ class Datablock:
             self.specialize(journal=self.__dict__.get('__specialization_journal__'))
         if self._redirected_paths_ is not None and not self.ownedtopics():
             entry = self.redirection.entry if self.redirection is not None else None
-            whither = (f"journal entry {entry.block.id} (hash {entry.block.hash})"
+            whither = (f"journal entry {entry.pretty.id} (hash {entry.pretty.hash})"
                        if entry is not None else f"the paths {self._redirected_paths_}")
             self.log.verbose(
                 f"BUILD ELIDED: {self.anchorkeypath} is REDIRECTED to {whither}, and reads "
@@ -2926,10 +2938,10 @@ class Datablock:
             else:
                 self.log.selected(f"Skipping existing datablock: {self.anchorkeypath}")
         except KeyboardInterrupt as e:
-            self.__post_build__(*args, event="build:keyboard_interrupt", **kwargs)
+            self.__post_build__(*args, event="build:keyboard_interrupt", failure=e, **kwargs)
             raise(e)
         except Exception as e:
-            self.__post_build__(*args, event="build:exception", **kwargs)
+            self.__post_build__(*args, event="build:exception", failure=e, **kwargs)
             raise(e)
         return self
 
@@ -3424,12 +3436,12 @@ class Datablock:
             self.log.warning(f"redirection: filter {filter!r} matches no journal entry")
             return None
 
-        resolved_paths = self._mapped_paths_(entry.block.paths(), topic_map, topics)
+        resolved_paths = self._mapped_paths_(entry.pretty.paths(), topic_map, topics)
         self.__dict__['__redirected_paths__'] = resolved_paths
 
         self.log.verbose(
-            f"REDIRECTION: {self.anchorkeypath} reads from journal entry {entry.block.id} "
-            f"instead (hash {entry.block.hash}, event {entry.get('event')!r}, written "
+            f"REDIRECTION: {self.anchorkeypath} reads from journal entry {entry.pretty.id} "
+            f"instead (hash {entry.pretty.hash}, event {entry.get('event')!r}, written "
             f"{entry.get('datetime')}), matched by {filter!r}"
             + (f", topics mapped {topic_map!r}" if topic_map else "")
             + (f", restricted to topics {topics!r}" if topics else "")
@@ -3595,7 +3607,7 @@ class Datablock:
                 j = BuildJournalFrame(journal, storage_options=getattr(journal, 'storage_options', self.storage_options), **dict(filter))
                 if len(j) > 0:
                     entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else BuildJournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
-                    target_paths = entry.block.paths()
+                    target_paths = entry.pretty.paths()
                     if target_paths is None or not isinstance(target_paths, dict):
                         try:
                             target_paths = entry.inst(remote=remote).paths()
@@ -3603,7 +3615,7 @@ class Datablock:
                             self.log.detailed(f"UNSAFE_redirect: entry.inst() failed: {e}")
                     if target_paths is not None:
                         target_paths = self._chase_redirected_paths_(target_paths)
-                    redirect_record = (entry.block.id if topics is None else
+                    redirect_record = (entry.pretty.id if topics is None else
                                        {'filter': dict(filter), 'topics': list(topics)})
             except Exception as e:
                 self.log.warning(f"UNSAFE_redirect: filter {filter!r} failed on journal: {e}")
@@ -3621,7 +3633,7 @@ class Datablock:
                 j = journal if isinstance(journal, BuildJournalFrame) else BuildJournalFrame(journal, storage_options=self.storage_options)
                 if len(j) > 0:
                     entry = j.get(0, dropna=True) if hasattr(j, 'get') and 0 in j.index else BuildJournalEntry(j.iloc[0].dropna(), storage_options=getattr(j, 'storage_options', self.storage_options))
-                    target_paths = entry.block.paths()
+                    target_paths = entry.pretty.paths()
                     if target_paths is None or not isinstance(target_paths, dict):
                         try:
                             target_paths = entry.inst(remote=remote).paths()
@@ -3629,7 +3641,7 @@ class Datablock:
                             self.log.detailed(f"UNSAFE_redirect: entry.inst() failed: {e}")
                     if target_paths is not None:
                         target_paths = self._chase_redirected_paths_(target_paths)
-                    redirect_record = entry.block.id
+                    redirect_record = entry.pretty.id
             except Exception as e:
                 self.log.warning(f"UNSAFE_redirect: failed reading journal: {e}")
 
@@ -3672,8 +3684,8 @@ class Datablock:
                 f"  - I would record {redirect_record!r} as this block's redirection\n"
                 + (f"  - I would record it as the specialization {specialization!r}\n"
                    if specialization is not None else "")
-                + (f"  - the redirection would come from journal entry {entry.block.id} "
-                   f"(hash {entry.block.hash})\n" if entry is not None else "")
+                + (f"  - the redirection would come from journal entry {entry.pretty.id} "
+                   f"(hash {entry.pretty.hash})\n" if entry is not None else "")
                 + f"  - I would read these topics through the redirection: {remapped_paths!r}\n"
                 + ((f"  - I checked those paths: all {len(validation)} topics are THERE\n"
                     if validation
@@ -3955,7 +3967,7 @@ class Datablock:
         """
         entry = self.buildjournal(**journal)
         return self.UNSAFE_copy_from(
-            entry.block.anchorkeypath,
+            entry.pretty.anchorkeypath,
             OVERRIDE=OVERRIDE,
             overwrite=overwrite,
             topicpaths=topicpaths,
@@ -4704,7 +4716,7 @@ class Datablock:
                     f"no entry with hash {row['hash']} records data that is still there")
             else:
                 row['paths'], entry = resolved
-                row['entry'] = entry.block.id
+                row['entry'] = entry.pretty.id
             rows.append(row)
         return rows
 
@@ -4734,7 +4746,7 @@ class Datablock:
                 hash=self.get_hash(sp),
                 matches=True,
                 why=None,
-                entry=entry.block.id,
+                entry=entry.pretty.id,
                 paths=paths,
                 topics=named,
                 builds=[t for t in self.topics() if t not in named],
@@ -5024,11 +5036,11 @@ class Datablock:
 
     def write_journal_entry(self, event: str, *, note: str = None, inline_note: bool = False,
                             message: str = None, inline_message: bool = False, journal_prefix: str = '',
-                            redirection: 'str | dict | None' = None):
+                            redirection: 'str | dict | None' = None, columns: dict | None = None):
         """Write one journal entry for *event*, under the current `BuildJournal` session. See `BuildJournal.write`."""
         return BuildJournal.write(self, event, note=note, inline_note=inline_note,
                                  message=message, inline_message=inline_message,
-                                 journal_prefix=journal_prefix, redirection=redirection)
+                                 journal_prefix=journal_prefix, redirection=redirection, columns=columns)
 
     @staticmethod
     def BuildJournal(anchor, loc: int = None, *, iloc: int = None, datalake=None, storage_options=None, log=None, n_workers=8, index=None, unnormalized: bool = False, url=None, **filter_kwargs):
@@ -5709,14 +5721,14 @@ class Datablock:
             target_entry = self._find_journal_entry_by_code_(code_of_target)
             if target_entry is None:
                 raise ValueError(f"redirect failed: no journal entry found for code {code_of_target!r}")
-            resolved_paths = target_entry.block.paths()
+            resolved_paths = target_entry.pretty.paths()
 
         elif filter_spec is not None:
             target_entry = self._find_journal_entry_by_filter_(filter_spec)
             if target_entry is None:
                 raise ValueError(f"redirect failed: filter {filter_spec!r} matches no journal entry")
-            code_of_target = target_entry.block.id
-            resolved_paths = target_entry.block.paths()
+            code_of_target = target_entry.pretty.id
+            resolved_paths = target_entry.pretty.paths()
 
         elif paths is not None:
             code_of_target = None
@@ -6213,12 +6225,12 @@ class Datablock:
                     for _, row in sub.iterrows():
                         entry = BuildJournalEntry(row, storage_options=self.storage_options)
                         when = row.get('datetime')
-                        if entry.block.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
+                        if entry.pretty.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
                             if latest is None or str(when) > str(latest[0]):
                                 latest = (when, None)
-                        elif entry.block.redirection is not None:
+                        elif entry.pretty.redirection is not None:
                             if latest is None or str(when) > str(latest[0]):
-                                red_val = entry.block.redirection
+                                red_val = entry.pretty.redirection
                                 if isinstance(red_val, str) and not red_val.startswith('{'):
                                     latest = (when, {'filter': {'id': red_val}})
                                 else:
@@ -6255,12 +6267,12 @@ class Datablock:
             for _, row in df.iterrows():
                 entry = BuildJournalEntry(row, storage_options=self.storage_options)
                 when = row.get('datetime')
-                if entry.block.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
+                if entry.pretty.redirection is False or entry.get('event', '').startswith('UNSAFE_clear'):
                     if latest is None or str(when) > str(latest[0]):
                         latest = (when, None)
-                elif entry.block.redirection is not None:
+                elif entry.pretty.redirection is not None:
                     if latest is None or str(when) > str(latest[0]):
-                        red_val = entry.block.redirection
+                        red_val = entry.pretty.redirection
                         if isinstance(red_val, str) and not red_val.startswith('{'):
                             latest = (when, {'filter': {'id': red_val}})
                         else:
@@ -6945,7 +6957,7 @@ class Datablock:
             # A journal records a list-TOPICS block as a mapping of DIRTOPIC,
             # so the two render alike from an entry even though they do not from
             # the blocks themselves. Compare two LIVE blocks to see that one.
-            other_topics = other_topics.block.TOPICS
+            other_topics = other_topics.pretty.TOPICS
         elif isinstance(other_topics, str):
             other_topics = literal_topics(other_topics)
         topicmap = self._topic_map_(other_topics)
@@ -7169,9 +7181,9 @@ class Datablock:
             if entry.get('event') not in self.SPECIALIZATION_EVENTS:
                 continue
             candidates += 1
-            recorded = entry.block.paths()
+            recorded = entry.pretty.paths()
             if not isinstance(recorded, dict) or not recorded:
-                note(f"entry {entry.block.id} records no paths at all")
+                note(f"entry {entry.pretty.id} records no paths at all")
                 continue
             if getattr(specialization, 'UNSAFE_redirect_all_topics', False):
                 wanted = list(self.topics())
@@ -7186,20 +7198,20 @@ class Datablock:
             if len(paths) < len(wanted):
                 missing = sorted(set(wanted) - set(paths))
                 self.log.verbose(
-                    f"specialization: entry {entry.block.id} for hash {h} records no path "
+                    f"specialization: entry {entry.pretty.id} for hash {h} records no path "
                     f"for {missing}; skipping it"
                 )
-                note(f"entry {entry.block.id} records no path for {missing} -- a "
+                note(f"entry {entry.pretty.id} records no path for {missing} -- a "
                  f"specialization is all of its topics or none of them")
                 continue
             paths = self._chase_redirected_paths_(paths)
             gone = sorted(t for t, p in paths.items() if not self.valid_path(p))
             if gone:
                 self.log.verbose(
-                    f"specialization: entry {entry.block.id} for hash {h} records paths that "
+                    f"specialization: entry {entry.pretty.id} for hash {h} records paths that "
                     f"are not there any more; skipping it"
                 )
-                note(f"entry {entry.block.id} records {gone} at paths that are not there "
+                note(f"entry {entry.pretty.id} records {gone} at paths that are not there "
                      f"any more -- that build has been cleared")
                 continue
             return paths, entry
@@ -7590,7 +7602,7 @@ class Datablock:
             )
             self.log.verbose(
                 f"SPECIALIZATION: {self.anchorkeypath} reads {list(offered.keys())} "
-                f"from journal entry {entry.block.id} (hash {self.get_hash(sp)}) instead, "
+                f"from journal entry {entry.pretty.id} (hash {self.get_hash(sp)}) instead, "
                 f"as {sp!r}"
             )
             if not needed:

@@ -14,7 +14,7 @@ import pytest
 
 import dbx
 from dbx.datablocks import DATAFILE, Datablock
-from dbx.journals import Block as JournalBlock, PipeJournal
+from dbx.journals import PipeJournal, Pretty as JournalBlock
 from dbx.pipelines import pipeline
 from test_partition_coalesce import RowsTable, TABLETS, split  # noqa: E402
 from test_partition_methods import built_parts  # noqa: E402

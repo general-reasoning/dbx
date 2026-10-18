@@ -99,7 +99,7 @@ def grown(tmp_path, monkeypatch):
 def test_the_record_carries_the_paths(grown):
     tablet = adopted(v1table(grown, spec={'n': 3}).tablet(0))  # installs, and records
     entry = tablet.buildjournal(event='^UNSAFE_redirect$', hash=tablet.hash, iloc=0, index=None)
-    assert 'paths' in entry.block.redirection
+    assert 'paths' in entry.pretty.redirection
 
 
 def test_where_a_specialized_tablet_reads_from_costs_no_journal_read(grown, monkeypatch):

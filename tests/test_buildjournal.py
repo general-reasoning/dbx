@@ -103,7 +103,7 @@ class TestABlockHasNoJournalOfItsOwn:
         assert BuildJournal.current() is DEFAULT_BUILDJOURNAL
         b = block(tmp_path)
         b.build()
-        assert b.buildjournal(loc=0).block.session == DEFAULT_BUILDJOURNAL.session
+        assert b.buildjournal(loc=0).pretty.session == DEFAULT_BUILDJOURNAL.session
 
     def test_a_handle_is_shared_not_copied(self):
         dj = BuildJournal()
@@ -163,12 +163,12 @@ class TestSession:
             b.write_journal_entry(event='note')
         j = b.buildjournal()
         assert list(j['session']) == [dj.session] * 2
-        assert b.buildjournal(loc=0).block.session == dj.session
+        assert b.buildjournal(loc=0).pretty.session == dj.session
 
     def test_distinct_from_the_tree(self, tmp_path):
         with BuildJournal() as dj:
             block(tmp_path, tree='TREE').write_journal_entry(event='note')
-        entry = block(tmp_path).buildjournal(loc=0).block
+        entry = block(tmp_path).buildjournal(loc=0).pretty
         assert (entry.tree, entry.session) == ('TREE', dj.session)
 
     def test_survives_pickling(self):
@@ -259,7 +259,7 @@ class TestWithScope:
             b = block(tmp_path)
         b.build()
         assert dj.written_entries() == []
-        assert b.buildjournal(loc=0).block.session == DEFAULT_BUILDJOURNAL.session
+        assert b.buildjournal(loc=0).pretty.session == DEFAULT_BUILDJOURNAL.session
 
     def test_the_innermost_wins_and_nesting_unwinds(self):
         with BuildJournal() as outer:
@@ -298,11 +298,13 @@ class TestWithScope:
         assert seen['worker'] is seen['mine'] and seen['main'] is dj
         assert seen['after'] is dj
 
-    def test_dfn_yaml_carries_no_journal(self, tmp_path):
-        from dbx.databits import read_yaml
+    def test_no_dfn_is_recorded(self, tmp_path):
+        """A block's definition is read off its quote, its spec and its kwargs: no entry records a dfn of its own."""
         b = block(tmp_path)
         b.build()
-        assert 'buildjournal' not in read_yaml(b.buildjournal(loc=0)['dfn'], safe=True)
+        entry = b.buildjournal(iloc=0)
+        assert 'dfn' not in entry.index and not hasattr(entry.pretty, 'dfn')
+        assert not os.path.exists(os.path.join(b.anchorkeypath, '.journal', b.fqcn, 'dfn'))
 
 
 class TestExec:
@@ -389,9 +391,9 @@ class TestExecJournal:
         a, b = self._run(tmp_path)
         entries = dbx.journal(iloc=0).dataentries()
         assert all(isinstance(e, BuildJournalEntry) for e in entries)
-        assert [(e.block.hash, e['event']) for e in entries] == [
+        assert [(e.pretty.hash, e['event']) for e in entries] == [
             (a.hash, 'build:start'), (a.hash, 'build:end'), (b.hash, 'build:start'), (b.hash, 'build:end')]
-        assert [e.block.typestr() for e in entries] == [a.typestr()] * 2 + [b.typestr()] * 2
+        assert [e.pretty.typestr() for e in entries] == [a.typestr()] * 2 + [b.typestr()] * 2
 
     def test_a_filter_then_entries(self, tmp_path):
         self._run(tmp_path)
@@ -460,9 +462,9 @@ class TestRepr:
         b = block(tmp_path)
         b.build()
         entry = b.buildjournal(loc=0)
-        assert entry.block.repr() == b.repr()
+        assert entry.pretty.repr() == b.repr()
         assert entry.read('repr') == b.repr()
-        d = entry.block.to_dict()
+        d = entry.pretty.to_dict()
         assert (d['repr'], d['quote'], d['cite']) == (b.repr(), b.quote(), b.cite())
 
 
@@ -556,7 +558,7 @@ class TestJournalIndex:
         b = block(tmp_path)
         b.build()
         entry_id = b.buildjournal(iloc=0)['id']
-        assert dbx.journal(Built, datalake=str(tmp_path), loc=entry_id).block.id == entry_id
+        assert dbx.journal(Built, datalake=str(tmp_path), loc=entry_id).pretty.id == entry_id
 
     def test_none_numbers_it(self, tmp_path):
         dbx.exec("1 + 1")
@@ -686,6 +688,23 @@ class Other(Datablock):
             f.write('data')
 
 
+class TestAFailedBuildRecordsWhy:
+    """A build that raises writes its exception and traceback into its build:exception entry."""
+
+    def test_the_exception_and_its_traceback(self, tmp_path):
+        with pytest.raises(RuntimeError, match='boom'):
+            Other(datalake=str(tmp_path), spec={'fail': True}).build()
+        entry = Other(datalake=str(tmp_path), spec={'fail': True}).buildjournal(event='build:exception', iloc=0)
+        assert entry['exception'] == 'RuntimeError: boom'
+        assert entry['traceback'].startswith('Traceback (most recent call last):')
+        assert 'raise RuntimeError("boom")' in entry['traceback']
+
+    def test_a_build_that_ends_records_none(self, tmp_path):
+        Other(datalake=str(tmp_path)).build()
+        j = Other(datalake=str(tmp_path)).buildjournal()
+        assert 'exception' not in j.columns or j['exception'].isna().all()
+
+
 class TestConstructed:
     """What a command CONSTRUCTED: built, redirected, copied in, or noted -- by anchor."""
 
@@ -809,7 +828,7 @@ class TestTwoJournals:
         assert isinstance(dbx.buildjournal(b), BuildJournalFrame)
         assert isinstance(dbx.execjournal(), ExecJournalFrame)
         assert dbx.execjournal(iloc=0)['exec'] == 'b.build()'
-        assert dbx.buildjournal(b, iloc=0).block.hash == b.hash
+        assert dbx.buildjournal(b, iloc=0).pretty.hash == b.hash
 
     def test_journal_picks_the_same_one(self, tmp_path):
         b = block(tmp_path)
@@ -895,6 +914,10 @@ class TestAcrossProcesses:
         # build:exception of its own, in this process -- and its sibling's,
         # which succeeded after the failure had stopped the collecting.
         assert sorted(events) == ['build:end', 'build:exception', 'build:start', 'build:start']
+        # Why it failed is in its own entry, written in the worker: nothing captured output here.
+        failed = frame[(frame['anchor'] == Timed.anchor) & (frame['event'] == 'build:exception')].iloc[0]
+        assert failed['exception'] == 'RuntimeError: boom'
+        assert 'raise RuntimeError("boom")' in failed['traceback'] and 'in __build__' in failed['traceback']
 
     def test_results_are_the_callables_values(self, tmp_path):
         from dbx.databits import callable_executor
@@ -910,8 +933,8 @@ class TestAcrossProcesses:
         hashes = callable_executor('multiprocessing', n_workers=1).exec_callables(
             [functools.partial(_built_under_the_scope, 0)])
         entry = block(tmp_path, x=100).buildjournal(iloc=0)
-        assert hashes == [entry.block.hash]
-        assert entry.block.session == DEFAULT_BUILDJOURNAL.session
+        assert hashes == [entry.pretty.hash]
+        assert entry.pretty.session == DEFAULT_BUILDJOURNAL.session
         assert entry['id'] in ids(DEFAULT_BUILDJOURNAL.written_entries())
 
     def test_a_stream_keeps_what_arrived_after_a_failure(self, tmp_path):

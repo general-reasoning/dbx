@@ -222,14 +222,14 @@ class TestJournalOnMemory:
         block.build()
         j = block.buildjournal()
         entry = j.get(0)
-        assert entry.block.url == mem_url
+        assert entry.pretty.url == mem_url
 
     def test_journal_entry_has_correct_hash(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
         block.build()
         j = block.buildjournal()
         entry = j.get(0)
-        assert entry.block.hash == block.hash
+        assert entry.pretty.hash == block.hash
 
     def test_static_journal_on_memory(self, mem_url):
         block = MemSingleTopic(datalake=mem_url)
@@ -254,7 +254,7 @@ class TestBuildJournalEntryPaths:
             'subhash': 'ab12cd34',
         }
         entry = BuildJournalEntry(pd.Series(data))
-        akp = entry.block.anchorkeypath
+        akp = entry.pretty.anchorkeypath
         assert akp.startswith('memory://')
         assert 'my.module.MyBlock' in akp
         assert 'abc123de' in akp  # hash[:8] (tag_version_shorthash default)
@@ -267,7 +267,7 @@ class TestBuildJournalEntryPaths:
             'subhash': 'ab12cd34',
         }
         entry = BuildJournalEntry(pd.Series(data))
-        akp = entry.block.anchorkeypath
+        akp = entry.pretty.anchorkeypath
         assert akp.startswith('memory://')
         assert 'abc123de' in akp  # hash[:8] (tag_version_shorthash default)
 
@@ -280,8 +280,8 @@ class TestBuildJournalEntryPaths:
             'subhash': 'ab12cd34',
         }
         entry = BuildJournalEntry(pd.Series(data))
-        assert not entry.block.anchorkeypath.startswith('file://')
-        assert '/tmp/dbx_test' in entry.block.anchorkeypath
+        assert not entry.pretty.anchorkeypath.startswith('file://')
+        assert '/tmp/dbx_test' in entry.pretty.anchorkeypath
 
     def test_root_property_from_url(self):
         """BuildJournalEntry.root should derive from url."""
@@ -291,7 +291,7 @@ class TestBuildJournalEntryPaths:
             'hash': 'abc',
         }
         entry = BuildJournalEntry(pd.Series(data))
-        assert entry.block.root == '/bucket/root'
+        assert entry.pretty.root == '/bucket/root'
 
     def test_root_property_legacy_fallback(self):
         """BuildJournalEntry.root should fall back to 'root' field when no url."""
@@ -301,7 +301,7 @@ class TestBuildJournalEntryPaths:
             'hash': 'abc',
         }
         entry = BuildJournalEntry(pd.Series(data))
-        assert entry.block.root == '/legacy/path'
+        assert entry.pretty.root == '/legacy/path'
 
     def test_journal_entry_from_real_build(self, mem_url):
         """BuildJournalEntry produced by a real build has correct anchorkeypath."""
@@ -310,9 +310,9 @@ class TestBuildJournalEntryPaths:
         j = block.buildjournal()
         entry = j.get(0)
         # Entry should have url, not root
-        assert entry.block.url == mem_url
+        assert entry.pretty.url == mem_url
         assert entry.get('root') is None
         # anchorkeypath should start with protocol
-        akp = entry.block.anchorkeypath
+        akp = entry.pretty.anchorkeypath
         assert akp.startswith('memory://')
-        assert entry.block.anchor in akp
+        assert entry.pretty.anchor in akp

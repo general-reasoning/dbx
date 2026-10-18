@@ -270,24 +270,24 @@ class TestSignature:
 class TestJournal:
 
     def test_the_declared_shape_is_recorded(self, built):
-        topics = built.buildjournal(iloc=-1).block.TOPICS
+        topics = built.buildjournal(iloc=-1).pretty.TOPICS
         assert topics == {
             'data': {'frames': None, 'annotations': (), 'index': 'index.csv'},
             'model': 'model.pt',
         }
 
     def test_recorded_paths_are_nested(self, built):
-        paths = built.buildjournal(iloc=-1).block.paths()
+        paths = built.buildjournal(iloc=-1).pretty.paths()
         assert paths['data']['index'] == built.path('data', 'index')
 
     def test_entry_addresses_topics_by_path(self, built):
         entry = built.buildjournal(iloc=-1)
-        assert entry.block._is_dir_topic_('data', 'frames')
-        assert entry.block._is_syntopic_('data', 'annotations')
-        assert entry.block.is_topicgroup('data')
-        assert not entry.block.is_topicgroup('model')
+        assert entry.pretty._is_dir_topic_('data', 'frames')
+        assert entry.pretty._is_syntopic_('data', 'annotations')
+        assert entry.pretty.is_topicgroup('data')
+        assert not entry.pretty.is_topicgroup('model')
 
     def test_entry_listing_matches_the_block(self, built):
         entry = built.buildjournal(iloc=-1)
-        assert entry.block.size('data') == built.size('data')
-        assert {os.path.basename(x) for x in entry.block.ls('data', 'frames')} == {'f0.bin'}
+        assert entry.pretty.size('data') == built.size('data')
+        assert {os.path.basename(x) for x in entry.pretty.ls('data', 'frames')} == {'f0.bin'}

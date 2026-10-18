@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A failed build records why.** Its `build:exception` (or `build:keyboard_interrupt`)
+  entry holds `exception` -- `'<Type>: <message>'`, as the exec journal has it -- and
+  `traceback`, written in the process the build failed in, a worker's too: the
+  cause is in the journal whether or not output was captured.
+- **`BuildJournalEntry.block` is `.pretty`, and `Block` is `Pretty`.** The view of an
+  entry as the block it records; `Datastack.block(i)` is unchanged. `Pretty.quote()`
+  lays the recorded quote out as `cite()` does -- a keyword a line, nested blocks
+  indented, nothing escaped (`cite_specline`); `quote(pretty=False)` is the
+  evaluable text as recorded, which `to_dict()` exports.
+- **No entry records a `dfn`.** It said nothing the quote, the spec and the kwargs do
+  not; entries from before keep theirs, and PipeJournal compaction their files.
 - **`use_block_specializations=False` looks for no past.** A stack with it off no
   longer enters its "ATTEMPTING SPECIALIZATION" pass -- no journal handed to its
   blocks, no lookup per block -- but classifies its invalid blocks and builds them:

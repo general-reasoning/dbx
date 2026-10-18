@@ -579,7 +579,7 @@ class TestDatablockJournalArgThreading:
         assert len(j_inst) >= 1
 
     def test_journal_entry_block(self, tmp_path, monkeypatch):
-        """entry.block is a Datablock-SHAPED view of the recorded row."""
+        """entry.pretty is a Datablock-SHAPED view of the recorded row."""
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         b = BuildableBlock(datalake=str(tmp_path))
         b.build()
@@ -589,7 +589,7 @@ class TestDatablockJournalArgThreading:
 
         entry = b.buildjournal(iloc=0)
         assert isinstance(entry, BuildJournalEntry)
-        block = entry.block
+        block = entry.pretty
 
         assert block.hash == b.hash
         assert block.code == b.code
@@ -604,11 +604,11 @@ class TestDatablockJournalArgThreading:
         assert block.topics() == b.topics()
 
         # The entry is NOT mirrored: the Datablock-shaped API lives on the
-        # Block. Note hasattr() cannot tell you that -- a pandas Series
+        # Pretty. Note hasattr() cannot tell you that -- a pandas Series
         # resolves an unknown attribute to a COLUMN of the same name, so
         # `entry.paths` still answers, with the raw recorded string.
         for name in ('paths', 'topics', 'signature', 'type', 'ls', 'anchor'):
-            assert name not in type(entry).__dict__, f"{name!r} belongs on Block"
+            assert name not in type(entry).__dict__, f"{name!r} belongs on Pretty"
         assert isinstance(entry.get('topics'), str)        # the column, unparsed
         assert block.topics() == ['output']                # parsed, Datablock-shaped
 
@@ -621,7 +621,7 @@ class TestDatablockJournalArgThreading:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         b = BuildableBlock(datalake=str(tmp_path))
         b.build()
-        block = b.buildjournal(iloc=0).block
+        block = b.buildjournal(iloc=0).pretty
         for kw in ({'legacy': True}, {'legacy_typing': True}, {'legacy_signature': True}):
             with pytest.raises(TypeError, match='already rendered'):
                 block.signaturestr(**kw)
@@ -636,14 +636,14 @@ class TestDatablockJournalArgThreading:
         monkeypatch.setenv('DBX_DIRTY_REPO_OK', '1')
         b = BuildableBlock(datalake=str(tmp_path))
         b.build()
-        block = b.buildjournal(iloc=0).block
-        # `read` is the sharp one and stays off Block; build/valid are the
+        block = b.buildjournal(iloc=0).pretty
+        # `read` is the sharp one and stays off Pretty; build/valid are the
         # entry's business too. `ls`/`list`/`size` DO belong here -- they mimic
         # Datablock and read only what the row recorded.
         for name in ('read', 'build', 'valid', 'path'):
-            assert not hasattr(block, name), f"Block should not carry {name!r}"
+            assert not hasattr(block, name), f"Pretty should not carry {name!r}"
         for name in ('ls', 'list', 'size'):
-            assert hasattr(block, name), f"Block should carry {name!r}"
+            assert hasattr(block, name), f"Pretty should carry {name!r}"
 
     def test_journal_entry_field_order_and_cleanup(self, tmp_path, monkeypatch):
         """BuildJournalEntry member ordering, and removal of the renamed fields."""
@@ -657,11 +657,11 @@ class TestDatablockJournalArgThreading:
         assert 'bid' not in members and 'Bid' not in members
         assert 'message' not in members          # replaced by note
 
-        # The Datablock-shaped members moved to Block; the entry keeps only
-        # what manipulates the entry, plus `.block` itself.
-        assert 'block' in members
+        # The Datablock-shaped members moved to Pretty; the entry keeps only
+        # what manipulates the entry, plus `.pretty` itself.
+        assert 'pretty' in members and 'block' not in members
         for name in ('anchor', 'hash', 'paths', 'topics', 'signature', 'type', 'ls'):
-            assert name not in members, f"{name!r} belongs on Block now"
+            assert name not in members, f"{name!r} belongs on Pretty now"
 
 
 
@@ -709,8 +709,8 @@ class TestANullColumnReadsAsNone:
         entry = block.buildjournal(iloc=0)
         assert BuildJournalEntry.column(entry, 'revision') is None
         assert BuildJournalEntry.column(entry, 'gitrepo') is None
-        assert entry.block.revision is None
-        assert entry.block.gitrepo is None
+        assert entry.pretty.revision is None
+        assert entry.pretty.gitrepo is None
 
     def test_inst_falls_back_to_the_current_environment(self, tmp_path, monkeypatch):
         """``inst()`` takes the entry's revision, and 'none recorded' is an answer.

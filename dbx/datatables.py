@@ -930,12 +930,12 @@ class Datatablet(_Database_):
 
     def _tag_filed_paths_(self):
         """``{topic: path}`` where a tag filed it -- `_redirected_paths_` -- or None: not filed by its hash, built here, or not there."""
-        from .journals import Block, BuildJournal
+        from .journals import BuildJournal, Pretty
         if self.keyby in BuildJournal._TAG_KEYBYS_ or self.fs.exists(self.anchorkeypath):
             return None
         here = self.anchorkeypath
         for tag in self._tags_filed_under_():
-            there = os.path.join(self._anchorpath_(), Block._key_from_('tag_version_shorthash', self.hash, tag, self.version))
+            there = os.path.join(self._anchorpath_(), Pretty._key_from_('tag_version_shorthash', self.hash, tag, self.version))
             if not self.fs.exists(there):
                 continue
             redirection = os.path.join(there, '.redirection', 'paths.yaml')

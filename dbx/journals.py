@@ -2,7 +2,7 @@
 
 - :class:`BuildJournal` -- the handle a block writes its build records through,
   and reads them back with; :class:`BuildJournalFrame` / :class:`BuildJournalEntry`
-  are those records as a frame and as a row, and :class:`Block` is an entry's
+  are those records as a frame and as a row, and :class:`Pretty` is an entry's
   view of the block it recorded. :func:`buildjournal` / :func:`journal` read one.
 - :func:`execjournal` / :class:`ExecJournalFrame` / :class:`ExecJournalEntry` --
   the record of each ``dbx.exec()`` run, written by :func:`write_exec_journal`.
@@ -1676,7 +1676,66 @@ class CallableTp(CallableStr):
         return t
 
 
-class Block:
+def cite_specline(text: str, *, deslash: bool = True) -> str:
+    """*text* -- an evaluable ``$fqcn(...)`` specline, a recorded quote -- laid out as `Datablock.cite` lays out a block.
+
+    A keyword a line, ``spec`` an entry a line, and every nested block -- in a
+    specline, a string holding a specline, escaped once more at every level --
+    an indented block of its own, so nothing is left to escape. A nested block
+    is a ``'$fqcn(...)'`` string calling with keywords, as every block's quote
+    does; ``"$dbx.getenv('X')"`` stays as it is. *deslash* strips what
+    backslashes are left, last, as `cite` does. Not evaluable, as a cite is
+    not. *text* comes back unchanged when it does not parse as a call.
+    """
+    import ast
+    IND = '    '
+
+    def call_of(value):
+        if not (isinstance(value, str) and value.startswith('$')):
+            return None
+        try:
+            node = ast.parse(value[1:].strip(), mode='eval').body
+        except SyntaxError:
+            return None
+        return node if isinstance(node, ast.Call) and node.keywords else None
+
+    def holds_a_block(node):
+        return any(isinstance(n, ast.Constant) and call_of(n.value) is not None for n in ast.walk(node))
+
+    def entries(pairs, indent):
+        inner = indent + IND
+        return '\n'.join(f"{inner}{k}{v}," for k, v in pairs)
+
+    def value(node, indent):
+        if isinstance(node, ast.Constant) and call_of(node.value) is not None:
+            return call(call_of(node.value), indent)
+        if isinstance(node, ast.Dict) and holds_a_block(node):
+            pairs = [(f"{ast.unparse(k)}: ", value(v, indent + IND)) for k, v in zip(node.keys, node.values)]
+            return '{\n' + entries(pairs, indent) + f'\n{indent}}}'
+        if isinstance(node, (ast.List, ast.Tuple)) and holds_a_block(node):
+            opening, closing = ('[', ']') if isinstance(node, ast.List) else ('(', ')')
+            return opening + '\n' + entries([('', value(e, indent + IND)) for e in node.elts], indent) + f'\n{indent}{closing}'
+        return ast.unparse(node)
+
+    def call(node, indent):
+        pairs = [('', value(a, indent + IND)) for a in node.args]
+        for kw in node.keywords:
+            if kw.arg == 'spec' and isinstance(kw.value, ast.Dict) and kw.value.keys:
+                inner = indent + IND
+                spec = [(f"{ast.unparse(k)}: ", value(v, inner + IND)) for k, v in zip(kw.value.keys, kw.value.values)]
+                pairs.append(('spec=', '{\n' + entries(spec, inner) + f'\n{inner}}}'))
+            else:
+                pairs.append((f"{kw.arg}=" if kw.arg else '**', value(kw.value, indent + IND)))
+        return f"${ast.unparse(node.func)}(\n" + entries(pairs, indent) + f"\n{indent})"
+
+    root = call_of(text.strip()) if isinstance(text, str) else None
+    if root is None:
+        return text
+    out = call(root, '')
+    return out.replace('\\', '') if deslash else out
+
+
+class Pretty:
     """A `Datablock`-shaped view of one journal entry.
 
     Everything here is READ OFF THE ROW -- the block as it was when the entry
@@ -1706,7 +1765,7 @@ class Block:
         self._entry = entry
 
     def __repr__(self):
-        return f"Block({self.anchor}/{self.hash})"
+        return f"Pretty({self.anchor}/{self.hash})"
 
     # 2. Declared API ------------------------------------------------------
 
@@ -1788,13 +1847,22 @@ class Block:
         """
         return list(self._dict_column_(self._entry, 'topics', parse=datablocks.literal_topics))
 
-    def quote(self, *, deslash: bool = False):
-        """The recorded `Datablock.quote` TEXT -- the evaluable specline -- or None.
+    def quote(self, *, pretty: bool = True, deslash: bool | None = None):
+        """The recorded `Datablock.quote`, laid out to be read as a cite is, or None.
 
-        The TEXT, as on `Datablock`; the row's ``quote`` column holds the path
-        to the file it was written to.
+        *pretty* lays it out as `Datablock.cite` does (`cite_specline`): a
+        keyword a line, every nested block an indented block of its own,
+        nothing left escaped. ``pretty=False`` is the TEXT as recorded -- the
+        evaluable specline. *deslash* strips backslashes: by default when
+        *pretty*, as `cite` does, and not otherwise. The row's ``quote`` column
+        holds the path to the file it was written to.
         """
-        return self._recorded_text_('quote', deslash)
+        text = self._recorded_text_('quote', False)
+        if text is None:
+            return None
+        if pretty:
+            return cite_specline(text, deslash=True if deslash is None else deslash)
+        return text.replace('\\', '') if deslash else text
 
     def cite(self, *, deslash: bool = False):
         """The recorded `Datablock.cite` TEXT, or None. The path is the row's ``cite`` column."""
@@ -1857,7 +1925,7 @@ class Block:
         # The TEXT of each rendering, not the path of the file it was written to.
         d['signature'] = self.signaturestr()
         d['type'] = self.typestr()
-        d['quote'] = self.quote()
+        d['quote'] = self.quote(pretty=False)     # the record: the evaluable text
         d['cite'] = self.cite()
         d['repr'] = self.repr()
         d['paths'] = self.paths()
@@ -2046,7 +2114,7 @@ class Block:
     def _leaf_paths_(node):
         """Every recorded path at or below *node*, flattened."""
         if isinstance(node, dict):
-            return [p for child in node.values() for p in Block._leaf_paths_(child)]
+            return [p for child in node.values() for p in Pretty._leaf_paths_(child)]
         return [node]
 
     def _topic_path_(self, *topicpath):
@@ -2168,7 +2236,7 @@ class Block:
                            if k.startswith('legacy') and kwargs[k] is not None)
         if offending:
             raise TypeError(
-                f"Block.{what}: {offending} choose how a signature is rendered, "
+                f"Pretty.{what}: {offending} choose how a signature is rendered, "
                 f"but this row records one already rendered. Ask the block "
                 f"itself ({what}(legacy_typing=...)) for another rendering."
             )
@@ -2418,15 +2486,15 @@ class BuildJournalEntry(pd.Series):
     # 3. Accessors ---------------------------------------------------------
 
     @property
-    def block(self):
-        """This entry's `Block`: the block as it was when the entry was written.
+    def pretty(self):
+        """This entry's `Pretty`: the block as it was when the entry was written.
 
         The Datablock-shaped API lives there and ONLY there: nothing on this
         class forwards to it. ``entry.paths`` is the row's ``paths`` column --
         pandas attribute access, a string -- and calling it raises; the
-        recorded mapping is ``entry.block.paths()``.
+        recorded mapping is ``entry.pretty.paths()``.
         """
-        return Block(self)
+        return Pretty(self)
 
     # 4. Helpers -----------------------------------------------------------
 
@@ -2593,10 +2661,10 @@ class BuildJournal:
     an entry. Both keep to ONE on-disk layout, which is why they live
     together: an entry of block B is ::
 
-        {B.anchorkeypath}/.journal/{fqcn}/journal/{hash}/{fqcn}-journal-{hash}-{dt}.parquet
+        {B.anchorkeypath}/.journal/{fqcn}/journal/{hash}/{fqcn}-journal-{hash}-{dt}-{id}.parquet
 
-    with its side files (spec, dfn, kwargs, quote, cite, repr, signature, type,
-    note) beside it under ``.journal/{fqcn}/{x}/{hash}/`` -- see :meth:`path` --
+    with its side files (spec, kwargs, quote, cite, repr, signature, type, note)
+    beside it under ``.journal/{fqcn}/{x}/{hash}/`` -- see :meth:`path` --
     and :meth:`read` globs for exactly that under ``{datalake}/{anchor}``.
 
     An INSTANCE is a session: a ``session`` id written to every entry made
@@ -3096,7 +3164,6 @@ class BuildJournal:
         code = hashlib.sha256(code_seed.encode('utf-8')).hexdigest()[:32]
 
         cls._write_dict_(block, 'spec', block.spec)
-        cls._write_dict_(block, 'dfn', block.dfn)
         cls._write_dict_(block, 'kwargs', block.kwargs)
         cls._write_text_(block, 'quote', block.quote())
         cls._write_text_(block, 'cite', block.cite())
@@ -3107,7 +3174,6 @@ class BuildJournal:
             cls._write_text_(block, 'note', note)
 
         spec_path = cls.path(block, 'spec', 'yaml')
-        dfn_path = cls.path(block, 'dfn', 'yaml')
         kwargs_path = cls.path(block, 'kwargs', 'yaml')
         quote_path = cls.path(block, 'quote', 'txt')
         cite_path = cls.path(block, 'cite', 'txt')
@@ -3162,7 +3228,6 @@ class BuildJournal:
                                          'event': event,
                                          'redirection': redirection_value,
                                          'spec': spec_path,
-                                         'dfn': dfn_path,
                                          'kwargs': kwargs_path,
                                          'quote': quote_path,
                                          'cite': cite_path,
@@ -3429,8 +3494,8 @@ class BuildJournal:
         pipeline journal of 233 entries took 77 s to list that way. Here every
         directory of a level is listed at once, on *n_workers* threads. And
         ``journal/``'s siblings under ``.journal/{fqcn}/`` -- ``spec/``,
-        ``dfn/``, ``kwargs/``, with parquet files of their own that are not
-        entries -- are never entered.
+        ``kwargs/``, and ``dfn/`` of entries from before, with parquet files of
+        their own that are not entries -- are never entered.
         """
         root = fs._strip_protocol(anchordirpath).rstrip('/')
 
@@ -3755,7 +3820,7 @@ class PipeJournal(BuildJournal):
 
         Under each pipeline's ``.journal/{fqcn}/journal/{hash}/``, the newest
         entry -- by its ``datetime`` -- of every distinct ``entrypath`` is
-        kept, with its side files (spec, dfn, kwargs, quote, cite, repr,
+        kept, with its side files (spec, kwargs, quote, cite, repr,
         signature, type, note), which are named, as it is, by the instance's
         ``dt``; every other entry is removed, side files and all. `collect`
         reads the same pipelines, each with the same entrypaths, before and
@@ -3813,7 +3878,7 @@ class PipeJournal(BuildJournal):
                     if entrypath not in newest or dt > newest[entrypath][0]:
                         newest[entrypath] = (dt, file, sides)
             kept = {norm(file) for _, file, _ in newest.values()} | {p for *_, sides in newest.values() for p in sides}
-            # A side file a column names, under every extension it is written in: spec, dfn and kwargs
+            # A side file a column names, under every extension it is written in: spec and kwargs
             # are written as YAML -- the one named -- and as parquet.
             return kept | {os.path.splitext(p)[0] for p in kept}
 
@@ -3854,6 +3919,7 @@ class PipeJournal(BuildJournal):
     _PIPELINE_COLUMNS_ = ('datalake', 'anchor', 'hash', 'keyby', 'key', 'anchorkeypath', 'tag', 'version')
 
     #: An entry's columns naming its side files: what it keeps, beside itself.
+    #: ``dfn`` no entry records now -- `Pretty.quote` says it -- but those from before do, and keep it.
     _SIDE_COLUMNS_ = ('spec', 'dfn', 'kwargs', 'quote', 'cite', 'signature', 'type', 'repr', 'note')
 
     @staticmethod

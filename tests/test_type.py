@@ -92,7 +92,7 @@ class TestSignatureInJournal:
 
     def test_build_writes_signature_txt(self, built):
         entry = built.buildjournal(iloc=-1)
-        assert entry.block.signaturestr() is not None
+        assert entry.pretty.signaturestr() is not None
         assert entry.read('signature') == built.signaturestr()
 
 
@@ -108,27 +108,27 @@ class TestPreRenameJournals:
     def test_legacy_hashstr_column_is_read_as_type(self):
         entry = self._entry(hashstr='/j/x-hashstr-1.txt',
                             norm='/j/x-norm-1.txt')
-        assert entry.block.typestr() == '/j/x-hashstr-1.txt'
-        assert entry.block.signaturestr() == '/j/x-norm-1.txt'
+        assert entry.pretty.typestr() == '/j/x-hashstr-1.txt'
+        assert entry.pretty.signaturestr() == '/j/x-norm-1.txt'
 
     def test_new_column_wins_when_both_are_present(self):
         entry = self._entry(type='/j/new.txt', signature='/j/old.txt')
-        assert entry.block.typestr() == '/j/new.txt'
+        assert entry.pretty.typestr() == '/j/new.txt'
 
     def test_nan_in_the_new_column_still_falls_back(self):
         entry = self._entry(type=float('nan'), signature='/j/old.txt')
-        assert entry.block.typestr() == '/j/old.txt'
+        assert entry.pretty.typestr() == '/j/old.txt'
 
     def test_absent_in_both_degrades_to_none(self):
         entry = self._entry()
-        assert entry.block.typestr() is None
-        assert entry.block.signaturestr() is None
+        assert entry.pretty.typestr() is None
+        assert entry.pretty.signaturestr() is None
         assert entry.read('type') is None
         assert entry.read('signature') is None
 
     def test_nan_in_both_degrades_to_none(self):
         entry = self._entry(type=float('nan'), signature=float('nan'))
-        assert entry.block.typestr() is None
+        assert entry.pretty.typestr() is None
 
     def test_a_real_mixed_era_journal_reads_both_rows(self, built):
         """End to end: an old row and a new row concatenated into one frame."""
@@ -161,7 +161,7 @@ class TestStrAndStructuredForms:
         assert block.sig() == block.signature() and block.tp() == block.type()
 
     def test_journal_block_matches_the_live_one(self, built):
-        recorded = built.buildjournal(event='build:end', loc=0).block
+        recorded = built.buildjournal(event='build:end', loc=0).pretty
         assert recorded.signaturestr() == built.signaturestr()
         assert recorded.typestr() == built.typestr()
         assert recorded.signature() == built.signature()

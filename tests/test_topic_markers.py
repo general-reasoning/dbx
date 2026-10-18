@@ -498,21 +498,21 @@ class TestTheJournalRecordsMarkers:
     def test_the_recorded_topics_are_markers(self, tmp_path):
         b = block(Marked, tmp_path)
         b.build()
-        assert b.buildjournal(loc=0).block.TOPICS == {
+        assert b.buildjournal(loc=0).pretty.TOPICS == {
             'data': 'data.txt', 'masks': DIR, 'cache': SYNTHETIC,
         }
 
     def test_the_entry_answers_what_kind_each_topic_is(self, tmp_path):
         b = block(Marked, tmp_path)
         b.build()
-        recorded = b.buildjournal(loc=0).block
+        recorded = b.buildjournal(loc=0).pretty
         assert recorded._is_dir_topic_('masks') and not recorded._is_dir_topic_('data')
         assert recorded._is_syntopic_('cache') and not recorded._is_syntopic_('masks')
 
     def test_a_recorded_slice_keeps_its_columns(self, tmp_path):
         t = block(MarkedTablet, tmp_path)
         t.build()
-        recorded = t.buildjournal(loc=0).block.TOPICS
+        recorded = t.buildjournal(loc=0).pretty.TOPICS
         assert recorded['numbers'].columns == {'idx': 'int', 'square': 'int'}
 
     def test_a_block_does_not_differ_from_its_own_entry(self, tmp_path):

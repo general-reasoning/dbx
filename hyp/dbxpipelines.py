@@ -581,7 +581,7 @@ def topics(row):
             out.append((path, not (node == SYNTOPIC or is_topicmarker(node, SYNTHETIC))))
 
     try:
-        walk(_entry_(row).block.TOPICS, ())
+        walk(_entry_(row).pretty.TOPICS, ())
     except Exception:
         return []
     return out
@@ -593,7 +593,7 @@ def ls_text(row, topic):
     The block's own `ls`, over its recorded paths -- nothing is instantiated.
     """
     entry = _entry_(row)
-    listing = entry.block.ls(*topic, detail=True)
+    listing = entry.pretty.ls(*topic, detail=True)
     head = [f"ls {'/'.join(topic)} of {row.get('anchorkeypath', '?')}", ""]
     if not listing:
         return "\n".join(head + ["nothing there"])

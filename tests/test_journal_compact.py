@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 import dbx
-from dbx.datablocks import DATAFILE, Datablock
+from dbx.datablocks import DATAFILE, SAME, Datablock
 from dbx.journals import DataJournal, ExecJournal, PipeJournal, read_exec_journal, write_exec_journal
 from dbx.pipelines import Pipeline
 
@@ -101,6 +101,58 @@ def test_redirections_are_left_where_they_are(lake):
     assert frame['kept'].tolist() == [1]
     again = Leaf(spec={'n': 2})
     assert again.redirected() and again.path('x') == src.path('x')
+
+
+def test_read_hash_reads_a_compacted_journal(lake):
+    """Its entries moved into the compacted file, a block is still found by its hash -- and only its rows are read."""
+    for n in range(3):
+        Leaf(spec={'n': n}).build()
+    leaf = Leaf(spec={'n': 1})
+    before = DataJournal.read_hash(leaf.anchor, leaf.hash, version=leaf.version, keyby=leaf.keyby, datalake=lake)
+    DataJournal.UNSAFE_compact([leaf.anchor], OVERRIDE=True)
+    after = DataJournal.read_hash(leaf.anchor, leaf.hash, version=leaf.version, keyby=leaf.keyby, datalake=lake)
+    assert after is not None and set(after['hash']) == {leaf.hash}
+    assert _rows(after) == _rows(before)
+    Leaf(spec={'n': 9}).build()
+    nine = Leaf(spec={'n': 9})
+    assert set(DataJournal.read_hash(nine.anchor, nine.hash, version=nine.version, keyby=nine.keyby,
+                                     datalake=lake)['hash']) == {nine.hash}, "a later entry file, and nothing compacted"
+    absent = Leaf(spec={'n': 7})
+    assert DataJournal.read_hash(absent.anchor, absent.hash, keyby=absent.keyby, datalake=lake) is None
+
+
+class Grown(Leaf):
+    """`Leaf` with a field it never had, at the value at which the two agree: a `Leaf` built is its past."""
+
+    SPECIALIZATIONS = [Datablock.Specialization(spec={'m': 0}, topics=SAME, anchor=f'{__name__}.Leaf',
+                                                note="a Leaf, before m")]
+
+    @dataclass
+    class VAR(Leaf.VAR):
+        m: int = 0
+
+
+class Holder(Datablock):
+    TOPICS = {'y': DATAFILE('y.txt')}
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        leaf: Datablock = None
+
+    def __build__(self):
+        with open(self.path('y', ensure_dirpath=True), 'w') as f:
+            f.write('y')
+
+
+def test_a_nested_past_composes_through_a_compacted_journal(lake):
+    """A block finds its build through a nested block's past whose own journal was compacted."""
+    built = Holder(spec={'leaf': Leaf(spec={'n': 3}).build()}).build()
+    now = Holder(spec={'leaf': Grown(spec={'n': 3})})
+    assert now.hash != built.hash
+    DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    assert now.var.leaf._past_recorded_(Grown.SPECIALIZATIONS[0]), "the Leaf it was, though its journal is compacted"
+    row = now.find_specialization()
+    assert row is not None and row['hash'] == built.hash
 
 
 def test_compact_asks_first(lake, monkeypatch):

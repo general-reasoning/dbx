@@ -2815,6 +2815,11 @@ class DataJournal:
         before 'version_shorthash' -- is filed. Those directories, and no
         others, are listed here.
 
+        An anchor whose journal was compacted (`UNSAFE_compact`) holds its
+        entries in one file, `COMPACTED`, and no longer in those directories:
+        that file's rows for *hash* are read too -- only those, filtered as the
+        file is read.
+
         None when none of them holds an entry -- the block was built under
         another tag, say, as a specialization allows -- and the caller reads
         the whole journal instead.
@@ -2849,11 +2854,15 @@ class DataJournal:
                 files.extend(f for f in _expand_levels_(fs, prefix, levels) if f not in files)
             except Exception as e:
                 log.detailed(f"DataJournal.read_hash: {prefix}/{'/'.join(levels)}: {e}")
-        if not files:
+        compacted = cls._read_compacted_hash_(fs, base, anchor, hash, log=log)
+        if not files and compacted is None:
             return None
-        log.detailed(f"DataJournal.read_hash: {anchor} {hash[:8]}: {len(files)} file(s)")
+        log.detailed(f"DataJournal.read_hash: {anchor} {hash[:8]}: {len(files)} file(s)"
+                     + (f", {len(compacted)} compacted entr(ies)" if compacted is not None else ""))
         dfs = [d for d in cls._read_files_(fs, files, n_workers=n_workers or 8, log=log,
                                            desc=f"Reading {anchor} journal for {hash[:8]}") if d is not None]
+        if compacted is not None:
+            dfs.insert(0, compacted)
         if not dfs:
             return None
         df = cls._normalize_columns_(pd.concat(dfs, ignore_index=True))
@@ -3183,6 +3192,28 @@ class DataJournal:
 
     #: An anchor's compacted journal, under its directory: where `read` lists entry files, so it is read as one.
     COMPACTED = os.path.join('.journal', '{anchor}', 'journal', '{anchor}-journal-compacted.parquet')
+
+    @classmethod
+    def _read_compacted_hash_(cls, fs, base, anchor, hash, *, log) -> 'pd.DataFrame | None':
+        """The rows for *hash* of *anchor*'s compacted journal under *base*, filtered as the file is read; None for none.
+
+        A compacted journal is every block's entries of an anchor -- tens of
+        thousands of rows, for a table's tablets -- so only the rows of one hash
+        are read, by pyarrow's filter on the ``hash`` column.
+        """
+        path = os.path.join(base, cls.COMPACTED.format(anchor=anchor))
+        try:
+            if not fs.exists(path):
+                return None
+            with fs.open(path, 'rb') as f:
+                df = pd.read_parquet(f, engine='pyarrow', filters=[('hash', '==', hash)])
+        except Exception as e:
+            log.warning(f"DataJournal.read_hash: skipping unreadable compacted journal {path}: {e}")
+            return None
+        if df.empty:
+            return None
+        df['entry_path'] = fs_full_path(fs, path)
+        return df
 
     @classmethod
     def UNSAFE_compact(cls, anchors=None, *, datalake=None, storage_options=None, parallelization='multithreading',

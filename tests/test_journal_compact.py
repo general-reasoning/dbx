@@ -157,6 +157,18 @@ def test_a_nested_past_composes_through_a_compacted_journal(lake):
     assert row is not None and row['hash'] == built.hash
 
 
+def test_unsafe_specialize_installs_a_nested_past(lake):
+    """The explicit adoption installs what find_specialization finds -- a composed past too -- and records it."""
+    built = Holder(spec={'leaf': Leaf(spec={'n': 4}).build()}).build()
+    now = Holder(spec={'leaf': Grown(spec={'n': 4})})
+    assert not now.valid() and now.find_specialization()['hash'] == built.hash
+    assert now.UNSAFE_specialize(dry_run=True, OVERRIDE=True) is not None
+    assert not now.redirected(), "a dry run writes nothing"
+    assert now.UNSAFE_specialize(OVERRIDE=True) is not None
+    again = Holder(spec={'leaf': Grown(spec={'n': 4})})
+    assert again.valid() and again.redirected() and again.path('y') == built.path('y')
+
+
 def test_compact_asks_first(lake, monkeypatch):
     Leaf().build()
     monkeypatch.setattr('builtins.input', lambda prompt: 'n')

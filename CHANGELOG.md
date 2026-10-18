@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A block the tree never builds is adopted, when a past of it resolves.**
+  `build_tree` specializes a `TREE_SKIP_BUILDING` child that is not valid -- whatever
+  `deep` -- and every such child below a child it skips as valid (`_adopt_exempt_`): an
+  adoption computes nothing, and a still an evaluator reads, moved to a new identity,
+  is valid again in every process that reads it, rather than in none.
+  `UNSAFE_specialize` installs what `find_specialization` finds and `build()` would
+  install -- a past composed with its nested blocks' pasts too -- not only a declared
+  specialization.
 - **A journal entry is found by what it is -- its `id` -- never by where it is filed.**
   Every `DataJournal.write` keeps its entry: a file of its own, named by its `id`, so
   a build leaves its `build:start` and its `build:end`, and the `journal_prefix`es

@@ -8,7 +8,7 @@ import os
 import pytest
 from dataclasses import dataclass
 
-from dbx.datablocks import Datablock
+from dbx.datablocks import SAME, Datablock
 from dbx.databits import quote
 
 
@@ -89,6 +89,16 @@ class Root(Datablock):
         path = self.path('root', ensure_dirpath=True)
         with self.fs.open(path, 'w') as f:
             f.write(f"root:{self.var.label}")
+
+
+class MidGrown(Mid):
+    """`Mid` with a field it never had, at the value at which the two agree: a `Mid` built is its past."""
+    SPECIALIZATIONS = [Datablock.Specialization(spec={'m': 0}, topics=SAME, anchor=f'{__name__}.Mid',
+                                                note="a Mid, before m")]
+
+    @dataclass
+    class VAR(Mid.VAR):
+        m: int = 0
 
 
 class RootWithExemptions(Root):
@@ -262,6 +272,40 @@ class TestBuildTreeDeep:
         assert _build_counts.get("'L'", 0) == 0, "Leaf should be exempted"
         # Root itself should still be built
         assert _build_counts.get("'R'", 0) == 1, "Root should be built"
+
+    @pytest.mark.parametrize('deep', [False, True, 'try_specialize_children'])
+    def test_an_exempt_child_with_a_past_is_adopted_not_built(self, url, deep):
+        """TREE_SKIP_BUILDING never builds a child -- but adopts its past: that computes nothing, and the child is valid."""
+        leaf = Leaf(datalake=url, spec=dict(label="'L'"))
+        built = Mid(datalake=url, spec=dict(label="'M'", dep=quote(leaf))).build_tree()
+        grown = MidGrown(datalake=url, spec=dict(label="'M'", dep=quote(leaf)))
+        assert grown.hash != built.hash and not grown.valid()
+        root = RootWithExemptions(datalake=url, spec=dict(label="'R'", child=quote(grown)))
+        _reset_counts()
+        root.build_tree(deep=deep)
+        assert _build_counts.get("'M'", 0) == 0 and _build_counts.get("'L'", 0) == 0, "nothing of the child built"
+        again = MidGrown(datalake=url, spec=dict(label="'M'", dep=quote(leaf)))
+        assert again.valid() and again.redirected() and again.path('mid') == built.path('mid')
+
+    @pytest.mark.parametrize('deep', [False, 'try_specialize_children'])
+    def test_an_exempt_child_under_a_valid_one_is_adopted(self, url, deep):
+        """A valid child vouches for what it reads, not what it exempts: an evaluator's still is adopted below it."""
+        leaf = Leaf(datalake=url, spec=dict(label="'L'"))
+        built = Mid(datalake=url, spec=dict(label="'M'", dep=quote(leaf))).build_tree()
+        grown = MidGrown(datalake=url, spec=dict(label="'M'", dep=quote(leaf)))
+        evaluator = RootWithExemptions(datalake=url, spec=dict(label="'E'", child=quote(grown))).build()
+        assert evaluator.valid() and not grown.valid()
+        root = Root(datalake=url, spec=dict(label="'R'", child=quote(evaluator)))
+        _reset_counts()
+        root.build_tree(deep=deep)
+        assert _build_counts.get("'M'", 0) == 0 and _build_counts.get("'E'", 0) == 0
+        assert MidGrown(datalake=url, spec=dict(label="'M'", dep=quote(leaf))).valid()
+
+    def test_an_exempt_child_with_no_past_is_left_as_it_is(self, url):
+        root, mid, leaf = _make_tree_with_exemptions(url)
+        _reset_counts()
+        root.build_tree()
+        assert not mid.valid() and _build_counts.get("'M'", 0) == 0
 
     def test_exclude_self_with_deep(self, url):
         """exclude_self=True + deep=True builds children but not root."""

@@ -3218,7 +3218,11 @@ class Datablock:
           by whatever reads it later.
         - ``True`` -- nothing: every block is built anew, valid or not.
 
-        A child not valid is built in every case, with the same *deep*.
+        A child not valid is built in every case, with the same *deep*. A child
+        `TREE_SKIP_BUILDING` exempts is never built here, but it is specialized
+        -- whatever *deep* -- so a past of it that resolves is adopted: that
+        computes nothing, and a block reading it -- in any process -- finds it
+        valid, as it was when it was built under the identity it had then.
         """
         if deep not in (False, True, 'try_specialize_children'):
             raise ValueError(f"build_tree(deep={deep!r}): deep is False, True or 'try_specialize_children'")
@@ -3227,7 +3231,9 @@ class Datablock:
         # Each banner names whose field it is, as a log line names a block: ``upstream of <anchorkey> [<tag>]``.
         of = f" of {self.anchorkey}" + (f" [{shown_tag(self.tag)}]" if self.tag else "")
         def skip_cb(s):
-            log.skip_subtree(f"{s}{of}", "TREE_SKIP_BUILDING")
+            # Never built here -- but adopted, if a past of it resolves: an adoption computes nothing.
+            adopted = self._adopt_exempt_child_(s)
+            log.skip_subtree(f"{s}{of}", "TREE_SKIP_BUILDING; its past adopted" if adopted else "TREE_SKIP_BUILDING")
 
         for s, c in self._iter_var_blocks_('TREE_SKIP_BUILDING', skip_callback=skip_cb):
             if deep is not True and c.valid():
@@ -3236,6 +3242,10 @@ class Datablock:
                     log.skip_subtree(f"{s}{of}", "already valid; its children tried for specializations")
                 else:
                     log.skip_subtree(f"{s}{of}", "already valid")
+                # A valid child vouches for what it reads, not for what it exempts: those are
+                # adopted below it, as they would be were it built -- an evaluator, valid with
+                # nothing stored, exempting the still it evaluates.
+                c._adopt_exempt_()
                 continue
             self.write_journal_entry(event=f"build_tree:{s}:begin")
             with log.subtree(f"{s}{of}"):
@@ -3246,6 +3256,30 @@ class Datablock:
         if not exclude_self:
             self.build(*args, deep=deep is True, **kwargs)
         return self
+
+    def _adopt_exempt_child_(self, s) -> bool:
+        """Specialize this block's `TREE_SKIP_BUILDING` child *s*, if it is not valid: True when that made it valid."""
+        c = getattr(self.var, s, None)
+        if not isinstance(c, Datablock) or c.valid():
+            return False
+        c.specialize()
+        return c.valid()
+
+    def _adopt_exempt_(self, _seen=None) -> None:
+        """Specialize every `TREE_SKIP_BUILDING` child in this block's tree that is not valid -- adopt, never build."""
+        seen = set() if _seen is None else _seen
+        if self.anchorkey in seen:
+            return
+        seen.add(self.anchorkey)
+        exempt = self._tree_skips_('TREE_SKIP_BUILDING')
+        for s in self.spec.keys():
+            if s in exempt:
+                if self._adopt_exempt_child_(s):
+                    self.log.verbose(f"ADOPTED: {s} of {self.anchorkey}, a TREE_SKIP_BUILDING child, its past")
+                continue
+            c = getattr(self.var, s, None)
+            if isinstance(c, Datablock):
+                c._adopt_exempt_(seen)
 
     def try_specialize_tree(self) -> dict:
         """Specialize every block of this one's tree whose specialization resolves -- and build none.
@@ -4732,17 +4766,26 @@ class Datablock:
         with ``use_specializations='memory'``, and for adopting one without
         building the topics it does not cover.
 
-        *dry_run* reports what the first applicable specialization WOULD do and
+        What it installs is what :meth:`find_specialization` finds and
+        ``build()`` would install: the most recently recorded past that
+        resolves -- a declared specialization, or a composition of one, or of
+        this block as it is, with its nested blocks' pasts.
+
+        *dry_run* reports what that specialization WOULD do and
         returns its proposed :class:`Redirection`, writing nothing -- the same
         handle :meth:`UNSAFE_redirect` has, *dry_validate* included, which makes
         the return a ``(Redirection, Validation)`` pair.
         """
         if not UNSAFE_allowed("UNSAFE_specialize", OVERRIDE=OVERRIDE):
             return None
-        for sp in (self.SPECIALIZATIONS or []):
-            if self._specialization_mismatch_(sp) is not None:
-                continue
-            res = self.UNSAFE_redirect(specialization=sp, journal=journal,
+        if isinstance(journal, BlocksJournal):
+            journal = _shared_journal_(journal, self)
+        memo = {'journal': journal}
+        for sp, _ in self._specialization_candidates_by_recency_(journal, _memo=memo):
+            sp_j = memo.get(('hash_journal', sp.key))
+            if sp_j is None:
+                sp_j = self._specialization_journal_(memo.get('journal'), sp)
+            res = self.UNSAFE_redirect(specialization=sp, journal=sp_j,
                                        dry_run=dry_run, dry_validate=dry_validate,
                                        OVERRIDE=True)
             if res:

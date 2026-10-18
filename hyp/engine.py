@@ -98,6 +98,27 @@ class Engine:
                 s.layout = layout.compute(s.embeddings, seed=self.seed)
             s.save()
 
+    def refresh(self, progress=print):
+        """Read the source again and embed what is new or changed -- the layout nudged from where it was, not laid out afresh; whether anything moved.
+
+        What a Claude session's every turn calls: the disk follows the
+        conversation without reshuffling at each step, as `reload` would.
+        """
+        with self.lock:
+            s = self.store
+            if self.source is None:
+                return False
+            previous = s.layout
+            moved = self._sync_(progress)
+            if self._shown_indices_() is not None:
+                self._lay_out_shown_(progress)
+            elif moved or s.layout is None or len(s.layout) != len(s):
+                progress("updating the layout")
+                keep = previous if previous is not None and len(previous) <= len(s) else None
+                s.layout = layout.compute(s.embeddings, previous=keep, seed=self.seed)
+            s.save()
+            return moved
+
     def arrows(self, i, js, progress=print):
         """The arrows from point *i* to points *js* -- indices into the snapshot -- each decoded: `arrows.decode`'s (toward, away), phrases in place of indices.
 

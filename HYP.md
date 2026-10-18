@@ -214,8 +214,9 @@ directories, `node_modules`, `__pycache__`, `site-packages`, `venv`, `env`,
 and the start of its text (a pdf's first 30 pages), labeled by its name, its
 modification time beneath. A document whose time and size are unchanged is
 not read again. The corpus is kept under `~/.hyp/docs/<hash of the
-directory>`: nothing is written to the directory scanned. A document removed
-from it leaves the disk at the next start or reload.
+directory>`. Nothing is written to the directory scanned, except the Claude
+sessions saved there (below). A document removed from it leaves the disk at
+the next start or reload. A markdown's YAML front matter is not drawn.
 
 - **left click** opens a document in the center, filling the window;
 - **right click** places it instead, picked from a 3×3 grid of little
@@ -244,6 +245,66 @@ navigated with windows open: bring it to the front with the **layers** menu
 with Tab, which brings the back layer to the front -- or by clicking it
 wherever it shows. The disk is see-through
 over the layers behind it. Opening a window brings its layer to the front.
+
+### Claude sessions
+
+```bash
+hyp --markdowns                          # sessions saved in the current directory
+hyp --markdowns --claude-dir claude      # or in ./claude, under it
+```
+
+The **Claude** button (top right) opens a conversation with Claude in a
+window a third of the window's area, in its middle (`hyp/claude.py`). The
+conversation is above and what is being typed below: Enter sends,
+Shift+Enter starts a new line, Cmd+V pastes. The reply streams in as it is
+written. PageUp/PageDown, Home/End and the wheel scroll the conversation;
+Esc or × closes the window. A turn that fails says why beneath, and puts
+what was sent back in the box, to send again.
+
+**Claude Code, under your own login.** Each turn runs the Claude Code CLI
+once -- `claude -p`, streaming -- so a Claude subscription covers it; no API
+key or credits are needed. The CLI is `$HYP_CLAUDE`, else `claude` on the
+PATH, else the one VS Code's Claude Code extension carries. It must have
+been logged in once (`claude`, then `/login`). Claude Code keeps the
+conversation itself: the first turn starts a session with an id of hyp's
+(`--session-id`), and every turn after resumes it (`--resume`). Claude runs
+in `--dir` with read-only tools -- `Read`, `Glob`, `Grep`, and no others,
+none asked about -- so it can read, list and search the documents on the
+disk, and change nothing. Each tool it uses is noted in the reply. A
+`--dir` that is a url is no directory Claude Code can work in: there it
+runs in your home directory, with no tools, and sees only what is pasted
+in.
+
+**Saved and embedded at every turn.** As each reply comes in whole, the
+session is saved into the directory scanned (`--dir`), or into
+`--claude-dir`: a directory relative to it that the scan reaches, so not
+absolute, not above `--dir`, and not a hidden or skipped one. It is one
+markdown, `claude-session-<started>.md`, a `## You` / `## Claude` section a
+turn. Its front matter says what it is: `hyp: claude-session`, the session's
+id, the model, and the first line as its `title`. The disk is brought up to
+date with it at once, in the background, the window usable meanwhile: the
+directory is read again, the session embedded, and the layout nudged from
+where it was rather than laid out afresh. So the session's point,
+`Claude · <title>`, moves among the documents as the conversation goes, and
+its arcs and arrows relate it to them as they do any document. Closing the
+window saves nothing more, unless a turn is not yet saved.
+
+**Embedded whole.** A document is embedded by its name and its first 4,000
+characters; a session by all of its transcript, up to 256,000 characters.
+Hence `ChunkedEmbedder` (`hyp/docs.py`): a text longer than that is
+embedded a 4,000-character piece at a time -- cut at paragraph breaks where
+it can be, the name before each piece -- and the pieces' unit vectors
+averaged, so a long session lies where all of it points, not where its
+first turns do. A text of one piece gets the embedder's own vector, as
+before. No markdown's front matter is embedded, a session's or any other's.
+
+**Reopened by its point.** A left click on a session's point opens it
+again: its transcript is shown, and the next turn resumes it by its id. Closed,
+it is saved over the same file, the new turns after the old. A right click
+places its transcript, as any document's. Claude Code keeps a session on the
+machine, and for the directory, it ran in. A session saved on one machine
+and reopened on another is shown, but Claude there has no record of it: the
+window says so.
 
 ## Arrows
 
@@ -324,6 +385,7 @@ hyp --journal ANCHOR --filter 'key=pattern, ...'   # its blocks filtered; the fi
 hyp --journal --ece ckpt     # --extra-construction-events: events that also make an entry block count as
                              # constructed, each alone or followed by = or : -- here, a still that checkpointed
 hyp --markdowns [--dir DIR]  # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
+hyp --markdowns --claude-dir REL   # Claude sessions saved under DIR/REL, not DIR itself (REL relative, and scanned)
 hyp --n-workers N            # threads reading the datalake (default 16)
 hyp --remote-python PATH     # the python on the datalake's host whose Ray read's and hyp's trueinst() run in,
                              # with dbx, ray (the version here) and the project; a path there, quoted so ~

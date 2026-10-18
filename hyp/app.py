@@ -1897,6 +1897,21 @@ class Hyp:
             self.clock.tick(60 if moving else 30)
 
 
+def _unscanned_(rel):
+    """Why sessions saved under *rel* would not be found by --markdowns' scan, or None: it must be relative, below --dir, and scanned."""
+    from .docs import SKIP_DIRS
+
+    if "://" in rel or rel.startswith(("/", "~")):
+        return "a directory relative to --dir, not a path of its own"
+    parts = [p for p in rel.replace("\\", "/").split("/") if p not in ("", ".")]
+    if ".." in parts:
+        return "below --dir, not above it"
+    hidden = [p for p in parts if p.startswith(".") or p in SKIP_DIRS]
+    if hidden:
+        return f"{hidden[0]} is a directory the scan skips: the sessions would not be found"
+    return None
+
+
 def _connection_errors_():
     """What opening a corpus raises when its directory cannot be reached or made: OSError, and asyncssh's own over ssh."""
     try:
@@ -1920,6 +1935,8 @@ def main(argv=None):
                          "followed by = or : and the rest: `--ece ckpt` takes a block that has checkpointed (ckpt=<tag>)")
     ap.add_argument("--markdowns", action="store_true", help="the documents -- markdowns and pdfs -- under --dir, one point each")
     ap.add_argument("--dir", default=None, help="with --markdowns: the directory scanned, local or an fsspec url (default: the current one)")
+    ap.add_argument("--claude-dir", default=None, metavar="REL",
+                    help="with --markdowns: where Claude sessions are saved -- a directory relative to --dir, scanned with it (default: --dir itself)")
     ap.add_argument("--remote-python", default=None, help="with --journal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: $HYP_REMOTE_PYTHON, else the one each entry records its build ran in, else python3)")
     ap.add_argument("--n-workers", type=int, default=16, help="threads reading a remote source, e.g. the dbx journal and its side files (default: 16)")
     ap.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama", help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
@@ -1937,6 +1954,11 @@ def main(argv=None):
         ap.error("--extra-construction-events is for the entry blocks of --journal's pipelines")
     if args.dir is not None and not args.markdowns:
         ap.error("--dir is the directory --markdowns scans")
+    if args.claude_dir is not None:
+        if not args.markdowns:
+            ap.error("--claude-dir is where --markdowns saves Claude sessions")
+        if problem := _unscanned_(args.claude_dir):
+            ap.error(f"--claude-dir {args.claude_dir}: {problem}")
     if args.filter and (args.journal is None or pipelines):
         ap.error("--filter filters an anchor's journal: --journal ANCHOR --filter 'key=pattern, ...'")
     if args.journal is not None:

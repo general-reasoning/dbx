@@ -12,8 +12,12 @@ disk, the placed windows ("tiles") and the center window are three layers,
 in an order the layers menu -- or Tab, which brings the back one to the front
 -- changes: what is under the mouse in the front one gets the clicks.
 
-The corpus is kept under ~/.hyp/docs/, one directory per scanned directory:
-nothing is written to the one scanned.
+The **Claude** button opens a Claude session in a window of its own
+(`hyp.claude`); each turn saves the session as a markdown in the directory
+scanned, or one under it (``--claude-dir``), embedded whole at once, whose
+point opens the session again. That is all hyp writes there: the corpus is
+kept under ~/.hyp/docs/, one directory per scanned directory. A markdown's
+front matter is no part of what is embedded of it.
 """
 
 import hashlib
@@ -26,8 +30,9 @@ from dataclasses import dataclass, field
 
 import pygame
 
-from .app import Hyp
-from .docview import DocWindow, MarkdownDoc, Message, PdfDoc, pdf_text
+from . import claude
+from .app import Button, Hyp
+from .docview import DocWindow, MarkdownDoc, Message, PdfDoc, front_matter, pdf_text
 
 KINDS = {".md": "markdown", ".markdown": "markdown", ".pdf": "pdf"}
 # Directories never scanned, besides hidden ones.
@@ -36,6 +41,8 @@ MAX_DOCS = 5_000
 MAX_DEPTH = 16
 TEXT_CHARS = 8_000  # of a document's text, kept with its point
 EMBED_CHARS = 4_000  # of it, embedded
+SESSION_CHARS = 256_000  # of a Claude session's transcript, kept and embedded: all of it, but for the longest
+CHUNK_CHARS = 4_000  # a longer text is embedded a piece this long at a time (`ChunkedEmbedder`)
 PDF_TEXT_BYTES = 64 << 20  # a larger pdf is embedded by its name alone
 
 # Where a right click can put a document: (x, y, width, height), as fractions of the window.
@@ -241,15 +248,78 @@ def documents(root, progress=print, n_workers=16, cache=None, storage_options=No
             text = known.get("text", "")
         else:
             try:
-                text = read_text(fs, info, kind)[:TEXT_CHARS]
+                text = read_text(fs, info, kind)
             except Exception as e:  # unreadable: placed by its name, saying why
                 text = f"({type(e).__name__}: {e})"
+            fields = front_matter(text)[0] if kind == "markdown" and text.startswith("---") else None
+            text = text[: SESSION_CHARS if claude.is_session(fields) else TEXT_CHARS]
             cache[url] = {"mtime": mtime, "size": size, "text": text}
-        return Doc(key=url, text=text, embed=f"{base}\n\n{text[:EMBED_CHARS]}", summary=base,
-                   extra={"path": url, "kind": kind, "mtime": mtime, "size": size})
+        extra, summary = {"path": url, "kind": kind, "mtime": mtime, "size": size}, base
+        fields, body = front_matter(text) if kind == "markdown" and text.startswith("---") else (None, text)
+        body = body.strip() if fields is not None else text  # the front matter is no part of what a document says
+        embed = f"{base}\n\n{body[:EMBED_CHARS]}"
+        if claude.is_session(fields):
+            # A Claude session: embedded whole, as long as it gets; its point opens the session again, labeled by its first line.
+            extra.update(kind=claude.KIND, session=fields.get("session"))
+            summary = f"Claude · {fields.get('title') or base}"
+            embed = f"{base}\n\n{body}"
+        return Doc(key=url, text=text[:TEXT_CHARS], embed=embed, summary=summary, extra=extra)
 
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
         return list(ex.map(one, infos))
+
+
+class ChunkedEmbedder:
+    """An embedder for texts longer than a model reads well: each embedded a piece at a time, the pieces' unit vectors averaged.
+
+    A text is its first line -- a document's name -- and the rest. A rest
+    of `CHUNK_CHARS` or less is embedded as it is, by *base*, exactly as
+    without this wrapper; that is every document but a Claude session's
+    transcript, embedded whole. A longer one is cut into pieces of about
+    that length, at paragraph breaks where it can be, each embedded with the
+    name before it. Their unit vectors are averaged, and scaled to their mean
+    length: the text lies where all of it points, not where its start does.
+
+    Its name is *base*'s: for a text in one piece the vector is *base*'s
+    own, so a corpus embedded before it is not embedded again.
+    """
+
+    def __init__(self, base, chunk=CHUNK_CHARS):
+        self.base, self.chunk = base, chunk
+        self.name = base.name
+
+    def prepare(self, progress=print):
+        self.base.prepare(progress)
+
+    def __call__(self, texts):
+        import numpy as np
+
+        pieces = [self.pieces(t) for t in texts]
+        flat = [p for ps in pieces for p in ps]
+        if len(flat) == len(texts):
+            return self.base(texts)
+        vecs = np.asarray(self.base(flat), dtype=np.float32)
+        out, k = [], 0
+        for ps in pieces:
+            v = vecs[k : k + len(ps)]
+            k += len(ps)
+            norms = np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12)
+            mean = (v / norms).mean(axis=0)
+            out.append(mean / max(float(np.linalg.norm(mean)), 1e-12) * float(norms.mean()))
+        return np.stack(out).astype(np.float32)
+
+    def pieces(self, text):
+        """*text* as embedded: itself, or its name before each piece of the rest."""
+        head, _, rest = text.partition("\n")
+        rest = rest.strip()
+        if len(rest) <= self.chunk:
+            return [text]
+        out = []
+        while rest:
+            cut = len(rest) if len(rest) <= self.chunk else (rest.rfind("\n\n", self.chunk // 2, self.chunk) + 1 or self.chunk)
+            out.append(f"{head}\n\n{rest[:cut].strip()}")
+            rest = rest[cut:].strip()
+        return out
 
 
 def load(url, kind, storage_options=None):
@@ -277,6 +347,7 @@ class HypDocs(Hyp):
     title = "hyp: docs"
     HINT = "click: open · right-click: place · drag: move · scroll: zoom · Tab: next layer · double-click outside: reset"
     LAYERS = ("disk", "tiles", "center")
+    CLAUDE_AREA = 1 / 3  # of the window's, a Claude session's window takes, in its middle
 
     # 1. Hooks ------------------------------------------------------------------
 
@@ -285,8 +356,19 @@ class HypDocs(Hyp):
         return canonical(getattr(args, "dir", None) or os.getcwd())
 
     @classmethod
+    def claude_dir(cls, args):
+        """Where Claude sessions are saved, under `root`: --claude-dir, or "" for the root itself."""
+        rel = posixpath.normpath(getattr(args, "claude_dir", None) or ".")
+        return "" if rel == "." else rel
+
+    @classmethod
     def __default_data__(cls, args):
         return os.path.join(cls.HOME, "docs", hashlib.sha1(cls.root(args).encode()).hexdigest()[:12])
+
+    @classmethod
+    def __embedder__(cls, embedder):
+        """A Claude session is embedded whole: `ChunkedEmbedder`, over the embedder --embedder names."""
+        return ChunkedEmbedder(embedder)
 
     @classmethod
     def __source__(cls, args):
@@ -317,10 +399,16 @@ class HypDocs(Hyp):
         self.center = None
         self.focus = None  # the window keys go to, when the mouse is over none: the one last clicked
         self.capture = None  # the window a drag began in
+        self.controls = [Button("Claude", self.open_claude)]
 
     def __click_point__(self, i, now):
-        """Left click on a document: open it in the center."""
-        self.place(i, "center")
+        """Left click on a document: open it in the center; on a saved Claude session, the session, to go on with."""
+        point = self.snap.points[i] if self.snap.points else {}
+        if point.get("kind") != claude.KIND:
+            self.place(i, "center")
+            return
+        args = self.args
+        self.run_async(lambda: claude.Session.load(point["path"], self.root(args), self.claude_dir(args)), self.open_claude)
 
     def __context_point__(self, i, pos):
         """Right click on a document -- on the disk, or in the points menu: where to place it, as a `TilePicker` at the mouse."""
@@ -338,6 +426,20 @@ class HypDocs(Hyp):
     def windows(self):
         return [*self.tiles.values(), *([self.center] if self.center else [])]
 
+    def open_claude(self, session=None):
+        """A Claude session's window, in the middle: *session*, to go on with, or a new one; in place of the center's window."""
+        if session is None and isinstance(self.center, claude.ClaudeWindow):
+            window = self.center  # one is open: it, not another
+        else:
+            args = self.args
+            session = session or claude.Session(self.root(args), self.claude_dir(args))
+            window = claude.ClaudeWindow(session, self._send_claude_)
+            if self.center is not None:
+                self._close_(self.center)
+            self.center = window
+        self.bring_to_front("center")
+        self.focus = window
+
     def place(self, i, slot):
         """Open document *i* at *slot* -- "center", or one of SLOTS -- in place of any window there, its layer brought to the front."""
         point = self.snap.points[i]
@@ -346,6 +448,8 @@ class HypDocs(Hyp):
         window = DocWindow(self.snap.summaries[i], " · ".join(p for p in (when, url) if p))
         window.title_color = self.title_color(i)
         if slot == "center":
+            if self.center is not None:
+                self._close_(self.center)  # a Claude session is saved, not dropped
             self.center = window
             self.bring_to_front("center")
         else:
@@ -364,12 +468,55 @@ class HypDocs(Hyp):
     def slot_rect(self, slot):
         a = self.area()
         if slot == "center":
+            if isinstance(self.center, claude.ClaudeWindow):
+                f = self.CLAUDE_AREA ** 0.5  # each side: the area, a third
+                return pygame.Rect(0, 0, round(a.width * f), round(a.height * f)).move_to(center=a.center)
             return a
         fx, fy, fw, fh = SLOTS[slot]
         r = pygame.Rect(a.x + round(fx * a.width), a.y + round(fy * a.height), round(fw * a.width), round(fh * a.height))
         return r.inflate(-GAP, -GAP)
 
+    def _send_claude_(self, window, text):
+        """Send *text* in *window*'s session, on a thread, the reply shown as it comes."""
+        window.begin(text)
+        put = self.worker.events.put
+
+        def turn():
+            """None once the reply is in; what went wrong, where the turn failed -- the text then put back to send again."""
+            try:
+                window.session.send(text, lambda t: put(("call", lambda: window.delta(t))), lambda: window.cancelled)
+            except claude.Failed as e:
+                return str(e)
+            except Exception as e:  # unforeseen: in the window, and in the status line with its traceback
+                said = f"{type(e).__name__}: {e}"  # now: *e* is gone once the except is left, before the call is made
+                put(("call", lambda: window.finish(said)))
+                raise
+            return None
+
+        def then(note):
+            window.finish(note)
+            if note is None:
+                self._file_(window.session)
+
+        self.run_async(turn, then)
+
+    def _file_(self, session):
+        """Save *session* and bring the disk up to date with it -- embedded whole, the layout nudged -- in the background, the window usable meanwhile."""
+        engine, put = self.engine, self.worker.events.put
+
+        def job():
+            url = session.save()
+            if engine is not None and engine.refresh(self.worker.status):
+                put(("snapshot", (engine.snapshot(), None)))
+            return url
+
+        self.run_async(job, lambda url: setattr(self, "status", f"saved and embedded {posixpath.basename(url)}"))
+
     def _close_(self, window):
+        if isinstance(window, claude.ClaudeWindow):
+            window.close_input()
+            if window.session.dirty():  # a turn not yet filed: one cancelled as it was closed has none
+                self._file_(window.session)
         if window is self.center:
             self.center = None
         self.tiles = {s: w for s, w in self.tiles.items() if w is not window}
@@ -408,7 +555,8 @@ class HypDocs(Hyp):
             if ev.type == pygame.MOUSEBUTTONDOWN:
                 self.focus = None  # a click on the disk: its keys are the disk's again
                 return False
-            if self.focus is not None and ev.type == pygame.KEYDOWN and ev.key not in (pygame.K_HOME,):
+            typed = ev.type == pygame.TEXTINPUT and isinstance(self.focus, claude.ClaudeWindow)  # typed with the mouse away
+            if self.focus is not None and (typed or ev.type == pygame.KEYDOWN and ev.key not in (pygame.K_HOME,)):
                 if self.focus.handle(ev) == "close":
                     self._close_(self.focus)
                 return True

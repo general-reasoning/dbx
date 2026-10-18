@@ -31,6 +31,17 @@ All notable changes to this project will be documented in this file.
   toward and away from, read against the corpus's own phrases, embedded once
   and kept in the store (`hyp/arrows.py`, `Engine.arrows`). See Arrows in
   HYP.md, which also sketches an LLM's reading for later.
+- **hyp --markdowns: Claude sessions.** A **Claude** button opens a
+  conversation with Claude in a window a third of the window's area. Each
+  turn runs the Claude Code CLI (`claude -p`, streamed, `--resume` after the
+  first) under the user's own login, so a subscription covers it. Claude
+  runs in `--dir` with read-only tools. Every turn saves the session into
+  `--dir`, or `--claude-dir` under it, as one markdown transcript tagged
+  `hyp: claude-session` in its front matter, and embeds it at once: whole,
+  a piece at a time, averaged (`ChunkedEmbedder`), the layout nudged
+  rather than redone (`Engine.refresh`). Its point reopens the session to
+  go on with. A markdown's front matter is no longer drawn, nor embedded.
+
 ### Changed
 - **`hyp --docs` is `hyp --markdowns`.** `--docs` is gone. Corpora already
   made stay where they were, under `~/.hyp/docs`.

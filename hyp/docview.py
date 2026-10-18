@@ -108,10 +108,26 @@ def spans_of(inline):
     return out
 
 
+def front_matter(text):
+    """``(fields, body)``: *text*'s yaml front matter -- a dict, or None where it has none -- and the markdown after it."""
+    import yaml
+
+    m = re.match(r"---[ \t]*\n(.*?\n)?---[ \t]*(\n|$)", text, re.S)
+    if not m:
+        return None, text
+    try:
+        fields = yaml.safe_load(m.group(1) or "")
+    except yaml.YAMLError:
+        return None, text
+    return (fields if isinstance(fields, dict) else None), text[m.end():]
+
+
 def parse_markdown(text):
-    """*text*'s blocks, in order: commonmark, with tables and strikethrough, by markdown-it."""
+    """*text*'s blocks, in order: commonmark, with tables and strikethrough, by markdown-it; its front matter left out."""
     from markdown_it import MarkdownIt
 
+    fields, body = front_matter(text)
+    text = body if fields is not None else text
     tokens = MarkdownIt("commonmark", {"html": True}).enable(["table", "strikethrough"]).parse(text)
     blocks, lists, quote, prefix = [], [], 0, None
 

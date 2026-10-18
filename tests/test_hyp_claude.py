@@ -28,7 +28,9 @@ if os.environ.get("FAKE_STDERR"):
 def put(e):
     print(json.dumps(e), flush=True)
 sid = sys.argv[sys.argv.index("--resume" if "--resume" in sys.argv else "--session-id") + 1]
-put({{"type": "system", "subtype": "init", "session_id": sid, "model": "claude-opus-5-5"}})
+model = {{"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5"}}.get(sys.argv[sys.argv.index("--model") + 1] if "--model" in sys.argv else "", "claude-opus-5-5")
+put({{"type": "system", "subtype": "init", "session_id": sid, "model": model}})
+put({{"type": "rate_limit_event", "rate_limit_info": {{"unifiedWindows": {{"five_hour": {{"utilization": 0.71}}, "seven_day": {{"utilization": 0.65}}}}}}}})
 if os.environ.get("FAKE_FAIL"):
     put({{"type": "result", "subtype": "error_during_execution", "is_error": True, "result": os.environ["FAKE_FAIL"]}})
     sys.exit(1)
@@ -39,7 +41,8 @@ if os.environ.get("FAKE_TOOL"):
     put({{"type": "stream_event", "event": {{"type": "content_block_start", "content_block": {{"type": "tool_use", "name": "Read"}}}}}})
     put({{"type": "stream_event", "event": {{"type": "content_block_start", "content_block": {{"type": "text", "text": ""}}}}}})
     put({{"type": "stream_event", "event": {{"type": "content_block_delta", "delta": {{"type": "text_delta", "text": "After reading."}}}}}})
-put({{"type": "result", "subtype": "success", "is_error": False, "result": "(final)", "session_id": sid}})
+put({{"type": "result", "subtype": "success", "is_error": False, "result": "(final)", "session_id": sid, "total_cost_usd": 0.25,
+     "usage": {{"input_tokens": 10, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 2000, "output_tokens": 300}}}})
 '''
 
 
@@ -335,3 +338,38 @@ def test_a_refresh_embeds_what_changed_and_nudges_the_layout_from_where_it_was(t
     texts["k6"] = "a new one"
     assert engine.refresh(quiet) is True
     assert np.array_equal(seen["previous"], before) and len(engine.store.layout) == 7
+
+
+def test_a_sessions_usage_adds_up_turn_by_turn_and_is_kept_with_it(cli, tree):
+    s = claude.Session(str(tree))
+    s.send("one")
+    s.send("two")
+    assert s.usage == {"tokens_in": 6020, "tokens_out": 600, "cost_usd": 0.5}
+    line = s.usage_line()
+    assert line == "claude-opus-5-5 · 6.0k in · 600 out · ≈$0.50 at API rates · plan 5 h 71%, 7 d 65%"
+    again = claude.Session.load(s.save(), str(tree))
+    assert again.usage == s.usage and again.model == "claude-opus-5-5"
+    again.send("three")
+    assert again.usage["tokens_in"] == 9030, "counted on from where it was saved"
+
+
+def test_the_model_is_switched_from_the_next_turn_on_and_kept_with_the_session(cli, tree):
+    s = claude.Session(str(tree))
+    s.send("one")
+    assert "--model" not in cli.runs()[-1]["argv"], "Claude Code's default, unless one is asked for"
+    assert [s.switch() or s.choice for _ in claude.MODELS] == ["opus", "sonnet", "haiku", None]
+    s.switch(), s.switch(), s.switch()
+    s.send("two")
+    argv = cli.runs()[-1]["argv"]
+    assert argv[argv.index("--model") + 1] == "haiku" and "--resume" in argv and s.model == "claude-haiku-5-5"
+    again = claude.Session.load(s.save(), str(tree))
+    assert again.choice == "haiku"
+
+
+def test_a_click_on_the_model_switches_it_and_the_usage_is_shown(app):
+    app.open_claude()
+    window = app.center
+    app.draw(0)
+    assert "in · " in window.sub and "API rates" in window.sub
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.chip.center))
+    assert window.session.choice == "opus"

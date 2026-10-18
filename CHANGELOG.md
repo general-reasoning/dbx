@@ -41,6 +41,11 @@ All notable changes to this project will be documented in this file.
   a piece at a time, averaged (`ChunkedEmbedder`), the layout nudged
   rather than redone (`Engine.refresh`). Its point reopens the session to
   go on with. A markdown's front matter is no longer drawn, nor embedded.
+- **hyp: a Claude session's model, and its usage.** A chip in the window
+  switches the model -- default, opus, sonnet, haiku -- from the next turn
+  on; beneath the title, the session's tokens in and out, their cost at API
+  rates, and the plan's 5-hour and 7-day windows. Both are kept in the
+  session's front matter.
 
 ### Changed
 - **hyp: an arrow is read by where else its direction runs, not by its

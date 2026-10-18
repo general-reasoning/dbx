@@ -46,6 +46,8 @@ SYSTEM = (
 )
 SYSTEM_TOOLS = "You may read, list and search those documents, to answer from them; you cannot change them."
 SYSTEM_NO_TOOLS = "You cannot see the documents unless the user pastes them in."
+# The models a session's window switches among, by Claude Code's names for them; None is Claude Code's own default.
+MODELS = (None, "opus", "sonnet", "haiku")
 
 
 class Failed(Exception):
@@ -62,7 +64,7 @@ class Session:
     """
 
     def __init__(self, root, subdir="", storage_options=None, command=None, id=None, started=None, title=None,
-                 prior="", resumable=False, md_url=None):
+                 prior="", resumable=False, md_url=None, choice=None, usage=None):
         self.root, self.subdir = str(root).rstrip("/") or "/", subdir
         self.storage_options = storage_options or {}
         self.command = command
@@ -73,7 +75,11 @@ class Session:
         self.resumable = resumable
         self.turns = []  # this time's: (text you sent, Claude's reply)
         self.saved = 0  # how many of them the file has
-        self.model = None  # as Claude Code says, at its first turn
+        self.model = None  # the model the last turn ran on, as Claude Code says
+        self.choice = choice  # the model asked for, of MODELS: None, Claude Code's default
+        # Over every turn, saved ones too: tokens in (cached or not) and out, and what they would cost at API rates.
+        self.usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, **(usage or {})}
+        self.plan = None  # the plan's windows, as the last turn left them: {"five_hour": {"utilization", "resetsAt"}, ...}
         stamp = self.started.replace("-", "").replace(":", "").replace("T", "-")
         self.md_url = md_url or posixpath.join(self.root, *([subdir] if subdir else []), f"{PREFIX}{stamp}.md")
 
@@ -85,8 +91,12 @@ class Session:
         fields, body = front_matter(_read_(md_url, storage_options))
         if not is_session(fields):
             raise ValueError(f"{md_url} is not a {KIND}")
-        return cls(root, subdir, storage_options, command, id=fields["session"], started=fields.get("started"),
-                   title=fields.get("title"), prior=body.strip(), resumable=True, md_url=md_url)
+        usage = {k: fields[k] for k in ("tokens_in", "tokens_out", "cost_usd") if isinstance(fields.get(k), (int, float))}
+        session = cls(root, subdir, storage_options, command, id=fields["session"], started=fields.get("started"),
+                      title=fields.get("title"), prior=body.strip(), resumable=True, md_url=md_url,
+                      choice=fields.get("choice") if fields.get("choice") in MODELS else None, usage=usage)
+        session.model = fields.get("model")
+        return session
 
     def send(self, text, on_text=lambda t: None, cancelled=lambda: False):
         """Send *text* as the next turn, streaming the reply to *on_text*; the reply, or None if *cancelled*.
@@ -114,8 +124,11 @@ class Session:
                 if event.get("type") == "system" and event.get("subtype") == "init":
                     self.resumable = True  # Claude Code has the session now, whatever comes of the turn
                     self.model = event.get("model") or self.model
+                elif event.get("type") == "rate_limit_event":
+                    self.plan = (event.get("rate_limit_info") or {}).get("unifiedWindows") or self.plan
                 elif event.get("type") == "result":
                     result = event
+                    self._count_(event)
                 else:
                     piece = _piece_(event, bool(reply))
                     if piece:
@@ -153,6 +166,9 @@ class Session:
                   "updated": time.strftime("%Y-%m-%dT%H:%M:%S"), "title": self.title()}
         if self.model:
             fields["model"] = self.model
+        if self.choice:
+            fields["choice"] = self.choice
+        fields.update(tokens_in=self.usage["tokens_in"], tokens_out=self.usage["tokens_out"], cost_usd=round(self.usage["cost_usd"], 4))
         lines = ["---", *(f"{k}: {json.dumps(v)}" for k, v in fields.items()), "---", ""]
         lines += [self.prior, ""] if self.prior else [f"# Claude · {self.title()}", ""]
         for said, answer in self.turns:
@@ -168,7 +184,30 @@ class Session:
         line = (self.turns[0][0] if self.turns else "").strip().split("\n", 1)[0]
         return (line[:77] + "…" if len(line) > 80 else line) or self.started.replace("T", " ")
 
+    def switch(self):
+        """Ask for the next of MODELS from the next turn on: Claude Code resumes the session on it."""
+        self.choice = MODELS[(MODELS.index(self.choice) + 1) % len(MODELS)]
+
+    def usage_line(self):
+        """The session's usage, as its window shows it: the model, tokens in and out, the cost at API rates, and the plan's windows."""
+        u = self.usage
+        said = [self.model or "model: Claude Code's default",
+                f"{_tokens_(u['tokens_in'])} in · {_tokens_(u['tokens_out'])} out",
+                f"≈${u['cost_usd']:.2f} at API rates"]
+        if self.plan:
+            names = {"five_hour": "5 h", "seven_day": "7 d"}
+            said.append("plan " + ", ".join(f"{names.get(k, k)} {w.get('utilization', 0):.0%}" for k, w in self.plan.items()
+                                            if isinstance(w, dict)))
+        return " · ".join(said)
+
     # 4. Helpers --------------------------------------------------------------
+
+    def _count_(self, result):
+        """Add a turn's *result* to the session's usage."""
+        u = result.get("usage") or {}
+        self.usage["tokens_in"] += sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        self.usage["tokens_out"] += int(u.get("output_tokens") or 0)
+        self.usage["cost_usd"] += float(result.get("total_cost_usd") or 0)
 
     def _local_(self):
         return "://" not in self.root
@@ -182,7 +221,8 @@ class Session:
         system = SYSTEM.format(root=self.root, tools=SYSTEM_TOOLS if tools else SYSTEM_NO_TOOLS)
         return [self.command or claude_command(), "-p", "--output-format", "stream-json", "--include-partial-messages",
                 "--verbose", f"--tools={tools}", f"--allowedTools={tools}", "--permission-mode", "dontAsk",
-                "--append-system-prompt", system, *(("--resume", self.id) if self.resumable else ("--session-id", self.id))]
+                "--append-system-prompt", system, *(("--model", self.choice) if self.choice else ()),
+                *(("--resume", self.id) if self.resumable else ("--session-id", self.id))]
 
 
 def ask(prompt, timeout=180, command=None):
@@ -200,6 +240,10 @@ def ask(prompt, timeout=180, command=None):
     if result is None or result.get("is_error") or done.returncode:
         raise Failed(explain((result or {}).get("result") or done.stderr or f"Claude Code exited with {done.returncode}"))
     return str(result.get("result") or "")
+
+
+def _tokens_(n):
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.1f}k" if n >= 1e3 else str(n)
 
 
 def claude_command():
@@ -230,7 +274,9 @@ class ClaudeWindow(DocWindow):
 
     Enter sends, Shift+Enter starts a new line, Cmd+V pastes; PageUp and
     PageDown, Home and End, and the wheel scroll the transcript; Esc or ×
-    closes the window, and its owner saves the session.
+    closes the window, and its owner saves the session. Beneath its title,
+    the session's usage; at the right of the box, the model, which a click
+    switches, from the next turn on.
     """
 
     INPUT_LINES = 8  # the box grows to this many lines, then scrolls
@@ -244,6 +290,7 @@ class ClaudeWindow(DocWindow):
         self.cancelled = False
         self.note = None  # what went wrong with the last turn
         self.input = pygame.Rect(0, 0, 0, 0)
+        self.chip = pygame.Rect(0, 0, 0, 0)  # the model's, as last drawn
         self._render_()
         pygame.key.start_text_input()
 
@@ -277,6 +324,10 @@ class ClaudeWindow(DocWindow):
         """Returns "close" or None."""
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.close.collidepoint(ev.pos):
             return "close"
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.chip.collidepoint(ev.pos):
+            if not self.busy():
+                self.session.switch()
+            return None
         if ev.type == pygame.TEXTINPUT:
             self.text += ev.text
             return None
@@ -311,6 +362,7 @@ class ClaudeWindow(DocWindow):
         shown = lines[-self.INPUT_LINES:]
         hint = "Claude is answering …" if self.busy() else "Enter: send · Shift+Enter: new line · Esc: close and save"
         box_h = 2 * pad + lh * len(shown) + small.get_linesize() + 4
+        self.sub = f"{posixpath.basename(self.session.md_url)} · {self.session.usage_line()}"
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
         self.rect = rect  # the box's too: a click on it is the window's, not the disk's
         self.input = pygame.Rect(rect.x, rect.bottom - box_h + 4, rect.width, box_h - 4)
@@ -318,8 +370,14 @@ class ClaudeWindow(DocWindow):
         pygame.draw.rect(surf, EDGE, self.input, 1, border_radius=8)
         for i, ln in enumerate(shown):
             surf.blit(font.render(ln, True, DIM if self.busy() else TEXT), (self.input.x + pad, self.input.y + pad + i * lh))
+        chip = small.render(f"model: {self.session.choice or 'default'} ▾", True, DIM if self.busy() else TEXT)
+        bottom = self.input.bottom - pad - small.get_linesize() + 4
+        self.chip = chip.get_rect(topright=(self.input.right - pad, bottom)).inflate(8, 2)
+        hot = self.chip.collidepoint(pygame.mouse.get_pos()) and not self.busy()
+        pygame.draw.rect(surf, (52, 60, 76) if hot else (40, 46, 58), self.chip, border_radius=4)
+        surf.blit(chip, chip.get_rect(center=self.chip.center))
         note = small.render(self.note or hint, True, (240, 120, 110) if self.note else DIM)
-        surf.blit(note, (self.input.x + pad, self.input.bottom - pad - small.get_linesize() + 4))
+        surf.blit(note, (self.input.x + pad, bottom))
         pygame.key.set_text_input_rect(self.input)
 
     def _render_(self, follow=False):

@@ -275,6 +275,23 @@ disk, and change nothing. Each tool it uses is noted in the reply. A
 runs in your home directory, with no tools, and sees only what is pasted
 in.
 
+**The model, and the usage.** At the right of the box, `model: default ▾`:
+a click switches it -- Claude Code's default, `opus`, `sonnet`, `haiku` --
+from the next turn on, which resumes the session on that model
+(`--model`). Beneath the window's title, the session's usage: the model the
+last turn ran on, the tokens in (cached or not) and out over every turn,
+what they would cost at API rates -- a subscription is not billed them --
+and how much of the plan's 5-hour and 7-day windows is used. The choice and
+the totals are kept in the front matter (`choice`, `tokens_in`,
+`tokens_out`, `cost_usd`), so a session reopened goes on from them.
+
+**Renaming a session.** Its file can be renamed, or moved anywhere the scan
+reaches, while its window is closed: what resumes it is the `session` id in
+its front matter, not its name. Keep the `.md`, and reload. The point's
+label is the front matter's `title`, not the file's name: edit `title:` to
+change it. A file renamed while its window is open is written again under
+its old name at the next turn.
+
 **Saved and embedded at every turn.** As each reply comes in whole, the
 session is saved into the directory scanned (`--dir`), or into
 `--claude-dir`: a directory relative to it that the scan reaches, so not

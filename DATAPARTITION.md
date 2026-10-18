@@ -988,8 +988,7 @@ change form.
   one down as its upstream. A pure pullback of the whole stack -- every layer
   copied whole -- would be work a user could not escape: a coreset of the bipolar
   codes would copy every tile and every deep feature. Further layers are pulled
-  back along the same maps when wanted, by `datamap.pullback(table, collator)`,
-  as autopath's `carbon_core_*` entrypoints do.
+  back along the same maps when wanted, by `datamap.pullback(table, collator)`.
 
 - **A pullback is a table pulled back along a part's map.** One `PartitionDatamapTable` per
   part; the part is a `MappedDatatable` (or `MappedFeaturetable`). It does not keep

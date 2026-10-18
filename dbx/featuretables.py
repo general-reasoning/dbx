@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import functools
 import gc
 import math
+import os
 import warnings
 from typing import Any
 
@@ -451,13 +452,18 @@ class Featuretable(Layered, Datatable):
         return cls(**kwargs)
 
     def _check_devices_(self) -> None:
-        """Raise for a ``cuda:<i>`` this process cannot see.
+        """Raise for a ``cuda:<i>`` this process cannot see, or GPUs with fewer CPUs than there are of them.
 
         Each worker takes one of *devices*; one naming a GPU the job was not
         given fails as ``CUDA error: invalid device ordinal`` -- in a worker,
         after the blocks are checked and the journal read, minutes in. Here --
         from `_build_executor_`, before any worker starts -- it fails saying how
         many devices there are.
+
+        A worker also needs a CPU of its own to feed its GPU. Workers sharing
+        fewer CPUs than GPUs fail nothing: they take turns, and the GPUs run
+        one after another -- a job given ``--gres=gpu:3`` and no
+        ``--cpus-per-task`` has one CPU. Here that is an error too.
         """
         cuda = [str(d) for d in self.devices if str(d).startswith('cuda')]
         if not cuda:
@@ -470,6 +476,12 @@ class Featuretable(Layered, Datatable):
         if missing:
             raise ValueError(f"{type(self).__name__}: devices={self.devices} names {missing}, but this process "
                              f"sees {n} CUDA device(s), cuda:0..cuda:{n - 1} -- ask for no more than the job has")
+        n_cpus = len(os.sched_getaffinity(0))
+        if n_cpus < len(cuda):
+            raise RuntimeError(f"{type(self).__name__}: devices={self.devices} starts {len(cuda)} GPU workers, and "
+                               f"this process may run on {n_cpus} CPU(s) (os.sched_getaffinity): the workers would "
+                               f"take turns on them, and the GPUs run one after another -- ask the job for at least "
+                               f"one CPU per GPU (e.g. salloc --cpus-per-task=...), or name fewer devices")
 
     def __tablet__(self, idx: int, device: str | None = None, tag=None) -> Featuretablet:
         upstream = self.var.upstream.tablet(idx)

@@ -20,6 +20,11 @@ All notable changes to this project will be documented in this file.
   constructed.
 
 ### Changed
+- **A Featuretable with fewer CPUs than GPUs raises before its workers start.** Its
+  device workers -- one per GPU -- need a CPU each to feed their GPUs; sharing fewer
+  (a Slurm job given `--gres=gpu:3` and no `--cpus-per-task` has one) they take turns,
+  and the GPUs run one after another. `_check_devices_` now raises a `RuntimeError`
+  naming the CPUs `os.sched_getaffinity` allows and the fix.
 - **`ModelEvaluatorBuilder.evaluator()` caches per process, not per builder.** The key is
   `(type(builder), builder.hash, device)`, so the builders of a feature table's tablets --
   one each, evaluated from the table's spec -- share one evaluator, and a process loads

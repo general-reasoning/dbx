@@ -160,6 +160,47 @@ class Engine:
 
         return [tuple(named(side) for side in arrows.decode(here, v, vecs)) for v in there]
 
+    def arrow_notes(self, i, js, ask, progress=print):
+        """The line each arrow from point *i* to points *js* -- indices into the snapshot -- is said in.
+
+        Each is read from the phrases `arrows` projects it on, and said by
+        *ask*, a function from a prompt to its answer's text (Claude): every
+        arrow not said before in one question, at most once a pair -- the
+        lines are kept in the store, by the two embed texts. An arrow
+        between two equal embeddings is not asked about.
+        """
+        import hashlib
+
+        decoded = self.arrows(i, js, progress)
+        with self.lock:
+            s = self.store
+            rows = self._shown_[0] if self._shown_ is not None else np.arange(len(s))
+            points = [s.points[rows[k]] for k in [i, *js]]
+            labels = [p.get("summary", "") for p in points]
+            embeds = [p.get("embed", p["text"]) for p in points]
+            keys = [hashlib.sha1(f"{embeds[0]}\0{e}".encode()).hexdigest()[:20] for e in embeds[1:]]
+            notes = [s.notes.get(k) for k in keys]
+            name = s.embedder
+        for n, (toward, _) in enumerate(decoded):
+            if not toward:
+                notes[n] = "the same embedding"
+        todo = [n for n, note in enumerate(notes) if note is None]
+        if todo:
+            progress(f"arrows: Claude is reading {len(todo)} arrow{'s' if len(todo) > 1 else ''}")
+            reply = ask(arrows.prompt([(labels[0], labels[n + 1], *decoded[n]) for n in todo]))
+            said = arrows.parse(reply, len(todo))
+            if said is None:
+                raise ValueError(f"Claude's answer was not {len(todo)} lines: {reply[:200]}")
+            for n, line in zip(todo, said):
+                notes[n] = line
+            with self.lock:
+                s = self.store
+                if s.embedder == name:  # not re-embedded, nor another corpus, while Claude read
+                    s.notes.update({keys[n]: notes[n] for n in todo})
+                    s.save_notes()
+            progress("arrows: read")
+        return notes
+
     def _shown_indices_(self):
         """The indices of the points shown, where the source gives fewer than are stored; None where it gives them all."""
         if self.keys is None:

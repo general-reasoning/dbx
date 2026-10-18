@@ -310,43 +310,43 @@ window says so.
 
 Each arc a hover draws is an arrow, from the hovered point to a neighbor:
 the difference of their embeddings, `ê_there − ê_here`, each unit length
-first. An embedding has no decoder -- no text comes back out of a vector --
-so Shift reads the arrow against a vocabulary (`hyp/arrows.py`):
+first. Hold Shift over the point, and each arrow is labeled with a short
+line saying what moving along it means -- `Moves from test-split
+evaluation to the 602020 training split`. An embedding has no decoder: no
+text comes back out of a vector. So the line is made in two steps
+(`hyp/arrows.py`, `Engine.arrow_notes`).
 
-1. **Phrases.** Every stored point's embed text is cut into phrases: a line
-   each, a line longer than 120 characters at its sentences, quotes,
-   brackets and backslashes stripped, so a spec's lines read `key: value`. A
-   phrase in every text is dropped, as it points nowhere. The 4,000 in the
-   most texts are kept.
-2. **Their vectors.** Each phrase is embedded with the corpus's own embedder
-   -- through `LabelFirstEmbedder`, for a journal -- so it lies in the
-   points' space. They are embedded the first time Shift is held over the
-   corpus, in the background, the status line counting them (a few seconds
-   for a few hundred), and kept in the store (`phrases.json`,
-   `phrases.npy`), with the embedder's name. A phrase new since is embedded
-   when next asked for, and a change of embedder discards them all.
-3. **The reading.** Every embedding shares a large common direction, so
-   each phrase's unit vector is taken less the mean of them all: what it
-   says that the others do not. The arrow's cosine with each is its score.
-   The 3 highest are where moving there takes you (+), the 3 lowest what it
-   leaves behind (−).
+1. **The arrow is read against the corpus's phrases.** Every stored point's
+   embed text is cut into phrases: a line each, a line longer than 120
+   characters at its sentences, quotes, brackets and backslashes stripped.
+   A phrase in every text is dropped, as it points nowhere, and the 4,000
+   in the most texts are kept. Each is embedded with the corpus's own
+   embedder -- through `LabelFirstEmbedder`, for a journal -- so it lies in
+   the points' space. Every embedding shares a large common direction, so
+   each phrase's unit vector is taken less the mean of them all, and the
+   arrow's cosine with each is its score. The 10 highest are where moving
+   there leads, the 10 lowest what it leaves behind. The phrases are
+   embedded the first time Shift is held over a corpus, and kept in the
+   store (`phrases.json`, `phrases.npy`) with the embedder's name.
+2. **Claude says what that means.** The phrases and their scores, with the
+   two points' labels, are given to Claude Code (`claude -p`, under your
+   login, with no tools, as the Claude sessions run), which answers in one
+   line of at most 12 words an arrow. All of a hover's arrows not said
+   before go in one question, about 5 seconds. "…" stands on each arc until
+   the lines come.
 
-A phrase can score without being in either text: this reads the vector, not
-the texts. Between two pipelines of one label the label's block cancels and
-the arrow reads as their specs' difference -- from a `_TEST` pipeline to its
-`_TRAIN` neighbor, `+ split: TRAIN`, `− split: TEST`. Between labels the
-label's trigrams count too. The scores are small, a few hundredths in 1,024
-dimensions; their order is what they say. Two neighbors with one embedding --
-a pipeline run again -- have no arrow, and say so: `= the same embedding`.
+Each line is kept in the store (`notes.json`), by the two points' embed
+texts, so an arrow is said once; a point's text changing asks again, and a
+change of embedder discards them all. Two neighbors with one embedding -- a
+pipeline run again -- are not asked about: their arc says `the same
+embedding`. A reading that fails -- no Claude Code, not logged in -- says
+why on the first arc, and is tried again after 30 seconds of Shift.
 
-**Possible later: an LLM's reading.** The summary model
-(`deepseek-r1:1.5b`, through Ollama) could instead be given the two embed
-texts and asked, in one line, what changes from one to the other. It would
-read as prose, but it would describe the texts rather than the vector, take
-seconds per arrow (five per hover), vary from one run to the next, and a
-1.5B model can be wrong. Held in the store keyed by the pair, it would be
-asked once per arrow. It would go in `Engine.arrows`, beside the phrases, so
-the two readings could be shown together.
+Claude is given the phrases, not the texts: it says what the embedding
+weighs, which the phrases are the embedding's own reading of. Giving it
+the two texts as well would let it say more of what they are, at the cost
+of long prompts -- specs, transcripts -- and of describing the texts rather
+than the vector.
 
 ## Controls
 
@@ -361,7 +361,7 @@ the two readings could be shown together.
 | right click on a point | its stored text |
 | right click elsewhere | type a text; Enter embeds, summarizes, stores and places it |
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space -- by cosine over the whole vectors, so an arc may reach a point far off on the disk |
-| Shift, while hovering | each of those arcs labeled with what its arrow means: the phrases it points toward (+) and away from (−). See [Arrows](#arrows) |
+| Shift, while hovering | each of those arcs labeled with a line, by Claude, saying what moving along it means. See [Arrows](#arrows) |
 | Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
 | (lower left) | a spinning wheel while data are being loaded or prepared; an error, in red, for 15 s or until the next read -- its full traceback in the terminal |
 | while a corpus loads | the window is dimmed and takes no input. A card in its middle shows the stage under way, with a bar, the files done out of the total, the time taken and the time left. An anchor's journal is listed first, as a stage of its own (`dbx.DataJournal.list`). Until the listing is done there is no total, so the bar slides and the card counts the files found so far, after every directory. Then the files are read (`dbx.DataJournal.read_frame`), counted against that total |

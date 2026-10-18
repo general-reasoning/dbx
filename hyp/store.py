@@ -11,6 +11,8 @@ Under *root*, a local directory or any fsspec url -- a datalake's
     <dir>/phrases.json     {"embedder": name, "phrases": [...]}: what arrows
                            are decoded against (`hyp.arrows`), embedded once
     <dir>/phrases.npy      (m, d) float32, one row per phrase
+    <dir>/notes.json       {"embedder": name, "notes": {pair: line}}: each
+                           arrow's line, as Claude said it, asked once
 
 Every write goes to a temporary file that is then moved over the old one, so
 a crash leaves the previous state rather than a torn one. The corpus is small
@@ -37,6 +39,7 @@ class Store:
         self.layout = None
         self.phrases = []
         self.phrase_embeddings = np.zeros((0, 0), dtype=np.float32)
+        self.notes = {}
         self.load()
 
     def __len__(self):
@@ -78,6 +81,11 @@ class Store:
             meta, vecs = json.loads(meta), np.load(io.BytesIO(vecs))
             if meta.get("embedder") == self.embedder and len(meta.get("phrases", [])) == len(vecs):
                 self.phrases, self.phrase_embeddings = list(meta["phrases"]), vecs
+        notes = self._read_("notes.json")
+        if notes is not None:
+            notes = json.loads(notes)
+            if notes.get("embedder") == self.embedder:  # read from another model's arrows, they say nothing of these
+                self.notes = dict(notes.get("notes", {}))
 
     def _write_(self, name, write):
         tmp, path = self._path_(name + ".tmp"), self._path_(name)
@@ -104,6 +112,10 @@ class Store:
         if self.layout is not None:
             self._write_("layout.npy", lambda f: np.save(f, self.layout))
 
+    def save_notes(self):
+        """Write the arrows' lines."""
+        self._write_("notes.json", lambda f: f.write(json.dumps({"embedder": self.embedder, "notes": self.notes}).encode()))
+
     def save_phrases(self):
         """Write the phrases and their vectors: apart from `save`, as they are embedded apart from the points."""
         self._write_("phrases.npy", lambda f: np.save(f, self.phrase_embeddings))
@@ -116,6 +128,7 @@ class Store:
         self.layout = None
         self.phrases = []
         self.phrase_embeddings = np.zeros((0, 0), dtype=np.float32)
+        self.notes = {}
 
     def add(self, texts, summaries, embeddings, extras=None):
         """Append points; *extras*, one dict per point, adds fields to each."""

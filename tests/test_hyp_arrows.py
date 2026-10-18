@@ -83,14 +83,18 @@ def test_the_engine_decodes_a_points_arrows_and_embeds_the_phrases_once(tmp_path
     assert Store(tmp_path).phrases == [], "phrases embedded with another model are dropped"
 
 
-def test_shift_over_a_point_decodes_its_arrows_and_draws_them(tmp_path, monkeypatch):
+def test_shift_over_a_point_has_its_arrows_said_and_draws_them(tmp_path, monkeypatch):
     import os
     from types import SimpleNamespace as NS
 
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     import pygame
 
+    from hyp import claude
     from hyp.app import Hyp, Worker
+
+    asked = []
+    monkeypatch.setattr(claude, "ask", lambda prompt: asked.append(prompt) or '["a lower learning rate", "folds instead"]')
 
     emb = BagEmbedder()
     texts = ["model probe\nlr: 0.1", "model probe\nlr: 0.001", "model probe\nfold: 5"]
@@ -110,6 +114,81 @@ def test_shift_over_a_point_decodes_its_arrows_and_draws_them(tmp_path, monkeypa
     monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_SHIFT)
     app.draw(0)
     ((key, got),) = app.arrows.items()
-    assert key == (id(app.snap), 0) and got[0][0][0][0] == "lr: 0.001"
-    app.draw(0)  # drawn from what was decoded: nothing asked again
-    assert len(app.arrows) == 1
+    assert key == (id(app.snap), 0) and got == ["a lower learning rate", "folds instead"]
+    assert len(asked) == 1 and "lr: 0.001" in asked[0], "both arrows in one question, read from the phrases"
+    app.draw(0)  # drawn from what was said: nothing asked again
+    assert len(app.arrows) == 1 and len(asked) == 1
+
+
+def test_a_reading_that_failed_says_why_and_is_not_asked_again_at_once(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace as NS
+
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    import pygame
+
+    from hyp import claude
+    from hyp.app import Hyp, Worker
+
+    asked = []
+
+    def fail(prompt):
+        asked.append(prompt)
+        raise claude.Failed("Claude Code is not logged in")
+
+    monkeypatch.setattr(claude, "ask", fail)
+    emb = BagEmbedder()
+    texts = ["model probe\nlr: 0.1", "model probe\nlr: 0.001"]
+    store = Store(tmp_path)
+    store.reset(emb.name)
+    store.add(texts, texts, emb(texts))
+    app = Hyp(engine=Engine(store, emb, EchoSummarizer()), worker=Worker())
+
+    def run_async(fn, then):
+        try:
+            then(fn())
+        except Exception:
+            pass
+
+    app.run_async = run_async
+    app.snap = NS(positions=np.array([0j, 0.4 + 0.2j]), summaries=texts, texts=texts, neighbors=np.array([[1], [0]]), points=[{}, {}])
+    app.draw(0)
+    cx, cy, _ = app.frame()
+    monkeypatch.setattr(pygame.mouse, "get_pos", lambda: (cx, cy))
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: pygame.KMOD_SHIFT)
+    app.draw(0)
+    app.drain(0)
+    ((_, got),) = app.arrows.items()
+    assert isinstance(got, tuple) and "not logged in" in got[0]
+    app.draw(0)
+    assert len(asked) == 1, "not every frame"
+
+
+def test_an_arrow_is_said_once_and_kept_and_one_between_equal_embeddings_not_asked(tmp_path):
+    emb = BagEmbedder()
+    texts = ["model probe\nlr: 0.1", "model probe\nlr: 0.001", "model probe\nlr: 0.1"]
+    store = Store(tmp_path)
+    store.reset(emb.name)
+    store.add(texts, texts, emb(texts))
+    store.save()
+    engine = Engine(store, emb, EchoSummarizer())
+    asked = []
+
+    def ask(prompt):
+        asked.append(prompt)
+        return 'Sure: ["a lower learning rate"]'
+
+    assert engine.arrow_notes(0, [1, 2], ask, quiet) == ["a lower learning rate", "the same embedding"]
+    assert len(asked) == 1 and '1. from "model probe\nlr: 0.1"' in asked[0] and "2. from" not in asked[0]
+    assert engine.arrow_notes(0, [1, 2], ask, quiet) == ["a lower learning rate", "the same embedding"]
+    assert len(asked) == 1, "kept"
+    again = Engine(Store(tmp_path), emb, EchoSummarizer())
+    assert again.arrow_notes(0, [1], lambda p: asked.append(p), quiet) == ["a lower learning rate"], "and kept on disk"
+    assert len(asked) == 1
+
+
+def test_claudes_answer_is_read_as_one_line_per_arrow_or_not_at_all():
+    assert arrows.parse('Here: ["one", "  two   words "]', 2) == ["one", "two words"]
+    assert arrows.parse('["one"]', 2) is None and arrows.parse("no json", 1) is None
+    p = arrows.prompt([("a", "b", [("lr: 0.001", 0.09)], [("lr: 0.1", -0.07)])])
+    assert '1. from "a" to "b"' in p and "+ lr: 0.001 (+0.09)" in p and "- lr: 0.1 (-0.07)" in p and "JSON array" in p

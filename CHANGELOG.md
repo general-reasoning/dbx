@@ -43,6 +43,11 @@ All notable changes to this project will be documented in this file.
   go on with. A markdown's front matter is no longer drawn, nor embedded.
 
 ### Changed
+- **hyp: an arrow's label is a line by Claude, not a list of phrases.** The
+  phrases an arrow projects on read as a diff of the two texts. They are now
+  what Claude Code is given, with their scores, to say in one short line
+  what moving along the arrow means: all of a hover's arrows in one
+  question, each line kept in the store (`notes.json`, `Engine.arrow_notes`).
 - **`hyp --docs` is `hyp --markdowns`.** `--docs` is gone. Corpora already
   made stay where they were, under `~/.hyp/docs`.
 - **A partition's stages say what they are.** A deal's build opens with a

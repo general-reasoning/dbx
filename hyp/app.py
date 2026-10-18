@@ -68,9 +68,10 @@ DIMMED = (85, 92, 105)  # a menu shown but not yet usable
 DISK_SEE_THROUGH = 150  # the disk's alpha, out of 255, over layers behind it
 LOADING_VEIL = 170  # the alpha, out of 255, of the veil over the window while a job loads
 BAR = (120, 170, 235)  # a loading job's bar
-ARROW_TOWARD = (40, 120, 60)  # a decoded arrow's phrases toward its end, on TIP_BG
-ARROW_AWAY = (170, 60, 50)  # and away from it
-ARROW_AT = 0.6  # where along its arc an arrow's phrases are shown: 0 at the hovered point, 1 at its neighbor
+ARROW_AWAY = (170, 60, 50)  # an arrow whose reading failed, saying why, on TIP_BG
+ARROW_NOTE_PX = 240  # how wide an arrow's line is wrapped
+ARROW_RETRY_S = 30  # a reading that failed is tried again after this long
+ARROW_AT = 0.6  # where along its arc an arrow's line is shown: 0 at the hovered point, 1 at its neighbor
 
 
 def make_embedder(kind, model, ollama):
@@ -1701,36 +1702,42 @@ class Hyp:
                 self.tooltip(self.__point_tooltip__(self.hover), (mx, my))
 
     def draw_arrows(self, i, data, M):
-        """Point *i*'s arrows to its neighbors, each labeled along its arc with the phrases it points toward (+) and away from (-): `Engine.arrows`.
+        """Point *i*'s arrows to its neighbors, each labeled along its arc with a line saying what moving along it means: `Engine.arrow_notes`.
 
-        The first Shift over a point asks for them in the background; they show once decoded.
+        The first Shift over a point asks for them in the background -- the
+        arrows read through the corpus's phrases, then said by Claude, every
+        arrow not said before in one question -- and "…" stands in until they
+        come. Each line is kept, so a point is read once. A reading that
+        failed says why, in place of the lines, and is tried again after
+        ARROW_RETRY_S.
         """
-        snap, key = self.snap, (id(self.snap), i)
-        if key not in self.arrows:
+        from . import claude
+
+        snap, key, now = self.snap, (id(self.snap), i), time.monotonic()
+        got = self.arrows.get(key, ())
+        if key not in self.arrows or (isinstance(got, tuple) and got and now - got[1] > ARROW_RETRY_S):
             self.arrows[key] = None
             js = [int(j) for j in snap.neighbors[i]]
 
-            def decode():
+            def read():
                 try:
-                    return self.engine.arrows(i, js, self.worker.status)
-                except Exception:
-                    self.arrows.pop(key, None)  # asked again at the next Shift
+                    return self.engine.arrow_notes(i, js, claude.ask, self.worker.status)
+                except Exception as e:
+                    said = str(e) if isinstance(e, claude.Failed) else f"{type(e).__name__}: {e}"
+                    self.worker.events.put(("call", lambda: self.arrows.__setitem__(key, (said, time.monotonic()))))
                     raise
 
-            self.run_async(decode, lambda got: self.arrows.__setitem__(key, got) if key in self.arrows else None)
+            self.run_async(read, lambda notes: self.arrows.__setitem__(key, notes) if key in self.arrows else None)
         got = self.arrows[key]
-        if got is None:
-            return
+        failed = isinstance(got, tuple)
         placed = []
-        for j, (toward, away) in zip(snap.neighbors[i], got):
+        for n, j in enumerate(snap.neighbors[i]):
             z = self.display(P.geodesic(data[i], data[j], np.array([ARROW_AT])), M)
             x, y = (float(c[0]) for c in self.to_screen(z))
-            rows = [(f"+ {p}", ARROW_TOWARD, s) for p, s in toward] + [(f"\u2212 {p}", ARROW_AWAY, s) for p, s in away]
-            imgs = [(self.tiny.render(_fit_(self.tiny, t, 260), True, c), self.tiny.render(f"{s:+.2f}", True, STATUS)) for t, c, s in rows]
-            if not imgs:  # one embedding at both ends: a pipeline run again, say
-                imgs = [(self.tiny.render("= the same embedding", True, STATUS), self.tiny.render("", True, STATUS))]
-            w = max(a.get_width() + b.get_width() for a, b in imgs) + 8
-            h = sum(a.get_height() for a, _ in imgs)
+            text, color = ("…", STATUS) if got is None else (f"no reading: {got[0]}", ARROW_AWAY) if failed else (got[n], TIP_FG)
+            lines = wrap(self.tiny, text, ARROW_NOTE_PX)[:3] or [""]
+            imgs = [self.tiny.render(ln, True, color) for ln in lines]
+            w, h = max(img.get_width() for img in imgs), sum(img.get_height() for img in imgs)
             rect = pygame.Rect(int(x) + 6, int(y) + 6, w, h).inflate(10, 6)
             rect.clamp_ip(self.screen.get_rect())
             while rect.collidelist(placed) >= 0 and rect.bottom < self.screen.get_height():
@@ -1738,11 +1745,12 @@ class Hyp:
             pygame.draw.rect(self.screen, TIP_BG, rect, border_radius=4)
             pygame.draw.rect(self.screen, EDGE, rect, 1, border_radius=4)
             ty = rect.y + 3
-            for a, b in imgs:
-                self.screen.blit(a, (rect.x + 5, ty))
-                self.screen.blit(b, (rect.right - 5 - b.get_width(), ty))
-                ty += a.get_height()
+            for img in imgs:
+                self.screen.blit(img, (rect.x + 5, ty))
+                ty += img.get_height()
             placed.append(rect)
+            if failed:
+                break  # one box says it: the same for every arrow
 
     def draw_chrome(self, now):
         """What is over every layer: the text box, the top bar's menus, the text windows, the status line."""

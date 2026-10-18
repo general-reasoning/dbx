@@ -185,6 +185,23 @@ class Session:
                 "--append-system-prompt", system, *(("--resume", self.id) if self.resumable else ("--session-id", self.id))]
 
 
+def ask(prompt, timeout=180, command=None):
+    """One question to Claude Code, and its answer's text: no tools, no session kept -- what an arrow's line is asked with."""
+    args = [command or claude_command(), "-p", "--output-format", "json", "--tools=", "--no-session-persistence",
+            "--permission-mode", "dontAsk"]
+    try:
+        done = subprocess.run(args, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, cwd=os.path.expanduser("~"))
+    except OSError as e:
+        raise Failed(f"could not run Claude Code ({args[0]}): {e}") from None
+    except subprocess.TimeoutExpired:
+        raise Failed(f"Claude Code took more than {timeout} s") from None
+    result = _event_(done.stdout.strip().splitlines()[-1]) if done.stdout.strip() else None
+    if result is None or result.get("is_error") or done.returncode:
+        raise Failed(explain((result or {}).get("result") or done.stderr or f"Claude Code exited with {done.returncode}"))
+    return str(result.get("result") or "")
+
+
 def claude_command():
     """The Claude Code CLI to run: $HYP_CLAUDE, else ``claude`` on the PATH, else the one VS Code's extension carries."""
     named = os.environ.get("HYP_CLAUDE") or shutil.which("claude")

@@ -1244,7 +1244,7 @@ class ExecJournal:
         fs, _ = fsspec.url_to_fs(exec_dir, **storage_options)
         compacted = os.path.join(fs._strip_protocol(exec_dir), cls.COMPACTED)
         files = sorted(fs.glob(os.path.join(exec_dir, '*.parquet'))) if fs.exists(exec_dir) else []
-        result = {'files': len(files), 'entries': 0, 'removed': 0, 'compacted': compacted}
+        result = {'files': len(files), 'entries': 0, 'removed': 0, 'kept': 0, 'compacted': compacted}
         if not files or files == [compacted]:
             return result
         if not dry_run and not UNSAFE_allowed(f"ExecJournal.UNSAFE_compact of {len(files)} file(s) in {exec_dir}",
@@ -1253,9 +1253,13 @@ class ExecJournal:
         executor = callable_executor(parallelization, n_workers=n_workers or 8,
                                      tag=f"READING {len(files)} exec journal files")
         frames = executor.exec_callables([_ReadParquetCallable(fs, file) for file in files])
-        table = pd.concat(frames, ignore_index=True)
-        removed = [f for f in files if f != compacted]
-        result.update(entries=len(table), removed=len(removed))
+        # An unreadable file -- empty, say -- is left as it is, as read_exec_journal skips it.
+        read = [(file, df) for file, df in zip(files, frames) if isinstance(df, pd.DataFrame)]
+        for file, err in ((f, d) for f, d in zip(files, frames) if not isinstance(d, pd.DataFrame)):
+            log.warning(f"ExecJournal.UNSAFE_compact: leaving unreadable {file}: {err}")
+        table = pd.concat([df for _, df in read], ignore_index=True)
+        removed = [f for f, _ in read if f != compacted]
+        result.update(entries=len(table), removed=len(removed), kept=len(files) - len(read))
         DataJournal._write_compacted_(fs, table, compacted, dry_run=dry_run)
         result['verified'] = True
         if dry_run:
@@ -1272,8 +1276,12 @@ class _ReadParquetCallable:
         self.fs, self.path = fs, path
 
     def __call__(self, *args, **kwargs):
-        with self.fs.open(self.path, 'rb') as f:
-            return pd.read_parquet(f, engine='pyarrow')
+        """The file's frame, or what reading it raised, as a str: one bad file does not stop the others."""
+        try:
+            with self.fs.open(self.path, 'rb') as f:
+                return pd.read_parquet(f, engine='pyarrow')
+        except Exception as e:
+            return f"{type(e).__name__}: {e}"
 
 
 def execjournal(loc=None, *, iloc=None, datalake=None, storage_options=None, log=None,

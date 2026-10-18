@@ -166,3 +166,14 @@ def test_an_exec_dry_run_checks_and_leaves_nothing(lake):
     names = sorted(os.listdir(ExecJournal.dirpath(lake)))
     assert ExecJournal.UNSAFE_compact(datalake=lake, dry_run=True)['verified'] is True
     assert sorted(os.listdir(ExecJournal.dirpath(lake))) == names
+
+
+def test_an_unreadable_exec_file_is_left_as_it_is(lake):
+    for i in range(3):
+        write_exec_journal(f"print({i})", datalake=lake)
+    empty = os.path.join(ExecJournal.dirpath(lake), 'exec_empty.parquet')
+    open(empty, 'wb').close()
+    result = ExecJournal.UNSAFE_compact(datalake=lake, OVERRIDE=True)
+    assert (result['entries'], result['removed'], result['kept']) == (3, 3, 1)
+    assert sorted(os.listdir(ExecJournal.dirpath(lake))) == sorted([ExecJournal.COMPACTED, 'exec_empty.parquet'])
+    assert len(read_exec_journal(lake)) == 3

@@ -1679,11 +1679,11 @@ class CallableTp(CallableStr):
 def cite_specline(text: str, *, deslash: bool = True) -> str:
     """*text* -- an evaluable ``$fqcn(...)`` specline, a recorded quote -- laid out as `Datablock.cite` lays out a block.
 
-    A keyword a line, ``spec`` an entry a line, and every nested block -- in a
-    specline, a string holding a specline, escaped once more at every level --
-    an indented block of its own, so nothing is left to escape. A nested block
-    is a ``'$fqcn(...)'`` string calling with keywords, as every block's quote
-    does; ``"$dbx.getenv('X')"`` stays as it is. *deslash* strips what
+    A keyword a line, ``spec`` an entry a line, and every nested block an
+    indented block of its own. A nested block is a call with keywords: written
+    bare, ``fqcn(...)``, as a quote writes it now, or -- as recorded before --
+    a ``'$fqcn(...)'`` string, escaped once more at every level, so laid out
+    nothing is left to escape. ``"$dbx.getenv('X')"`` stays as it is. *deslash* strips what
     backslashes are left, last, as `cite` does. Not evaluable, as a cite is
     not. *text* comes back unchanged when it does not parse as a call.
     """
@@ -1699,16 +1699,22 @@ def cite_specline(text: str, *, deslash: bool = True) -> str:
             return None
         return node if isinstance(node, ast.Call) and node.keywords else None
 
+    def block_of(node):
+        """The call *node* holds when it is a nested block: a string holding one, or one written bare."""
+        if isinstance(node, ast.Constant):
+            return call_of(node.value)
+        return node if isinstance(node, ast.Call) and node.keywords else None
+
     def holds_a_block(node):
-        return any(isinstance(n, ast.Constant) and call_of(n.value) is not None for n in ast.walk(node))
+        return any(block_of(n) is not None for n in ast.walk(node))
 
     def entries(pairs, indent):
         inner = indent + IND
         return '\n'.join(f"{inner}{k}{v}," for k, v in pairs)
 
     def value(node, indent):
-        if isinstance(node, ast.Constant) and call_of(node.value) is not None:
-            return call(call_of(node.value), indent)
+        if block_of(node) is not None:
+            return call(block_of(node), indent)
         if isinstance(node, ast.Dict) and holds_a_block(node):
             pairs = [(f"{ast.unparse(k)}: ", value(v, indent + IND)) for k, v in zip(node.keys, node.values)]
             return '{\n' + entries(pairs, indent) + f'\n{indent}}}'

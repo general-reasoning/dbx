@@ -6734,10 +6734,27 @@ class Datablock:
         return {'tag': tag} if tag is not None else {}
 
     def _render_call_(self, kwargs, *, pretty: bool, deslash: int, dollar: bool) -> str:
-        """``fqcn(k=v, ...)`` for *kwargs*: the rendering :meth:`quote` and :meth:`repr` share."""
+        """``fqcn(k=v, ...)`` for *kwargs*: the rendering :meth:`quote` and :meth:`repr` share.
+
+        Evaluable (*dollar*), a spec value that is a ``$`` specline -- a nested
+        block's quote, or ``$dbx.getenv('X')`` -- is written bare,
+        ``'upstream': X(...)``, not as a string (`databits.bare_specline`):
+        held as a string, it is escaped once more at every level of nesting.
+        `databits.eval` reads it back as the specline string it was.
+        """
         def quotestr(x):
             return repr(x) if isinstance(x, str) else x
-        kwargstrs = [f"{k}={quotestr(v)}" for k, v in kwargs.items()]
+
+        def specval(v):
+            bare = databits.bare_specline(v) if dollar else None
+            return bare if bare is not None else repr(v)
+
+        def specstr(spec):
+            if not (dollar and isinstance(spec, dict)):
+                return spec
+            return '{' + ', '.join(f"{k!r}: {specval(v)}" for k, v in spec.items()) + '}'
+
+        kwargstrs = [f"{k}={specstr(v) if k == 'spec' else quotestr(v)}" for k, v in kwargs.items()]
         if pretty:
             # A FIXED 4-space indent, and the spec dict broken one entry per
             # line -- the two things that made the previous attempt unreadable:
@@ -6761,7 +6778,7 @@ class Datablock:
             parts = []
             for k, v in kwargs.items():
                 if k == 'spec' and isinstance(v, dict):
-                    rows = [f"{IND * 2}{sk!r}: {repr(sv)},\n" for sk, sv in v.items()]
+                    rows = [f"{IND * 2}{sk!r}: {specval(sv)},\n" for sk, sv in v.items()]
                     parts.append(f"{IND}spec={{\n{''.join(rows)}{IND}}}")
                 else:
                     parts.append(f"{IND}{k}={quotestr(v)}")

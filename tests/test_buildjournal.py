@@ -455,8 +455,9 @@ class TestRepr:
                 child: Datablock = None
 
         outer = Outer(datalake=str(tmp_path), spec={'child': inner})
-        assert repr(inner.repr()) in outer.repr()
-        assert repr(inner.quote()) in outer.quote()
+        # Written bare, not as a string: escaped, it doubled its backslashes at every level.
+        assert f"'child': {inner.repr()[1:]}" in outer.repr()
+        assert f"'child': {inner.quote()[1:]}" in outer.quote()
 
     def test_recorded_in_the_journal_and_read_back(self, tmp_path):
         b = block(tmp_path)

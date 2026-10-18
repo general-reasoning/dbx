@@ -8,9 +8,11 @@ OutputTee, I/O helpers, term evaluator, callable executors, etc.
 import ast
 import atexit
 import contextlib
+import copy
 from collections.abc import Iterable
 from dataclasses import dataclass
 import datetime
+import functools
 import gc
 import importlib
 import io
@@ -444,6 +446,118 @@ def get_named_const_and_cxt(name):
     return const, cxt
 
 
+def split_top_level_items(inner: str, sep: str = ',') -> list[str]:
+    """*inner* split at each *sep* outside brackets and string literals (backslash escapes honoured)."""
+    out, buf, depth, quote, esc = [], [], 0, None, False
+    for c in inner:
+        if esc:
+            buf.append(c); esc = False; continue
+        if c == '\\':
+            buf.append(c); esc = True; continue
+        if quote is not None:
+            buf.append(c)
+            if c == quote:
+                quote = None
+            continue
+        if c in ('"', "'"):
+            quote = c; buf.append(c); continue
+        if c in ('(', '[', '{'):
+            depth += 1
+        elif c in (')', ']', '}'):
+            depth -= 1
+        elif c == sep and depth == 0:
+            out.append(''.join(buf)); buf = []
+            continue
+        buf.append(c)
+    if buf:
+        out.append(''.join(buf))
+    return out
+
+
+def bare_specline(value) -> 'str | None':
+    """*value*, a ``$`` specline, as a quote writes it in a spec: bare, ``X(...)`` -- or None, when it stays a string.
+
+    A nested block's quote held as a string literal is escaped once more at
+    every level of nesting -- every backslash doubled -- so a quote twelve
+    levels deep was 98% backslashes, and `eval` spent seconds scanning them.
+    Bare, nothing is escaped. Only an expression that `quote_spec` splits back
+    out whole is written so: one expression, with no top-level comma (a bare
+    tuple) or colon (a lambda). Anything else stays a string, as it always was.
+    """
+    if not (isinstance(value, str) and value.startswith('$')):
+        return None
+    body = value[1:]
+    if not body or body != body.strip():
+        return None
+    try:
+        node = ast.parse(body, mode='eval').body
+    except SyntaxError:
+        return None
+    return None if isinstance(node, (ast.Tuple, ast.Lambda)) else body
+
+
+def quote_spec(text: str) -> 'dict | None':
+    """The spec dict of a quote, its bare values (`bare_specline`) back as the ``$`` speclines they were -- or None.
+
+    ``{'n': 5, 'upstream': X(tag='t', spec={...})}`` reads as
+    ``{'n': 5, 'upstream': "$X(tag='t', spec={...})"}``: exactly the text a
+    quote held as a string before nested blocks were written bare. None
+    when *text* is not a dict of that shape.
+    """
+    text = text.strip()
+    if not (text.startswith('{') and text.endswith('}')):
+        return None
+    spec = {}
+    for item in split_top_level_items(text[1:-1]):
+        if not item.strip():
+            continue
+        key, *rest = split_top_level_items(item, sep=':')
+        if not rest:
+            return None
+        try:
+            key = ast.literal_eval(key.strip())
+        except (ValueError, SyntaxError, TypeError):
+            return None
+        value = ':'.join(rest).strip()
+        try:
+            spec[key] = ast.literal_eval(value)
+        except (ValueError, SyntaxError, TypeError):
+            spec[key] = '$' + value
+    return spec
+
+
+@functools.lru_cache(maxsize=1024)
+def _datablock_ctor_args_(argkwargstr: str) -> tuple[list, dict]:
+    """A datablock constructor's ``(args, kwargs)`` in *argkwargstr*: literals, and speclines left as the strings they are.
+
+    Nothing is evaluated -- a block evaluates its speclines itself, lazily --
+    so this is a function of the text alone, and parsed once per process: the
+    same quotes are read again and again as a stack forms its blocks, each
+    holding its upstream's. A spec whose nested blocks are written bare reads
+    through `quote_spec`.
+    """
+    args, kwargs = [], {}
+    for bit in split_top_level_items(argkwargstr):
+        bit = bit.strip()
+        if not bit:
+            continue
+        kwparts = split_top_level_items(bit, sep='=')
+        if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
+            k, v = kwparts[0].strip(), kwparts[1].strip()
+            try:
+                val = ast.literal_eval(v)
+            except (ValueError, SyntaxError):
+                spec = quote_spec(v) if k == 'spec' else None
+                val = spec if spec is not None else v  # a specline/identifier stays a string
+            kwargs[k] = val
+        else:
+            try:
+                args.append(ast.literal_eval(bit))
+            except (ValueError, SyntaxError):
+                args.append(bit)  # a specline/identifier stays a string
+    return args, kwargs
+
+
 def eval(name):
     """Evaluate a dbx term expression.
 
@@ -461,38 +575,15 @@ def eval(name):
             the concrete path rather than the portable specline, breaking
             signature() alignment.
     """
-    def split_top_level_items(inner: str, sep: str = ','):
-        out, buf, depth, quote, esc = [], [], 0, None, False
-        for c in inner:
-            if esc:
-                buf.append(c); esc = False; continue
-            if c == '\\':
-                buf.append(c); esc = True; continue
-            if quote is not None:
-                buf.append(c)
-                if c == quote:
-                    quote = None
-                continue
-            if c in ('"', "'"):
-                quote = c; buf.append(c); continue
-            if c in ('(', '[', '{'):
-                depth += 1
-            elif c in (')', ']', '}'):
-                depth -= 1
-            elif c == sep and depth == 0:
-                out.append(''.join(buf)); buf = []
-                continue
-            buf.append(c)
-        if buf:
-            out.append(''.join(buf))
-        return out
-
     def get_named_args_kwargs(argkwargstr, cxt=None, *, func_is_datablock_ctor: bool = False):
         args = []
         kwargs = {}
         if cxt is None:
             cxt = {}
         cxt['dbx'] = sys.modules['dbx']
+        if func_is_datablock_ctor and argkwargstr is not None:
+            # A copy each time: the constructor keeps what it is given, and may change it.
+            return copy.deepcopy(_datablock_ctor_args_(argkwargstr))
         if argkwargstr is not None:
             bits = split_top_level_items(argkwargstr)
             for bit in bits:
@@ -503,57 +594,30 @@ def eval(name):
                 
                 if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
                     k, v = kwparts[0].strip(), kwparts[1].strip()
-                    if func_is_datablock_ctor:
-                        try:
-                            val = ast.literal_eval(v)
-                        except (ValueError, SyntaxError):
-                            val = v  # leave speclines/identifiers as strings
-                    else:
-                        try:
-                            val = ast.literal_eval(v)
-                        except (NameError, SyntaxError, ValueError):
-                            val = v
-                        if isinstance(val, str):
-                            if val.startswith("$") or val.startswith("@") or val.startswith("#"):
-                                val = eval(val)
-                            elif val.startswith("dbx."):
-                                val = __eval__(val, cxt)
-                        elif isinstance(val, (dict, list, tuple)):
-                            if func_is_datablock_ctor and k == 'spec':
-                                if not isinstance(val, dict):
-                                    raise TypeError(f"spec must be a dict, got {type(val).__name__}")
-                                _val = {}
-                                """
-                                    In a spec, evaluate only the Datablock args, the rest should remain unevaluated/unexpanded.
-                                """
-                                for _k, _v in val.items():
-                                    _value = eval(_v)
-                                    if isinstance(_value, Datablock):
-                                        _val[_k] = _value
-                                    else:
-                                        _val[_k] = _v
-                                val = _val
-                            else:
-                                val = eval(val)
+                    try:
+                        val = ast.literal_eval(v)
+                    except (NameError, SyntaxError, ValueError):
+                        val = v
+                    if isinstance(val, str):
+                        if val.startswith("$") or val.startswith("@") or val.startswith("#"):
+                            val = eval(val)
+                        elif val.startswith("dbx."):
+                            val = __eval__(val, cxt)
+                    elif isinstance(val, (dict, list, tuple)):
+                        val = eval(val)
                     kwargs[k] = val
                 else:
-                    if func_is_datablock_ctor:
-                        try:
-                            arg = ast.literal_eval(bit)
-                        except (ValueError, SyntaxError):
-                            arg = bit  # leave speclines/identifiers as strings
-                    else:
-                        try:
-                            arg = ast.literal_eval(bit)
-                        except (NameError, SyntaxError, ValueError):
-                            arg = bit
-                        if isinstance(arg, str):
-                            if arg.startswith("$") or arg.startswith("@") or arg.startswith("#"):
-                                arg = eval(arg)
-                            elif arg.startswith("dbx."):
-                                arg = __eval__(arg, cxt)
-                        elif isinstance(arg, (dict, list, tuple)):
+                    try:
+                        arg = ast.literal_eval(bit)
+                    except (NameError, SyntaxError, ValueError):
+                        arg = bit
+                    if isinstance(arg, str):
+                        if arg.startswith("$") or arg.startswith("@") or arg.startswith("#"):
                             arg = eval(arg)
+                        elif arg.startswith("dbx."):
+                            arg = __eval__(arg, cxt)
+                    elif isinstance(arg, (dict, list, tuple)):
+                        arg = eval(arg)
                     args.append(arg)
         return args, kwargs
 

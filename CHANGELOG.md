@@ -20,6 +20,18 @@ All notable changes to this project will be documented in this file.
   constructed.
 
 ### Changed
+- **A quote writes its nested blocks bare: nothing in it is escaped, at any depth.** A
+  spec value that is a `$` specline -- a nested block's quote, or `$dbx.getenv('X')` --
+  is written `'upstream': fqcn(...)`, not as a string literal, in `quote()` and
+  `repr()` (`databits.bare_specline`). As a string, it was escaped once more at every
+  level of nesting, every backslash doubled: a feature tablet twelve levels deep had a
+  5 MB quote, 98% backslashes, now 113 KB with none. `dbx.eval` reads a bare value
+  back as the specline string it was (`databits.quote_spec`), and parses a datablock
+  constructor's arguments once per process, by their text. Forming a tablet of such a
+  clip went from 8 s to 1 s. No identity changes: a hash is computed from signatures,
+  which are unchanged. Quotes recorded the old way evaluate as before; one recorded
+  now does not evaluate under an earlier dbx (`inst(revision=...)` of an older one).
+  `cite_specline` lays out bare nested blocks as it does quoted ones.
 - **`slice_columns(slice)` and `slice_schema(slice)`, renamed from `declared_columns` and
   `declared_schema`.** The columns a slice declares, as the MDS writer takes them (a
   dict column as `'json'`), and as declared (a dict column's structure). The old names

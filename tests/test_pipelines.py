@@ -316,9 +316,9 @@ def test_compact_keeps_the_newest_entry_of_each_entrypath(lake, monkeypatch):
     before = {r['hash']: r['entrypaths'] for _, r in PipeJournal.collect().iterrows()}
     n_files = len(_journal_files(lake))
 
-    dry = PipeJournal.compact(dry_run=True)
+    dry = PipeJournal.UNSAFE_compact(dry_run=True).sort_values('pipeline')
     assert len(_journal_files(lake)) == n_files and dry['removed'].sum() > 0
-    frame = PipeJournal.compact()
+    frame = PipeJournal.UNSAFE_compact(OVERRIDE=True).sort_values('pipeline')
     assert list(frame['removed']) == list(dry['removed'])
     after = {r['hash']: r['entrypaths'] for _, r in PipeJournal.collect().iterrows()}
     assert after == before and first in after[Flat(spec={'n': 1}).hash]
@@ -327,7 +327,7 @@ def test_compact_keeps_the_newest_entry_of_each_entrypath(lake, monkeypatch):
     # Each kept entry keeps its side files; the removed ones' are gone with them.
     assert n_files % 6 == 0, "six entries, each with as many side files"
     assert len(_journal_files(lake)) == n_files - frame['removed'].sum() == 3 * n_files // 6
-    assert PipeJournal.compact()['removed'].sum() == 0, "compacting again removes nothing"
+    assert PipeJournal.UNSAFE_compact(OVERRIDE=True)['removed'].sum() == 0, "compacting again removes nothing"
 
 
 def test_compact_unjournaled_removes_the_pipelines_not_journaled_but_spared(lake):
@@ -335,8 +335,27 @@ def test_compact_unjournaled_removes_the_pipelines_not_journaled_but_spared(lake
     for cls in (Quiet, Spared):
         p = cls()
         PipeJournal.write(p, 'create', entrypath=p.create().anchorkeypath)    # as written before JOURNAL
-    frame = PipeJournal.compact(unjournaled=True, spare=['Spared']).set_index('pipeline')
+    frame = PipeJournal.UNSAFE_compact(unjournaled=True, spare=['Spared'], OVERRIDE=True).set_index('pipeline')
     assert frame.loc[Quiet().fqcn, 'action'] == 'removed: not journaled'
     assert frame.loc[Spared().fqcn, 'action'] == 'unchanged'
     assert set(PipeJournal.collect()['hash']) == {Flat().hash, Spared().hash}
     assert not os.path.exists(os.path.join(lake, PipeJournal.ANCHOR, Quiet().anchor))
+
+
+def test_compact_asks_first(lake, monkeypatch):
+    for _ in range(2):
+        Flat(spec={'n': 1}).create()
+    monkeypatch.setattr('builtins.input', lambda prompt: 'n')
+    assert PipeJournal.UNSAFE_compact() is None
+    assert len(PipeJournal.read(PipeJournal.ANCHOR, datalake=lake)) == 2
+
+
+def test_compact_some_anchors(lake):
+    for _ in range(2):
+        Flat(spec={'n': 1}).create()
+        p = Spared()
+        PipeJournal.write(p, 'create', entrypath=p.create().anchorkeypath)
+    frame = PipeJournal.UNSAFE_compact([Flat().fqcn], OVERRIDE=True)
+    assert list(frame['pipeline']) == [Flat().fqcn]
+    entries = PipeJournal.read(PipeJournal.ANCHOR, datalake=lake)
+    assert sorted(entries['hash']) == sorted([Flat(spec={'n': 1}).hash] + [Spared().hash] * 2)

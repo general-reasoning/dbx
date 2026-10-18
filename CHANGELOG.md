@@ -15,11 +15,21 @@ All notable changes to this project will be documented in this file.
   created and journaled once per process; `f.cache_clear()` empties it. Until now every
   `.entry` on every fresh instance wrote a 12-file entry: hundreds per command for one
   nested collator. Pass `journal=True` to the pipelines whose entries you want.
-- **`PipeJournal.compact()`: one entry per pipeline and entrypath, the rest removed.**
+- **`PipeJournal.UNSAFE_compact()`: one entry per pipeline and entrypath, the rest removed.**
   The newest entry of each distinct `entrypath` is kept, with its side files; `collect`
   reads the same pipelines and entrypaths after. `unjournaled=True` also removes the
   journals of pipelines whose class says `JOURNAL = False`, but those in `spare=`;
-  `dry_run=True` says what would go.
+  `dry_run=True` says what would go. Asks first, as every `UNSAFE_` does (`OVERRIDE=True`).
+- **`DataJournal.UNSAFE_compact(anchors)` and `ExecJournal.UNSAFE_compact()`: a journal
+  as one parquet file.** Every entry file of an anchor -- `dbx.anchors()` by default --
+  is read and written back, row for row, to `<anchor>/.journal/<anchor>/journal/
+  <anchor>-journal-compacted.parquet`, where `read` already finds entry files; the
+  exec journal to `.journal/exec/exec-compacted.parquet`. Nothing is deduplicated.
+  An entry recording a redirection stays where it is, in its block's own journal.
+  Anchors go to a `parallelization` executor (`'multithreading'` by default) of
+  `n_workers`; `dry_run=True` touches nothing. A compacted entry's `entry_path` is the
+  compacted file, so `read_frame` of its old path -- a session's index -- no longer
+  finds it. `ExecJournal` is new: the exec journal's directory and its compaction.
 - **Every tablet is filed by its hash, and tagged by its table: no tag in any path.**
   `Datatablet.KEYBY` is `version_shorthash`, as every block's. A tablet filed under its
   tag until 2026-10-17 -- hundreds of thousands, in tables valid as they stand -- is

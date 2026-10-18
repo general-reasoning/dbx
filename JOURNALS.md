@@ -394,6 +394,13 @@ is False, the default, writes none. An `@pipeline` call is cached by all its
 arguments, so a pipeline that several others nest is one instance, created
 and journaled once per process.
 
+A journal read often and written in many small files can be compacted:
+`DataJournal.UNSAFE_compact(anchors)` rewrites each anchor's entries as one parquet
+file, where `read` finds it, and `ExecJournal.UNSAFE_compact()` does the same for
+the exec journal. No entry is dropped, and entries recording a redirection stay in
+their block's own journal. `PipeJournal.UNSAFE_compact()` instead keeps one entry per
+pipeline and entrypath -- all `collect` reads.
+
 `PipeJournal` is a `DataJournal` whose entries are laid out exactly as a
 block's are, under `<datalake>/.pipelines` instead of the datalake itself:
 `<datalake>/.pipelines/<anchor>/<key>/.journal/…`, where the pipeline's own

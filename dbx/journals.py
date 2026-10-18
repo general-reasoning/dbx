@@ -46,6 +46,8 @@ import tqdm
 from . import databits
 from .databits import (
     OutputTee,
+    UNSAFE_allowed,
+    callable_executor,
     Remote,
     default_datalake,
     default_storage_options,
@@ -1206,6 +1208,72 @@ def read_exec_journal(
     elif iloc is not None:
         return ExecJournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options, datalake=dbx_url)
     return frame
+
+
+class ExecJournal:
+    """The exec journal: one entry per `dbx.exec` command, under ``{datalake}/.journal/exec/``.
+
+    Written by `write_exec_journal`, read by `read_exec_journal` -- every ``*.parquet``
+    file there, each row an entry -- and compacted by :meth:`UNSAFE_compact`.
+    """
+
+    #: Where the compacted journal is, under the exec journal's directory.
+    COMPACTED = 'exec-compacted.parquet'
+
+    @classmethod
+    def dirpath(cls, datalake=None) -> str:
+        """``{datalake}/.journal/exec``: *datalake* defaults to ``DBX_DATALAKE``."""
+        return os.path.join(datalake or default_datalake() or './dbx', '.journal', 'exec')
+
+    @classmethod
+    def UNSAFE_compact(cls, *, datalake=None, storage_options=None, parallelization='multithreading',
+                       n_workers=None, dry_run: bool = False, OVERRIDE: bool = False, log=None) -> dict:
+        """Rewrite the exec journal as one parquet file, to read it in one go. No entry is dropped.
+
+        Every entry file -- the compacted one among them -- is read on a
+        *parallelization* executor of *n_workers*, the rows are written back,
+        as they are, to `COMPACTED`, and the files read are removed. As in
+        `DataJournal.UNSAFE_compact`, the file is written aside and checked
+        against the rows in memory first; *dry_run* writes and checks it,
+        then removes it. Returns what was done, ``verified`` among it.
+        """
+        log = log or Datalog()
+        if storage_options is None:
+            storage_options = default_storage_options()
+        exec_dir = cls.dirpath(datalake)
+        fs, _ = fsspec.url_to_fs(exec_dir, **storage_options)
+        compacted = os.path.join(fs._strip_protocol(exec_dir), cls.COMPACTED)
+        files = sorted(fs.glob(os.path.join(exec_dir, '*.parquet'))) if fs.exists(exec_dir) else []
+        result = {'files': len(files), 'entries': 0, 'removed': 0, 'compacted': compacted}
+        if not files or files == [compacted]:
+            return result
+        if not dry_run and not UNSAFE_allowed(f"ExecJournal.UNSAFE_compact of {len(files)} file(s) in {exec_dir}",
+                                              OVERRIDE=OVERRIDE):
+            return None
+        executor = callable_executor(parallelization, n_workers=n_workers or 8,
+                                     tag=f"READING {len(files)} exec journal files")
+        frames = executor.exec_callables([_ReadParquetCallable(fs, file) for file in files])
+        table = pd.concat(frames, ignore_index=True)
+        removed = [f for f in files if f != compacted]
+        result.update(entries=len(table), removed=len(removed))
+        DataJournal._write_compacted_(fs, table, compacted, dry_run=dry_run)
+        result['verified'] = True
+        if dry_run:
+            return result
+        fs.rm(removed)
+        log.info(f"ExecJournal.UNSAFE_compact: {len(table)} entries from {len(files)} file(s) into {compacted}")
+        return result
+
+
+class _ReadParquetCallable:
+    """Read one parquet file through *fs*: a callable an executor can send to a worker."""
+
+    def __init__(self, fs, path):
+        self.fs, self.path = fs, path
+
+    def __call__(self, *args, **kwargs):
+        with self.fs.open(self.path, 'rb') as f:
+            return pd.read_parquet(f, engine='pyarrow')
 
 
 def execjournal(loc=None, *, iloc=None, datalake=None, storage_options=None, log=None,
@@ -3075,6 +3143,126 @@ class DataJournal:
     #: Relative to an anchor's directory: an entry file -- under
     #: ``**/.journal/{fqcn}/journal/``, or the legacy ``.dbx/{fqcn}/journal/``
     #: -- and a sibling of ``journal/`` under ``{fqcn}/``, which is not entered.
+    @staticmethod
+    def _write_compacted_(fs, table, compacted, *, dry_run: bool) -> None:
+        """Write *table* aside of *compacted*, read it back, and check it is *table*; then move it over *compacted*.
+
+        Nothing an entry file holds is removed before its rows are read back
+        from the compacted file as they are in memory: a frame that will not
+        write, or comes back otherwise, raises here, with the journal as it
+        was. With *dry_run*, the file is written and checked, then removed.
+        """
+        aside = f"{compacted}.{uuid.uuid4().hex[:8]}.tmp"
+        fs.makedirs(os.path.dirname(compacted), exist_ok=True)
+        try:
+            with fs.open(aside, 'wb') as f:
+                table.to_parquet(f, engine='pyarrow')
+            with fs.open(aside, 'rb') as f:
+                back = pd.read_parquet(f, engine='pyarrow')
+            # Values, not dtypes or how a missing one is spelled: a column of strings and Nones,
+            # object in memory, reads back as strings with NaN for None.
+            def values(df):
+                return df.astype(object).where(df.notna(), None)
+            pd.testing.assert_frame_equal(values(back), values(table), check_dtype=False)
+        except BaseException:
+            fs.rm(aside) if fs.exists(aside) else None
+            raise
+        if dry_run:
+            fs.rm(aside)
+        else:
+            # Moved over the old one: a reader sees the old file or the new, never half of one.
+            fs.mv(aside, compacted)
+
+    #: An anchor's compacted journal, under its directory: where `read` lists entry files, so it is read as one.
+    COMPACTED = os.path.join('.journal', '{anchor}', 'journal', '{anchor}-journal-compacted.parquet')
+
+    @classmethod
+    def UNSAFE_compact(cls, anchors=None, *, datalake=None, storage_options=None, parallelization='multithreading',
+                       n_workers=None, dry_run: bool = False, OVERRIDE: bool = False, **kwargs) -> pd.DataFrame:
+        """Rewrite each of *anchors*' journals as one parquet file, to read it in one go. No entry is dropped.
+
+        Every entry file under an anchor -- as `read` lists them, the anchor's
+        compacted file among them -- is read, and its rows are written back,
+        as they are, to `COMPACTED`; the entry files read are removed. An
+        entry recording a redirection is left where it is: a block finds its
+        own redirection in its own journal directory. Side files are not
+        touched. *anchors* defaults to `dbx.anchors`, and the anchors are
+        compacted on a *parallelization* executor of *n_workers*.
+
+        The compacted file is written aside, read back and checked against the
+        rows in memory before it replaces the old one and the entry files are
+        removed; a mismatch raises, the journal as it was. *dry_run* writes and
+        checks it, then removes it, and touches nothing else. Returns one row
+        per anchor, ``verified`` among its columns.
+        """
+        datalake = datalake or default_datalake()
+        if datalake is None:
+            raise ValueError(f"No datalake for {cls.__name__}.UNSAFE_compact(): pass datalake= or set DBX_DATALAKE")
+        if storage_options is None:
+            storage_options = default_storage_options()
+        if anchors is None:
+            anchors = cls._anchors_(datalake, storage_options)
+        anchors = [anchors] if isinstance(anchors, str) else list(anchors)
+        if not anchors:
+            return pd.DataFrame(columns=['anchor', 'files', 'entries', 'kept', 'removed', 'compacted'])
+        if not dry_run and not UNSAFE_allowed(
+                f"{cls.__name__}.UNSAFE_compact of {len(anchors)} anchor(s) under {datalake}", OVERRIDE=OVERRIDE):
+            return None
+        n_workers = n_workers or 8
+        executor = callable_executor(parallelization, n_workers=n_workers,
+                                     tag=f"COMPACTING {len(anchors)} journal(s) [{cls.__name__}]")
+        rows = executor.exec_callables([_CompactAnchorCallable(cls, anchor, datalake, storage_options, dry_run, **kwargs)
+                                        for anchor in anchors])
+        return pd.DataFrame(rows)
+
+    @classmethod
+    def _anchors_(cls, datalake, storage_options) -> list:
+        """The anchors `UNSAFE_compact` compacts by default: `dbx.anchors`."""
+        from .databits import anchors
+        return anchors(datalake, storage_options=storage_options)
+
+    @classmethod
+    def _compact_anchor_(cls, anchor, datalake, storage_options, dry_run, log=None) -> dict:
+        """Compact one anchor's journal -- see `UNSAFE_compact` -- and say what was done."""
+        log = log or Datalog()
+        fs, root = fsspec.url_to_fs(datalake, **storage_options)
+        anchordirpath = os.path.join(root, anchor)
+        compacted = os.path.join(anchordirpath, cls.COMPACTED.format(anchor=anchor))
+        files = cls._journal_files_(fs, anchordirpath, n_workers=8, log=log)
+        frames = cls._read_files_(fs, files, n_workers=8, log=log, desc=f"Reading {anchor} journal files")
+        kept, absorbed = [], []
+        for file, df in zip(files, frames):
+            if df is None:
+                kept.append(file)          # unreadable: left as it is
+            elif fs_full_path(fs, file) != fs_full_path(fs, compacted) and cls._records_redirection_(df, file):
+                kept.append(file)
+            else:
+                absorbed.append((file, df.drop(columns=['entry_path'], errors='ignore')))
+        row = {'anchor': anchor, 'files': len(files), 'entries': sum(len(df) for _, df in absorbed),
+               'kept': len(kept), 'removed': 0, 'compacted': compacted}
+        if not absorbed or (len(absorbed) == 1 and fs_full_path(fs, absorbed[0][0]) == fs_full_path(fs, compacted)):
+            return row
+        table = pd.concat([df for _, df in absorbed], ignore_index=True)
+        removed = [f for f, _ in absorbed if fs_full_path(fs, f) != fs_full_path(fs, compacted)]
+        row['removed'] = len(removed)
+        cls._write_compacted_(fs, table, compacted, dry_run=dry_run)
+        row['verified'] = True
+        if dry_run:
+            return row
+        fs.rm(removed)
+        log.info(f"{cls.__name__}.UNSAFE_compact: {anchor}: {row['entries']} entries from {len(absorbed)} file(s) "
+                 f"into {compacted}; {len(kept)} kept")
+        return row
+
+    @staticmethod
+    def _records_redirection_(df, file) -> bool:
+        """Whether the entry file *file*, read as *df*, records a redirection -- made or cleared."""
+        if os.path.basename(file).startswith('unredirect-'):
+            return True
+        if 'event' in df.columns and df['event'].astype(str).str.startswith(('UNSAFE_redirect', 'UNSAFE_clear')).any():
+            return True
+        return 'redirection' in df.columns and df['redirection'].notna().any()
+
     _ENTRY_FILE_ = re.compile(r'^(?:\.dbx|(?:.*/)?\.journal)/[^/]+/journal/.*\.parquet$')
     _NOT_JOURNAL_DIR_ = re.compile(r'^(?:\.dbx|(?:.*/)?\.journal)/[^/]+/(?!journal$)[^/]+$')
 
@@ -3307,6 +3495,18 @@ class DataJournal:
         return df
 
 
+class _CompactAnchorCallable:
+    """One anchor of a `DataJournal.UNSAFE_compact`: a callable an executor can send to a worker."""
+
+    def __init__(self, journal_cls, anchor, datalake, storage_options, dry_run, **kwargs):
+        self.journal_cls, self.anchor, self.datalake = journal_cls, anchor, datalake
+        self.storage_options, self.dry_run, self.kwargs = storage_options, dry_run, kwargs
+
+    def __call__(self, *args, **kwargs):
+        return self.journal_cls._compact_anchor_(self.anchor, self.datalake, self.storage_options, self.dry_run,
+                                                 **self.kwargs)
+
+
 class PipeJournal(DataJournal):
     """The pipeline journal: a `DataJournal` anchored under ``{datalake}/.pipelines``.
 
@@ -3397,8 +3597,9 @@ class PipeJournal(DataJournal):
         return DataJournalFrame(out, storage_options=storage_options, unnormalized=True)
 
     @classmethod
-    def compact(cls, *, unjournaled: bool = False, spare=(), datalake=None, storage_options=None,
-                dry_run: bool = False, log=None, n_workers=None) -> pd.DataFrame:
+    def UNSAFE_compact(cls, anchors=None, *, unjournaled: bool = False, spare=(), datalake=None, storage_options=None,
+                       parallelization='multithreading', n_workers=None, dry_run: bool = False,
+                       OVERRIDE: bool = False) -> pd.DataFrame:
         """Remove the entries `collect` would read only to drop: one per pipeline and entrypath is kept.
 
         Under each pipeline's ``.journal/{fqcn}/journal/{hash}/``, the newest
@@ -3409,25 +3610,35 @@ class PipeJournal(DataJournal):
         reads the same pipelines, each with the same entrypaths, before and
         after.
 
-        *unjournaled* also removes the whole journal of every pipeline whose
-        class -- imported by its fqcn -- has `Pipeline.JOURNAL` False, but those
-        named in *spare* (fqcns, or class names); a class that no longer
-        imports is compacted as any other. *dry_run* removes nothing and says
-        what would go. Returns one row per pipeline class: files ``before``,
+        *anchors* are pipeline classes' fqcns, every one under ``.pipelines``
+        by default. *unjournaled* also removes the whole journal of every
+        pipeline whose class -- imported by its fqcn -- has `Pipeline.JOURNAL`
+        False, but those named in *spare* (fqcns, or class names); a class
+        that no longer imports is compacted as any other. As
+        `DataJournal.UNSAFE_compact`, the anchors go to a *parallelization*
+        executor of *n_workers*, and *dry_run* removes nothing and says what
+        would go. Returns one row per pipeline class: files ``before``,
         ``removed``, ``after``, and what was done with it.
         """
+        return super().UNSAFE_compact(anchors, datalake=datalake, storage_options=storage_options,
+                                      parallelization=parallelization, n_workers=n_workers, dry_run=dry_run,
+                                      OVERRIDE=OVERRIDE, unjournaled=unjournaled, spare=tuple(spare))
+
+    @classmethod
+    def _anchors_(cls, datalake, storage_options) -> list:
+        """Every pipeline class with a journal under ``{datalake}/.pipelines``."""
+        from .databits import anchors
+        return anchors(os.path.join(datalake, cls.ANCHOR), storage_options=storage_options)
+
+    @classmethod
+    def _compact_anchor_(cls, anchor, datalake, storage_options, dry_run, *, unjournaled=False, spare=(),
+                         log=None) -> dict:
+        """Compact one pipeline class's journal -- see `UNSAFE_compact` -- and say what was done."""
         import importlib
 
-        datalake = datalake or default_datalake()
-        if datalake is None:
-            raise ValueError("No datalake for PipeJournal.compact(): pass datalake= or set DBX_DATALAKE")
-        if storage_options is None:
-            storage_options = default_storage_options()
         log = log or Datalog()
-        n_workers = n_workers or 8
         fs, lake = fsspec.url_to_fs(datalake, **storage_options)
-        root = os.path.join(lake, cls.ANCHOR)
-        spare = set(spare)
+        anchor_dir = os.path.join(lake, cls.ANCHOR, anchor)
 
         def journaled(fqcn):
             module, _, name = fqcn.rpartition('.')
@@ -3445,43 +3656,39 @@ class PipeJournal(DataJournal):
                 return (file, df['datetime'].iloc[0] if 'datetime' in df.columns else '',
                         df['entrypath'].iloc[0] if 'entrypath' in df.columns else None)
             newest = {}
-            with ThreadPoolExecutor(max_workers=n_workers) as ex:
+            with ThreadPoolExecutor(max_workers=8) as ex:
                 for file, dt, entrypath in ex.map(read, files):
                     if entrypath not in newest or dt > newest[entrypath][0]:
                         newest[entrypath] = (dt, file)
             return {file for _, file in newest.values()}
 
-        rows = []
-        for anchor_dir in sorted(fs.ls(root, detail=False)) if fs.exists(root) else []:
-            fqcn = os.path.basename(anchor_dir.rstrip('/'))
-            files = fs.find(anchor_dir)
-            on = journaled(fqcn)
-            if unjournaled and on is False and fqcn not in spare and fqcn.rpartition('.')[2] not in spare:
-                removed, action = files, 'removed: not journaled'
+        files = fs.find(anchor_dir) if fs.exists(anchor_dir) else []
+        on = journaled(anchor)
+        if unjournaled and on is False and anchor not in spare and anchor.rpartition('.')[2] not in spare:
+            removed, action = files, 'removed: not journaled'
+        else:
+            removed = []
+            for journal_dir in fs.glob(os.path.join(anchor_dir, '*', '.journal', '*', 'journal', '*')):
+                hash = os.path.basename(journal_dir.rstrip('/'))
+                entries = fs.glob(os.path.join(journal_dir, '*.parquet'))
+                kept = newest_per_entrypath(entries)
+                kept_dts = {cls._dt_of_(f, hash) for f in kept}
+                journal_root = os.path.dirname(os.path.dirname(journal_dir.rstrip('/')))
+                for side_file in fs.glob(os.path.join(journal_root, '*', hash, '*')):
+                    dt = cls._dt_of_(side_file, hash)
+                    if dt is not None and dt not in kept_dts:
+                        removed.append(side_file)
+            action = ('compacted' if on is not None else 'compacted: class no longer imports') \
+                if removed else 'unchanged'
+        if removed and not dry_run:
+            if action.startswith('removed'):
+                fs.rm(anchor_dir, recursive=True)
             else:
-                removed = []
-                for journal_dir in fs.glob(os.path.join(anchor_dir, '*', '.journal', '*', 'journal', '*')):
-                    hash = os.path.basename(journal_dir.rstrip('/'))
-                    entries = fs.glob(os.path.join(journal_dir, '*.parquet'))
-                    kept = newest_per_entrypath(entries)
-                    kept_dts = {cls._dt_of_(f, hash) for f in kept}
-                    journal_root = os.path.dirname(os.path.dirname(journal_dir.rstrip('/')))
-                    for side_file in fs.glob(os.path.join(journal_root, '*', hash, '*')):
-                        dt = cls._dt_of_(side_file, hash)
-                        if dt is not None and dt not in kept_dts:
-                            removed.append(side_file)
-                action = ('compacted' if on is not None else 'compacted: class no longer imports') \
-                    if removed else 'unchanged'
-            if removed and not dry_run:
-                if action.startswith('removed'):
-                    fs.rm(anchor_dir, recursive=True)
-                else:
-                    fs.rm(removed)
-            rows.append({'pipeline': fqcn, 'journal': on, 'before': len(files), 'removed': len(removed),
-                         'after': len(files) - len(removed), 'action': action})
-            log.info(f"PipeJournal.compact(): {fqcn}: {action}, {len(removed)} of {len(files)} files"
-                     f"{' (dry run)' if dry_run else ''}")
-        return pd.DataFrame(rows)
+                fs.rm(removed)
+        log.info(f"PipeJournal.UNSAFE_compact(): {anchor}: {action}, {len(removed)} of {len(files)} files"
+                 f"{' (dry run)' if dry_run else ''}")
+        return {'pipeline': anchor, 'journal': on, 'before': len(files), 'removed': len(removed),
+                'after': len(files) - len(removed), 'action': action}
 
     # 4. Helpers -----------------------------------------------------------
 
@@ -3516,14 +3723,38 @@ class PipeJournal(DataJournal):
         else -- an ``ssh://`` datalake -- such a path is on the DATALAKE's
         filesystem, not this machine's, and is looked for there.
         """
-        lake_fs, _ = fsspec.url_to_fs(datalake, **storage_options)
+        lake_fs, lake_root = fsspec.url_to_fs(datalake, **storage_options)
         extra = cls._is_event_(extra_events)
+        compacted, compacted_lock = {}, threading.Lock()
+
+        def counts(events):
+            return events.isin(cls.ENTRYPOINT_EVENTS).any() or (extra and events.astype(str).str.fullmatch(extra).any())
+
+        def compacted_events(fs, root):
+            # An entrypoint's entries may be in its anchor's compacted journal -- DataJournal.UNSAFE_compact.
+            rel = os.path.relpath(root, lake_root)
+            if fs is not lake_fs or rel.startswith('..'):
+                return None
+            anchor = rel.split(os.sep)[0]
+            with compacted_lock:
+                if anchor not in compacted:
+                    path = os.path.join(lake_root, anchor, DataJournal.COMPACTED.format(anchor=anchor))
+                    try:
+                        with fs.open(path, 'rb') as f:
+                            compacted[anchor] = pd.read_parquet(f, columns=['anchorkeypath', 'event'])
+                    except (FileNotFoundError, KeyError, ValueError):
+                        compacted[anchor] = None
+            df = compacted[anchor]
+            return None if df is None else df.loc[df['anchorkeypath'] == root, 'event']
 
         def constructed(entrypath):
             if '://' in entrypath:
                 fs, root = fsspec.url_to_fs(entrypath, **storage_options)
             else:
                 fs, root = lake_fs, entrypath
+            events = compacted_events(fs, root)
+            if events is not None and counts(events):
+                return True
             for file in fs.glob(os.path.join(root, '.journal', '*', 'journal', '*', '*.parquet')):
                 try:
                     with fs.open(file, 'rb') as f:
@@ -3531,7 +3762,7 @@ class PipeJournal(DataJournal):
                 except Exception as e:
                     log.warning(f"Skipping unreadable journal file {file}: {e}")
                     continue
-                if events.isin(cls.ENTRYPOINT_EVENTS).any() or (extra and events.astype(str).str.fullmatch(extra).any()):
+                if counts(events):
                     return True
             return False
 

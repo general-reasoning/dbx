@@ -1918,8 +1918,8 @@ def main(argv=None):
     ap.add_argument("--extra-construction-events", "--ece", nargs="+", default=[], metavar="EVENT",
                     help="with --journal (pipelines): events that also make an entry block count as constructed -- each alone, or "
                          "followed by = or : and the rest: `--ece ckpt` takes a block that has checkpointed (ckpt=<tag>)")
-    ap.add_argument("--docs", action="store_true", help="the documents -- markdowns and pdfs -- under --dir, one point each")
-    ap.add_argument("--dir", default=None, help="with --docs: the directory scanned, local or an fsspec url (default: the current one)")
+    ap.add_argument("--markdowns", action="store_true", help="the documents -- markdowns and pdfs -- under --dir, one point each")
+    ap.add_argument("--dir", default=None, help="with --markdowns: the directory scanned, local or an fsspec url (default: the current one)")
     ap.add_argument("--remote-python", default=None, help="with --journal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: $HYP_REMOTE_PYTHON, else the one each entry records its build ran in, else python3)")
     ap.add_argument("--n-workers", type=int, default=16, help="threads reading a remote source, e.g. the dbx journal and its side files (default: 16)")
     ap.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama", help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
@@ -1931,12 +1931,12 @@ def main(argv=None):
 
     cls = Hyp
     pipelines = args.journal in ("pipelines", ".pipelines")
-    if args.journal is not None and args.docs:
-        ap.error("--journal and --docs are two corpora: one at a time")
+    if args.journal is not None and args.markdowns:
+        ap.error("--journal and --markdowns are two corpora: one at a time")
     if args.extra_construction_events and not pipelines:
         ap.error("--extra-construction-events is for the entry blocks of --journal's pipelines")
-    if args.dir is not None and not args.docs:
-        ap.error("--dir is the directory --docs scans")
+    if args.dir is not None and not args.markdowns:
+        ap.error("--dir is the directory --markdowns scans")
     if args.filter and (args.journal is None or pipelines):
         ap.error("--filter filters an anchor's journal: --journal ANCHOR --filter 'key=pattern, ...'")
     if args.journal is not None:
@@ -1946,7 +1946,7 @@ def main(argv=None):
             parse_filters(args.filter)
         except ValueError as e:
             ap.error(f"--filter: {e}")
-    elif args.docs:
+    elif args.markdowns:
         from .docs import HypDocs as cls
     origin = "--data" if args.data is not None else cls.__data_origin__(args)
     if args.data is None:

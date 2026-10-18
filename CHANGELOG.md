@@ -32,6 +32,8 @@ All notable changes to this project will be documented in this file.
   and kept in the store (`hyp/arrows.py`, `Engine.arrows`). See Arrows in
   HYP.md, which also sketches an LLM's reading for later.
 ### Changed
+- **`hyp --docs` is `hyp --markdowns`.** `--docs` is gone. Corpora already
+  made stay where they were, under `~/.hyp/docs`.
 - **A partition's stages say what they are.** A deal's build opens with a
   `DEAL` line naming its stages; a mapped table's with a `PULLBACK` summary --
   the deal, dealt and kept or not; the map, built or to build; how many tablets

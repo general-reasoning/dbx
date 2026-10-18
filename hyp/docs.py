@@ -1,6 +1,6 @@
-"""hyp --docs: the documents of a directory -- markdowns and pdfs -- on the disk.
+"""hyp --markdowns: the documents of a directory -- markdowns and pdfs -- on the disk.
 
-``hyp --docs`` scans the current directory, ``hyp --docs --dir URL`` another,
+``hyp --markdowns`` scans the current directory, ``hyp --markdowns --dir URL`` another,
 local or any fsspec url (``ssh://host/path``, ``gs://bucket/path``, ...): every
 ``.md``, ``.markdown`` and ``.pdf`` under it, but for hidden directories and
 the usual heaps (`SKIP_DIRS`). Each is embedded by its name and the start of

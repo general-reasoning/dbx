@@ -1,4 +1,4 @@
-"""hyp --docs: a directory's markdowns and pdfs, found, read, laid out, and placed in windows on layers of their own."""
+"""hyp --markdowns: a directory's markdowns and pdfs, found, read, laid out, and placed in windows on layers of their own."""
 
 import os
 import sys
@@ -335,7 +335,7 @@ def test_docs_and_dir_are_checked():
     with pytest.raises(SystemExit):
         main(["--dir", "/somewhere"])
     with pytest.raises(SystemExit):
-        main(["--docs", "--journal"])
+        main(["--markdowns", "--journal"])
 
 
 def test_a_click_on_a_layer_brings_it_to_the_front(app):

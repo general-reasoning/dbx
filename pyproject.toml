@@ -87,7 +87,7 @@ hyp = [
     "umap-learn>=0.5.5",
     # ssh:// datalakes, through fsspec: asyncssh, which reads ~/.ssh/config.
     "sshfs>=2024.0",
-    # hyp --docs: markdown parsed by markdown-it; pdfs read and rendered by
+    # hyp --markdowns: markdown parsed by markdown-it; pdfs read and rendered by
     # pdfium. Mermaid diagrams need the mermaid CLI, mmdc, which is not a
     # python package: npm install -g @mermaid-js/mermaid-cli.
     "markdown-it-py>=3.0",

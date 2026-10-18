@@ -204,8 +204,8 @@ nothing; those shown are laid out by themselves.
 ## A directory's documents
 
 ```bash
-hyp --docs                          # the current directory
-hyp --docs --dir ssh://host/notes   # or any directory, local or an fsspec url
+hyp --markdowns                          # the current directory
+hyp --markdowns --dir ssh://host/notes   # or any directory, local or an fsspec url
 ```
 
 Every `.md`, `.markdown` and `.pdf` under the directory -- hidden
@@ -323,7 +323,7 @@ hyp --journal ANCHOR         # the blocks of ANCHOR, from its block journal; the
 hyp --journal ANCHOR --filter 'key=pattern, ...'   # its blocks filtered; the filter field changes it
 hyp --journal --ece ckpt     # --extra-construction-events: events that also make an entry block count as
                              # constructed, each alone or followed by = or : -- here, a still that checkpointed
-hyp --docs [--dir DIR]       # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
+hyp --markdowns [--dir DIR]  # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
 hyp --n-workers N            # threads reading the datalake (default 16)
 hyp --remote-python PATH     # the python on the datalake's host whose Ray read's and hyp's trueinst() run in,
                              # with dbx, ray (the version here) and the project; a path there, quoted so ~

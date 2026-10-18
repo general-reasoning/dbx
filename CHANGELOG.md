@@ -26,6 +26,11 @@ All notable changes to this project will be documented in this file.
   route to host`. A specialization says where its default came from with the
   new hook `__data_origin__`, and `dbx.default_datalake_var()` names the
   variable `default_datalake()` reads.
+- **hyp: Shift over a point says what its arrows mean.** Each arc to a
+  neighbor is labeled with the phrases the embeddings' difference points
+  toward and away from, read against the corpus's own phrases, embedded once
+  and kept in the store (`hyp/arrows.py`, `Engine.arrows`). See Arrows in
+  HYP.md, which also sketches an LLM's reading for later.
 ### Changed
 - **A partition's stages say what they are.** A deal's build opens with a
   `DEAL` line naming its stages; a mapped table's with a `PULLBACK` summary --

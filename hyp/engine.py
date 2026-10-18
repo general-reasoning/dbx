@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from . import layout, seeds
+from . import arrows, layout, seeds
 
 NEIGHBORS = 5
 
@@ -97,6 +97,47 @@ class Engine:
                 progress(f"computing hyperbolic UMAP layout of {len(s)} texts")
                 s.layout = layout.compute(s.embeddings, seed=self.seed)
             s.save()
+
+    def arrows(self, i, js, progress=print):
+        """The arrows from point *i* to points *js* -- indices into the snapshot -- each decoded: `arrows.decode`'s (toward, away), phrases in place of indices.
+
+        The phrases are the stored points' embed texts cut up (`arrows.phrases`),
+        embedded once and kept in the store. Those not yet embedded are embedded
+        here, outside the lock -- the first Shift over a corpus takes a while --
+        and *progress* hears how far it has got.
+        """
+        with self.lock:
+            s = self.store
+            rows = self._shown_[0] if self._shown_ is not None else np.arange(len(s))
+            here, there = s.embeddings[rows[i]], [s.embeddings[rows[j]] for j in js]
+            wanted = arrows.phrases([p.get("embed", p["text"]) for p in s.points])
+            known = set(s.phrases)
+            name = s.embedder
+        todo = [p for p in wanted if p not in known]
+        if todo:
+            msg = f"arrows: embedding {len(todo)} phrases"
+            batches = []
+            for k in range(0, len(todo), 64):
+                progress(msg, k, len(todo))
+                batches.append(np.asarray(self.embedder(todo[k : k + 64]), dtype=np.float32))
+            progress(f"arrows: {len(todo)} phrases embedded")
+            with self.lock:
+                s = self.store
+                if s.embedder == name:  # not re-embedded, nor another corpus, while these were made
+                    vecs = np.concatenate(batches)
+                    s.phrase_embeddings = vecs if not len(s.phrases) else np.concatenate([s.phrase_embeddings, vecs])
+                    s.phrases = s.phrases + todo
+                    s.save_phrases()
+        with self.lock:
+            s = self.store
+            index = {p: k for k, p in enumerate(s.phrases)}
+            keep = [index[p] for p in wanted if p in index]
+            names, vecs = [s.phrases[k] for k in keep], s.phrase_embeddings[keep] if keep else np.zeros((0, 0))
+
+        def named(pairs):
+            return [(names[k], score) for k, score in pairs]
+
+        return [tuple(named(side) for side in arrows.decode(here, v, vecs)) for v in there]
 
     def _shown_indices_(self):
         """The indices of the points shown, where the source gives fewer than are stored; None where it gives them all."""

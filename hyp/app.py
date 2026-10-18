@@ -68,6 +68,9 @@ DIMMED = (85, 92, 105)  # a menu shown but not yet usable
 DISK_SEE_THROUGH = 150  # the disk's alpha, out of 255, over layers behind it
 LOADING_VEIL = 170  # the alpha, out of 255, of the veil over the window while a job loads
 BAR = (120, 170, 235)  # a loading job's bar
+ARROW_TOWARD = (40, 120, 60)  # a decoded arrow's phrases toward its end, on TIP_BG
+ARROW_AWAY = (170, 60, 50)  # and away from it
+ARROW_AT = 0.6  # where along its arc an arrow's phrases are shown: 0 at the hovered point, 1 at its neighbor
 
 
 def make_embedder(kind, model, ollama):
@@ -1141,7 +1144,7 @@ class Hyp:
     title = "hyp"
 
     #: The controls, at the right of the status line.
-    HINT = "click: center · drag: move · scroll: zoom · right-click: open / add · Home or double-click outside: reset"
+    HINT = "click: center · drag: move · scroll: zoom · right-click: open / add · Shift over a point: its arrows · Home or double-click outside: reset"
 
     #: Where corpora are kept unless --data says otherwise: one directory each.
     HOME = os.path.join(os.path.expanduser("~"), ".hyp")
@@ -1313,6 +1316,7 @@ class Hyp:
         self.box = None
         self.viewers = []  # open text windows, the last on top
         self.hover = None
+        self.arrows = {}  # (snapshot, point) -> its arrows decoded, or None while they are being decoded: Shift over a point
         self.press = None  # where the left button went down, while it is down
         self.last_off_disk = None  # (pos, time) of the last left click off the disk: half a double click
         self.dragging = False
@@ -1391,7 +1395,7 @@ class Hyp:
         else:
             # First layout -- or another corpus, or fewer points: open on its center.
             self.view.M, self.view.anim, self.tween = P.Mobius(), None, None
-        self.snap = snap
+        self.snap, self.arrows = snap, {}
         if focus is not None:
             M = self.view.isometry(now)
             self.view.center_on(M(snap.positions[focus]), now)
@@ -1692,7 +1696,53 @@ class Hyp:
                     placed.append(rect.inflate(6, 2))
 
             if self.hover is not None:
+                if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                    self.draw_arrows(self.hover, data, M)
                 self.tooltip(self.__point_tooltip__(self.hover), (mx, my))
+
+    def draw_arrows(self, i, data, M):
+        """Point *i*'s arrows to its neighbors, each labeled along its arc with the phrases it points toward (+) and away from (-): `Engine.arrows`.
+
+        The first Shift over a point asks for them in the background; they show once decoded.
+        """
+        snap, key = self.snap, (id(self.snap), i)
+        if key not in self.arrows:
+            self.arrows[key] = None
+            js = [int(j) for j in snap.neighbors[i]]
+
+            def decode():
+                try:
+                    return self.engine.arrows(i, js, self.worker.status)
+                except Exception:
+                    self.arrows.pop(key, None)  # asked again at the next Shift
+                    raise
+
+            self.run_async(decode, lambda got: self.arrows.__setitem__(key, got) if key in self.arrows else None)
+        got = self.arrows[key]
+        if got is None:
+            return
+        placed = []
+        for j, (toward, away) in zip(snap.neighbors[i], got):
+            z = self.display(P.geodesic(data[i], data[j], np.array([ARROW_AT])), M)
+            x, y = (float(c[0]) for c in self.to_screen(z))
+            rows = [(f"+ {p}", ARROW_TOWARD, s) for p, s in toward] + [(f"\u2212 {p}", ARROW_AWAY, s) for p, s in away]
+            imgs = [(self.tiny.render(_fit_(self.tiny, t, 260), True, c), self.tiny.render(f"{s:+.2f}", True, STATUS)) for t, c, s in rows]
+            if not imgs:  # one embedding at both ends: a pipeline run again, say
+                imgs = [(self.tiny.render("= the same embedding", True, STATUS), self.tiny.render("", True, STATUS))]
+            w = max(a.get_width() + b.get_width() for a, b in imgs) + 8
+            h = sum(a.get_height() for a, _ in imgs)
+            rect = pygame.Rect(int(x) + 6, int(y) + 6, w, h).inflate(10, 6)
+            rect.clamp_ip(self.screen.get_rect())
+            while rect.collidelist(placed) >= 0 and rect.bottom < self.screen.get_height():
+                rect.y = placed[rect.collidelist(placed)].bottom + 2
+            pygame.draw.rect(self.screen, TIP_BG, rect, border_radius=4)
+            pygame.draw.rect(self.screen, EDGE, rect, 1, border_radius=4)
+            ty = rect.y + 3
+            for a, b in imgs:
+                self.screen.blit(a, (rect.x + 5, ty))
+                self.screen.blit(b, (rect.right - 5 - b.get_width(), ty))
+                ty += a.get_height()
+            placed.append(rect)
 
     def draw_chrome(self, now):
         """What is over every layer: the text box, the top bar's menus, the text windows, the status line."""

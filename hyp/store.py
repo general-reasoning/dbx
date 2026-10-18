@@ -8,6 +8,9 @@ Under *root*, a local directory or any fsspec url -- a datalake's
                            "key" and "embed" for points read from a source
     <dir>/embeddings.npy   (n, d) float32
     <dir>/layout.npy       (n,) complex128 Poincare disk positions
+    <dir>/phrases.json     {"embedder": name, "phrases": [...]}: what arrows
+                           are decoded against (`hyp.arrows`), embedded once
+    <dir>/phrases.npy      (m, d) float32, one row per phrase
 
 Every write goes to a temporary file that is then moved over the old one, so
 a crash leaves the previous state rather than a torn one. The corpus is small
@@ -32,6 +35,8 @@ class Store:
         self.points = []
         self.embeddings = np.zeros((0, 0), dtype=np.float32)
         self.layout = None
+        self.phrases = []
+        self.phrase_embeddings = np.zeros((0, 0), dtype=np.float32)
         self.load()
 
     def __len__(self):
@@ -67,6 +72,12 @@ class Store:
         self.points, self.embeddings = self.points[:n], self.embeddings[:n]
         if self.layout is not None and len(self.layout) != n:
             self.layout = None
+        # Phrases embedded with another model, or torn from their vectors, are dropped: embedded again when asked for.
+        meta, vecs = self._read_("phrases.json"), self._read_("phrases.npy")
+        if meta is not None and vecs is not None:
+            meta, vecs = json.loads(meta), np.load(io.BytesIO(vecs))
+            if meta.get("embedder") == self.embedder and len(meta.get("phrases", [])) == len(vecs):
+                self.phrases, self.phrase_embeddings = list(meta["phrases"]), vecs
 
     def _write_(self, name, write):
         tmp, path = self._path_(name + ".tmp"), self._path_(name)
@@ -93,11 +104,18 @@ class Store:
         if self.layout is not None:
             self._write_("layout.npy", lambda f: np.save(f, self.layout))
 
+    def save_phrases(self):
+        """Write the phrases and their vectors: apart from `save`, as they are embedded apart from the points."""
+        self._write_("phrases.npy", lambda f: np.save(f, self.phrase_embeddings))
+        self._write_("phrases.json", lambda f: f.write(json.dumps({"embedder": self.embedder, "phrases": self.phrases}).encode()))
+
     def reset(self, embedder):
         self.embedder = embedder
         self.points = []
         self.embeddings = np.zeros((0, 0), dtype=np.float32)
         self.layout = None
+        self.phrases = []
+        self.phrase_embeddings = np.zeros((0, 0), dtype=np.float32)
 
     def add(self, texts, summaries, embeddings, extras=None):
         """Append points; *extras*, one dict per point, adds fields to each."""

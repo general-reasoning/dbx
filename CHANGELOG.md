@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A pullback of whole tablets builds no map.** Every tablet taken whole, no lot is
+  read: each tablet is its table's own, from the partition's entries. Its map is not
+  built, nor asked for by its validity (`TREE_SKIP_BUILDING`/`TREE_SKIP_VALIDATION`,
+  per instance); another table laid out alike is pulled back along it all the same.
+- **Subtree banners name whose field they are:** `BUILDING SUBTREE at upstream of
+  <anchorkey> [<tag>]`.
 - **A pipeline is created once, journaled only when it says so, and cached by its call.**
   `Pipeline.create()` -- and so `entrypoint`, `entry`, `entrypath` and
   `read('entrypoint')` -- arranges the tree once per instance, not afresh on every

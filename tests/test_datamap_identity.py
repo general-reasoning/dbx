@@ -198,3 +198,48 @@ def _tagged_as_then_(tablet, tag_of):
     def __tablet__(self, idx, **kw):
         return tablet(self, idx, **kw).set(tag=tag_of(idx))
     return __tablet__
+
+
+def test_a_part_of_whole_tablets_builds_no_map(tmp_path):
+    """Every tablet taken whole, no lot is read: build_tree builds the pullback, valid, and not its map."""
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_core_partition import points
+    table = points(tmp_path)
+    partition = DatatablePartition(datalake=str(tmp_path), spec=dict(datatable=table, fractions=[0.5, 0.5],
+                                                                     partition_slice='pts')).build()
+    pulled = partition.part(0).pullback()
+    assert all(pulled.datamap.whole(i) is not None for i in range(pulled.n_tablets))
+    assert pulled.TREE_SKIP_BUILDING == ('datamap',)
+    pulled.build_tree()
+    assert pulled.valid() and pulled.valid_var(reduce=True)
+    assert not pulled.datamap.valid(), "its map was built"
+
+
+def test_a_part_of_whole_tablets_builds_no_map_and_another_table_pulls_back_along_it(tmp_path):
+    """Every tablet taken whole, no lot is read: build_tree builds the pullback, valid, and not its map's tablets.
+
+    The map is still there -- the same block, in the pullback's VAR -- and another table laid out alike
+    is pulled back along it, still unbuilt: each tablet that table's own, as the partition records it.
+    """
+    import os
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_core_partition import points
+    table = points(tmp_path)
+    partition = DatatablePartition(datalake=str(tmp_path), spec=dict(datatable=table, fractions=[0.5, 0.5],
+                                                                     partition_slice='pts')).build()
+    datamap = partition.part(0)
+    pulled = datamap.pullback()
+    assert all(datamap.whole(i) is not None for i in range(pulled.n_tablets))
+    assert pulled.TREE_SKIP_BUILDING == ('datamap',)
+    pulled.build_tree()
+    assert pulled.valid() and pulled.valid_var(reduce=True)
+    assert not datamap.valid(), "its map was built"
+    other = points(tmp_path, offset=100)
+    along = datamap.pullback(other).build_tree()
+    assert along.valid() and not datamap.valid()
+    for i in range(along.n_tablets):
+        assert along.tablet(i).hash == other.tablet(datamap.whole(i)).hash
+        assert along.tablet(i).hash != pulled.tablet(i).hash

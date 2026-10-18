@@ -1151,6 +1151,20 @@ class MappedDatatable(Datatable):
         datatable: Datatable | None = None
         collator: Datacollator | None = None
 
+    @property
+    def TREE_SKIP_BUILDING(self) -> tuple:
+        """``('datamap',)`` when every tablet is taken whole: no lot is read, and its map is not built.
+
+        Each tablet is then its table's own, answered from its partition's entries; a map of
+        such a part -- a CPTAC tile part, a slide a tablet -- is hundreds of lots nothing reads.
+        """
+        return ('datamap',) if self._is_whole_only_() else ()
+
+    @property
+    def TREE_SKIP_VALIDATION(self) -> tuple:
+        """As `TREE_SKIP_BUILDING`: a map not built for a part of whole tablets is not asked for."""
+        return self.TREE_SKIP_BUILDING
+
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, *args, filter_built_tablets: bool = True, **kwargs):
@@ -1166,7 +1180,7 @@ class MappedDatatable(Datatable):
         return self.tablet(idx)
 
     def build(self, *args, **kwargs):
-        """Its map first, when it names one -- the lots, built in parallel -- the layer below, then its own copies.
+        """Its map first, when it names one and copies rows -- the lots, built in parallel -- the layer below, then its own copies.
 
         Each layer says what it copies as its copies are built, in build order, bottom up:
         the layers are pulled back independently along one map. The partition and the map are
@@ -1175,7 +1189,8 @@ class MappedDatatable(Datatable):
         if self.valid():
             return super().build(*args, **kwargs)
         datamap = getattr(self.var, 'datamap', None)
-        if not self.datamap.valid():
+        # Every tablet taken whole, no lot is read: its map is not built -- see `TREE_SKIP_BUILDING`.
+        if not self._is_whole_only_() and not self.datamap.valid():
             if datamap is not None:
                 datamap.build()             # says the partition and the map itself
             else:

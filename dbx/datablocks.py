@@ -3225,19 +3225,21 @@ class Datablock:
             raise ValueError(f"build_tree(deep={deep!r}): deep is False, True or 'try_specialize_children'")
         log = self.log
         log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
+        # Each banner names whose field it is, as a log line names a block: ``upstream of <anchorkey> [<tag>]``.
+        of = f" of {self.anchorkey}" + (f" [{shown_tag(self.tag)}]" if self.tag else "")
         def skip_cb(s):
-            log.skip_subtree(s, "TREE_SKIP_BUILDING")
+            log.skip_subtree(f"{s}{of}", "TREE_SKIP_BUILDING")
 
         for s, c in self._iter_var_blocks_('TREE_SKIP_BUILDING', skip_callback=skip_cb):
             if deep is not True and c.valid():
                 if deep == 'try_specialize_children':
                     c._specialize_tree_('TREE_SKIP_BUILDING', {})
-                    log.skip_subtree(s, "already valid; its children tried for specializations")
+                    log.skip_subtree(f"{s}{of}", "already valid; its children tried for specializations")
                 else:
-                    log.skip_subtree(s, "already valid")
+                    log.skip_subtree(f"{s}{of}", "already valid")
                 continue
             self.write_journal_entry(event=f"build_tree:{s}:begin")
-            with log.subtree(s):
+            with log.subtree(f"{s}{of}"):
                 # A child built as part of this tree belongs to this run. VAR is
                 # where it was constructed, which is too early to know that.
                 self._adopt_(c).build_tree(*args, deep=deep, **kwargs)

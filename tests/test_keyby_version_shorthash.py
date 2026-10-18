@@ -189,6 +189,26 @@ def test_a_tablet_filed_under_its_tag_is_read_where_it_was_filed_and_not_built_a
     assert not any(os.path.exists(now.tablet(i).anchorkeypath) for i in range(now.n_tablets)), "built again"
 
 
+def test_a_tablet_whose_build_under_its_tag_was_cut_short_is_built_where_it_is_filed_now(tmp_path, monkeypatch):
+    """A build cut short where its tag filed it is not adopted: the tablet is built anew, at its hash."""
+    import shutil
+    from dbx.datatables import Datatablet
+    spec = {'tablets': [[list(r) for r in t] for t in TABLETS]}
+    monkeypatch.setattr(Datatablet, 'KEYBY', OLD)
+    then = RowsTable(datalake=str(tmp_path), spec=spec).build()
+    cut = then.tablet(1)
+    topic = cut._toplevel_topics_(cut.topics())[0]
+    shutil.rmtree(cut.path(topic))                        # the build there, cut short
+    monkeypatch.undo()
+    now = RowsTable(datalake=str(tmp_path), spec=spec)
+    assert now.tablet(0).valid() and now.tablet(0)._redirected_paths_ is not None
+    tablet = now.tablet(1)
+    assert not tablet.valid() and tablet._redirected_paths_ is None
+    now.build()
+    tablet = now.tablet(1)
+    assert tablet.valid() and os.path.exists(os.path.join(tablet.anchorkeypath, topic)), "built where it is filed now"
+
+
 def test_a_pickled_or_requoted_table_still_leaves_its_tablets_their_own_keyby(tmp_path):
     """A table spells its keyby once round-tripped; it is still the default, so it is handed to no tablet."""
     table = RowsTable(datalake=str(tmp_path), spec={'tablets': [[list(r) for r in t] for t in TABLETS]}).build()

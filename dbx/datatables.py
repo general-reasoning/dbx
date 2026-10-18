@@ -902,7 +902,8 @@ class Datatablet(_Database_):
         hundreds of thousands were built so, in tables valid as they stand and never built again --
         which is when a block adopts what it finds. So a tablet not built where it is filed now, nor
         redirected, reads the same tablet -- the same hash -- where its tag filed it: that
-        tablet's own redirection, if it has one, else its topics there. Looked for once per instance.
+        tablet's own redirection, if it has one, else its topics there -- when every one is there:
+        a build cut short there is not adopted, and is built where it is filed now. Looked for once per instance.
         """
         paths = Datablock._redirected_paths_.fget(self)
         if paths is not None or not getattr(self, 'redirect', False):
@@ -939,9 +940,26 @@ class Datatablet(_Database_):
                 continue
             redirection = os.path.join(there, '.redirection', 'paths.yaml')
             if self.fs.exists(redirection):
-                return read_yaml(redirection, storage_options=self.storage_options)
-            return {t: self.__path__(t).replace(here, there, 1) for t in self._toplevel_topics_(self.topics())}
+                paths = read_yaml(redirection, storage_options=self.storage_options)
+            else:
+                paths = {t: self.__path__(t).replace(here, there, 1) for t in self._toplevel_topics_(self.topics())}
+            # Only a build that finished, valid as this tablet reads it there: one cut short where its
+            # tag filed it is not this tablet, and it is built where it is filed now.
+            if paths and self._valid_at_(paths):
+                return paths
         return None
+
+    def _valid_at_(self, paths) -> bool:
+        """Whether it is valid read from *paths*: `valid`, with them as its redirection, for the asking only."""
+        d = self.__dict__
+        held = d.pop('__tag_filed_paths__', None)
+        d['__tag_filed_paths__'] = paths
+        try:
+            return bool(self.valid())
+        finally:
+            d.pop('__tag_filed_paths__', None)
+            if held is not None:
+                d['__tag_filed_paths__'] = held
 
     @dataclass
     class VAR(Datablock.VAR):

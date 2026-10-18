@@ -1094,7 +1094,7 @@ class TestBuildJournalBuildersAreNamedForIt:
         assert not hasattr(Datastack, old)
 
     @pytest.mark.parametrize('old', ['DataJournal', 'DataJournalFrame', 'DataJournalEntry', 'datajournal',
-                                     'DEFAULT_DATAJOURNAL'])
+                                     'DEFAULT_DATAJOURNAL', 'BlocksJournal'])
     def test_the_dbx_names_are_gone(self, old):
         assert not hasattr(dbx, old) and not hasattr(dbx.journals, old) and not hasattr(dbx.datablocks, old)
 

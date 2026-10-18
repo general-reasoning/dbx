@@ -911,8 +911,8 @@ class TestAnchorOnTheClass:
         original = S.__block__
         S.__block__ = lambda self, idx: formed.append(idx) or original(self, idx)
         try:
-            journal, anchor, url = stack._blocks_buildjournal_()
+            journal = stack._blocks_buildjournal_()
         finally:
             S.__block__ = original
         assert formed == [], "no block is formed to find the journal"
-        assert anchor == CounterBlock.anchor and len(journal) >= 2
+        assert journal.read_anchor == CounterBlock.anchor and len(journal) >= 2

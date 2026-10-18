@@ -449,8 +449,8 @@ def eval(name):
 
     Strings prefixed with ``@``, ``$``, or ``#`` are resolved as
     Python expressions in a context that includes imported modules.
-    Iterables are evaluated element-wise.  Plain strings and other
-    objects are returned as-is.
+    Iterables are evaluated element-wise -- but a DataFrame or Series, which
+    is returned as it is.  Plain strings and other objects are returned as-is.
     However, 
         - We do not recursively eval Datablock ctor args/kwargs -- their string values
             are speclines that Datablocks store and evaluate lazily, 
@@ -570,7 +570,10 @@ def eval(name):
         return funcstr, argkwargstr
 
     _datalog_("eval").detailed(f" ====================> Evaluating term {repr(name)}")
-    if isinstance(name, dict):
+    if isinstance(name, (pd.DataFrame, pd.Series)):
+        # Iterable, but over its column names or values: rebuilt from those, it would be lost.
+        term = name
+    elif isinstance(name, dict):
         term = {k: eval(v) for k, v in name.items()}
     elif isinstance(name, Iterable) and not isinstance(name, str):
         term = type(name)(eval(item) for item in name)

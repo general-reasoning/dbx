@@ -3,6 +3,8 @@ Finding a specialization without installing it; a stack deciding its blocks'
 use_specializations; clearing a redirection.
 """
 import os
+
+import dbx
 import sys
 
 import pytest
@@ -187,10 +189,10 @@ class TestSpecializeMethod:
         with tablet_to_spec.fs.open(tablet_to_spec.path('rows'), 'r') as f:
             assert f.read() == "rows-0\n"
 
-    def test_datastack_specialize_with_blocks_journal_does_not_crash(self, grown):
-        from dbx.datablocks import BlocksJournal
+    def test_datastack_specialize_with_a_journal_for_its_blocks_does_not_crash(self, grown):
+        from dbx.journals import BuildJournalFrame
         table = v1table(grown, spec={'n': 3}, tag='bj_test')
-        bj = BlocksJournal(journal=None, anchor='nonexistent', datalake=str(grown))
+        bj = BuildJournalFrame(None, read_anchor='nonexistent', read_datalake=str(grown))
         table.specialize(journal=bj)
 
     def test_valid_stack_skips_block_specializations(self, grown):
@@ -201,13 +203,13 @@ class TestSpecializeMethod:
         assert res is not None
         assert all(v is None for v in res)
 
-    def test_stack_with_own_specializations_and_blocks_journal_does_not_crash(self, grown):
-        from dbx.datablocks import BlocksJournal
+    def test_stack_with_own_specializations_and_a_journal_for_its_blocks_does_not_crash(self, grown):
+        from dbx.journals import BuildJournalFrame
         from test_specializations import v2table
 
         table = v2table(grown, tag='stack_spec_test')
-        bj = BlocksJournal(journal=None, anchor=RowTablet.anchor, datalake=str(grown))
-        # Must not raise AttributeError: 'BlocksJournal' object has no attribute 'empty'
+        bj = BuildJournalFrame(None, read_anchor=RowTablet.anchor, read_datalake=str(grown))
+        # The blocks' journal is the blocks', not the stack's own: it must not reach the stack's specialize.
         table.specialize(journal=bj)
 
     def test_install_block_specializations_skips_valid_and_specializes_invalid(self, grown):
@@ -587,3 +589,46 @@ class TestBuildTreeSpecializesUnderAValidChild:
     def test_a_deep_it_does_not_know_is_refused(self, built):
         with pytest.raises(ValueError, match="'try_specialize_children'"):
             over(built).build_tree(deep='adopt')
+
+
+class TestTheBlocksBuildJournalIsAFrame:
+    """What a stack hands the workers forming its blocks is a BuildJournalFrame, its read_anchor theirs."""
+
+    @staticmethod
+    def frame(**kwargs):
+        import pandas as pd
+        from dbx.journals import BuildJournalFrame
+        return BuildJournalFrame(pd.DataFrame({'hash': ['h'], 'event': ['build:end']}), unnormalized=True, **kwargs)
+
+    def test_it_survives_dbx_eval_as_a_frame(self):
+        frame = self.frame(read_anchor='pkg.A', read_datalake='/lake')
+        back = dbx.databits.eval(frame)
+        assert back is frame and (back.read_anchor, back.read_datalake, back.by_hash) == ('pkg.A', '/lake', False)
+
+    def test_it_crosses_a_process_with_what_it_was_read_for(self):
+        import pickle
+        from dbx.journals import BuildJournalFrame
+        frame = pickle.loads(pickle.dumps(BuildJournalFrame(None, read_anchor='pkg.A', read_datalake='/lake',
+                                                            by_hash=True)))
+        assert (frame.read_anchor, frame.read_datalake, frame.by_hash) == ('pkg.A', '/lake', True)
+
+    def test_only_its_own_blocks_resolve_against_it(self):
+        from dbx.datablocks import BY_HASH, _forming_journal_, forming_with_journal
+        from dbx.journals import BuildJournalFrame
+        with forming_with_journal(BuildJournalFrame(None, read_anchor='pkg.A', read_datalake='/lake', by_hash=True)):
+            assert _forming_journal_('pkg.A', '/lake') is BY_HASH
+            assert _forming_journal_('pkg.B', '/lake') is None
+            assert _forming_journal_('pkg.A', '/elsewhere') is None
+        assert _forming_journal_('pkg.A', '/lake') is None
+
+    def test_a_block_gets_it_as_a_journal_given(self):
+        from dbx.datablocks import _forming_journal_, forming_with_journal
+        from dbx.journals import BuildJournalFrame
+        with forming_with_journal(self.frame(read_anchor='pkg.A', read_datalake='/lake')):
+            got = _forming_journal_('pkg.A', '/lake')
+        assert isinstance(got, BuildJournalFrame) and got.read_anchor is None and list(got['hash']) == ['h']
+
+    def test_a_journal_given_is_not_one_read_for_blocks(self):
+        from dbx.datablocks import forming_with_journal, _forming_journal_
+        with forming_with_journal(self.frame()):
+            assert _forming_journal_('pkg.A', '/lake') is None

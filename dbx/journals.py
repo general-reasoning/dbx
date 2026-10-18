@@ -2432,17 +2432,25 @@ class BuildJournalEntry(pd.Series):
 
 
 class BuildJournalFrame(pd.DataFrame):
-    _metadata = ['storage_options', 'logger']
+    _metadata = ['storage_options', 'logger', 'read_anchor', 'read_datalake', 'by_hash']
 
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, df: pd.DataFrame|None, *, storage_options: dict = None,
                  parse_datetimes: bool = True, logger: Datalog = Datalog(),
-                 index: str | None = None, unnormalized: bool = False, **filter_kwargs):
-        
-        # Guard against an empty journal (no parquet files written yet), or unwrap BlocksJournal.
-        if hasattr(df, 'journal'):
-            df = df.journal
+                 index: str | None = None, unnormalized: bool = False,
+                 read_anchor: str | None = None, read_datalake: str | None = None, by_hash: bool = False,
+                 **filter_kwargs):
+        """*df* read into a journal frame: normalized, filtered by *filter_kwargs*, indexed by *index*.
+
+        *read_anchor* and *read_datalake* say what a stack read it for, when it
+        hands it to the workers forming its blocks: a block of that anchor, in
+        that datalake, resolves its specializations against it, and any other
+        block reads its own (`dbx.datablocks.forming_with_journal`). *by_hash*,
+        for an empty frame read for no one, is `BY_HASH`: each block looks its
+        own entries up by hash.
+        """
+        # Guard against an empty journal (no parquet files written yet).
         if df is None:
             df = pd.DataFrame()
 
@@ -2471,6 +2479,7 @@ class BuildJournalFrame(pd.DataFrame):
         # Set custom attributes AFTER super().__init__()
         self.storage_options = storage_options or {}
         self.logger = logger
+        self.read_anchor, self.read_datalake, self.by_hash = read_anchor, read_datalake, by_hash
 
     def __call__(self, entry:int):
         return self.get(entry, dropna=True)
@@ -2541,7 +2550,8 @@ class BuildJournalFrame(pd.DataFrame):
     @classmethod
     def _derived_(cls, *args, **kwargs) -> 'BuildJournalFrame':
         """A frame pandas made out of one of these -- wrapped, not read again: it already was."""
-        return _derived_frame_(cls, {'storage_options': {}, 'logger': Datalog()}, args, kwargs)
+        return _derived_frame_(cls, {'storage_options': {}, 'logger': Datalog(), 'read_anchor': None,
+                                     'read_datalake': None, 'by_hash': False}, args, kwargs)
 
 
 def one_datalake(datalake, url, what):

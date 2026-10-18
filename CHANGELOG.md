@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`BlocksJournal` is gone: a stack hands its blocks a `BuildJournalFrame`.** The
+  build journal a stack reads once for its blocks -- or `BY_HASH` -- travels to the
+  workers forming them as the frame itself, its new `read_anchor` and
+  `read_datalake` saying whose it is (a block of another anchor, a tablet's
+  upstream, reads its own) and `by_hash` standing for `BY_HASH`.
+  `Datastack._blocks_buildjournal_(journal=None)` is the one way to get it, read or
+  given; `_shared_blocks_journal_` is gone, and so is its `(journal, anchor, url)`
+  tuple. `dbx.eval` returns a DataFrame or Series as it is: iterated, it rebuilt one
+  from its column names -- which is why the frame had been wrapped. A stack's block
+  methods refuse a `dict` or `list` journal, which no single frame can hold.
 - **`DataJournal` is `BuildJournal`: the journal of what happens to a block's data.**
   Builds, clears, copies, redirects and adoptions, notes: entries keyed by
   `(anchor, hash)` and filed under the block. A clean break, with no aliases:

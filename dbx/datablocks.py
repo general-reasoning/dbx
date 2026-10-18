@@ -993,7 +993,7 @@ _BLOCK_SPECIALIZATIONS = threading.local()
 
 
 #: The journals stacks have read for the blocks they are forming, innermost
-#: last -- per thread -- each as a `BlocksJournal`. A block of that anchor, in
+#: last -- per thread -- each a `BuildJournalFrame` with its ``read_anchor``. A block of that anchor, in
 #: that datalake, resolves its specializations against it instead of reading
 #: the journal itself: which is what a block formed in a WORKER needs, since
 #: the stack that read it is in another process.
@@ -1015,44 +1015,21 @@ _RENAMED_BUILDJOURNAL_BUILDERS_ = {
 }
 
 
-class BlocksJournal:
-    """A journal read once for a stack's blocks: those of *anchor*, stored in *datalake*.
-
-    A plain class and not a namedtuple: it travels as a call argument, and a
-    tuple there is taken apart and rebuilt, element by element, by `dbx.eval`.
-    """
-    __slots__ = ('journal', 'anchor', 'datalake')
-
-    def __init__(self, journal, anchor, datalake):
-        self.journal, self.anchor, self.datalake = journal, anchor, datalake
-
-    def __getstate__(self):
-        return (self.journal, self.anchor, self.datalake)
-
-    def __setstate__(self, state):
-        self.journal, self.anchor, self.datalake = state
-
-    def __repr__(self):
-        n = ('no' if self.journal is None else 'by-hash' if self.journal is BY_HASH
-             else len(self.journal))
-        return f"BlocksJournal({self.anchor!r} in {self.datalake!r}, {n} entries)"
-
-
 @contextlib.contextmanager
-def forming_with_journal(blocks_journal):
-    """Blocks formed inside resolve against *blocks_journal* -- when it is theirs.
+def forming_with_journal(journal):
+    """Blocks formed inside resolve against *journal* -- when it is theirs: its ``read_anchor`` and ``read_datalake``.
 
     What a block-forming callable wraps its forming in, having been handed the
     journal its stack read -- as a ctx kwarg, once per worker. None forms
     blocks as they would be formed anyway.
     """
-    if blocks_journal is None or blocks_journal.journal is None:
+    if getattr(journal, 'read_anchor', None) is None:
         yield
         return
     stack = getattr(_FORMING_JOURNALS, 'stack', None)
     if stack is None:
         stack = _FORMING_JOURNALS.stack = []
-    stack.append(blocks_journal)
+    stack.append(journal)
     try:
         yield
     finally:
@@ -1061,9 +1038,13 @@ def forming_with_journal(blocks_journal):
 
 def _forming_journal_(anchor, datalake):
     """The journal a stack forming this block read for it, or None -- see `forming_with_journal`."""
-    for bj in reversed(getattr(_FORMING_JOURNALS, 'stack', None) or ()):
-        if bj.anchor == anchor and bj.datalake == datalake:
-            return bj.journal
+    for journal in reversed(getattr(_FORMING_JOURNALS, 'stack', None) or ()):
+        if journal.read_anchor == anchor and journal.read_datalake == datalake:
+            if journal.by_hash:
+                return BY_HASH
+            frame = journal.copy(deep=False)
+            frame.read_anchor = frame.read_datalake = None      # as a journal given
+            return frame
     return None
 
 
@@ -2869,10 +2850,10 @@ class Datablock:
         """Install the applicable specialization without building any unspecialized topics."""
         if self.valid():
             return self
-        if isinstance(journal, BlocksJournal):
+        if getattr(journal, 'read_anchor', None) is not None:
             journal = _shared_journal_(journal, self)
         j = journal if journal is not None else self.__dict__.get('__specialization_journal__')
-        if isinstance(j, BlocksJournal):
+        if getattr(j, 'read_anchor', None) is not None:
             j = _shared_journal_(j, self)
         self._install_specialization_(journal=j)
         return self
@@ -4679,7 +4660,7 @@ class Datablock:
         a topic that was renamed, a build that was cleared -- shows up here as a
         row with a reason, rather than as a block that quietly rebuilds.
         """
-        if isinstance(journal, BlocksJournal):
+        if getattr(journal, 'read_anchor', None) is not None:
             journal = _shared_journal_(journal, self)
         rows = []
         for i, sp in enumerate(self.SPECIALIZATIONS or []):
@@ -4738,7 +4719,7 @@ class Datablock:
         installed without anything being redirected or recorded. For why each
         declared specialization did or did not apply, see `specializations()`.
         """
-        if isinstance(journal, BlocksJournal):
+        if getattr(journal, 'read_anchor', None) is not None:
             journal = _shared_journal_(journal, self)
         memo = {'journal': journal}
         for sp, (paths, entry) in self._specialization_candidates_by_recency_(journal, _memo=memo):
@@ -4783,7 +4764,7 @@ class Datablock:
         """
         if not UNSAFE_allowed("UNSAFE_specialize", OVERRIDE=OVERRIDE):
             return None
-        if isinstance(journal, BlocksJournal):
+        if getattr(journal, 'read_anchor', None) is not None:
             journal = _shared_journal_(journal, self)
         memo = {'journal': journal}
         for sp, _ in self._specialization_candidates_by_recency_(journal, _memo=memo):
@@ -7163,7 +7144,7 @@ class Datablock:
 
         h = self.get_hash(specialization)
         anchor = self._specialization_anchor_(specialization)
-        if isinstance(journal, BlocksJournal):
+        if getattr(journal, 'read_anchor', None) is not None:
             journal = _shared_journal_(journal, self)
         journal = self._specialization_journal_(journal, specialization)
         try:
@@ -7514,7 +7495,7 @@ class Datablock:
         *_memo*, given, holds the journal: read the first time a candidate needs
         it, and kept there for the caller.
         """
-        if isinstance(journal, BlocksJournal):
+        if getattr(journal, 'read_anchor', None) is not None:
             journal = _shared_journal_(journal, self)
         memo = _memo if _memo is not None else {'journal': journal}
         for sp in self._specialization_variants_():
@@ -7575,7 +7556,7 @@ class Datablock:
         # If the block is not specializing or already valid, do not install a redirection.
         if self.valid() or not self._specializing_():
             return None
-        if isinstance(journal, BlocksJournal):
+        if getattr(journal, 'read_anchor', None) is not None:
             journal = _shared_journal_(journal, self)
         # Read at most once -- and only if a candidate gets as far as resolving --
         # for finding one and for redirecting to it alike.
@@ -7701,11 +7682,15 @@ def _shared_journal_(caller, block):
         return None
     if isinstance(caller, (dict, list, tuple)):
         return caller
-    if getattr(caller, 'journal', None) is None or getattr(caller, 'anchor', None) is None:
+    if getattr(caller, 'read_anchor', None) is None:
         return None
-    if block.anchor != caller.anchor or (caller.datalake is not None and block.datalake != caller.datalake):
+    if block.anchor != caller.read_anchor or (caller.read_datalake is not None and block.datalake != caller.read_datalake):
         return None
-    return caller.journal
+    if caller.by_hash:
+        return BY_HASH
+    frame = caller.copy(deep=False)
+    frame.read_anchor = frame.read_datalake = None      # as a journal given
+    return frame
 
 
 class DatablockRedirectionGetter:
@@ -7980,7 +7965,7 @@ class Datastack(Datablock):
             self.idx = idx
 
         def __call__(self, stack, *, build=True, journal=None):
-            # *journal*, a BlocksJournal the stack read once and the executor
+            # *journal*, the journal the stack read once -- `_blocks_buildjournal_` -- and the executor
             # handed each worker, is what the block resolves its
             # specializations against, rather than reading the journal itself.
             with forming_with_journal(journal), stack._block_specializations_in_force_():
@@ -8115,7 +8100,7 @@ class Datastack(Datablock):
         # The blocks' journal is read by the adoption, and only if a block needs it.
         self.specialize_blocks(journal=journal, parallelization=parallelization,
                                n_workers=n_workers, **kwargs)
-        stack_journal = None if isinstance(journal, BlocksJournal) else journal
+        stack_journal = None if getattr(journal, 'read_anchor', None) is not None else journal
         super().specialize(journal=stack_journal)
         return self
 
@@ -8328,7 +8313,7 @@ class Datastack(Datablock):
         if self.n_blocks == 0:
             return None
         try:
-            return self._blocks_buildjournal_(**kwargs)[0]
+            return self._blocks_buildjournal_(**kwargs)
         except Exception as e:
             self.log.detailed(f"block_buildjournal: could not load journal for child blocks: {e}")
             return None
@@ -8503,7 +8488,15 @@ class Datastack(Datablock):
         n = self.n_blocks
         if n == 0:
             return pd.Series([], dtype=object)
-        shared = self._shared_blocks_journal_(journal)
+        # Read only when BLOCK declares SPECIALIZATIONS: without them, a block not
+        # redirected answers from its own hash directory, and one redirected from
+        # its record -- neither needs the anchor's journal.
+        shared = None
+        if journal is not None or self._block_specializations_():
+            try:
+                shared = self._blocks_buildjournal_(journal)
+            except FileNotFoundError:
+                pass            # nothing to share: each block reads its own
         results = self._exec_over_blocks_(
             [self.DatablockRedirectionGetter(i) for i in range(n)], journal=shared,
             tag=f"RESOLVING REDIRECTION of {n} blocks [{self.__class__.__name__}]",
@@ -8530,7 +8523,15 @@ class Datastack(Datablock):
         if not block_specs:
             series = pd.Series([None] * n, dtype=object)   # nothing declared: nothing to find
             return series[series.notna()] if found_only else series
-        shared = self._shared_blocks_journal_(journal)
+        # Read only when BLOCK declares SPECIALIZATIONS: without them, a block not
+        # redirected answers from its own hash directory, and one redirected from
+        # its record -- neither needs the anchor's journal.
+        shared = None
+        if journal is not None or self._block_specializations_():
+            try:
+                shared = self._blocks_buildjournal_(journal)
+            except FileNotFoundError:
+                pass            # nothing to share: each block reads its own
         results = self._exec_over_blocks_(
             [self.DatablockSpecializationFinder(i) for i in range(n)], journal=shared,
             tag=f"FINDING SPECIALIZATIONS of {n} blocks [{self.__class__.__name__}]",
@@ -9375,10 +9376,16 @@ class Datastack(Datablock):
             return 'TABLET'
         return 'BLOCK'
 
-    def _blocks_buildjournal_(self, **kwargs):
-        """``(journal, anchor, url)`` of this stack's blocks: read once, for all of them.
+    def _blocks_buildjournal_(self, journal=None, **kwargs) -> BuildJournalFrame:
+        """The build journal of this stack's blocks' anchor: read once, for all of them, as one frame.
 
-        From `BLOCK` when the stack declares one: the class's anchor under
+        Its ``read_anchor`` and ``read_datalake`` say whose it is: handed to the
+        workers forming the blocks, it is what a block of that anchor in that
+        datalake resolves against, and any other block -- a tablet's upstream --
+        reads its own (`forming_with_journal`). *journal*, given, is used rather
+        than read: a frame, or `BY_HASH`, as an empty frame with ``by_hash``.
+
+        Read from `BLOCK` when the stack declares one: the class's anchor under
         `_blocks_datalake_()` -- the blocks are taken to share it -- with no block
         formed at all. Otherwise from ``block(0)``, formed only to say where its
         journal is: uncached, and with specializations off, since forming it
@@ -9387,6 +9394,20 @@ class Datastack(Datablock):
         """
         block_cls = self._block_class_()
         kind = self._block_kind_()
+        if journal is not None:
+            if isinstance(journal, (dict, list, tuple)):
+                raise TypeError(
+                    f"{type(self).__name__}: a stack hands its blocks one journal frame, not a "
+                    f"{type(journal).__name__}; give each block its own, or the frame of their anchor")
+            anchor = block_cls.anchor if block_cls is not None else None
+            if journal is BY_HASH:
+                return BuildJournalFrame(None, unnormalized=True, parse_datetimes=False,
+                                         read_anchor=anchor, read_datalake=self._blocks_datalake_(), by_hash=True)
+            if getattr(journal, 'read_anchor', None) is not None:
+                return journal
+            frame = (journal if isinstance(journal, BuildJournalFrame) else BuildJournalFrame(journal)).copy(deep=False)
+            frame.read_anchor, frame.read_datalake = anchor, self._blocks_datalake_()
+            return frame
         if block_cls is not None:
             anchor, lake = block_cls.anchor, self._blocks_datalake_()
             # And every other anchor BLOCK's specializations look in: a renamed
@@ -9412,12 +9433,16 @@ class Datastack(Datablock):
                 raise FileNotFoundError(f"no journal under {[anchor] + others!r} in {lake!r}")
             journal = frames[0] if len(frames) == 1 else BuildJournalFrame(
                 pd.concat(frames), storage_options=self.storage_options)
-            return journal, anchor, lake
+            journal = journal.copy(deep=False)
+            journal.read_anchor, journal.read_datalake = anchor, lake
+            return journal
         first = self._form_block_(0, use_specializations=False)
-        return first.buildjournal(**kwargs), first.anchor, first.datalake
+        journal = first.buildjournal(**kwargs).copy(deep=False)
+        journal.read_anchor, journal.read_datalake = first.anchor, first.datalake
+        return journal
 
     def _build_journal_(self):
-        """The `BlocksJournal` a build hands its callables, or None.
+        """The journal a build hands its callables -- `_blocks_buildjournal_` -- or None.
 
         Read only when there is something to resolve against it -- a BLOCK that
         declares SPECIALIZATIONS -- and once, here in the parent.
@@ -9442,7 +9467,7 @@ class Datastack(Datablock):
         anchor = block_cls.anchor
         if not getattr(self, 'specialization_use_full_journal', False):
             self.log.info(f"{self.anchorkeypath}: its {item_label} look up earlier builds of themselves by hash")
-            journal = BlocksJournal(BY_HASH, anchor, self._blocks_datalake_())
+            journal = self._blocks_buildjournal_(BY_HASH)
             if self.__dict__.get('__building__'):
                 self.__dict__['__build_journal__'] = journal
             return journal
@@ -9450,13 +9475,12 @@ class Datastack(Datablock):
                       f"{item_label} can adopt -- once for the whole build; over many blocks this takes minutes")
         started = time.time()
         try:
-            journal, anchor, lake = self._blocks_buildjournal_()
+            journal = self._blocks_buildjournal_()
         except FileNotFoundError:
             self.log.info(f"{self.anchorkeypath}: no {anchor} journal: nothing to adopt")
             return None
-        self.log.info(f"{self.anchorkeypath}: read the {anchor} journal, {len(journal)} entries, "
+        self.log.info(f"{self.anchorkeypath}: read the {journal.read_anchor} journal, {len(journal)} entries, "
                       f"in {time.time() - started:.0f} s")
-        journal = BlocksJournal(journal, anchor, lake)
         if self.__dict__.get('__building__'):
             self.__dict__['__build_journal__'] = journal
         return journal
@@ -9552,34 +9576,6 @@ class Datastack(Datablock):
         # The journal as a ctx kwarg: sent once per worker, not with each callable.
         ctx = {} if journal is None else {'journal': journal}
         return executor.exec_callables(callables, self, **ctx)
-
-    def _shared_blocks_journal_(self, journal=None):
-        """A `BlocksJournal` for these blocks: *journal* as given, or read once -- or None.
-
-        Read only when BLOCK declares SPECIALIZATIONS: without them, a block not
-        redirected answers from its own hash directory, and one redirected
-        answers from its record -- neither needs the anchor's journal.
-        """
-        block_cls = self._block_class_()
-        if journal is not None:
-            return BlocksJournal(journal, block_cls.anchor if block_cls is not None else None,
-                                 self._blocks_datalake_())
-        block_specs = self._block_specializations_()
-        if block_cls is None or not block_specs:
-            return None
-        kind = self._block_kind_()
-        item_label = 'tablets' if kind == 'TABLET' else 'blocks'
-        n_items = getattr(self, 'n_tablets', self.n_blocks)
-        anchor = block_cls.anchor
-        self.log.verbose(f"{self.__class__.__name__}: reading the {anchor} ({kind}) journal "
-                         f"for {n_items} {item_label} to resolve against...")
-        try:
-            journal, anchor, lake = self._blocks_buildjournal_()
-        except FileNotFoundError:
-            return None                 # nothing to share: each block reads its own
-        self.log.verbose(f"{self.__class__.__name__}: read the {anchor} ({kind}) journal once "
-                         f"({len(journal)} entries) for {n_items} {item_label} to resolve against")
-        return BlocksJournal(journal, anchor, lake)
 
 
 def _redirect_succeeded_(result) -> bool:

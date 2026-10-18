@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+pytest.importorskip("pygame", reason="hyp is the [hyp] extra")
+
 from hyp import dbxpipelines
 from hyp.engine import Engine
 from hyp.store import Store

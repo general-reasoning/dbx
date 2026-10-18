@@ -310,43 +310,45 @@ window says so.
 
 Each arc a hover draws is an arrow, from the hovered point to a neighbor:
 the difference of their embeddings, `ê_there − ê_here`, each unit length
-first. Hold Shift over the point, and each arrow is labeled with a short
-line saying what moving along it means -- `Moves from test-split
-evaluation to the 602020 training split`. An embedding has no decoder: no
-text comes back out of a vector. So the line is made in two steps
-(`hyp/arrows.py`, `Engine.arrow_notes`).
+first. Hold Shift over the point, and each arc is labeled with what its
+direction means -- `Test split toward train split; probe outputs toward raw
+data-pipeline stages` -- and beneath it, what that rests on: `the same move
+in 5 other pairs · cos up to 0.97`.
 
-1. **The arrow is read against the corpus's phrases.** Every stored point's
-   embed text is cut into phrases: a line each, a line longer than 120
-   characters at its sentences, quotes, brackets and backslashes stripped.
-   A phrase in every text is dropped, as it points nowhere, and the 4,000
-   in the most texts are kept. Each is embedded with the corpus's own
-   embedder -- through `LabelFirstEmbedder`, for a journal -- so it lies in
-   the points' space. Every embedding shares a large common direction, so
-   each phrase's unit vector is taken less the mean of them all, and the
-   arrow's cosine with each is its score. The 10 highest are where moving
-   there leads, the 10 lowest what it leaves behind. The phrases are
-   embedded the first time Shift is held over a corpus, and kept in the
-   store (`phrases.json`, `phrases.npy`) with the embedder's name.
-2. **Claude says what that means.** The phrases and their scores, with the
-   two points' labels, are given to Claude Code (`claude -p`, under your
-   login, with no tools, as the Claude sessions run), which answers in one
-   line of at most 12 words an arrow. All of a hover's arrows not said
-   before go in one question, about 5 seconds. "…" stands on each arc until
-   the lines come.
+An arrow's two endpoints say only what differs between them, which their
+labels say already. What the arrow means is its direction, and a direction
+is the same anywhere in the space, so it is read where else it runs in the
+corpus (`hyp/arrows.py`, `Engine.arrow_notes`):
 
-Each line is kept in the store (`notes.json`), by the two points' embed
-texts, so an arrow is said once; a point's text changing asks again, and a
-change of embedder discards them all. Two neighbors with one embedding -- a
-pipeline run again -- are not asked about: their arc says `the same
-embedding`. A reading that fails -- no Claude Code, not logged in -- says
-why on the first arc, and is tried again after 30 seconds of Shift.
+- **The same move elsewhere.** Every pair of neighbors in the corpus is an
+  arrow too. Those whose unit difference points most nearly the same way --
+  the cosine of the two directions, 0.5 or more -- are the same move made
+  elsewhere: up to 5 of them, a pair the corpus holds again (a pipeline run
+  again) counted once. Those at 0.7 or more are what the line beneath
+  counts.
+- **Its axis.** The whole corpus projected on the direction: the 5 points
+  furthest toward each end are what it runs from, and toward, whoever its
+  endpoints are.
 
-Claude is given the phrases, not the texts: it says what the embedding
-weighs, which the phrases are the embedding's own reading of. Giving it
-the two texts as well would let it say more of what they are, at the cost
-of long prompts -- specs, transcripts -- and of describing the texts rather
-than the vector.
+That evidence, by the points' labels -- a pipeline's with its `VAR.name` --
+is what Claude Code is given (`claude -p`, under your login, with no
+tools), and asked to name the direction itself, in one line of at most 12
+words, as all of it has in common: not the two endpoints, and not a list of
+the evidence. All of a hover's arrows not named before go in one question,
+a few seconds; "…" stands on each arc until the lines come.
+
+Each is kept in the store (`notes.json`), by the two points' embed texts and
+the corpus's size -- the evidence is the whole corpus's, so a corpus that
+grows asks again -- and a change of embedder discards them all. Two
+neighbors with one embedding -- a pipeline run again -- are not asked
+about: their arc says `the same embedding`. A reading that fails -- no
+Claude Code, not logged in -- says why on the first arc, and is tried again
+after 30 seconds of Shift.
+
+What a direction can mean is what the texts hold. A pipeline's text is its
+configuration, so in a journal most directions are a split's or a variant's
+change, and the evidence shows how consistently the embedding makes it; in
+a directory of markdowns, they are directions of content.
 
 ## Controls
 
@@ -361,7 +363,7 @@ than the vector.
 | right click on a point | its stored text |
 | right click elsewhere | type a text; Enter embeds, summarizes, stores and places it |
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space -- by cosine over the whole vectors, so an arc may reach a point far off on the disk |
-| Shift, while hovering | each of those arcs labeled with a line, by Claude, saying what moving along it means. See [Arrows](#arrows) |
+| Shift, while hovering | each of those arcs labeled with what its direction means, named by Claude from where else it runs in the corpus, and what that rests on. See [Arrows](#arrows) |
 | Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
 | (lower left) | a spinning wheel while data are being loaded or prepared; an error, in red, for 15 s or until the next read -- its full traceback in the terminal |
 | while a corpus loads | the window is dimmed and takes no input. A card in its middle shows the stage under way, with a bar, the files done out of the total, the time taken and the time left. An anchor's journal is listed first, as a stage of its own (`dbx.DataJournal.list`). Until the listing is done there is no total, so the bar slides and the card counts the files found so far, after every directory. Then the files are read (`dbx.DataJournal.read_frame`), counted against that total |

@@ -23,6 +23,11 @@ class Snapshot:
     points: tuple = ()  # each point's stored fields, for a specialization's use
 
 
+def _label_(point):
+    """A point as the arrows name it: its label -- a pipeline's, with its VAR.name -- or its summary."""
+    return " | ".join(str(x) for x in (point.get("label") or point.get("summary", ""), point.get("name")) if x)
+
+
 class Engine:
     def __init__(self, store, embedder, summarizer, seed=0, source=None):
         """*source*, if given, replaces the seed corpus: a callable taking a
@@ -119,80 +124,51 @@ class Engine:
             s.save()
             return moved
 
-    def arrows(self, i, js, progress=print):
-        """The arrows from point *i* to points *js* -- indices into the snapshot -- each decoded: `arrows.decode`'s (toward, away), phrases in place of indices.
-
-        The phrases are the stored points' embed texts cut up (`arrows.phrases`),
-        embedded once and kept in the store. Those not yet embedded are embedded
-        here, outside the lock -- the first Shift over a corpus takes a while --
-        and *progress* hears how far it has got.
-        """
-        with self.lock:
-            s = self.store
-            rows = self._shown_[0] if self._shown_ is not None else np.arange(len(s))
-            here, there = s.embeddings[rows[i]], [s.embeddings[rows[j]] for j in js]
-            wanted = arrows.phrases([p.get("embed", p["text"]) for p in s.points])
-            known = set(s.phrases)
-            name = s.embedder
-        todo = [p for p in wanted if p not in known]
-        if todo:
-            msg = f"arrows: embedding {len(todo)} phrases"
-            batches = []
-            for k in range(0, len(todo), 64):
-                progress(msg, k, len(todo))
-                batches.append(np.asarray(self.embedder(todo[k : k + 64]), dtype=np.float32))
-            progress(f"arrows: {len(todo)} phrases embedded")
-            with self.lock:
-                s = self.store
-                if s.embedder == name:  # not re-embedded, nor another corpus, while these were made
-                    vecs = np.concatenate(batches)
-                    s.phrase_embeddings = vecs if not len(s.phrases) else np.concatenate([s.phrase_embeddings, vecs])
-                    s.phrases = s.phrases + todo
-                    s.save_phrases()
-        with self.lock:
-            s = self.store
-            index = {p: k for k, p in enumerate(s.phrases)}
-            keep = [index[p] for p in wanted if p in index]
-            names, vecs = [s.phrases[k] for k in keep], s.phrase_embeddings[keep] if keep else np.zeros((0, 0))
-
-        def named(pairs):
-            return [(names[k], score) for k, score in pairs]
-
-        return [tuple(named(side) for side in arrows.decode(here, v, vecs)) for v in there]
-
     def arrow_notes(self, i, js, ask, progress=print):
-        """The line each arrow from point *i* to points *js* -- indices into the snapshot -- is said in.
+        """What each arrow from point *i* to points *js* -- indices into the snapshot -- means: ``{"line", "same", "cos"}``.
 
-        Each is read from the phrases `arrows` projects it on, and said by
-        *ask*, a function from a prompt to its answer's text (Claude): every
-        arrow not said before in one question, at most once a pair -- the
-        lines are kept in the store, by the two embed texts. An arrow
-        between two equal embeddings is not asked about.
+        An arrow is read where else its direction runs in the corpus
+        (`arrows.evidence`): the other neighbor pairs making the same move,
+        and the ends of its axis. *ask*, a function from a prompt to its
+        answer's text (Claude), names each direction in a line: every arrow
+        not named before in one question, at most once a pair -- the notes
+        are kept in the store, by the two embed texts and the corpus's size,
+        as the evidence is the whole corpus's. An arrow between two equal
+        embeddings is not asked about.
         """
         import hashlib
 
-        decoded = self.arrows(i, js, progress)
         with self.lock:
             s = self.store
             rows = self._shown_[0] if self._shown_ is not None else np.arange(len(s))
-            points = [s.points[rows[k]] for k in [i, *js]]
-            labels = [p.get("summary", "") for p in points]
+            units = arrows.unit_rows(s.embeddings[rows])
+            points = [s.points[r] for r in rows]
             embeds = [p.get("embed", p["text"]) for p in points]
-            keys = [hashlib.sha1(f"{embeds[0]}\0{e}".encode()).hexdigest()[:20] for e in embeds[1:]]
+            keys = [hashlib.sha1(f"{len(rows)}\0{embeds[i]}\0{embeds[j]}".encode()).hexdigest()[:20] for j in js]
             notes = [s.notes.get(k) for k in keys]
             name = s.embedder
-        for n, (toward, _) in enumerate(decoded):
-            if not toward:
-                notes[n] = "the same embedding"
-        todo = [n for n, note in enumerate(notes) if note is None]
+        labels = [_label_(p) for p in points]
+        todo, asked = [], []
+        if any(n is None for n in notes):
+            pairs, moves = arrows.neighbor_moves(units, layout.nearest(units, NEIGHBORS))
+            for n, j in enumerate(js):
+                if notes[n] is not None:
+                    continue
+                ev = arrows.evidence(units, i, j, pairs, moves, labels)
+                if ev is None:
+                    notes[n] = {"line": "the same embedding", "same": 0, "cos": 1.0}
+                else:
+                    todo.append(n)
+                    asked.append((labels[i], labels[j], ev))
         if todo:
             progress(f"arrows: Claude is reading {len(todo)} arrow{'s' if len(todo) > 1 else ''}")
-            reply = ask(arrows.prompt([(labels[0], labels[n + 1], *decoded[n]) for n in todo]))
+            reply = ask(arrows.prompt(asked))
             said = arrows.parse(reply, len(todo))
             if said is None:
                 raise ValueError(f"Claude's answer was not {len(todo)} lines: {reply[:200]}")
-            for n, line in zip(todo, said):
-                notes[n] = line
+            for n, line, (_, _, ev) in zip(todo, said, asked):
+                same, cos = ev.same()
+                notes[n] = {"line": line, "same": same, "cos": round(cos, 3)}
             with self.lock:
                 s = self.store
                 if s.embedder == name:  # not re-embedded, nor another corpus, while Claude read

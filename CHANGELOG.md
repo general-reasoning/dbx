@@ -43,6 +43,14 @@ All notable changes to this project will be documented in this file.
   go on with. A markdown's front matter is no longer drawn, nor embedded.
 
 ### Changed
+- **hyp: an arrow is read by where else its direction runs, not by its
+  endpoints.** The lines Claude wrote from an arrow's projected phrases only
+  said what its two endpoints differ in. An arrow is now read across the
+  corpus: the other neighbor pairs whose difference points the same way,
+  and the ends of the axis it defines (`arrows.evidence`). That is what
+  Claude names the direction from, and the arc shows, beneath the line,
+  how many other pairs make the same move and how nearly. The phrase
+  vocabulary, and its `phrases.json` and `phrases.npy`, are gone.
 - **hyp: an arrow's label is a line by Claude, not a list of phrases.** The
   phrases an arrow projects on read as a diff of the two texts. They are now
   what Claude Code is given, with their scores, to say in one short line

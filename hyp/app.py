@@ -1702,12 +1702,12 @@ class Hyp:
                 self.tooltip(self.__point_tooltip__(self.hover), (mx, my))
 
     def draw_arrows(self, i, data, M):
-        """Point *i*'s arrows to its neighbors, each labeled along its arc with a line saying what moving along it means: `Engine.arrow_notes`.
+        """Point *i*'s arrows to its neighbors, each labeled along its arc with what its direction means, and beneath, what that rests on: `Engine.arrow_notes`.
 
-        The first Shift over a point asks for them in the background -- the
-        arrows read through the corpus's phrases, then said by Claude, every
-        arrow not said before in one question -- and "…" stands in until they
-        come. Each line is kept, so a point is read once. A reading that
+        The first Shift over a point asks for them in the background -- each
+        direction read where else it runs in the corpus, then named by Claude,
+        every arrow not named before in one question -- and "…" stands in until
+        they come. Each is kept, so a point is read once. A reading that
         failed says why, in place of the lines, and is tried again after
         ARROW_RETRY_S.
         """
@@ -1734,9 +1734,11 @@ class Hyp:
         for n, j in enumerate(snap.neighbors[i]):
             z = self.display(P.geodesic(data[i], data[j], np.array([ARROW_AT])), M)
             x, y = (float(c[0]) for c in self.to_screen(z))
-            text, color = ("…", STATUS) if got is None else (f"no reading: {got[0]}", ARROW_AWAY) if failed else (got[n], TIP_FG)
-            lines = wrap(self.tiny, text, ARROW_NOTE_PX)[:3] or [""]
-            imgs = [self.tiny.render(ln, True, color) for ln in lines]
+            if got is None or failed:
+                rows = [("…", STATUS)] if got is None else [(f"no reading: {got[0]}", ARROW_AWAY)]
+            else:
+                rows = [(got[n]["line"], TIP_FG), (_arrow_evidence_(got[n]), STATUS)]
+            imgs = [self.tiny.render(ln, True, color) for text, color in rows for ln in (wrap(self.tiny, text, ARROW_NOTE_PX)[:3] or [""])]
             w, h = max(img.get_width() for img in imgs), sum(img.get_height() for img in imgs)
             rect = pygame.Rect(int(x) + 6, int(y) + 6, w, h).inflate(10, 6)
             rect.clamp_ip(self.screen.get_rect())
@@ -1903,6 +1905,16 @@ class Hyp:
             if events or news or moving or self.busy() or self.box is not None or editing:
                 self.draw(now)
             self.clock.tick(60 if moving else 30)
+
+
+def _arrow_evidence_(note):
+    """What an arrow's naming rests on, beneath it: how many other pairs make the same move, and how nearly."""
+    if note["line"] == "the same embedding":
+        return ""
+    same, cos = note.get("same", 0), note.get("cos", 0.0)
+    if not same:
+        return f"no other pair moves this way (nearest cos {cos:.2f})" if cos else "no other pair moves this way"
+    return f"the same move in {same} other pair{'s' if same > 1 else ''} · cos up to {cos:.2f}"
 
 
 def _unscanned_(rel):

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **A pipeline is created once, journaled only when it says so, and cached by its call.**
+  `Pipeline.create()` -- and so `entrypoint`, `entry`, `entrypath` and
+  `read('entrypoint')` -- arranges the tree once per instance, not afresh on every
+  access. `Pipeline.JOURNAL`, False by default, says whether that creation is written
+  to the `PipeJournal`; `@pipeline(journal=True)` sets it. An `@pipeline` call is cached
+  by ALL its arguments (dicts, lists and blocks by value; an omitted `datalake=` by
+  `DBX_DATALAKE` at the call), so the pipelines several others nest are one instance,
+  created and journaled once per process; `f.cache_clear()` empties it. Until now every
+  `.entry` on every fresh instance wrote a 12-file entry: hundreds per command for one
+  nested collator. Pass `journal=True` to the pipelines whose entries you want.
+- **`PipeJournal.compact()`: one entry per pipeline and entrypath, the rest removed.**
+  The newest entry of each distinct `entrypath` is kept, with its side files; `collect`
+  reads the same pipelines and entrypaths after. `unjournaled=True` also removes the
+  journals of pipelines whose class says `JOURNAL = False`, but those in `spare=`;
+  `dry_run=True` says what would go.
 - **Every tablet is filed by its hash, and tagged by its table: no tag in any path.**
   `Datatablet.KEYBY` is `version_shorthash`, as every block's. A tablet filed under its
   tag until 2026-10-17 -- hundreds of thousands, in tables valid as they stand -- is

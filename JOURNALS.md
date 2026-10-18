@@ -387,8 +387,12 @@ dbx.pipejournal(loc=None, *, iloc=None, construct_only=False, extra_construction
 A `Pipeline` is a Datablock tree defined flat. Its `__create__()` arranges
 the tree out of the pipeline's VAR and returns the root, its **entrypoint**.
 `p.create()`, `p.entrypoint` (or `p.entry`, for short) and
-`p.read('entrypoint')` create the tree afresh, and each writes a `create`
-entry to the `PipeJournal`.
+`p.read('entrypoint')` all return the one tree `create()` arranges, once per
+instance. A pipeline whose `JOURNAL` is True -- `@pipeline(journal=True)` --
+writes one `create` entry to the `PipeJournal` as it does; one whose `JOURNAL`
+is False, the default, writes none. An `@pipeline` call is cached by all its
+arguments, so a pipeline that several others nest is one instance, created
+and journaled once per process.
 
 `PipeJournal` is a `DataJournal` whose entries are laid out exactly as a
 block's are, under `<datalake>/.pipelines` instead of the datalake itself:

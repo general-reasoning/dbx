@@ -3,9 +3,9 @@
 :class:`Pipeline` is an abstract Datablock whose one topic, ``entrypoint``, is
 SYNTHETIC: the root of a tree of blocks it arranges, parceling its own VAR out
 among them, in ``__create__``. Every creation is recorded in the
-`PipeJournal` (in ``journals``), under ``{datalake}/.pipelines``, with the
-``entrypath`` it led to; :func:`dbx.pipejournal` reads them back, one row per
-pipeline.
+`PipeJournal` (in ``journals``) -- when its ``JOURNAL`` says so -- under
+``{datalake}/.pipelines``, with the ``entrypath`` it led to; :func:`dbx.pipejournal`
+reads them back, one row per pipeline.
 
 :func:`pipeline` makes a Pipeline of a function that arranges a tree and returns
 its root -- an entrypoint function -- its arguments the pipeline's VAR: a
@@ -17,6 +17,7 @@ import inspect
 import sys
 from typing import Any
 
+from .databits import default_datalake
 from .datablocks import SYNTHETIC, Datablock
 from .journals import PipeJournal
 
@@ -46,13 +47,19 @@ class Pipeline(Datablock):
     The one topic, ``entrypoint``, is SYNTHETIC: a pipeline stores nothing
     of its own, and is valid vacuously. ``read('entrypoint')``,
     :attr:`entrypoint` (or :attr:`entry`, for short) and :meth:`create` all
-    create the tree afresh,
-    and each records the creation in the `PipeJournal`, with the
-    entrypoint's anchorkeypath as ``entrypath`` -- which is how the pipelines
-    that led to a block are found again (`PipeJournal.collect`).
+    return the one tree :meth:`create` arranges, once per instance. A
+    pipeline whose :attr:`JOURNAL` is True records that creation in the
+    `PipeJournal`, with the entrypoint's anchorkeypath as ``entrypath`` --
+    which is how the pipelines that led to a block are found again
+    (`PipeJournal.collect`).
     """
 
     TOPICS = {'entrypoint': SYNTHETIC}
+
+    #: Whether a creation is recorded in the `PipeJournal`. Off by default:
+    #: only the pipelines one runs and looks for again -- not the collators,
+    #: factories and builders they nest -- are worth an entry.
+    JOURNAL: bool = False
 
     # 1. Datablock protocol ------------------------------------------------
 
@@ -69,24 +76,30 @@ class Pipeline(Datablock):
     # 2. Declared API ------------------------------------------------------
 
     def create(self) -> Datablock:
-        """The entrypoint ``__create__`` returns, its creation recorded in the `PipeJournal` as event ``'create'``."""
+        """The entrypoint ``__create__`` returns, arranged once per instance; see `_created_`."""
+        return self._created_
+
+    # 3. Accessors ---------------------------------------------------------
+
+    @functools.cached_property
+    def _created_(self) -> Datablock:
+        """The entrypoint ``__create__`` returns, its creation recorded in the `PipeJournal` as event ``'create'`` when `JOURNAL`."""
         entrypoint = self.__create__()
         if not isinstance(entrypoint, Datablock):
             raise TypeError(f"{self.__class__.__name__}.__create__() returned a "
                             f"{type(entrypoint).__name__}, not the Datablock at the root of its tree")
-        PipeJournal.write(self, 'create', entrypath=entrypoint.anchorkeypath)
+        if self.JOURNAL:
+            PipeJournal.write(self, 'create', entrypath=entrypoint.anchorkeypath)
         return entrypoint
-
-    # 3. Accessors ---------------------------------------------------------
 
     @property
     def entrypoint(self) -> Datablock:
-        """:meth:`create`: the root of this pipeline's tree, created afresh."""
+        """:meth:`create`: the root of this pipeline's tree."""
         return self.create()
 
     @property
     def entry(self) -> Datablock:
-        """:attr:`entrypoint`, for short: the root of this pipeline's tree, created afresh."""
+        """:attr:`entrypoint`, for short: the root of this pipeline's tree."""
         return self.entrypoint
 
     @property
@@ -120,11 +133,30 @@ class PipelineFromEntrypointFn(Pipeline):
         return ops
 
 
+def _cache_key_(value):
+    """*value*, hashable and equal wherever *value* is: dicts, lists, sets and blocks by what they hold."""
+    if isinstance(value, Datablock):
+        return (type(value), value.quote())
+    if isinstance(value, dict):
+        return (dict, tuple(sorted(((_cache_key_(k), _cache_key_(v)) for k, v in value.items()), key=repr)))
+    if isinstance(value, (list, tuple)):
+        return (type(value), tuple(_cache_key_(v) for v in value))
+    if isinstance(value, (set, frozenset)):
+        return (frozenset, frozenset(_cache_key_(v) for v in value))
+    if isinstance(value, type) or callable(value):
+        return value
+    try:
+        hash(value)
+    except TypeError:
+        return (type(value), repr(value))
+    return (type(value), value)
+
+
 def _camel_(name: str) -> str:
     return ''.join(part[:1].upper() + part[1:] for part in name.split('_'))
 
 
-def pipeline(fn=None, *, tag: str | None = None):
+def pipeline(fn=None, *, tag: str | None = None, journal: bool = False):
     """*fn*, returning a `PipelineFromEntrypointFn` rather than the tree it arranges.
 
     An entrypoint function ``f(name, ..., *, var_a=..., var_b=..., n_workers=..., datalake=...)``
@@ -151,12 +183,20 @@ def pipeline(fn=None, *, tag: str | None = None):
     ``@pipeline`` or ``@pipeline(tag=...)``: each pipeline is tagged *tag*, by default the function's
     fully qualified name, ``module.qualname`` -- several projects may write to one journal -- to filter
     the `PipeJournal` by; a tag filter matches by containment, so the function's own name finds it too.
+    ``@pipeline(journal=True)`` sets the pipeline's `Pipeline.JOURNAL`: only then is its creation
+    journaled. Leave it off for the minor pipelines -- collators, factories -- others nest.
+
+    A call is cached by ALL its arguments, as `functools.cache` would cache it, for the life of the
+    process: the same arguments return the same pipeline, so a pipeline that several others nest is
+    created -- and journaled -- once. Arguments `functools.cache` would refuse -- dicts, lists, sets,
+    blocks -- are keyed by value, a block by its quote -- and an omitted ``datalake=`` by the
+    ``DBX_DATALAKE`` it stands for at the call. ``f.cache_clear()`` empties it.
     The pipeline class, ``<FnInCamelCase>Pipeline``, is put in the function's module under that name,
     so its quote -- the journal's record -- evaluates. ``fn(None)``, the block class some entrypoints
     answer with, is passed through.
     """
     if fn is None:
-        return functools.partial(pipeline, tag=tag)
+        return functools.partial(pipeline, tag=tag, journal=journal)
     tag = f"{fn.__module__}.{fn.__qualname__}" if tag is None else tag
     sig = inspect.signature(fn)
     params = list(sig.parameters.values())
@@ -178,14 +218,23 @@ def pipeline(fn=None, *, tag: str | None = None):
         bases=(Pipeline.VAR,), kw_only=True)
     name = _camel_(fn.__name__) + 'Pipeline'
     cls = type(name, (PipelineFromEntrypointFn,), {
-        'VAR': VAR, 'FUNCTION': staticmethod(fn), 'LEADING': leading, '__module__': fn.__module__,
+        'VAR': VAR, 'FUNCTION': staticmethod(fn), 'LEADING': leading, 'JOURNAL': journal, '__module__': fn.__module__,
         '__qualname__': name, '__doc__': f"The pipeline of `{fn.__name__}`: its tree, configured by its VAR.",
     })
     VAR.__qualname__ = f"{name}.VAR"
     setattr(sys.modules[fn.__module__], name, cls)
 
+    cache = {}
+
     @functools.wraps(fn)
     def entry(*args, **kwargs):
+        # An omitted datalake= is DBX_DATALAKE's as of the call, which a block resolves as it is constructed.
+        key = _cache_key_((args, kwargs, default_datalake()))
+        if key not in cache:
+            cache[key] = arrange(*args, **kwargs)
+        return cache[key]
+
+    def arrange(*args, **kwargs):
         # The pipeline's datalake, where it is journaled, given to fn only when fn takes one.
         datalake = None if 'datalake' in sig.parameters else kwargs.pop('datalake', None)
         bound = sig.bind(*args, **kwargs)
@@ -210,5 +259,6 @@ def pipeline(fn=None, *, tag: str | None = None):
 
     entry.Pipeline = cls
     entry.function = fn
+    entry.cache_clear = cache.clear
     return entry
 

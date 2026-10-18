@@ -33,17 +33,17 @@ class Root(Datablock):
             f.write(str(self.var.m))
 
 
-@pipeline
+@pipeline(journal=True)
 def leaf(name, *, var_n: int = 1, datalake=None):
     return Leaf(datalake=datalake, spec={'n': var_n}, tag=name)
 
 
-@pipeline(tag='rooted')
+@pipeline(tag='rooted', journal=True)
 def root(name, *, var_n: int = 1, var_m: int = 1, n_workers: int = 1, datalake=None):
     return Root(datalake=datalake, spec={'leaf': leaf(name, var_n=var_n, datalake=datalake).entry, 'm': var_m})
 
 
-@pipeline
+@pipeline(journal=True)
 def no_datalake(name, *, var_n: int = 1):
     return Leaf(spec={'n': var_n})
 
@@ -95,6 +95,53 @@ def test_every_pipeline_takes_a_datalake_and_its_function_only_when_it_does(tmp_
     p = no_datalake('a', datalake=other)
     p.entry
     assert len(dbx.pipejournal(datalake=other)) == 1
+
+
+def test_a_call_is_cached_by_all_its_arguments(lake):
+    assert root('a', var_m=3) is root('a', var_m=3)
+    assert root('a', var_m=3, n_workers=4) is not root('a', var_m=3), "operational arguments key the cache too"
+    assert root('a', var_m=3) is not root('a', var_m=4)
+
+
+def test_unhashable_arguments_are_cached_by_value(lake):
+    @pipeline
+    def columns(name, *, var_columns: dict = None, devices: list = None):
+        return Leaf(spec={'n': len(var_columns or {})}, tag=name)
+
+    p = columns('a', var_columns={'signals': ['x', 'y']}, devices=['cuda:0'])
+    assert columns('a', var_columns={'signals': ['x', 'y']}, devices=['cuda:0']) is p
+    assert columns('a', var_columns={'signals': ['x']}, devices=['cuda:0']) is not p
+
+
+def test_a_nested_pipeline_is_created_and_journaled_once(lake):
+    root('a', var_m=3).entry
+    root('a', var_m=4).entry     # another root, the same leaf
+    assert len(dbx.pipejournal(datalake=lake, tag='rooted')) == 2
+    (row,) = [r for _, r in dbx.PipeJournal.read(dbx.PipeJournal.ANCHOR, datalake=lake).iterrows()
+              if r['tag'].endswith('.leaf')]
+    assert row['event'] == 'create'
+
+
+def test_an_omitted_datalake_is_keyed_by_dbx_datalake_at_the_call(lake, tmp_path, monkeypatch):
+    p = leaf('a')
+    monkeypatch.setenv('DBX_DATALAKE', str(tmp_path / 'elsewhere'))
+    assert leaf('a') is not p and leaf('a') is leaf('a')
+
+
+def test_cache_clear(lake):
+    p = leaf('a')
+    leaf.cache_clear()
+    assert leaf('a') is not p and leaf('a').hash == p.hash
+
+
+def test_a_pipeline_not_journaled_writes_nothing(lake):
+    @pipeline
+    def quiet(name, *, var_n: int = 1):
+        return Leaf(spec={'n': var_n}, tag=name)
+
+    assert quiet.Pipeline.JOURNAL is False and leaf.Pipeline.JOURNAL is True
+    quiet('a').entry.build()
+    assert len(dbx.pipejournal(datalake=lake)) == 0
 
 
 def test_a_var_through_kwargs_is_refused(lake):

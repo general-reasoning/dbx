@@ -39,6 +39,8 @@ class Root(Datablock):
 
 
 class Flat(Pipeline):
+    JOURNAL = True
+
     @dataclass
     class VAR(Pipeline.VAR):
         n: int = 1
@@ -46,6 +48,16 @@ class Flat(Pipeline):
 
     def __create__(self):
         return Root(spec={'leaf': Leaf(spec={'n': self.var.n}), 'm': self.var.m})
+
+
+class Quiet(Pipeline):
+    def __create__(self):
+        return Leaf()
+
+
+class Spared(Pipeline):
+    def __create__(self):
+        return Leaf(spec={'n': 7})
 
 
 class Broken(Pipeline):
@@ -67,6 +79,23 @@ def test_entrypoint_is_what_create_returns(lake):
     assert p.entry.hash == root.hash
     assert p.read('entrypoint').hash == root.hash
     assert p.entrypath == root.anchorkeypath
+
+
+def test_create_runs_once_per_instance(lake, monkeypatch):
+    calls = []
+    original = Flat.__create__
+    monkeypatch.setattr(Flat, '__create__', lambda self: calls.append(1) or original(self))
+    p = Flat()
+    assert p.create() is p.entrypoint is p.entry is p.read('entrypoint')
+    p.entrypath
+    assert len(calls) == 1
+    assert len(PipeJournal.read(PipeJournal.ANCHOR, datalake=lake)) == 1
+
+
+def test_a_pipeline_journals_only_when_its_journal_is_on(lake):
+    assert Pipeline.JOURNAL is False
+    Quiet().create()
+    assert not os.path.exists(os.path.join(lake, PipeJournal.ANCHOR))
 
 
 def test_entrypoint_is_synthetic(lake):
@@ -192,7 +221,6 @@ def test_pipejournal_is_collect(lake):
     a, b = Flat(spec={'n': 1}), Flat(spec={'n': 2})
     a_entrypath = a.create().anchorkeypath
     b.create()
-    # Read only now: entrypath creates, and so re-journals, a pipeline.
     frame = dbx.pipejournal()
     assert list(frame['hash']) == list(PipeJournal.collect()['hash']) == [b.hash, a.hash]
     assert list(dbx.pipejournal(hash=a.hash)['hash']) == [a.hash]
@@ -269,3 +297,46 @@ def test_collect_construct_only_counts_a_copied_or_updated_entrypoint(lake, even
     p.create()
     p.entrypoint.write_journal_entry(event=event)
     assert list(PipeJournal.collect(construct_only=True)['hash']) == [p.hash]
+
+
+def _journal_files(lake):
+    return sorted(os.path.relpath(os.path.join(d, f), lake)
+                  for d, _, fs in os.walk(os.path.join(lake, PipeJournal.ANCHOR)) for f in fs)
+
+
+def test_compact_keeps_the_newest_entry_of_each_entrypath(lake, monkeypatch):
+    for _ in range(3):
+        Flat(spec={'n': 1}).create()     # three instances: three entries, one entrypath
+    Flat(spec={'n': 2}).create()
+    first = Flat(spec={'n': 1}).entrypath     # a fourth instance, a fourth entry
+    monkeypatch.setattr(Flat, '__create__', lambda self: Leaf(spec={'n': 99}))
+    Flat(spec={'n': 1}).create()         # the same pipeline, another entrypath
+    monkeypatch.undo()
+    monkeypatch.setenv('DBX_DATALAKE', lake)
+    before = {r['hash']: r['entrypaths'] for _, r in PipeJournal.collect().iterrows()}
+    n_files = len(_journal_files(lake))
+
+    dry = PipeJournal.compact(dry_run=True)
+    assert len(_journal_files(lake)) == n_files and dry['removed'].sum() > 0
+    frame = PipeJournal.compact()
+    assert list(frame['removed']) == list(dry['removed'])
+    after = {r['hash']: r['entrypaths'] for _, r in PipeJournal.collect().iterrows()}
+    assert after == before and first in after[Flat(spec={'n': 1}).hash]
+    entries = PipeJournal.read(PipeJournal.ANCHOR, datalake=lake)
+    assert len(entries) == 3, "one per pipeline and entrypath"
+    # Each kept entry keeps its side files; the removed ones' are gone with them.
+    assert n_files % 6 == 0, "six entries, each with as many side files"
+    assert len(_journal_files(lake)) == n_files - frame['removed'].sum() == 3 * n_files // 6
+    assert PipeJournal.compact()['removed'].sum() == 0, "compacting again removes nothing"
+
+
+def test_compact_unjournaled_removes_the_pipelines_not_journaled_but_spared(lake):
+    Flat().create()
+    for cls in (Quiet, Spared):
+        p = cls()
+        PipeJournal.write(p, 'create', entrypath=p.create().anchorkeypath)    # as written before JOURNAL
+    frame = PipeJournal.compact(unjournaled=True, spare=['Spared']).set_index('pipeline')
+    assert frame.loc[Quiet().fqcn, 'action'] == 'removed: not journaled'
+    assert frame.loc[Spared().fqcn, 'action'] == 'unchanged'
+    assert set(PipeJournal.collect()['hash']) == {Flat().hash, Spared().hash}
+    assert not os.path.exists(os.path.join(lake, PipeJournal.ANCHOR, Quiet().anchor))

@@ -3396,10 +3396,104 @@ class PipeJournal(DataJournal):
         out.insert(at, 'entrypaths', pd.Series(list(entrypaths), index=out.index, dtype=object))
         return DataJournalFrame(out, storage_options=storage_options, unnormalized=True)
 
+    @classmethod
+    def compact(cls, *, unjournaled: bool = False, spare=(), datalake=None, storage_options=None,
+                dry_run: bool = False, log=None, n_workers=None) -> pd.DataFrame:
+        """Remove the entries `collect` would read only to drop: one per pipeline and entrypath is kept.
+
+        Under each pipeline's ``.journal/{fqcn}/journal/{hash}/``, the newest
+        entry -- by its ``datetime`` -- of every distinct ``entrypath`` is
+        kept, with its side files (spec, dfn, kwargs, quote, cite, repr,
+        signature, type, note), which are named, as it is, by the instance's
+        ``dt``; every other entry is removed, side files and all. `collect`
+        reads the same pipelines, each with the same entrypaths, before and
+        after.
+
+        *unjournaled* also removes the whole journal of every pipeline whose
+        class -- imported by its fqcn -- has `Pipeline.JOURNAL` False, but those
+        named in *spare* (fqcns, or class names); a class that no longer
+        imports is compacted as any other. *dry_run* removes nothing and says
+        what would go. Returns one row per pipeline class: files ``before``,
+        ``removed``, ``after``, and what was done with it.
+        """
+        import importlib
+
+        datalake = datalake or default_datalake()
+        if datalake is None:
+            raise ValueError("No datalake for PipeJournal.compact(): pass datalake= or set DBX_DATALAKE")
+        if storage_options is None:
+            storage_options = default_storage_options()
+        log = log or Datalog()
+        n_workers = n_workers or 8
+        fs, lake = fsspec.url_to_fs(datalake, **storage_options)
+        root = os.path.join(lake, cls.ANCHOR)
+        spare = set(spare)
+
+        def journaled(fqcn):
+            module, _, name = fqcn.rpartition('.')
+            try:
+                pipeline_cls = getattr(importlib.import_module(module), name)
+            except (ImportError, AttributeError):
+                return None
+            return getattr(pipeline_cls, 'JOURNAL', None)
+
+        def newest_per_entrypath(files):
+            # The dt in each entry's file name -- the instance's -- and the entry's own datetime and entrypath.
+            def read(file):
+                with fs.open(file, 'rb') as f:
+                    df = pd.read_parquet(f)
+                return (file, df['datetime'].iloc[0] if 'datetime' in df.columns else '',
+                        df['entrypath'].iloc[0] if 'entrypath' in df.columns else None)
+            newest = {}
+            with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                for file, dt, entrypath in ex.map(read, files):
+                    if entrypath not in newest or dt > newest[entrypath][0]:
+                        newest[entrypath] = (dt, file)
+            return {file for _, file in newest.values()}
+
+        rows = []
+        for anchor_dir in sorted(fs.ls(root, detail=False)) if fs.exists(root) else []:
+            fqcn = os.path.basename(anchor_dir.rstrip('/'))
+            files = fs.find(anchor_dir)
+            on = journaled(fqcn)
+            if unjournaled and on is False and fqcn not in spare and fqcn.rpartition('.')[2] not in spare:
+                removed, action = files, 'removed: not journaled'
+            else:
+                removed = []
+                for journal_dir in fs.glob(os.path.join(anchor_dir, '*', '.journal', '*', 'journal', '*')):
+                    hash = os.path.basename(journal_dir.rstrip('/'))
+                    entries = fs.glob(os.path.join(journal_dir, '*.parquet'))
+                    kept = newest_per_entrypath(entries)
+                    kept_dts = {cls._dt_of_(f, hash) for f in kept}
+                    journal_root = os.path.dirname(os.path.dirname(journal_dir.rstrip('/')))
+                    for side_file in fs.glob(os.path.join(journal_root, '*', hash, '*')):
+                        dt = cls._dt_of_(side_file, hash)
+                        if dt is not None and dt not in kept_dts:
+                            removed.append(side_file)
+                action = ('compacted' if on is not None else 'compacted: class no longer imports') \
+                    if removed else 'unchanged'
+            if removed and not dry_run:
+                if action.startswith('removed'):
+                    fs.rm(anchor_dir, recursive=True)
+                else:
+                    fs.rm(removed)
+            rows.append({'pipeline': fqcn, 'journal': on, 'before': len(files), 'removed': len(removed),
+                         'after': len(files) - len(removed), 'action': action})
+            log.info(f"PipeJournal.compact(): {fqcn}: {action}, {len(removed)} of {len(files)} files"
+                     f"{' (dry run)' if dry_run else ''}")
+        return pd.DataFrame(rows)
+
     # 4. Helpers -----------------------------------------------------------
 
     #: What names one pipeline, and so one row of `collect`.
     _PIPELINE_COLUMNS_ = ('datalake', 'anchor', 'hash', 'keyby', 'key', 'anchorkeypath', 'tag', 'version')
+
+    @staticmethod
+    def _dt_of_(path, hash):
+        """The instance ``dt`` a journal file of *hash* is named by -- ``...-{x}-{hash}-{dt}.{ext}`` -- or None."""
+        name = os.path.basename(path)
+        _, sep, rest = name.partition(f"-{hash}-")
+        return rest.rpartition('.')[0] or None if sep else None
 
     @staticmethod
     def _is_event_(names):

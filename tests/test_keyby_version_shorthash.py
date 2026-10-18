@@ -236,7 +236,7 @@ def test_core_tablets_are_hash_filed_built_and_read(tmp_path):
 # Pipelines: their journal is collected by scanning, so both layouts are found
 # ---------------------------------------------------------------------------
 
-@pipeline
+@pipeline(journal=True)
 def tagged_leaf(name, *, var_n: int = 1, datalake=None):
     return Leaf(datalake=datalake, spec={'n': var_n}, tag=name)
 

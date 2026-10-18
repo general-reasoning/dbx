@@ -1365,8 +1365,10 @@ def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
     # Vectorised, not row-wise: a journal runs to thousands of rows and this
     # happens on every read.
     type_col = col('type').where(modern, col('signature').where(middle, col('hashstr')))
+    # where(), not fillna(): fillna on an object column warns that its downcast will change.
+    subsignature = col('subsignature')
     sig_col = col('signature').where(
-        modern, col('subsignature').fillna(col('norm')).where(middle, col('norm')))
+        modern, subsignature.where(subsignature.notna(), col('norm')).where(middle, col('norm')))
 
     df = df.copy()
     df['type'] = type_col

@@ -20,6 +20,16 @@ All notable changes to this project will be documented in this file.
   constructed.
 
 ### Changed
+- **`ModelEvaluatorBuilder.evaluator()` caches per process, not per builder.** The key is
+  `(type(builder), builder.hash, device)`, so the builders of a feature table's tablets --
+  one each, evaluated from the table's spec -- share one evaluator, and a process loads
+  its model once per device instead of once per tablet. The class is in the key because
+  an identity names none: two builder classes with the same spec have the same hash.
+  The cache holds each model for the life of the process;
+  `ModelEvaluatorBuilder.evaluator_cache_clear()` empties it (a subclass's, its own
+  entries). The `Evaluator` is constructed with `model` moved to *device*, `transform`
+  and the new `evaluator_kwargs` property, which `TransformerEvaluatorBuilder` extends
+  instead of overriding `evaluator()`. No identity changes.
 - **A failed build records why.** Its `build:exception` (or `build:keyboard_interrupt`)
   entry holds `exception` -- `'<Type>: <message>'`, as the exec journal has it -- and
   `traceback`, written in the process the build failed in, a worker's too: the

@@ -45,7 +45,8 @@ class DummySampleTablet(Datatablet):
         }
         with self.slice_writers(specs) as writers:
             for i in range(self.var.n_samples):
-                vec = np.arange(4, dtype=np.float32) + i
+                # The samples grow with the tablet's index too: the tablets of a table differ.
+                vec = np.arange(4, dtype=np.float32) + self.var.index * self.var.n_samples + i
                 label = np.int64(i % 2)
                 writers["samples"].write({"samples": vec})
                 writers["labels"].write({"labels": label})

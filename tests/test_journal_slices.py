@@ -15,7 +15,7 @@ def setup_env(monkeypatch):
 
 
 def _entry_slices(block):
-    j = block.datajournal()
+    j = block.buildjournal()
     return ast.literal_eval(j.iloc[-1]['slices'])
 
 
@@ -47,14 +47,14 @@ def test_slices_not_yet_readable_are_named_and_not_raised(tmp_path, monkeypatch)
 
 
 def test_slices_read_back_right_after_topics_and_paths(tmp_path):
-    columns = list(_feature_table(str(tmp_path), 'features').datajournal().columns)
+    columns = list(_feature_table(str(tmp_path), 'features').buildjournal().columns)
     assert columns[columns.index('topics'):columns.index('topics') + 3] == ['topics', 'paths', 'slices']
 
 
 def test_a_note_reads_back_right_after_slices(tmp_path):
     table = _feature_table(str(tmp_path), 'features')
     table.note('what this table is for', event='note', inline=True)
-    columns = list(table.datajournal().columns)
+    columns = list(table.buildjournal().columns)
     assert columns[columns.index('topics'):columns.index('topics') + 4] == ['topics', 'paths', 'slices', 'note']
 
 
@@ -70,7 +70,7 @@ def test_a_dict_column_is_recorded_with_its_keys(tmp_path):
     assert slices['meta'] == {'meta': {'case_id': 'str', 'cohort': 'str', 'clinical': 'json'}}
     assert slices['x'] == {'x': 'int32'}
     tablet.write_journal_entry(event='note')
-    assert ast.literal_eval(tablet.datajournal().iloc[0]['slices']) == slices
+    assert ast.literal_eval(tablet.buildjournal().iloc[0]['slices']) == slices
 
 
 def test_a_plain_tables_slices_are_its_tablets(tmp_path):
@@ -87,13 +87,13 @@ def test_a_plain_tables_slices_are_its_tablets(tmp_path):
 def test_rebuilding_a_valid_tables_tablets_is_journaled_on_the_table(tmp_path):
     """build_blocks leaves entries of the table's own, with its slices -- beside its build's, not over them."""
     table = DummySampleTable(datalake=str(tmp_path), spec=dict(samples_per_tablet=5), tag='samples').build()
-    events = lambda: sorted(table.datajournal()['event'])
+    events = lambda: sorted(table.buildjournal()['event'])
     assert events() == ['build:end', 'build:start']
     table.build_blocks()                            # every tablet valid: nothing built, nothing written
     assert events() == ['build:end', 'build:start']
     table.build_blocks([0])                         # the same instance that wrote build:end
     assert events() == ['build:end', 'build:start', 'build_blocks:begin', 'build_blocks:end']
-    entry = table.datajournal(event='build_blocks:end').iloc[-1]
+    entry = table.buildjournal(event='build_blocks:end').iloc[-1]
     assert ast.literal_eval(entry['slices']) == table.readable_slices()
     assert entry['note'] == f"1 of {table.n_blocks} blocks: [0]"
 
@@ -101,7 +101,7 @@ def test_rebuilding_a_valid_tables_tablets_is_journaled_on_the_table(tmp_path):
 def test_update_is_a_note_under_its_own_event(tmp_path):
     table = _feature_table(str(tmp_path), 'features')
     assert table.update('slices re-recorded', inline=True) is table
-    entry = table.datajournal(event='update').iloc[-1]
+    entry = table.buildjournal(event='update').iloc[-1]
     assert entry['note'] == 'slices re-recorded'
     assert ast.literal_eval(entry['slices']) == table.readable_slices()
-    assert 'build:end' in set(table.datajournal()['event']), "beside the build's entry, not over it"
+    assert 'build:end' in set(table.buildjournal()['event']), "beside the build's entry, not over it"

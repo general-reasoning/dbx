@@ -38,7 +38,7 @@ from .datablocks import (
     DATAFILE,
     DIRTOPIC,
     Datablock,
-    DataJournalFrame,
+    BuildJournalFrame,
     Datastack,
     TopicMarkerMeta,
     _NotedMarkerMeta_,
@@ -930,8 +930,8 @@ class Datatablet(_Database_):
 
     def _tag_filed_paths_(self):
         """``{topic: path}`` where a tag filed it -- `_redirected_paths_` -- or None: not filed by its hash, built here, or not there."""
-        from .journals import Block, DataJournal
-        if self.keyby in DataJournal._TAG_KEYBYS_ or self.fs.exists(self.anchorkeypath):
+        from .journals import Block, BuildJournal
+        if self.keyby in BuildJournal._TAG_KEYBYS_ or self.fs.exists(self.anchorkeypath):
             return None
         here = self.anchorkeypath
         for tag in self._tags_filed_under_():
@@ -1611,9 +1611,9 @@ class Datatable(_Database_, Datastack):
         """Return a list of indices of all tablets matching the given signature, tag, and/or path pattern(s) (parallelized)."""
         return self.find_blocks(signature, *patterns, tag=tag, path=path, parallelization=parallelization, n_workers=n_workers, work_stealing=work_stealing, **kwargs)
 
-    def tablet_datajournal(self, **kwargs) -> DataJournalFrame | None:
-        """Return the DataJournalFrame for child tablets, or None if no tablets exist or journal fails to load."""
-        return self.block_datajournal(**kwargs)
+    def tablet_buildjournal(self, **kwargs) -> BuildJournalFrame | None:
+        """Return the BuildJournalFrame for child tablets, or None if no tablets exist or journal fails to load."""
+        return self.block_buildjournal(**kwargs)
 
     def valid_slice(self, slice) -> bool:
         return all(

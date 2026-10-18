@@ -256,7 +256,7 @@ class TestCiteChunks:
 
 
 # =====================================================================
-# cite() as a recorded field: Bid, the journal, and DataJournalEntry
+# cite() as a recorded field: Bid, the journal, and BuildJournalEntry
 # =====================================================================
 
 class Solo(Datablock):
@@ -281,7 +281,7 @@ class TestCiteInJournal:
         return b
 
     def test_build_writes_cite_txt(self, built):
-        entry = built.datajournal(iloc=-1)
+        entry = built.buildjournal(iloc=-1)
         assert entry.get('cite') is not None, "journal has no cite column"
         assert '-cite-' in entry['cite'] and entry['cite'].endswith('.txt')
         assert entry.read('cite') == built.cite()
@@ -296,8 +296,8 @@ class TestCiteInJournal:
         which is what a bare column lookup would do.
         """
         import pandas as pd
-        from dbx.datablocks import DataJournalEntry
-        entry = DataJournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B'}))
+        from dbx.datablocks import BuildJournalEntry
+        entry = BuildJournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B'}))
         assert entry.block.cite() is None
         assert entry.read('cite') is None
 

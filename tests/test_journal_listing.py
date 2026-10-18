@@ -1,11 +1,11 @@
-"""DataJournal._journal_files_: the entry files the journal globs find, listed a level at a time."""
+"""BuildJournal._journal_files_: the entry files the journal globs find, listed a level at a time."""
 import re
 
 import fsspec
 import pandas as pd
 import pytest
 
-from dbx.journals import DataJournal, Datalog
+from dbx.journals import BuildJournal, Datalog
 
 GLOBS = ('{a}/.dbx/*/journal/**/*.parquet', '{a}/**/.journal/*/journal/**/*.parquet')
 
@@ -43,7 +43,7 @@ def test_journal_files_are_what_the_globs_find_less_the_sibling_dirs(tmp_path, p
     anchor = str(tmp_path / 'Block') if protocol == 'file' else f'/lake-{tmp_path.name}/Block'
     expected = [fs._strip_protocol(p) for p in _lake_(fs, anchor)]
 
-    found = DataJournal._journal_files_(fs, anchor, n_workers=4, log=Datalog())
+    found = BuildJournal._journal_files_(fs, anchor, n_workers=4, log=Datalog())
     assert found == expected
 
     globbed = {f for g in GLOBS for f in fs.glob(g.format(a=anchor))}
@@ -55,4 +55,4 @@ def test_journal_files_are_what_the_globs_find_less_the_sibling_dirs(tmp_path, p
 
 def test_journal_files_of_a_missing_anchor_is_empty(tmp_path):
     fs = fsspec.filesystem('file')
-    assert DataJournal._journal_files_(fs, str(tmp_path / 'nowhere'), n_workers=4, log=Datalog()) == []
+    assert BuildJournal._journal_files_(fs, str(tmp_path / 'nowhere'), n_workers=4, log=Datalog()) == []

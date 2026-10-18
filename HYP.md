@@ -50,7 +50,7 @@ to -- and each row is a point:
     its header, which stays in view -- its title a menu of the pipeline's
     other constructed blocks, and beside it, *session blocks*: every block
     journaled under the session of the entry shown, from the index a
-    `dbx.exec` command keeps (`DataJournal.session_entries`), to show in its
+    `dbx.exec` command keeps (`BuildJournal.session_entries`), to show in its
     place. A block built outside `dbx.exec` has no index to list.
   - session blocks: every block journaled under the pipeline's own session,
     as the entry blocks' windows list theirs: picking one opens its journal,
@@ -97,7 +97,7 @@ DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal dbx.dataparts.DatatableCo
 DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal pkg.Model --filter 'tag=TRAIN, event=build:end|note'
 ```
 
-shows one point per block of the anchor, from its block journal -- each
+shows one point per block of the anchor, from its build journal -- each
 block's newest entry, embedded and labeled as a pipeline is; pipeline
 entries, filed in the pipeline journal, are not among them. Its corpus is
 kept under `{DBX_DATALAKE}/.hyp/anchors/<anchor>`.
@@ -107,7 +107,7 @@ every anchor of the datalake (`dbx.anchors()`); picking one shows it in
 place, read, embedded and laid out in the background, each in its own corpus.
 With an anchor shown, the **filter** field beside it takes `key=pattern,
 key=pattern, ...` -- each *key* a journal column, each *pattern* matched
-against it, as `DataJournal.read`'s filters are (a comma splits only before
+against it, as `BuildJournal.read`'s filters are (a comma splits only before
 another `key=`, so a pattern may hold one; `|` alternates) -- and Enter
 applies it; Esc puts it back. `--filter` gives it at the start. Blocks a
 filter leaves out keep their embeddings, so widening it again embeds
@@ -193,7 +193,7 @@ hyp --data DIR               # the corpus directory, local or an fsspec url
                              # (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)
 hyp --reset                  # discard the corpus and start over
 hyp --journal                # the pipelines of DBX_DATALAKE (HypDbxJournal); also: --journal pipelines
-hyp --journal ANCHOR         # the blocks of ANCHOR, from its block journal; the journal menu switches either
+hyp --journal ANCHOR         # the blocks of ANCHOR, from its build journal; the journal menu switches either
 hyp --journal ANCHOR --filter 'key=pattern, ...'   # its blocks filtered; the filter field changes it
 hyp --journal --ece ckpt     # --extra-construction-events: events that also make an entry block count as
                              # constructed, each alone or followed by = or : -- here, a still that checkpointed

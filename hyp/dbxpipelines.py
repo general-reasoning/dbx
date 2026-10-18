@@ -396,19 +396,19 @@ def pipelines(progress=print, n_workers=16):
 
 
 def blocks(anchor, progress=print, n_workers=16, filters=None):
-    """Every block of *anchor* in dbx's datalake, from its block journal: one each, its newest entry, newest first.
+    """Every block of *anchor* in dbx's datalake, from its build journal: one each, its newest entry, newest first.
 
     *filters* -- ``{column: pattern}``, as `parse_filters` makes them -- are
-    the journal's own: `DataJournal.read` applies them, to the entries, before
+    the journal's own: `BuildJournal.read` applies them, to the entries, before
     a block's newest is taken. A pipeline's entries -- filed under the pipeline
     journal, ``.pipelines`` -- are not among them.
     """
     import pandas as pd
 
     filters = dict(filters or {})
-    progress(f"dbx.DataJournal.read({anchor!r}{''.join(f', {k}={v!r}' for k, v in filters.items())})")
+    progress(f"dbx.BuildJournal.read({anchor!r}{''.join(f', {k}={v!r}' for k, v in filters.items())})")
     try:
-        df = pd.DataFrame(_dbx_().DataJournal.read(anchor, datalake=datalake(), n_workers=n_workers, index=None, **filters))
+        df = pd.DataFrame(_dbx_().BuildJournal.read(anchor, datalake=datalake(), n_workers=n_workers, index=None, **filters))
     except FileNotFoundError as e:
         raise FileNotFoundError(f"no journal of {anchor} in {datalake()}: {e}") from e
     if not len(df):
@@ -530,7 +530,7 @@ def session_blocks(row, n_workers=16):
     """The blocks journaled under *row*'s session: ``[(anchorkeypath, last event)]``, in the order first written.
 
     From the index a ``dbx.exec`` command keeps of every entry written under
-    its session, by any process -- `DataJournal.session_entries` -- under
+    its session, by any process -- `BuildJournal.session_entries` -- under
     ``{datalake}/.journal/sessions/{session}/``. The index and the entries it
     lists are recorded as the datalake's host wrote them, and are read, as the
     side files are, through the row's ``entry_path``. A session no command
@@ -545,10 +545,10 @@ def session_blocks(row, n_workers=16):
     if _is_blank_(session) or not lake:
         return []
     options = dbx.default_storage_options()
-    paths = dbx.DataJournal.session_entries(session, datalake=rebase(lake, url), storage_options=options)
+    paths = dbx.BuildJournal.session_entries(session, datalake=rebase(lake, url), storage_options=options)
     if not paths:
         return []
-    df = pd.DataFrame(dbx.DataJournal.read_frame([rebase(p, url) for p in paths], storage_options=options, n_workers=n_workers))
+    df = pd.DataFrame(dbx.BuildJournal.read_frame([rebase(p, url) for p in paths], storage_options=options, n_workers=n_workers))
     blocks = {}
     for _, r in df.iterrows():
         if not _is_blank_(r.get("anchorkeypath")) and "/.pipelines/" not in str(r.get("entry_path", "")):
@@ -557,12 +557,12 @@ def session_blocks(row, n_workers=16):
 
 
 def _entry_(row):
-    """*row* -- a block's journal row, as a window keeps one -- as a `DataJournalEntry` whose filesystem is the datalake's, over ssh if it is remote."""
+    """*row* -- a block's journal row, as a window keeps one -- as a `BuildJournalEntry` whose filesystem is the datalake's, over ssh if it is remote."""
     import pandas as pd
 
     dbx = _dbx_()
     lake = rebase(str(row.get("datalake", "")), row.get("entry_path", ""))
-    return dbx.DataJournalEntry(pd.Series({**row, "datalake": lake}), storage_options=dbx.default_storage_options())
+    return dbx.BuildJournalEntry(pd.Series({**row, "datalake": lake}), storage_options=dbx.default_storage_options())
 
 
 def topics(row):
@@ -622,7 +622,7 @@ def remote_python(entry, python=None):
     """The interpreter to run *entry*'s block in: *python* if given, else the one its build recorded, else FALLBACK_PYTHON."""
     if python:
         return python
-    recorded = _dbx_().DataJournalEntry.column(entry, "python")
+    recorded = _dbx_().BuildJournalEntry.column(entry, "python")
     return FALLBACK_PYTHON if _is_blank_(recorded) else str(recorded)
 
 
@@ -632,12 +632,12 @@ def _remote_block_(row, python):
     url = str(row.get("entry_path", ""))
     key = (url, str(row.get("id")))
     if _REMOTE_["key"] != key:
-        entry = dbx.DataJournal.read_entries([url])[0]
+        entry = dbx.BuildJournal.read_entries([url])[0]
         kwargs = {}
         host = _where_(row)
         if host:
             cluster = dbx.SshRay.session(host, python=remote_python(entry, python))
-            kwargs = {"address": cluster.address, "gitrepo": dbx.DataJournalEntry.column(entry, "gitrepo")}
+            kwargs = {"address": cluster.address, "gitrepo": dbx.BuildJournalEntry.column(entry, "gitrepo")}
         _REMOTE_.update(key=None, block=None, quote=None)
         _REMOTE_["block"] = entry.trueinst(**kwargs)
         _REMOTE_["quote"] = entry.read("quote", raw=True)
@@ -937,7 +937,7 @@ def entrypoint_text(entrypath, row, n_workers=16):
     # The block's directory as an anchor of its own: its journal, and nothing
     # else in the anchor, is read -- as PipeJournal reads .pipelines.
     under = entrypath[len(lake) :].strip("/")
-    df = pd.DataFrame(dbx.DataJournal.read(under, datalake=rebase(lake, row.get("entry_path", "")), n_workers=n_workers, index=None))
+    df = pd.DataFrame(dbx.BuildJournal.read(under, datalake=rebase(lake, row.get("entry_path", "")), n_workers=n_workers, index=None))
     if "anchorkeypath" in df.columns:
         df = df[df["anchorkeypath"].astype(str) == entrypath]
     if not len(df):

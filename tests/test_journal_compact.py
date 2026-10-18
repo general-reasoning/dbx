@@ -1,4 +1,4 @@
-"""UNSAFE_compact: an anchor's block journal, and the exec journal, rewritten as one parquet file each -- no entry dropped."""
+"""UNSAFE_compact: an anchor's build journal, and the exec journal, rewritten as one parquet file each -- no entry dropped."""
 import os
 from dataclasses import dataclass
 
@@ -6,7 +6,7 @@ import pytest
 
 import dbx
 from dbx.datablocks import DATAFILE, SAME, Datablock
-from dbx.journals import DataJournal, ExecJournal, PipeJournal, read_exec_journal, write_exec_journal
+from dbx.journals import BuildJournal, ExecJournal, PipeJournal, read_exec_journal, write_exec_journal
 from dbx.pipelines import Pipeline
 
 
@@ -44,7 +44,7 @@ def lake(tmp_path, monkeypatch):
 
 
 def _entry_files(lake, anchor):
-    return DataJournal._journal_files_(__import__('fsspec').filesystem('file'), os.path.join(lake, anchor),
+    return BuildJournal._journal_files_(__import__('fsspec').filesystem('file'), os.path.join(lake, anchor),
                                        n_workers=2, log=dbx.journals.Datalog())
 
 
@@ -57,18 +57,18 @@ def test_compact_rewrites_an_anchors_entries_as_one_file(lake):
         Leaf(spec={'n': n}).build()
         Leaf(spec={'n': n}).note(f'noted {n}')
     Other().build()
-    before = DataJournal.read(Leaf().anchor, datalake=lake)
+    before = BuildJournal.read(Leaf().anchor, datalake=lake)
     assert len(_entry_files(lake, Leaf().anchor)) == 12, "each build's start and end, and each note"
 
-    dry = DataJournal.UNSAFE_compact([Leaf().anchor], dry_run=True)
+    dry = BuildJournal.UNSAFE_compact([Leaf().anchor], dry_run=True)
     assert len(_entry_files(lake, Leaf().anchor)) == 12 and dry['removed'].tolist() == [12]
 
-    frame = DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    frame = BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
     (row,) = frame.to_dict('records')
     assert (row['entries'], row['removed'], row['kept']) == (12, 12, 0)
     files = _entry_files(lake, Leaf().anchor)
-    assert files == [os.path.join(lake, Leaf().anchor, DataJournal.COMPACTED.format(anchor=Leaf().anchor))]
-    after = DataJournal.read(Leaf().anchor, datalake=lake)
+    assert files == [os.path.join(lake, Leaf().anchor, BuildJournal.COMPACTED.format(anchor=Leaf().anchor))]
+    after = BuildJournal.read(Leaf().anchor, datalake=lake)
     assert _rows(after) == _rows(before), "every entry, as it was"
     assert len(_entry_files(lake, Other().anchor)) == 2, "another anchor is not touched: its build's start and end"
     assert Leaf(spec={'n': 2}).lastbuilt() is not None
@@ -76,19 +76,19 @@ def test_compact_rewrites_an_anchors_entries_as_one_file(lake):
 
 def test_entries_written_after_are_compacted_with_the_compacted_ones(lake):
     Leaf(spec={'n': 1}).build()
-    DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
     Leaf(spec={'n': 2}).build()
-    assert len(DataJournal.read(Leaf().anchor, datalake=lake)) == 4
+    assert len(BuildJournal.read(Leaf().anchor, datalake=lake)) == 4
     assert len(_entry_files(lake, Leaf().anchor)) == 3, "the compacted file, and the second build's two"
-    frame = DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    frame = BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
     assert frame['entries'].tolist() == [4] and len(_entry_files(lake, Leaf().anchor)) == 1
-    assert len(DataJournal.read(Leaf().anchor, datalake=lake)) == 4
+    assert len(BuildJournal.read(Leaf().anchor, datalake=lake)) == 4
 
 
 def test_the_anchors_default_to_every_anchor(lake):
     Leaf().build()
     Other().build()
-    frame = DataJournal.UNSAFE_compact(OVERRIDE=True)
+    frame = BuildJournal.UNSAFE_compact(OVERRIDE=True)
     assert sorted(frame['anchor']) == sorted(dbx.anchors(lake))
 
 
@@ -98,7 +98,7 @@ def test_a_redirection_is_compacted_and_still_found(lake):
     src.build()
     dst.UNSAFE_redirect(paths=src.paths(), OVERRIDE=True)
     assert dst.redirected()
-    frame = DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    frame = BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
     assert frame['kept'].tolist() == [0]
     again = Leaf(spec={'n': 2})
     assert again.redirected() and again.path('x') == src.path('x')
@@ -110,17 +110,17 @@ def test_read_hash_reads_a_compacted_journal(lake):
     for n in range(3):
         Leaf(spec={'n': n}).build()
     leaf = Leaf(spec={'n': 1})
-    before = DataJournal.read_hash(leaf.anchor, leaf.hash, version=leaf.version, keyby=leaf.keyby, datalake=lake)
-    DataJournal.UNSAFE_compact([leaf.anchor], OVERRIDE=True)
-    after = DataJournal.read_hash(leaf.anchor, leaf.hash, version=leaf.version, keyby=leaf.keyby, datalake=lake)
+    before = BuildJournal.read_hash(leaf.anchor, leaf.hash, version=leaf.version, keyby=leaf.keyby, datalake=lake)
+    BuildJournal.UNSAFE_compact([leaf.anchor], OVERRIDE=True)
+    after = BuildJournal.read_hash(leaf.anchor, leaf.hash, version=leaf.version, keyby=leaf.keyby, datalake=lake)
     assert after is not None and set(after['hash']) == {leaf.hash}
     assert _rows(after) == _rows(before)
     Leaf(spec={'n': 9}).build()
     nine = Leaf(spec={'n': 9})
-    assert set(DataJournal.read_hash(nine.anchor, nine.hash, version=nine.version, keyby=nine.keyby,
+    assert set(BuildJournal.read_hash(nine.anchor, nine.hash, version=nine.version, keyby=nine.keyby,
                                      datalake=lake)['hash']) == {nine.hash}, "a later entry file, and nothing compacted"
     absent = Leaf(spec={'n': 7})
-    assert DataJournal.read_hash(absent.anchor, absent.hash, keyby=absent.keyby, datalake=lake) is None
+    assert BuildJournal.read_hash(absent.anchor, absent.hash, keyby=absent.keyby, datalake=lake) is None
 
 
 class Grown(Leaf):
@@ -151,7 +151,7 @@ def test_a_nested_past_composes_through_a_compacted_journal(lake):
     built = Holder(spec={'leaf': Leaf(spec={'n': 3}).build()}).build()
     now = Holder(spec={'leaf': Grown(spec={'n': 3})})
     assert now.hash != built.hash
-    DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
     assert now.var.leaf._past_recorded_(Grown.SPECIALIZATIONS[0]), "the Leaf it was, though its journal is compacted"
     row = now.find_specialization()
     assert row is not None and row['hash'] == built.hash
@@ -172,7 +172,7 @@ def test_unsafe_specialize_installs_a_nested_past(lake):
 def test_compact_asks_first(lake, monkeypatch):
     Leaf().build()
     monkeypatch.setattr('builtins.input', lambda prompt: 'n')
-    assert DataJournal.UNSAFE_compact([Leaf().anchor]) is None
+    assert BuildJournal.UNSAFE_compact([Leaf().anchor]) is None
     assert len(_entry_files(lake, Leaf().anchor)) == 2, "the build's start and end, as they were"
 
 
@@ -181,7 +181,7 @@ def test_a_compacted_entrypoint_still_counts_as_constructed(lake):
     built.create()
     unbuilt.create()
     built.entrypoint.build()
-    DataJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
     assert list(PipeJournal.collect(construct_only=True)['hash']) == [built.hash]
 
 
@@ -206,7 +206,7 @@ def test_a_dry_run_writes_and_checks_the_compacted_file_then_leaves_nothing(lake
         Leaf(spec={'n': n}).build()
     anchordir = os.path.join(lake, Leaf().anchor)
     listing = sorted(os.path.join(d, f) for d, _, fs in os.walk(anchordir) for f in fs)
-    frame = DataJournal.UNSAFE_compact([Leaf().anchor], dry_run=True)
+    frame = BuildJournal.UNSAFE_compact([Leaf().anchor], dry_run=True)
     assert frame['verified'].tolist() == [True]
     assert sorted(os.path.join(d, f) for d, _, fs in os.walk(anchordir) for f in fs) == listing
 
@@ -222,7 +222,7 @@ def test_a_compacted_file_that_does_not_read_back_as_written_leaves_the_journal_
 
     monkeypatch.setattr('pandas.testing.assert_frame_equal', differs)
     with pytest.raises(AssertionError, match='read back otherwise'):
-        DataJournal.UNSAFE_compact([Leaf().anchor], parallelization='inline', OVERRIDE=True)
+        BuildJournal.UNSAFE_compact([Leaf().anchor], parallelization='inline', OVERRIDE=True)
     assert sorted(os.path.join(d, f) for d, _, fs in os.walk(anchordir) for f in fs) == listing
 
 

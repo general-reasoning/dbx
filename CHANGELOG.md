@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **`DataJournal` is `BuildJournal`: the journal of what happens to a block's data.**
+  Builds, clears, copies, redirects and adoptions, notes: entries keyed by
+  `(anchor, hash)` and filed under the block. A clean break, with no aliases:
+  `DataJournal` → `BuildJournal`, `DataJournalFrame` → `BuildJournalFrame`,
+  `DataJournalEntry` → `BuildJournalEntry`, `DEFAULT_DATAJOURNAL` →
+  `DEFAULT_BUILDJOURNAL` (and the other `*DATAJOURNAL*` names), `datajournal()` →
+  `buildjournal()` -- the module function, `Datablock.buildjournal`,
+  `ExecJournalEntry`/`ExecJournalFrame.buildjournal`, `Datablock.BuildJournal` --
+  `Datastack.block_datajournal` → `block_buildjournal`,
+  `child_specialization_datajournal` → `child_specialization_buildjournal`,
+  `Datatable.tablet_datajournal` → `tablet_buildjournal`, and every other
+  `*datajournal*` helper to match (`JournaledResult.buildjournal_entries`,
+  `CARRIES_BUILDJOURNAL`, ...). A subclass defining a builder under an old name is
+  refused, as before. On disk only the exec journal's column changes:
+  `datajournal_entries` is `buildjournal_entries`, and a row written under the old
+  name -- or `written_entries`, before it -- reads under the new one. Entry files,
+  `.journal/` directories and session markers are named for no class, and do not
+  change. An exec row recorded verbatim calling `.datajournal(...)` reads as it is,
+  but no longer runs again.
 - **A block the tree never builds is adopted, when a past of it resolves.**
   `build_tree` specializes a `TREE_SKIP_BUILDING` child that is not valid -- whatever
   `deep` -- and every such child below a child it skips as valid (`_adopt_exempt_`): an

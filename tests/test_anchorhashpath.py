@@ -2,7 +2,7 @@ import os
 import unittest
 import pandas as pd
 import fsspec
-from dbx.datablocks import Datablock, DataJournalEntry
+from dbx.datablocks import Datablock, BuildJournalEntry
 from dbx.databits import fs_full_path
 
 class TestAnchorKeyPath(unittest.TestCase):
@@ -30,7 +30,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         self.assertFalse(block.anchorkeypath.startswith('file://'))
 
     def test_journal_entry_anchorkeypath_with_url(self):
-        """DataJournalEntry.anchorkeypath should derive root from url."""
+        """BuildJournalEntry.anchorkeypath should derive root from url."""
         data = {
             'url': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
@@ -38,7 +38,7 @@ class TestAnchorKeyPath(unittest.TestCase):
             'subhash': 'ab12cd34',
         }
         series = pd.Series(data)
-        entry = DataJournalEntry(series)
+        entry = BuildJournalEntry(series)
         
         # They are Datablock-shaped, so they live on the Block view, not on
         # the entry -- which would otherwise fall through to column lookup.
@@ -54,7 +54,7 @@ class TestAnchorKeyPath(unittest.TestCase):
         self.assertEqual(entry.block.anchorkeypath, expected_anchorkeypath)
 
     def test_journal_entry_anchorkeypath_legacy_root(self):
-        """DataJournalEntry.anchorkeypath still works with legacy 'root' field."""
+        """BuildJournalEntry.anchorkeypath still works with legacy 'root' field."""
         data = {
             'root': '/tmp/dbx_test',
             'anchor': 'my.module.MyBlock',
@@ -62,7 +62,7 @@ class TestAnchorKeyPath(unittest.TestCase):
             'subhash': 'ab12cd34',
         }
         series = pd.Series(data)
-        entry = DataJournalEntry(series)
+        entry = BuildJournalEntry(series)
         
         expected_anchorkey = os.path.join(data['anchor'], data['hash'][:8])
         expected_anchorkeypath = os.path.join(data['root'], expected_anchorkey)

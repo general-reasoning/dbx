@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 import dbx
-from dbx.datablocks import Datablock, DataJournalEntry, journal
+from dbx.datablocks import Datablock, BuildJournalEntry, journal
 from dbx.databits import write_exec_journal, read_exec_journal
 
 
@@ -22,16 +22,16 @@ class Built(Datablock):
             f.write('hello')
 
 
-class TestDataJournalEntryMethods:
+class TestBuildJournalEntryMethods:
 
-    def test_datajournal_entry_methods(self):
+    def test_buildjournal_entry_methods(self):
         series = pd.Series({
             'signature': 'test.Anchor(spec={})',
             'type': 'test.Anchor(spec={})/version=1.0',
             'hash': '12345',
             'anchor': 'test.Anchor'
         })
-        entry = DataJournalEntry(series)
+        entry = BuildJournalEntry(series)
 
         # The ENTRY: properties over the row's own columns.
         assert entry.block.signaturestr() == 'test.Anchor(spec={})'
@@ -46,9 +46,9 @@ class TestDataJournalEntryMethods:
         assert entry.block.typestr() == 'test.Anchor(spec={})/version=1.0'
         assert entry.block.sigstr() == "{'spec': {}}"
 
-    def test_datajournal_entry_methods_none(self):
+    def test_buildjournal_entry_methods_none(self):
         series = pd.Series({'hash': '12345', 'anchor': 'test.Anchor'})
-        entry = DataJournalEntry(series)
+        entry = BuildJournalEntry(series)
 
         assert entry.block.signaturestr() is None
         assert entry.block.sigstr() is None
@@ -72,8 +72,8 @@ class TestEvalJournal:
         res = dbx.exec(expr)
         assert isinstance(res, Datablock)
 
-        # Verify no note eval string injection in block journal
-        j_block = block.datajournal()
+        # Verify no note eval string injection in build journal
+        j_block = block.buildjournal()
         if 'note' in j_block.columns:
             notes = j_block['note'].dropna().tolist()
             assert expr not in notes

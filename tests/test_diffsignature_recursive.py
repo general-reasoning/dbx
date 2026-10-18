@@ -260,7 +260,7 @@ class TestJournalFilters:
     def test_id_rejects_extra_filters(self, tmp_path):
         a = self.Solo(datalake=str(tmp_path), spec={'x': 1})
         a.build()
-        id = a.datajournal()['id'].iloc[-1]
+        id = a.buildjournal()['id'].iloc[-1]
         with pytest.raises(ValueError, match="'id'"):
             a.diffsubsig(journal={'id': id, 'event': 'build:end'})
 

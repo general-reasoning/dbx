@@ -27,8 +27,8 @@ dataparts
     assigned into parts; :class:`PartitionDatamapTable`, a part's map; and
     :class:`MappedDatatable`, a table pulled back along a map -- a part.
 journals
-    :class:`DataJournal` and the build records it reads and writes
-    (:class:`DataJournalFrame`, :class:`DataJournalEntry`); the exec journal
+    :class:`BuildJournal` and the build records it reads and writes
+    (:class:`BuildJournalFrame`, :class:`BuildJournalEntry`); the exec journal
     (:func:`execjournal`, :class:`ExecJournalFrame`); the filters both are
     queried with; and the log, :class:`Datalog`.
 pipelines

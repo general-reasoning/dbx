@@ -11,7 +11,7 @@ import threading
 import pytest
 
 from dbx.databits import callable_executor
-from dbx.datablocks import DataJournal
+from dbx.datablocks import BuildJournal
 
 
 def _whoami(i, scale=1):
@@ -63,11 +63,11 @@ def test_a_failure_raises_stops_the_workers_and_the_next_call_starts_anew():
 
 
 def test_the_journal_is_carried_to_reused_workers(tmp_path, monkeypatch):
-    from test_datajournal import _built_under_the_scope, block
+    from test_buildjournal import _built_under_the_scope, block
     monkeypatch.setenv('DBX_ROOT', str(tmp_path))
     ex = callable_executor('multiprocessing', n_workers=2, reuse_workers=True, tag='journaled')
     try:
-        with DataJournal() as dj:
+        with BuildJournal() as dj:
             first = ex.exec_callables([functools.partial(_built_under_the_scope, i) for i in range(2)])
             second = ex.exec_callables([functools.partial(_built_under_the_scope, i) for i in range(2, 4)])
     finally:

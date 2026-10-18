@@ -8,7 +8,7 @@ import pytest
 
 import dbx
 from dbx.datablocks import DATAFILE, Datablock
-from dbx.journals import DataJournal, DataJournalEntry, DataJournalFrame
+from dbx.journals import BuildJournal, BuildJournalEntry, BuildJournalFrame
 from dbx.journals import PipeJournal
 from dbx.pipelines import Pipeline
 
@@ -145,14 +145,14 @@ def test_pipelines_go_to_the_pipelines_own_datalake(lake, tmp_path_factory):
 def test_a_block_journal_is_where_it_was(lake):
     leaf = Leaf()
     leaf.build()
-    assert DataJournal.dirpath(leaf).startswith(os.path.join(leaf.anchorkeypath, '.journal'))
-    assert len(leaf.datajournal(event='build:end')) == 1
-    assert 'entrypath' not in leaf.datajournal().columns
+    assert BuildJournal.dirpath(leaf).startswith(os.path.join(leaf.anchorkeypath, '.journal'))
+    assert len(leaf.buildjournal(event='build:end')) == 1
+    assert 'entrypath' not in leaf.buildjournal().columns
 
 
 def test_extra_columns_may_not_replace_the_entrys_own(lake):
     with pytest.raises(ValueError, match='hash'):
-        DataJournal.write(Leaf(), 'note', columns={'hash': 'x'})
+        BuildJournal.write(Leaf(), 'note', columns={'hash': 'x'})
 
 
 def test_collect_groups_entrypaths_per_pipeline(lake):
@@ -161,7 +161,7 @@ def test_collect_groups_entrypaths_per_pipeline(lake):
     Flat(spec={'n': 1}).create()        # another instance: another entry, same entrypath
     b.create()
     frame = PipeJournal.collect()
-    assert isinstance(frame, DataJournalFrame)
+    assert isinstance(frame, BuildJournalFrame)
     assert len(frame) == 2
     assert 'entrypath' not in frame.columns
     by_hash = {row['hash']: row['entrypaths'] for _, row in frame.iterrows()}
@@ -203,7 +203,7 @@ def test_collect_construct_only(lake):
 
 def test_collect_of_an_empty_lake(lake):
     frame = PipeJournal.collect()
-    assert isinstance(frame, DataJournalFrame) and len(frame) == 0
+    assert isinstance(frame, BuildJournalFrame) and len(frame) == 0
     assert len(PipeJournal.collect(construct_only=True)) == 0
 
 
@@ -225,7 +225,7 @@ def test_pipejournal_is_collect(lake):
     assert list(frame['hash']) == list(PipeJournal.collect()['hash']) == [b.hash, a.hash]
     assert list(dbx.pipejournal(hash=a.hash)['hash']) == [a.hash]
     entry = dbx.pipejournal(iloc=1)
-    assert isinstance(entry, DataJournalEntry) and entry['entrypaths'] == [a_entrypath]
+    assert isinstance(entry, BuildJournalEntry) and entry['entrypaths'] == [a_entrypath]
     assert dbx.pipejournal(loc=0)['hash'] == b.hash
 
 
@@ -285,7 +285,7 @@ def test_an_extra_event_matches_itself_and_what_follows_it_after_an_equals_or_a_
 
 
 def test_entrypoint_events_are_the_constructed_events():
-    """One notion of constructed: a pipeline's entry blocks count by the events a block journal's constructed() does."""
+    """One notion of constructed: a pipeline's entry blocks count by the events a build journal's constructed() does."""
     from dbx.journals import CONSTRUCTED_EVENTS
 
     assert {f'^{e}$' for e in PipeJournal.ENTRYPOINT_EVENTS} == set(CONSTRUCTED_EVENTS)

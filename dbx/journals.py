@@ -1,12 +1,12 @@
-"""Journals: what was built (DataJournal), what was run (ExecJournal), and what was said (Datalog).
+"""Journals: what was built (BuildJournal), what was run (ExecJournal), and what was said (Datalog).
 
-- :class:`DataJournal` -- the handle a block writes its build records through,
-  and reads them back with; :class:`DataJournalFrame` / :class:`DataJournalEntry`
+- :class:`BuildJournal` -- the handle a block writes its build records through,
+  and reads them back with; :class:`BuildJournalFrame` / :class:`BuildJournalEntry`
   are those records as a frame and as a row, and :class:`Block` is an entry's
-  view of the block it recorded. :func:`datajournal` / :func:`journal` read one.
+  view of the block it recorded. :func:`buildjournal` / :func:`journal` read one.
 - :func:`execjournal` / :class:`ExecJournalFrame` / :class:`ExecJournalEntry` --
   the record of each ``dbx.exec()`` run, written by :func:`write_exec_journal`.
-- :class:`PipeJournal` / :func:`pipejournal` -- a DataJournal kept under
+- :class:`PipeJournal` / :func:`pipejournal` -- a BuildJournal kept under
   ``{datalake}/.pipelines``: each creation of a ``Pipeline``, with the
   ``entrypath`` it led to.
 - :func:`filter_journal_frame` -- the column filters (regex, glob, dates) both
@@ -136,7 +136,7 @@ class Datalog:
 
     The scope and the nesting are per thread, and a dbx executor sends them to
     its workers with the work (:meth:`_carry_`, through `JournaledCallable`), as
-    it sends the `DataJournal` session. A worker is ``main`` in the process and
+    it sends the `BuildJournal` session. A worker is ``main`` in the process and
     thread a command runs in, and a dbx executor's are named under the one that
     dispatched to them: ``main:t0`` is its thread 0, ``main:3`` its process 3,
     ``main:3:t1`` a thread of that.
@@ -216,7 +216,7 @@ class Datalog:
             _THREAD_DATALOGS.depth, _THREAD_DATALOGS.worker = self._thread_list_('restore').pop()
         stack = self._stack_()
         with _PROCESS_DATALOGS_LOCK:
-            # The innermost entry of THIS handle, as `DataJournal.__exit__`.
+            # The innermost entry of THIS handle, as `BuildJournal.__exit__`.
             for i in range(len(stack) - 1, -1, -1):
                 if stack[i] is self:
                     del stack[i]
@@ -456,7 +456,7 @@ class Datalog:
 
 def write_exec_journal(s: str, datalake: str | None = None, storage_options: dict | None = None, *,
                        comment: str | None = None, session: str | None = None,
-                       datajournal_entries=None, output_captures=None, dt: str | None = None,
+                       buildjournal_entries=None, output_captures=None, dt: str | None = None,
                        end_dt: str | None = None, success: bool | None = None,
                        exception: str | None = None, traceback: str | None = None,
                        url: str | None = None) -> dict:
@@ -469,8 +469,8 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
     query is work the journal can do once. Pass *comment* to override what
     :func:`exec_comment` reads off *s*.
 
-    ``session`` is the `DataJournal` session the command ran under, and
-    ``datajournal_entries`` the block journal entries it wrote -- the keys from
+    ``session`` is the `BuildJournal` session the command ran under, and
+    ``buildjournal_entries`` the build journal entries it wrote -- the keys from
     this row to what the command did. ``output_captures`` are the paths of
     its `OutputCapture`\\ s, the master first: empty for a command that
     captured nothing. *dt* is when the command started --
@@ -502,7 +502,7 @@ def write_exec_journal(s: str, datalake: str | None = None, storage_options: dic
         'traceback': traceback,
         'id': id,
         'session': session,
-        'datajournal_entries': list(datajournal_entries or []),
+        'buildjournal_entries': list(buildjournal_entries or []),
         'output_captures': list(output_captures or []),
         'comment': comment if comment is not None else exec_comment(s),
     }
@@ -575,7 +575,7 @@ def _match_journal_filter_(x, spec) -> bool:
 def _journal_datetimes_(series: pd.Series) -> pd.Series:
     """Coerce a journal ``datetime`` column to real datetimes.
 
-    A block journal arrives already parsed -- `DataJournalFrame` does it on the way
+    A build journal arrives already parsed -- `BuildJournalFrame` does it on the way
     in -- and is handed back untouched. The exec journal does not: it reaches a
     filter holding the raw `JOURNAL_DATETIME_FORMAT` strings, which pandas
     cannot parse unaided.
@@ -657,7 +657,7 @@ def filter_journal_frame(df: pd.DataFrame, **filter_kwargs) -> pd.DataFrame:
     return df
 
 
-#: The events a block journal entry holds when the command that wrote it
+#: The events a build journal entry holds when the command that wrote it
 #: CONSTRUCTED the block: built it, made it readable by redirection, copied
 #: its data in, updated it, or noted it (`Datablock.note`, whose event is
 #: 'note' unless told otherwise). Anchored, because a filter string is a pattern and a bare
@@ -669,7 +669,7 @@ CONSTRUCTED_EVENTS = ['^build:end$', '^UNSAFE_redirect$', '^UNSAFE_copy_from:END
 
 
 def _constructed_(frame, anchor, filters):
-    """The rows of a DataJournalFrame *filters* select: one anchor's, or ``{anchor: rows}``."""
+    """The rows of a BuildJournalFrame *filters* select: one anchor's, or ``{anchor: rows}``."""
     filters = dict(filters)
     filters.setdefault('event', CONSTRUCTED_EVENTS)
     if filters['event'] is None:
@@ -679,7 +679,7 @@ def _constructed_(frame, anchor, filters):
 
     def of(a):
         rows = df[df['anchor'] == a] if 'anchor' in df.columns else df.iloc[0:0]
-        return DataJournalFrame(rows.reset_index(drop=True), storage_options=storage_options)
+        return BuildJournalFrame(rows.reset_index(drop=True), storage_options=storage_options)
 
     if anchor is not None:
         return of(anchor)
@@ -701,15 +701,15 @@ def _shell_double_quoted_(text: str) -> str:
 class ExecJournalEntry(pd.Series):
     """One `dbx.exec` command, as the exec journal recorded it.
 
-    The counterpart of `DataJournalEntry` for the exec journal: its columns
+    The counterpart of `BuildJournalEntry` for the exec journal: its columns
     are `EXEC_JOURNAL_COLUMNS`, from ``datetime`` and ``exec`` to ``comment``
-    and ``success``; :meth:`dataentries` and :meth:`datajournal`
-    follow the command's session to the block journal entries written under
+    and ``success``; :meth:`dataentries` and :meth:`buildjournal`
+    follow the command's session to the build journal entries written under
     it -- through the session's index, in every process that wrote one, and
-    ``datajournal_entries`` for a row from before the index.
+    ``buildjournal_entries`` for a row from before the index.
     """
     #: Carried by pandas across operations that rebuild the object -- see
-    #: `DataJournalEntry._metadata`. *datalake* is the one the exec journal was
+    #: `BuildJournalEntry._metadata`. *datalake* is the one the exec journal was
     #: read from, where the command's session index is.
     _metadata = ['storage_options', 'datalake']
 
@@ -726,53 +726,53 @@ class ExecJournalEntry(pd.Series):
     def dataentries(self, anchor=None, *, datalake=None, storage_options=None, log=None,
                     n_workers: int | None = None, unnormalized: bool = False, url=None,
                     **filter_kwargs) -> list:
-        """The `DataJournalEntry` of every block journal entry this command wrote, in the order written.
+        """The `BuildJournalEntry` of every build journal entry this command wrote, in the order written.
 
-        Narrowed as :meth:`datajournal` narrows them.
+        Narrowed as :meth:`buildjournal` narrows them.
         """
-        frame = self.datajournal(anchor, datalake=datalake, storage_options=storage_options, log=log,
+        frame = self.buildjournal(anchor, datalake=datalake, storage_options=storage_options, log=log,
                                  n_workers=n_workers, index=None, unnormalized=unnormalized,
                                  url=url, **filter_kwargs)
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
-    def datajournal(self, anchor=None, loc=None, *, iloc=None, datalake=None, storage_options=None,
+    def buildjournal(self, anchor=None, loc=None, *, iloc=None, datalake=None, storage_options=None,
                     log=None, n_workers: int | None = None, index: 'str | None' = ...,
                     unnormalized: bool = False, url=None, **filter_kwargs):
-        """The block journal entries this command wrote, as one `DataJournalFrame`.
+        """The build journal entries this command wrote, as one `BuildJournalFrame`.
 
-        Takes what :func:`datajournal` takes, and means the same by it, over
+        Takes what :func:`buildjournal` takes, and means the same by it, over
         this command's entries instead of an anchor's whole journal: one row
         per entry, in the order written. *anchor* -- a Datablock class, an
         anchor string or a block -- keeps that anchor's entries, and None all
-        of them. *filter_kwargs* are block journal filters; *loc* / *iloc*
-        answer with the one `DataJournalEntry`; *index* defaults to ``'id'``,
+        of them. *filter_kwargs* are build journal filters; *loc* / *iloc*
+        answer with the one `BuildJournalEntry`; *index* defaults to ``'id'``,
         as there. *datalake* (``url``, its old name) is where the command's
         session index is read -- the datalake its exec journal was read from,
         unless given.
         """
-        return _written_datajournal_(
-            ExecJournalEntry._written_refs_(self, one_datalake(datalake, url, 'datajournal') or self.datalake,
+        return _written_buildjournal_(
+            ExecJournalEntry._written_refs_(self, one_datalake(datalake, url, 'buildjournal') or self.datalake,
                                             self.storage_options),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
             log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
 
     def anchors(self) -> list:
-        """Every anchor this command wrote a block journal entry for, sorted."""
-        return _anchors_(self.datajournal(index=None))
+        """Every anchor this command wrote a build journal entry for, sorted."""
+        return _anchors_(self.buildjournal(index=None))
 
     def constructed(self, anchor: str | None = None, **filters):
-        """The block journal entries of what this command CONSTRUCTED.
+        """The build journal entries of what this command CONSTRUCTED.
 
-        *anchor* given: that anchor's entries, as a `DataJournalFrame`. Not
-        given: ``{anchor: DataJournalFrame}`` for every anchor with any.
+        *anchor* given: that anchor's entries, as a `BuildJournalFrame`. Not
+        given: ``{anchor: BuildJournalFrame}`` for every anchor with any.
 
-        *filters* are `DataJournalFrame` filters. ``event`` defaults to
+        *filters* are `BuildJournalFrame` filters. ``event`` defaults to
         `CONSTRUCTED_EVENTS` -- a block built, redirected, copied in, updated, or noted -- and
         applies alongside any other filter unless given itself;
         ``event=None`` drops it. A block the command found already built was
         not constructed by it, and wrote no entry: it is not here.
         """
-        return _constructed_(self.datajournal(index=None), anchor, filters)
+        return _constructed_(self.buildjournal(index=None), anchor, filters)
 
     def rerun(self, **kwargs):
         """Execute this command's ``exec`` string again, through `dbx.exec`, and return its value.
@@ -857,22 +857,22 @@ class ExecJournalEntry(pd.Series):
 
     @staticmethod
     def _written_refs_(row, datalake, storage_options) -> list:
-        """The entries of *row*'s command, for `DataJournal.read_refs`: its session's index, then any ``datajournal_entries`` it lacks.
+        """The entries of *row*'s command, for `BuildJournal.read_refs`: its session's index, then any ``buildjournal_entries`` it lacks.
 
         A row shares its session -- and so these -- with an exec nested in
         it, or run in a process it started. A row from before the index has
-        only ``datajournal_entries``; one from before that column, neither.
+        only ``buildjournal_entries``; one from before that column, neither.
         One from before entries were referenced by ``id`` names their paths: a
         path whose file is gone -- compacted since -- is its block's entries
         under this session (`_legacy_ref_`).
         """
-        listed = row.get('datajournal_entries')
+        listed = row.get('buildjournal_entries')
         if listed is None or (isinstance(listed, float) and pd.isna(listed)):
             listed = []
         session = row.get('session')
         indexed = []
         if isinstance(session, str) and session:
-            indexed = DataJournal.session_entries(session, datalake=datalake,
+            indexed = BuildJournal.session_entries(session, datalake=datalake,
                                                   storage_options=storage_options or None)
         seen = set(indexed)
         refs = indexed + [str(p) for p in listed if str(p) not in seen]
@@ -904,8 +904,8 @@ class ExecJournalEntry(pd.Series):
 class ExecJournalFrame(pd.DataFrame):
     """The exec journal: one `dbx.exec` command per row, newest first.
 
-    The counterpart of `DataJournalFrame`. :meth:`get` answers with an
-    `ExecJournalEntry`, and :meth:`dataentries` with the block journal entries
+    The counterpart of `BuildJournalFrame`. :meth:`get` answers with an
+    `ExecJournalEntry`, and :meth:`dataentries` with the build journal entries
     of every command in the frame -- so a filter narrows to the commands and
     ``.dataentries()`` goes on to what they wrote::
 
@@ -969,7 +969,7 @@ class ExecJournalFrame(pd.DataFrame):
             print(frame)
 
     def get(self, entry, *, dropna: bool = False) -> ExecJournalEntry:
-        """The command at LABEL *entry* (``.loc``). As `DataJournalFrame.get`.
+        """The command at LABEL *entry* (``.loc``). As `BuildJournalFrame.get`.
 
         Where the index is ``id``, a label is also any prefix of one that no
         other id shares -- the short id the frame displays, ``…`` and all.
@@ -982,31 +982,31 @@ class ExecJournalFrame(pd.DataFrame):
     def dataentries(self, anchor=None, *, datalake=None, storage_options=None, log=None,
                     n_workers: int | None = None, unnormalized: bool = False, url=None,
                     **filter_kwargs) -> list:
-        """The block journal entries every command here wrote: row by row, each in the order written.
+        """The build journal entries every command here wrote: row by row, each in the order written.
 
-        Narrowed as :meth:`datajournal` narrows them.
+        Narrowed as :meth:`buildjournal` narrows them.
         """
-        frame = self.datajournal(anchor, datalake=datalake, storage_options=storage_options, log=log,
+        frame = self.buildjournal(anchor, datalake=datalake, storage_options=storage_options, log=log,
                                  n_workers=n_workers, index=None, unnormalized=unnormalized,
                                  url=url, **filter_kwargs)
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
-    def datajournal(self, anchor=None, loc=None, *, iloc=None, datalake=None, storage_options=None,
+    def buildjournal(self, anchor=None, loc=None, *, iloc=None, datalake=None, storage_options=None,
                     log=None, n_workers: int | None = None, index: 'str | None' = ...,
                     unnormalized: bool = False, url=None, **filter_kwargs):
-        """What :meth:`dataentries` reads, as one `DataJournalFrame`. Takes what `ExecJournalEntry.datajournal` takes."""
-        return _written_datajournal_(
-            self._written_refs_(one_datalake(datalake, url, 'datajournal') or self.datalake),
+        """What :meth:`dataentries` reads, as one `BuildJournalFrame`. Takes what `ExecJournalEntry.buildjournal` takes."""
+        return _written_buildjournal_(
+            self._written_refs_(one_datalake(datalake, url, 'buildjournal') or self.datalake),
             anchor, loc, iloc, storage_options=self.storage_options if storage_options is None else storage_options,
             log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, filters=filter_kwargs)
 
     def anchors(self) -> list:
-        """Every anchor the commands here wrote a block journal entry for, sorted."""
-        return _anchors_(self.datajournal(index=None))
+        """Every anchor the commands here wrote a build journal entry for, sorted."""
+        return _anchors_(self.buildjournal(index=None))
 
     def constructed(self, anchor: str | None = None, **filters):
         """As `ExecJournalEntry.constructed`, over every command here."""
-        return _constructed_(self.datajournal(index=None), anchor, filters)
+        return _constructed_(self.buildjournal(index=None), anchor, filters)
 
     # 4. Helpers -----------------------------------------------------------
 
@@ -1053,7 +1053,7 @@ class ExecJournalFrame(pd.DataFrame):
         for c in ('datetime', 'exec:start:datetime', 'exec:end:datetime'):
             if c in df.columns:
                 df[c] = df[c].map(to_the_second)
-        for c in ('datajournal_entries', 'output_captures'):
+        for c in ('buildjournal_entries', 'output_captures'):
             if c in df.columns:
                 df[c] = df[c].map(count)
         return df.drop(columns=['traceback'], errors='ignore')
@@ -1070,8 +1070,8 @@ class ExecJournalFrame(pd.DataFrame):
 def _index_label_(index, entry):
     """*entry* as a label of a journal frame's *index*: itself, or the one label it is a PREFIX of.
 
-    What ``loc=`` means to `datajournal`, `execjournal` and a block's
-    ``datajournal()``, and a label to `DataJournalFrame.get` and
+    What ``loc=`` means to `buildjournal`, `execjournal` and a block's
+    ``buildjournal()``, and a label to `BuildJournalFrame.get` and
     `ExecJournalFrame.get`: an id is long, and its first few characters -- the
     8 an `ExecJournalFrame` displays, ``…`` and all -- are enough when no other
     label starts with them. A label that is not a string, as in a numbered
@@ -1104,11 +1104,11 @@ def _derived_frame_(cls, defaults, args, kwargs):
     return obj
 
 
-def _written_datajournal_(refs, anchor, loc, iloc, *, storage_options, log, n_workers, index,
+def _written_buildjournal_(refs, anchor, loc, iloc, *, storage_options, log, n_workers, index,
                           unnormalized, filters):
-    """The block journal entries *refs* name (`DataJournal.read_refs`), narrowed and indexed as :func:`datajournal` would be.
+    """The build journal entries *refs* name (`BuildJournal.read_refs`), narrowed and indexed as :func:`buildjournal` would be.
 
-    *anchor* is matched exactly, as :func:`datajournal` reads exactly one
+    *anchor* is matched exactly, as :func:`buildjournal` reads exactly one
     anchor's journal -- not as a filter pattern, where ``'a.B'`` would also
     keep ``'a.BC'``.
     """
@@ -1117,12 +1117,12 @@ def _written_datajournal_(refs, anchor, loc, iloc, *, storage_options, log, n_wo
     if anchor is not None:
         name = _anchor_of_(anchor)
         filters = {'anchor': lambda a: a == name, **filters}
-    frame = DataJournal.read_refs(refs, storage_options=storage_options or None, log=log,
+    frame = BuildJournal.read_refs(refs, storage_options=storage_options or None, log=log,
                                   n_workers=n_workers, index=index, unnormalized=unnormalized, **filters)
     if loc is not None:
         return frame.get(loc, dropna=True)
     if iloc is not None:
-        return DataJournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
+        return BuildJournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
     return frame
 
 
@@ -1131,10 +1131,14 @@ def _written_datajournal_(refs, anchor, loc, iloc, *, storage_options, log, n_wo
 #: where a glance down the right-hand edge finds them.
 EXEC_JOURNAL_COLUMNS = ['datetime', 'exec', 'exec:start:datetime', 'exec:end:datetime',
                         'exception', 'traceback',
-                        'id', 'session', 'datajournal_entries', 'output_captures', 'comment', 'success']
+                        'id', 'session', 'buildjournal_entries', 'output_captures', 'comment', 'success']
 
 #: The columns that stay at the right-hand edge, after any the list does not name.
 _EXEC_JOURNAL_TAIL_ = ('comment', 'success')
+
+
+#: What exec-journal rows called `buildjournal_entries` before: read under that name.
+_EXEC_JOURNAL_ENTRIES_OLD_NAMES_ = ('written_entries', 'datajournal_entries')
 
 
 def _exec_journal_columns_(df: pd.DataFrame) -> pd.DataFrame:
@@ -1145,14 +1149,17 @@ def _exec_journal_columns_(df: pd.DataFrame) -> pd.DataFrame:
     because a journal read in any order concatenates rows from before a
     column existed with rows after, and pandas puts a new column last.
     """
-    if 'written_entries' in df.columns:
-        # Its name for a day, before `datajournal_entries`: taken per row, so
-        # a journal holding rows of both kinds loses neither.
-        if 'datajournal_entries' in df.columns:
-            df['datajournal_entries'] = df['datajournal_entries'].combine_first(df['written_entries'])
+    # Its names before `buildjournal_entries` -- `written_entries` for a day,
+    # then `datajournal_entries` -- taken per row, so a journal holding rows
+    # of every kind loses none.
+    for old in _EXEC_JOURNAL_ENTRIES_OLD_NAMES_:
+        if old not in df.columns:
+            continue
+        if 'buildjournal_entries' in df.columns:
+            df['buildjournal_entries'] = df['buildjournal_entries'].combine_first(df[old])
         else:
-            df = df.rename(columns={'written_entries': 'datajournal_entries'})
-        df = df.drop(columns=['written_entries'], errors='ignore')
+            df = df.rename(columns={old: 'buildjournal_entries'})
+        df = df.drop(columns=[old], errors='ignore')
     known = [c for c in EXEC_JOURNAL_COLUMNS if c in df.columns and c not in _EXEC_JOURNAL_TAIL_]
     other = [c for c in df.columns if c not in EXEC_JOURNAL_COLUMNS]
     return df[known + other + [c for c in _EXEC_JOURNAL_TAIL_ if c in df.columns]]
@@ -1260,7 +1267,7 @@ class ExecJournal:
         Every entry file -- the compacted one among them -- is read on a
         *parallelization* executor of *n_workers*, the rows are written back,
         as they are, to `COMPACTED`, and the files read are removed. As in
-        `DataJournal.UNSAFE_compact`, the file is written aside and checked
+        `BuildJournal.UNSAFE_compact`, the file is written aside and checked
         against the rows in memory first; *dry_run* writes and checks it,
         then removes it. Returns what was done, ``verified`` among it.
         """
@@ -1287,7 +1294,7 @@ class ExecJournal:
         table = pd.concat([df for _, df in read], ignore_index=True)
         removed = [f for f, _ in read if f != compacted]
         result.update(entries=len(table), removed=len(removed), kept=len(files) - len(read))
-        DataJournal._write_compacted_(fs, table, compacted, dry_run=dry_run)
+        BuildJournal._write_compacted_(fs, table, compacted, dry_run=dry_run)
         result['verified'] = True
         if dry_run:
             return result
@@ -1317,8 +1324,8 @@ def execjournal(loc=None, *, iloc=None, datalake=None, storage_options=None, log
 
     An `ExecJournalFrame`, or the `ExecJournalEntry` at *loc* / *iloc*. *index*
     defaults to ``'id'``, so ``loc=`` is a command's id; ``index=None`` numbers
-    the rows. Filters are patterns, as on a block journal -- see
-    :func:`datajournal`. *datalake* (``url``, its old name) defaults to
+    the rows. Filters are patterns, as on a build journal -- see
+    :func:`buildjournal`. *datalake* (``url``, its old name) defaults to
     ``DBX_DATALAKE``, then ``DBX_ROOT``, then ``DBX_URL``.
     """
     return read_exec_journal(datalake=datalake or url, loc=loc, iloc=iloc, storage_options=storage_options,
@@ -1346,7 +1353,7 @@ def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
     can, and the discriminator is in the data -- a row carrying a ``type``
     value is a modern one.
 
-    `DataJournalEntry.COLUMN_CHAINS` resolves the same thing lazily, per
+    `BuildJournalEntry.COLUMN_CHAINS` resolves the same thing lazily, per
     access, which is why the ACCESSORS are right either way. This is for the
     frame itself, so that filtering on ``type`` or reading ``df['signature']``
     means what it says -- most of the point of a journal being a DataFrame.
@@ -1376,8 +1383,8 @@ def normalize_journal_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage_options=None, log=None, n_workers=8, index: 'str | None' = ..., unnormalized: bool = False, url=None, **filter_kwargs):
-    """Read a block journal, or wrap a frame of one.
+def buildjournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage_options=None, log=None, n_workers=8, index: 'str | None' = ..., unnormalized: bool = False, url=None, **filter_kwargs):
+    """Read a build journal, or wrap a frame of one.
 
     Parameters
     ----------
@@ -1385,9 +1392,9 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage
         A Datablock class, an anchor string, a block (whose url, storage
         options and log are then the defaults), or a raw DataFrame to wrap.
     loc : int, optional
-        If given, return a single :class:`DataJournalEntry` at this label index.
+        If given, return a single :class:`BuildJournalEntry` at this label index.
     iloc : int, optional
-        If given, return a single :class:`DataJournalEntry` at this positional index.
+        If given, return a single :class:`BuildJournalEntry` at this positional index.
         Mutually exclusive with *loc*.
     url : str, optional
         The datalake (``url``, its old name, is accepted). Defaults to
@@ -1410,26 +1417,26 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage
         recorded. By default they are resolved per row, so the frame means
         what it says -- see `normalize_journal_frame`.
     **filter_kwargs
-        Forwarded to :class:`DataJournalFrame` for filtering.
+        Forwarded to :class:`BuildJournalFrame` for filtering.
 
     Returns
     -------
-    DataJournalFrame, or the DataJournalEntry at *loc* / *iloc*. The exec
+    BuildJournalFrame, or the BuildJournalEntry at *loc* / *iloc*. The exec
     journal is :func:`execjournal`.
     """
     if cls_anchor_or_df is None:
-        raise TypeError("datajournal() needs an anchor, a Datablock class or block, or a frame; "
+        raise TypeError("buildjournal() needs an anchor, a Datablock class or block, or a frame; "
                         "the exec journal is execjournal()")
-    url = one_datalake(datalake, url, 'datajournal')
+    url = one_datalake(datalake, url, 'buildjournal')
     if loc is not None and iloc is not None:
         raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
     if isinstance(cls_anchor_or_df, pd.DataFrame):
-        frame = DataJournalFrame(cls_anchor_or_df, storage_options=storage_options, index=index,
+        frame = BuildJournalFrame(cls_anchor_or_df, storage_options=storage_options, index=index,
                                  unnormalized=unnormalized, **filter_kwargs)
         if loc is not None:
             return frame.get(loc, dropna=True)
         if iloc is not None:
-            return DataJournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
+            return BuildJournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
         return frame
     else:
         anchor = _anchor_of_(cls_anchor_or_df)
@@ -1440,7 +1447,7 @@ def datajournal(cls_anchor_or_df, loc=None, *, iloc=None, datalake=None, storage
                 storage_options = cls_anchor_or_df.storage_options
             if log is None and hasattr(cls_anchor_or_df, 'log'):
                 log = cls_anchor_or_df.log
-        return datablocks.Datablock.DataJournal(anchor, loc=loc, iloc=iloc, datalake=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
+        return datablocks.Datablock.BuildJournal(anchor, loc=loc, iloc=iloc, datalake=url, storage_options=storage_options, log=log, n_workers=n_workers, index=index, unnormalized=unnormalized, **filter_kwargs)
 
 
 def _on_fs_of_(path, url):
@@ -1474,7 +1481,7 @@ def _anchor_of_(cls_or_anchor) -> str:
 
 
 def journal(cls_anchor_or_df=None, loc=None, **kwargs):
-    """:func:`datajournal` for an anchor, class, block or frame; :func:`execjournal` with none; :func:`pipejournal` for ``'pipelines'``.
+    """:func:`buildjournal` for an anchor, class, block or frame; :func:`execjournal` with none; :func:`pipejournal` for ``'pipelines'``.
 
     The one entry point both journals used to share, kept so code written
     against it goes on working. Say which journal you mean instead.
@@ -1487,12 +1494,12 @@ def journal(cls_anchor_or_df=None, loc=None, **kwargs):
     if isinstance(cls_anchor_or_df, str) and cls_anchor_or_df in ('pipelines', PipeJournal.ANCHOR):
         kwargs.pop('unnormalized', None)
         return pipejournal(loc, **kwargs)
-    return datajournal(cls_anchor_or_df, loc, **kwargs)
+    return buildjournal(cls_anchor_or_df, loc, **kwargs)
 
 
 def constructed(anchor=None, *, event=..., datalake=None, storage_options=None,
-                n_workers=8, url=None, **filters) -> 'DataJournalFrame':
-    """The block journal entries of what was CONSTRUCTED: built, redirected, copied in, or noted.
+                n_workers=8, url=None, **filters) -> 'BuildJournalFrame':
+    """The build journal entries of what was CONSTRUCTED: built, redirected, copied in, or noted.
 
     *anchor* -- a Datablock class, an anchor string or a block -- reads that
     anchor's journal; None reads every anchor in the datalake (`anchors`)
@@ -1500,7 +1507,7 @@ def constructed(anchor=None, *, event=..., datalake=None, storage_options=None,
     nothing.
 
     *event* ``...``, the default, is `CONSTRUCTED_EVENTS`; None drops the
-    event filter, and anything else is the filter, as `DataJournalFrame`
+    event filter, and anything else is the filter, as `BuildJournalFrame`
     takes one. *filters* are its other filters.
     """
     if event is ...:
@@ -1509,22 +1516,22 @@ def constructed(anchor=None, *, event=..., datalake=None, storage_options=None,
         filters['event'] = event
     datalake = one_datalake(datalake, url, 'constructed')
     if anchor is not None:
-        return datajournal(anchor, datalake=datalake, storage_options=storage_options,
+        return buildjournal(anchor, datalake=datalake, storage_options=storage_options,
                            n_workers=n_workers, **filters)
     frames = []
     for a in databits.anchors(datalake, storage_options=storage_options):
         try:
-            frames.append(datajournal(a, datalake=datalake, storage_options=storage_options,
+            frames.append(buildjournal(a, datalake=datalake, storage_options=storage_options,
                                       n_workers=n_workers, **filters))
         except FileNotFoundError:
             continue
     frames = [f for f in frames if len(f)]
     if not frames:
-        return DataJournalFrame(pd.DataFrame(), storage_options=storage_options or {})
+        return BuildJournalFrame(pd.DataFrame(), storage_options=storage_options or {})
     frame = pd.concat(frames)
     if 'datetime' in frame.columns:
         frame = frame.sort_values('datetime', ascending=False, kind='stable')
-    return DataJournalFrame(frame, storage_options=storage_options or {})
+    return BuildJournalFrame(frame, storage_options=storage_options or {})
 
 
 class CallableSignature(CallableStr):
@@ -1680,7 +1687,7 @@ class Block:
 
     It mimics the parts of `Datablock` the row DETERMINES, and stops there.
     Not the entry: `ls`, `list`, `size` and `read` are the entry's, they go to
-    storage, and `Datablock.read` reads a TOPIC while `DataJournalEntry.read`
+    storage, and `Datablock.read` reads a TOPIC while `BuildJournalEntry.read`
     reads a journal COLUMN -- one name with two meanings is worse than no
     name. Nor does it build or validate.
 
@@ -1695,7 +1702,7 @@ class Block:
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, entry: 'DataJournalEntry'):
+    def __init__(self, entry: 'BuildJournalEntry'):
         self._entry = entry
 
     def __repr__(self):
@@ -1803,7 +1810,7 @@ class Block:
 
     def note(self):
         """Path to or content of this entry's note, or None."""
-        return DataJournalEntry.column(self._entry, 'note')
+        return BuildJournalEntry.column(self._entry, 'note')
 
     def is_topicgroup(self, *topicpath):
         """True when the recorded entry for *topicpath* is a group of topics."""
@@ -1903,18 +1910,18 @@ class Block:
         Shared by every entry of that tree, across blocks -- unlike ``id``,
         which is unique per row, and ``hash``, which is per block.
         """
-        return DataJournalEntry.column(self._entry, 'tree')
+        return BuildJournalEntry.column(self._entry, 'tree')
 
     @property
     def session(self):
-        """The `DataJournal` session that wrote this entry, or None.
+        """The `BuildJournal` session that wrote this entry, or None.
 
         A row from before sessions has none -- and on such a row a ``session``
         column, if present, is its TREE under that column's old name.
         """
         if self._entry.get('tree') is None or pd.isna(self._entry.get('tree')):
             return None
-        return DataJournalEntry.column(self._entry, 'session')
+        return BuildJournalEntry.column(self._entry, 'session')
 
     @property
     def id(self):
@@ -1945,7 +1952,7 @@ class Block:
     @property
     def datalake(self):
         """The datalake the block was stored in -- recorded as ``url`` before the rename."""
-        return DataJournalEntry.column(self._entry, 'datalake')
+        return BuildJournalEntry.column(self._entry, 'datalake')
 
     @property
     def url(self):
@@ -1964,7 +1971,7 @@ class Block:
     @property
     def key(self):
         """The key, recorded if the row has one and reconstructed if not."""
-        recorded = DataJournalEntry.column(self._entry, 'key')
+        recorded = BuildJournalEntry.column(self._entry, 'key')
         if recorded is not None:
             return recorded
         return self._key_from_(self.keyby, self.hash, self.tag, self.version,
@@ -1977,7 +1984,7 @@ class Block:
 
     @property
     def anchorkeypath(self):
-        recorded = DataJournalEntry.column(self._entry, 'anchorkeypath')
+        recorded = BuildJournalEntry.column(self._entry, 'anchorkeypath')
         if recorded is not None:
             return recorded
         url = self.datalake
@@ -2015,7 +2022,7 @@ class Block:
     # attribute namespace with every column name in the journal.
     @staticmethod
     def _fs_(entry):
-        url = DataJournalEntry.column(entry, 'datalake') or entry.get('root')  # legacy fallback
+        url = BuildJournalEntry.column(entry, 'datalake') or entry.get('root')  # legacy fallback
         fs, _ = fsspec.url_to_fs(_on_fs_of_(url, entry.get('entry_path')), **entry.storage_options)
         return fs
 
@@ -2075,7 +2082,7 @@ class Block:
             val = entry.read(name, safe=True)
             if val:
                 return val
-        raw = DataJournalEntry.column(entry, 'signature')
+        raw = BuildJournalEntry.column(entry, 'signature')
         return str(raw) if raw is not None else None
 
     @staticmethod
@@ -2084,7 +2091,7 @@ class Block:
         val = entry.read('type', safe=True)
         if val:
             return val
-        raw = DataJournalEntry.column(entry, 'type')
+        raw = BuildJournalEntry.column(entry, 'type')
         return str(raw) if raw is not None else None
 
     @staticmethod
@@ -2167,7 +2174,7 @@ class Block:
             )
 
 
-class DataJournalEntry(pd.Series):
+class BuildJournalEntry(pd.Series):
     """A single row from a Datablock journal, with convenience accessors.
 
     Inherits from :class:`pandas.Series` so all standard pandas
@@ -2180,7 +2187,7 @@ class DataJournalEntry(pd.Series):
     #: rebuild the object -- pickling among them. Without this, an entry that
     #: crosses a process boundary (a Ray proxy, a multiprocessing executor)
     #: arrives with its data intact but no `logger`, and the next method to log
-    #: dies with AttributeError. Mirrors :attr:`DataJournalFrame._metadata`.
+    #: dies with AttributeError. Mirrors :attr:`BuildJournalFrame._metadata`.
     _metadata = ['storage_options', 'logger']
 
     #: Column-name chains, oldest spelling last. A journal written before a
@@ -2198,13 +2205,13 @@ class DataJournalEntry(pd.Series):
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, series: pd.Series, *, storage_options: dict = None,
-                 logger: Datalog = Datalog(name="DataJournalEntry")):
+                 logger: Datalog = Datalog(name="BuildJournalEntry")):
         super().__init__(series)
         self.storage_options = storage_options or {}
         self.logger = logger
 
     def __tag__(self):
-        return f"DataJournalEntry:{self.get('anchor')}/{self.get('hash')}"
+        return f"BuildJournalEntry:{self.get('anchor')}/{self.get('hash')}"
 
     # 2. Declared API ------------------------------------------------------
 
@@ -2254,7 +2261,7 @@ class DataJournalEntry(pd.Series):
             thingstr = thingstr.replace('\\', '')
         r = None
         # Call this here because a new revision may need to be checked out
-        gitwrkreposetup(revision=revision, gitrepo=gitrepo, reason=f"because of evaluating a DataJournalEntry field {thing}")
+        gitwrkreposetup(revision=revision, gitrepo=gitrepo, reason=f"because of evaluating a BuildJournalEntry field {thing}")
         try:
             if eval:
                 __eval__ = vars(datablocks)['eval']
@@ -2338,9 +2345,9 @@ class DataJournalEntry(pd.Series):
         host's repo paths, in the interpreter the entry records was its
         build's, ``python``::
 
-            python = DataJournalEntry.column(entry, 'python')
+            python = BuildJournalEntry.column(entry, 'python')
             cluster = dbx.SshRay.session('host', python=python)
-            block = entry.trueinst(address=cluster.address, gitrepo=DataJournalEntry.column(entry, 'gitrepo'))
+            block = entry.trueinst(address=cluster.address, gitrepo=BuildJournalEntry.column(entry, 'gitrepo'))
 
         The proxy forwards attribute and method access, but it is a
         :class:`Remote`, not an ``IJEPAsaurUSPoseStill``: ``isinstance`` is false,
@@ -2398,11 +2405,11 @@ class DataJournalEntry(pd.Series):
         """The first present value along *name*'s rename chain, or None.
 
         The way to read ANY column, rename chain or not. An entry is a Series
-        built with `dropna` (see `Datablock.DataJournal`), so a column that was
+        built with `dropna` (see `Datablock.BuildJournal`), so a column that was
         recorded null is not merely None on the row -- its label is gone, and
         ``entry.name`` raises AttributeError where the reader expected None.
         """
-        for candidate in DataJournalEntry.COLUMN_CHAINS.get(name, (name,)):
+        for candidate in BuildJournalEntry.COLUMN_CHAINS.get(name, (name,)):
             value = entry.get(candidate)
             if value is not None and not (isinstance(value, float) and pd.isna(value)):
                 return value
@@ -2424,7 +2431,7 @@ class DataJournalEntry(pd.Series):
     # 4. Helpers -----------------------------------------------------------
 
 
-class DataJournalFrame(pd.DataFrame):
+class BuildJournalFrame(pd.DataFrame):
     _metadata = ['storage_options', 'logger']
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -2477,10 +2484,10 @@ class DataJournalFrame(pd.DataFrame):
     def get(self, entry:int, *, dropna: bool = False):
         """Return the entry at LABEL *entry* (``.loc``, not ``.iloc``).
 
-        What a label is depends on how the frame was indexed. `dbx.datajournal`
+        What a label is depends on how the frame was indexed. `dbx.buildjournal`
         indexes by ``id`` by default, so there *entry* is an entry's id.
-        So does `ExecJournalEntry.datajournal`. ``index=None`` and
-        `Datablock.datajournal` number the frame 0..N-1, and there
+        So does `ExecJournalEntry.buildjournal`. ``index=None`` and
+        `Datablock.buildjournal` number the frame 0..N-1, and there
         a label is also a position. For a frame you sliced yourself, use
         ``.iloc`` for a position. A string label may be given by any prefix of it
         that no other label shares: see `_index_label_`.
@@ -2488,7 +2495,7 @@ class DataJournalFrame(pd.DataFrame):
         entry = self.loc[_index_label_(self.index, entry)]
         if dropna:
             entry = entry.dropna()
-        return DataJournalEntry(entry, storage_options=self.storage_options)
+        return BuildJournalEntry(entry, storage_options=self.storage_options)
 
     def list(self, thing, *, take: str = 'last', sortby: Optional[str] = None, ascending: bool = False, raw: bool = False, safe: bool = False, dropna: bool = False):
         if take == 'last':
@@ -2505,12 +2512,12 @@ class DataJournalFrame(pd.DataFrame):
         for hash, row in unique_rows.iterrows():
             try:
                 entry = None
-                entry = DataJournalEntry(row, storage_options=self.storage_options)
+                entry = BuildJournalEntry(row, storage_options=self.storage_options)
                 th = None
                 th = entry.read(thing, raw=raw, safe=safe)
                 entries.append(th)
             except Exception as exc: 
-                self.logger.silent(f"DataJournalFrame: EXCEPTION when reading {thing}: {row=}, {entry=}, {th=}:\nEXCEPTION: {exc}")
+                self.logger.silent(f"BuildJournalFrame: EXCEPTION when reading {thing}: {row=}, {entry=}, {th=}:\nEXCEPTION: {exc}")
                 entries.append(pd.Series())
             datetimes.append(row.datetime if 'datetime' in row.index else None)
             hashes.append(hash)
@@ -2532,7 +2539,7 @@ class DataJournalFrame(pd.DataFrame):
     # 4. Helpers -----------------------------------------------------------
 
     @classmethod
-    def _derived_(cls, *args, **kwargs) -> 'DataJournalFrame':
+    def _derived_(cls, *args, **kwargs) -> 'BuildJournalFrame':
         """A frame pandas made out of one of these -- wrapped, not read again: it already was."""
         return _derived_frame_(cls, {'storage_options': {}, 'logger': Datalog()}, args, kwargs)
 
@@ -2545,31 +2552,31 @@ def one_datalake(datalake, url, what):
     return datalake if datalake is not None else url
 
 
-#: The DataJournals opened by ``with`` in the MAIN thread, innermost last. Every
+#: The BuildJournals opened by ``with`` in the MAIN thread, innermost last. Every
 #: thread's scope unless it opened one of its own, and process-wide for that
 #: reason: a thread does not inherit context variables, and the blocks a thread
 #: pool builds would otherwise write under another session -- silently.
-_PROCESS_DATAJOURNALS = []
+_PROCESS_BUILDJOURNALS = []
 
 
 #: How a command session reaches a process dbx did not start: ``dbx.exec``
 #: exports them for as long as the command runs, and a process that finds them
 #: set at import makes that session its default -- its blocks, and any
-#: ``dbx.exec`` it runs, are the command's. See `DataJournal.command_session`.
+#: ``dbx.exec`` it runs, are the command's. See `BuildJournal.command_session`.
 JOURNAL_SESSION_ENV = 'DBX_JOURNAL_SESSION'
 JOURNAL_DATALAKE_ENV = 'DBX_JOURNAL_DATALAKE'
 
 
-_PROCESS_DATAJOURNALS_LOCK = threading.Lock()
+_PROCESS_BUILDJOURNALS_LOCK = threading.Lock()
 
 
-#: The DataJournals opened by ``with`` in any OTHER thread: ``.stack``, that
+#: The BuildJournals opened by ``with`` in any OTHER thread: ``.stack``, that
 #: thread's own. A thread that opens one does not change what its siblings see.
-_THREAD_DATAJOURNALS = threading.local()
+_THREAD_BUILDJOURNALS = threading.local()
 
 
-class DataJournal:
-    """The block journal: how its entries are written and read, and the sessions they are written under.
+class BuildJournal:
+    """The build journal: how its entries are written and read, and the sessions they are written under.
 
     Reading and writing are class-level: :meth:`read`, :meth:`read_frame` and
     :meth:`read_entries` query storage, and :meth:`write` is how a block adds
@@ -2587,11 +2594,11 @@ class DataJournal:
     :meth:`entry_ref`) -- what each is, never where it is filed.
     Constructing one touches no storage. Which session an entry goes under is
     never a block's to say -- a block has no journal of its own -- but
-    :meth:`current`'s: the innermost ``with DataJournal()`` open for this
+    :meth:`current`'s: the innermost ``with BuildJournal()`` open for this
     thread; else the innermost the main thread has open; else
-    `DEFAULT_DATAJOURNAL`, one per process, the bottom of every stack. So ::
+    `DEFAULT_BUILDJOURNAL`, one per process, the bottom of every stack. So ::
 
-        with DataJournal() as dj:
+        with BuildJournal() as dj:
             run_pipeline()          # every block it builds, however deep
         dj.written_entries()        # ... wrote here, under dj.session: references
 
@@ -2626,7 +2633,7 @@ class DataJournal:
         self._datalake = None
 
     def __repr__(self):
-        return f"dbx.DataJournal(session={self._session!r})"
+        return f"dbx.BuildJournal(session={self._session!r})"
 
     def __getstate__(self):
         # The session and where it is indexed: a handle crosses process
@@ -2643,13 +2650,13 @@ class DataJournal:
 
     def __enter__(self):
         stack = self._stack_()
-        with _PROCESS_DATAJOURNALS_LOCK:
+        with _PROCESS_BUILDJOURNALS_LOCK:
             stack.append(self)
         return self
 
     def __exit__(self, *exc):
         stack = self._stack_()
-        with _PROCESS_DATAJOURNALS_LOCK:
+        with _PROCESS_BUILDJOURNALS_LOCK:
             # The innermost entry of THIS handle: nesting one handle in itself
             # is legal, and exits out of order must not pop someone else's.
             for i in range(len(stack) - 1, -1, -1):
@@ -2670,21 +2677,21 @@ class DataJournal:
     # 2. Declared API ------------------------------------------------------
 
     @staticmethod
-    def current() -> 'DataJournal':
+    def current() -> 'BuildJournal':
         """The session an entry written NOW goes under: this thread's innermost ``with``, the main thread's, or the default.
 
-        Never None: `DEFAULT_DATAJOURNAL` is the bottom of every stack.
+        Never None: `DEFAULT_BUILDJOURNAL` is the bottom of every stack.
         """
-        own = getattr(_THREAD_DATAJOURNALS, 'stack', None)
-        with _PROCESS_DATAJOURNALS_LOCK:
+        own = getattr(_THREAD_BUILDJOURNALS, 'stack', None)
+        with _PROCESS_BUILDJOURNALS_LOCK:
             if own:
                 return own[-1]
-            if _PROCESS_DATAJOURNALS:
-                return _PROCESS_DATAJOURNALS[-1]
-        return DEFAULT_DATAJOURNAL
+            if _PROCESS_BUILDJOURNALS:
+                return _PROCESS_BUILDJOURNALS[-1]
+        return DEFAULT_BUILDJOURNAL
 
     @classmethod
-    def command_session(cls) -> 'DataJournal':
+    def command_session(cls) -> 'BuildJournal':
         """The session a ``dbx.exec`` command runs under: the one open, or a new one.
 
         Joined, not opened, when a session other than an unindexed default is
@@ -2694,7 +2701,7 @@ class DataJournal:
         the datalake the exec journal is written to.
         """
         dj = cls.current()
-        if dj is DEFAULT_DATAJOURNAL and dj._datalake is None:
+        if dj is DEFAULT_BUILDJOURNAL and dj._datalake is None:
             dj = cls()
         if dj._datalake is None:
             dj._datalake = default_datalake() or './dbx'
@@ -2764,13 +2771,13 @@ class DataJournal:
         when *log* is verbose; a caller whose read the user is waiting on --
         a stack resolving its blocks' specializations -- passes True.
 
-        Returns a `DataJournalFrame`, or the one `DataJournalEntry` at *loc*
+        Returns a `BuildJournalFrame`, or the one `BuildJournalEntry` at *loc*
         (a label) or *iloc* (a position). *datalake* (``url``, its old name)
         defaults to ``DBX_DATALAKE``, ``DBX_ROOT``, ``DBX_URL``.
         """
         log = log or Datalog()
         n_workers = n_workers or 8
-        url = one_datalake(datalake, url, 'DataJournal.read')
+        url = one_datalake(datalake, url, 'BuildJournal.read')
         if loc is not None and iloc is not None:
             raise ValueError("Specify at most one of 'loc' and 'iloc', not both.")
         if url is None:
@@ -2796,7 +2803,7 @@ class DataJournal:
         if progress:
             log.info(f"Listing the {anchor} journal files under {anchordirpath} ...")
         listing_started = time.time()
-        parquet_files = DataJournal._journal_files_(fs, anchordirpath, n_workers=n_workers, log=log)
+        parquet_files = BuildJournal._journal_files_(fs, anchordirpath, n_workers=n_workers, log=log)
 
         if len(parquet_files) == 0 and not fs.exists(anchordirpath):
             raise FileNotFoundError(
@@ -2813,21 +2820,21 @@ class DataJournal:
         df = None
         desc = desc or f"Reading {anchor} journal files"
         if len(parquet_files) > 0:
-            dfs = [d for d in DataJournal._read_files_(fs, parquet_files, n_workers=n_workers, log=log, desc=desc,
+            dfs = [d for d in BuildJournal._read_files_(fs, parquet_files, n_workers=n_workers, log=log, desc=desc,
                                                        progress=progress)
                    if d is not None]
             if dfs:
                 df = pd.concat(dfs, ignore_index=True)
-                df = DataJournal._normalize_columns_(df)
+                df = BuildJournal._normalize_columns_(df)
             else:
                 df = None
-        frame = DataJournalFrame(df, storage_options=storage_options, index=index,
+        frame = BuildJournalFrame(df, storage_options=storage_options, index=index,
                               unnormalized=unnormalized, **filter_kwargs)
         if loc is not None:
-            result = DataJournalEntry(frame.loc[_index_label_(frame.index, loc)].dropna(),
+            result = BuildJournalEntry(frame.loc[_index_label_(frame.index, loc)].dropna(),
                                       storage_options=storage_options)
         elif iloc is not None:
-            result = DataJournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options)
+            result = BuildJournalEntry(frame.iloc[iloc].dropna(), storage_options=storage_options)
         else:
             result = frame
         return result
@@ -2835,7 +2842,7 @@ class DataJournal:
     @classmethod
     def read_hash(cls, anchor, hash: str, *, tag: str | None = None, version=None,
                   keyby: str | None = 'tag_version_shorthash', datalake=None,
-                  storage_options=None, log=None, n_workers=None) -> 'DataJournalFrame | None':
+                  storage_options=None, log=None, n_workers=None) -> 'BuildJournalFrame | None':
         """The entries *anchor*'s journal holds for one block hash -- read from where that block's are filed.
 
         `read` reads every entry under *anchor* -- a walk of every block's
@@ -2887,11 +2894,11 @@ class DataJournal:
             try:
                 files.extend(f for f in _expand_levels_(fs, prefix, levels) if f not in files)
             except Exception as e:
-                log.detailed(f"DataJournal.read_hash: {prefix}/{'/'.join(levels)}: {e}")
+                log.detailed(f"BuildJournal.read_hash: {prefix}/{'/'.join(levels)}: {e}")
         compacted = cls._read_compacted_hash_(fs, base, anchor, hash, log=log)
         if not files and compacted is None:
             return None
-        log.detailed(f"DataJournal.read_hash: {anchor} {hash[:8]}: {len(files)} file(s)"
+        log.detailed(f"BuildJournal.read_hash: {anchor} {hash[:8]}: {len(files)} file(s)"
                      + (f", {len(compacted)} compacted entr(ies)" if compacted is not None else ""))
         dfs = [d for d in cls._read_files_(fs, files, n_workers=n_workers or 8, log=log,
                                            desc=f"Reading {anchor} journal for {hash[:8]}") if d is not None]
@@ -2900,12 +2907,12 @@ class DataJournal:
         if not dfs:
             return None
         df = cls._normalize_columns_(pd.concat(dfs, ignore_index=True))
-        return DataJournalFrame(df, storage_options=storage_options, hash=hash)
+        return BuildJournalFrame(df, storage_options=storage_options, hash=hash)
 
     @classmethod
     def read_frame(cls, paths, *, storage_options=None, log=None, n_workers=None,
                    index: str | None = None, unnormalized: bool = False,
-                   **filter_kwargs) -> 'DataJournalFrame':
+                   **filter_kwargs) -> 'BuildJournalFrame':
         """The entries at *paths* -- journal entry files, as :meth:`written_entries` lists them.
 
         One row per path, in the order given, and read exactly as :meth:`read`
@@ -2917,7 +2924,7 @@ class DataJournal:
         """
         paths = [str(p) for p in paths]
         if not paths:
-            return DataJournalFrame(None, storage_options=storage_options, index=index,
+            return BuildJournalFrame(None, storage_options=storage_options, index=index,
                                     unnormalized=unnormalized, **filter_kwargs)
         log = log or Datalog()
         n_workers = n_workers or 8
@@ -2925,23 +2932,23 @@ class DataJournal:
             storage_options = default_storage_options()
         fs, _ = fsspec.url_to_fs(paths[0], **storage_options)
         dfs = []
-        for order, (path, d) in enumerate(zip(paths, DataJournal._read_files_(
+        for order, (path, d) in enumerate(zip(paths, BuildJournal._read_files_(
                 fs, paths, n_workers=n_workers, log=log))):
             if d is not None:
                 d['entry_path'] = path
                 d['__order__'] = order
                 dfs.append(d)
         if not dfs:
-            return DataJournalFrame(None, storage_options=storage_options, index=index,
+            return BuildJournalFrame(None, storage_options=storage_options, index=index,
                                     unnormalized=unnormalized, **filter_kwargs)
-        df = DataJournal._normalize_columns_(pd.concat(dfs, ignore_index=True))
+        df = BuildJournal._normalize_columns_(pd.concat(dfs, ignore_index=True))
         df = df.sort_values('__order__').drop(columns=['__order__']).reset_index(drop=True)
-        return DataJournalFrame(df, storage_options=storage_options, index=index,
+        return BuildJournalFrame(df, storage_options=storage_options, index=index,
                                 unnormalized=unnormalized, **filter_kwargs)
 
     @classmethod
-    def read_entries(cls, paths, *, storage_options=None, log=None, n_workers=None) -> 'list[DataJournalEntry]':
-        """What :meth:`read_frame` reads, one `DataJournalEntry` per path, in the order given."""
+    def read_entries(cls, paths, *, storage_options=None, log=None, n_workers=None) -> 'list[BuildJournalEntry]':
+        """What :meth:`read_frame` reads, one `BuildJournalEntry` per path, in the order given."""
         frame = cls.read_frame(paths, storage_options=storage_options, log=log, n_workers=n_workers)
         return [frame.get(i, dropna=True) for i in range(len(frame))]
 
@@ -2960,8 +2967,8 @@ class DataJournal:
 
     @classmethod
     def read_refs(cls, refs, *, storage_options=None, log=None, n_workers=None, index: str | None = None,
-                  unnormalized: bool = False, **filter_kwargs) -> 'DataJournalFrame':
-        """The entries *refs* name, in the order given, as one `DataJournalFrame`: as `read_frame` reads files.
+                  unnormalized: bool = False, **filter_kwargs) -> 'BuildJournalFrame':
+        """The entries *refs* name, in the order given, as one `BuildJournalFrame`: as `read_frame` reads files.
 
         A reference is :meth:`entry_ref`'s: one entry. One with a ``session``
         and no ``id`` is every entry of its block written under that session.
@@ -3008,7 +3015,7 @@ class DataJournal:
                 else:
                     d = rows[rows['session'] == ref.get('session')].sort_values('datetime')
                 if d is None or d.empty:
-                    log.warning(f"DataJournal.read_refs: no entry {ref.get('id') or 'of session ' + str(ref.get('session'))} "
+                    log.warning(f"BuildJournal.read_refs: no entry {ref.get('id') or 'of session ' + str(ref.get('session'))} "
                                 f"of {ref['anchor']}/{str(ref['hash'])[:8]}: skipped")
                     d = None
             if d is not None:
@@ -3016,11 +3023,11 @@ class DataJournal:
                 d['__order__'] = len(dfs)
                 dfs.append(d)
         if not dfs:
-            return DataJournalFrame(None, storage_options=storage_options, index=index,
+            return BuildJournalFrame(None, storage_options=storage_options, index=index,
                                     unnormalized=unnormalized, **filter_kwargs)
         df = cls._normalize_columns_(pd.concat(dfs, ignore_index=True))
         df = df.sort_values('__order__', kind='stable').drop(columns=['__order__']).reset_index(drop=True)
-        return DataJournalFrame(df, storage_options=storage_options, index=index,
+        return BuildJournalFrame(df, storage_options=storage_options, index=index,
                                 unnormalized=unnormalized, **filter_kwargs)
 
     @classmethod
@@ -3039,7 +3046,7 @@ class DataJournal:
         is filed -- its own file, or a compacted journal:
 
             id = block.write_journal_entry(event='note')
-            entry = block.datajournal(id=id, iloc=0)
+            entry = block.buildjournal(id=id, iloc=0)
 
         Every call keeps its entry: each is a file of its own, named by its
         ``id``, so a build leaves its ``build:start`` and its ``build:end``.
@@ -3214,7 +3221,7 @@ class DataJournal:
         """
         if not isinstance(payload, JournaledResult):
             return payload
-        for ref in payload.datajournal_entries:
+        for ref in payload.buildjournal_entries:
             self._record_(ref)
         return payload.value
 
@@ -3223,12 +3230,12 @@ class DataJournal:
 
         A failed build writes an entry too -- ``build:exception`` -- and the
         :meth:`carry` wrapper sends its entries home on the exception, as
-        ``datajournal_entries``, since an exception is all a failure returns.
+        ``buildjournal_entries``, since an exception is all a failure returns.
         The calls that succeeded before it are on the exception as well, as
         ``executor_payloads``: an executor that raises returns no results, and
         keeps the ones that arrived there instead.
         """
-        self.collect(JournaledResult(None, getattr(exc, 'datajournal_entries', None) or []))
+        self.collect(JournaledResult(None, getattr(exc, 'buildjournal_entries', None) or []))
         for payload in getattr(exc, 'executor_payloads', None) or []:
             self.collect(payload)
 
@@ -3316,7 +3323,7 @@ class DataJournal:
             with fs.open(path, 'rb') as f:
                 df = pd.read_parquet(f, engine='pyarrow', filters=[('hash', '==', hash)])
         except Exception as e:
-            log.warning(f"DataJournal.read_hash: skipping unreadable compacted journal {path}: {e}")
+            log.warning(f"BuildJournal.read_hash: skipping unreadable compacted journal {path}: {e}")
             return None
         if df.empty:
             return None
@@ -3433,9 +3440,9 @@ class DataJournal:
                         name = info['name'].rstrip('/')
                         rel = name[len(root):].lstrip('/')
                         if info['type'] == 'directory':
-                            if not DataJournal._NOT_JOURNAL_DIR_.match(rel):
+                            if not BuildJournal._NOT_JOURNAL_DIR_.match(rel):
                                 level.append(name)
-                        elif DataJournal._ENTRY_FILE_.match(rel):
+                        elif BuildJournal._ENTRY_FILE_.match(rel):
                             files.append(name)
                 log.detailed(f"Listing journal files under {anchordirpath}: {len(files)} so far, {len(level)} directories next")
         return sorted(files)
@@ -3514,10 +3521,10 @@ class DataJournal:
     def _stack_() -> list:
         """The stack a ``with`` opened in THIS thread goes on: the process's in the main thread, else the thread's own."""
         if threading.current_thread() is threading.main_thread():
-            return _PROCESS_DATAJOURNALS
-        stack = getattr(_THREAD_DATAJOURNALS, 'stack', None)
+            return _PROCESS_BUILDJOURNALS
+        stack = getattr(_THREAD_BUILDJOURNALS, 'stack', None)
         if stack is None:
-            stack = _THREAD_DATAJOURNALS.stack = []
+            stack = _THREAD_BUILDJOURNALS.stack = []
         return stack
 
     @staticmethod
@@ -3583,7 +3590,7 @@ class DataJournal:
                 df = df.rename(columns={legacy: current})
             elif legacy in df.columns:
                 df = df.drop(columns=[legacy])
-        df = DataJournal._legacy_tree_(df)
+        df = BuildJournal._legacy_tree_(df)
         if 'url' in df.columns:
             # `datalake` was `url` until it was renamed; a journal spanning the
             # rename has both, each row filled in one.
@@ -3608,7 +3615,7 @@ class DataJournal:
         """The build-tree id, recorded as ``uuid``, then ``session``, now ``tree``.
 
         Decided per ROW, not per frame, because ``session`` is a column again:
-        the DataJournal session, written beside ``tree``. So a row with no
+        the BuildJournal session, written beside ``tree``. So a row with no
         ``tree`` is from before the rename and its ``session`` IS its tree --
         moved across, leaving no session, which that row never had -- while a
         row with a ``tree`` keeps its ``session`` as written.
@@ -3630,7 +3637,7 @@ class DataJournal:
 
 
 class _CompactAnchorCallable:
-    """One anchor of a `DataJournal.UNSAFE_compact`: a callable an executor can send to a worker."""
+    """One anchor of a `BuildJournal.UNSAFE_compact`: a callable an executor can send to a worker."""
 
     def __init__(self, journal_cls, anchor, datalake, storage_options, dry_run, **kwargs):
         self.journal_cls, self.anchor, self.datalake = journal_cls, anchor, datalake
@@ -3641,8 +3648,8 @@ class _CompactAnchorCallable:
                                                  **self.kwargs)
 
 
-class PipeJournal(DataJournal):
-    """The pipeline journal: a `DataJournal` anchored under ``{datalake}/.pipelines``.
+class PipeJournal(BuildJournal):
+    """The pipeline journal: a `BuildJournal` anchored under ``{datalake}/.pipelines``.
 
     An entry of pipeline P is laid out as any block's is, with
     ``{datalake}/.pipelines/{P.anchorkey}`` standing where ``P.anchorkeypath``
@@ -3669,15 +3676,15 @@ class PipeJournal(DataJournal):
 
     @classmethod
     def write(cls, block, event: str, *, entrypath: str, **kwargs):
-        """Write one entry for pipeline *block*'s *event*, recording *entrypath*. See `DataJournal.write`."""
+        """Write one entry for pipeline *block*'s *event*, recording *entrypath*. See `BuildJournal.write`."""
         return super().write(block, event, columns={'entrypath': entrypath}, **kwargs)
 
     @classmethod
     def collect(cls, *, construct_only: bool = False, extra_construction_events=(), datalake=None,
-                storage_options=None, log=None, n_workers=None, **filters) -> DataJournalFrame:
+                storage_options=None, log=None, n_workers=None, **filters) -> BuildJournalFrame:
         """Every pipeline in the journal, one row each, with every entrypath it was created to.
 
-        The entries are read and *filters* applied as `DataJournal.read`
+        The entries are read and *filters* applied as `BuildJournal.read`
         applies them, then grouped by the pipeline they are of -- its
         ``anchorkeypath``, with the identity columns that go with it -- and
         each group is its NEWEST entry, its ``entrypath`` column replaced by
@@ -3710,7 +3717,7 @@ class PipeJournal(DataJournal):
         except FileNotFoundError:
             df = pd.DataFrame()
         if df.empty or 'entrypath' not in df.columns:
-            return DataJournalFrame(pd.DataFrame(), storage_options=storage_options, unnormalized=True)
+            return BuildJournalFrame(pd.DataFrame(), storage_options=storage_options, unnormalized=True)
 
         keys = [c for c in cls._PIPELINE_COLUMNS_ if c in df.columns]
         rows, entrypaths = [], []
@@ -3728,7 +3735,7 @@ class PipeJournal(DataJournal):
         out = pd.DataFrame(list(rows)).reset_index(drop=True).drop(columns=['entrypath'], errors='ignore')
         at = out.columns.get_loc('event') if 'event' in out.columns else len(out.columns)
         out.insert(at, 'entrypaths', pd.Series(list(entrypaths), index=out.index, dtype=object))
-        return DataJournalFrame(out, storage_options=storage_options, unnormalized=True)
+        return BuildJournalFrame(out, storage_options=storage_options, unnormalized=True)
 
     @classmethod
     def UNSAFE_compact(cls, anchors=None, *, unjournaled: bool = False, spare=(), datalake=None, storage_options=None,
@@ -3749,7 +3756,7 @@ class PipeJournal(DataJournal):
         pipeline whose class -- imported by its fqcn -- has `Pipeline.JOURNAL`
         False, but those named in *spare* (fqcns, or class names); a class
         that no longer imports is compacted as any other. As
-        `DataJournal.UNSAFE_compact`, the anchors go to a *parallelization*
+        `BuildJournal.UNSAFE_compact`, the anchors go to a *parallelization*
         executor of *n_workers*, and *dry_run* removes nothing and says what
         would go. Returns one row per pipeline class: files ``before``,
         ``removed``, ``after``, and what was done with it.
@@ -3868,14 +3875,14 @@ class PipeJournal(DataJournal):
             return events.isin(cls.ENTRYPOINT_EVENTS).any() or (extra and events.astype(str).str.fullmatch(extra).any())
 
         def compacted_events(fs, root):
-            # An entrypoint's entries may be in its anchor's compacted journal -- DataJournal.UNSAFE_compact.
+            # An entrypoint's entries may be in its anchor's compacted journal -- BuildJournal.UNSAFE_compact.
             rel = os.path.relpath(root, lake_root)
             if fs is not lake_fs or rel.startswith('..'):
                 return None
             anchor = rel.split(os.sep)[0]
             with compacted_lock:
                 if anchor not in compacted:
-                    path = os.path.join(lake_root, anchor, DataJournal.COMPACTED.format(anchor=anchor))
+                    path = os.path.join(lake_root, anchor, BuildJournal.COMPACTED.format(anchor=anchor))
                     try:
                         with fs.open(path, 'rb') as f:
                             compacted[anchor] = pd.read_parquet(f, columns=['anchorkeypath', 'event'])
@@ -3914,12 +3921,12 @@ def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, extra_cons
                 storage_options=None, log=None, n_workers=8, url=None, **filter_kwargs):
     """Read the pipeline journal: every `Pipeline` created, one row each, newest first, then filtered.
 
-    `PipeJournal.collect`: a `DataJournalFrame` with an ``entrypaths`` column,
+    `PipeJournal.collect`: a `BuildJournalFrame` with an ``entrypaths`` column,
     every entrypath the pipeline was created to -- with *construct_only*,
     only those built, redirected or noted, or with an event of
-    *extra_construction_events* (``'ckpt'``, say) -- or the `DataJournalEntry` at *loc* /
+    *extra_construction_events* (``'ckpt'``, say) -- or the `BuildJournalEntry` at *loc* /
     *iloc*, both positions here, as the rows are numbered. Filters are
-    patterns, as on a block journal -- see :func:`datajournal`. *datalake*
+    patterns, as on a build journal -- see :func:`buildjournal`. *datalake*
     (``url``, its old name) defaults to ``DBX_DATALAKE``, then ``DBX_ROOT``,
     then ``DBX_URL``.
     """
@@ -3931,12 +3938,12 @@ def pipejournal(loc=None, *, iloc=None, construct_only: bool = False, extra_cons
     if loc is not None:
         return frame.get(loc, dropna=True)
     if iloc is not None:
-        return DataJournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
+        return BuildJournalEntry(frame.iloc[iloc].dropna(), storage_options=frame.storage_options)
     return frame
 
 
 #: The OutputCaptures open in this process, innermost last. One stack for the
-#: whole process, not one per thread as `DataJournal` keeps: a capture
+#: whole process, not one per thread as `BuildJournal` keeps: a capture
 #: redirects file descriptors 1 and 2, and every thread writes through those.
 _PROCESS_CAPTURES = []
 _PROCESS_CAPTURES_LOCK = threading.RLock()
@@ -4036,8 +4043,8 @@ class OutputCapture:
             return _PROCESS_CAPTURES[-1] if _PROCESS_CAPTURES else None
 
     @classmethod
-    def command_capture(cls, datajournal: 'DataJournal') -> 'OutputCapture':
-        """The capture a ``dbx.exec`` command runs under: the one open in this process, or a new master under *datajournal*'s session.
+    def command_capture(cls, buildjournal: 'BuildJournal') -> 'OutputCapture':
+        """The capture a ``dbx.exec`` command runs under: the one open in this process, or a new master under *buildjournal*'s session.
 
         Joined, not opened, when one is open: an exec inside an exec, or a
         command inside :meth:`command`, which ``dbx.pprint`` opens so that
@@ -4046,8 +4053,8 @@ class OutputCapture:
         capture = cls.current()
         if capture is not None:
             return capture
-        datalake = datajournal._datalake or default_datalake() or './dbx'
-        return cls(os.path.join(cls.dirpath(datalake, datajournal.session), cls._basename_('master')))
+        datalake = buildjournal._datalake or default_datalake() or './dbx'
+        return cls(os.path.join(cls.dirpath(datalake, buildjournal.session), cls._basename_('master')))
 
     @classmethod
     @contextlib.contextmanager
@@ -4061,7 +4068,7 @@ class OutputCapture:
                 r = dbx.exec(s, capture_output=True)
                 print(r)
         """
-        dj = DataJournal.command_session()
+        dj = BuildJournal.command_session()
         with dj, cls.command_capture(dj) as capture:
             yield capture
 
@@ -4075,7 +4082,7 @@ class OutputCapture:
         return (self._host, self._pid) == (socket.gethostname(), os.getpid())
 
     def collect(self, payload):
-        """Add the capture paths a :meth:`DataJournal.carry` wrapper returned to this one's; anything else is ignored."""
+        """Add the capture paths a :meth:`BuildJournal.carry` wrapper returned to this one's; anything else is ignored."""
         if isinstance(payload, JournaledResult):
             for path in getattr(payload, 'output_captures', None) or []:
                 self._record_(path)
@@ -4083,7 +4090,7 @@ class OutputCapture:
     def collect_raised(self, exc: BaseException) -> None:
         """Add the capture paths behind an executor's *exc* to this one's: the failed call's, and its siblings'.
 
-        As `DataJournal.collect_raised`: the failed call's are on the exception,
+        As `BuildJournal.collect_raised`: the failed call's are on the exception,
         as ``output_captures``, and those of the calls that succeeded before it
         on its ``executor_payloads``.
         """
@@ -4104,7 +4111,7 @@ class OutputCapture:
     @staticmethod
     def dirpath(datalake, session) -> str:
         """Where the captures of *session* are written: beside its journal index."""
-        return os.path.join(DataJournal._index_dirpath_(datalake, session), 'output')
+        return os.path.join(BuildJournal._index_dirpath_(datalake, session), 'output')
 
     # 3. Accessors ---------------------------------------------------------
 
@@ -4152,20 +4159,20 @@ class OutputCapture:
 
 
 class JournaledCallable:
-    """A callable handed to a worker with the `DataJournal` session it was dispatched under.
+    """A callable handed to a worker with the `BuildJournal` session it was dispatched under.
 
     A worker process has a stack of its own, and a worker thread sees the main
     thread's but not the dispatching thread's: a block built there would write
     under another session -- and to paths nobody in the dispatcher lists. Made by
-    `DataJournal.carry`, this runs the callable inside the handle it carries
+    `BuildJournal.carry`, this runs the callable inside the handle it carries
     and returns a `JournaledResult` -- its value, and the entries the call
-    wrote -- for `DataJournal.collect` to take back into the handle it came
+    wrote -- for `BuildJournal.collect` to take back into the handle it came
     from. Only this call's paths: a worker that runs several callables holds
     one unpickled handle for all of them, and under ``fork`` that handle is a
     copy of the parent's, holding its entries already.
 
     A call that raises sends its entries home on the exception, as
-    ``datajournal_entries``, for `DataJournal.collect_raised`.
+    ``buildjournal_entries``, for `BuildJournal.collect_raised`.
 
     The `Datalog` scope goes out with it too, made where the callable was
     wrapped (`Datalog._carry_`): the call runs at the levels set there, as
@@ -4183,14 +4190,14 @@ class JournaledCallable:
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, fn, datajournal: 'DataJournal', output_capture: 'OutputCapture | None' = None):
+    def __init__(self, fn, buildjournal: 'BuildJournal', output_capture: 'OutputCapture | None' = None):
         self.fn = fn
-        self.datajournal = datajournal
+        self.buildjournal = buildjournal
         self.output_capture = output_capture
         self.datalog = Datalog._carry_()
 
     def __call__(self, *args, **kwargs):
-        dj = self.datajournal
+        dj = self.buildjournal
         before = len(dj.written_entries())
         capture = self.output_capture
         if capture is not None and capture._is_this_process_():
@@ -4201,7 +4208,7 @@ class JournaledCallable:
             try:
                 value = self.fn(*args, **kwargs)
             except BaseException as exc:
-                exc.datajournal_entries = dj.written_entries()[before:]
+                exc.buildjournal_entries = dj.written_entries()[before:]
                 exc.output_captures = capture.paths() if capture is not None else []
                 raise
         return JournaledResult(value, dj.written_entries()[before:],
@@ -4218,24 +4225,24 @@ class JournaledCallable:
 
 
 class JournaledResult:
-    """What a `JournaledCallable` returns: the call's *value*, the *datajournal_entries* it wrote, and its *output_captures*."""
+    """What a `JournaledCallable` returns: the call's *value*, the *buildjournal_entries* it wrote, and its *output_captures*."""
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    def __init__(self, value, datajournal_entries, output_captures=()):
+    def __init__(self, value, buildjournal_entries, output_captures=()):
         self.value = value
-        self.datajournal_entries = list(datajournal_entries)
+        self.buildjournal_entries = list(buildjournal_entries)
         self.output_captures = list(output_captures)
 
 
 #: The session an entry goes under when no ``with`` is open: one per process,
 #: and the bottom of every stack. Keeps no index -- it is no command's -- unless
 #: this process was started while a command ran, and so is part of it.
-DEFAULT_DATAJOURNAL = DataJournal()
+DEFAULT_BUILDJOURNAL = BuildJournal()
 if os.environ.get(JOURNAL_SESSION_ENV):
     # A process started while a command ran: its default is the command's.
-    DEFAULT_DATAJOURNAL._session = os.environ[JOURNAL_SESSION_ENV]
-    DEFAULT_DATAJOURNAL._datalake = os.environ.get(JOURNAL_DATALAKE_ENV) or default_datalake() or './dbx'
+    DEFAULT_BUILDJOURNAL._session = os.environ[JOURNAL_SESSION_ENV]
+    DEFAULT_BUILDJOURNAL._datalake = os.environ.get(JOURNAL_DATALAKE_ENV) or default_datalake() or './dbx'
 
 
 def _expand_levels_(fs, prefix: str, levels: list[str]) -> list[str]:

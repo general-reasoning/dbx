@@ -772,8 +772,8 @@ def exec(s=None, *, capture_output: bool = False, **kwargs):
     # the workers a dbx executor hands it to, and in any process started while
     # it runs -- writes under one session, indexed where the exec journal is.
     # An exec inside an exec joins the session already open.
-    from .journals import DataJournal, OutputCapture, write_exec_journal
-    dj = DataJournal.command_session()
+    from .journals import BuildJournal, OutputCapture, write_exec_journal
+    dj = BuildJournal.command_session()
     # Its capture -- the one open, which it joins, or a new master -- and
     # closed before the row is written, so the row points at a file that is
     # there. One it joined is closed by whoever opened it.
@@ -799,7 +799,7 @@ def exec(s=None, *, capture_output: bool = False, **kwargs):
             end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
             write_exec_journal(s, session=dj.session, dt=dt, end_dt=end_dt,
                                success=exception is None, exception=exception, traceback=traceback,
-                               datajournal_entries=dj.written_entries()[written_before:],
+                               buildjournal_entries=dj.written_entries()[written_before:],
                                output_captures=([capture.path] + capture.collected()[captured_before:]
                                                 if capture is not None else []))
 
@@ -1006,7 +1006,7 @@ def _with_payloads_(exc, payloads):
     """*exc*, carrying the results that DID arrive before it was raised, as ``executor_payloads``.
 
     An executor that raises returns nothing, so the results of the callables
-    that succeeded -- their values, and under a `DataJournal` scope the entry
+    that succeeded -- their values, and under a `BuildJournal` scope the entry
     paths they wrote -- would go down with the raise. None stands for an item
     that never arrived, as in exec_callables' own result.
     """
@@ -1017,17 +1017,17 @@ def _with_payloads_(exc, payloads):
     return exc
 
 
-class _CarriesDataJournal_:
-    """An executor's public entry points, carrying the open `DataJournal` scope to its workers.
+class _CarriesBuildJournal_:
+    """An executor's public entry points, carrying the open `BuildJournal` scope to its workers.
 
-    Every entry is written under `DataJournal.current()` -- in a ``dbx.exec``
+    Every entry is written under `BuildJournal.current()` -- in a ``dbx.exec``
     command, the command's session. A worker process has a stack of its own,
     so a block built there would write under that process's default session,
     and the command's exec-journal row would list none of it; a worker thread
     sees the main thread's stack, but not a ``with`` the dispatching thread
-    opened itself. So an executor with workers (``CARRIES_DATAJOURNAL``)
-    sends each callable out in the current session (`DataJournal.carry`) and
-    takes back what it wrote (`DataJournal.collect`) before a caller sees the
+    opened itself. So an executor with workers (``CARRIES_BUILDJOURNAL``)
+    sends each callable out in the current session (`BuildJournal.carry`) and
+    takes back what it wrote (`BuildJournal.collect`) before a caller sees the
     result. The results themselves are unchanged. The inline executor runs
     in the caller's thread, and sends nothing.
 
@@ -1040,13 +1040,13 @@ class _CarriesDataJournal_:
     """
 
     #: True for an executor whose workers are other processes or threads.
-    CARRIES_DATAJOURNAL = False
+    CARRIES_BUILDJOURNAL = False
 
     # 2. Declared API ------------------------------------------------------
 
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute all callables and return their results as a flat list, in input order."""
-        callables, dj, capture = self._carry_datajournal_(callables)
+        callables, dj, capture = self._carry_buildjournal_(callables)
         if dj is None:
             return self._exec_callables_(callables, *ctx_args, **ctx_kwargs)
         try:
@@ -1058,7 +1058,7 @@ class _CarriesDataJournal_:
 
     def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute callables and yield their results in input order: in lists of *batch_size*, when it is over 1."""
-        callables, dj, capture = self._carry_datajournal_(callables)
+        callables, dj, capture = self._carry_buildjournal_(callables)
         stream = self._exec_callables_streaming_(callables, *ctx_args, **ctx_kwargs)
         if dj is None:
             yield from stream
@@ -1074,12 +1074,12 @@ class _CarriesDataJournal_:
 
     # 4. Helpers -----------------------------------------------------------
 
-    def _carry_datajournal_(self, callables):
+    def _carry_buildjournal_(self, callables):
         """*callables* as they go out, the session to collect into -- None when there is nothing to carry -- and the capture."""
-        if not self.CARRIES_DATAJOURNAL:
+        if not self.CARRIES_BUILDJOURNAL:
             return callables, None, None
-        from .journals import DataJournal, OutputCapture
-        dj, capture = DataJournal.current(), OutputCapture.current()
+        from .journals import BuildJournal, OutputCapture
+        dj, capture = BuildJournal.current(), OutputCapture.current()
         return dj.carry(callables, capture), dj, capture
 
     def _journaled_(self, payload):
@@ -1087,14 +1087,14 @@ class _CarriesDataJournal_:
         return payload
 
     def _collect_(self, dj, capture, payload):
-        """`DataJournal.collect`, with *payload*'s capture paths collected into *capture* on the way."""
+        """`BuildJournal.collect`, with *payload*'s capture paths collected into *capture* on the way."""
         payload = self._journaled_(payload)
         if capture is not None:
             capture.collect(payload)
         return dj.collect(payload)
 
     def _collect_raised_(self, dj, capture, exc):
-        """`DataJournal.collect_raised` -- and `OutputCapture.collect_raised` -- over the payloads *exc* carries as this executor returns them."""
+        """`BuildJournal.collect_raised` -- and `OutputCapture.collect_raised` -- over the payloads *exc* carries as this executor returns them."""
         payloads = getattr(exc, 'executor_payloads', None)
         if payloads:
             _with_payloads_(exc, [self._journaled_(p) for p in payloads])
@@ -1103,7 +1103,7 @@ class _CarriesDataJournal_:
         dj.collect_raised(exc)
 
 
-class _CallableExecutorBase_(_CarriesDataJournal_):
+class _CallableExecutorBase_(_CarriesBuildJournal_):
     """
     Abstract base that implements the fan-out / collect / join scaffold shared by
     MultithreadingCallableExecutor and MultiprocessingCallableExecutor.
@@ -1896,7 +1896,7 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
-    CARRIES_DATAJOURNAL = True
+    CARRIES_BUILDJOURNAL = True
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -1991,7 +1991,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
-    CARRIES_DATAJOURNAL = True
+    CARRIES_BUILDJOURNAL = True
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -2055,7 +2055,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         gc.collect()
 
 
-class RayCallableExecutor(_CarriesDataJournal_):
+class RayCallableExecutor(_CarriesBuildJournal_):
     """Execute callables on pre-created Ray actor workers.
 
     Requires the ``ray`` optional dependency (``pip install datablocks[ray]``).
@@ -2074,7 +2074,7 @@ class RayCallableExecutor(_CarriesDataJournal_):
         Label for the progress bar.
     """
 
-    CARRIES_DATAJOURNAL = True
+    CARRIES_BUILDJOURNAL = True
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -2266,7 +2266,7 @@ class RayCallableExecutor(_CarriesDataJournal_):
         """
         if isinstance(payload, Remote):
             from .journals import JournaledResult
-            return JournaledResult(payload.value, payload.datajournal_entries, payload.output_captures)
+            return JournaledResult(payload.value, payload.buildjournal_entries, payload.output_captures)
         return payload
 
     @staticmethod
@@ -3898,7 +3898,7 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
         Environment variables for the workers, over the ``DBX*`` ones of this
         process they are otherwise given; ``None`` as a value unsets one. For
         a worker on another host, whose ``DBX_DATALAKE`` -- say -- is not this
-        one's: `DataJournalEntry.rinst` sets it to the datalake its entry
+        one's: `BuildJournalEntry.rinst` sets it to the datalake its entry
         recorded.
     working_dir:
         Ray ``runtime_env`` working directory. ``'auto'`` (the default) means:

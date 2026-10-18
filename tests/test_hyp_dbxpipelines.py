@@ -330,8 +330,8 @@ def remote_dbx(monkeypatch):
         def read(self, thing, raw=False):
             return "$pkg.Block()" if thing == "quote" else None
 
-    monkeypatch.setattr(dbx.DataJournal, "read_entries", lambda paths, **kw: [Entry(gitrepo="/home/me/dbx:/home/me/proj")])
-    monkeypatch.setattr(dbx.DataJournalEntry, "column", staticmethod(lambda entry, name: entry.get(name)))
+    monkeypatch.setattr(dbx.BuildJournal, "read_entries", lambda paths, **kw: [Entry(gitrepo="/home/me/dbx:/home/me/proj")])
+    monkeypatch.setattr(dbx.BuildJournalEntry, "column", staticmethod(lambda entry, name: entry.get(name)))
     monkeypatch.setattr(dbx.SshRay, "session", classmethod(lambda cls, host, python: calls["session"].append((host, python)) or SimpleNamespace(address="ray://localhost:9")))
     monkeypatch.setitem(dbxpipelines._REMOTE_, "key", None)
     return calls
@@ -358,7 +358,7 @@ def test_read_instantiates_on_the_datalakes_host_and_keeps_the_block(remote_dbx)
 def test_the_head_runs_in_the_python_the_entrys_build_recorded(remote_dbx, monkeypatch):
     import dbx
 
-    monkeypatch.setattr(dbx.DataJournal, "read_entries", lambda paths, **kw: [
+    monkeypatch.setattr(dbx.BuildJournal, "read_entries", lambda paths, **kw: [
         type("E", (dict,), {"trueinst": lambda self, **kw: object(), "read": lambda self, *a, **k: None})(
             python="/env/bin/python")])
     dbxpipelines.read_text({"entry_path": "ssh://host/lake/e.parquet", "id": "e1"}, ("n",))
@@ -806,7 +806,7 @@ def anchor_journal(monkeypatch):
     import dbx
 
     monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
-    monkeypatch.setattr(dbx.DataJournal, "read", lambda anchor, **kw: pd.DataFrame(JOURNAL_ROWS))
+    monkeypatch.setattr(dbx.BuildJournal, "read", lambda anchor, **kw: pd.DataFrame(JOURNAL_ROWS))
     monkeypatch.setattr(dbxpipelines, "_side_file_", lambda *a: None)
     monkeypatch.setattr(dbxpipelines, "var_name", lambda row: None)
 
@@ -907,7 +907,7 @@ def test_an_anchors_filters_reach_its_journal(monkeypatch):
 
     seen = {}
     monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
-    monkeypatch.setattr(dbx.DataJournal, "read", lambda anchor, **kw: seen.update(kw) or pd.DataFrame())
+    monkeypatch.setattr(dbx.BuildJournal, "read", lambda anchor, **kw: seen.update(kw) or pd.DataFrame())
     assert dbxpipelines.blocks("pkg.Model", progress=lambda m: None, filters={"tag": "first"}) == []
     assert seen["tag"] == "first"
 

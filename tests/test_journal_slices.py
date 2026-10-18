@@ -25,14 +25,14 @@ def test_a_tables_entry_says_what_its_tablets_and_upstream_hold(tmp_path):
     assert table.topics() == ['done'], "a table's own topics are its markers alone"
     slices = _entry_slices(table)
     assert set(slices) == set(table.slices(recursive=True)) >= {'features', 'samples', 'labels'}
-    assert slices['features'] == table.tablet(0).declared_schema('features')
+    assert slices['features'] == table.tablet(0).slice_schema('features')
     assert slices == table.readable_slices()
 
 
 def test_a_tablets_entry_says_the_same_of_itself(tmp_path):
     tablet = _feature_table(str(tmp_path), 'features').tablet(0)
     assert set(tablet.readable_slices()) == set(tablet.slices(recursive=True))
-    assert tablet.readable_slices()['features'] == tablet.declared_schema('features')
+    assert tablet.readable_slices()['features'] == tablet.slice_schema('features')
 
 
 def test_slices_not_yet_readable_are_named_and_not_raised(tmp_path, monkeypatch):
@@ -80,7 +80,7 @@ def test_a_plain_tables_slices_are_its_tablets(tmp_path):
     assert not hasattr(table, '_route_')
     slices = table.readable_slices()
     assert set(slices) == set(table.slices(recursive=True))
-    assert slices == {s: table.tablet(0).declared_schema(s) for s in slices}
+    assert slices == {s: table.tablet(0).slice_schema(s) for s in slices}
 
 
 

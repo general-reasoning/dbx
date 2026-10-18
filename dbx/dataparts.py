@@ -988,7 +988,7 @@ class MappedDatatablet(Datatablet):
         sources = self._sources_()
         first = sources[0][1]
         copied = self._copied_(first)
-        columns = {s: {c: t for c, t in (self.declared_columns(s) or _written_columns_(first, s, what)).items()
+        columns = {s: {c: t for c, t in (self.slice_columns(s) or _written_columns_(first, s, what)).items()
                        if cols is None or c in cols}
                    for s, cols in copied.items()}
         # A slice at a time, and within it a source tablet at a time, so only one
@@ -1040,7 +1040,7 @@ class MappedDatatablet(Datatablet):
         for s, cols in copied.items():
             node = topics[s]
             if cols is not None:
-                declared = first.declared_columns(s) or {}
+                declared = first.slice_columns(s) or {}
                 node = DATASLICE(**{c: declared[c] for c in cols}) if all(c in declared for c in cols) else DATASLICE
             out[s] = node
         if not self.WRITES_SOURCE:
@@ -1976,7 +1976,7 @@ class DatatableClusterCorePartition(DatatablePartition):
         schema = {}
         for s, cols in self._carried_columns_().items():
             owner = tablet if s in tablet.slices() else owners[s]
-            declared = owner.declared_columns(s)
+            declared = owner.slice_columns(s)
             if not declared:
                 with owner.fs.open(owner.slice_index_path(s), 'r') as f:
                     shard = json.load(f)['shards'][0]

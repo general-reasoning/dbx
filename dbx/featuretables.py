@@ -199,7 +199,7 @@ class Featuretablet(Layered, Datatablet):
     #     fault VAR.LazyLoader._check_renderable_ exists to prevent, arrived at
     #     from the other side.
     #   * It needs the column's MDS type, which only a DATASLICE-declared
-    #     upstream states (`upstream.declared_columns(slice)`). Under the
+    #     upstream states (`upstream.slice_columns(slice)`). Under the
     #     SLICETOPIC sentinel nothing declares it, and inferring a type from a
     #     value that has already been through MDS is guesswork -- so this may
     #     have to require a declared upstream, and say so.
@@ -656,7 +656,7 @@ class BipolarFeaturetablet(Layered, Datatablet):
     @property
     def feature_columns(self) -> list[str]:
         """The featuretab columns encoded here, in the featuretab's declared order."""
-        declared = self.upstream.declared_columns('features')
+        declared = self.upstream.slice_columns('features')
         if not declared:
             raise ValueError(
                 f"{type(self).__name__}: {self.upstream.anchorkeypath} declares no columns "
@@ -873,7 +873,7 @@ class TernaryFeaturetablet(Layered, Datatablet):
     @property
     def bipolar_columns(self) -> list[str]:
         """The upstream's bipolar columns, in its declared order."""
-        declared = self.upstream.declared_columns('bipolar')
+        declared = self.upstream.slice_columns('bipolar')
         if not declared:
             raise ValueError(f"{type(self).__name__}: {self.upstream.anchorkeypath} declares no columns for "
                              f"its 'bipolar' slice, so there is nothing to say which to ternarize")

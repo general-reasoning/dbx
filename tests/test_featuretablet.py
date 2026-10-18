@@ -185,7 +185,7 @@ def test_bipolar_featuretablet_build_and_slice_inheritance(tmp_path):
 
     assert bipolar_tablet.valid()
     assert set(bipolar_tablet.slices()) == {"bipolar"}
-    assert bipolar_tablet.declared_columns("bipolar") == {"final": "ndarray:int8"}
+    assert bipolar_tablet.slice_columns("bipolar") == {"final": "ndarray:int8"}
     assert set(bipolar_tablet.slices(recursive=True)) == {"bipolar", "features", "samples", "labels"}
 
     # Reading across the encoding, the raw features, and the original labels.
@@ -276,12 +276,12 @@ def test_bipolar_encodes_every_feature_column_or_the_ones_named(tmp_path):
 
     every = BipolarFeaturetable(
         datalake=url, spec=dict(upstream=featuretable, stats_probe=stats), tag="every")
-    assert every.tablet(0).declared_columns("bipolar") == {"a": "ndarray:int8", "b": "ndarray:int8"}
+    assert every.tablet(0).slice_columns("bipolar") == {"a": "ndarray:int8", "b": "ndarray:int8"}
 
     only_b = BipolarFeaturetable(
         datalake=url, spec=dict(upstream=featuretable, stats_probe=stats, features=["b"]),
         tag="only_b").build()
-    assert only_b.tablet(0).declared_columns("bipolar") == {"b": "ndarray:int8"}
+    assert only_b.tablet(0).slice_columns("bipolar") == {"b": "ndarray:int8"}
     assert only_b.data(("bipolar", "b"), concat=True)["bipolar"]["b"].shape == (10, 8)
     assert only_b.hash != every.hash
 
@@ -301,8 +301,8 @@ def test_the_tables_columns_are_their_tablets_declared_slices_before_anything_is
                                                               features=features), tag="bipolar")
         ternary = TernaryFeaturetable(datalake=url, spec=dict(upstream=bipolar), tag="ternary")
         assert not stats.valid() and not bipolar.valid() and not ternary.valid()
-        assert bipolar.bipolar_columns == list(bipolar.tablet(0).declared_columns("bipolar")) == (features or ["a", "b"])
-        assert ternary.ternary_columns == list(ternary.tablet(0).declared_columns("ternary")) == bipolar.bipolar_columns
+        assert bipolar.bipolar_columns == list(bipolar.tablet(0).slice_columns("bipolar")) == (features or ["a", "b"])
+        assert ternary.ternary_columns == list(ternary.tablet(0).slice_columns("ternary")) == bipolar.bipolar_columns
     with pytest.raises(ValueError, match="not columns"):
         BipolarFeaturetable(datalake=url, spec=dict(upstream=featuretable, stats_probe=stats, features=["c"]),
                             tag="nope").bipolar_columns

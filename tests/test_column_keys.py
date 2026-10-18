@@ -195,8 +195,8 @@ class TestADictColumnDeclaredByItsStructure:
 
     def test_the_writer_gets_json(self, tmp_path):
         t = DeclaredTablet(datalake=str(tmp_path))
-        assert t.declared_columns('annotations') == {'annotations': 'json', 'idx': 'int'}
-        assert t.declared_schema('annotations') == {
+        assert t.slice_columns('annotations') == {'annotations': 'json', 'idx': 'int'}
+        assert t.slice_schema('annotations') == {
             'annotations': {'cohort': 'str', 'recurrence': 'int'}, 'idx': 'int'}
 
     def test_built_and_read_back_by_key(self, tmp_path):

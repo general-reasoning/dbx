@@ -20,6 +20,10 @@ All notable changes to this project will be documented in this file.
   constructed.
 
 ### Changed
+- **`slice_columns(slice)` and `slice_schema(slice)`, renamed from `declared_columns` and
+  `declared_schema`.** The columns a slice declares, as the MDS writer takes them (a
+  dict column as `'json'`), and as declared (a dict column's structure). The old names
+  remain as deprecated aliases.
 - **A Featuretable with fewer CPUs than GPUs raises before its workers start.** Its
   device workers -- one per GPU -- need a CPU each to feed their GPUs; sharing fewer
   (a Slurm job given `--gres=gpu:3` and no `--cpus-per-task` has one) they take turns,

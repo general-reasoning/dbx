@@ -387,8 +387,13 @@ class TestSliceWritersTakesTheDeclaration:
     def test_no_argument_is_needed(self, tmp_path):
         t = block(MarkedTablet, tmp_path)
         t.build()
-        assert t.declared_columns('numbers') == {'idx': 'int', 'square': 'int'}
+        assert t.slice_columns('numbers') == {'idx': 'int', 'square': 'int'}
         assert t.data('numbers')['numbers']['square'] == [0, 1, 4]
+
+    def test_the_old_names_are_aliases(self, tmp_path):
+        t = block(MarkedTablet, tmp_path)
+        assert t.declared_columns('numbers') == t.slice_columns('numbers')
+        assert t.declared_schema('numbers') == t.slice_schema('numbers')
 
     def test_a_bare_slice_still_needs_its_columns_passed(self, tmp_path):
         class Bare(Datatablet):
@@ -411,7 +416,7 @@ class TestSliceWritersTakesTheDeclaration:
 
         b = block(Sentinel, tmp_path)
         b.build()
-        assert b.declared_columns('numbers') is None
+        assert b.slice_columns('numbers') is None
         assert b.data('numbers') == {'numbers': {'idx': [0]}}
 
     def test_a_missing_slice_is_still_refused(self, tmp_path):

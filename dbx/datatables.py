@@ -149,8 +149,8 @@ class DATASLICE(DATADIR, metaclass=_DataSliceMeta_):
 
     It is written as MDS ``'json'`` -- what a dict column is -- and the
     structure is what renders, so it is in the hash, and what a
-    ``(slice, column, key)`` read names the keys of. `declared_columns` gives
-    the writer's view, `declared_schema` the declaration.
+    ``(slice, column, key)`` read names the keys of. `slice_columns` gives
+    the writer's view, `slice_schema` the declaration.
     """
 
     #: Empty on the bare marker, and set by the call that parameterises it.
@@ -264,23 +264,31 @@ class _Database_(Datablock):
         """
         return _Database_._find_slice_topics_(getattr(self, 'TOPICS', None))
 
-    def declared_columns(self, slice) -> 'dict | None':
+    def slice_columns(self, slice) -> 'dict | None':
         """The columns *slice* declares, as ``{column: mds_type}``, or None.
 
         None when nothing was declared -- the :data:`SLICETOPIC` sentinel, or a
         bare :class:`DATASLICE` -- so the columns are still the writer's to supply.
         A declaration, unlike what a writer is handed, is in the block's hash.
         A column declared by its dict structure is its MDS type here, ``'json'``;
-        :meth:`declared_schema` has the structure.
+        :meth:`slice_schema` has the structure.
         """
-        schema = self.declared_schema(slice)
+        schema = self.slice_schema(slice)
         return DATASLICE.writer_columns(schema) if schema else None
 
-    def declared_schema(self, slice) -> 'dict | None':
+    def slice_schema(self, slice) -> 'dict | None':
         """The columns *slice* declares, as declared: an MDS type, or a dict column's structure."""
         node = self._topicnode_(*slice.split('/'))
         columns = getattr(node, 'columns', None) if is_topicmarker(node, DATASLICE) else None
         return dict(columns) if columns else None
+
+    def declared_columns(self, slice) -> 'dict | None':
+        """Deprecated alias for slice_columns."""
+        return self.slice_columns(slice)
+
+    def declared_schema(self, slice) -> 'dict | None':
+        """Deprecated alias for slice_schema."""
+        return self.slice_schema(slice)
 
     def data(self, *slice_columns, nested=True, concat: bool = False,
              columns=None, sample_fraction: float | None = None, sample_seed: int = 0, **kwargs):
@@ -742,13 +750,13 @@ class _Database_(Datablock):
         one table is one TABLET class, so the first tablet speaks for them all.
         """
         try:
-            return self.declared_schema(slice) or {}
+            return self.slice_schema(slice) or {}
         except KeyError:
             pass
         n_tablets = getattr(self, 'n_tablets', 0) or 0
         if n_tablets and hasattr(self, 'tablet'):
             try:
-                return self.tablet(0).declared_schema(slice) or {}
+                return self.tablet(0).slice_schema(slice) or {}
             except KeyError:
                 pass
         return {}
@@ -1078,7 +1086,7 @@ class Datatablet(_Database_):
                 )
                 # A column declared by its dict structure is checked row by
                 # row against it, here, where the row that is wrong is known.
-                structures = {c: t for c, t in (self.declared_schema(name) or {}).items()
+                structures = {c: t for c, t in (self.slice_schema(name) or {}).items()
                               if isinstance(t, dict)}
                 writers[name] = sync.track(name, writer, structures)
             yield writers
@@ -1105,7 +1113,7 @@ class Datatablet(_Database_):
         the order it was written, and the declaration renders in its own order
         into the hash, so a permutation is a different slice by both accounts.
         """
-        declared = {name: self.declared_columns(name) for name in names}
+        declared = {name: self.slice_columns(name) for name in names}
         if slices is None:
             undeclared = [name for name, columns in declared.items() if not columns]
             if undeclared:

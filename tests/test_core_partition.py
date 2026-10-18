@@ -180,7 +180,7 @@ def test_core_tablets_declare_the_carried_columns_as_the_table_declares_them(tmp
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, carry=[LABEL], rows_per_tablet=16)
     part = p.part(0).pullback(None, p.var.collator)
-    assert part.tablet(0).declared_schema('pts') == {'x': 'ndarray:float32', 'label': 'int'}
+    assert part.tablet(0).slice_schema('pts') == {'x': 'ndarray:float32', 'label': 'int'}
     assert part.readable_slices() == {'pts': {'x': 'ndarray:float32', 'label': 'int'}, 'source': {'tab': 'int', 'row': 'int'}}
 
 

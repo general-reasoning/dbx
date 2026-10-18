@@ -15,7 +15,7 @@ the `[hyp]` extra. Into another env, `pip install -e '.[hyp]'`.
 
 ```bash
 brew install ollama            # hyp starts `ollama serve` itself if it is not running
-hyp                            # or: python -m hyp
+hyp                            # or: dbx.hyp, or python -m hyp
 ```
 
 On first run it pulls `nomic-embed-text` (embeddings) and `deepseek-r1:1.5b`
@@ -179,6 +179,8 @@ over the layers behind it. Opening a window brings its layer to the front.
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space |
 | Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
 | (lower left) | a spinning wheel while data are being loaded or prepared; an error, in red, for 15 s or until the next read -- its full traceback in the terminal |
+| while a corpus loads | the window is dimmed and takes no input. A card in its middle shows the stage under way, with a bar, the files done out of the total, the time taken and the time left. An anchor's journal is listed first, as a stage of its own (`dbx.BuildJournal.list`). Until the listing is done there is no total, so the bar slides and the card counts the files found so far, after every directory. Then the files are read (`dbx.BuildJournal.read_frame`), counted against that total |
+| Esc, while a corpus loads | interrupt it at its next step and drop anything queued behind it. A reload that is interrupted leaves the disk as it was; a switch of journal leaves it empty until the next reload. Laying out the disk (UMAP) cannot be cut short, so an Esc during it waits for it to finish |
 | points (top right) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center; a right click on one does what a right click on its point does |
 | settings (top right) | names and versions (`--journal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |

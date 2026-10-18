@@ -806,13 +806,14 @@ def anchor_journal(monkeypatch):
     import dbx
 
     monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
-    monkeypatch.setattr(dbx.BuildJournal, "read", lambda anchor, **kw: pd.DataFrame(JOURNAL_ROWS))
+    monkeypatch.setattr(dbx.BuildJournal, "list", lambda anchor, **kw: [f"f{i}" for i in range(len(JOURNAL_ROWS))])
+    monkeypatch.setattr(dbx.BuildJournal, "read_frame", lambda files, **kw: pd.DataFrame(JOURNAL_ROWS))
     monkeypatch.setattr(dbxpipelines, "_side_file_", lambda *a: None)
     monkeypatch.setattr(dbxpipelines, "var_name", lambda row: None)
 
 
 def test_an_anchors_blocks_are_its_newest_entries_and_no_pipelines(anchor_journal):
-    found = dbxpipelines.blocks("pkg.Model", progress=lambda m: None, n_workers=2)
+    found = dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, n_workers=2)
     assert [e.key for e in found] == ["/lake/pkg.Model/v2", "/lake/pkg.Model/v1"]
     assert found[1].extra["row"]["event"] == "build:start", "a block's newest entry"
 
@@ -858,7 +859,7 @@ def journal_app(anchor_journal, monkeypatch):
 
     monkeypatch.setattr(dbxpipelines.HypDbxJournal, "run_async", lambda self, fn, then: None)
     app = dbxpipelines.HypDbxJournal(engine=None, worker=Worker(), args=NS(journal="pkg.Model", n_workers=2))
-    found = dbxpipelines.blocks("pkg.Model", progress=lambda m: None, n_workers=2)
+    found = dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, n_workers=2)
     app.snap = NS(positions=np.array([0.1 + 0j, 0.2 + 0j]), summaries=[e.summary for e in found], texts=[e.text for e in found],
                   points=[{**e.extra} for e in found])
     return app
@@ -907,8 +908,9 @@ def test_an_anchors_filters_reach_its_journal(monkeypatch):
 
     seen = {}
     monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
-    monkeypatch.setattr(dbx.BuildJournal, "read", lambda anchor, **kw: seen.update(kw) or pd.DataFrame())
-    assert dbxpipelines.blocks("pkg.Model", progress=lambda m: None, filters={"tag": "first"}) == []
+    monkeypatch.setattr(dbx.BuildJournal, "list", lambda anchor, **kw: [])
+    monkeypatch.setattr(dbx.BuildJournal, "read_frame", lambda files, **kw: seen.update(kw) or pd.DataFrame())
+    assert dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, filters={"tag": "first"}) == []
     assert seen["tag"] == "first"
 
 
@@ -964,7 +966,7 @@ def test_a_switch_opens_the_journals_own_corpus_and_shows_it(switching, monkeypa
     app.engine = SimpleNamespace(switch=lambda store, source: calls.append(("switch", store)),
                                  start=lambda progress: calls.append(("start",)), snapshot=lambda: "SNAP")
     app.switch("pkg.Model", {"tag": "x"})
-    jobs[-1](lambda m: None)
+    jobs[-1](lambda *a: None)
     assert opened == ["ssh://host/lake/.hyp/anchors/pkg.Model"] and calls == [("switch", "STORE"), ("start",)]
     assert ("snapshot", ("SNAP", None)) in list(app.worker.events.queue)
 
@@ -972,7 +974,7 @@ def test_a_switch_opens_the_journals_own_corpus_and_shows_it(switching, monkeypa
 def test_a_block_of_a_switched_to_anchor_opens_its_window(switching, anchor_journal):
     app, jobs = switching
     app.switch("pkg.Model")
-    found = dbxpipelines.blocks("pkg.Model", progress=lambda m: None, n_workers=2)
+    found = dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, n_workers=2)
     app.snap = SimpleNamespace(positions=np.array([0.1 + 0j, 0.2 + 0j]), summaries=[e.summary for e in found],
                                texts=[e.text for e in found], points=[{**e.extra} for e in found])
     dbxpipelines.HypDbxJournal.__open_point__(app, 0)
@@ -986,3 +988,25 @@ def test_a_block_menu_copies_the_anchorkey_a_journal_filter_matches():
     assert kw["copy"]("ssh://host/lake/pkg.Block/version=2/1234abcd") == "pkg.Block/version=2/1234abcd"
     assert kw["copy"]("/elsewhere/pkg.Block/1234abcd") == "/elsewhere/pkg.Block/1234abcd", "another lake's, whole"
     assert "anchorkey" in kw["copy_hint"]
+
+
+def test_an_anchors_journal_is_listed_then_read_against_the_total(anchor_journal, monkeypatch):
+    import dbx
+
+    def list_(anchor, progress, **kw):
+        progress("listing", 1, None)
+        progress("listing", 3, None)
+        return ["f0", "f1", "f2"]
+
+    def read_frame(files, progress, **kw):
+        assert files == ["f0", "f1", "f2"]
+        progress("reading", 1, 3)
+        return pd.DataFrame(JOURNAL_ROWS)
+
+    monkeypatch.setattr(dbx.BuildJournal, "list", list_)
+    monkeypatch.setattr(dbx.BuildJournal, "read_frame", read_frame)
+    told = []
+    dbxpipelines.blocks("pkg.Model", progress=lambda msg, done=None, total=None: told.append((msg, done, total)), n_workers=2)
+    listing, reading = "dbx.BuildJournal.list('pkg.Model')", "dbx.BuildJournal.read_frame(3 journal files of pkg.Model)"
+    assert told[:5] == [(listing, None, None), (listing, 1, None), (listing, 3, None), (reading, 0, 3), (reading, 1, 3)]
+    assert told[-1][1:] == (2, 2), "and then the side files, counted"

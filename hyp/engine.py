@@ -112,24 +112,34 @@ class Engine:
         self._shown_ = (shown, layout.compute(self.store.embeddings[shown], seed=self.seed) if len(shown) else np.zeros(0, dtype=complex))
 
     def _sync_(self, progress):
-        """Add the source's new entries and update changed ones; True if any embedding changed."""
+        """Add the source's new entries and update changed ones; True if any embedding changed.
+
+        The store is changed only once everything is embedded, so a job
+        interrupted on the way -- its *progress* raising -- leaves it as it was.
+        """
         s = self.store
         index = {p.get("key"): i for i, p in enumerate(s.points)}
         entries = self.source(progress)
-        self.keys, self._shown_ = {e.key for e in entries}, None
         new = [e for e in entries if e.key not in index]
         changed = [e for e in entries if e.key in index and s.points[index[e.key]].get("embed") != e.embed]
+        todo = new + changed
+        if todo:
+            msg = f"embedding {len(new)} new and {len(changed)} changed entries"
+            batches = []
+            for i in range(0, len(todo), 64):
+                progress(msg, i, len(todo))
+                batches.append(self.embedder([e.embed for e in todo[i : i + 64]]))
+            progress(msg, len(todo), len(todo))
+            vecs = np.concatenate(batches)
+        self.keys, self._shown_ = {e.key for e in entries}, None
         for e in entries:
             if e.key in index:
                 # Text and summary may change without the embedding changing:
                 # a pipeline run again keeps its spec but gains a datetime.
                 s.points[index[e.key]].update(text=e.text, summary=e.summary, embed=e.embed, **e.extra)
-        if not new and not changed:
+        if not todo:
             progress("source: nothing new")
             return False
-        progress(f"embedding {len(new)} new and {len(changed)} changed entries")
-        todo = new + changed
-        vecs = np.concatenate([self.embedder([e.embed for e in todo[i : i + 64]]) for i in range(0, len(todo), 64)])
         for e, v in zip(changed, vecs[len(new) :]):
             s.embeddings[index[e.key]] = v
         if new:

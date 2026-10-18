@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`Datablock.update_tree(note)` and `touch_tree(note)`** run `update` or
+  `touch` on every block of the tree, bottom up, each block once. They skip
+  the subtrees `build_tree` skips (`TREE_SKIP_BUILDING`, unless `skips=`
+  says otherwise), and `exclude_self=True` leaves the top block out. Every
+  entry carries the top block's `tree` id, so they are found together.
+- **`Datablock.walk_tree(skips, exclude_self=, adopt=, skip_callback=)`:**
+  the reusable walk behind them. It yields `(path, block)` for every block of
+  the tree, bottom up and each once, lazily, so a block is dealt with before
+  its parent is reached. `try_specialize_tree` now walks with it.
+- **`Datablock.touch()`: a `note` under the event `touch`**, as `update()`
+  is under `update`. `touch` is a construction event, in `CONSTRUCTED_EVENTS`
+  and `PipeJournal.ENTRYPOINT_EVENTS`, so a touched block counts as
+  constructed.
+
 ### Changed
 - **A failed build records why.** Its `build:exception` (or `build:keyboard_interrupt`)
   entry holds `exception` -- `'<Type>: <message>'`, as the exec journal has it -- and

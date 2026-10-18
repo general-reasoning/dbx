@@ -126,6 +126,7 @@ dbx = "dbx:exec"
 "dbx.slurm.eval" = "dbx:slurm_eval"
 "dbx.slurm.print" = "dbx:slurm_pprint"
 "dbx.slurm.pprint" = "dbx:slurm_pprint"
+"dbx.hyp" = "hyp.app:main"
 hyp = "hyp.app:main"
 
 [tool.setuptools.packages.find]

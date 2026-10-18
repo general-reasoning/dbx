@@ -3180,6 +3180,24 @@ class Datablock:
         """`note`, under the event ``'update'``: what this block's journal entry says now -- its slices, say -- re-recorded."""
         return self.note(note, event='update', inline=inline, message=message)
 
+    def touch(self, note: str | None = None, *, inline: bool = False, message: str | None = None):
+        """`note`, under the event ``'touch'``: the block marked constructed, as it stands -- its data there, however they got there."""
+        return self.note(note, event='touch', inline=inline, message=message)
+
+    def update_tree(self, note: str | None = None, *, inline: bool = False, skips: str | None = 'TREE_SKIP_BUILDING',
+                    exclude_self: bool = False):
+        """`update` every block of this one's tree, bottom up, each once: see `walk_tree` for which, and in what order."""
+        for _, block in self.walk_tree(skips, exclude_self=exclude_self, adopt=True):
+            block.update(note, inline=inline)
+        return self
+
+    def touch_tree(self, note: str | None = None, *, inline: bool = False, skips: str | None = 'TREE_SKIP_BUILDING',
+                   exclude_self: bool = False):
+        """`touch` every block of this one's tree, bottom up, each once: see `walk_tree` for which, and in what order."""
+        for _, block in self.walk_tree(skips, exclude_self=exclude_self, adopt=True):
+            block.touch(note, inline=inline)
+        return self
+
     def leave_breadcrumbs(self):
         """Touch a breadcrumb for every topic that has a location.
 
@@ -3279,6 +3297,39 @@ class Datablock:
             if isinstance(c, Datablock):
                 c._adopt_exempt_(seen)
 
+    def walk_tree(self, skips: str | None = 'TREE_SKIP_BUILDING', *, exclude_self: bool = False, adopt: bool = False,
+                  skip_callback=None):
+        """Every block of this one's tree, bottom up, each once: ``(path, block)``, *path* the spec keys from this one to it.
+
+        A tree is a block and the Datablocks its VAR holds, theirs, and so on;
+        each is yielded after every block below it -- the order `build_tree`
+        builds in -- and this one last, unless *exclude_self*. A block reached
+        twice, through two parents, is yielded at the first. Lazily: what is
+        done with a block is done before its parent is reached, so a parent
+        sees its children as the walk left them.
+
+        *skips* names the class attribute whose spec keys are not descended
+        into -- ``'TREE_SKIP_BUILDING'``, the default, as `build_tree` skips;
+        ``'TREE_SKIP_VALIDATION'``, as `valid_tree` does -- or None for none.
+        *skip_callback(path)* is told of each subtree skipped. *adopt* hands
+        each block below this one this tree's id first (`_adopt_`), as
+        `build_tree` does, so that the journal entries a walk writes are found
+        together with this block's.
+        """
+        seen = set()
+
+        def visit(block, path):
+            if block.anchorkey in seen:
+                return
+            seen.add(block.anchorkey)
+            on_skip = (lambda s: skip_callback(path + (s,))) if skip_callback else None
+            for s, child in block._iter_var_blocks_(skips, skip_callback=on_skip):
+                yield from visit(block._adopt_(child) if adopt else child, path + (s,))
+            if path or not exclude_self:
+                yield path, block
+
+        return visit(self, ())
+
     def try_specialize_tree(self) -> dict:
         """Specialize every block of this one's tree whose specialization resolves -- and build none.
 
@@ -3294,14 +3345,13 @@ class Datablock:
 
     def _specialize_tree_(self, skips: str, status: dict) -> dict:
         """`try_specialize_tree`'s walk, over the children *skips* -- a ``TREE_SKIP_*`` -- leaves; *status* filled."""
-        if self.anchorkey in status:
-            return status
-        for _, child in self._iter_var_blocks_(skips):
-            child._specialize_tree_(skips, status)
-        # Asked of a valid block too: a block's specialize() returns at once, but a
-        # stack's asks its blocks, which may have moved under it -- see `Datastack.specialize`.
-        self.specialize()
-        status[self.anchorkey] = ('valid' if self.valid() else 'not-valid', self.owedtopics())
+        for _, block in self.walk_tree(skips):
+            if block.anchorkey in status:
+                continue
+            # Asked of a valid block too: a block's specialize() returns at once, but a
+            # stack's asks its blocks, which may have moved under it -- see `Datastack.specialize`.
+            block.specialize()
+            status[block.anchorkey] = ('valid' if block.valid() else 'not-valid', block.owedtopics())
         return status
 
     def valid_var(self, *, reduce=False):

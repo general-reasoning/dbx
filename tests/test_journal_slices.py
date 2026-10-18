@@ -6,6 +6,7 @@ import pytest
 pytest.importorskip("torch")
 
 from dbx.datatables import DATASLICE, Datatable, Datatablet  # noqa: E402
+from dbx.journals import CONSTRUCTED_EVENTS  # noqa: E402
 from test_featuretablet import DummySampleTable, _feature_table  # noqa: E402
 
 
@@ -105,3 +106,12 @@ def test_update_is_a_note_under_its_own_event(tmp_path):
     assert entry['note'] == 'slices re-recorded'
     assert ast.literal_eval(entry['slices']) == table.readable_slices()
     assert 'build:end' in set(table.buildjournal()['event']), "beside the build's entry, not over it"
+
+
+def test_touch_is_a_note_under_its_own_event(tmp_path):
+    table = _feature_table(str(tmp_path), 'features')
+    assert table.touch() is table
+    entry = table.buildjournal(event='touch').iloc[-1]
+    assert ast.literal_eval(entry['slices']) == table.readable_slices()
+    assert 'build:end' in set(table.buildjournal()['event']), "beside the build's entry, not over it"
+    assert 'touch' in set(table.buildjournal(event=CONSTRUCTED_EVENTS)['event']), "touch is a construction"

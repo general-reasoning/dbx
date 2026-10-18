@@ -66,6 +66,8 @@ EDGE = (250, 200, 90)
 STATUS = (150, 160, 175)
 DIMMED = (85, 92, 105)  # a menu shown but not yet usable
 DISK_SEE_THROUGH = 150  # the disk's alpha, out of 255, over layers behind it
+LOADING_VEIL = 170  # the alpha, out of 255, of the veil over the window while a job loads
+BAR = (120, 170, 235)  # a loading job's bar
 
 
 def make_embedder(kind, model, ollama):
@@ -87,6 +89,13 @@ def _double_click_(last, pos, now):
     return False, (pos, now)
 
 
+def _duration_(seconds) -> str:
+    """*seconds* as ``m:ss``, or ``h:mm:ss`` from an hour."""
+    m, sec = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
 def _failed_(e) -> str:
     """*e*, raised on a background thread: its traceback to the terminal, whole; a line for the status line, returned."""
     traceback.print_exception(e, file=sys.stderr)
@@ -94,27 +103,60 @@ def _failed_(e) -> str:
     return f"{type(e).__name__}: {e}"
 
 
+class Interrupted(Exception):
+    """Raised by a job's progress callback once the user has interrupted it: Esc."""
+
+
 class Worker:
-    """One background thread running engine jobs in order, reporting through a queue."""
+    """One background thread running engine jobs in order, reporting through a queue.
+
+    A job is called with a progress callback, ``progress(msg, done=None,
+    total=None)``: *msg* for the status line and, with counts, a bar -- *done*
+    of *total*, or *done* so far where *total* is None, not yet known. Once
+    `cancel` is called the callback of every job submitted before it raises
+    `Interrupted`, so a job stops at its next report: it is interruptible
+    exactly where it reports.
+    """
 
     def __init__(self):
         self.events = queue.Queue()
         self.jobs = queue.Queue()
         self.pending = 0
+        self.cancels = 0  # how many times cancel was called: a job submitted before the last is interrupted
         threading.Thread(target=self._loop_, daemon=True).start()
 
     def submit(self, fn):
         self.pending += 1
-        self.jobs.put(fn)
+        self.jobs.put((fn, self.cancels))
 
-    def status(self, msg):
-        self.events.put(("status", msg))
+    def status(self, msg, done=None, total=None):
+        self.events.put(("status", (msg, done, total)))
+
+    def cancel(self):
+        """Interrupt the job under way, at its next report, and drop the ones queued behind it."""
+        self.cancels += 1
+        while True:
+            try:
+                self.jobs.get_nowait()
+            except queue.Empty:
+                break
+            self.events.put(("finished", None))
 
     def _loop_(self):
         while True:
-            fn = self.jobs.get()
+            fn, cancels = self.jobs.get()
+
+            def progress(msg, done=None, total=None, cancels=cancels):
+                if self.cancels != cancels:
+                    raise Interrupted(msg)
+                self.status(msg, done, total)
+
             try:
-                fn(self.status)
+                if self.cancels != cancels:  # taken off the queue as it was dropped: not begun
+                    raise Interrupted(None)
+                fn(progress)
+            except Interrupted:
+                self.events.put(("interrupted", None))
             except Exception as e:  # shown in the status line; the UI keeps running
                 self.events.put(("error", _failed_(e)))
             finally:
@@ -1257,6 +1299,9 @@ class Hyp:
         self.snap = None
         self.tween = None  # (from positions, to positions, start time)
         self.status = "starting"
+        self.status_since = time.monotonic()  # when the status last changed: when the job's stage began
+        self.progress = None  # (done, total) of the job's stage, total None where not yet known; None for no counts
+        self.interrupting = False  # Esc was pressed, and the job has not stopped yet
         self.error = None
         self.error_at = 0.0
         self.reading = 0  # run_async reads under way: with the worker's jobs, what the spinner shows
@@ -1368,7 +1413,17 @@ class Hyp:
 
         self.worker.submit(job)
 
+    def interrupt(self):
+        """Stop the engine's job at its next report, and drop those queued: Esc, while one loads."""
+        self.worker.cancel()
+        self.interrupting = True
+
     def handle(self, ev, now):
+        if self.loading():
+            # Everything waits on the job; Esc stops it.
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                self.interrupt()
+            return
         if any(c.handle(ev) for c in self.controls if c.visible()) and not self.viewers:
             return
         if self.settings_menu.handle(ev) or (not self.viewers and (self.reload_button.handle(ev) or self.points_menu.handle(ev))):
@@ -1468,7 +1523,12 @@ class Hyp:
                 return got
             got = True
             if kind == "status":
-                self.status, self.error = payload, None
+                msg, done, total = payload
+                if msg != self.status:
+                    self.status_since = now
+                self.status, self.progress, self.error = msg, None if done is None else (done, total), None
+            elif kind == "interrupted":
+                self.status, self.status_since, self.progress = "interrupted", now, None
             elif kind == "error":
                 self.error, self.error_at = payload, now
             elif kind == "snapshot":
@@ -1477,6 +1537,8 @@ class Hyp:
                 payload()
             elif kind == "finished":
                 self.worker.pending -= 1
+                if not self.worker.pending:
+                    self.progress, self.interrupting = None, False
             elif kind == "read":
                 self.reading -= 1
 
@@ -1656,6 +1718,8 @@ class Hyp:
                     control.draw_list(surf, self.small)
         if self.popup is not None:
             self.popup.draw_list(surf, self.small)
+        if self.loading():
+            self.draw_loading(now)
         self.statusline(now)
         pygame.display.flip()
 
@@ -1671,6 +1735,56 @@ class Hyp:
         for line in lines:
             self.screen.blit(line, (rect.x + 8, y))
             y += line.get_height()
+
+    def draw_loading(self, now):
+        """While a job loads: a veil over all but the status line, and in the middle the job, its bar and the time it has taken and has left."""
+        surf = self.screen
+        w, h = surf.get_size()
+        veil = pygame.Surface((w, max(0, h - 24)), pygame.SRCALPHA)
+        veil.fill((*BG, LOADING_VEIL))
+        surf.blit(veil, (0, 0))
+        bw = max(120, min(460, w - 60))
+        title = self.status
+        while len(title) > 1 and self.font.size(title)[0] > bw:
+            title = title[:-2] + "…"
+        elapsed = now - self.status_since
+        if self.progress is None:
+            detail, frac = _duration_(elapsed), None
+        else:
+            done, total = self.progress
+            if total is None:
+                detail, frac = f"{done:,} found so far · {_duration_(elapsed)}", None
+            else:
+                frac = min(1.0, done / total) if total else 1.0
+                detail = f"{done:,} of {total:,} · {frac:.0%} · {_duration_(elapsed)}"
+                if 0 < done < total and elapsed >= 1:
+                    detail += f" · about {_duration_(elapsed / done * (total - done))} left"
+        hint = "interrupting…" if self.interrupting else "Esc: interrupt"
+        lines = [self.font.render(title, True, LABEL), None, self.small.render(detail, True, STATUS),
+                 self.small.render(hint, True, DIMMED)]
+        heights = [l.get_height() if l is not None else 6 for l in lines]
+        card = pygame.Rect(0, 0, bw + 32, sum(heights) + 8 * (len(lines) - 1) + 28)
+        card.center = (w // 2, (h - 24) // 2)
+        pygame.draw.rect(surf, DISK, card, border_radius=8)
+        pygame.draw.rect(surf, RIM, card, 1, border_radius=8)
+        x, y = card.x + 16, card.y + 14
+        for line, lh in zip(lines, heights):
+            if line is None:
+                track = pygame.Rect(x, y, bw, lh)
+                pygame.draw.rect(surf, GRID, track, border_radius=3)
+                if frac is None:  # no total yet: a segment sliding to and fro
+                    seg = bw // 4
+                    s = 0.5 - 0.5 * math.cos(math.pi * ((now * 0.6) % 2))
+                    pygame.draw.rect(surf, BAR, (x + int(s * (bw - seg)), y, seg, lh), border_radius=3)
+                elif frac > 0:
+                    pygame.draw.rect(surf, BAR, (x, y, max(lh, int(bw * frac)), lh), border_radius=3)
+            else:
+                surf.blit(line, (x, y))
+            y += lh + 8
+
+    def loading(self):
+        """Whether an engine job -- reading a corpus's source, embedding it, laying it out -- is under way: the window waits on it."""
+        return bool(self.worker.pending)
 
     def busy(self):
         """Whether data are being loaded or prepared: an engine job, or a read a viewer waits on."""

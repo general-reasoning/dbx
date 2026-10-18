@@ -146,7 +146,7 @@ dbx.execjournal(date='2026-09-28').constructed()      # {anchor: BuildJournalFra
 | `e.output(basename='…')` | prints the one capture whose file name the regex matches at its start (below) |
 
 "Constructed" means an entry whose `event` is one of `CONSTRUCTED_EVENTS`:
-`build:end`, `UNSAFE_redirect`, `UNSAFE_copy_from:END`, `update` or `note` (what
+`build:end`, `UNSAFE_redirect`, `UNSAFE_copy_from:END`, `update`, `touch` or `note` (what
 `Datablock.note()` writes by default), matched exactly. The
 default `event` filter is applied **in addition** to any other filter you pass.
 Passing `event=` yourself replaces it.
@@ -319,6 +319,26 @@ Rows from older eras have their `type` and `signature` columns resolved per
 row, so a filter on them means the same thing on every row. Pass
 `unnormalized=True` to get the columns exactly as recorded.
 
+### Listing first
+
+Reading a journal is two stages: listing its entry files, and then reading
+them. `BuildJournal.list(anchor)` is the first one alone: every entry file
+under `<datalake>/<anchor>/`, as full paths. `BuildJournal.read_frame(files)`
+reads them, so a caller can learn how many files there are before it reads
+any:
+
+```python
+files = dbx.BuildJournal.list('demo_blocks.Apple')
+frame = dbx.BuildJournal.read_frame(files, event='build:end')
+```
+
+`BuildJournal.read`, `list`, `read_frame` and `dbx.pipejournal` all take a
+callable `progress=`, which they call as `progress(desc, done, total)`.
+While listing, `total` is None and `done` is the number of files found so
+far, reported after every directory is listed. While reading, `done` counts the files read out of `total`. If the
+callable raises an exception, the files not yet started are cancelled and
+the exception reaches the caller; that is how a user interrupts a read.
+
 ### `BuildJournalFrame`
 
 | call | returns |
@@ -422,7 +442,7 @@ positions.
 
 With `construct_only=True`, an entrypath is kept only if its own journal
 (the `.journal` under it) has a `build:end`, `UNSAFE_redirect`,
-`UNSAFE_copy_from:END`, `update` or `note` entry -- `CONSTRUCTED_EVENTS`. A
+`UNSAFE_copy_from:END`, `update`, `touch` or `note` entry -- `CONSTRUCTED_EVENTS`. A
 pipeline left with no entrypaths is dropped. `extra_construction_events` adds
 events that count as well: each matches an event alone, or followed by `=` or
 `:` and the rest, so `'ckpt'` takes a still that has checkpointed

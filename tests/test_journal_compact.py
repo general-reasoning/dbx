@@ -123,6 +123,66 @@ def test_read_hash_reads_a_compacted_journal(lake):
     assert BuildJournal.read_hash(absent.anchor, absent.hash, keyby=absent.keyby, datalake=lake) is None
 
 
+@pytest.fixture
+def parquet_reads(monkeypatch):
+    """Every `pd.read_parquet` call: what it read, and the options it read with."""
+    import pandas as pd
+    calls, read = [], pd.read_parquet
+
+    def recording(source, *args, **kwargs):
+        calls.append((getattr(source, 'path', source), kwargs))
+        return read(source, *args, **kwargs)
+
+    monkeypatch.setattr(pd, 'read_parquet', recording)
+    return calls
+
+
+def _compacted(lake):
+    leaves = [Leaf(spec={'n': n}) for n in range(3)]
+    for leaf in leaves:
+        leaf.build()
+    BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    return leaves
+
+
+def _read_hash(leaf, lake):
+    return BuildJournal.read_hash(leaf.anchor, leaf.hash, version=leaf.version, keyby=leaf.keyby, datalake=lake)
+
+
+def test_a_compacted_journal_is_read_once_for_every_hash_and_without_threads(lake, parquet_reads):
+    leaves = _compacted(lake)
+    BuildJournal._COMPACTED_FRAMES_.clear()
+    parquet_reads.clear()
+    for leaf in leaves + leaves:
+        assert set(_read_hash(leaf, lake)['hash']) == {leaf.hash}
+    compacted = [kwargs for path, kwargs in parquet_reads if str(path).endswith('-journal-compacted.parquet')]
+    assert len(compacted) == 1, parquet_reads
+    assert compacted[0].get('use_threads') is False and 'filters' not in compacted[0]
+
+
+def test_a_journal_compacted_again_is_read_again(lake, parquet_reads):
+    leaves = _compacted(lake)
+    _read_hash(leaves[0], lake)
+    Leaf(spec={'n': 7}).build()
+    BuildJournal.UNSAFE_compact([Leaf().anchor], OVERRIDE=True)
+    seven = Leaf(spec={'n': 7})
+    assert set(_read_hash(seven, lake)['hash']) == {seven.hash}
+
+
+def test_what_a_caller_does_to_its_rows_leaves_the_journal_as_it_was(lake):
+    leaves = _compacted(lake)
+    rows = _read_hash(leaves[0], lake)
+    rows['hash'] = 'changed'
+    assert set(_read_hash(leaves[0], lake)['hash']) == {leaves[0].hash}
+
+
+def test_every_journal_read_is_without_threads(lake, parquet_reads):
+    _compacted(lake)
+    Leaf(spec={'n': 5}).build()
+    BuildJournal.read(Leaf().anchor, datalake=lake)
+    assert parquet_reads and all(kwargs.get('use_threads') is False for _, kwargs in parquet_reads), parquet_reads
+
+
 class Grown(Leaf):
     """`Leaf` with a field it never had, at the value at which the two agree: a `Leaf` built is its past."""
 

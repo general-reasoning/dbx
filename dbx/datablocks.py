@@ -5813,7 +5813,7 @@ class Datablock:
             for file in parquet_files:
                 try:
                     with fs.open(file, 'rb') as f:
-                        df = pd.read_parquet(f, engine='pyarrow')
+                        df = pd.read_parquet(f, engine='pyarrow', use_threads=False)
                     if 'id' in df.columns and code in df['id'].values:
                         row = df[df['id'] == code].iloc[0]
                         return BuildJournalEntry(row.dropna(), storage_options=self.storage_options)
@@ -6308,7 +6308,7 @@ class Datablock:
         for file in files:
             try:
                 with self.fs.open(file, 'rb') as f:
-                    df = pd.read_parquet(f)
+                    df = pd.read_parquet(f, use_threads=False)
             except Exception as e:
                 self.log.warning(f"redirection: skipping unreadable journal file {file}: {e}")
                 continue

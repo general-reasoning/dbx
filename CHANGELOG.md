@@ -20,6 +20,15 @@ All notable changes to this project will be documented in this file.
   constructed.
 
 ### Changed
+- **Journal files are read without Arrow's thread pool, and a compacted journal once per
+  process.** A specialization pass hung for good in one worker: reading an anchor's
+  compacted journal with a hash filter, through an open file, Arrow waited on a task no
+  thread of its pool held. Every journal `read_parquet` now passes `use_threads=False`
+  (journal files are KB to MB; threads gain nothing). `BuildJournal.read_hash` reads a
+  compacted journal whole, once per process -- by its file: path, size, modification
+  time, so one compacted again is read again; the 16 most recent are kept -- and filters
+  by hash in memory, rather than reading the file again for every past of every tablet.
+  The rows are those the filtered read gave.
 - **A core partition's layout is read once per process, shared, and memory-mapped.**
   `DatatableClusterCorePartition._layouts_` -- what `lot` and `lot_tablets` read --
   cached the layout on the instance, and each core tablet evaluates instances of its

@@ -19,6 +19,7 @@ imports from here at the top, so the names in it are not there yet when this
 module is executed.
 """
 import ast
+import collections
 import contextlib
 import copy
 import datetime
@@ -1203,7 +1204,7 @@ def read_exec_journal(
     else:
         def read_file(file):
             with fs.open(file, 'rb') as f:
-                return pd.read_parquet(f)
+                return pd.read_parquet(f, use_threads=False)
 
         dfs = []
         with ThreadPoolExecutor(max_workers=min(n_workers, max(1, len(files)))) as ex:
@@ -1313,7 +1314,7 @@ class _ReadParquetCallable:
         """The file's frame, or what reading it raised, as a str: one bad file does not stop the others."""
         try:
             with self.fs.open(self.path, 'rb') as f:
-                return pd.read_parquet(f, engine='pyarrow')
+                return pd.read_parquet(f, engine='pyarrow', use_threads=False)
         except Exception as e:
             return f"{type(e).__name__}: {e}"
 
@@ -3373,7 +3374,7 @@ class BuildJournal:
             with fs.open(aside, 'wb') as f:
                 table.to_parquet(f, engine='pyarrow')
             with fs.open(aside, 'rb') as f:
-                back = pd.read_parquet(f, engine='pyarrow')
+                back = pd.read_parquet(f, engine='pyarrow', use_threads=False)
             # Values, not dtypes or how a missing one is spelled: a column of strings and Nones,
             # object in memory, reads back as strings with NaN for None.
             def values(df):
@@ -3403,15 +3404,46 @@ class BuildJournal:
         try:
             if not fs.exists(path):
                 return None
-            with fs.open(path, 'rb') as f:
-                df = pd.read_parquet(f, engine='pyarrow', filters=[('hash', '==', hash)])
+            whole = cls._compacted_frame_(fs, path)
         except Exception as e:
             log.warning(f"BuildJournal.read_hash: skipping unreadable compacted journal {path}: {e}")
             return None
+        df = whole[whole['hash'] == hash].reset_index(drop=True) if 'hash' in whole.columns else whole.iloc[:0]
         if df.empty:
             return None
         df['entry_path'] = fs_full_path(fs, path)
         return df
+
+    #: The compacted journals this process has read, whole, by their file -- path, size,
+    #: modification time -- the most recent `_COMPACTED_KEPT_` of them. See `_compacted_frame_`.
+    _COMPACTED_FRAMES_: 'collections.OrderedDict' = collections.OrderedDict()
+    _COMPACTED_KEPT_ = 16
+
+    @classmethod
+    def _compacted_frame_(cls, fs, path) -> pd.DataFrame:
+        """The compacted journal at *path*, whole: read once per process, while the file is as it was.
+
+        Looking for a block's pasts reads one anchor's compacted journal for
+        every past of every tablet -- the same file, hundreds of times a stack
+        -- so it is read once and filtered by hash in memory, which a filtered
+        read did on every call. Keyed by the file's path, size and
+        modification time, so a journal compacted again is read again.
+        Without Arrow's thread pool (``use_threads=False``): a filtered read
+        of an open file through it once waited forever on a task no pool
+        thread held, in one worker of a stack's specialization pass.
+        Callers filter it -- a new frame -- and never change it.
+        """
+        info = fs.info(path)
+        key = (fs_full_path(fs, path), info.get('size'), info.get('mtime', info.get('last_modified')))
+        frames = cls._COMPACTED_FRAMES_
+        if key in frames:
+            frames.move_to_end(key)
+        else:
+            with fs.open(path, 'rb') as f:
+                frames[key] = pd.read_parquet(f, engine='pyarrow', use_threads=False)
+            while len(frames) > cls._COMPACTED_KEPT_:
+                frames.popitem(last=False)
+        return frames[key]
 
     @classmethod
     def UNSAFE_compact(cls, anchors=None, *, datalake=None, storage_options=None, parallelization='multithreading',
@@ -3670,7 +3702,7 @@ class BuildJournal:
             # journal file is not. Every entry then "skipped as unreadable" and
             # the journal came back empty rather than failing.
             with fs.open(file, 'rb') as f:
-                return pd.read_parquet(f, engine='pyarrow')
+                return pd.read_parquet(f, engine='pyarrow', use_threads=False)
 
         desc = desc or 'Reading journal files'
         report = progress if callable(progress) else None
@@ -3937,7 +3969,7 @@ class PipeJournal(BuildJournal):
             # The newest entry of each entrypath, by its own datetime: its file, and the side files it names.
             def read(file):
                 with fs.open(file, 'rb') as f:
-                    df = pd.read_parquet(f)
+                    df = pd.read_parquet(f, use_threads=False)
                 row = df.iloc[0]
                 sides = {norm(row[c]) for c in cls._SIDE_COLUMNS_ if c in df.columns and isinstance(row[c], str)}
                 return file, row.get('datetime', ''), row.get('entrypath'), sides
@@ -4030,7 +4062,7 @@ class PipeJournal(BuildJournal):
                     path = os.path.join(lake_root, anchor, BuildJournal.COMPACTED.format(anchor=anchor))
                     try:
                         with fs.open(path, 'rb') as f:
-                            compacted[anchor] = pd.read_parquet(f, columns=['anchorkeypath', 'event'])
+                            compacted[anchor] = pd.read_parquet(f, columns=['anchorkeypath', 'event'], use_threads=False)
                     except (FileNotFoundError, KeyError, ValueError):
                         compacted[anchor] = None
             df = compacted[anchor]
@@ -4047,7 +4079,7 @@ class PipeJournal(BuildJournal):
             for file in fs.glob(os.path.join(root, '.journal', '*', 'journal', '*', '*.parquet')):
                 try:
                     with fs.open(file, 'rb') as f:
-                        events = pd.read_parquet(f, columns=['event'])['event']
+                        events = pd.read_parquet(f, columns=['event'], use_threads=False)['event']
                 except Exception as e:
                     log.warning(f"Skipping unreadable journal file {file}: {e}")
                     continue

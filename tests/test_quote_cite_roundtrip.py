@@ -69,6 +69,19 @@ class Top(Datablock):
         pass
 
 
+class Located(Datablock):
+    """VAR fields holding a specline that names no datablock: one a default, one given in the spec."""
+    TOPICS = {'output': 'output.txt'}
+
+    @dataclass
+    class VAR(Datablock.VAR):
+        root: str = "$dbx.getenv('CITE_TEST_ROOT')"
+        other: str = None
+
+    def __build__(self):
+        pass
+
+
 @pytest.fixture
 def nested(tmp_path):
     """``Top -> Mid -> Leaf``, each tagged and with an operational kwarg."""
@@ -211,6 +224,21 @@ class TestCiteRendering:
         """cite() emits no escapes, so deslash has nothing to corrupt -- which
         is why deslash=2 is safe here and not in quote()."""
         assert nested.cite(deslash=0) == nested.cite(deslash=2)
+
+    def test_cite_keeps_a_speclines_line_given_or_default(self, tmp_path, monkeypatch):
+        """Nested datablocks are expanded; any other specline is cited as the line, relocatable -- never as what it resolves to here."""
+        monkeypatch.setenv('CITE_TEST_ROOT', '/resolved/here')
+        given = Located(datalake=str(tmp_path), spec=dict(other="$dbx.getenv('CITE_TEST_ROOT')"))
+        for line in ("'root': \"$dbx.getenv('CITE_TEST_ROOT')\",", "'other': \"$dbx.getenv('CITE_TEST_ROOT')\","):
+            assert line in given.cite()
+        assert '/resolved/here' not in given.cite()
+        assert given.var.root == '/resolved/here', "resolved when read, as before"
+
+    def test_a_cites_nested_datablock_reads_back_with_one_sigil(self, nested):
+        """quote_spec takes a value already carrying its $ -- as a cite writes a nested datablock -- as it stands, not as $$."""
+        from dbx.databits import quote_spec
+        assert quote_spec("{'mid': $pkg.Mid(spec={'seed': 42}), 'up': pkg.Up(n=1)}") == \
+            {'mid': "$pkg.Mid(spec={'seed': 42})", 'up': "$pkg.Up(n=1)"}
 
 
 # =====================================================================

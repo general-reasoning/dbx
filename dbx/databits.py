@@ -522,7 +522,8 @@ def quote_spec(text: str) -> 'dict | None':
         try:
             spec[key] = ast.literal_eval(value)
         except (ValueError, SyntaxError, TypeError):
-            spec[key] = '$' + value
+            # A value with its sigil already -- as a cite writes a nested datablock -- is a specline as it stands: never $$.
+            spec[key] = value if value.startswith('$') else '$' + value
     return spec
 
 

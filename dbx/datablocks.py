@@ -4126,6 +4126,10 @@ class Datablock:
         matter how they are wrapped. Recursing over the *object graph* instead
         removes the quoting entirely, so depth costs nothing but indentation.
 
+        Nested datablocks are expanded; every other specline -- given in the
+        spec or a VAR default -- is cited as the line, ``'$dbx.getenv(...)'``,
+        never as what it resolves to on this machine: it is there to relocate.
+
         ``tailkwargs=False`` (default) shows only :attr:`CITE_KEEP_TAILKWARGS`.
         ``deslash`` is retained for compatibility and applied last; it is
         normally a no-op here, since the recursive form emits no escaped
@@ -4143,7 +4147,12 @@ class Datablock:
 
         lines.append(f"{inner}spec={{")
         for sk in sorted(self.VAR.__dataclass_fields__):
-            raw_v = self.spec[sk] if (isinstance(getattr(self, 'spec', None), dict) and sk in self.spec) else None
+            # The field's term, unevaluated: the spec's value where it gives one, else the VAR default's -- so a
+            # specline naming no datablock, ``$dbx.getenv('HOME')`` say, is cited as the line, relocatable, not
+            # as what it resolves to here.
+            loaded = object.__getattribute__(self.var, sk)
+            raw_v = (self.spec[sk] if (isinstance(getattr(self, 'spec', None), dict) and sk in self.spec)
+                     else loaded.term if isinstance(loaded, Datablock.VAR.LazyLoader) else None)
             val = getattr(self.var, sk)
             if isinstance(val, Datablock):
                 rendered = val.cite(

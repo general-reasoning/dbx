@@ -57,6 +57,12 @@ All notable changes to this project will be documented in this file.
   entry's revision, `--revision=`; off, it runs at today's checkout.
 
 ### Changed
+- **`cite()` keeps a specline's line.** Nested datablocks are still
+  expanded, but any other specline -- given in the spec or a VAR default,
+  `$dbx.getenv('HOME')` say -- is cited as the line, relocatable, not as what
+  it resolves to on this machine. And `quote_spec` takes a value that already
+  carries its `$` -- as a cite writes a nested datablock -- as it stands, so
+  a cite's nested datablock no longer reads back as a `$$` specline.
 - **hyp: an arrow is read by where else its direction runs, not by its
   endpoints.** The lines Claude wrote from an arrow's projected phrases only
   said what its two endpoints differ in. An arrow is now read across the

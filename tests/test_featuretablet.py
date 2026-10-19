@@ -471,7 +471,7 @@ def test_datacollator_refuses_a_missing_column():
         collator(rows)
 
 
-def test_featuretablet_streaming(tmp_path):
+def test_featuretablet_evaluator_use_dataset(tmp_path):
     url = str(tmp_path)
     sampletablet = DummySampleTablet(datalake=url, tag="samples_str").build()
 
@@ -485,7 +485,7 @@ def test_featuretablet_streaming(tmp_path):
             collator=sample_collator(),
         ),
         device="cpu",
-        streaming=False,
+        evaluator_use_dataset=False,
         tag="features_bulk",
     ).build()
 
@@ -497,13 +497,13 @@ def test_featuretablet_streaming(tmp_path):
             collator=sample_collator(),
         ),
         device="cpu",
-        streaming=True,
-        dataloader_kwargs={"num_workers": 0},
+        evaluator_use_dataset=True,
+        evaluator_dataloader_kwargs={"num_workers": 0},
         tag="features_stream",
     ).build()
 
-    assert featuretablet_stream.streaming is True
-    assert featuretablet_stream.dataloader_kwargs == {"num_workers": 0}
+    assert featuretablet_stream.evaluator_use_dataset is True
+    assert featuretablet_stream.evaluator_dataloader_kwargs == {"num_workers": 0}
     assert featuretablet_stream.valid()
 
     data_bulk = featuretablet_bulk.data(("features", "final"))["features"]["final"]
@@ -511,7 +511,7 @@ def test_featuretablet_streaming(tmp_path):
     np.testing.assert_allclose(np.squeeze(data_stream), np.squeeze(data_bulk))
 
 
-def test_featuretable_streaming(tmp_path):
+def test_featuretable_evaluator_use_dataset(tmp_path):
     url = str(tmp_path)
     sampletable = DummySampleTable(
         datalake=url,
@@ -529,16 +529,16 @@ def test_featuretable_streaming(tmp_path):
             collator=sample_collator(),
         ),
         devices=["cpu"],
-        streaming=True,
-        dataloader_kwargs={"num_workers": 0},
+        evaluator_use_dataset=True,
+        evaluator_dataloader_kwargs={"num_workers": 0},
         tag="feature_table_str",
     ).build()
 
-    assert featuretable_stream.streaming is True
-    assert featuretable_stream.dataloader_kwargs == {"num_workers": 0}
+    assert featuretable_stream.evaluator_use_dataset is True
+    assert featuretable_stream.evaluator_dataloader_kwargs == {"num_workers": 0}
     tablet0 = featuretable_stream.tablet(0)
-    assert tablet0.streaming is True
-    assert tablet0.dataloader_kwargs == {"num_workers": 0}
+    assert tablet0.evaluator_use_dataset is True
+    assert tablet0.evaluator_dataloader_kwargs == {"num_workers": 0}
 
     feat_data = featuretable_stream.data(("features", "final"), concat=True)
     assert np.squeeze(feat_data["features"]["final"]).shape == (10, 8)
@@ -698,6 +698,92 @@ def test_feature_evaluation_queues_off_the_devices_and_the_rest_off_n_workers(tm
     one = table(["cpu"]).build()      # its checks at n_workers=5, its one device's evaluation inline
     assert one.valid() and all(one.tablet(i).valid() for i in range(one.n_tablets))
     assert one.data(("features", "final"), concat=True)["features"]["final"].shape == (10, 8)
+
+
+def test_streaming_and_dataloader_kwargs_are_the_old_names_of_the_evaluator_ones(tmp_path):
+    """Taken, with a warning, by a table and a tablet alike -- and refused beside the new names."""
+    url = str(tmp_path)
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag="old_samples")
+    spec = dict(upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+                collator=sample_collator())
+    with pytest.warns(FutureWarning, match="streaming= is now evaluator_use_dataset="):
+        old = Featuretable(datalake=url, tag="old", devices=["cpu"], spec=spec,
+                           streaming=True, dataloader_kwargs={"num_workers": 0})
+    new = Featuretable(datalake=url, tag="old", devices=["cpu"], spec=spec,
+                       evaluator_use_dataset=True, evaluator_dataloader_kwargs={"num_workers": 0})
+    assert old.hash == new.hash and old.quote() == new.quote()
+    assert old.tablet(0).evaluator_use_dataset is True
+    assert old.tablet(0).evaluator_dataloader_kwargs == {"num_workers": 0}
+    with pytest.raises(TypeError, match="pass evaluator_use_dataset= alone"):
+        Featuretable(datalake=url, tag="old", devices=["cpu"], spec=spec, streaming=True, evaluator_use_dataset=True)
+
+
+def test_device_and_worker_parallelization_each_fall_back_to_parallelization(tmp_path):
+    """device_parallelization runs the evaluation, worker_parallelization the rest; parallelization either one not given."""
+    from dbx.databits import MultiprocessingCallableExecutor, MultithreadingCallableExecutor
+    url = str(tmp_path)
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag="par_samples").build()
+
+    def table(**kw):
+        return Featuretable(datalake=url, tag="par", devices=["cpu", "cpu"], n_workers=5, spec=dict(
+            upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+            collator=sample_collator()), **kw)
+
+    def build_cls(t):
+        return type(t._build_executor_("t"))
+
+    # Neither: several devices are processes, and the rest inline.
+    neither = table()
+    assert build_cls(neither) is MultiprocessingCallableExecutor and neither.executor_cls.__name__ == "InlineCallableExecutor"
+    # parallelization alone names both.
+    both = table(parallelization="multithreading")
+    assert build_cls(both) is MultithreadingCallableExecutor and both.executor_cls is MultithreadingCallableExecutor
+    # Each overrides it for its own passes.
+    split = table(parallelization="multiprocessing", device_parallelization="multithreading",
+                  worker_parallelization="inline")
+    assert build_cls(split) is MultithreadingCallableExecutor and split.executor_cls.__name__ == "InlineCallableExecutor"
+    assert split._worker_executor_cls_().__name__ == "InlineCallableExecutor"
+    # The passes over the blocks run on the worker one.
+    assert table(device_parallelization="multithreading", worker_parallelization="multithreading").build().valid()
+    with pytest.raises(ValueError, match="worker_parallelization"):
+        table(worker_parallelization="threads")
+    with pytest.raises(ValueError, match="device_parallelization"):
+        table(device_parallelization="threads")
+
+
+def test_device_and_worker_work_stealing_each_fall_back_to_work_stealing(tmp_path):
+    url = str(tmp_path)
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag="ws_samples").build()
+
+    def stealing(**kw):
+        t = Featuretable(datalake=url, tag="ws", devices=["cpu", "cpu"], parallelization="multithreading", spec=dict(
+            upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+            collator=sample_collator()), **kw)
+        return t._build_executor_("t").work_stealing, t.executor_cls(**t._executor_kwargs_(tag="t")).work_stealing
+
+    assert stealing() == (False, False)
+    assert stealing(work_stealing=True) == (True, True)
+    assert stealing(work_stealing=True, device_work_stealing=False) == (False, True)
+    assert stealing(work_stealing=True, worker_work_stealing=False) == (True, False)
+    assert stealing(device_work_stealing=True) == (True, False)
+    assert stealing(worker_work_stealing=True) == (False, True)
+
+
+def test_the_parallelizations_are_in_the_quote_only_when_given(tmp_path):
+    """Operational: in no hash, and in the quote only when set -- every stack's quote is as it was."""
+    url = str(tmp_path)
+    samples = DummySampleTable(datalake=url, spec=dict(samples_per_tablet=5), tag="quote_samples")
+
+    def table(**kw):
+        return Featuretable(datalake=url, tag="quote", devices=["cpu"], spec=dict(
+            upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
+            collator=sample_collator()), **kw)
+
+    plain, given = table(), table(worker_parallelization="multithreading", device_parallelization="inline",
+                                  worker_work_stealing=False, device_work_stealing=False)
+    assert plain.hash == given.hash
+    for name in ("worker_parallelization", "device_parallelization", "worker_work_stealing", "device_work_stealing"):
+        assert name not in plain.quote() and name in given.quote()
 
 
 def test_a_built_feature_table_builds_where_its_devices_are_not(tmp_path):

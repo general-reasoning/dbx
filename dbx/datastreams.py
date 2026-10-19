@@ -24,6 +24,7 @@ import os
 import weakref
 import shutil
 import tempfile
+import threading
 import urllib.parse
 from dataclasses import dataclass
 
@@ -68,6 +69,13 @@ class SharedMemoryManager:
     """PID-qualified shared memory prefix management for MosaicML StreamingDataset."""
 
     _patched: bool = False
+
+    #: Held while a `StreamingDataset` is opened, and while a failed open is cleaned up and
+    #: retried. It takes the first prefix of this process whose names are free, and only then
+    #: creates them: two threads opening one at once -- a table built one thread per device --
+    #: take the same prefix, and the second fails, FileExistsError. And the clean-up before a
+    #: retry releases every segment of the process, those of a dataset another thread has open.
+    OPEN_LOCK = threading.RLock()
 
     @classmethod
     def enable_pid_prefixes(cls) -> None:
@@ -1367,13 +1375,14 @@ def open_datastream(index_dir, *, local=None, cache_dir=None, cache=None,
         **kwargs,
     )
     SharedMemoryManager.enable_pid_prefixes()
-    try:
-        return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
-    except ValueError as exc:
-        if 'Reused local directory' not in str(exc):
-            raise
-        SharedMemoryManager.clean_process_shared_memory()
-        return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+    with SharedMemoryManager.OPEN_LOCK:
+        try:
+            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+        except ValueError as exc:
+            if 'Reused local directory' not in str(exc):
+                raise
+            SharedMemoryManager.clean_process_shared_memory()
+            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
 
 
 # ═══════════════════════════════════════════════════════════════════════

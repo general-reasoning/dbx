@@ -6452,6 +6452,14 @@ class Datablock:
             self.log.detailed(f"Copying file {src_path} to {dst_path}")
             self._UNSAFE_copy_fs_(src_path=src_path, dst_path=dst_path, recursive=False)
 
+    def _worker_parallelization_(self) -> str | None:
+        """What this block's work off its devices runs on: *worker_parallelization*, else *parallelization*.
+
+        None when neither is given. The work on its devices -- a `Datastack`'s
+        ``devices`` -- is *device_parallelization*'s; see `Datastack`.
+        """
+        return getattr(self, 'worker_parallelization', None) or getattr(self, 'parallelization', None)
+
     def _UNSAFE_copy_topic_dir_(self, topic, anchorkeypath, *, topicpaths=None):
         """Copy the entire .dirpath(topic) directory."""
         topic = self._normtopic_((topic,))
@@ -6485,21 +6493,22 @@ class Datablock:
             for file_path in src_fs.find(src_bare, withdirs=False):
                 rel = file_path[len(src_bare):].lstrip('/')
                 self.fs.cp_file(file_path, os.path.join(dst_bare, rel))
-        elif getattr(self, 'parallelization', None):
+        elif self._worker_parallelization_():
             # Parallelize on top-level directory contents; each item is copied independently.
             # _fscopy_item_callable_ is a module-level function (picklable for multiprocessing).
             items = [src_fs.unstrip_protocol(p)
                      for p in src_fs.ls(src_path, detail=False)]
             if items:
+                _parallelization_ = self._worker_parallelization_()
                 _storage_options = getattr(self, 'storage_options', {})
                 _n_workers_ = getattr(self, 'n_workers', 1)
                 _tag = f"fscopy {len(items)} items [{_src_path}]"
                 _executor_kwargs_ = dict(n_workers=_n_workers_, tag=_tag)
                 if (hasattr(self, 'multiprocessing_start_method')
                         and self.multiprocessing_start_method is not None
-                        and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
+                        and _parallelization_.lower() in ('multiprocessing', 'torch_multiprocessing')):
                     _executor_kwargs_['start_method'] = self.multiprocessing_start_method
-                _executor = callable_executor(self.parallelization, **_executor_kwargs_)
+                _executor = callable_executor(_parallelization_, **_executor_kwargs_)
                 _callables = [
                     functools.partial(
                         _fscopy_item_callable_,
@@ -8008,6 +8017,26 @@ class Datastack(Datablock):
         devices : list[str] | str | None
             Required for torch parallelizations.  Devices are assigned to
             workers round-robin when ``n_workers > len(devices)``.
+        worker_parallelization : str | None
+            The executor of every pass but the build on *devices* -- checking,
+            validating, adopting, clearing the blocks, and building them when
+            there are no devices -- at *n_workers*. Falls back to
+            *parallelization*.
+        device_parallelization : str | None
+            The executor of the build on *devices*. Falls back to
+            *parallelization*. A stack whose device build is one worker per
+            device -- `Featuretable` -- has a default of its own after that.
+        worker_work_stealing : bool | None
+            Work stealing in the passes of *worker_parallelization*. Falls
+            back to *work_stealing*.
+        device_work_stealing : bool | None
+            Work stealing in the build on *devices*. Falls back to
+            *work_stealing*.
+
+    Device work wants threads or processes of its own -- one per GPU, sharing
+    a CUDA context or not -- while the passes around it want *n_workers* of
+    whatever reads storage fastest; *parallelization* names both when they
+    are the same.
 
     Example
     -------
@@ -8087,7 +8116,18 @@ class Datastack(Datablock):
     #: How many blocks 'cross_check' compares with the manifest: block 0 and the rest at random.
     CROSS_CHECK_BLOCKS = 3
 
-    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, result_idle_timeout_sec: float | None = None, shuffle_callables: bool = False, work_stealing: bool = False, use_block_specializations: 'bool | str | None' = None, validation: str | None = None, cross_check_blocks: int | None = None, cross_check_seed: int | None = None, specialization_use_full_journal: bool = False, **kwargs):
+    def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, result_idle_timeout_sec: float | None = None, shuffle_callables: bool = False, work_stealing: bool = False, worker_parallelization: str | None = None, worker_work_stealing: bool | None = None, device_parallelization: str | None = None, device_work_stealing: bool | None = None, use_block_specializations: 'bool | str | None' = None, validation: str | None = None, cross_check_blocks: int | None = None, cross_check_seed: int | None = None, specialization_use_full_journal: bool = False, **kwargs):
+        # The executors of the passes off the devices and of the build on them,
+        # each falling back to *parallelization* -- see the class docstring.
+        # Operational, and passed on only when set, as below.
+        if worker_parallelization is not None:
+            kwargs['worker_parallelization'] = worker_parallelization
+        if worker_work_stealing is not None:
+            kwargs['worker_work_stealing'] = worker_work_stealing
+        if device_parallelization is not None:
+            kwargs['device_parallelization'] = device_parallelization
+        if device_work_stealing is not None:
+            kwargs['device_work_stealing'] = device_work_stealing
         # The use_specializations the blocks are formed with -- see _form_block_.
         # Passed on only when given: every keyword of a stack reaches its
         # quote(), and a default spelled out would change that of every stack.
@@ -8118,13 +8158,8 @@ class Datastack(Datablock):
                 f"{type(self).__qualname__} declares no BLOCK: set BLOCK = <the Datablock class "
                 f"its blocks are>. It will be required.", FutureWarning, stacklevel=2)
         # Early validation only — executor_cls is a property so deepcopy/setstate paths work.
-        executors = self._get_executors_()
-        key = (self.parallelization or "inline").lower()
-        if key not in executors:
-            raise ValueError(
-                f"Unknown parallelization {self.parallelization!r}. "
-                f"Choose from {list(executors)}"
-            )
+        for name in ('parallelization', 'worker_parallelization', 'device_parallelization'):
+            self._executor_class_(getattr(self, name, None), name)
 
     def __block__(self, idx: int):
         """Return a single child :class:`Datablock` for the given index.
@@ -8335,7 +8370,7 @@ class Datastack(Datablock):
         the worker callables, so they are fully parallelized.
         """
         callables, callable_kwargs = self.__split__(*args, **kwargs)
-        work_stealing_state = getattr(self, 'work_stealing', False)
+        work_stealing_state = self._worker_work_stealing_()
         self.log.info(
             f"Building {self.__class__.__name__}: blocks using {len(callables)} callables, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
@@ -8500,19 +8535,7 @@ class Datastack(Datablock):
             if self._blocks_cross_checked_():
                 return pd.Series(True, index=pd.RangeIndex(n), dtype=bool), None
             validation = 'valid'
-        executors = self._get_executors_()
-        if parallelization is not None:
-            key = parallelization.lower()
-        elif n_workers is not None:
-            key = 'multithreading' if n_workers > 0 else 'inline'
-        else:
-            default_par = getattr(self, 'parallelization', None) or 'inline'
-            key = default_par.lower()
-        if key not in executors:
-            raise ValueError(
-                f"Unknown parallelization {key!r}. Choose from {list(executors)}"
-            )
-        executor_cls = executors[key]
+        executor_cls = self._worker_executor_cls_(parallelization, n_workers)
         exec_kwargs = self._executor_kwargs_(
             tag=f"CHECKING VALIDITY ({validation}) of {n} blocks [{self.__class__.__name__}]",
             n_workers=n_workers,
@@ -8761,19 +8784,7 @@ class Datastack(Datablock):
         n = self.n_blocks
         if n == 0:
             return pd.Series([], dtype=bool)
-        executors = self._get_executors_()
-        if parallelization is not None:
-            key = parallelization.lower()
-        elif n_workers is not None:
-            key = 'multithreading' if n_workers > 0 else 'inline'
-        else:
-            default_par = getattr(self, 'parallelization', None) or 'inline'
-            key = default_par.lower()
-        if key not in executors:
-            raise ValueError(
-                f"Unknown parallelization {key!r}. Choose from {list(executors)}"
-            )
-        executor_cls = executors[key]
+        executor_cls = self._worker_executor_cls_(parallelization, n_workers)
         exec_kwargs = self._executor_kwargs_(
             tag=f"VALIDATING {n} blocks [{self.__class__.__name__}]",
             n_workers=n_workers,
@@ -8822,19 +8833,7 @@ class Datastack(Datablock):
         if n == 0:
             return []
 
-        executors = self._get_executors_()
-        if parallelization is not None:
-            key = parallelization.lower()
-        elif n_workers is not None:
-            key = 'multithreading' if n_workers > 0 else 'inline'
-        else:
-            default_par = getattr(self, 'parallelization', None) or 'inline'
-            key = default_par.lower()
-        if key not in executors:
-            raise ValueError(
-                f"Unknown parallelization {key!r}. Choose from {list(executors)}"
-            )
-        executor_cls = executors[key]
+        executor_cls = self._worker_executor_cls_(parallelization, n_workers)
         exec_kwargs = self._executor_kwargs_(
             tag=f"FINDING BLOCKS matching sig={sig_clauses} tag={tag_clauses} path={path_clauses} in {n} blocks [{self.__class__.__name__}]",
             n_workers=n_workers,
@@ -8920,12 +8919,7 @@ class Datastack(Datablock):
         self.write_journal_entry(event="UNSAFE_clear_blocks:begin")
 
         tag = f"CLEARING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={self.n_workers}]"
-        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
-        if (hasattr(self, 'multiprocessing_start_method')
-                and self.multiprocessing_start_method is not None
-                and (self.parallelization or '').lower() in ('multiprocessing', 'torch_multiprocessing')):
-            executor_kwargs['start_method'] = self.multiprocessing_start_method
-        executor = callable_executor(self.parallelization, **executor_kwargs)
+        executor = self.executor_cls(**self._executor_kwargs_(tag=tag))
 
         executor.exec_callables(callables)
 
@@ -8982,7 +8976,7 @@ class Datastack(Datablock):
         self._forget_blocks_manifest_()
 
         block_list = self.blocks()
-        work_stealing_state = getattr(self, 'work_stealing', False)
+        work_stealing_state = self._worker_work_stealing_()
         self.log.info(
             f"UNSAFE_copy_blocks_from: copying {len(block_list)} blocks, "
             f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
@@ -8996,22 +8990,7 @@ class Datastack(Datablock):
         ]
 
         tag = f"COPYING {len(block_list)} blocks [{self.__class__.__name__}, n_workers={self.n_workers}]"
-        executor_kwargs = dict(n_workers=self.n_workers, tag=tag)
-        if hasattr(self, 'worker_done_timeout_sec') and self.worker_done_timeout_sec is not None:
-            executor_kwargs['worker_done_timeout_sec'] = self.worker_done_timeout_sec
-        if getattr(self, 'result_idle_timeout_sec', None) is not None:
-            executor_kwargs['result_idle_timeout_sec'] = self.result_idle_timeout_sec
-        if hasattr(self, 'shuffle_callables') and self.shuffle_callables:
-            executor_kwargs['shuffle_callables'] = self.shuffle_callables
-        if (hasattr(self, 'multiprocessing_start_method')
-                and self.multiprocessing_start_method is not None
-                and issubclass(self.executor_cls, MultiprocessingCallableExecutor)):
-            executor_kwargs['start_method'] = self.multiprocessing_start_method
-        if getattr(self, 'devices', None) is not None:
-            executor_kwargs['devices'] = self.devices
-        if getattr(self, 'work_stealing', False):
-            executor_kwargs['work_stealing'] = True
-        executor = self.executor_cls(**executor_kwargs)
+        executor = self.executor_cls(**self._executor_kwargs_(tag=tag))
         executor.exec_callables(callables)
 
         self.log.info(f"UNSAFE_copy_blocks_from complete: {self.__class__.__name__}")
@@ -9033,7 +9012,7 @@ class Datastack(Datablock):
         OVERRIDE : bool, default False
             Must be True to allow unsafe redirection.
         parallelization : str, optional
-            CallableExecutor to use. Defaults to ``self.parallelization``.
+            CallableExecutor to use. Defaults to the stack's *worker_parallelization*, else *parallelization*.
         n_workers : int, optional
             Worker count for parallel redirection and journal scanning.
 
@@ -9056,7 +9035,7 @@ class Datastack(Datablock):
         # They may leave a block invalid: nothing vouches for the blocks until they are asked again.
         self._forget_blocks_manifest_()
 
-        par = parallelization if parallelization is not None else getattr(self, 'parallelization', None)
+        par = parallelization if parallelization is not None else self._worker_parallelization_()
         nw = n_workers if n_workers is not None else getattr(self, 'n_workers', 1)
         self.log.info(
             f"UNSAFE_redirect_blocks: redirecting {total} blocks, "
@@ -9087,20 +9066,15 @@ class Datastack(Datablock):
 
     @property
     def executor_cls(self):
-        """Resolve executor class from self.parallelization.
+        """The executor class of the passes off the devices: *worker_parallelization*, else *parallelization*.
 
         Implemented as a property (not set in __init__) so that objects
         reconstructed via deepcopy / __setstate__ — which bypass __init__ —
         still return the correct class.
         """
-        executors = self._get_executors_()
-        key = (getattr(self, 'parallelization', None) or "inline").lower()
-        if key not in executors:
-            raise ValueError(
-                f"Unknown parallelization {getattr(self, 'parallelization', None)!r}. "
-                f"Choose from {list(executors)}"
-            )
-        return executors[key]
+        return self._executor_class_(self._worker_parallelization_(),
+                                     'worker_parallelization' if getattr(self, 'worker_parallelization', None)
+                                     else 'parallelization')
 
     @property
     def n_blocks(self) -> int:
@@ -9291,12 +9265,60 @@ class Datastack(Datablock):
     def _build_executor_(self, tag: str):
         """The executor that BUILDS this stack's blocks -- not the one that checks or adopts them.
 
-        The stack's own -- *n_workers*, *parallelization*, *work_stealing* -- by
-        default. A stack whose builds need a resource its other passes do not
+        Without *devices*, that of every other pass: *worker_parallelization*.
+        With them, *device_parallelization* and *device_work_stealing*, at
+        *n_workers*; both fall back to the stack's own, *parallelization* and
+        *work_stealing*. A stack whose device build is shaped otherwise
         overrides it: `Featuretable` queues its feature evaluations off its
-        devices, one worker per device, while its checks run at *n_workers*.
+        devices, one worker per device.
         """
-        return self.executor_cls(**self._executor_kwargs_(tag=tag))
+        if getattr(self, 'devices', None) is None:
+            return self.executor_cls(**self._executor_kwargs_(tag=tag))
+        cls = self._executor_class_(self._device_parallelization_(), 'device_parallelization')
+        return cls(**self._device_executor_kwargs_(tag=tag, executor_cls=cls))
+
+    def _device_parallelization_(self) -> str | None:
+        """What the build on *devices* runs on: *device_parallelization*, else *parallelization* -- None when neither."""
+        return getattr(self, 'device_parallelization', None) or getattr(self, 'parallelization', None)
+
+    def _worker_work_stealing_(self) -> bool:
+        """Whether the passes off the devices steal work: *worker_work_stealing*, else *work_stealing*."""
+        stealing = getattr(self, 'worker_work_stealing', None)
+        return bool(getattr(self, 'work_stealing', False) if stealing is None else stealing)
+
+    def _device_work_stealing_(self) -> bool:
+        """Whether the build on *devices* steals work: *device_work_stealing*, else *work_stealing*."""
+        stealing = getattr(self, 'device_work_stealing', None)
+        return bool(getattr(self, 'work_stealing', False) if stealing is None else stealing)
+
+    def _device_executor_kwargs_(self, **kwargs) -> dict:
+        """`_executor_kwargs_`, with the device build's work stealing in place of the stack's."""
+        executor_kwargs = self._executor_kwargs_(**kwargs)
+        executor_kwargs.pop('work_stealing', None)
+        if self._device_work_stealing_():
+            executor_kwargs['work_stealing'] = True
+        return executor_kwargs
+
+    def _worker_executor_cls_(self, parallelization: str | None = None, n_workers: int | None = None):
+        """The executor class of a pass off the devices: *parallelization* if the pass is given one.
+
+        Given only *n_workers*, threads (none: inline); given neither, the
+        stack's -- `executor_cls`.
+        """
+        if parallelization is not None:
+            return self._executor_class_(parallelization)
+        if n_workers is not None:
+            return self._executor_class_('multithreading' if n_workers > 0 else 'inline')
+        return self.executor_cls
+
+    @classmethod
+    def _executor_class_(cls, parallelization: str | None, name: str = 'parallelization'):
+        """The executor class *parallelization* names -- None: inline -- refusing, as *name*, one it does not."""
+        executors = cls._get_executors_()
+        key = (parallelization or 'inline').lower()
+        if key not in executors:
+            raise ValueError(f"Unknown {name} {parallelization!r}. Choose from {list(executors)}")
+        return executors[key]
 
     def _executor_kwargs_(self, tag: str | None = None, n_workers: int | None = None, executor_cls=None, **kwargs) -> dict:
         nw = n_workers if n_workers is not None else getattr(self, 'n_workers', 1)
@@ -9317,7 +9339,7 @@ class Datastack(Datablock):
             executor_kwargs['start_method'] = self.multiprocessing_start_method
         if getattr(self, 'devices', None) is not None:
             executor_kwargs['devices'] = self.devices
-        if getattr(self, 'work_stealing', False):
+        if self._worker_work_stealing_():
             executor_kwargs['work_stealing'] = True
         executor_kwargs.update(kwargs)
         return executor_kwargs
@@ -9643,16 +9665,7 @@ class Datastack(Datablock):
 
     def _exec_over_blocks_(self, callables, *, tag, parallelization=None, n_workers=None, journal=None, **kwargs):
         """Run one callable per block under this stack's executor -- chosen as `valid_blocks` chooses it."""
-        executors = self._get_executors_()
-        if parallelization is not None:
-            key = parallelization.lower()
-        elif n_workers is not None:
-            key = 'multithreading' if n_workers > 0 else 'inline'
-        else:
-            key = (getattr(self, 'parallelization', None) or 'inline').lower()
-        if key not in executors:
-            raise ValueError(f"Unknown parallelization {key!r}. Choose from {list(executors)}")
-        executor_cls = executors[key]
+        executor_cls = self._worker_executor_cls_(parallelization, n_workers)
         executor = executor_cls(**self._executor_kwargs_(
             tag=tag, n_workers=n_workers, executor_cls=executor_cls, **kwargs))
         # The journal as a ctx kwarg: sent once per worker, not with each callable.

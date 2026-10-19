@@ -1437,7 +1437,7 @@ class Datatable(_Database_, Datastack):
 
         filter_built = getattr(self, 'filter_built_tablets', False)
         if filter_built:
-            work_stealing_state = getattr(self, 'work_stealing', False)
+            work_stealing_state = self._worker_work_stealing_()
             self.log.info(
                 f"Building {self.__class__.__name__}: filtering {len(callables)} tablets using "
                 f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
@@ -1652,12 +1652,13 @@ class Datatable(_Database_, Datastack):
             cache_limit=cache_limit,
             **kwargs,
         )
-        try:
-            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
-        except (ValueError, TypeError, OSError, FileExistsError, FileNotFoundError) as exc:
-            SharedMemoryManager.clean_process_shared_memory()
-            streaming_kwargs['streams'] = self._tablet_streams_(slice, local)
-            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+        with SharedMemoryManager.OPEN_LOCK:
+            try:
+                return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+            except (ValueError, TypeError, OSError, FileExistsError, FileNotFoundError) as exc:
+                SharedMemoryManager.clean_process_shared_memory()
+                streaming_kwargs['streams'] = self._tablet_streams_(slice, local)
+                return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
 
     # 3. Accessors ---------------------------------------------------------
 

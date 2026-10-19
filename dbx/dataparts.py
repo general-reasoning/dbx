@@ -488,7 +488,7 @@ class DatatablePartition(Datablock):
         tablets, core tablets -- in parallel, as the partition scanned in parallel.
         """
         return dict(datalake=self._datalake_, storage_options=self.storage_options,
-                    parallelization=getattr(self, 'parallelization', None),
+                    parallelization=self._worker_parallelization_(),
                     n_workers=getattr(self, 'n_workers', 1) or 1)
 
     # 4. Helpers -----------------------------------------------------------
@@ -503,7 +503,7 @@ class DatatablePartition(Datablock):
         """
         table = self.var.datatable
         executor = callable_executor(
-            getattr(self, 'parallelization', None) or 'inline',
+            self._worker_parallelization_() or 'inline',
             n_workers=getattr(self, 'n_workers', 1) or 1,
             tag=f"SCANNING {table.n_tablets} tablets [{type(self).__name__}]")
         scans = executor.exec_callables([TabletPartitionScanCallable(self, i) for i in range(table.n_tablets)])
@@ -926,7 +926,7 @@ class PartitionDatamapTable(Datatable):
         kwargs.setdefault('datalake', self._datalake_)
         kwargs.setdefault('storage_options', self.storage_options)
         # The part's workers: a pullback builds its copies, in parallel, as its map builds its lots.
-        kwargs.setdefault('parallelization', getattr(self, 'parallelization', None))
+        kwargs.setdefault('parallelization', self._worker_parallelization_())
         kwargs.setdefault('n_workers', getattr(self, 'n_workers', 1) or 1)
         return _mapped_table_(self, collator, datatable=datatable, **kwargs)
 
@@ -1354,12 +1354,13 @@ class MappedDatatable(Datatable):
             cache_limit=cache_limit,
             **kwargs,
         )
-        try:
-            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
-        except (ValueError, TypeError, OSError, FileExistsError, FileNotFoundError) as exc:
-            SharedMemoryManager.clean_process_shared_memory()
-            streaming_kwargs['streams'] = self._tablet_streams_(slice, local)
-            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+        with SharedMemoryManager.OPEN_LOCK:
+            try:
+                return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+            except (ValueError, TypeError, OSError, FileExistsError, FileNotFoundError) as exc:
+                SharedMemoryManager.clean_process_shared_memory()
+                streaming_kwargs['streams'] = self._tablet_streams_(slice, local)
+                return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
 
     # 3. Accessors ---------------------------------------------------------
 
@@ -2030,7 +2031,7 @@ class DatatableClusterCorePartition(DatatablePartition):
         if reusing is not None:
             reusing.tag = tag
             return reusing
-        return callable_executor(getattr(self, 'parallelization', None) or 'inline',
+        return callable_executor(self._worker_parallelization_() or 'inline',
                                  n_workers=getattr(self, 'n_workers', 1) or 1, tag=tag)
 
     def _cluster_and_assign_(self):
@@ -2041,7 +2042,7 @@ class DatatableClusterCorePartition(DatatablePartition):
         # One set of workers for every stage -- the scan, each of up to max_iter passes, the
         # assignment, the coverage -- rather than a set started anew for each: minutes apiece.
         self.__dict__['_reusing_'] = callable_executor(
-            getattr(self, 'parallelization', None) or 'inline', n_workers=getattr(self, 'n_workers', 1) or 1,
+            self._worker_parallelization_() or 'inline', n_workers=getattr(self, 'n_workers', 1) or 1,
             tag=type(self).__name__, reuse_workers=True)
         try:
             scans = self._executor_(f"SCANNING {table.n_tablets} tablets").exec_callables(

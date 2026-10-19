@@ -48,6 +48,16 @@ def _passthrough_collate_(batch):
     return batch
 
 
+def _renamed_kwarg_(what: str, old: str, new: str, old_value, new_value):
+    """*new_value*, or *old_value* -- given by the keyword's name until 2026-10-19 -- with a warning; not both."""
+    if old_value is None:
+        return new_value
+    if new_value is not None:
+        raise TypeError(f"{what}: {old}= is {new}= by its old name; pass {new}= alone")
+    warnings.warn(f"{what}: {old}= is now {new}=", FutureWarning, stacklevel=3)
+    return old_value
+
+
 def _flatten_item_(x):
     while isinstance(x, dict) and len(x) > 0:
         x = next(iter(x.values()))
@@ -203,25 +213,35 @@ class Featuretablet(Layered, Datatablet):
     #     SLICETOPIC sentinel nothing declares it, and inferring a type from a
     #     value that has already been through MDS is guesswork -- so this may
     #     have to require a declared upstream, and say so.
-    #   * Both build paths have to write it: __build_bulk__ can take it out of
-    #     the `sample_data` it already read, but __build_streaming__ sees rows
+    #   * Both build paths have to write it: __build_from_data__ can take it out of
+    #     the `sample_data` it already read, but __build_from_dataset__ sees rows
     #     only as whatever _passthrough_collate_ made of the batch.
     def __init__(
         self,
         *args,
         device_batch_size: int = 64,
         device: str = "cpu",
-        streaming: bool = False,
-        dataloader_kwargs: dict | None = None,
+        evaluator_use_dataset: bool | None = None,
+        evaluator_dataloader_kwargs: dict | None = None,
         shared_upstream_column: 'str | None' = None,
+        streaming: bool | None = None,
+        dataloader_kwargs: dict | None = None,
         **kwargs,
     ):
+        # How the evaluator reads the upstream tablet: False, `upstream.data()`, whole, in batches
+        # of *device_batch_size*; True, `upstream.dataset()` through a DataLoader of
+        # *evaluator_dataloader_kwargs* -- its *num_workers* read and decode as the device computes.
+        what = type(self).__name__
+        evaluator_use_dataset = bool(_renamed_kwarg_(what, 'streaming', 'evaluator_use_dataset',
+                                                     streaming, evaluator_use_dataset))
+        evaluator_dataloader_kwargs = _renamed_kwarg_(what, 'dataloader_kwargs', 'evaluator_dataloader_kwargs',
+                                                      dataloader_kwargs, evaluator_dataloader_kwargs)
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
             device=device,
-            streaming=streaming,
-            dataloader_kwargs=dataloader_kwargs,
+            evaluator_use_dataset=evaluator_use_dataset,
+            evaluator_dataloader_kwargs=evaluator_dataloader_kwargs,
             shared_upstream_column=shared_upstream_column,
             **kwargs,
         )
@@ -230,16 +250,18 @@ class Featuretablet(Layered, Datatablet):
         super().__post_init__()
         self.device = getattr(self, 'device', 'cpu')
         self.device_batch_size = getattr(self, 'device_batch_size', 64)
-        self.streaming = getattr(self, 'streaming', False)
-        self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
+        # A state from before 2026-10-19 carries them as streaming and dataloader_kwargs.
+        self.evaluator_use_dataset = getattr(self, 'evaluator_use_dataset', getattr(self, 'streaming', False))
+        self.evaluator_dataloader_kwargs = (getattr(self, 'evaluator_dataloader_kwargs', None)
+                                            or getattr(self, 'dataloader_kwargs', None) or {})
 
     def __build__(self):
-        if self.streaming:
-            return self.__build_streaming__()
+        if self.evaluator_use_dataset:
+            return self.__build_from_dataset__()
         else:
-            return self.__build_bulk__()
+            return self.__build_from_data__()
 
-    def __build_bulk__(self):
+    def __build_from_data__(self):
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         upstream = self.var.upstream
 
@@ -270,13 +292,13 @@ class Featuretablet(Layered, Datatablet):
                 # for the next batch of the same shape: no collection per batch.
                 del batch, result, batch_features
             del inputs
-        # Once per bag: collect, and hand the allocator's cache back -- see `__build_streaming__`.
+        # Once per bag: collect, and hand the allocator's cache back -- see `__build_from_dataset__`.
         evaluator.clear()
         del evaluator
         gc.collect()
         return self
 
-    def __build_streaming__(self):
+    def __build_from_dataset__(self):
         warnings.filterwarnings("ignore", category=UserWarning, message=".*given NumPy array is not writable.*")
         gc.collect()
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
@@ -285,7 +307,7 @@ class Featuretablet(Layered, Datatablet):
         collator = self.var.collator
 
         dataset = upstream.dataset(*collator.slices(upstream))
-        dl_kwargs = dict(self.dataloader_kwargs) if self.dataloader_kwargs else {}
+        dl_kwargs = dict(self.evaluator_dataloader_kwargs) if self.evaluator_dataloader_kwargs else {}
         dl_kwargs.setdefault('batch_size', self.device_batch_size)
         dl_kwargs.setdefault('collate_fn', _passthrough_collate_)
 
@@ -390,30 +412,37 @@ class Featuretable(Layered, Datatable):
         *args,
         device_batch_size: int = 64,
         devices: list | None = None,
-        device_parallelization: str | None = None,
-        device_work_stealing: bool = False,
-        streaming: bool = False,
-        dataloader_kwargs: dict | None = None,
+        evaluator_use_dataset: bool | None = None,
+        evaluator_dataloader_kwargs: dict | None = None,
         filter_built_tablets: bool = False,
         shared_upstream_column: 'str | None' = None,
+        streaming: bool | None = None,
+        dataloader_kwargs: dict | None = None,
         **kwargs,
     ):
         # The feature evaluation -- building the tablets -- queues off *devices*,
-        # one worker per device: *device_parallelization* (default:
-        # multiprocessing for several devices, inline for one) and
-        # *device_work_stealing*. Everything else -- checking and adopting the
-        # tablets -- runs at the stack's own *n_workers*, *parallelization* and
-        # *work_stealing*. Operational, and passed on only when set.
-        if device_parallelization is not None:
-            kwargs['device_parallelization'] = device_parallelization
-        if device_work_stealing:
-            kwargs['device_work_stealing'] = True
+        # one worker per device: `Datastack`'s *device_parallelization*, else
+        # *parallelization*, else multiprocessing for several devices and inline
+        # for one; and *device_work_stealing*, else *work_stealing*. Everything
+        # else -- checking and adopting the tablets -- runs at *n_workers*, on
+        # *worker_parallelization*, else *parallelization*, and
+        # *worker_work_stealing*, else *work_stealing*. *evaluator_use_dataset*
+        # reads each tablet's upstream as `upstream.dataset()`, through a
+        # DataLoader of *evaluator_dataloader_kwargs* -- its *num_workers* read
+        # and decode in processes of their own, while the collator and the
+        # evaluator run in the device's worker -- rather than as `upstream.data()`.
+        # Neither touches how this table is read: by `data()` or `dataset()`, as its reader asks.
+        what = type(self).__name__
+        evaluator_use_dataset = bool(_renamed_kwarg_(what, 'streaming', 'evaluator_use_dataset',
+                                                     streaming, evaluator_use_dataset))
+        evaluator_dataloader_kwargs = _renamed_kwarg_(what, 'dataloader_kwargs', 'evaluator_dataloader_kwargs',
+                                                      dataloader_kwargs, evaluator_dataloader_kwargs)
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
             devices=devices,
-            streaming=streaming,
-            dataloader_kwargs=dataloader_kwargs,
+            evaluator_use_dataset=evaluator_use_dataset,
+            evaluator_dataloader_kwargs=evaluator_dataloader_kwargs,
             filter_built_tablets=filter_built_tablets,
             shared_upstream_column=shared_upstream_column,
             **kwargs,
@@ -422,8 +451,10 @@ class Featuretable(Layered, Datatable):
     def __post_init__(self):
         super().__post_init__()
         # Read back from self — works whether we came through __init__ or __setstate__.
-        self.streaming = getattr(self, 'streaming', False)
-        self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
+        # A state from before 2026-10-19 carries them as streaming and dataloader_kwargs.
+        self.evaluator_use_dataset = getattr(self, 'evaluator_use_dataset', getattr(self, 'streaming', False))
+        self.evaluator_dataloader_kwargs = (getattr(self, 'evaluator_dataloader_kwargs', None)
+                                            or getattr(self, 'dataloader_kwargs', None) or {})
         self.filter_built_tablets = getattr(self, 'filter_built_tablets', False)
         self.device_batch_size = getattr(self, 'device_batch_size', 64)
         self.devices = getattr(self, 'devices', None) or ["cpu"]
@@ -438,16 +469,9 @@ class Featuretable(Layered, Datatable):
         """
         self._check_devices_()
         devices = list(self.devices)
-        key = (getattr(self, 'device_parallelization', None)
-               or ('multiprocessing' if len(devices) > 1 else 'inline')).lower()
-        executors = self._get_executors_()
-        if key not in executors:
-            raise ValueError(f"Unknown device_parallelization {key!r}. Choose from {list(executors)}")
-        cls = executors[key]
-        kwargs = self._executor_kwargs_(tag=f"{tag} on {devices}", n_workers=len(devices), executor_cls=cls)
-        kwargs.pop('work_stealing', None)
-        if getattr(self, 'device_work_stealing', False):
-            kwargs['work_stealing'] = True
+        key = (self._device_parallelization_() or ('multiprocessing' if len(devices) > 1 else 'inline')).lower()
+        cls = self._executor_class_(key, 'device_parallelization')
+        kwargs = self._device_executor_kwargs_(tag=f"{tag} on {devices}", n_workers=len(devices), executor_cls=cls)
         self.log.info(f"{self.anchorkeypath}: evaluating features on {devices}, one worker per device ({key})")
         return cls(**kwargs)
 
@@ -504,8 +528,8 @@ class Featuretable(Layered, Datatable):
             SPECIALIZATIONS=tablet_specs,
             device_batch_size=self.device_batch_size,
             device=device,
-            streaming=self.streaming,
-            dataloader_kwargs=self.dataloader_kwargs,
+            evaluator_use_dataset=self.evaluator_use_dataset,
+            evaluator_dataloader_kwargs=self.evaluator_dataloader_kwargs,
             revision=self.revision,
             tag=tag if tag is not None else upstream.tag,
         )

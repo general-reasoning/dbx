@@ -22,11 +22,11 @@ def setup_env(monkeypatch):
 
 
 @pytest.mark.parametrize('cls', [datatables.Datatablet, datatables.Datatable, dataparts.DatatablePartition,
-                                 dataparts.DatatablePart, featuretables.Featuretablet, featuretables.Featuretable,
+                                 dataparts.MappedFeaturetable, featuretables.Featuretablet, featuretables.Featuretable,
                                  featuretables.BipolarFeaturetablet, featuretables.BipolarFeaturetable,
-                                 datatables.Datacollator, dataparts.MappedDatatablet, dataparts.DatatableCorePartition,
-                                 dataparts.DatamapTable,
-                                 dataparts.DatamapTablet, dataparts.MappedDatatable,
+                                 datatables.Datacollator, dataparts.MappedDatatablet, dataparts.DatatableClusterCorePartition,
+                                 dataparts.PartitionDatamapTable,
+                                 dataparts.PartitionDatamapTablet, dataparts.MappedDatatable,
                                  dataparts.MappedFeaturetablet,
                                  probes.FeatureStatsProbe])
 def test_a_class_is_recorded_under_its_own_module(cls):

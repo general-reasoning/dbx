@@ -5,8 +5,8 @@ dbx keeps three journals, all as Parquet files under the datalake:
 | | what one row is | read with | returns |
 |---|---|---|---|
 | **exec journal** | one `dbx.exec` / `dbx.pprint` command | `dbx.execjournal()` | `ExecJournalFrame` / `ExecJournalEntry` |
-| **data journal** | one journal entry of one block (`build:end`, a note, …) | `dbx.datajournal(anchor)` | `DataJournalFrame` / `DataJournalEntry` |
-| **pipeline journal** | one `Pipeline`, with every entrypath it was constructed to | `dbx.pipejournal()` | `DataJournalFrame` / `DataJournalEntry` |
+| **build journal** | one journal entry of one block (`build:end`, a note, …) | `dbx.buildjournal(anchor)` | `BuildJournalFrame` / `BuildJournalEntry` |
+| **pipeline journal** | one `Pipeline`, with every entrypath it was constructed to | `dbx.pipejournal()` | `BuildJournalFrame` / `BuildJournalEntry` |
 
 They are linked by the command's `session`. Every journal entry written while
 a command runs is written under its session, and the session keeps an index of
@@ -63,8 +63,8 @@ Columns, in the order the frame holds them:
 | `exception` | what it raised, as `'<Type>: <message>'`; None if it returned |
 | `traceback` | where it raised, as Python prints it; None if it returned |
 | `id` | row's uuid |
-| `session` | `DataJournal` session every block in the command wrote under |
-| `datajournal_entries` | paths of the block journal entries the command's own process wrote or got back from its workers, in the order first written (the session index is the complete list) |
+| `session` | `BuildJournal` session every block in the command wrote under |
+| `buildjournal_entries` | paths of the build journal entries the command's own process wrote or got back from its workers, in the order first written (the session index is the complete list) |
 | `output_captures` | paths of the command's captured stdout/stderr, the master capture first; empty unless it ran with `capture_output=True` / `--capture-output` (see [Captured output](#captured-output)) |
 | `comment` | trailing `# comment` alone: what the command was *for* |
 | `success` | whether it returned rather than raised |
@@ -82,7 +82,7 @@ ej[['exec', 'comment']]
 
 ej.get('976f41ea')                                  # the displayed id is enough
 e = dbx.execjournal(comment='two apples', iloc=0)   # ExecJournalEntry
-e['exec'], e['session'], len(e['datajournal_entries'])   # (..., '692e946a-…', 2)
+e['exec'], e['session'], len(e['buildjournal_entries'])   # (..., '692e946a-…', 2)
 ```
 
 ### `ExecJournalFrame`
@@ -92,20 +92,20 @@ e['exec'], e['session'], len(e['datajournal_entries'])   # (..., '692e946a-…',
 | `ej.get(id)` | `ExecJournalEntry` at label `id`: the full id, or a prefix no other id shares, such as the short id the frame displays |
 | `ej(id)` | same, with null columns dropped |
 | `ej.show(width=, max_colwidth=, max_rows=, full=False)` | prints the frame wider than its repr does, or with `full=True` every column and value exactly as held |
-| `ej.dataentries()` | Python **list** of `DataJournalEntry`, one per block journal entry that any command in the frame wrote: the first command's entries in written order, then the next command's |
-| `ej.datajournal()` | `DataJournalFrame` of the **same records**, one row each: row *i* is `ej.dataentries()[i]` |
+| `ej.dataentries()` | Python **list** of `BuildJournalEntry`, one per build journal entry that any command in the frame wrote: the first command's entries in written order, then the next command's |
+| `ej.buildjournal()` | `BuildJournalFrame` of the **same records**, one row each: row *i* is `ej.dataentries()[i]` |
 | `ej.anchors()` | sorted list of the anchors those entries belong to |
 | `ej.constructed(anchor=None, **filters)` | as on an entry (below), over every command in the frame |
 
-`dataentries()` and `datajournal()` hold the same records. Use the list to work
-with one entry at a time (`e.dataentries()[0].block.paths()`), and the frame to
-work with columns (`e.datajournal()[['anchor', 'event', 'hash']]`,
-`e.datajournal()['hash'].tolist()`).
+`dataentries()` and `buildjournal()` hold the same records. Use the list to work
+with one entry at a time (`e.dataentries()[0].pretty.paths()`), and the frame to
+work with columns (`e.buildjournal()[['anchor', 'event', 'hash']]`,
+`e.buildjournal()['hash'].tolist()`).
 
 **What a frame displays is not what it holds.** The repr shows:
 - ids and sessions as their first 8 characters, `976f41ea…`;
 - timestamps to the second;
-- `datajournal_entries` and `output_captures` as counts, `[2]`.
+- `buildjournal_entries` and `output_captures` as counts, `[2]`.
 
 It leaves out:
 - the `id` column, when it only repeats the index;
@@ -121,24 +121,24 @@ held, use `ej.show(width=250, max_colwidth=120)` or `ej.show(full=True)`.
 **A frame derived from one is still an `ExecJournalFrame`.** A column
 selection, a boolean filter, a sort or `head()` all come back as
 `ExecJournalFrame`s with the same datalake, so they display the same way and
-keep `.get()` and `.datajournal()`. The same holds for a `DataJournalFrame`.
+keep `.get()` and `.buildjournal()`. The same holds for a `BuildJournalFrame`.
 
 To pick commands with a filter and then look at what they wrote:
 
 ```python
-dbx.execjournal(comment='nightly').datajournal()      # every entry every nightly run wrote
-dbx.execjournal(date='2026-09-28').constructed()      # {anchor: DataJournalFrame} built that day
+dbx.execjournal(comment='nightly').buildjournal()      # every entry every nightly run wrote
+dbx.execjournal(date='2026-09-28').constructed()      # {anchor: BuildJournalFrame} built that day
 ```
 
 ### `ExecJournalEntry`
 
 | call | returns |
 |---|---|
-| `e.dataentries()` | Python **list** of `DataJournalEntry`, one per entry written under the command's session, in the order written |
-| `e.datajournal()` | `DataJournalFrame` of the **same records**, one row each: row *i* is `e.dataentries()[i]`, numbered 0..N-1, plus an `entry_path` column naming the file each row was read from |
+| `e.dataentries()` | Python **list** of `BuildJournalEntry`, one per entry written under the command's session, in the order written |
+| `e.buildjournal()` | `BuildJournalFrame` of the **same records**, one row each: row *i* is `e.dataentries()[i]`, numbered 0..N-1, plus an `entry_path` column naming the file each row was read from -- its own, or its anchor's compacted journal. The command found them by reference, `(anchor, hash, id)`, not by that path |
 | `e.anchors()` | sorted list of the anchors the command wrote entries for |
-| `e.constructed()` | `{anchor: DataJournalFrame}` of what the command **constructed**, for every anchor that has any |
-| `e.constructed(anchor)` | that one anchor's `DataJournalFrame` |
+| `e.constructed()` | `{anchor: BuildJournalFrame}` of what the command **constructed**, for every anchor that has any |
+| `e.constructed(anchor)` | that one anchor's `BuildJournalFrame` |
 | `e.constructed(anchor, **filters)` | same, further filtered, e.g. `hash='^3c29'` |
 | `e.constructed(event=None)` | drops the default event filter, which leaves every entry the command wrote, grouped by anchor |
 | `e.rerun(**kwargs)` | runs `exec` again through `dbx.exec` and returns its value (below) |
@@ -152,14 +152,14 @@ default `event` filter is applied **in addition** to any other filter you pass.
 Passing `event=` yourself replaces it.
 
 ```python
-e.dataentries()                    # [DataJournalEntry, DataJournalEntry]
-e.datajournal()[['anchor', 'event', 'hash']]
+e.dataentries()                    # [BuildJournalEntry, BuildJournalEntry]
+e.buildjournal()[['anchor', 'event', 'hash']]
 #               anchor      event        hash
 # 0  demo_blocks.Apple  build:end  3c293846…
 # 1  demo_blocks.Apple  build:end  2e3ec8ff…
 e.anchors()                        # ['demo_blocks.Apple']
-e.constructed()                    # {'demo_blocks.Apple': DataJournalFrame (2 rows)}
-e.dataentries()[0].block.paths()   # {'x': '…/demo_blocks.Apple/3c293846/x/x.txt'}
+e.constructed()                    # {'demo_blocks.Apple': BuildJournalFrame (2 rows)}
+e.dataentries()[0].pretty.paths()   # {'x': '…/demo_blocks.Apple/3c293846/x/x.txt'}
 
 dbx.execjournal(comment='again', iloc=0).dataentries()   # []
 ```
@@ -173,12 +173,12 @@ each valid block's own `build()` still skips without writing.
 **Reads are live.** The entries are read from the session index at call
 time, so `.dataentries()` shows what is in those files *now*, and a path that has
 since been cleared is skipped with a warning. A row written before the index
-existed falls back to its `datajournal_entries`.
+existed falls back to its `buildjournal_entries`.
 
 **One entry per block instance.** A block instance rewrites its one entry
 file. So a `build()` appears as its final event: `build:end`,
 `build:exception` if it raised, or `build:start` if it never finished. A
-failed build is in `datajournal()` and not in `constructed()`. Two instances
+failed build is in `buildjournal()` and not in `constructed()`. Two instances
 of the same block give two entries. The same goes for `build_tree()`: it
 writes `build_tree:<var>:begin` and `build_tree:<var>:end` for each var into
 that one file, so after a `build_tree()` that skipped its own build, the entry
@@ -203,7 +203,7 @@ writes its index marker, so the command's rows list it however it got there:
 What still isn't listed:
 - **A remote process outside dbx's executors** that doesn't inherit the
   environment, such as a Ray actor you create and call yourself.
-- **Entries written inside a `with DataJournal()` you open yourself** within
+- **Entries written inside a `with BuildJournal()` you open yourself** within
   the command, which is a session of its own.
 
 A worker on another host must also be able to write to the command's datalake
@@ -271,10 +271,10 @@ shared with everything else the process printed, and it is only written once
 the capture closes. `Datablock(capture_output=...)` is still accepted, so
 that recorded dfns still reconstruct, but it is ignored and not recorded.
 
-## `dbx.datajournal()`
+## `dbx.buildjournal()`
 
 ```python
-dbx.datajournal(what, loc=None, *, iloc=None, datalake=None, index=..., unnormalized=False, **filters)
+dbx.buildjournal(what, loc=None, *, iloc=None, datalake=None, index=..., unnormalized=False, **filters)
 ```
 
 `what` can be any of these:
@@ -282,26 +282,26 @@ dbx.datajournal(what, loc=None, *, iloc=None, datalake=None, index=..., unnormal
 - an anchor string such as `'demo_blocks.Apple'`
 - a `Datablock` class
 - a block instance, whose `datalake`, `storage_options` and `log` then become the defaults
-- a DataFrame to wrap as a `DataJournalFrame`, which reads nothing
+- a DataFrame to wrap as a `BuildJournalFrame`, which reads nothing
 
 This reads every entry under `<datalake>/<anchor>/`, for every hash and tag.
-The result is a `DataJournalFrame`, **newest first**, indexed by the entry's
+The result is a `BuildJournalFrame`, **newest first**, indexed by the entry's
 `id`. With `loc=` (an id, or a prefix of exactly one id) or `iloc=` (a
-position), it returns one `DataJournalEntry`. A prefix that matches no id or
+position), it returns one `BuildJournalEntry`. A prefix that matches no id or
 several ids raises `KeyError`, listing the matches. An anchor with no journal
 directory raises `FileNotFoundError`.
 
-`block.datajournal(**filters)` reads the same journal through the block's own
-`DataJournal`, but its frame is numbered rather than indexed by id, so its
+`block.buildjournal(**filters)` reads the same journal through the block's own
+`BuildJournal`, but its frame is numbered rather than indexed by id, so its
 `loc=` is a row number. Pass `index='id'` to look an entry up by id or id
 prefix instead. `frame.get(...)` takes the same labels, prefixes included.
 
 ```python
-dbx.datajournal(Apple)                                  # every Apple entry
-dbx.datajournal(Apple, event='build:end', iloc=0)       # the latest build
-dbx.datajournal(a)                                      # a's anchor, a's datalake
-dbx.datajournal('demo_blocks.Apple', session=e['session'])   # what one command wrote for this anchor
-dbx.datajournal(Apple, hash='^3c29', date='2026-09-28')
+dbx.buildjournal(Apple)                                  # every Apple entry
+dbx.buildjournal(Apple, event='build:end', iloc=0)       # the latest build
+dbx.buildjournal(a)                                      # a's anchor, a's datalake
+dbx.buildjournal('demo_blocks.Apple', session=e['session'])   # what one command wrote for this anchor
+dbx.buildjournal(Apple, hash='^3c29', date='2026-09-28')
 ```
 
 The main columns:
@@ -322,48 +322,48 @@ row, so a filter on them means the same thing on every row. Pass
 ### Listing first
 
 Reading a journal is two stages: listing its entry files, and then reading
-them. `DataJournal.list(anchor)` is the first one alone: every entry file
-under `<datalake>/<anchor>/`, as full paths. `DataJournal.read_frame(files)`
+them. `BuildJournal.list(anchor)` is the first one alone: every entry file
+under `<datalake>/<anchor>/`, as full paths. `BuildJournal.read_frame(files)`
 reads them, so a caller can learn how many files there are before it reads
 any:
 
 ```python
-files = dbx.DataJournal.list('demo_blocks.Apple')
-frame = dbx.DataJournal.read_frame(files, event='build:end')
+files = dbx.BuildJournal.list('demo_blocks.Apple')
+frame = dbx.BuildJournal.read_frame(files, event='build:end')
 ```
 
-`DataJournal.read`, `list`, `read_frame` and `dbx.pipejournal` all take a
+`BuildJournal.read`, `list`, `read_frame` and `dbx.pipejournal` all take a
 callable `progress=`, which they call as `progress(desc, done, total)`.
 While listing, `total` is None and `done` is the number of files found so
 far, reported after every directory is listed. While reading, `done` counts the files read out of `total`. If the
 callable raises an exception, the files not yet started are cancelled and
 the exception reaches the caller; that is how a user interrupts a read.
 
-### `DataJournalFrame`
+### `BuildJournalFrame`
 
 | call | returns |
 |---|---|
-| `dj.get(label)` / `dj(label)` | `DataJournalEntry` at label `label` (`.loc`; `dj()` drops null columns) |
+| `dj.get(label)` / `dj(label)` | `BuildJournalEntry` at label `label` (`.loc`; `dj()` drops null columns) |
 | `dj.list(column, take='last'\|'first'\|'all', sortby=None)` | a frame of `column` read for each hash: one row per hash by default. `'spec'` expands to a column per spec field |
 
 ```python
-dbx.datajournal(Apple).list('spec')
+dbx.buildjournal(Apple).list('spec')
 #    n       hash                   datetime
 # 0  2  2e3ec8ff…  2026-09-28 22:21:57.770803
 # 1  1  3c293846…  2026-09-28 22:21:57.735728
 ```
 
-### `DataJournalEntry`
+### `BuildJournalEntry`
 
 A row. Plain column values read as `entry['event']` or `entry.anchor`.
-`DataJournalEntry.column(entry, name)` reads a column that may be missing from
+`BuildJournalEntry.column(entry, name)` reads a column that may be missing from
 the row, or that has been renamed since, and returns None where that column is
 absent.
 
 | call | returns |
 |---|---|
 | `entry.read('spec')`, `entry.read('quote', 'note')` | **contents** behind a path column: YAML parsed, `.txt`/`.log` as text; several names give a dict |
-| `entry.block` | `Block`: the block **as recorded**, with `Datablock`'s API shape |
+| `entry.pretty` | `Pretty`: the block **as recorded**, with `Datablock`'s API shape |
 | `entry.inst()` | re-creates the block by evaluating its recorded `quote` in this interpreter |
 | `entry.rinst()` / `entry.inst(remote=True)` / `entry.trueinst()` | same, but on a Ray worker pinned to the entry's `revision`, so the hash matches the recorded one; returns a proxy |
 
@@ -372,10 +372,10 @@ which is already imported. So if `dbx`'s rendering has changed since the
 entry was written, the local instance comes back with a different hash and
 paths that hold nothing. Use `rinst()` when that matters.
 
-`entry.block` is read **off the row**, not recomputed:
+`entry.pretty` is read **off the row**, not recomputed:
 
 ```python
-blk = e.dataentries()[0].block       # Block(demo_blocks.Apple/3c2938466890…)
+blk = e.dataentries()[0].pretty       # Pretty(demo_blocks.Apple/3c2938466890…)
 blk.hash, blk.anchor, blk.key, blk.revision, blk.session, blk.tree   # properties
 blk.paths()        # {'x': '…/3c293846/x/x.txt'}: the paths actually written
 blk.topics()       # ['x']
@@ -387,9 +387,9 @@ blk.ls('x'), blk.list('x'), blk.size('x')      # storage at the recorded paths
 ## Across anchors
 
 `dbx.constructed(anchor=None, *, event=..., datalake=None, **filters)` works
-on the data journal **without** an exec row:
+on the build journal **without** an exec row:
 
-- given an anchor, it returns that anchor's constructed entries as one `DataJournalFrame`
+- given an anchor, it returns that anchor's constructed entries as one `BuildJournalFrame`
 - with no anchor, it reads every anchor in the datalake into one frame, newest first
 - `event=None` drops the event filter
 
@@ -407,10 +407,21 @@ dbx.pipejournal(loc=None, *, iloc=None, construct_only=False, extra_construction
 A `Pipeline` is a Datablock tree defined flat. Its `__create__()` arranges
 the tree out of the pipeline's VAR and returns the root, its **entrypoint**.
 `p.create()`, `p.entrypoint` (or `p.entry`, for short) and
-`p.read('entrypoint')` create the tree afresh, and each writes a `create`
-entry to the `PipeJournal`.
+`p.read('entrypoint')` all return the one tree `create()` arranges, once per
+instance. A pipeline whose `JOURNAL` is True -- `@pipeline(journal=True)` --
+writes one `create` entry to the `PipeJournal` as it does; one whose `JOURNAL`
+is False, the default, writes none. An `@pipeline` call is cached by all its
+arguments, so a pipeline that several others nest is one instance, created
+and journaled once per process.
 
-`PipeJournal` is a `DataJournal` whose entries are laid out exactly as a
+A journal read often and written in many small files can be compacted:
+`BuildJournal.UNSAFE_compact(anchors)` rewrites each anchor's entries as one parquet
+file, where `read` finds it, and `ExecJournal.UNSAFE_compact()` does the same for
+the exec journal. No entry is dropped, and entries recording a redirection stay in
+their block's own journal. `PipeJournal.UNSAFE_compact()` instead keeps one entry per
+pipeline and entrypath -- all `collect` reads.
+
+`PipeJournal` is a `BuildJournal` whose entries are laid out exactly as a
 block's are, under `<datalake>/.pipelines` instead of the datalake itself:
 `<datalake>/.pipelines/<anchor>/<key>/.journal/…`, where the pipeline's own
 journal is at `<datalake>/<anchor>/<key>/.journal/…`. So every pipeline in a
@@ -451,5 +462,5 @@ the tree. A pipeline instance rewrites its one entry file, so the entry's
 ## `dbx.journal()`
 
 `dbx.journal(what=None, …)` is the older single entry point. With `what` it
-calls `datajournal`; with `'pipelines'` (or `'.pipelines'`), `pipejournal`;
+calls `buildjournal`; with `'pipelines'` (or `'.pipelines'`), `pipejournal`;
 and without it, `execjournal`. New code should call the one it means.

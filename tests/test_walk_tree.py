@@ -49,7 +49,7 @@ def test_update_and_touch_tree_journal_every_block_under_one_tree(tmp_path, meth
     root, mid, leaf = _make_tree(str(tmp_path))
     assert getattr(root, method)('re-recorded', inline=True) is root
     for block in (leaf, mid, root):
-        entries = block.datajournal(event=event)
+        entries = block.buildjournal(event=event)
         assert len(entries) == 1 and entries.iloc[0]['note'] == 're-recorded'
         assert entries.iloc[0]['tree'] == root.tree, "found together, as one run's"
     assert f'^{event}$' in CONSTRUCTED_EVENTS
@@ -58,7 +58,7 @@ def test_update_and_touch_tree_journal_every_block_under_one_tree(tmp_path, meth
 def _touched(block):
     """Whether *block* has a touch entry -- a block with no journal at all has none."""
     try:
-        df = block.datajournal()
+        df = block.buildjournal()
     except FileNotFoundError:
         return False
     return bool(len(df)) and bool((df['event'] == 'touch').any())

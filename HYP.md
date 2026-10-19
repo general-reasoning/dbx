@@ -50,7 +50,7 @@ to -- and each row is a point:
     its header, which stays in view -- its title a menu of the pipeline's
     other constructed blocks, and beside it, *session blocks*: every block
     journaled under the session of the entry shown, from the index a
-    `dbx.exec` command keeps (`DataJournal.session_entries`), to show in its
+    `dbx.exec` command keeps (`BuildJournal.session_entries`), to show in its
     place. A block built outside `dbx.exec` has no index to list.
   - session blocks: every block journaled under the pipeline's own session,
     as the entry blocks' windows list theirs: picking one opens its journal,
@@ -85,11 +85,13 @@ to -- and each row is a point:
 - in either window, `quote` and `cite` buttons, where the entry shown
   recorded its block's quote: each opens a bash line, to copy (Cmd+C), that
   makes the block again from that quote and prints it --
-  `dbx.pprint "pkg.Block(spec={...}, ...)"` -- or, for `cite`, prints its
-  cite: `dbx.pprint "pkg.Block(...).cite()"`. The quote's `$` is dropped,
-  as `dbx.exec` runs Python; the cite is made from the quote because a
-  recorded cite cannot be run -- its nested blocks are cited without quotes
-  and their env values resolved. The window's title switches between the
+  `dbx.pprint "dbx.eval(\"\$pkg.Block(spec={...}, ...)\")"` -- or, for
+  `cite`, prints its cite, the same with `.cite()` after it. The quote is
+  evaluated by `dbx.eval`, as recorded: its nested blocks are written bare,
+  and only `dbx.eval` reads them back as the speclines they were -- run as
+  Python, they would be made into blocks, and the block made would not be
+  the one quoted. The cite is made from the quote because a recorded cite
+  cannot be run. The window's title switches between the
   two; beside it, `[ ] --revision=` pins the line to the entry's recorded
   revision, `dbx.pprint --revision=<dbxsha>:<projsha> "..."`, so it runs as
   the block was built. Off, as it starts, the line runs at today's checkout.
@@ -189,7 +191,7 @@ DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal dbx.dataparts.DatatableCo
 DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal pkg.Model --filter 'tag=TRAIN, event=build:end|note'
 ```
 
-shows one point per block of the anchor, from its block journal -- each
+shows one point per block of the anchor, from its build journal -- each
 block's newest entry, embedded and labeled as a pipeline is; pipeline
 entries, filed in the pipeline journal, are not among them. Beneath a
 block's label, its full `tag`, then its datetime -- on the same line where
@@ -201,7 +203,7 @@ every anchor of the datalake (`dbx.anchors()`); picking one shows it in
 place, read, embedded and laid out in the background, each in its own corpus.
 With an anchor shown, the **filter** field beside it takes `key=pattern,
 key=pattern, ...` -- each *key* a journal column, each *pattern* matched
-against it, as `DataJournal.read`'s filters are (a comma splits only before
+against it, as `BuildJournal.read`'s filters are (a comma splits only before
 another `key=`, so a pattern may hold one; `|` alternates) -- and Enter
 applies it; Esc puts it back. `--filter` gives it at the start. Blocks a
 filter leaves out keep their embeddings, so widening it again embeds
@@ -396,7 +398,7 @@ a directory of markdowns, they are directions of content.
 | Shift, while hovering | each of those arcs labeled with what its direction means, named by Claude from where else it runs in the corpus, and what that rests on. See [Arrows](#arrows) |
 | Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
 | (lower left) | a spinning wheel while data are being loaded or prepared; an error, in red, for 15 s or until the next read -- its full traceback in the terminal |
-| while a corpus loads | the window is dimmed and takes no input. A card in its middle shows the stage under way, with a bar, the files done out of the total, the time taken and the time left. An anchor's journal is listed first, as a stage of its own (`dbx.DataJournal.list`). Until the listing is done there is no total, so the bar slides and the card counts the files found so far, after every directory. Then the files are read (`dbx.DataJournal.read_frame`), counted against that total |
+| while a corpus loads | the window is dimmed and takes no input. A card in its middle shows the stage under way, with a bar, the files done out of the total, the time taken and the time left. An anchor's journal is listed first, as a stage of its own (`dbx.BuildJournal.list`). Until the listing is done there is no total, so the bar slides and the card counts the files found so far, after every directory. Then the files are read (`dbx.BuildJournal.read_frame`), counted against that total |
 | Esc, while a corpus loads | interrupt it at its next step and drop anything queued behind it. A reload that is interrupted leaves the disk as it was; a switch of journal leaves it empty until the next reload. Laying out the disk (UMAP) cannot be cut short, so an Esc during it waits for it to finish |
 | points (top right) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center; a right click on one does what a right click on its point does |
 | settings (top right) | tags (an anchor's blocks), names and versions (`--journal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same |
@@ -412,7 +414,7 @@ hyp --data DIR               # the corpus directory, local or an fsspec url
                              # (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)
 hyp --reset                  # discard the corpus and start over
 hyp --journal                # the pipelines of DBX_DATALAKE (HypDbxJournal); also: --journal pipelines
-hyp --journal ANCHOR         # the blocks of ANCHOR, from its block journal; the journal menu switches either
+hyp --journal ANCHOR         # the blocks of ANCHOR, from its build journal; the journal menu switches either
 hyp --journal ANCHOR --filter 'key=pattern, ...'   # its blocks filtered; the filter field changes it
 hyp --journal --ece ckpt     # --extra-construction-events: events that also make an entry block count as
                              # constructed, each alone or followed by = or : -- here, a still that checkpointed

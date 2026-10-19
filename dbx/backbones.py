@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import gc
 import math
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -155,13 +155,16 @@ class ModelEvaluatorBuilder(Datablock):
     It exists so that feature blocks/clips can declare their evaluator configuration
     as a spec dependency, enabling deterministic hashing and lineage tracking.
 
-    Concrete subclasses may extend ``VAR`` with model-specific fields
-    and override `evaluator()` to return a ready-to-use
-    `ModelEvaluator`.
+    Concrete subclasses may extend ``VAR`` with model-specific fields,
+    and give `model`, `transform` and `evaluator_kwargs`: what `evaluator()`
+    constructs its `Evaluator` with.
     """
 
     VERSION = 1
     Evaluator: type[ModelEvaluator] = ModelEvaluator
+
+    #: The live evaluators of this process, by ``(type(builder), builder.hash, device)``: see `evaluator`.
+    _evaluator_cache: ClassVar[dict[tuple, ModelEvaluator]] = {}
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -176,26 +179,45 @@ class ModelEvaluatorBuilder(Datablock):
     # 2. Declared API ------------------------------------------------------
 
     def evaluator(self, *, device: str = "cuda", log: Datalog | None = None) -> ModelEvaluator:
-        """Create a live `ModelEvaluator`.
+        """The live `Evaluator` on *device*, with `model` moved there.
 
-        The result is cached per device so that repeated calls with
-        the same device return the same instance.
+        Cached per process, by ``(type(self), self.hash, device)``: every
+        builder of the same class and spec -- one per tablet of a feature
+        table -- shares one evaluator, and its model is loaded once per device,
+        as it is for the batches within a tablet. The class is in the key
+        because an identity names none: two builder classes with the same spec
+        have the same hash, and need not build the same model.
+
+        The cache holds each model for the life of the process -- what a
+        build's workers want. `evaluator_cache_clear` empties it. *log* is
+        used when the evaluator is constructed; a cached one keeps its own.
         """
-        if not hasattr(self, '_evaluators'):
-            self._evaluators = {}
-        if device not in self._evaluators:
-            log = log or self.log
-            self._evaluators[device] = self.Evaluator(
-                model=self.model,
-                transform=self.transform,
-                capture_layers=self.var.capture_layers,
-                capture_final=self.var.capture_final,
-                device=device,
-                log=log,
-            )
-        return self._evaluators[device]
+        key = (type(self), self.hash, device)
+        cache = ModelEvaluatorBuilder._evaluator_cache
+        if key not in cache:
+            model = self.model
+            if not isinstance(model, str) and hasattr(model, 'to'):
+                model = model.to(device)
+            cache[key] = self.Evaluator(model=model, transform=self.transform, device=device,
+                                        log=log or self.log, **self.evaluator_kwargs)
+        return cache[key]
+
+    @classmethod
+    def evaluator_cache_clear(cls) -> None:
+        """Drop the cached evaluators -- and their models -- of *cls* and its subclasses (`evaluator`)."""
+        cache = ModelEvaluatorBuilder._evaluator_cache
+        for key in [k for k in cache if issubclass(k[0], cls)]:
+            del cache[key]
+        gc.collect()
+        if torch is not None and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # 3. Accessors ---------------------------------------------------------
+
+    @property
+    def evaluator_kwargs(self) -> dict:
+        """What `Evaluator` is constructed with, besides the model, transform, device and log."""
+        return dict(capture_layers=self.var.capture_layers, capture_final=self.var.capture_final)
 
     @property
     def model(self):
@@ -385,29 +407,10 @@ class TransformerEvaluatorBuilder(ModelEvaluatorBuilder):
     def __init__(self, *args, capture_blocks=None, capture_layers=None, capture_final=True, cls_token_only=False, **kwargs):
         super().__init__(*args, capture_layers=capture_layers, capture_final=capture_final, capture_blocks=capture_blocks, cls_token_only=cls_token_only, **kwargs)
 
-    def evaluator(self, *, device: str = "cuda", log: Datalog | None = None) -> TransformerEvaluator:
-        """Create a live `TransformerEvaluator`.
-
-        The result is cached per device so that repeated calls with
-        the same device return the same instance.
-        """
-        if not hasattr(self, '_evaluators'):
-            self._evaluators = {}
-        if device not in self._evaluators:
-            log = log or self.log
-            self._evaluators[device] = self.Evaluator(
-                model=self.model,
-                capture_blocks=self.var.capture_blocks,
-                capture_layers=self.var.capture_layers,
-                capture_final=self.var.capture_final,
-                cls_token_only=self.var.cls_token_only,
-                transform=self.transform,
-
-                device=device,
-                log=log,
-            )
-
-        return self._evaluators[device]
+    @property
+    def evaluator_kwargs(self) -> dict:
+        return dict(super().evaluator_kwargs, capture_blocks=self.var.capture_blocks,
+                    cls_token_only=self.var.cls_token_only)
 
     @property
     def layer_names(self) -> list[str]:
@@ -442,6 +445,7 @@ class TransformerEvaluatorBuilder(ModelEvaluatorBuilder):
                 names.append('final')
             return names
 
-        if hasattr(self, '_evaluators') and self._evaluators:
-            return next(iter(self._evaluators.values())).layer_names
+        for (cls, h, _), evaluator in ModelEvaluatorBuilder._evaluator_cache.items():
+            if cls is type(self) and h == self.hash:
+                return evaluator.layer_names
         return self.evaluator(device="cpu").layer_names

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import functools
 import gc
 import math
+import os
 import warnings
 from typing import Any
 
@@ -25,7 +26,7 @@ from dbx.backbones import ModelEvaluatorBuilder
 from dbx.datatables import (
     DATASLICE,
     Datacollator,
-    DataslicesUpstream,
+    Layered,
     Datatablet,
     Datatable,
     DatatableTablet,
@@ -45,6 +46,16 @@ from dbx.datastreams import (
 
 def _passthrough_collate_(batch):
     return batch
+
+
+def _renamed_kwarg_(what: str, old: str, new: str, old_value, new_value):
+    """*new_value*, or *old_value* -- given by the keyword's name until 2026-10-19 -- with a warning; not both."""
+    if old_value is None:
+        return new_value
+    if new_value is not None:
+        raise TypeError(f"{what}: {old}= is {new}= by its old name; pass {new}= alone")
+    warnings.warn(f"{what}: {old}= is now {new}=", FutureWarning, stacklevel=3)
+    return old_value
 
 
 def _flatten_item_(x):
@@ -118,7 +129,7 @@ def feature_map(feature_for_column, evaluator_factory) -> dict[str, str]:
     return {str(feature_for_column): str(feature_for_column)}
 
 
-class Featuretablet(DataslicesUpstream, Datatablet):
+class Featuretablet(Layered, Datatablet):
     """A tablet storing multi-layer feature activations captured by an evaluator.
 
     Inherits access to the slices of its ``upstream`` tablet, the one its features
@@ -198,29 +209,39 @@ class Featuretablet(DataslicesUpstream, Datatablet):
     #     fault VAR.LazyLoader._check_renderable_ exists to prevent, arrived at
     #     from the other side.
     #   * It needs the column's MDS type, which only a DATASLICE-declared
-    #     upstream states (`upstream.declared_columns(slice)`). Under the
+    #     upstream states (`upstream.slice_columns(slice)`). Under the
     #     SLICETOPIC sentinel nothing declares it, and inferring a type from a
     #     value that has already been through MDS is guesswork -- so this may
     #     have to require a declared upstream, and say so.
-    #   * Both build paths have to write it: __build_bulk__ can take it out of
-    #     the `sample_data` it already read, but __build_streaming__ sees rows
+    #   * Both build paths have to write it: __build_from_data__ can take it out of
+    #     the `sample_data` it already read, but __build_from_dataset__ sees rows
     #     only as whatever _passthrough_collate_ made of the batch.
     def __init__(
         self,
         *args,
         device_batch_size: int = 64,
         device: str = "cpu",
-        streaming: bool = False,
-        dataloader_kwargs: dict | None = None,
+        evaluator_use_dataset: bool | None = None,
+        evaluator_dataloader_kwargs: dict | None = None,
         shared_upstream_column: 'str | None' = None,
+        streaming: bool | None = None,
+        dataloader_kwargs: dict | None = None,
         **kwargs,
     ):
+        # How the evaluator reads the upstream tablet: False, `upstream.data()`, whole, in batches
+        # of *device_batch_size*; True, `upstream.dataset()` through a DataLoader of
+        # *evaluator_dataloader_kwargs* -- its *num_workers* read and decode as the device computes.
+        what = type(self).__name__
+        evaluator_use_dataset = bool(_renamed_kwarg_(what, 'streaming', 'evaluator_use_dataset',
+                                                     streaming, evaluator_use_dataset))
+        evaluator_dataloader_kwargs = _renamed_kwarg_(what, 'dataloader_kwargs', 'evaluator_dataloader_kwargs',
+                                                      dataloader_kwargs, evaluator_dataloader_kwargs)
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
             device=device,
-            streaming=streaming,
-            dataloader_kwargs=dataloader_kwargs,
+            evaluator_use_dataset=evaluator_use_dataset,
+            evaluator_dataloader_kwargs=evaluator_dataloader_kwargs,
             shared_upstream_column=shared_upstream_column,
             **kwargs,
         )
@@ -229,16 +250,18 @@ class Featuretablet(DataslicesUpstream, Datatablet):
         super().__post_init__()
         self.device = getattr(self, 'device', 'cpu')
         self.device_batch_size = getattr(self, 'device_batch_size', 64)
-        self.streaming = getattr(self, 'streaming', False)
-        self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
+        # A state from before 2026-10-19 carries them as streaming and dataloader_kwargs.
+        self.evaluator_use_dataset = getattr(self, 'evaluator_use_dataset', getattr(self, 'streaming', False))
+        self.evaluator_dataloader_kwargs = (getattr(self, 'evaluator_dataloader_kwargs', None)
+                                            or getattr(self, 'dataloader_kwargs', None) or {})
 
     def __build__(self):
-        if self.streaming:
-            return self.__build_streaming__()
+        if self.evaluator_use_dataset:
+            return self.__build_from_dataset__()
         else:
-            return self.__build_bulk__()
+            return self.__build_from_data__()
 
-    def __build_bulk__(self):
+    def __build_from_data__(self):
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
         upstream = self.var.upstream
 
@@ -269,13 +292,13 @@ class Featuretablet(DataslicesUpstream, Datatablet):
                 # for the next batch of the same shape: no collection per batch.
                 del batch, result, batch_features
             del inputs
-        # Once per bag: collect, and hand the allocator's cache back -- see `__build_streaming__`.
+        # Once per bag: collect, and hand the allocator's cache back -- see `__build_from_dataset__`.
         evaluator.clear()
         del evaluator
         gc.collect()
         return self
 
-    def __build_streaming__(self):
+    def __build_from_dataset__(self):
         warnings.filterwarnings("ignore", category=UserWarning, message=".*given NumPy array is not writable.*")
         gc.collect()
         evaluator = self.var.evaluator_factory.evaluator(device=self.device, log=self.log)
@@ -284,7 +307,7 @@ class Featuretablet(DataslicesUpstream, Datatablet):
         collator = self.var.collator
 
         dataset = upstream.dataset(*collator.slices(upstream))
-        dl_kwargs = dict(self.dataloader_kwargs) if self.dataloader_kwargs else {}
+        dl_kwargs = dict(self.evaluator_dataloader_kwargs) if self.evaluator_dataloader_kwargs else {}
         dl_kwargs.setdefault('batch_size', self.device_batch_size)
         dl_kwargs.setdefault('collate_fn', _passthrough_collate_)
 
@@ -358,7 +381,7 @@ def _featuretable_pasts_(tablet) -> list:
     ]
 
 
-class Featuretable(DataslicesUpstream, Datatable):
+class Featuretable(Layered, Datatable):
     """A table of `Featuretablet` blocks built across a `Datatable`."""
 
     TABLET = Featuretablet
@@ -389,30 +412,37 @@ class Featuretable(DataslicesUpstream, Datatable):
         *args,
         device_batch_size: int = 64,
         devices: list | None = None,
-        device_parallelization: str | None = None,
-        device_work_stealing: bool = False,
-        streaming: bool = False,
-        dataloader_kwargs: dict | None = None,
+        evaluator_use_dataset: bool | None = None,
+        evaluator_dataloader_kwargs: dict | None = None,
         filter_built_tablets: bool = False,
         shared_upstream_column: 'str | None' = None,
+        streaming: bool | None = None,
+        dataloader_kwargs: dict | None = None,
         **kwargs,
     ):
         # The feature evaluation -- building the tablets -- queues off *devices*,
-        # one worker per device: *device_parallelization* (default:
-        # multiprocessing for several devices, inline for one) and
-        # *device_work_stealing*. Everything else -- checking and adopting the
-        # tablets -- runs at the stack's own *n_workers*, *parallelization* and
-        # *work_stealing*. Operational, and passed on only when set.
-        if device_parallelization is not None:
-            kwargs['device_parallelization'] = device_parallelization
-        if device_work_stealing:
-            kwargs['device_work_stealing'] = True
+        # one worker per device: `Datastack`'s *device_parallelization*, else
+        # *parallelization*, else multiprocessing for several devices and inline
+        # for one; and *device_work_stealing*, else *work_stealing*. Everything
+        # else -- checking and adopting the tablets -- runs at *n_workers*, on
+        # *worker_parallelization*, else *parallelization*, and
+        # *worker_work_stealing*, else *work_stealing*. *evaluator_use_dataset*
+        # reads each tablet's upstream as `upstream.dataset()`, through a
+        # DataLoader of *evaluator_dataloader_kwargs* -- its *num_workers* read
+        # and decode in processes of their own, while the collator and the
+        # evaluator run in the device's worker -- rather than as `upstream.data()`.
+        # Neither touches how this table is read: by `data()` or `dataset()`, as its reader asks.
+        what = type(self).__name__
+        evaluator_use_dataset = bool(_renamed_kwarg_(what, 'streaming', 'evaluator_use_dataset',
+                                                     streaming, evaluator_use_dataset))
+        evaluator_dataloader_kwargs = _renamed_kwarg_(what, 'dataloader_kwargs', 'evaluator_dataloader_kwargs',
+                                                      dataloader_kwargs, evaluator_dataloader_kwargs)
         super().__init__(
             *args,
             device_batch_size=device_batch_size,
             devices=devices,
-            streaming=streaming,
-            dataloader_kwargs=dataloader_kwargs,
+            evaluator_use_dataset=evaluator_use_dataset,
+            evaluator_dataloader_kwargs=evaluator_dataloader_kwargs,
             filter_built_tablets=filter_built_tablets,
             shared_upstream_column=shared_upstream_column,
             **kwargs,
@@ -421,41 +451,43 @@ class Featuretable(DataslicesUpstream, Datatable):
     def __post_init__(self):
         super().__post_init__()
         # Read back from self — works whether we came through __init__ or __setstate__.
-        self.streaming = getattr(self, 'streaming', False)
-        self.dataloader_kwargs = getattr(self, 'dataloader_kwargs', None) or {}
+        # A state from before 2026-10-19 carries them as streaming and dataloader_kwargs.
+        self.evaluator_use_dataset = getattr(self, 'evaluator_use_dataset', getattr(self, 'streaming', False))
+        self.evaluator_dataloader_kwargs = (getattr(self, 'evaluator_dataloader_kwargs', None)
+                                            or getattr(self, 'dataloader_kwargs', None) or {})
         self.filter_built_tablets = getattr(self, 'filter_built_tablets', False)
         self.device_batch_size = getattr(self, 'device_batch_size', 64)
         self.devices = getattr(self, 'devices', None) or ["cpu"]
         self._devices = self.devices
 
-    def build(self, *args, **kwargs):
-        """As `Datatable.build`, after checking that its *devices* exist here -- before anything else is done."""
-        self._check_devices_()
-        return super().build(*args, **kwargs)
-
     def _build_executor_(self, tag: str):
-        """The feature evaluation's executor: one worker per device -- see `__init__`."""
+        """The feature evaluation's executor: one worker per device -- see `__init__` -- once its *devices* are here.
+
+        Checked here, as features are about to be evaluated, and not as `build` starts: a
+        table that adopts an earlier build, or finds every tablet built, evaluates nothing,
+        and needs no device -- it is built on a machine without the GPUs it was computed on.
+        """
+        self._check_devices_()
         devices = list(self.devices)
-        key = (getattr(self, 'device_parallelization', None)
-               or ('multiprocessing' if len(devices) > 1 else 'inline')).lower()
-        executors = self._get_executors_()
-        if key not in executors:
-            raise ValueError(f"Unknown device_parallelization {key!r}. Choose from {list(executors)}")
-        cls = executors[key]
-        kwargs = self._executor_kwargs_(tag=f"{tag} on {devices}", n_workers=len(devices), executor_cls=cls)
-        kwargs.pop('work_stealing', None)
-        if getattr(self, 'device_work_stealing', False):
-            kwargs['work_stealing'] = True
+        key = (self._device_parallelization_() or ('multiprocessing' if len(devices) > 1 else 'inline')).lower()
+        cls = self._executor_class_(key, 'device_parallelization')
+        kwargs = self._device_executor_kwargs_(tag=f"{tag} on {devices}", n_workers=len(devices), executor_cls=cls)
         self.log.info(f"{self.anchorkeypath}: evaluating features on {devices}, one worker per device ({key})")
         return cls(**kwargs)
 
     def _check_devices_(self) -> None:
-        """Raise for a ``cuda:<i>`` this process cannot see.
+        """Raise for a ``cuda:<i>`` this process cannot see, or GPUs with fewer CPUs than there are of them.
 
         Each worker takes one of *devices*; one naming a GPU the job was not
         given fails as ``CUDA error: invalid device ordinal`` -- in a worker,
-        after the blocks are checked and the journal read, minutes in. Here it
-        fails first, saying how many devices there are.
+        after the blocks are checked and the journal read, minutes in. Here --
+        from `_build_executor_`, before any worker starts -- it fails saying how
+        many devices there are.
+
+        A worker also needs a CPU of its own to feed its GPU. Workers sharing
+        fewer CPUs than GPUs fail nothing: they take turns, and the GPUs run
+        one after another -- a job given ``--gres=gpu:3`` and no
+        ``--cpus-per-task`` has one CPU. Here that is an error too.
         """
         cuda = [str(d) for d in self.devices if str(d).startswith('cuda')]
         if not cuda:
@@ -468,6 +500,12 @@ class Featuretable(DataslicesUpstream, Datatable):
         if missing:
             raise ValueError(f"{type(self).__name__}: devices={self.devices} names {missing}, but this process "
                              f"sees {n} CUDA device(s), cuda:0..cuda:{n - 1} -- ask for no more than the job has")
+        n_cpus = len(os.sched_getaffinity(0))
+        if n_cpus < len(cuda):
+            raise RuntimeError(f"{type(self).__name__}: devices={self.devices} starts {len(cuda)} GPU workers, and "
+                               f"this process may run on {n_cpus} CPU(s) (os.sched_getaffinity): the workers would "
+                               f"take turns on them, and the GPUs run one after another -- ask the job for at least "
+                               f"one CPU per GPU (e.g. salloc --cpus-per-task=...), or name fewer devices")
 
     def __tablet__(self, idx: int, device: str | None = None, tag=None) -> Featuretablet:
         upstream = self.var.upstream.tablet(idx)
@@ -490,8 +528,8 @@ class Featuretable(DataslicesUpstream, Datatable):
             SPECIALIZATIONS=tablet_specs,
             device_batch_size=self.device_batch_size,
             device=device,
-            streaming=self.streaming,
-            dataloader_kwargs=self.dataloader_kwargs,
+            evaluator_use_dataset=self.evaluator_use_dataset,
+            evaluator_dataloader_kwargs=self.evaluator_dataloader_kwargs,
             revision=self.revision,
             tag=tag if tag is not None else upstream.tag,
         )
@@ -535,13 +573,13 @@ class Featuretable(DataslicesUpstream, Datatable):
         return self.var.upstream.n_tablets
 
 
-class BipolarFeaturetablet(DataslicesUpstream, Datatablet):
+class BipolarFeaturetablet(Layered, Datatablet):
     """Bipolar encoding of a `Featuretablet`'s feature columns against a calibration.
 
     Each column is mapped to ``{-1, +1}`` elementwise: ``+1`` where the value
     is at or above the column's median, ``-1`` below it. The median is the
     whole-table one in ``VAR.stats_probe`` -- a `FeatureStatsProbe` over a
-    calibration table, usually another fold than the one this tablet is in -- and
+    calibration table, usually another part than the one this tablet is in -- and
     the values are normalized first exactly as that probe normalized them
     before taking it (`normalize_features` with its ``normalization``, one
     column at a time), so value and median are in the same space.
@@ -642,7 +680,7 @@ class BipolarFeaturetablet(DataslicesUpstream, Datatablet):
     @property
     def feature_columns(self) -> list[str]:
         """The featuretab columns encoded here, in the featuretab's declared order."""
-        declared = self.upstream.declared_columns('features')
+        declared = self.upstream.slice_columns('features')
         if not declared:
             raise ValueError(
                 f"{type(self).__name__}: {self.upstream.anchorkeypath} declares no columns "
@@ -675,7 +713,7 @@ class BipolarFeaturetablet(DataslicesUpstream, Datatablet):
             )
 
 
-class BipolarFeaturetable(DataslicesUpstream, Datatable):
+class BipolarFeaturetable(Layered, Datatable):
     """A table of `BipolarFeaturetablet` blocks built over a `Featuretable`.
 
     Every tablet is calibrated by the one ``stats_probe``: that is what makes the
@@ -760,7 +798,7 @@ class BipolarFeaturetable(DataslicesUpstream, Datatable):
         return self.upstream.n_tablets
 
 
-class TernaryFeaturetablet(DataslicesUpstream, Datatablet):
+class TernaryFeaturetablet(Layered, Datatablet):
     """A `BipolarFeaturetablet`'s tiles, kept where their bag is sure of the sign and they agree with it, else 0.
 
     The bag-level estimate, per column and dimension, is the mean of the
@@ -859,14 +897,14 @@ class TernaryFeaturetablet(DataslicesUpstream, Datatablet):
     @property
     def bipolar_columns(self) -> list[str]:
         """The upstream's bipolar columns, in its declared order."""
-        declared = self.upstream.declared_columns('bipolar')
+        declared = self.upstream.slice_columns('bipolar')
         if not declared:
             raise ValueError(f"{type(self).__name__}: {self.upstream.anchorkeypath} declares no columns for "
                              f"its 'bipolar' slice, so there is nothing to say which to ternarize")
         return list(declared)
 
 
-class TernaryFeaturetable(DataslicesUpstream, Datatable):
+class TernaryFeaturetable(Layered, Datatable):
     """A table of `TernaryFeaturetablet` blocks built over a `BipolarFeaturetable`, one threshold for all."""
 
     TABLET = TernaryFeaturetablet

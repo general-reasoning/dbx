@@ -1,14 +1,14 @@
 """
 Tests for Datablock.diffnorm(other_norm=None, *, journal=None).
 
-The ``journal`` selector dict must carry exactly one of ``entry_path``,
+The ``journal`` selector dict must carry exactly one of ``id``,
 ``iloc``, or ``loc``; the matching journal entry supplies the "other" norm.
 
 Verifies:
 1. A raw other_norm still diffs key-by-key (no journal).
 2. journal={'iloc': -1} reads the last entry's norm.
 3. journal={'loc': <label>} reads that entry's norm.
-4. journal={'entry_path': <parquet path>} reads that file's norm.
+4. journal={'id': <entry id>} reads that entry's norm, wherever it is filed.
 5. Comparing a block to its own just-built entry yields no diff.
 6. Supplying none / more than one selector raises ValueError.
 
@@ -76,13 +76,13 @@ class TestJournalSelectors:
 
     def test_loc(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        loc = a.datajournal().index[-1]
+        loc = a.buildjournal().index[-1]
         assert b.diffsubsig(journal={'loc': loc}) == {'spec': {'x': (2, 1)}}
 
-    def test_entry_path(self, tmp_path):
+    def test_id(self, tmp_path):
         a, b = _built_pair(tmp_path)
-        entry_path = a.datajournal()['entry_path'].iloc[-1]
-        assert b.diffsubsig(journal={'entry_path': entry_path}) == {'spec': {'x': (2, 1)}}
+        id = a.buildjournal(event='build:end')['id'].iloc[-1]
+        assert b.diffsubsig(journal={'id': id}) == {'spec': {'x': (2, 1)}}
 
     def test_self_against_own_entry(self, tmp_path):
         a, b = _built_pair(tmp_path)

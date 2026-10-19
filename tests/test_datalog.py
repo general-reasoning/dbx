@@ -9,7 +9,7 @@ from dbx.databits import callable_executor
 from dbx.journals import Datalog
 
 
-LEAD = re.compile(r"^(?P<worker>\S+):\s+(?P<dt>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}): (?P<rest>.*)$")
+LEAD = re.compile(r"^(?P<worker>\S+?):-*\s+(?P<dt>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}): (?P<rest>.*)$")
 
 
 def _lines(capsys):
@@ -59,9 +59,30 @@ class TestLevels:
         m = LEAD.match(line)
         assert m['worker'] == 'main'
         assert m['rest'] == "INFO: x: hello"
+        assert line.startswith('main:' + '-' * (Datalog.WORKER_WIDTH - len('main')) + ' ')
 
 
 class TestSubtree:
+
+    def test_tree_is_a_level_of_its_own_and_follows_verbose_where_unset(self, capsys, monkeypatch):
+        """DBX_LOG_TREE shows the banners alone; set nowhere, they come with VERBOSE, as they always did."""
+        for var in ('DBX_LOG_TREE', 'DBX_LOG_VERBOSE'):
+            monkeypatch.delenv(var, raising=False)
+        log = Datalog()
+
+        def shown():
+            with log.subtree('a'):
+                log.verbose('inside')
+            return [_rest(l) for l in _lines(capsys)]
+
+        assert shown() == []
+        with Datalog(verbose=True):
+            assert shown() == ["------------>>>--- BUILDING SUBTREE at a", "VERBOSE: inside",
+                               "------------<<<--- BUILDING SUBTREE at a"]
+        with Datalog(verbose=True, tree=False):
+            assert shown() == ["VERBOSE: inside"]
+        monkeypatch.setenv('DBX_LOG_TREE', '1')
+        assert shown() == ["------------>>>--- BUILDING SUBTREE at a", "------------<<<--- BUILDING SUBTREE at a"]
 
     def test_banners_nest_and_line_up(self, capsys):
         log = Datalog()
@@ -109,9 +130,10 @@ class TestCarried:
         with Datalog(verbose=True):
             with Datalog().subtree('a'):
                 results = ex.exec_callables([functools.partial(_work, i) for i in range(2)])
-        assert sorted(results) == [(f"main/{kind}0", 1), (f"main/{kind}1", 1)]
+        label = 't' if kind == 't' else ''      # a process is its bare number, a thread t<i>
+        assert sorted(results) == [(f"main:{label}0", 1), (f"main:{label}1", 1)]
         out = capfd.readouterr().out
-        assert re.search(rf"^main/{kind}\d:\s+\S+: VERBOSE: w: 0 at 1$", out, re.M)
+        assert re.search(rf"^main:{label}\d:-*\s+\S+: VERBOSE: w: 0 at 1$", out, re.M)
         assert Datalog.worker() == 'main' and Datalog.depth() == 0
 
 

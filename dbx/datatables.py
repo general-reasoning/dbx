@@ -38,7 +38,7 @@ from .datablocks import (
     DATAFILE,
     DIRTOPIC,
     Datablock,
-    DataJournalFrame,
+    BuildJournalFrame,
     Datastack,
     TopicMarkerMeta,
     _NotedMarkerMeta_,
@@ -46,6 +46,7 @@ from .datablocks import (
     forming_with_journal,
     is_topicmarker,
 )
+from .databits import read_yaml
 from .datastreams import (
     ChunkShuffleSampler,
     SharedMemoryManager,
@@ -148,8 +149,8 @@ class DATASLICE(DATADIR, metaclass=_DataSliceMeta_):
 
     It is written as MDS ``'json'`` -- what a dict column is -- and the
     structure is what renders, so it is in the hash, and what a
-    ``(slice, column, key)`` read names the keys of. `declared_columns` gives
-    the writer's view, `declared_schema` the declaration.
+    ``(slice, column, key)`` read names the keys of. `slice_columns` gives
+    the writer's view, `slice_schema` the declaration.
     """
 
     #: Empty on the bare marker, and set by the call that parameterises it.
@@ -250,7 +251,7 @@ class _Database_(Datablock):
         """The names of this block's slice topics, in declaration order.
 
         *recursive* adds the slices of the blocks upstream of this one, for a
-        block that has them (`DataslicesUpstream`); a block reading only its
+        block that has them (`Layered`); a block reading only its
         own has nothing to add.
 
         A method rather than a property, mirroring :meth:`topics`, which it is
@@ -258,28 +259,36 @@ class _Database_(Datablock):
 
         Derived on each call rather than frozen at class creation, so a TOPICS
         assigned or amended after the class body still reports its slices, and
-        an instance overriding TOPICS -- as :class:`DatatablePart` does -- is
+        an instance overriding TOPICS -- as :class:`~dbx.dataparts.MappedDatatable` does -- is
         read through.
         """
         return _Database_._find_slice_topics_(getattr(self, 'TOPICS', None))
 
-    def declared_columns(self, slice) -> 'dict | None':
+    def slice_columns(self, slice) -> 'dict | None':
         """The columns *slice* declares, as ``{column: mds_type}``, or None.
 
         None when nothing was declared -- the :data:`SLICETOPIC` sentinel, or a
         bare :class:`DATASLICE` -- so the columns are still the writer's to supply.
         A declaration, unlike what a writer is handed, is in the block's hash.
         A column declared by its dict structure is its MDS type here, ``'json'``;
-        :meth:`declared_schema` has the structure.
+        :meth:`slice_schema` has the structure.
         """
-        schema = self.declared_schema(slice)
+        schema = self.slice_schema(slice)
         return DATASLICE.writer_columns(schema) if schema else None
 
-    def declared_schema(self, slice) -> 'dict | None':
+    def slice_schema(self, slice) -> 'dict | None':
         """The columns *slice* declares, as declared: an MDS type, or a dict column's structure."""
         node = self._topicnode_(*slice.split('/'))
         columns = getattr(node, 'columns', None) if is_topicmarker(node, DATASLICE) else None
         return dict(columns) if columns else None
+
+    def declared_columns(self, slice) -> 'dict | None':
+        """Deprecated alias for slice_columns."""
+        return self.slice_columns(slice)
+
+    def declared_schema(self, slice) -> 'dict | None':
+        """Deprecated alias for slice_schema."""
+        return self.slice_schema(slice)
 
     def data(self, *slice_columns, nested=True, concat: bool = False,
              columns=None, sample_fraction: float | None = None, sample_seed: int = 0, **kwargs):
@@ -708,7 +717,7 @@ class _Database_(Datablock):
         a dict column by its structure, its keys and their types, not the
         ``'json'`` a writer is handed -- None when
         none is declared, or when the owner cannot be asked yet -- a table
-        whose tablets are not dealt, say, journaled before its tree is built.
+        whose partition is not built yet, say, journaled before its tree is built.
         Never raises for that: a journal entry must not break the build it records.
         """
         out = {}
@@ -741,13 +750,13 @@ class _Database_(Datablock):
         one table is one TABLET class, so the first tablet speaks for them all.
         """
         try:
-            return self.declared_schema(slice) or {}
+            return self.slice_schema(slice) or {}
         except KeyError:
             pass
         n_tablets = getattr(self, 'n_tablets', 0) or 0
         if n_tablets and hasattr(self, 'tablet'):
             try:
-                return self.tablet(0).declared_schema(slice) or {}
+                return self.tablet(0).slice_schema(slice) or {}
             except KeyError:
                 pass
         return {}
@@ -889,10 +898,76 @@ class _Database_(Datablock):
 class Datatablet(_Database_):
     """One tablet of a `Datatable`: a Datablock writing MDS slices."""
 
-    #: A tablet's tag is in its path, as it always was: thousands of built
-    #: tablets per table are keyed so, and a table's tablets are found where
-    #: they were built only if the table at its default does not re-key them.
-    KEYBY = 'tag_version_shorthash'
+    #: Filed by its hash, as a block is: no tag in its path. Until 2026-10-17 a tablet was
+    #: filed under its tag, and one built so is read where it was filed -- see `_redirected_paths_`.
+    KEYBY = 'version_shorthash'
+
+    @property
+    def _redirected_paths_(self):
+        """Its redirection, as a block's -- else, built where tablets were filed until 2026-10-17, there.
+
+        A tablet was filed under its tag, ``<anchor>/<tag>/[version=<v>/]<hash>``, until then, and
+        hundreds of thousands were built so, in tables valid as they stand and never built again --
+        which is when a block adopts what it finds. So a tablet not built where it is filed now, nor
+        redirected, reads the same tablet -- the same hash -- where its tag filed it: that
+        tablet's own redirection, if it has one, else its topics there -- when every one is there:
+        a build cut short there is not adopted, and is built where it is filed now. Looked for once per instance.
+        """
+        paths = Datablock._redirected_paths_.fget(self)
+        if paths is not None or not getattr(self, 'redirect', False):
+            return paths
+        if '__tag_filed_paths__' not in self.__dict__:
+            self.__dict__['__tag_filed_paths__'] = self._tag_filed_paths_()
+        return self.__dict__['__tag_filed_paths__']
+
+    @_redirected_paths_.setter
+    def _redirected_paths_(self, value):
+        Datablock._redirected_paths_.fset(self, value)
+        self.__dict__.pop('__tag_filed_paths__', None)
+
+    @_redirected_paths_.deleter
+    def _redirected_paths_(self):
+        Datablock._redirected_paths_.fdel(self)
+        self.__dict__.pop('__tag_filed_paths__', None)
+
+    _paths_ = _redirected_paths_
+
+    def _tags_filed_under_(self) -> list[str]:
+        """The tags it may have been filed under until 2026-10-17: its own."""
+        return [self._tag_] if self._tag_ else []
+
+    def _tag_filed_paths_(self):
+        """``{topic: path}`` where a tag filed it -- `_redirected_paths_` -- or None: not filed by its hash, built here, or not there."""
+        from .journals import BuildJournal, Pretty
+        if self.keyby in BuildJournal._TAG_KEYBYS_ or self.fs.exists(self.anchorkeypath):
+            return None
+        here = self.anchorkeypath
+        for tag in self._tags_filed_under_():
+            there = os.path.join(self._anchorpath_(), Pretty._key_from_('tag_version_shorthash', self.hash, tag, self.version))
+            if not self.fs.exists(there):
+                continue
+            redirection = os.path.join(there, '.redirection', 'paths.yaml')
+            if self.fs.exists(redirection):
+                paths = read_yaml(redirection, storage_options=self.storage_options)
+            else:
+                paths = {t: self.__path__(t).replace(here, there, 1) for t in self._toplevel_topics_(self.topics())}
+            # Only a build that finished, valid as this tablet reads it there: one cut short where its
+            # tag filed it is not this tablet, and it is built where it is filed now.
+            if paths and self._valid_at_(paths):
+                return paths
+        return None
+
+    def _valid_at_(self, paths) -> bool:
+        """Whether it is valid read from *paths*: `valid`, with them as its redirection, for the asking only."""
+        d = self.__dict__
+        held = d.pop('__tag_filed_paths__', None)
+        d['__tag_filed_paths__'] = paths
+        try:
+            return bool(self.valid())
+        finally:
+            d.pop('__tag_filed_paths__', None)
+            if held is not None:
+                d['__tag_filed_paths__'] = held
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -1011,7 +1086,7 @@ class Datatablet(_Database_):
                 )
                 # A column declared by its dict structure is checked row by
                 # row against it, here, where the row that is wrong is known.
-                structures = {c: t for c, t in (self.declared_schema(name) or {}).items()
+                structures = {c: t for c, t in (self.slice_schema(name) or {}).items()
                               if isinstance(t, dict)}
                 writers[name] = sync.track(name, writer, structures)
             yield writers
@@ -1038,7 +1113,7 @@ class Datatablet(_Database_):
         the order it was written, and the declaration renders in its own order
         into the hash, so a permutation is a different slice by both accounts.
         """
-        declared = {name: self.declared_columns(name) for name in names}
+        declared = {name: self.slice_columns(name) for name in names}
         if slices is None:
             undeclared = [name for name, columns in declared.items() if not columns]
             if undeclared:
@@ -1362,7 +1437,7 @@ class Datatable(_Database_, Datastack):
 
         filter_built = getattr(self, 'filter_built_tablets', False)
         if filter_built:
-            work_stealing_state = getattr(self, 'work_stealing', False)
+            work_stealing_state = self._worker_work_stealing_()
             self.log.info(
                 f"Building {self.__class__.__name__}: filtering {len(callables)} tablets using "
                 f"executor={self.executor_cls.__name__}, n_workers={self.n_workers}, work_stealing={work_stealing_state}"
@@ -1452,7 +1527,7 @@ class Datatable(_Database_, Datastack):
         `valid_slice()`) working.
 
         Falls back to its own TOPICS when TABLET is unset or is not a
-        `_Database_` -- as for :class:`DatatablePart`, which overrides
+        `_Database_` -- as for :class:`~dbx.dataparts.MappedDatatable`, which overrides
         TOPICS per instance and computes its TABLET dynamically.
         """
         tablet = getattr(self, 'TABLET', None)
@@ -1544,9 +1619,9 @@ class Datatable(_Database_, Datastack):
         """Return a list of indices of all tablets matching the given signature, tag, and/or path pattern(s) (parallelized)."""
         return self.find_blocks(signature, *patterns, tag=tag, path=path, parallelization=parallelization, n_workers=n_workers, work_stealing=work_stealing, **kwargs)
 
-    def tablet_datajournal(self, **kwargs) -> DataJournalFrame | None:
-        """Return the DataJournalFrame for child tablets, or None if no tablets exist or journal fails to load."""
-        return self.block_datajournal(**kwargs)
+    def tablet_buildjournal(self, **kwargs) -> BuildJournalFrame | None:
+        """Return the BuildJournalFrame for child tablets, or None if no tablets exist or journal fails to load."""
+        return self.block_buildjournal(**kwargs)
 
     def valid_slice(self, slice) -> bool:
         return all(
@@ -1577,12 +1652,13 @@ class Datatable(_Database_, Datastack):
             cache_limit=cache_limit,
             **kwargs,
         )
-        try:
-            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
-        except (ValueError, TypeError, OSError, FileExistsError, FileNotFoundError) as exc:
-            SharedMemoryManager.clean_process_shared_memory()
-            streaming_kwargs['streams'] = self._tablet_streams_(slice, local)
-            return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+        with SharedMemoryManager.OPEN_LOCK:
+            try:
+                return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
+            except (ValueError, TypeError, OSError, FileExistsError, FileNotFoundError) as exc:
+                SharedMemoryManager.clean_process_shared_memory()
+                streaming_kwargs['streams'] = self._tablet_streams_(slice, local)
+                return release_shared_memory_when_collected(StreamingDataset(**streaming_kwargs))
 
     # 3. Accessors ---------------------------------------------------------
 
@@ -1955,7 +2031,7 @@ class Datacollator(Datablock):
             return np.concatenate(batch_items, axis=0)
 
 
-class DataslicesUpstream:
+class Layered:
     """Slice routing for a tablet or table that reads its own slices and an upstream one's.
 
     A mixin, ahead of `Datatablet` or `Datatable` in the bases. `Featuretablet` owns
@@ -1965,8 +2041,11 @@ class DataslicesUpstream:
     work out which block owns a requested slice, keep the caller's order, and
     refuse a name that two blocks both claim.
 
-    The upstream is the VAR field ``upstream``: a block of the same kind --
-    a tablet's a tablet, a table's a table -- that this one was built from.
+    The upstream is `upstream`: a block of the same kind -- a tablet's a
+    tablet, a table's a table -- that this one was built from. It is the VAR
+    field ``upstream``, or, for a mapped table or a part, whose identity its
+    map and source already fix, its source's upstream pulled back along the
+    same map.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
@@ -2062,6 +2141,11 @@ class DataslicesUpstream:
 
     def _upstream_block_(self):
         return self.var.upstream
+
+    @property
+    def upstream(self):
+        """The block it reads upstream of: its VAR's ``upstream``, or, for a mapped table or a part, its source's upstream pulled back along the same map."""
+        return self._upstream_block_()
 
     def slices(self, recursive: bool = False):
         """This block's own slices; *recursive*, those of its upstream chain after them."""

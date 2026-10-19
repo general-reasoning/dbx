@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 import dbx
-from dbx.datablocks import Datablock, DataJournalEntry, journal
+from dbx.datablocks import Datablock, BuildJournalEntry, journal
 from dbx.databits import write_exec_journal, read_exec_journal
 
 
@@ -22,40 +22,40 @@ class Built(Datablock):
             f.write('hello')
 
 
-class TestDataJournalEntryMethods:
+class TestBuildJournalEntryMethods:
 
-    def test_datajournal_entry_methods(self):
+    def test_buildjournal_entry_methods(self):
         series = pd.Series({
             'signature': 'test.Anchor(spec={})',
             'type': 'test.Anchor(spec={})/version=1.0',
             'hash': '12345',
             'anchor': 'test.Anchor'
         })
-        entry = DataJournalEntry(series)
+        entry = BuildJournalEntry(series)
 
         # The ENTRY: properties over the row's own columns.
-        assert entry.block.signaturestr() == 'test.Anchor(spec={})'
-        assert entry.block.typestr() == 'test.Anchor(spec={})/version=1.0'
-        assert entry.block.signaturestr() == 'test.Anchor(spec={})'
-        assert entry.block.sigstr() == "{'spec': {}}"
-        assert entry.block.typestr() == 'test.Anchor(spec={})/version=1.0'
-        assert entry.block.tpstr() == "{'paths': None, 'signature': {'spec': {}}, 'topics': (), 'version': '1.0'}"
+        assert entry.pretty.signaturestr() == 'test.Anchor(spec={})'
+        assert entry.pretty.typestr() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.pretty.signaturestr() == 'test.Anchor(spec={})'
+        assert entry.pretty.sigstr() == "{'spec': {}}"
+        assert entry.pretty.typestr() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.pretty.tpstr() == "{'paths': None, 'signature': {'spec': {}}, 'topics': (), 'version': '1.0'}"
 
         # The BLOCK: Datablock-shaped, so these are calls, not properties.
-        assert entry.block.signaturestr() == 'test.Anchor(spec={})'
-        assert entry.block.typestr() == 'test.Anchor(spec={})/version=1.0'
-        assert entry.block.sigstr() == "{'spec': {}}"
+        assert entry.pretty.signaturestr() == 'test.Anchor(spec={})'
+        assert entry.pretty.typestr() == 'test.Anchor(spec={})/version=1.0'
+        assert entry.pretty.sigstr() == "{'spec': {}}"
 
-    def test_datajournal_entry_methods_none(self):
+    def test_buildjournal_entry_methods_none(self):
         series = pd.Series({'hash': '12345', 'anchor': 'test.Anchor'})
-        entry = DataJournalEntry(series)
+        entry = BuildJournalEntry(series)
 
-        assert entry.block.signaturestr() is None
-        assert entry.block.sigstr() is None
-        assert entry.block.typestr() is None
-        assert entry.block.tpstr() is None
-        assert entry.block.signaturestr() is None
-        assert entry.block.typestr() is None
+        assert entry.pretty.signaturestr() is None
+        assert entry.pretty.sigstr() is None
+        assert entry.pretty.typestr() is None
+        assert entry.pretty.tpstr() is None
+        assert entry.pretty.signaturestr() is None
+        assert entry.pretty.typestr() is None
 
 
 class TestEvalJournal:
@@ -72,8 +72,8 @@ class TestEvalJournal:
         res = dbx.exec(expr)
         assert isinstance(res, Datablock)
 
-        # Verify no note eval string injection in block journal
-        j_block = block.datajournal()
+        # Verify no note eval string injection in build journal
+        j_block = block.buildjournal()
         if 'note' in j_block.columns:
             notes = j_block['note'].dropna().tolist()
             assert expr not in notes

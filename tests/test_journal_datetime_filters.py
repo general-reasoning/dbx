@@ -6,7 +6,7 @@ dbx writes a timestamp as ``isoformat()`` with ``' '`` and ``':'`` replaced by
 pandas cannot parse that unaided: dateutil reads the ``-`` between the hour and
 the minute as a date separator and raises.
 
-A block journal is parsed on the way into `DataJournalFrame`, so it reached the
+A build journal is parsed on the way into `BuildJournalFrame`, so it reached the
 filter already holding datetimes and these filters worked. The exec journal is
 not, so it reached the same filter holding the raw strings, where ``date=``
 raised ``DateParseError`` and ``datetime=`` compared a string column against a
@@ -41,7 +41,7 @@ def raw_frame():
 
 @pytest.fixture
 def parsed_frame(raw_frame):
-    """The same frame shaped like a block journal: 'datetime' already parsed."""
+    """The same frame shaped like a build journal: 'datetime' already parsed."""
     df = raw_frame.copy()
     df['datetime'] = pd.to_datetime(df['datetime'], format=JOURNAL_DATETIME_FORMAT)
     return df

@@ -7,8 +7,9 @@ import time
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import numpy as np
-import pygame
 import pytest
+
+pygame = pytest.importorskip("pygame", reason="hyp is the [hyp] extra")
 
 from hyp import docs, docview
 

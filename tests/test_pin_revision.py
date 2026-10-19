@@ -525,7 +525,7 @@ class TestInstRemoteDispatch:
     @pytest.fixture
     def entry(self):
         import pandas as pd
-        return dbxmod.DataJournalEntry(pd.Series({
+        return dbxmod.BuildJournalEntry(pd.Series({
             'anchor': 'pkg.mod.Block',
             'hash': 'a' * 64,
             'revision': 'dbxsha:projsha',
@@ -534,12 +534,12 @@ class TestInstRemoteDispatch:
     @pytest.fixture
     def recorded(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(dbxmod.DataJournalEntry, 'rinst',
+        monkeypatch.setattr(dbxmod.BuildJournalEntry, 'rinst',
                             lambda self, **kw: calls.append(kw) or 'PROXY')
         return calls
 
     def test_default_stays_local(self, entry, recorded, monkeypatch):
-        monkeypatch.setattr(dbxmod.DataJournalEntry, 'instantiate',
+        monkeypatch.setattr(dbxmod.BuildJournalEntry, 'instantiate',
                             lambda self, **kw: 'LOCAL')
         assert entry.inst() == 'LOCAL'
         assert recorded == []
@@ -596,16 +596,16 @@ class TestInstRemoteEqualsRinst:
             def run(self, func):
                 return 'PROXY'
 
-        # Where DataJournalEntry.inst looks `remote` up: dbx.journals, since the split.
+        # Where BuildJournalEntry.inst looks `remote` up: dbx.journals, since the split.
         monkeypatch.setattr(journals_mod, 'remote', lambda **kw: calls.append(kw) or _Handle())
-        monkeypatch.setattr(dbxmod.DataJournalEntry, 'read',
+        monkeypatch.setattr(dbxmod.BuildJournalEntry, 'read',
                             lambda self, *a, **k: '$pkg.mod.Block(datalake="u")')
         return calls
 
     @pytest.fixture
     def entry(self):
         import pandas as pd
-        return dbxmod.DataJournalEntry(pd.Series({
+        return dbxmod.BuildJournalEntry(pd.Series({
             'anchor': 'pkg.mod.Block', 'hash': 'a' * 64, 'revision': 'dbxsha:projsha',
         }))
 

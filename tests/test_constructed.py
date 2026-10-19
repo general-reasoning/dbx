@@ -1,11 +1,11 @@
 """
-dbx.constructed(): the block journal entries of what was built, redirected or copied in.
+dbx.constructed(): the build journal entries of what was built, redirected or copied in.
 """
 import pytest
 
 import dbx
 from dbx.datablocks import DATAFILE, Datablock
-from dbx.journals import DataJournalFrame
+from dbx.journals import BuildJournalFrame
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +38,7 @@ def lake(tmp_path):
 
 def test_one_anchor(lake):
     frame = dbx.constructed(Apple, datalake=lake)
-    assert isinstance(frame, DataJournalFrame)
+    assert isinstance(frame, BuildJournalFrame)
     assert set(frame['anchor']) == {Apple.anchor} and len(frame) == 2
     assert set(frame['event']) == {'build:end'}
     assert len(dbx.constructed(Apple.anchor, datalake=lake)) == 2
@@ -56,7 +56,7 @@ def test_what_is_not_a_construction_is_left_out(lake):
 
 def test_event_none_is_every_event(lake):
     everything = dbx.constructed(Apple, event=None, datalake=lake)
-    assert set(everything['event']) == {'build:end', 'note:checked'}
+    assert set(everything['event']) == {'build:start', 'build:end', 'note:checked'}
 
 
 def test_another_event_filter(lake):
@@ -66,7 +66,7 @@ def test_another_event_filter(lake):
 
 def test_an_empty_lake(tmp_path):
     frame = dbx.constructed(datalake=str(tmp_path))
-    assert isinstance(frame, DataJournalFrame) and len(frame) == 0
+    assert isinstance(frame, BuildJournalFrame) and len(frame) == 0
 
 
 def test_a_noted_block_counts_as_constructed(tmp_path):

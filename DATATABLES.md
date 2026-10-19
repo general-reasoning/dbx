@@ -12,7 +12,7 @@ from dbx.datatables import Datatablet, Datatable
 ```
 
 A class is recorded under the module it is defined in. Partitions of a table
--- `DatatablePartition`, the `DatatablePart`s it deals, their pieces and packed
+-- `DatatablePartition`, the `DatatablePart`s it assigns, their pieces and packed
 tablets, and the core partitions -- live in `dbx.dataparts`, and are stored under
 `dbx.dataparts.*`; see [DATAPARTITION.md](DATAPARTITION.md). Partitions built
 before their roles were renamed, on 2026-10-10, are rebuilt; pieces stored

@@ -13,7 +13,7 @@ import pytest
 import dbx
 from dbx import databits as databits_mod
 from dbx import journals as journals_mod
-from dbx.journals import DataJournalEntry, _on_fs_of_
+from dbx.journals import BuildJournalEntry, _on_fs_of_
 
 
 @pytest.fixture
@@ -72,11 +72,11 @@ class TestRinstDatalake:
                 return 'PROXY'
 
         monkeypatch.setattr(journals_mod, 'remote', lambda **kw: calls.append(kw) or _Handle())
-        monkeypatch.setattr(DataJournalEntry, 'read', lambda self, *a, **k: '$pkg.mod.Block()')
+        monkeypatch.setattr(BuildJournalEntry, 'read', lambda self, *a, **k: '$pkg.mod.Block()')
         return calls
 
     def entry(self, **columns):
-        return DataJournalEntry(pd.Series({'anchor': 'pkg.mod.Block', 'hash': 'a' * 64,
+        return BuildJournalEntry(pd.Series({'anchor': 'pkg.mod.Block', 'hash': 'a' * 64,
                                            'revision': 'dbxsha:projsha', **columns}))
 
     def test_the_worker_gets_the_datalake_the_entry_recorded(self, captured):
@@ -117,7 +117,7 @@ class TestOnFsOf:
     def test_an_entry_reads_its_side_files_where_it_was_read_from(self, monkeypatch):
         seen = []
         monkeypatch.setattr(journals_mod, 'read_str', lambda path, **kw: seen.append(path) or 'Q')
-        entry = DataJournalEntry(pd.Series({'anchor': 'a', 'hash': 'h', 'quote': '/data/lake/q.txt',
+        entry = BuildJournalEntry(pd.Series({'anchor': 'a', 'hash': 'h', 'quote': '/data/lake/q.txt',
                                             'entry_path': self.SSH}))
         assert entry.read('quote', raw=True) == 'Q'
         assert seen == ['ssh://host/data/lake/q.txt']

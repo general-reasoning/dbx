@@ -23,12 +23,12 @@ datatables
     :class:`Datatablet`, :class:`Datatable` and :class:`Datacollator`: tables of
     MDS slices, and the columns a consumer reads from them.
 dataparts
-    :class:`DatatablePartition` and :class:`DatatableCorePartition`: a table
-    dealt into folds; :class:`DatamapTable`, a fold's map; and
+    :class:`DatatablePartition` and :class:`DatatableClusterCorePartition`: a table
+    assigned into parts; :class:`PartitionDatamapTable`, a part's map; and
     :class:`MappedDatatable`, a table pulled back along a map -- a part.
 journals
-    :class:`DataJournal` and the build records it reads and writes
-    (:class:`DataJournalFrame`, :class:`DataJournalEntry`); the exec journal
+    :class:`BuildJournal` and the build records it reads and writes
+    (:class:`BuildJournalFrame`, :class:`BuildJournalEntry`); the exec journal
     (:func:`execjournal`, :class:`ExecJournalFrame`); the filters both are
     queried with; and the log, :class:`Datalog`.
 pipelines

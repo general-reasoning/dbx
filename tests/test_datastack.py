@@ -332,6 +332,9 @@ class TestDatastackClearBlocks(unittest.TestCase):
             VERSION = 1
             TOPICS = {'data': SLICETOPIC}
             COLUMNS = {'data': {'x': 'int'}}
+            @dataclass
+            class VAR(Datatablet.VAR):
+                index: int = 0
             def __build__(self):
                 with self.slice_writers(self.COLUMNS) as writers:
                     writers['data'].write({'x': 1})
@@ -342,6 +345,8 @@ class TestDatastackClearBlocks(unittest.TestCase):
             @property
             def n_tablets(self):
                 return 2
+            def __tablet__(self, idx, **kw):
+                return super().__tablet__(idx, index=idx, **kw)
 
         tbl = MinimalTable(datalake=os.path.join(self.tmpdir, 'tbl')).build()
         self.assertTrue(tbl.valid_tablet(0))
@@ -362,6 +367,9 @@ class TestDatastackClearBlocks(unittest.TestCase):
             VERSION = 1
             TOPICS = {'data': SLICETOPIC}
             COLUMNS = {'data': {'x': 'int'}}
+            @dataclass
+            class VAR(Datatablet.VAR):
+                index: int = 0
             def __build__(self):
                 with self.slice_writers(self.COLUMNS) as writers:
                     writers['data'].write({'x': 1})
@@ -374,6 +382,8 @@ class TestDatastackClearBlocks(unittest.TestCase):
             @property
             def n_tablets(self):
                 return 2
+            def __tablet__(self, idx, **kw):
+                return super().__tablet__(idx, index=idx, **kw)
 
         tbl = ValidatableTable(datalake=os.path.join(self.tmpdir, 'val_tbl')).build()
         self.assertTrue(os.path.exists(tbl._blocks_manifest_path_()))
@@ -852,11 +862,11 @@ class TestBLOCK:
     def test_a_part_has_its_tables_block(self, tmp_path):
         import sys
         sys.path.insert(0, os.path.dirname(__file__))
-        from test_partition_fold import DummyTable
+        from test_partition_part import DummyTable
         from dbx.dataparts import DatatablePartition
         table = DummyTable(datalake=str(tmp_path / 'table')).build()
         part = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
-            datatable=table, fractions=[0.5, 0.5], partition_slice=0)).build().fold(0)
+            datatable=table, fractions=[0.5, 0.5], partition_slice=0)).build().part(0).pullback()
         assert part._block_class_() is DummyTable.BLOCK is DummyTable.TABLET
         assert isinstance(part.block(0), DummyTable.TABLET)
 
@@ -881,7 +891,7 @@ class TestAnchorOnTheClass:
         class Anchored(CounterBlock):
             ANCHOR = 'lake.anchored2'
         Anchored(datalake=str(tmp_path), spec=dict(idx=0)).build()
-        assert len(dbx.datajournal(Anchored, datalake=str(tmp_path))) == 1
+        assert len(dbx.buildjournal(Anchored, datalake=str(tmp_path), event='build:end')) == 1
 
     def test_a_stack_finds_its_blocks_journal_from_BLOCK_alone(self, tmp_path):
         class S(Datastack):
@@ -901,8 +911,8 @@ class TestAnchorOnTheClass:
         original = S.__block__
         S.__block__ = lambda self, idx: formed.append(idx) or original(self, idx)
         try:
-            journal, anchor, url = stack._blocks_datajournal_()
+            journal = stack._blocks_buildjournal_()
         finally:
             S.__block__ = original
         assert formed == [], "no block is formed to find the journal"
-        assert anchor == CounterBlock.anchor and len(journal) >= 2
+        assert journal.read_anchor == CounterBlock.anchor and len(journal) >= 2

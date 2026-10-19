@@ -19,8 +19,8 @@ def test_import_dbx_without_torch_or_streaming():
         "sys.modules['torch'] = None\n"
         "sys.modules['streaming'] = None\n"
         "import dbx\n"
-        "assert callable(dbx.pipejournal) and callable(dbx.datajournal)\n"
-        "assert dbx.Datablock and dbx.Pipeline and dbx.DataJournal\n"
+        "assert callable(dbx.pipejournal) and callable(dbx.buildjournal)\n"
+        "assert dbx.Datablock and dbx.Pipeline and dbx.BuildJournal\n"
         "assert 'dbx.datatables' not in sys.modules\n"
     )
     proc = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=120)

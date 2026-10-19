@@ -79,6 +79,7 @@ class MarkedTablet(Datatablet):
     @dataclass
     class VAR(Datatablet.VAR):
         n: int = 3
+        index: int = 0     # its place in its table: two tablets alike in all else are two blocks
 
     def __build__(self):
         with self.slice_writers() as writers:
@@ -100,6 +101,9 @@ class MarkedTable(Datatable):
     @property
     def n_tablets(self):
         return self.var.n_tablets_
+
+    def __tablet__(self, idx, **kw):
+        return super().__tablet__(idx, index=idx, **kw)
 
 
 def block(cls, tmp_path, **kwargs):
@@ -383,8 +387,13 @@ class TestSliceWritersTakesTheDeclaration:
     def test_no_argument_is_needed(self, tmp_path):
         t = block(MarkedTablet, tmp_path)
         t.build()
-        assert t.declared_columns('numbers') == {'idx': 'int', 'square': 'int'}
+        assert t.slice_columns('numbers') == {'idx': 'int', 'square': 'int'}
         assert t.data('numbers')['numbers']['square'] == [0, 1, 4]
+
+    def test_the_old_names_are_aliases(self, tmp_path):
+        t = block(MarkedTablet, tmp_path)
+        assert t.declared_columns('numbers') == t.slice_columns('numbers')
+        assert t.declared_schema('numbers') == t.slice_schema('numbers')
 
     def test_a_bare_slice_still_needs_its_columns_passed(self, tmp_path):
         class Bare(Datatablet):
@@ -407,7 +416,7 @@ class TestSliceWritersTakesTheDeclaration:
 
         b = block(Sentinel, tmp_path)
         b.build()
-        assert b.declared_columns('numbers') is None
+        assert b.slice_columns('numbers') is None
         assert b.data('numbers') == {'numbers': {'idx': [0]}}
 
     def test_a_missing_slice_is_still_refused(self, tmp_path):
@@ -494,21 +503,21 @@ class TestTheJournalRecordsMarkers:
     def test_the_recorded_topics_are_markers(self, tmp_path):
         b = block(Marked, tmp_path)
         b.build()
-        assert b.datajournal(loc=0).block.TOPICS == {
+        assert b.buildjournal(loc=0).pretty.TOPICS == {
             'data': 'data.txt', 'masks': DIR, 'cache': SYNTHETIC,
         }
 
     def test_the_entry_answers_what_kind_each_topic_is(self, tmp_path):
         b = block(Marked, tmp_path)
         b.build()
-        recorded = b.datajournal(loc=0).block
+        recorded = b.buildjournal(loc=0).pretty
         assert recorded._is_dir_topic_('masks') and not recorded._is_dir_topic_('data')
         assert recorded._is_syntopic_('cache') and not recorded._is_syntopic_('masks')
 
     def test_a_recorded_slice_keeps_its_columns(self, tmp_path):
         t = block(MarkedTablet, tmp_path)
         t.build()
-        recorded = t.datajournal(loc=0).block.TOPICS
+        recorded = t.buildjournal(loc=0).pretty.TOPICS
         assert recorded['numbers'].columns == {'idx': 'int', 'square': 'int'}
 
     def test_a_block_does_not_differ_from_its_own_entry(self, tmp_path):

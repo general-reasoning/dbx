@@ -61,6 +61,18 @@ def _restore_import_environment_():
     os.environ.update(env)
 
 
+@pytest.fixture(autouse=True)
+def _clear_evaluator_cache_():
+    """Start every test without the evaluators -- and models -- an earlier one left in this worker.
+
+    `ModelEvaluatorBuilder.evaluator` caches per process, by builder class,
+    hash and device; test builders share names and specs across modules.
+    """
+    from dbx.backbones import ModelEvaluatorBuilder
+    ModelEvaluatorBuilder.evaluator_cache_clear()
+    yield
+
+
 # --- pinned tests ----------------------------------------------------------
 #
 # `@pytest.mark.pinned` marks a test that states an INVARIANT rather than the

@@ -156,12 +156,12 @@ class TestSpecs:
         assert project_column(nested, [('k',), ('s', 'c', 'd')]) == {'k': 1, 's': {'c': {'d': 7}}}
 
 def test_a_feature_table_parses_the_triple_as_a_table_does():
-    from dbx.datatables import DataslicesUpstream
-    items = DataslicesUpstream._norm_items_((('annotations', 'annotations', 'label'), 'features'))
+    from dbx.datatables import Layered
+    items = Layered._norm_items_((('annotations', 'annotations', 'label'), 'features'))
     assert items == [('annotations', [('annotations', ('label',))]), ('features', None)]
-    assert DataslicesUpstream._norm_items_((('annotations', 'annotations', ['a', 'b']),)) == [
+    assert Layered._norm_items_((('annotations', 'annotations', ['a', 'b']),)) == [
         ('annotations', [('annotations', [('a',), ('b',)])])]
-    assert DataslicesUpstream._norm_items_((('annotations', 'annotations', 'a', 'b'),)) == [
+    assert Layered._norm_items_((('annotations', 'annotations', 'a', 'b'),)) == [
         ('annotations', [('annotations', ('a', 'b'))])]
 
 
@@ -171,6 +171,10 @@ from dbx.datatables import DATASLICE
 class DeclaredTablet(Datatablet):
     """Declares its dict column by structure, and so writes with no columns passed."""
     TOPICS = {'annotations': DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')}
+
+    @dataclass
+    class VAR(Datatablet.VAR):
+        index: int = 0     # its place in its table: two tablets alike in all else are two blocks
 
     def __build__(self):
         with self.slice_writers() as writers:
@@ -191,8 +195,8 @@ class TestADictColumnDeclaredByItsStructure:
 
     def test_the_writer_gets_json(self, tmp_path):
         t = DeclaredTablet(datalake=str(tmp_path))
-        assert t.declared_columns('annotations') == {'annotations': 'json', 'idx': 'int'}
-        assert t.declared_schema('annotations') == {
+        assert t.slice_columns('annotations') == {'annotations': 'json', 'idx': 'int'}
+        assert t.slice_schema('annotations') == {
             'annotations': {'cohort': 'str', 'recurrence': 'int'}, 'idx': 'int'}
 
     def test_built_and_read_back_by_key(self, tmp_path):
@@ -287,6 +291,9 @@ def test_a_table_holds_a_key_to_its_tablets_declaration(tmp_path):
         @property
         def n_tablets(self):
             return 2
+
+        def __tablet__(self, idx, **kw):
+            return super().__tablet__(idx, index=idx, **kw)
 
     table = DeclaredTable(datalake=str(tmp_path))
     with pytest.raises(KeyError, match=r"not \['stage'\]"):

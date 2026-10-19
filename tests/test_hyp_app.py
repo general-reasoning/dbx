@@ -8,6 +8,8 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 import pytest
 
+pytest.importorskip("pygame", reason="hyp is the [hyp] extra")
+
 from hyp.app import Hyp, Worker
 
 

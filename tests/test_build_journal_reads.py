@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from dbx.datablocks import DIRTOPIC, Datablock, DataJournal
+from dbx.datablocks import DIRTOPIC, Datablock, BuildJournal
 from dbx.datatables import Datatablet, Datatable
 
 
@@ -57,13 +57,13 @@ class Table(Datatable):
 
 def _count_full_reads(monkeypatch):
     reads = []
-    original = DataJournal.read
+    original = BuildJournal.read
 
     def counting(anchor, *args, **kwargs):
         reads.append(anchor)
         return original(anchor, *args, **kwargs)
 
-    monkeypatch.setattr(DataJournal, 'read', staticmethod(counting))
+    monkeypatch.setattr(BuildJournal, 'read', staticmethod(counting))
     return reads
 
 
@@ -98,8 +98,8 @@ def grown(tmp_path, monkeypatch):
 
 def test_the_record_carries_the_paths(grown):
     tablet = adopted(v1table(grown, spec={'n': 3}).tablet(0))  # installs, and records
-    entry = tablet.datajournal(event='^UNSAFE_redirect$', hash=tablet.hash, iloc=0, index=None)
-    assert 'paths' in entry.block.redirection
+    entry = tablet.buildjournal(event='^UNSAFE_redirect$', hash=tablet.hash, iloc=0, index=None)
+    assert 'paths' in entry.pretty.redirection
 
 
 def test_where_a_specialized_tablet_reads_from_costs_no_journal_read(grown, monkeypatch):
@@ -133,10 +133,10 @@ def test_an_older_record_without_paths_answers_from_the_marker(grown, monkeypatc
 def test_a_redirected_tablet_formed_again_records_nothing_more(grown):
     table = v1table(grown, spec={'n': 3})
     tablet = adopted(table.tablet(0))
-    before = len(tablet.datajournal(event='^UNSAFE_redirect$', hash=tablet.hash, index=None))
+    before = len(tablet.buildjournal(event='^UNSAFE_redirect$', hash=tablet.hash, index=None))
     for _ in range(3):
         adopted(v1table(grown, spec={'n': 3}).tablet(0))   # finds the marker: installs nothing
-    after = len(tablet.datajournal(event='^UNSAFE_redirect$', hash=tablet.hash, index=None))
+    after = len(tablet.buildjournal(event='^UNSAFE_redirect$', hash=tablet.hash, index=None))
     assert after == before == 1
 
 
@@ -153,7 +153,7 @@ def test_a_part_filters_its_built_tablets_in_the_parent_by_default(tmp_path):
     from dbx.dataparts import DatatablePartition
     table = Table(datalake=str(tmp_path / 't'), spec={'n': 4})
     part = DatatablePartition(datalake=str(tmp_path / 'p'), spec=dict(
-        datatable=table, fractions=[0.5, 0.5], partition_slice=0)).fold(0)
+        datatable=table, fractions=[0.5, 0.5], partition_slice=0)).part(0).pullback()
     assert part.filter_built_tablets is True
 
 
@@ -185,7 +185,7 @@ def test_a_table_carries_no_journal_in_its_state(tmp_path):
     import copy
     Table(datalake=str(tmp_path), spec={'n': 2}).build()
     table = Table(datalake=str(tmp_path), spec={'n': 2})
-    table.child_specialization_datajournal()               # read, and cached on the instance
+    table.child_specialization_buildjournal()               # read, and cached on the instance
     assert '__child_journal__' in table.__dict__
     state = table.__getstate__()
     assert not any('journal' in k for k in state if k.startswith('__'))
@@ -204,8 +204,8 @@ def test_a_copy_reads_the_journal_once_when_it_needs_it(tmp_path, monkeypatch):
     for i in range(4):
         twin.tablet(i)
     assert reads == [], "forming tablets resolves nothing, so reads nothing"
-    assert twin.child_specialization_datajournal() is not None
-    twin.child_specialization_datajournal()
+    assert twin.child_specialization_buildjournal() is not None
+    twin.child_specialization_buildjournal()
     assert len([a for a in reads if a == Tablet.anchor]) == 1
 
 

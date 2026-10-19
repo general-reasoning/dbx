@@ -12,7 +12,7 @@ first, and the overwritten code stops resolving.
 import pytest
 from dataclasses import dataclass
 
-from dbx.datablocks import Datablock, DataJournalEntry
+from dbx.datablocks import Datablock, BuildJournalEntry
 
 
 @pytest.fixture(autouse=True)
@@ -55,8 +55,8 @@ class TestEveryCallGetsItsOwnCode:
     def test_a_build_stamps_its_entry(self, tmp_path):
         b = block(tmp_path)
         b.build()
-        entry = b.datajournal(loc=0)
-        assert entry.block.id
+        entry = b.buildjournal(loc=0)
+        assert entry.pretty.id
         assert not hasattr(entry, 'entry_code')
         assert not hasattr(entry, 'subhash')
         assert not hasattr(entry, 'subsignature')
@@ -67,7 +67,7 @@ class TestTheCodeIsRecorded:
     def test_column_is_written(self, tmp_path):
         b = block(tmp_path)
         b.write_journal_entry(event='note')
-        cols = block(tmp_path).datajournal().columns
+        cols = block(tmp_path).buildjournal().columns
         assert 'id' in cols
         assert 'code' in cols
         assert 'entry_code' not in cols
@@ -76,21 +76,21 @@ class TestTheCodeIsRecorded:
 
     def test_the_recorded_code_is_the_returned_one(self, tmp_path):
         code = block(tmp_path).write_journal_entry(event='note')
-        assert block(tmp_path).datajournal(loc=0).id == code
+        assert block(tmp_path).buildjournal(loc=0).id == code
 
     def test_the_journal_can_be_filtered_by_it(self, tmp_path):
         block(tmp_path).write_journal_entry(event='wanted')
         code = block(tmp_path).write_journal_entry(event='also-wanted')
-        entry = block(tmp_path).datajournal(id=code, loc=0)
-        assert isinstance(entry, DataJournalEntry)
+        entry = block(tmp_path).buildjournal(id=code, loc=0)
+        assert isinstance(entry, BuildJournalEntry)
         assert entry.get('event') == 'also-wanted'
 
     def test_codes_are_unique_across_the_whole_journal(self, tmp_path):
         for x in (1, 2, 3):
             block(tmp_path, x=x).build()
-        codes = list(block(tmp_path).datajournal()['id'])
-        assert len(codes) == 3
-        assert len(set(codes)) == 3
+        codes = list(block(tmp_path).buildjournal()['id'])
+        assert len(codes) == 6, "a build:start and a build:end each"
+        assert len(set(codes)) == 6
 
 
 class TestDistinctFromTheTree:
@@ -102,12 +102,10 @@ class TestDistinctFromTheTree:
         assert code != b.tree
 
     def test_one_instance_two_entries_share_a_tree_but_not_a_code(self, tmp_path):
-        """Distinct journal_prefix values, so both entries survive -- an
-        instance otherwise overwrites its own file."""
         b = block(tmp_path)
-        first = b.write_journal_entry(event='one', journal_prefix='a-')
-        second = b.write_journal_entry(event='two', journal_prefix='b-')
-        journal = block(tmp_path).datajournal()
+        first = b.write_journal_entry(event='one')
+        second = b.write_journal_entry(event='two')
+        journal = block(tmp_path).buildjournal()
         assert len(journal) == 2
         assert set(journal['id']) == {first, second}
         assert journal['tree'].nunique() == 1
@@ -115,37 +113,39 @@ class TestDistinctFromTheTree:
     def test_tree_accessor_reads_the_column(self, tmp_path):
         b = block(tmp_path)
         b.write_journal_entry(event='note')
-        assert block(tmp_path).datajournal(loc=0).block.tree == b.tree
+        assert block(tmp_path).buildjournal(loc=0).pretty.tree == b.tree
 
     def test_a_tree_can_be_given(self, tmp_path):
         b = block(tmp_path, tree='RUN-7')
         b.write_journal_entry(event='note')
-        assert block(tmp_path).datajournal(loc=0).block.tree == 'RUN-7'
+        assert block(tmp_path).buildjournal(loc=0).pretty.tree == 'RUN-7'
 
     def test_a_tree_does_not_change_identity(self, tmp_path):
         """Which run built a block cannot change what the block IS."""
         assert block(tmp_path, tree='A').hash == block(tmp_path, tree='B').hash
 
 
-class TestOverwriteWithinOneInstance:
-    """A journal file is per instance, so rewriting replaces the row."""
+class TestEveryWriteKeepsItsEntry:
+    """A journal file is per entry, named by its id: nothing an instance writes replaces what it wrote."""
 
-    def test_a_second_write_replaces_the_first(self, tmp_path):
+    def test_a_second_write_keeps_the_first(self, tmp_path):
         b = block(tmp_path)
         first = b.write_journal_entry(event='one')
         second = b.write_journal_entry(event='two')
-        journal = block(tmp_path).datajournal()
-        assert len(journal) == 1
-        assert list(journal['id']) == [second]
-        assert first not in set(journal['id'])
+        journal = block(tmp_path).buildjournal()
+        assert len(journal) == 2
+        assert set(journal['id']) == {first, second}
+        assert block(tmp_path).buildjournal(id=first, loc=0).get('event') == 'one'
 
-    def test_build_leaves_the_end_entry_not_the_start(self, tmp_path):
-        """build() writes build:start then build:end from one instance, so the
-        start is overwritten -- which is why a code resolves only until its
-        instance writes again."""
+    def test_build_leaves_its_start_and_its_end(self, tmp_path):
         b = block(tmp_path)
         b.build()
-        assert list(block(tmp_path).datajournal()['event']) == ['build:end']
+        assert sorted(block(tmp_path).buildjournal()['event']) == ['build:end', 'build:start']
+
+    def test_an_entry_is_filed_by_its_id(self, tmp_path):
+        b = block(tmp_path)
+        code = b.write_journal_entry(event='note')
+        assert block(tmp_path).buildjournal(id=code, loc=0)['entry_path'].endswith(f'-{code}.parquet')
 
 
 class TestLegacyJournals:
@@ -154,20 +154,20 @@ class TestLegacyJournals:
         """An entry from a journal written before the field existed."""
         b = block(tmp_path)
         b.write_journal_entry(event='note')
-        entry = b.datajournal(loc=0)
-        assert DataJournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).block.id is None
+        entry = b.buildjournal(loc=0)
+        assert BuildJournalEntry(entry.drop(['entry_code', 'id'], errors='ignore')).pretty.id is None
 
     @pytest.mark.parametrize('legacy', ['session', 'uuid'])
     def test_a_tree_recorded_under_an_older_name_still_reads(self, tmp_path, legacy):
         """``tree`` was ``session``, and before that ``uuid``."""
         b = block(tmp_path, tree='RUN-7')
         b.write_journal_entry(event='note')
-        entry = b.datajournal(loc=0)
-        # A row as it was written then: no `tree`, and no DataJournal session.
-        old = DataJournalEntry(entry.drop(['tree', 'session']).copy())
+        entry = b.buildjournal(loc=0)
+        # A row as it was written then: no `tree`, and no BuildJournal session.
+        old = BuildJournalEntry(entry.drop(['tree', 'session']).copy())
         old[legacy] = 'RUN-7'
-        assert old.block.tree == 'RUN-7'
-        assert old.block.session is None
+        assert old.pretty.tree == 'RUN-7'
+        assert old.pretty.session is None
 
 
 class TestUuid16:

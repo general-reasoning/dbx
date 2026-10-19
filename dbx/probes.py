@@ -23,7 +23,7 @@ import dbx
 from dbx.datablocks import DATADICT, DATAFILE, Datablock, InvalidBlocksError, forward_property
 from dbx.datatables import Datacollator
 from dbx.featuretables import Featuretable, Featuretablet
-from dbx.dataparts import DatatablePart
+from dbx.dataparts import MappedDatatable
 from dbx.databits import (
     callable_executor,
     read_npz,
@@ -262,13 +262,9 @@ def check_probe_inputs(probe, table=None) -> None:
     """
     table = probe.var.feature_table if table is None else table
     collator = getattr(probe.var, 'collator', None)
-    # A fold routes no slices of its own: it reads its table's. Its blocks --
-    # the table's tablets, and pieces of them, which are not the table's -- are
-    # asked of the fold itself; an upstream table's, at the fold's tablet indices.
-    # A core part is no DatatablePart: its tablets are its own copies, holding every slice it reads.
-    part = table if isinstance(table, DatatablePart) else None
-    if part is not None:
-        table = part.datatable
+    # A pullback is a table like any other: its tablets are its source's, where a part takes
+    # them whole, or its own copies; a layered one routes its upstream slices to the layer
+    # pulled back below it, whose tablets are asked in turn.
     owners = {}
     if collator is not None and hasattr(table, '_route_'):
         for owner, s_name, _ in table._route_(collator.slices(table)):
@@ -278,20 +274,15 @@ def check_probe_inputs(probe, table=None) -> None:
     for owner, slices in owners.values():
         if not hasattr(owner, 'valid_blocks') or not (getattr(owner, 'n_tablets', 0) or 0):
             continue
-        if part is not None and owner is table:
-            owner = part
-            invalid = [i for i in range(part.n_tablets) if not part.valid_block(i)]
-        elif part is not None:
-            # A partition splits no tablet of a table reading upstream, so these are whole tablets.
-            invalid = [i for i in part.tablet_indices if not owner.valid_block(i)]
-        else:
-            invalid = list(owner.valid_blocks(parallelization=probe.parallelization, n_workers=probe.n_workers,
-                                              false_only=True).index)
+        # A pullback's whole tablets are another table's: its manifest cannot vouch for them, so every one is asked.
+        how = dict(validation='valid') if isinstance(owner, MappedDatatable) else {}
+        invalid = list(owner.valid_blocks(parallelization=probe.parallelization, n_workers=probe.n_workers,
+                                          false_only=True, **how).index)
         if invalid:
-            pieces = owner is part and any(isinstance(part.tablet_indices[i], dict) for i in invalid)
+            copies = isinstance(owner, MappedDatatable) and any(owner.datamap.whole(i) is None for i in invalid)
             raise InvalidBlocksError(owner, invalid,
                                      reader=f"{probe.anchorkeypath}: reading {slices} from its tablets"
-                                            + ("; a part's pieces are built by the part: part.build()" if pieces else ""))
+                                            + ("; a pullback's copies are built by it: build_tree()" if copies else ""))
 
 
 class TabletAffineLogisticCallable:
@@ -403,7 +394,7 @@ class FeatureAffineLogisticProbe(Datablock):
     """Fit a logistic classifier on one table's tablets and score it on another's.
 
     *fit_table* and *eval_table* are what it is fitted on and scored on --
-    typically two parts of a `DatatablePartition` of a feature table, dealt by
+    typically two parts of a `DatatablePartition` of a feature table, assigned by
     patient and stratified by label, so neither the patients nor the slides of
     one are in the other. They must share no tablet, no row of the table they were
     partitioned from, and -- when the collator names an ``aggregateby`` column
@@ -632,7 +623,7 @@ class FeatureAffineLogisticProbe(Datablock):
         the partitions made -- pieces, packed tablets, core tablets, tagged by where
         they are -- so two parts of different partitions of one table are also
         compared row by row, by the rows of that table their ``source`` slices
-        name. Two parts of one partition are disjoint by its deal, and are not.
+        name. Two parts of one partition are disjoint by its partition, and are not.
         """
         fit, ev = self.var.fit_table, self.var.eval_table
         shared = sorted(set(self._tags_(fit)) & set(self._tags_(ev)) - {None})
@@ -640,9 +631,10 @@ class FeatureAffineLogisticProbe(Datablock):
             raise ValueError(
                 f"{type(self).__name__}: fit_table and eval_table share {len(shared)} tablet(s), e.g. {shared[:5]} -- "
                 f"their rows would be scored by a classifier fitted on them. Give it two parts of one partition.")
-        if not (isinstance(fit, DatatablePart) and isinstance(ev, DatatablePart)):
+        if not (isinstance(fit, MappedDatatable) and isinstance(ev, MappedDatatable)):
             return
-        if fit.var.partition.hash == ev.var.partition.hash or fit.datatable.hash != ev.datatable.hash:
+        if (fit.datamap.var.partition.hash == ev.datamap.var.partition.hash
+                or fit.datatable.hash != ev.datatable.hash):
             return
         for table in (fit, ev):
             check_probe_inputs(self, table)

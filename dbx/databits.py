@@ -8,9 +8,11 @@ OutputTee, I/O helpers, term evaluator, callable executors, etc.
 import ast
 import atexit
 import contextlib
+import copy
 from collections.abc import Iterable
 from dataclasses import dataclass
 import datetime
+import functools
 import gc
 import importlib
 import io
@@ -444,13 +446,125 @@ def get_named_const_and_cxt(name):
     return const, cxt
 
 
+def split_top_level_items(inner: str, sep: str = ',') -> list[str]:
+    """*inner* split at each *sep* outside brackets and string literals (backslash escapes honoured)."""
+    out, buf, depth, quote, esc = [], [], 0, None, False
+    for c in inner:
+        if esc:
+            buf.append(c); esc = False; continue
+        if c == '\\':
+            buf.append(c); esc = True; continue
+        if quote is not None:
+            buf.append(c)
+            if c == quote:
+                quote = None
+            continue
+        if c in ('"', "'"):
+            quote = c; buf.append(c); continue
+        if c in ('(', '[', '{'):
+            depth += 1
+        elif c in (')', ']', '}'):
+            depth -= 1
+        elif c == sep and depth == 0:
+            out.append(''.join(buf)); buf = []
+            continue
+        buf.append(c)
+    if buf:
+        out.append(''.join(buf))
+    return out
+
+
+def bare_specline(value) -> 'str | None':
+    """*value*, a ``$`` specline, as a quote writes it in a spec: bare, ``X(...)`` -- or None, when it stays a string.
+
+    A nested block's quote held as a string literal is escaped once more at
+    every level of nesting -- every backslash doubled -- so a quote twelve
+    levels deep was 98% backslashes, and `eval` spent seconds scanning them.
+    Bare, nothing is escaped. Only an expression that `quote_spec` splits back
+    out whole is written so: one expression, with no top-level comma (a bare
+    tuple) or colon (a lambda). Anything else stays a string, as it always was.
+    """
+    if not (isinstance(value, str) and value.startswith('$')):
+        return None
+    body = value[1:]
+    if not body or body != body.strip():
+        return None
+    try:
+        node = ast.parse(body, mode='eval').body
+    except SyntaxError:
+        return None
+    return None if isinstance(node, (ast.Tuple, ast.Lambda)) else body
+
+
+def quote_spec(text: str) -> 'dict | None':
+    """The spec dict of a quote, its bare values (`bare_specline`) back as the ``$`` speclines they were -- or None.
+
+    ``{'n': 5, 'upstream': X(tag='t', spec={...})}`` reads as
+    ``{'n': 5, 'upstream': "$X(tag='t', spec={...})"}``: exactly the text a
+    quote held as a string before nested blocks were written bare. None
+    when *text* is not a dict of that shape.
+    """
+    text = text.strip()
+    if not (text.startswith('{') and text.endswith('}')):
+        return None
+    spec = {}
+    for item in split_top_level_items(text[1:-1]):
+        if not item.strip():
+            continue
+        key, *rest = split_top_level_items(item, sep=':')
+        if not rest:
+            return None
+        try:
+            key = ast.literal_eval(key.strip())
+        except (ValueError, SyntaxError, TypeError):
+            return None
+        value = ':'.join(rest).strip()
+        try:
+            spec[key] = ast.literal_eval(value)
+        except (ValueError, SyntaxError, TypeError):
+            spec[key] = '$' + value
+    return spec
+
+
+@functools.lru_cache(maxsize=1024)
+def _datablock_ctor_args_(argkwargstr: str) -> tuple[list, dict]:
+    """A datablock constructor's ``(args, kwargs)`` in *argkwargstr*: literals, and speclines left as the strings they are.
+
+    Nothing is evaluated -- a block evaluates its speclines itself, lazily --
+    so this is a function of the text alone, and parsed once per process: the
+    same quotes are read again and again as a stack forms its blocks, each
+    holding its upstream's. A spec whose nested blocks are written bare reads
+    through `quote_spec`.
+    """
+    args, kwargs = [], {}
+    for bit in split_top_level_items(argkwargstr):
+        bit = bit.strip()
+        if not bit:
+            continue
+        kwparts = split_top_level_items(bit, sep='=')
+        if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
+            k, v = kwparts[0].strip(), kwparts[1].strip()
+            try:
+                val = ast.literal_eval(v)
+            except (ValueError, SyntaxError):
+                spec = quote_spec(v) if k == 'spec' else None
+                val = spec if spec is not None else v  # a specline/identifier stays a string
+            kwargs[k] = val
+        else:
+            try:
+                args.append(ast.literal_eval(bit))
+            except (ValueError, SyntaxError):
+                args.append(bit)  # a specline/identifier stays a string
+    return args, kwargs
+
+
 def eval(name):
     """Evaluate a dbx term expression.
 
     Strings prefixed with ``@``, ``$``, or ``#`` are resolved as
     Python expressions in a context that includes imported modules.
-    Iterables are evaluated element-wise.  Plain strings and other
-    objects are returned as-is.
+    Iterables are evaluated element-wise -- but a DataFrame or Series, which
+    is returned as it is.  Plain strings and other objects are returned as-is.
     However, 
         - We do not recursively eval Datablock ctor args/kwargs -- their string values
             are speclines that Datablocks store and evaluate lazily, 
@@ -461,38 +575,15 @@ def eval(name):
             the concrete path rather than the portable specline, breaking
             signature() alignment.
     """
-    def split_top_level_items(inner: str, sep: str = ','):
-        out, buf, depth, quote, esc = [], [], 0, None, False
-        for c in inner:
-            if esc:
-                buf.append(c); esc = False; continue
-            if c == '\\':
-                buf.append(c); esc = True; continue
-            if quote is not None:
-                buf.append(c)
-                if c == quote:
-                    quote = None
-                continue
-            if c in ('"', "'"):
-                quote = c; buf.append(c); continue
-            if c in ('(', '[', '{'):
-                depth += 1
-            elif c in (')', ']', '}'):
-                depth -= 1
-            elif c == sep and depth == 0:
-                out.append(''.join(buf)); buf = []
-                continue
-            buf.append(c)
-        if buf:
-            out.append(''.join(buf))
-        return out
-
     def get_named_args_kwargs(argkwargstr, cxt=None, *, func_is_datablock_ctor: bool = False):
         args = []
         kwargs = {}
         if cxt is None:
             cxt = {}
         cxt['dbx'] = sys.modules['dbx']
+        if func_is_datablock_ctor and argkwargstr is not None:
+            # A copy each time: the constructor keeps what it is given, and may change it.
+            return copy.deepcopy(_datablock_ctor_args_(argkwargstr))
         if argkwargstr is not None:
             bits = split_top_level_items(argkwargstr)
             for bit in bits:
@@ -503,57 +594,30 @@ def eval(name):
                 
                 if len(kwparts) == 2 and kwparts[0].strip().isidentifier():
                     k, v = kwparts[0].strip(), kwparts[1].strip()
-                    if func_is_datablock_ctor:
-                        try:
-                            val = ast.literal_eval(v)
-                        except (ValueError, SyntaxError):
-                            val = v  # leave speclines/identifiers as strings
-                    else:
-                        try:
-                            val = ast.literal_eval(v)
-                        except (NameError, SyntaxError, ValueError):
-                            val = v
-                        if isinstance(val, str):
-                            if val.startswith("$") or val.startswith("@") or val.startswith("#"):
-                                val = eval(val)
-                            elif val.startswith("dbx."):
-                                val = __eval__(val, cxt)
-                        elif isinstance(val, (dict, list, tuple)):
-                            if func_is_datablock_ctor and k == 'spec':
-                                if not isinstance(val, dict):
-                                    raise TypeError(f"spec must be a dict, got {type(val).__name__}")
-                                _val = {}
-                                """
-                                    In a spec, evaluate only the Datablock args, the rest should remain unevaluated/unexpanded.
-                                """
-                                for _k, _v in val.items():
-                                    _value = eval(_v)
-                                    if isinstance(_value, Datablock):
-                                        _val[_k] = _value
-                                    else:
-                                        _val[_k] = _v
-                                val = _val
-                            else:
-                                val = eval(val)
+                    try:
+                        val = ast.literal_eval(v)
+                    except (NameError, SyntaxError, ValueError):
+                        val = v
+                    if isinstance(val, str):
+                        if val.startswith("$") or val.startswith("@") or val.startswith("#"):
+                            val = eval(val)
+                        elif val.startswith("dbx."):
+                            val = __eval__(val, cxt)
+                    elif isinstance(val, (dict, list, tuple)):
+                        val = eval(val)
                     kwargs[k] = val
                 else:
-                    if func_is_datablock_ctor:
-                        try:
-                            arg = ast.literal_eval(bit)
-                        except (ValueError, SyntaxError):
-                            arg = bit  # leave speclines/identifiers as strings
-                    else:
-                        try:
-                            arg = ast.literal_eval(bit)
-                        except (NameError, SyntaxError, ValueError):
-                            arg = bit
-                        if isinstance(arg, str):
-                            if arg.startswith("$") or arg.startswith("@") or arg.startswith("#"):
-                                arg = eval(arg)
-                            elif arg.startswith("dbx."):
-                                arg = __eval__(arg, cxt)
-                        elif isinstance(arg, (dict, list, tuple)):
+                    try:
+                        arg = ast.literal_eval(bit)
+                    except (NameError, SyntaxError, ValueError):
+                        arg = bit
+                    if isinstance(arg, str):
+                        if arg.startswith("$") or arg.startswith("@") or arg.startswith("#"):
                             arg = eval(arg)
+                        elif arg.startswith("dbx."):
+                            arg = __eval__(arg, cxt)
+                    elif isinstance(arg, (dict, list, tuple)):
+                        arg = eval(arg)
                     args.append(arg)
         return args, kwargs
 
@@ -570,7 +634,10 @@ def eval(name):
         return funcstr, argkwargstr
 
     _datalog_("eval").detailed(f" ====================> Evaluating term {repr(name)}")
-    if isinstance(name, dict):
+    if isinstance(name, (pd.DataFrame, pd.Series)):
+        # Iterable, but over its column names or values: rebuilt from those, it would be lost.
+        term = name
+    elif isinstance(name, dict):
         term = {k: eval(v) for k, v in name.items()}
     elif isinstance(name, Iterable) and not isinstance(name, str):
         term = type(name)(eval(item) for item in name)
@@ -783,8 +850,8 @@ def exec(s=None, *, capture_output: bool = False, **kwargs):
     # the workers a dbx executor hands it to, and in any process started while
     # it runs -- writes under one session, indexed where the exec journal is.
     # An exec inside an exec joins the session already open.
-    from .journals import DataJournal, OutputCapture, write_exec_journal
-    dj = DataJournal.command_session()
+    from .journals import BuildJournal, OutputCapture, write_exec_journal
+    dj = BuildJournal.command_session()
     # Its capture -- the one open, which it joins, or a new master -- and
     # closed before the row is written, so the row points at a file that is
     # there. One it joined is closed by whoever opened it.
@@ -810,7 +877,7 @@ def exec(s=None, *, capture_output: bool = False, **kwargs):
             end_dt = datetime.datetime.now().isoformat().replace(' ', '-').replace(':', '-')
             write_exec_journal(s, session=dj.session, dt=dt, end_dt=end_dt,
                                success=exception is None, exception=exception, traceback=traceback,
-                               datajournal_entries=dj.written_entries()[written_before:],
+                               buildjournal_entries=dj.written_entries()[written_before:],
                                output_captures=([capture.path] + capture.collected()[captured_before:]
                                                 if capture is not None else []))
 
@@ -1017,7 +1084,7 @@ def _with_payloads_(exc, payloads):
     """*exc*, carrying the results that DID arrive before it was raised, as ``executor_payloads``.
 
     An executor that raises returns nothing, so the results of the callables
-    that succeeded -- their values, and under a `DataJournal` scope the entry
+    that succeeded -- their values, and under a `BuildJournal` scope the entry
     paths they wrote -- would go down with the raise. None stands for an item
     that never arrived, as in exec_callables' own result.
     """
@@ -1028,17 +1095,17 @@ def _with_payloads_(exc, payloads):
     return exc
 
 
-class _CarriesDataJournal_:
-    """An executor's public entry points, carrying the open `DataJournal` scope to its workers.
+class _CarriesBuildJournal_:
+    """An executor's public entry points, carrying the open `BuildJournal` scope to its workers.
 
-    Every entry is written under `DataJournal.current()` -- in a ``dbx.exec``
+    Every entry is written under `BuildJournal.current()` -- in a ``dbx.exec``
     command, the command's session. A worker process has a stack of its own,
     so a block built there would write under that process's default session,
     and the command's exec-journal row would list none of it; a worker thread
     sees the main thread's stack, but not a ``with`` the dispatching thread
-    opened itself. So an executor with workers (``CARRIES_DATAJOURNAL``)
-    sends each callable out in the current session (`DataJournal.carry`) and
-    takes back what it wrote (`DataJournal.collect`) before a caller sees the
+    opened itself. So an executor with workers (``CARRIES_BUILDJOURNAL``)
+    sends each callable out in the current session (`BuildJournal.carry`) and
+    takes back what it wrote (`BuildJournal.collect`) before a caller sees the
     result. The results themselves are unchanged. The inline executor runs
     in the caller's thread, and sends nothing.
 
@@ -1051,13 +1118,13 @@ class _CarriesDataJournal_:
     """
 
     #: True for an executor whose workers are other processes or threads.
-    CARRIES_DATAJOURNAL = False
+    CARRIES_BUILDJOURNAL = False
 
     # 2. Declared API ------------------------------------------------------
 
     def exec_callables(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute all callables and return their results as a flat list, in input order."""
-        callables, dj, capture = self._carry_datajournal_(callables)
+        callables, dj, capture = self._carry_buildjournal_(callables)
         if dj is None:
             return self._exec_callables_(callables, *ctx_args, **ctx_kwargs)
         try:
@@ -1069,7 +1136,7 @@ class _CarriesDataJournal_:
 
     def exec_callables_streaming(self, callables: Sequence[Callable], *ctx_args, **ctx_kwargs):
         """Execute callables and yield their results in input order: in lists of *batch_size*, when it is over 1."""
-        callables, dj, capture = self._carry_datajournal_(callables)
+        callables, dj, capture = self._carry_buildjournal_(callables)
         stream = self._exec_callables_streaming_(callables, *ctx_args, **ctx_kwargs)
         if dj is None:
             yield from stream
@@ -1085,12 +1152,12 @@ class _CarriesDataJournal_:
 
     # 4. Helpers -----------------------------------------------------------
 
-    def _carry_datajournal_(self, callables):
+    def _carry_buildjournal_(self, callables):
         """*callables* as they go out, the session to collect into -- None when there is nothing to carry -- and the capture."""
-        if not self.CARRIES_DATAJOURNAL:
+        if not self.CARRIES_BUILDJOURNAL:
             return callables, None, None
-        from .journals import DataJournal, OutputCapture
-        dj, capture = DataJournal.current(), OutputCapture.current()
+        from .journals import BuildJournal, OutputCapture
+        dj, capture = BuildJournal.current(), OutputCapture.current()
         return dj.carry(callables, capture), dj, capture
 
     def _journaled_(self, payload):
@@ -1098,14 +1165,14 @@ class _CarriesDataJournal_:
         return payload
 
     def _collect_(self, dj, capture, payload):
-        """`DataJournal.collect`, with *payload*'s capture paths collected into *capture* on the way."""
+        """`BuildJournal.collect`, with *payload*'s capture paths collected into *capture* on the way."""
         payload = self._journaled_(payload)
         if capture is not None:
             capture.collect(payload)
         return dj.collect(payload)
 
     def _collect_raised_(self, dj, capture, exc):
-        """`DataJournal.collect_raised` -- and `OutputCapture.collect_raised` -- over the payloads *exc* carries as this executor returns them."""
+        """`BuildJournal.collect_raised` -- and `OutputCapture.collect_raised` -- over the payloads *exc* carries as this executor returns them."""
         payloads = getattr(exc, 'executor_payloads', None)
         if payloads:
             _with_payloads_(exc, [self._journaled_(p) for p in payloads])
@@ -1114,7 +1181,7 @@ class _CarriesDataJournal_:
         dj.collect_raised(exc)
 
 
-class _CallableExecutorBase_(_CarriesDataJournal_):
+class _CallableExecutorBase_(_CarriesBuildJournal_):
     """
     Abstract base that implements the fan-out / collect / join scaffold shared by
     MultithreadingCallableExecutor and MultiprocessingCallableExecutor.
@@ -1907,7 +1974,7 @@ class MultithreadingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
-    CARRIES_DATAJOURNAL = True
+    CARRIES_BUILDJOURNAL = True
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -2002,7 +2069,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         Label for the progress bar.
     """
 
-    CARRIES_DATAJOURNAL = True
+    CARRIES_BUILDJOURNAL = True
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -2066,7 +2133,7 @@ class MultiprocessingCallableExecutor(_CallableExecutorBase_):
         gc.collect()
 
 
-class RayCallableExecutor(_CarriesDataJournal_):
+class RayCallableExecutor(_CarriesBuildJournal_):
     """Execute callables on pre-created Ray actor workers.
 
     Requires the ``ray`` optional dependency (``pip install datablocks[ray]``).
@@ -2085,7 +2152,7 @@ class RayCallableExecutor(_CarriesDataJournal_):
         Label for the progress bar.
     """
 
-    CARRIES_DATAJOURNAL = True
+    CARRIES_BUILDJOURNAL = True
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -2268,7 +2335,7 @@ class RayCallableExecutor(_CarriesDataJournal_):
             yield # make it a generator
 
     def _journaled_(self, payload):
-        """A `Remote` proxy of the `JournaledResult` taken apart: its paths by value, its value as `Remote` returns one.
+        """A `Remote` proxy of the `JournaledResult` taken apart: its entries by value, its value as `Remote` returns one.
 
         A remote worker returns anything that is not a primitive as a proxy,
         and every carried callable returns a `JournaledResult`. Its paths are a
@@ -2277,7 +2344,7 @@ class RayCallableExecutor(_CarriesDataJournal_):
         """
         if isinstance(payload, Remote):
             from .journals import JournaledResult
-            return JournaledResult(payload.value, payload.datajournal_entries, payload.output_captures)
+            return JournaledResult(payload.value, payload.buildjournal_entries, payload.output_captures)
         return payload
 
     @staticmethod
@@ -3909,7 +3976,7 @@ def remote(*, revision=None, slurm=None, conda=None, address=None, shared_repo=N
         Environment variables for the workers, over the ``DBX*`` ones of this
         process they are otherwise given; ``None`` as a value unsets one. For
         a worker on another host, whose ``DBX_DATALAKE`` -- say -- is not this
-        one's: `DataJournalEntry.rinst` sets it to the datalake its entry
+        one's: `BuildJournalEntry.rinst` sets it to the datalake its entry
         recorded.
     working_dir:
         Ray ``runtime_env`` working directory. ``'auto'`` (the default) means:

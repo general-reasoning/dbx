@@ -979,13 +979,13 @@ class TestValidTabletAndSentinels:
         assert tbl.find_tablets(signature="base=3", tag="sample_tag_1") == [1]
         assert tbl.find_tablets(signature="base=0", tag="sample_tag_1") == []
 
-        # Test path matching
+        # Test path matching -- a tablet is filed by its hash, its tag in no path
         assert tbl.find_tablets(path="note.txt") == [0, 1, 2, 3]
-        assert tbl.find_tablets(path="sample_tag_1") == [1]
-        assert tbl.find_tablets(path=("sample_tag_2", "letters")) == [2]
-        assert tbl.find_tablets(path=["tab_000000", "tab_000003"]) == [0, 3]
-        assert tbl.find_tablets(signature="base=3", path="sample_tag_1") == [1]
-        assert tbl.find_tablets(signature="base=0", path="sample_tag_1") == []
+        assert tbl.find_tablets(path=tbl.tablet(1).hash[:8]) == [1]
+        assert tbl.find_tablets(path=(tbl.tablet(2).hash[:8], "letters")) == [2]
+        assert tbl.find_tablets(path=[tbl.tablet(0).hash[:8], tbl.tablet(3).hash[:8]]) == [0, 3]
+        assert tbl.find_tablets(signature="base=3", path=tbl.tablet(1).hash[:8]) == [1]
+        assert tbl.find_tablets(signature="base=0", path=tbl.tablet(1).hash[:8]) == []
 
         # No match
         assert tbl.find_tablets("nonexistent") == []
@@ -1082,14 +1082,14 @@ class TestValidTabletAndSentinels:
         # No journal read at all: LetterTablet declares no SPECIALIZATIONS, so a tablet
         # not redirected answers from its own hash directory and one redirected
         # from its record -- the anchor's journal is never needed.
-        from dbx.datablocks import DataJournal
+        from dbx.datablocks import BuildJournal
         reads = []
-        original = DataJournal.read
+        original = BuildJournal.read
         def counting(self, anchor, *a, **kw):
             reads.append(anchor)
             return original(self, anchor, *a, **kw)
         import unittest.mock
-        with unittest.mock.patch.object(DataJournal, 'read', counting):
+        with unittest.mock.patch.object(BuildJournal, 'read', counting):
             dst_tbl.get_tablet_redirections(parallelization="inline")
         assert reads == []
 
@@ -1162,7 +1162,7 @@ class TestValidTabletAndSentinels:
             ),
         ).build()
 
-        fold0 = partition.fold(0)
+        fold0 = partition.part(0).pullback()
         # fold0 covers a subset of tablets
         valid_res = fold0.valid_tablets()
         red_res = fold0.redirected_tablets()

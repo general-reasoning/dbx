@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+pytest.importorskip("pygame", reason="hyp is the [hyp] extra")
+
 from hyp import dbxpipelines
 from hyp.engine import Engine
 from hyp.store import Store
@@ -328,8 +330,8 @@ def remote_dbx(monkeypatch):
         def read(self, thing, raw=False):
             return "$pkg.Block()" if thing == "quote" else None
 
-    monkeypatch.setattr(dbx.DataJournal, "read_entries", lambda paths, **kw: [Entry(gitrepo="/home/me/dbx:/home/me/proj")])
-    monkeypatch.setattr(dbx.DataJournalEntry, "column", staticmethod(lambda entry, name: entry.get(name)))
+    monkeypatch.setattr(dbx.BuildJournal, "read_entries", lambda paths, **kw: [Entry(gitrepo="/home/me/dbx:/home/me/proj")])
+    monkeypatch.setattr(dbx.BuildJournalEntry, "column", staticmethod(lambda entry, name: entry.get(name)))
     monkeypatch.setattr(dbx.SshRay, "session", classmethod(lambda cls, host, python: calls["session"].append((host, python)) or SimpleNamespace(address="ray://localhost:9")))
     monkeypatch.setitem(dbxpipelines._REMOTE_, "key", None)
     return calls
@@ -356,7 +358,7 @@ def test_read_instantiates_on_the_datalakes_host_and_keeps_the_block(remote_dbx)
 def test_the_head_runs_in_the_python_the_entrys_build_recorded(remote_dbx, monkeypatch):
     import dbx
 
-    monkeypatch.setattr(dbx.DataJournal, "read_entries", lambda paths, **kw: [
+    monkeypatch.setattr(dbx.BuildJournal, "read_entries", lambda paths, **kw: [
         type("E", (dict,), {"trueinst": lambda self, **kw: object(), "read": lambda self, *a, **k: None})(
             python="/env/bin/python")])
     dbxpipelines.read_text({"entry_path": "ssh://host/lake/e.parquet", "id": "e1"}, ("n",))
@@ -804,8 +806,8 @@ def anchor_journal(monkeypatch):
     import dbx
 
     monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
-    monkeypatch.setattr(dbx.DataJournal, "list", lambda anchor, **kw: [f"f{i}" for i in range(len(JOURNAL_ROWS))])
-    monkeypatch.setattr(dbx.DataJournal, "read_frame", lambda files, **kw: pd.DataFrame(JOURNAL_ROWS))
+    monkeypatch.setattr(dbx.BuildJournal, "list", lambda anchor, **kw: [f"f{i}" for i in range(len(JOURNAL_ROWS))])
+    monkeypatch.setattr(dbx.BuildJournal, "read_frame", lambda files, **kw: pd.DataFrame(JOURNAL_ROWS))
     monkeypatch.setattr(dbxpipelines, "_side_file_", lambda *a: None)
     monkeypatch.setattr(dbxpipelines, "var_name", lambda row: None)
 
@@ -936,11 +938,22 @@ def test_a_pipeline_is_labeled_by_its_tag_already_and_shows_it_no_more(pipelines
     assert pipelines_app.__point_tag__(0) is None
 
 
-def test_a_quote_is_rerun_without_its_sigil_quoted_for_bash():
-    quote = """$pkg.T(spec={'s': "a $b `c` \\\\ d"}, tag='x')"""
-    assert dbxpipelines.rerun_line(quote) == r'''dbx.pprint "pkg.T(spec={'s': \"a \$b \`c\` \\\\ d\"}, tag='x')"'''
-    assert dbxpipelines.rerun_line(quote, cite=True).endswith(r''', tag='x').cite()"''')
-    assert dbxpipelines.rerun_line("@pkg.T()") == 'dbx.pprint "pkg.T()"'
+def test_a_quote_is_rerun_by_dbx_eval_as_recorded_quoted_for_bash():
+    """What bash hands dbx.pprint is dbx.eval of the quote, exactly as recorded: its nested blocks bare, as only dbx.eval reads them."""
+    import ast
+    import subprocess
+
+    quote = """$pkg.T(spec={'s': "a $b `c` \\\\ d", 'up': pkg.U(spec={'n': 1})}, tag='x')"""
+    for cite in (False, True):
+        line = dbxpipelines.rerun_line(quote, cite=cite)
+        assert line.startswith('dbx.pprint "')
+        # What bash makes of the argument: printed, by bash itself, in dbx.pprint's place.
+        arg = subprocess.run(["bash", "-c", "printf %s " + line[len("dbx.pprint "):]], capture_output=True, text=True, check=True).stdout
+        call = ast.parse(arg, mode="eval").body
+        if cite:
+            assert call.func.attr == "cite" and not call.args
+            call = call.func.value
+        assert ast.unparse(call.func) == "dbx.eval" and ast.literal_eval(call.args[0]) == quote
 
 
 def test_the_quote_and_cite_buttons_follow_the_entry_shown_and_open_the_line(journal_app, tmp_path):
@@ -957,14 +970,14 @@ def test_the_quote_and_cite_buttons_follow_the_entry_shown_and_open_the_line(jou
     assert quote.visible() and cite.visible()
     cite.on_click()
     line = app.viewers[-1]
-    assert line.text == '''dbx.pprint "pkg.T(spec={'n': 1}).cite()"''', "unpinned at first"
+    assert line.text == dbxpipelines.rerun_line("$pkg.T(spec={'n': 1})", cite=True), "unpinned at first"
     how, pin = line.menus
     assert pin.visible() and pin.label.startswith("[ ]")
     pin.on_click()
-    assert line.text == '''dbx.pprint --revision=aaaaaaaaaaaa:bbbbbbbbbbbb "pkg.T(spec={'n': 1}).cite()"'''
+    assert line.text.startswith("dbx.pprint --revision=aaaaaaaaaaaa:bbbbbbbbbbbb \"dbx.eval(") and line.text.endswith(".cite()\"")
     assert pin.label == "[x]  --revision=aaaaaaaa:bbbbbbbb"
     how.select("quote")
-    assert line.text == '''dbx.pprint --revision=aaaaaaaaaaaa:bbbbbbbbbbbb "pkg.T(spec={'n': 1})"'''
+    assert line.text == dbxpipelines.rerun_line("$pkg.T(spec={'n': 1})", revision="aaaaaaaaaaaa:bbbbbbbbbbbb")
     assert how.label.startswith("quote · 2026-10-13 10:00:00")
 
 
@@ -974,7 +987,7 @@ def test_an_entry_with_no_revision_has_no_pin(journal_app, tmp_path):
     app.run_async = lambda fn, then: then(fn())
     app._open_rerun_({"quote": str(tmp_path / "quote.txt"), "revision": "None"}, "quote")
     assert not app.viewers[-1].menus[1].visible()
-    assert app.viewers[-1].text == 'dbx.pprint "pkg.T()"'
+    assert app.viewers[-1].text == dbxpipelines.rerun_line("$pkg.T()") == r'''dbx.pprint "dbx.eval(\"\$pkg.T()\")"'''
 
 
 @pytest.mark.parametrize("text, filters", [
@@ -1000,8 +1013,8 @@ def test_an_anchors_filters_reach_its_journal(monkeypatch):
 
     seen = {}
     monkeypatch.setattr(dbx, "default_datalake", lambda: "ssh://host/lake")
-    monkeypatch.setattr(dbx.DataJournal, "list", lambda anchor, **kw: [])
-    monkeypatch.setattr(dbx.DataJournal, "read_frame", lambda files, **kw: seen.update(kw) or pd.DataFrame())
+    monkeypatch.setattr(dbx.BuildJournal, "list", lambda anchor, **kw: [])
+    monkeypatch.setattr(dbx.BuildJournal, "read_frame", lambda files, **kw: seen.update(kw) or pd.DataFrame())
     assert dbxpipelines.blocks("pkg.Model", progress=lambda *a: None, filters={"tag": "first"}) == []
     assert seen["tag"] == "first"
 
@@ -1095,10 +1108,10 @@ def test_an_anchors_journal_is_listed_then_read_against_the_total(anchor_journal
         progress("reading", 1, 3)
         return pd.DataFrame(JOURNAL_ROWS)
 
-    monkeypatch.setattr(dbx.DataJournal, "list", list_)
-    monkeypatch.setattr(dbx.DataJournal, "read_frame", read_frame)
+    monkeypatch.setattr(dbx.BuildJournal, "list", list_)
+    monkeypatch.setattr(dbx.BuildJournal, "read_frame", read_frame)
     told = []
     dbxpipelines.blocks("pkg.Model", progress=lambda msg, done=None, total=None: told.append((msg, done, total)), n_workers=2)
-    listing, reading = "dbx.DataJournal.list('pkg.Model')", "dbx.DataJournal.read_frame(3 journal files of pkg.Model)"
+    listing, reading = "dbx.BuildJournal.list('pkg.Model')", "dbx.BuildJournal.read_frame(3 journal files of pkg.Model)"
     assert told[:5] == [(listing, None, None), (listing, 1, None), (listing, 3, None), (reading, 0, 3), (reading, 1, 3)]
     assert told[-1][1:] == (2, 2), "and then the side files, counted"

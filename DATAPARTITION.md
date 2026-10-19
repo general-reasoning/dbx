@@ -2,39 +2,84 @@
 
 ## At a glance
 
-Three layers, each built in parallel: a **deal** decides which rows go to which
-fold; a **map** records, per fold, which rows each tablet of the fold takes -- its
-**lot**; a **pullback** makes a table of the fold, its tablets the table's own or
-copies of the rows.
+### Three roles
 
-```
-deal ── datamap(k) ──▶ DatamapTable ── tablet i ──▶ DatamapTablet: lot i = [(t, rows | ALL), ...]
-table ─ pullback along a DatamapTable ─▶ MappedDatatable ── tablet i ──▶ the table's tablet t   (lot [(t, ALL)])
-                                                                     └─▶ MappedDatatablet: a copy of lot i's rows
-```
+- **A partition** decides which rows go to which part -- every part at once, the parts
+  disjoint -- and writes the decision down compactly. `DatatablePartition` assigns
+  whole tablets, pieces of them and packs; `DatatableClusterCorePartition` assigns rows, by
+  cluster.
+- **A part** is the partition's decision for one part, and nothing else: indices. For
+  each tablet of the part, which rows of which of the partition's table's tablets it
+  takes -- its **lot**. `partition.part(k)` is a `PartitionDatamapTable`, its tablets
+  `PartitionDatamapTablet`s, each storing one lot.
+- **A pullback** is a table pulled back along a part: the partition's own table --
+  `part.pullback()` -- or any laid out as it is -- `part.pullback(table, collator)`.
+  One tablet per lot: the table's own tablet, where the lot takes it whole; a copy
+  of the rows, otherwise. A layered table -- a `Featuretable` -- is pulled back
+  layer by layer, each layer independently along the same part.
 
-| Class | Base | VAR | Builds, holds | Notes |
+### The classes
+
+| Class | Role | Identity: VAR | Holds, writes | Made by |
 |---|---|---|---|---|
-| `DatatablePartition` | `Datablock` | `datatable`, `fractions`, `partition_slice`, `collator`, `method`, `seed`, `balance`, `coalesce`, `min/max_tablet_rows` | the deal of tablets and pieces: `tablets` (each fold's entries), `summary` | answers `lot`, `whole`, `tag_of`, `lot_tablets`, `dealt`; `datamap(k)`; `part(k)` |
-| `DatatableCorePartition` | `DatatablePartition` | + `clustering`, `n_clusters`, `rows_per_tablet`, `shuffle`, ... | the deal of rows, by cluster, folds disjoint: `layout`, `tablets` (each core tablet's `[start, end)`), `centers`, `coverage`, `summary` | a lot is a run of the layout; `part(k)` is `datamap(k).pullback(datatable, collator)` |
-| `DatamapTable` | `Datatable` | `partition`, `fold` | its `DatamapTablet`s, in parallel, with the deal's workers | `pullback(table, collator)` |
-| `DatamapTablet` | `Datatablet` | `datamap`, `index` | slice `lot`: one row per run -- `tab`, `rows`, `whole` | `.lot` reads it; `datamap` is in `TREE_SKIP_*` |
-| `MappedDatatable` | `Datatable` | `datamap`, `datatable` (None: the map's), `collator` (None: every slice) | its map, then its copies, in parallel | BLOCK, TOPICS: the table's; another table must be laid out alike |
-| `MappedFeaturetable` | `DataslicesUpstream`, `MappedDatatable` | as above | as above | its upstream: the table's upstream pulled back along the same map; a layer the collator names nothing of is passed over |
-| `MappedDatatablet` | `Datatablet` | `map` (a `DatamapTablet`), `datatable`, `collator` | the lot's rows of the slices it copies, and `source` | builds its map tablet first; checks the rows' counts |
-| `MappedFeaturetablet` | `DataslicesUpstream`, `MappedDatatablet` | + `upstream` | the table's own slices only; no `source` | its upstream: the same rows one layer down, built first |
-| `DatatablePart` | `MappedDatatable` | `partition`, `fold` (its map derived) | as `MappedDatatable`; copies every slice | the identity of every CPTAC fold, and all built on them |
-| `FeaturetablePart` | `DataslicesUpstream`, `DatatablePart` | as above | as above | a `Featuretable`'s part; adopts one built as a `DatatablePart` |
+| `DatatablePartition` | a partition | `datatable`, `fractions`, `partition_slice`, `collator`, `method`, `seed`, `balance`, `coalesce`, `min/max_tablet_rows` | `tablets` (each part's entries: a tablet's index, a piece, a pack), `summary` | you |
+| `DatatableClusterCorePartition` | a partition of rows, by cluster | + `clustering`, `n_clusters`, `max_iter`, `tol`, `rows_per_tablet`, `shuffle`, ... | `layout`, `tablets` (each core tablet's `[start, end)` of it), `centers`, `columns`, `coverage`, `summary` | you |
+| `PartitionDatamapTable` | a part: indices only | `partition`, `part` | its tablets, built in parallel with the partition's workers; `done` | `partition.part(k)` |
+| `PartitionDatamapTablet` | one lot | `datamap` (its part), `index` (its place in the part) | slice `lot`: one row per run -- `tab`, `rows`, `whole` | its part |
+| `MappedDatatable` | a table pulled back along a part | `datamap` (the part), `datatable` (None: the partition's own), `collator` (None: every slice) | its copies, built in parallel; `done` | `part.pullback(table, collator)` |
+| `MappedFeaturetable` | a layered table pulled back | + `upstream`: the pullback of the nearest layer below that it copies | as `MappedDatatable` | `part.pullback(featuretable, collator)` |
+| `MappedDatatablet` | a copy of a lot's rows | `map` (a `PartitionDatamapTablet`), `datatable`, `collator` | the slices it copies, and `source` | its table |
+| `MappedFeaturetablet` | a copy, one layer of a stack | + `upstream`: the copy of the same rows one layer down | its own layer's slices only; `source` is the bottom layer's | its table |
+
+A part holds **indices**; a pullback holds **data**. A part has no table of its
+own: `partition.part(k).pullback()` is the partition's table, part *k* of it.
+
+### Identities: parts built before 2026-10-16
+
+Until 2026-10-16 a part was a table, a `DatatablePart` -- a `FeaturetablePart` for
+a feature table -- its VAR ``{partition, fold}``, and everything built on one hashes
+through that: the CPTAC tile parts (`PancanTileFold`), the probes' fit and eval
+parts, and the deep feature clips, bipolar and ternary clips, stats probes, probes
+and cores built on them. A pullback of the partition's own table, copying every slice,
+is that part, and says so: `MappedDatatable`'s specialization renders it as
+``{fold, partition}`` -- its `datatable` and `collator`, None, left out; its part's
+`partition` and `part` moved out, the part under its old name; for a
+`MappedFeaturetable`, its `upstream` left out too, *determined* by its map, table
+and collator (`Specialization.determined`) -- under the old classes' paths
+(`dbx.dataparts.PART_PAST`). A block built on an old part finds its build by that
+rendering, as a nested past, and adopts it where it is.
+
+*Known issue.* A pullback declares its table's TOPICS -- as a part did, whose hash
+includes them -- and writes only `done`: a pulled-back tile clip declares the clip's
+`tabs` and `bag_lens`, never written. Nothing reads them; `paths()` lists them.
+
+### Example: the CPTAC 602020 CALIBRATE bipolar core
+
+```
+DatatableClusterCorePartition          the partition: the bipolar clip's tiles clustered; 20% of each cohort assigned to part 0
+ └─ part(0): PartitionDatamapTable     45 lots, each 4096 rows of some 16 bags
+     └─ pullback(bipolar clip, collator)
+         MappedFeaturetable            45 copies: bipolar
+          .upstream: MappedDatatable   45 copies of the tile part's bags: tiles, annotations, bag_name, source
+                                       (the deep features: named by nothing, passed over)
+```
+
+Core tablet *i* and its upstream tablet are copies of the same 4096 rows, each made
+from its own layer's source tablets by lot *i*; reading `tiles` from core tablet *i*
+is routed to its upstream.
 
 **Terms.** A *lot*: `[(tablet, rows | None)]`, runs of one tablet each, None for
 every row -- a whole tablet's `[(t, None)]`, a piece's `[(t, rows)]`, a packed or
 core tablet's several runs. *Laid out alike*: tablet *t* of both tables holds as
 many rows, row *i* the same sample -- a feature table and the table it was
 computed from. `source`: row *i* of a copy is `(tab, row)` of the table it was
-copied from.
+copied from. *Coherence*: a pullback is built layer by layer from the bottom, each
+layer's `upstream` the pullback of the nearest layer below it copies --
+`map.pullback(ft).upstream == map.pullback(ft.upstream)`, and for every copy
+`map.pullback(ft).tablet(i).upstream == map.pullback(ft.upstream).tablet(i)`.
 
-**Contents.** What decides the deal -- When a tablet is cut -- How the units are
-dealt -- What a part's tablets are: coalesce -- The flow -- Pieces (maps and
+**Contents.** What decides the partition -- When a tablet is cut -- How the units are
+assigned -- What a part's tablets are: coalesce -- The flow -- Pieces (maps and
 copies) -- Identities -- Probes -- Upstream and downstream tables -- Core
 partitions -- TODO: three choices, untangled (design, identities, progress,
 settled) -- Where the code is.
@@ -42,10 +87,11 @@ settled) -- Where the code is.
 ## Partitions
 
 A `DatatablePartition` splits a `Datatable` into **parts**: tables, each a
-`DatatablePart`, such as a probe's fit and eval tables. Part *k* takes the
-*k*-th of `fractions` of the rows (or of the tablets), and `partition.part(k)`
-returns it. The index *k* is also called the part's fold; `partition.fold(k)`
-is the name `part(k)` had first, and does the same. The `DatatablePartition`
+a table pulled back along it, such as a probe's fit and eval tables. Part *k*
+takes the *k*-th of `fractions` of the rows (or of the tablets): `partition.part(k)`
+is its indices, and `partition.part(k).pullback()` the table, part *k* of it. Any
+table laid out alike is pulled back along the same part, `part(k).pullback(table)`.
+The `DatatablePartition`
 itself writes no rows: it decides which rows go to which part, and writes
 that down in `tablets` and `summary`.
 
@@ -58,13 +104,13 @@ Two optional columns constrain which rows go to which part:
   so every part takes its share of every partition. The partitions keep their
   proportions in every part; they are not made equal.
 
-A tablet is dealt to a part whole when all of its rows carry the same stratum
+A tablet is assigned to a part whole when all of its rows carry the same stratum
 and, with partitionby, the same partition. Otherwise it is cut into
 pieces. "When a tablet is cut" below says exactly when and how. Once
-the deal is done, *coalesce* can make a cut tablet whole again, and pool small
+the partition is done, *coalesce* can make a cut tablet whole again, and pool small
 tablets and pieces into packed tablets: "What a part's tablets are" below. A
 part's piece or packed tablet is a `MappedDatatablet`, copying the rows its
-fold's map names: "Parts are tables pulled back along maps" below.
+part's map names: "Parts are tables pulled back along maps" below.
 
 The partition and the classes it makes live in `dbx.dataparts`; the collator
 naming its columns, in `dbx.datatables`:
@@ -79,25 +125,25 @@ split = DatatablePartition(spec=dict(
         'stratifyby': ('annotations', 'annotations', 'case_id'),     # strata: patients
         'partitionby': ('annotations', 'annotations', 'cohort'),   # partitions: cohorts
     })))).build()
-fit_table, eval_table = split.part(0).build(), split.part(1).build()
+fit_table, eval_table = split.part(0).pullback().build(), split.part(1).pullback().build()
 ```
 
-## What decides the deal
+## What decides the partition
 
 Five choices, each answering one question:
 
 - **stratifyby**: which rows must land in the SAME part? The rows of a stratum,
-  across all the tablets they lie in, are dealt as one **unit**. Without
+  across all the tablets they lie in, are assigned as one **unit**. Without
   stratifyby, each tablet or piece is a unit of its own.
 - **partitionby**: within which categories must the fractions hold? Each
-  partition is dealt to the parts separately, so the fractions are met within
+  partition is assigned to the parts separately, so the fractions are met within
   each partition, not only overall. A partition spans every part; a stratum spans
   one.
 - **balance**: fractions of what? `'rows'` (the default) or `'tablets'`. A piece
   weighs its rows, or 1.
-- **seed**: the order units are dealt in, within each partition.
-- **coalesce**: what a part's tablets are, once dealt. `None` (the default):
-  whole tablets and pieces, as dealt. `'whole'`: a cut tablet is made whole again
+- **seed**: the order units are assigned in, within each partition.
+- **coalesce**: what a part's tablets are, once assigned. `None` (the default):
+  whole tablets and pieces, as assigned. `'whole'`: a cut tablet is made whole again
   where it can be. `'pack'`: and small tablets and pieces are pooled into packed
   tablets. It never moves a row to another part. See "What a part's tablets are".
 
@@ -112,10 +158,10 @@ no collator and never cuts a tablet.
 
 ## When a tablet is cut
 
-Units are dealt one partition at a time, and each unit goes to one part. So
-everything dealt must lie in **one** stratum, which goes to one part, and in
-**one** partition, which is the pool it is dealt from. A tablet that already does
-is dealt whole. A tablet that does not is cut into pieces, one per combination
+Units are assigned one partition at a time, and each unit goes to one part. So
+everything assigned must lie in **one** stratum, which goes to one part, and in
+**one** partition, which is the pool it is assigned from. A tablet that already does
+is assigned whole. A tablet that does not is cut into pieces, one per combination
 of stratum and partition among its rows. A piece takes those rows wherever they
 lie in the tablet, in their order.
 
@@ -129,11 +175,11 @@ parts. The figures are drawn from real runs by
 [make_figures.py](figures/datapartition/make_figures.py).
 
 **stratifyby only: a tablet is cut by stratum.** Tablets 1, 3 and 4 hold two strata
-each, so each is cut in two. Tablets 0 and 2 hold only s1 and are dealt whole,
+each, so each is cut in two. Tablets 0 and 2 hold only s1 and are assigned whole,
 together, as s1's unit, to part 0. Tablet 1 is split: s2's piece goes to part 0
 and s3's to part 1. s3 also has a piece in tablet 4, and it goes to part 1 with
 s3's unit. Tablets 3 and 4 are cut too, although both pieces of each go to
-part 1: tablets are cut before the deal, by what they hold, not by where their
+part 1: tablets are cut before the partition, by what they hold, not by where their
 strata land. `coalesce='whole'` makes them whole again; see "What a part's
 tablets are". The partitions are not read.
 
@@ -142,7 +188,7 @@ tablets are". The partitions are not read.
 **partitionby only: a tablet is cut by partition.** Tablets 1 and 4 hold two partitions
 each, so each is cut in two, and both are split: their p1 rows go to part 0
 and their p2 rows to part 1. Tablet 3 holds two strata, s4 and s6, but one
-partition, p2, and is dealt whole, since strata are not read. Each tablet and
+partition, p2, and is assigned whole, since strata are not read. Each tablet and
 piece is a unit of its own, so nothing keeps a stratum together: s1's tablets 0
 and 2 go to different parts.
 
@@ -151,7 +197,7 @@ and 2 go to different parts.
 **Both: a stratum goes to one part, and each partition's strata are divided
 between the parts.** A stratum lies in one partition, so cutting by stratum and
 partition gives the same pieces as cutting by stratum alone: these are the
-pieces of the stratifyby figure. What partitionby changes is the deal. The
+pieces of the stratifyby figure. What partitionby changes is the partition. The
 strata of p1 (s1, s3) are divided between the parts, and so, separately, are
 the strata of p2 (s2, s4, s5, s6). Each part gets its share of each partition,
 as nearly as whole strata allow. Tablets 1 and 3 end up split.
@@ -159,28 +205,28 @@ as nearly as whole strata allow. Tablets 1 and 3 end up split.
 ![stratifyby and partitionby](figures/datapartition/both.svg)
 
 **A stratum in two partitions is refused.** Cutting it by partition would
-give two pieces of one stratum, which must go to one part but would be dealt
+give two pieces of one stratum, which must go to one part but would be assigned
 from two pools. The `DatatablePartition` raises `ValueError`. Strata must lie
 inside partitions: patients within cohorts work, but patients whose tiles
 each carry a partition of their own do not. To use such a column, either
 partition by a value of the whole stratum, or drop stratifyby, so that each
-tablet is cut by partition and its pieces are dealt apart.
+tablet is cut by partition and its pieces are assigned apart.
 
 ![a stratum in two partitions](figures/datapartition/refused.svg)
 
-## How the units are dealt
+## How the units are assigned
 
 Within each partition, in sorted order:
 
 1. The partition's weight, its rows or its tablets and pieces, sets each part's
    target: `target[k] = weight × fraction[k]`.
 2. The partition's units are shuffled with the seed. One generator shuffles
-   every partition in turn, so the whole deal depends on the seed.
+   every partition in turn, so the whole assignment depends on the seed.
 3. Each unit in turn goes to the part furthest below its target, measured
    relatively, `(target[k] − have[k]) / target[k]`. A tie goes to the lower
    *k*.
 
-The deal of the "both" figure:
+The partition of the "both" figure:
 
 | Partition | Unit | Its tablets and pieces | Weight | Deficits before, part 0 / 1 | To part | `have` after |
 |---|---|---|---|---|---|---|
@@ -192,7 +238,7 @@ The deal of the "both" figure:
 | | s6 | tablet 3 #s6 | 2 | 0.33 / 0.11 | 0 | 5 / 4 |
 
 **Units are not cut to fit, so the fractions hold only as finely as the
-units allow.** The deal does not ask whether a unit fits: it goes to the
+units allow.** The partition does not ask whether a unit fits: it goes to the
 part furthest below target, even if that overshoots. In partition p1 above, s1
 alone holds 7 of the 10 rows, so the split is 3 : 7 against 5 : 5. A partition
 of few, large strata meets its fractions loosely. `summary.json` gives the
@@ -200,15 +246,15 @@ rows each part got per partition.
 
 ## What a part's tablets are: coalesce
 
-Tablets are cut before the deal, by what they hold, not by where their strata
+Tablets are cut before the partition, by what they hold, not by where their strata
 land. So a tablet may be cut although all its pieces go to one part, like
 tablets 3 and 4 in the stratifyby figure. A piece is a copy of its rows, while a
-whole tablet is read where it is. *coalesce* decides, once the deal is done,
+whole tablet is read where it is. *coalesce* decides, once the partition is done,
 what each part's tablets are. It moves no row from one part to another: the
 parts hold the same rows in every mode, and only the tablets holding them
 differ.
 
-**`coalesce=None`**, the default: the entries as dealt, whole tablets and
+**`coalesce=None`**, the default: the entries as assigned, whole tablets and
 pieces. This is what a `DatatablePartition` did before *coalesce*.
 
 **`coalesce='whole'`**: a cut tablet whose pieces all went to one part is made
@@ -245,7 +291,7 @@ and rows.
 `DatatablePartition.build()` runs five steps. Each hands the next one thing:
 
 ```
-the table ─SCAN─▶ a scan per tablet ─ITEMS─▶ items ─DEAL─▶ each part's entries ─COALESCE─▶ each part's entries ─WRITE─▶ tabs.json, summary.json
+the table ─SCAN─▶ a scan per tablet ─ITEMS─▶ items ─ASSIGN─▶ each part's entries ─COALESCE─▶ each part's entries ─WRITE─▶ tabs.json, summary.json
 ```
 
 1. **SCAN** reads the table, in parallel, one worker per tablet
@@ -262,19 +308,19 @@ the table ─SCAN─▶ a scan per tablet ─ITEMS─▶ items ─DEAL─▶ eac
    whose slices or columns differ in length (`ValueError`), since a piece
    takes its rows by index.
 
-2. **ITEMS** turns the scans into the things to be dealt (`_items_`): one
+2. **ITEMS** turns the scans into the things to be assigned (`_items_`): one
    item per constant tablet, and one per piece of each mixed tablet. An item
    carries its entry (the tablet's index, or the piece's record), its values,
    its row count and its tag.
 
-3. **DEAL** gives each item to a part (`_deal_`). An item missing a value
+3. **ASSIGN** gives each item to a part (`_assign_`). An item missing a value
    is set aside first: in no part, warned of, and recorded in the summary,
    a piece with its row count. The rest are gathered into units, each holding every
    item of one stratum, from whichever tablets; without stratifyby, each item is
    a unit of its own. A stratum whose items lie in two partitions is refused
    (`ValueError`). Then, one partition at a time, the units are shuffled with
    the seed, and each goes to the part furthest below its target, as "How
-   the units are dealt" describes. What comes out is a list of entries for
+   the units are assigned" describes. What comes out is a list of entries for
    each part.
 
 4. **COALESCE** reshapes those lists, when *coalesce* is set (`_rejoin_`,
@@ -283,7 +329,7 @@ the table ─SCAN─▶ a scan per tablet ─ITEMS─▶ items ─DEAL─▶ eac
    they are replaced there by the tablet's own index. With `'pack'`, each
    part's entries of fewer than `min_tablet_rows` rows are then taken out of
    its list, and replaced by packed tablets' records: each a list of segments,
-   pieces of those entries, filling up to `max_tablet_rows` rows. Like DEAL, it
+   pieces of those entries, filling up to `max_tablet_rows` rows. Like ASSIGN, it
    works on the counts alone.
 
 5. **WRITE** stores the result. `tabs.json` holds each part's list of
@@ -299,68 +345,67 @@ for a piece; and, with `coalesce='pack'`, a packed tablet's record,
 `{"fold": 0, "pack": 0, "segments": [[{"tab": 1, "stratifyby": "s2"}, 0, 2], [2, 0, 3]]}`:
 rows *offset* to *offset + length* of each entry, in order.
 
-A part, `partition.part(k)`, is a `DatatablePart`: the table pulled back along
-part *k*'s map, a `DatamapTable` read from part *k*'s list. Its tablet *i* is what
+A part's table, `partition.part(k).pullback()`, is a `MappedDatatable`: the table pulled back along
+part *k*'s map, a `PartitionDatamapTable` read from part *k*'s list. Its tablet *i* is what
 entry *i* names: for a tablet index, the table's own tablet, with nothing copied;
 for a piece's or a packed tablet's record, a `MappedDatatablet` copying the rows
 the record resolves to. `part.build()` is the ordinary table build, in parallel.
 The whole tablets are built already and are skipped; each copy is built from the
 tablets its record names.
 
-### Why DEAL is not parallel
+### Why ASSIGN is not parallel
 
-DEAL is a greedy pass, and each of its decisions depends on the ones before:
+ASSIGN is a greedy pass, and each of its decisions depends on the ones before:
 a unit goes to the part furthest below its target, and that is known only
 after every earlier unit has been placed. Splitting the pass across workers
-would deal against stale totals, so it would lose both the balance and the
+would assign against stale totals, so it would lose both the balance and the
 reproducibility that the seed promises.
 
-It also has nothing to gain from it. DEAL works on counts already in memory:
+It also has nothing to gain from it. ASSIGN works on counts already in memory:
 one item per tablet or piece, a few arithmetic operations each, and no reads.
 The two passes that read data, SCAN (every
 tablet's partition columns) and BUILD (every piece's and packed tablet's rows),
-are where the time goes, and both run in parallel. COALESCE, like DEAL,
+are where the time goes, and both run in parallel. COALESCE, like ASSIGN,
 works on counts in memory.
 
 ## Pieces
 
-Only mixed tablets are split. A tablet holding one value per role is dealt whole,
+Only mixed tablets are split. A tablet holding one value per role is assigned whole,
 and its part reads it where it is.
 
 ### Parts are tables pulled back along maps
 
-A fold's layout is a `DatamapTable`, `partition.datamap(k)`, a `DatamapTablet`
-per tablet of the fold. A map tablet's **lot** is `[(tablet, rows), ...]`: runs,
+A part is a `PartitionDatamapTable`, `partition.part(k)`, a `PartitionDatamapTablet`
+per tablet of the part. A map tablet's **lot** is `[(tablet, rows), ...]`: runs,
 each a tablet *t* of the partitioned table and the indices of its rows taken, in
-order, None for all of them. Every kind of fold tablet is a map tablet, and they
+order, None for all of them. Every kind of part tablet is a map tablet, and they
 differ only in their lot's shape: a whole tablet's is `[(t, None)]`, a piece's
 `[(t, rows)]`, a packed tablet's or a core tablet's several runs.
 
-The deal answers for its lots, in the form it wrote them -- `partition.lot(k, i)`,
-`whole(k, i)`, `tag_of(k, i)`, `dealt()` -- and the map only asks: one map class
-for every deal. A plain deal's entries stay compact: a whole tablet's index, a
+The partition answers for its lots, in the form it wrote them -- `partition.lot(k, i)`,
+`whole(k, i)`, `tag_of(k, i)`, `partitioned()` -- and the map only asks: one map class
+for every partition. A plain partition's entries stay compact: a whole tablet's index, a
 piece's values, a packed tablet's segments; a piece's rows are read off its
-tablet by its values, as they always were. A core deal's lot is a run of its
+tablet by its values, as they always were. A core partition's lot is a run of its
 layout.
 
 A map is a table like any other: its build builds its map tablets, in parallel,
-with its deal's workers, and each stores its lot, resolved once, as its `lot`
+with its partition's workers, and each stores its lot, resolved once, as its `lot`
 slice -- one row per run: the tablet, its rows, whether it is whole. `.lot` reads
 it, and raises while it is not built. A copy builds its own map tablet first, in
 its worker, so a part's copies build its map lazily and in parallel; a mapped
 table naming a map builds it first, in parallel, then its copies. A part of whole
-tablets -- every CPTAC fold -- needs no map built at all. A map tablet's VAR
+tablets -- every CPTAC part -- needs no map built at all. A map tablet's VAR
 names its map, which forms it: `datamap` is in `TREE_SKIP_BUILDING` and
 `TREE_SKIP_VALIDATION`.
 
-A part is the table pulled back along its fold's map, a `MappedDatatable`. Its
+A pullback is a table pulled back along a part's map, a `MappedDatatable`. Its
 tablet *i* is, for a lot `[(t, None)]`, tablet *t* itself, the same block and
 hash, nothing written; for any other lot, a `MappedDatatablet` copying the rows.
 A piece, a packed tablet and a core tablet are all of these; only the lot
 differs.
-The part's map is derived from its VAR, `{partition, fold}`, not held in it, so
-its identity, and that of everything built on it, is what it was. See
-"TODO: three choices, untangled" below, for where this goes next.
+Its map is in its VAR, `datamap`. Until 2026-10-16 a part was a `DatatablePart`, its VAR
+`{partition, fold}`; `PART_PAST` reaches what was built on one -- see Identities.
 
 A `MappedDatatablet` is an ordinary `Datatablet`, so everything that reads
 tablets reads it unchanged: `data()`, `datastream()`, a probe. Its VAR is its
@@ -411,7 +456,7 @@ below).
 - **The roles were renamed on 2026-10-10.** `groupby` became `stratifyby`,
   and what was `stratifyby` became `partitionby`. A collator naming
   `stratifyby` spells, and so hashes, exactly as it did, and now means the
-  opposite. So `DatatablePartition` and `DatatableCorePartition` went to
+  opposite. So `DatatablePartition` and `DatatableClusterCorePartition` went to
   `VERSION = 2`, and no specialization reaches a partition built before:
   partitions, their parts, packed tablets and core tablets are rebuilt.
   `test_a_partition_from_before_the_roles_were_renamed_is_not_taken_for_one_now`
@@ -435,14 +480,14 @@ below).
   class's.
 - **`coalesce`, `min_tablet_rows` and `max_tablet_rows`**, added on 2026-10-09,
   are in the hash at their defaults too. A core partition takes no
-  *coalesce*: its VAR is built on the deal's fields alone,
-  `DatatablePartition._DealVAR_`.
-- A partition of constant tablets, under `coalesce=None`, deals exactly as it
+  *coalesce*: its VAR is built on the partition's fields alone,
+  `DatatablePartition._PartitionVAR_`.
+- A partition of constant tablets, under `coalesce=None`, assigns exactly as it
   always did, and writes the same `tabs.json`: plain ints, sorted the same
-  way. `test_a_partition_of_constant_tablets_is_what_it_was` pins the deal of
+  way. `test_a_partition_of_constant_tablets_is_what_it_was` pins the partition of
   dbx 07cd119.
 - A part's BLOCK is its table's TABLET, and is in the part's hash. A piece is
-  not an instance of the TABLET, so `DatatablePart._form_block_` checks the
+  not an instance of the TABLET, so `MappedDatatable._form_block_` checks the
   piece's source instead. A packed tablet packs the table's own tablets, and is
   not checked again.
 
@@ -468,7 +513,7 @@ parts of one partition, typically. It does not split anything itself.
   where they are, which says nothing of what they hold. So two parts of
   **different** partitions of one table are also compared row by row, by
   `part.source_index()`, and refused if they share a row. Two parts of one
-  partition are disjoint by its deal.
+  partition are disjoint by its partition.
 - With an `aggregateby` column, the two tables must share no value of it,
   whatever `aggregation` is. A row of no value is refused, unless
   `skip_missing` skips it.
@@ -487,7 +532,7 @@ of the same split, was removed when nothing used it any more.
 
 ## Upstream and downstream tables
 
-A feature table (`Featuretable`, a `DataslicesUpstream`) reads some slices
+A feature table (`Featuretable`, a `Layered`) reads some slices
 from its upstream table: its features are its own, its annotations are the
 sample table's. Row *i* of a feature tablet is the features of row *i* of its
 upstream sample tablet, and feature tablet *t* was computed from upstream
@@ -508,11 +553,11 @@ copy builds its upstream copy first.
 every layer above: the tables are laid out alike, so the indices are the same,
 and a row may not name one slice twice across layers.
 
-Any table laid out alike is pulled back along a fold's map:
+Any table laid out alike is pulled back along a part's map:
 `datamap.pullback(table, collator)`, a mapped table whose VAR names the table.
 Each of its copies checks, as it resolves its lot, that every tablet the lot
 names holds as many rows in its table as in the map's, and raises when they are
-not laid out alike. So one deal's maps take the tile clip, its deep features,
+not laid out alike. So one partition's maps take the tile clip, its deep features,
 their bipolar codes: every table laid out alike.
 
 All of this still rests on row *i* of a feature tablet being row *i* of its
@@ -523,33 +568,38 @@ and refuse a mismatch: the TODO on `Featuretablet`.
 
 A core partition (below) is pulled back the same way: a core part of a feature
 table copies each layer's named columns into that layer's copy. And any table
-laid out alike takes a core partition's folds without clustering anything:
-`core.datamap(k).pullback(table, collator)`.
+laid out alike takes a core partition's parts without clustering anything:
+`core.part(k).pullback(table, collator)`.
 
 ## Core partitions: coresets
 
-A `DatatableCorePartition` deals **rows**, not tablets, by what they hold. It
-clusters the table's rows by their values and deals each cluster's rows to
-the parts, nearest the center first, every fold disjoint: one deal, one scan,
-one clustering, for all of them. Fold *k*'s map, `core.datamap(k)`, makes each
-core tablet's lot a run of the fold's layout; its part, `core.part(k)`, is the
-table pulled back along it -- `core.datamap(k).pullback(table, collator)` -- every
-tablet a copy holding only the columns asked for. A single core is a one-fold
+A core partition is named for how it chooses its rows -- `Cluster`, by k-means -- since
+another way of choosing them would take other arguments, a class of its own rather than
+a `method` field. Until 2026-10-17 it was `DatatableCorePartition`; its specialization
+reaches what was built at that class's path.
+
+A `DatatableClusterCorePartition` assigns **rows**, not tablets, by what they hold. It
+clusters the table's rows by their values and assigns each cluster's rows to
+the parts, nearest the center first, every part disjoint: one partition, one scan,
+one clustering, for all of them. Part *k*, `core.part(k)`, makes each core
+tablet's lot a run of the part's layout; the table pulled back along it --
+`core.part(k).pullback(core.datatable, core.var.collator)` -- is the coreset, every
+tablet a copy holding only the columns asked for. A single core is a one-part
 partition, `fractions=[0.2]`, and its `datamap(0)`.
 
 ```python
 from dbx.datatables import Datacollator
-from dbx.dataparts import DatatableCorePartition
+from dbx.dataparts import DatatableClusterCorePartition
 
-core = DatatableCorePartition(spec=dict(
+core = DatatableClusterCorePartition(spec=dict(
     datatable=features, fractions=[0.05, 0.05], partition_slice='features',
     n_clusters=256, rows_per_tablet=4096,
     collator=Datacollator(spec=dict(columns={
         'coreby':  [('features', 'final')],                      # clustered by
-        'stratifyby': ('annotations', 'annotations', 'case_id'),    # dealt whole
+        'stratifyby': ('annotations', 'annotations', 'case_id'),    # assigned whole
         'carry':   [('annotations', 'annotations')],             # carried along
     }, recursive=True)))).build()
-fit_table, eval_table = core.part(0).build(), core.part(1).build()
+fit_table, eval_table = (core.part(k).pullback(None, core.var.collator).build() for k in (0, 1))
 ```
 
 ### The collator names every column it touches
@@ -573,18 +623,18 @@ stay row for row together because both are the same rows of one map.
 
 ### Fractions are of the rows
 
-Not normalized. Summing to 1, every row is dealt, and each part samples every
+Not normalized. Summing to 1, every row is assigned, and each part samples every
 cluster in proportion. Summing to less, each part takes the rows nearest each
 center: a coreset, which covers the table as its clusters do, and covers more
 of it as `n_clusters` grows.
 
 ### The flow
 
-`DatatableCorePartition.build()` runs five steps, and the parts then build
+`DatatableClusterCorePartition.build()` runs five steps, and the parts then build
 the core tablets:
 
 ```
-the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster and distance per row ─DEAL─▶ a part per row ─COVERAGE─▶ coverage ─LAYOUT─▶ each part's rows, cut into core tablets
+the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster and distance per row ─ASSIGN─▶ a part per row ─COVERAGE─▶ coverage ─LAYOUT─▶ each part's rows, cut into core tablets
 ```
 
 1. **SCAN** reads the table, in parallel, one worker per tablet
@@ -605,7 +655,7 @@ the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster a
    its nearest center. What comes out is each row's cluster, and its
    distance to the cluster's center.
 
-3. **DEAL** gives rows to parts, a unit at a time (`_deal_rows_`). A row
+3. **ASSIGN** gives rows to parts, a unit at a time (`_assign_rows_`). A row
    missing a value is set aside first, and counted in the summary. A unit is
    a stratum's rows, or a single row when there is no stratifyby; a stratum
    in two partitions is refused. Each unit belongs to a *cell*: its
@@ -613,7 +663,7 @@ the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster a
    units are taken nearest first, by their rows' mean distance to their
    centers, and each goes to the part furthest below its target, provided
    it brings that part nearer its target rather than past it. A unit no part
-   has room for is left undealt, which is how fractions summing to less
+   has room for is left unassigned, which is how fractions summing to less
    than 1 make a coreset. A part's target is its fraction of the rows,
    accumulated over the cells of a partition, so what one cell rounds off,
    the next makes up. What comes out is each row's part, or none.
@@ -629,7 +679,7 @@ the table ─SCAN─▶ a vector and values per row ─CLUSTER─▶ a cluster a
    are `layout/<fold>.npy`, `tablets`, `centers`, `columns`, `coverage` and
    `summary`.
 
-`partition.part(k).build()` then builds part *k*'s core tablets, in parallel.
+`partition.part(k).pullback(None, collator).build()` then builds part *k*'s core tablets, in parallel.
 Each reads the source tablets its rows are in, only the columns carried, and
 writes them, with `source`, in the layout's order.
 
@@ -654,15 +704,15 @@ All in `VAR`, with defaults:
 | `coverage_clusters` | 3 | the nearest clusters a sampled row is compared within |
 | `layout` | None | another core partition whose layout to take (below) |
 
-`seed` seeds the clustering, the tie-breaks of the deal, and the shuffle.
-`method` and `balance` are refused: a core partition deals rows, by cluster.
+`seed` seeds the clustering, the tie-breaks of the partition, and the shuffle.
+`method` and `balance` are refused: a core partition assigns rows, by cluster.
 
 ### Partitioning
 
 `partitionby` matters here for a reason of its own. The clusters group the
 rows by what they hold, not by their partition, and a cluster may mix
 cohorts. With `partitionby`, each cohort's rows in a cluster are ranked and
-dealt apart from the others', so each part takes its share of every cohort,
+assigned apart from the others', so each part takes its share of every cohort,
 and a coreset takes a rare cohort's central rows even where a common one
 dominates the cluster.
 
@@ -746,16 +796,16 @@ table and the feature table it was computed from. Any of them is pulled back
 along a core partition's maps, with other columns copied:
 
 ```python
-tiles_core = core.datamap(0).pullback(tiles, collator=Datacollator(spec=dict(
+tiles_core = core.part(0).pullback(tiles, collator=Datacollator(spec=dict(
     columns={'carry': [('tiles', 'tile'), ('bag_name', 'bag_name')]})))
 ```
 
-The map is the core's own, `core.datamap(0)`; the mapped table's VAR names the
+The part is the core's own, `core.part(0)`; the mapped table's VAR names the
 other table. Each copy checks, as it resolves its lot, that every tablet the lot
 names holds as many rows as in the core's table, or it raises. Nothing is
-scanned, clustered or dealt. Its tablets are the core's, tablet for tablet, and
+scanned, clustered or assigned. Its tablets are the core's, tablet for tablet, and
 their `source` slices agree with the core part's: a chain of tables computed one
-from another all take one deal's maps.
+from another all take one partition's maps.
 
 **Which columns a copy holds.** A core part's copies hold every
 column any role of the core's collator names: `coreby`, `stratifyby`,
@@ -765,7 +815,7 @@ pullback's hold what its collator names, every slice by default. All hold
 
 Until 2026-10-13 a core part was a table of `DatatableCoreTablet`s, a carbon
 copy a `DatatableCarbonCorePartition`, and before that a core partition's
-`layout` VAR; until 2026-10-14 a core fold's map was a `DatamapCoreTable`, a
+`layout` VAR; until 2026-10-14 a core part's map was a `DatamapCoreTable`, a
 carbon map a `DatamapCarbonTable`, and a core part a `DatatableCorePart` or
 `FeaturetableCorePart`. All are gone; the `layout` VAR is kept, always None, since a
 VAR's defaults are its identity and removing it would move the hash of every
@@ -788,56 +838,56 @@ core tablets, as a `carry` role.
 The partition classes bundle three independent choices into pairs that need not
 go together, and each new combination so far has meant a new class:
 
-1. **Which rows go to which fold.** `DatatablePartition` deals whole tablets and
-   pieces of them; `DatatableCorePartition` clusters rows and deals the nearest;
+1. **Which rows go to which part.** `DatatablePartition` assigns whole tablets and
+   pieces of them; `DatatableClusterCorePartition` clusters rows and assigns the nearest;
    a template's choice was taken by a carbon core partition. Each records it its
    own way: tablet indices and piece and pack records (`tablets`), or
    `(tablet, row, cluster)` per row (`layout`).
 2. **What a part is.** A view of the partitioned table's own tablets
    (`DatatablePart`), or copies of the rows (`DatatableCorePart`). The view goes
-   with the deal and the copy with the clustering, but neither needs the other.
+   with the partition and the copy with the clustering, but neither needs the other.
 3. **What happens to upstream data.** A view keeps it, through the tablets, so
    it cannot cut a tablet that reads upstream -- three `isinstance(...,
-   DataslicesUpstream)` refusals in `dataparts.py`. A copy flattens it into
+   Layered)` refusals in `dataparts.py`. A copy flattens it into
    local slices, losing the layers.
 
 ### The design
 
-**A datamap is the layout, as a table.** Its rows say, for each tablet of a fold
+**A datamap is the layout, as a table.** Its rows say, for each tablet of a part
 of the table being mapped, which rows of which source tablets it takes:
 
-- `DatamapTable(Datatable)`: the map of one fold. Its VAR is the deal block and
-  the fold (see Identities, below), and through the deal, the table being mapped.
-- `DatamapTablet(Datatablet)`: the map of one output tablet. Its VAR names its
-  `DatamapTable` and its index. A tablet naming its own table is circular for
+- `PartitionDatamapTable(Datatable)`: the map of one part. Its VAR is the partition block and
+  the part (see Identities, below), and through the partition, the table being mapped.
+- `PartitionDatamapTablet(Datatablet)`: the map of one output tablet. Its VAR names its
+  `PartitionDatamapTable` and its index. A tablet naming its own table is circular for
   `build_tree`, as a core tablet naming its partition was: the
-  field is in `TREE_SKIP_BUILDING` and `TREE_SKIP_VALIDATION`. Its record is
-  written by the deal, once, for every tablet; its own build is nothing.
+  field is in `TREE_SKIP_BUILDING` and `TREE_SKIP_VALIDATION`. Its lot is
+  written by the partition, once, for every tablet; its own build is nothing.
 
-**The record** is one format for every kind of output tablet: `[(source tablet,
+**The lot** is one format for every kind of output tablet: `[(source tablet,
 rows | ALL), ...]`. A whole tablet is `[(t, ALL)]`; a piece, `[(t, rows)]`; a
-packed tablet, several; a core tablet, a run of the fold's layout. Rows are
+packed tablet, several; a core tablet, a run of the part's layout. Rows are
 **indices, never values**: a stratum's values may live in one layer only
 (`annotations`, upstream of the features), and every layer must take the same
 rows. The compact forms stay compact: a whole tablet is still written as its
-index, as `tabs.json` writes it today. A `DatamapCoreTablet(DatamapTablet)` is
+index, as `tabs.json` writes it today. A `DatamapCoreTablet(PartitionDatamapTablet)` is
 warranted only if a core map carries more per row -- its cluster.
 
-**The deal makes the map, and stops there.** SCAN, ITEMS, DEAL and COALESCE --
+**The partition makes the map, and stops there.** SCAN, ITEMS, ASSIGN and COALESCE --
 `whole` and `pack` decide what the output tablets are -- run once for every
-fold, since fold 0's tablets depend on every tablet's scan. So the deal is a
+part, since part 0's tablets depend on every tablet's scan. So the partition is a
 block of its own, today's `DatatablePartition` less its parts, and the
-`DatamapTable` of fold *k* reads its fold's records from it. A clustering deal
-writes its layout, a template deal takes another map's. WRITE is no longer the
+`PartitionDatamapTable` of part *k* reads its part's records from it. A clustering partition
+writes its layout, a template partition takes another map's. WRITE is no longer the
 partition's: it is the pull.
 
 **A mapped table is a table pulled back along a map.** `MappedDatatable(Datatable)`
-of `MappedDatatablet(Datatablet)`s, one per `DatamapTablet`. Each pulls its rows
-of the source tablets' own slices, by its record:
+of `MappedDatatablet(Datatablet)`s, one per `PartitionDatamapTablet`. Each pulls its rows
+of the source tablets' own slices, by its lot:
 
 - `[(t, ALL)]` -- the identity map -- pulls back to **source tablet *t* itself**:
-  the same block, the same hash, nothing written. A fold of whole tablets is
-  a view, as `DatatablePart` is today.
+  the same block, the same hash, nothing written. A part of whole tablets is
+  a view, as a pullback's whole tablets are.
 - anything else is copied: the rows named, of every slice the source tablets
   hold themselves, into slices of the mapped tablet's own.
 
@@ -845,8 +895,8 @@ of the source tablets' own slices, by its record:
 functorial pullback. A `Featuretable` over an upstream `Datatable` is pulled
 back as two tables: the upstream along the map -- a `MappedDatatable`, or, if the
 upstream is itself a `Featuretable`, the same construction recursively -- and
-the feature layer along the same map, as a `MappedFeaturetable(DataslicesUpstream,
-Datatable)` of `MappedFeaturetablet(DataslicesUpstream, Datatablet)`s. A mapped
+the feature layer along the same map, as a `MappedFeaturetable(Layered,
+Datatable)` of `MappedFeaturetablet(Layered, Datatablet)`s. A mapped
 feature tablet copies only the feature table's own slices, and its `upstream` is
 the mapped upstream tablet. Nothing is flattened, and nothing is computed again:
 a mapped feature tablet selects rows of features already computed; it never runs
@@ -861,27 +911,26 @@ is what makes it checkable, and should come with this.
 ### Identities: what must not move
 
 A block enters the identity of a block built on it as its **rendered spec only**
--- no class, no version. A CPTAC fold renders, in every deep feature clip built
+-- no class, no version. A CPTAC part renders, in every deep feature clip built
 over it, as `{'fold': k, 'partition': {balance, coalesce, collator, datatable,
 fractions, max_tablet_rows, method, min_tablet_rows, partition_slice, seed}}`.
 Its own hash adds `TAB=<its table's TABLET>`, its version (1), and the TOPICS it
 forwards from its table; the partition's adds its version (2) and its topics,
 `tablets` (`tabs.json`) and `summary`. The classes are in their paths only.
 
-So, for the CPTAC folds and everything downstream of them -- deep feature
+So, for the CPTAC parts and everything downstream of them -- deep feature
 clips, bipolar clips, stats probes, probes -- to keep their hashes, with no
 specializations:
 
-- **the deal block keeps today's `DatatablePartition` VAR, version 2, and topics**,
+- **the partition block keeps today's `DatatablePartition` VAR, version 2, and topics**,
   `tablets` as `tabs.json` with its whole-tablet entries as indices;
-- **the mapped fold keeps the VAR `{partition, fold}`**, its version, its
-  table's TABLET as its BLOCK, and its table's TOPICS. Its `DatamapTable` is
-  then derived from it -- formed from `(partition, fold)` -- not held in its VAR;
+- **a pullback reaches the VAR `{partition, fold}` a part had**, through `PART_PAST`,
+  which renders its `datamap`'s partition and part as that VAR did; its map is in its VAR;
 - **a whole tablet pulls back to itself**, so the 3692 bags are untouched.
 
 `PancanTilePartition` and `PancanTileFold` keep their names, and so their paths,
-as subclasses of the deal and of `MappedDatatable`. Every CPTAC partition and
-fold built is then adopted as it stands. What does not carry over: pieces dealt
+as subclasses of the partition and of `MappedDatatable`. Every CPTAC partition and
+part built is then adopted as it stands. What does not carry over: pieces assigned
 by value (the CPTAC partitions have none), packed tablets, and every core
 partition and core part, which are recomputed -- their topics and tablets
 change form.
@@ -889,9 +938,9 @@ change form.
 ### Progress
 
 1. Done: the identities pinned (`tests/test_datamap_identity.py`).
-2. Done: `DatamapTable`/`DatamapTablet` over today's deal, and `MappedDatatable`/
+2. Done: `PartitionDatamapTable`/`PartitionDatamapTablet` over today's partition, and `MappedDatatable`/
    `MappedDatatablet`; `DatatablePart` is a `MappedDatatable`, and pieces and
-   packed tablets are `MappedDatatablet`s. The CPTAC folds keep their hashes,
+   packed tablets are `MappedDatatablet`s. The CPTAC parts keep their hashes,
    their bags pulled back to themselves.
 3. Done: the layered pull. A piece or packed tablet of a feature table is a
    `MappedFeaturetablet` whose upstream is the same rows of the upstream table,
@@ -903,19 +952,30 @@ change form.
    A feature table's part was a `DatatablePart` until 2026-10-13, under that
    class's path; its hash is unchanged, and `FeaturetablePart`'s specialization
    adopts it where it is.
-4. Done: a core part is its table pulled back along the fold's map, layered;
+4. Done: a core pullback is its table pulled back along the part's map, layered;
    a carbon copy is `datamap.pullback(table, collator)`. `DatatableCoreTablet` and
    `DatatableCarbonCorePartition` are gone. Core partitions keep their hashes and
    layouts; core parts are rebuilt.
-4a. Done (2026-10-14): one map for every deal. The deal answers for its lots --
-   `lot`, `whole`, `tag_of`, `dealt` -- and `DatamapTable` only asks; a map
+4a. Done (2026-10-14): one map for every partition. The partition answers for its lots --
+   `lot`, `whole`, `tag_of`, `partitioned` -- and `PartitionDatamapTable` only asks; a map
    tablet's resolved rows are its `lot`. A pullback to another table is a mapped
    table whose VAR names it, its copies checking it is laid out alike.
    `DatamapCoreTable`, `DatamapCarbonTable`, `DatatableCorePart` and
    `FeaturetableCorePart` are gone; `core.part(k)` is a pullback.
-4b. Done (2026-10-14): a map is a real table. Its build builds its `DatamapTablet`s
-   in parallel, each storing its lot, resolved once from the deal, as its `lot`
-   slice; a copy builds its map tablet first. The deal still answers `whole`,
+4d. Done (2026-10-16): a part is indices only -- `partition.part(k)`, a `PartitionDatamapTable`,
+   its VAR `{partition, part}` -- and a table is pulled back along it, `part(k).pullback()`.
+   `DatatablePart`, `FeaturetablePart` and `fold(k)` are gone; a pullback of the partition's own
+   table reaches what a part built as one of them, and everything built on it, by its
+   specialization (`PART_PAST`, its `upstream` *determined*).
+4c. Done (2026-10-15): `map(k)` is a fold's map, `fold(k)` its own table pulled
+   back (`part(k)` and `datamap(k)` are gone); the maps are `PartitionDatamapTable`
+   and `PartitionDatamapTablet`. A `MappedFeaturetable` holds its upstream in its
+   VAR -- the pullback of the nearest layer below it copies -- so `build_tree`
+   builds a pullback bottom up, each layer in parallel, and the coherence equation
+   holds literally.
+4b. Done (2026-10-14): a map is a real table. Its build builds its `PartitionDatamapTablet`s
+   in parallel, each storing its lot, resolved once from the partition, as its `lot`
+   slice; a copy builds its map tablet first. The partition still answers `whole`,
    `tag_of` and `lot_tablets` -- what a lot draws on, no row resolved -- cheaply.
 5. The callers: probes (`tablet_indices`, `source_index`), autopath's
    `tomography.py`, `PancanTileFold`'s specializations.
@@ -928,17 +988,16 @@ change form.
   one down as its upstream. A pure pullback of the whole stack -- every layer
   copied whole -- would be work a user could not escape: a coreset of the bipolar
   codes would copy every tile and every deep feature. Further layers are pulled
-  back along the same maps when wanted, by `datamap.pullback(table, collator)`,
-  as autopath's `carbon_core_*` entrypoints do.
+  back along the same maps when wanted, by `datamap.pullback(table, collator)`.
 
-- **A part is the table pulled back along its fold's map.** One `DatamapTable` per
+- **A pullback is a table pulled back along a part's map.** One `PartitionDatamapTable` per
   part; the part is a `MappedDatatable` (or `MappedFeaturetable`). It does not keep
-  `DatatablePart`'s API (`tablet_indices`, `source_index()`, `dealt`): what a probe
+  `DatatablePart`'s API (`tablet_indices`, `source_index()`): what a probe
   needs of a part, it asks of the part's map.
-- **A carbon map is per fold.** The map of fold *k* of a table laid out alike is a
-  `DatamapTable` whose VAR is `{template: <the template's DatamapTable of fold k>,
+- **A carbon map is per part.** The map of part *k* of a table laid out alike is a
+  `PartitionDatamapTable` whose VAR is `{template: <the template's PartitionDatamapTable of part k>,
   datatable: <this table>}`: it takes the template's records, after checking the
-  two tables are laid out alike, tablet for tablet and row for row. No deal block;
+  two tables are laid out alike, tablet for tablet and row for row. No partition block;
   a chain of carbon copies is a chain of maps.
 - **A collator names what a mapped tablet copies**, slices and columns; by default,
   every slice the source tablet holds itself.
@@ -953,29 +1012,30 @@ All in `dbx/dataparts.py`, except the probe.
 | How two values are compared | `_value_key_` (sorted JSON) |
 | A piece's tag | `_piece_tag_` |
 | The per-tablet scan worker | `TabletPartitionScanCallable` |
-| SCAN, ITEMS, DEAL, the summary | `DatatablePartition._scan_`, `_items_`, `_deal_`, `_summary_` |
+| SCAN, ITEMS, ASSIGN, the summary | `DatatablePartition._scan_`, `_items_`, `_assign_`, `_summary_` |
 | COALESCE | `DatatablePartition._rejoin_`, `_pack_`, `_entry_rows_` |
-| A fold's lots, as the deal wrote them | `DatatablePartition.lot`, `whole`, `tag_of`, `dealt`, `_lot_rows_`; `DatatableCorePartition.lot` |
-| A fold's map, and its tablets' lots, built and stored | `DatamapTable`, `DatamapTablet.__build__`, `DatamapTablet.lot`; `lot_tablets` |
-| A part as a table: the table pulled back along its map | `DatatablePartition.part`, `MappedDatatable`, `DatatablePart` |
+| A part's lots, as the partition wrote them | `DatatablePartition.lot`, `whole`, `tag_of`, `partitioned`, `_lot_rows_`; `DatatableClusterCorePartition.lot` |
+| A part's map, and its tablets' lots, built and stored | `PartitionDatamapTable`, `PartitionDatamapTablet.__build__`, `PartitionDatamapTablet.lot`; `lot_tablets` |
+| A part, and a table pulled back along it | `DatatablePartition.part`, `PartitionDatamapTable.pullback`, `MappedDatatable` |
 | A mapped table accepting copies as blocks | `MappedDatatable.tablet`, `valid_tablet`, `_form_block_` |
-| A part's rows, as the table's | `DatatablePart.source_index` |
+| A pullback's rows, as the table's | `MappedDatatable.source_index` |
 | A piece, a packed or a core tablet: a copy of the rows a lot names | `MappedDatatablet`: `__build__`, `_sources_`, `_copied_`, `source_index` |
-| A copy of a feature table's rows, layer by layer | `MappedFeaturetablet`, `MappedDatatable.upstream_mapped` |
-| A feature table pulled back, its upstream with it | `MappedFeaturetable`, `FeaturetablePart`, `_mapped_table_` |
+| A copy of a feature table's rows, layer by layer | `MappedFeaturetablet`, `MappedFeaturetable.upstream` |
+| A feature table pulled back, its upstream with it | `MappedFeaturetable`, `_mapped_table_` |
+| The identity of a part built before 2026-10-16 | `PART_PAST`, `MappedDatatable.SPECIALIZATIONS`, `Specialization.determined` |
 | Selecting a tablet's rows by value; copying a tablet's slices | `_selected_rows_`, `_written_columns_`, `_slice_topics_` |
 | The back-pointing slice | `SOURCE_SLICE`, `SOURCE`, `_source_index_` |
-| Core: scan, cluster, deal | `DatatableCorePartition`: `_lay_out_`, `_cluster_and_deal_`, `_cluster_master_`, `_cluster_distributed_`, `_deal_rows_` |
-| A table laid out alike pulled back along a map | `DatamapTable.pullback`, `MappedDatatablet._sources_` (the check) |
+| Core: scan, cluster, assign | `DatatableClusterCorePartition`: `_lay_out_`, `_cluster_and_assign_`, `_cluster_master_`, `_cluster_distributed_`, `_assign_rows_` |
+| A table laid out alike pulled back along a map | `PartitionDatamapTable.pullback`, `MappedDatatablet._sources_` (the check) |
 | Core: the workers | `TabletCoreScanCallable`, `TabletCoreStepCallable`, `TabletRowCountCallable`, `TabletCoverageCallable`, `TabletVectorsCallable` |
-| Core: coverage | `DatatableCorePartition._coverage_` |
-| Core: a part, a pullback | `DatatableCorePartition.part`, `MappedDatatable`, `MappedFeaturetable` |
+| Core: coverage | `DatatableClusterCorePartition._coverage_` |
+| Core: a part, a pullback | `DatatableClusterCorePartition.part`, `MappedDatatable`, `MappedFeaturetable` |
 | The probe's check before reading | `check_probe_inputs` in `dbx/probes.py` |
 | Rows aggregated by a column; the checks by its value and by row | `aggregateby_vector`, `FeatureAffineLogisticProbe._aggregate_means_`, `_check_disjoint_` in `dbx/probes.py` |
 
-The tests are `tests/test_partition_methods.py` (dealing, pieces, probes on
+The tests are `tests/test_partition_methods.py` (assigning, pieces, probes on
 parts), `tests/test_partition_coalesce.py` (`coalesce`, packed tablets, and
-probes aggregating rows by a column), `tests/test_partition_fold.py` (parts as
+probes aggregating rows by a column), `tests/test_partition_part.py` (parts as
 views) and `tests/test_core_partition.py` (core partitions). The figures are
 drawn from real partitions by
 [make_figures.py](figures/datapartition/make_figures.py).

@@ -1,5 +1,5 @@
 """
-`DatatableCorePartition`: rows clustered by their values, dealt nearest first into folds of fresh tablets.
+`DatatableClusterCorePartition`: rows clustered by their values, assigned nearest first into folds of fresh tablets.
 
 Each tablet here holds points from four well-separated blobs, one per label, so
 the clusters k-means finds are the labels, and a row's distance to its
@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from dbx.datatables import DATASLICE, Datacollator, Datatablet, Datatable
-from dbx.dataparts import (DatamapTable, DatatableCorePartition,
+from dbx.dataparts import (PartitionDatamapTable, DatatableClusterCorePartition,
                            MappedDatatable, MappedDatatablet)
 
 
@@ -78,7 +78,7 @@ def core(tmp_path, table, fractions=(0.8, 0.2), build=True, coreby=(X,), stratif
         columns['partitionby'] = partitionby
     if carry is not None:
         columns['carry'] = list(carry)
-    p = DatatableCorePartition(datalake=str(tmp_path / name), parallelization=parallelization, n_workers=n_workers,
+    p = DatatableClusterCorePartition(datalake=str(tmp_path / name), parallelization=parallelization, n_workers=n_workers,
                                spec=dict(datatable=table, fractions=list(fractions), partition_slice='pts',
                                          collator=Datacollator(spec=dict(columns=columns)),
                                          n_clusters=4, **spec))
@@ -89,12 +89,12 @@ def every_row(table):
     return {(t, r) for t in range(table.n_tablets) for r in range(table.var.n)}
 
 
-def test_fractions_summing_to_one_deal_every_row_once_and_sample_every_cluster(tmp_path):
+def test_fractions_summing_to_one_assign_every_row_once_and_sample_every_cluster(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl)
     layouts = [p.layout(k) for k in range(2)]
-    dealt = [{(int(t), int(r)) for t, r, _ in fl} for fl in layouts]
-    assert dealt[0].isdisjoint(dealt[1]) and dealt[0] | dealt[1] == every_row(tbl)
+    assigned = [{(int(t), int(r)) for t, r, _ in fl} for fl in layouts]
+    assert assigned[0].isdisjoint(assigned[1]) and assigned[0] | assigned[1] == every_row(tbl)
     for fl in layouts:          # source order: a core tablet reads a few neighbouring tablets
         assert [tuple(r) for r in fl[:, :2]] == sorted(tuple(r) for r in fl[:, :2])
     sizes = [np.bincount(fl[:, 2], minlength=4) for fl in layouts]
@@ -134,7 +134,7 @@ def test_a_coreset_takes_the_rows_nearest_each_center(tmp_path):
     assert s['n_undealt'] == len(xs) - len(taken)
 
 
-def test_a_group_is_dealt_whole(tmp_path):
+def test_a_group_is_assigned_whole(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, stratifyby=PATIENT, fractions=(0.5, 0.5))
     patients = {(t, r): pa for t in range(tbl.n_tablets) for r, pa in enumerate(tbl.tablet(t).data(PATIENT)['pts']['patient'])}
@@ -150,9 +150,9 @@ def test_core_tablets_carry_what_the_collator_names_and_point_back(tmp_path):
     p = core(tmp_path, tbl, carry=[LABEL], rows_per_tablet=16)
     assert p.carried_slices() == ['pts'] and p.read('columns') == {'pts': {'x': 'ndarray:float32', 'label': 'int'}}
     for k in range(2):
-        part = p.datamap(k).pullback(None, p.var.collator, parallelization='multiprocessing', n_workers=2)
-        assert part.hash == p.part(k).hash and isinstance(part.tablet(0), MappedDatatablet)
-        assert type(part.datamap) is DatamapTable and part.datamap.whole(0) is None, "a core tablet is a copy"
+        part = p.part(k).pullback(None, p.var.collator, parallelization='multiprocessing', n_workers=2)
+        assert part.hash == p.part(k).pullback(None, p.var.collator).hash and isinstance(part.tablet(0), MappedDatatablet)
+        assert type(part.datamap) is PartitionDatamapTable and part.datamap.whole(0) is None, "a core tablet is a copy"
         part.build()
         assert part.datamap.valid(), "built before its copies"
         assert sum(len(rows) for _, rows in part.datamap.lot(0)) == 16, "a core tablet's lot: a run of the layout"
@@ -179,8 +179,8 @@ def test_core_tablets_carry_what_the_collator_names_and_point_back(tmp_path):
 def test_core_tablets_declare_the_carried_columns_as_the_table_declares_them(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, carry=[LABEL], rows_per_tablet=16)
-    part = p.part(0)
-    assert part.tablet(0).declared_schema('pts') == {'x': 'ndarray:float32', 'label': 'int'}
+    part = p.part(0).pullback(None, p.var.collator)
+    assert part.tablet(0).slice_schema('pts') == {'x': 'ndarray:float32', 'label': 'int'}
     assert part.readable_slices() == {'pts': {'x': 'ndarray:float32', 'label': 'int'}, 'source': {'tab': 'int', 'row': 'int'}}
 
 
@@ -199,7 +199,7 @@ def test_distributed_clustering_finds_the_same_blobs_and_leaves_no_scratch(tmp_p
 
 def carbon(table, template, fold, carry=(('img', 'big'),)):
     """*table*, laid out as *template*'s table is, pulled back along fold *fold* of *template*: a carbon copy."""
-    return template.datamap(fold).pullback(table, collator=Datacollator(spec=dict(columns={'carry': list(carry)})))
+    return template.part(fold).pullback(table, collator=Datacollator(spec=dict(columns={'carry': list(carry)})))
 
 
 def test_a_table_laid_out_alike_is_pulled_back_along_the_core_s_maps_without_clustering(tmp_path):
@@ -209,8 +209,8 @@ def test_a_table_laid_out_alike_is_pulled_back_along_the_core_s_maps_without_clu
     for k in range(2):
         part = carbon(other, p, k)
         assert isinstance(part, MappedDatatable) and part.datatable.hash == other.hash
-        assert part.datamap.hash == p.datamap(k).hash, "the core's own map, another table pulled back along it"
-        assert part.n_tablets == p.part(k).n_tablets, "the template's core tablets, tablet for tablet"
+        assert part.datamap.hash == p.part(k).hash, "the core's own map, another table pulled back along it"
+        assert part.n_tablets == p.part(k).pullback(None, p.var.collator).n_tablets, "the template's core tablets, tablet for tablet"
         part.build()
         assert part.slices() == ('img', 'source')
         src = np.concatenate([part.tablet(i).source_index() for i in range(part.n_tablets)])
@@ -242,7 +242,7 @@ def test_a_core_partition_s_layout_is_retired_but_its_hash_is_kept(tmp_path):
     p = core(tmp_path, tbl, build=False)
     with pytest.raises(ValueError, match="layout is retired"):
         core(tmp_path, tbl, build=False, name='again', layout=p)
-    assert 'layout' in DatatableCorePartition.VAR.__dataclass_fields__, (
+    assert 'layout' in DatatableClusterCorePartition.VAR.__dataclass_fields__, (
         "a VAR's defaults are its identity: removing the field moves every core partition's hash")
 
 
@@ -252,7 +252,7 @@ def test_the_same_spec_is_the_same_partition(tmp_path):
     assert one.hash == two.hash
     for k in range(2):
         np.testing.assert_array_equal(one.layout(k), two.layout(k))
-        assert one.part(k).tablet(0).hash == two.part(k).tablet(0).hash
+        assert one.part(k).pullback(None, one.var.collator).tablet(0).hash == two.part(k).pullback(None, two.var.collator).tablet(0).hash
     assert core(tmp_path, tbl, name='c', seed=1, build=False).hash != one.hash
 
 
@@ -278,11 +278,11 @@ def test_a_probe_fits_on_core_parts_of_a_feature_table(tmp_path):
     features = Featuretable(datalake=url, devices=['cpu'], tag='features', spec=dict(
         upstream=samples, evaluator_factory=DummyModelEvaluatorFactory(spec=dict(capture_final=True)),
         collator=Datacollator(spec=dict(columns={'signals': [('samples', 'samples')], 'labels': [('labels', 'labels')]})))).build()
-    p = DatatableCorePartition(datalake=url, spec=dict(
+    p = DatatableClusterCorePartition(datalake=url, spec=dict(
         datatable=features, fractions=[0.5, 0.5], partition_slice='features', n_clusters=4, rows_per_tablet=16,
         collator=Datacollator(spec=dict(columns={'coreby': [('features', 'final')], 'carry': [('labels', 'labels')]},
                                         recursive=True)))).build()
-    fit, ev = p.part(0).build(), p.part(1).build()
+    fit, ev = p.part(0).pullback(None, p.var.collator).build(), p.part(1).pullback(None, p.var.collator).build()
     assert fit.slices() == ('features',)
     assert fit.slices(recursive=True) == ('features', 'labels', 'source'), "the samples layer copies only the labels"
     probe = FeatureAffineLogisticProbe(datalake=url, spec=dict(
@@ -309,7 +309,7 @@ def test_the_fractions_hold_within_each_partition(tmp_path, fractions):
         assert np.all(np.abs(got - f * total) <= 1), (k, got, f * total)
 
 
-def test_strata_within_partitions_are_dealt_whole_and_a_stratum_across_partitions_is_refused(tmp_path):
+def test_strata_within_partitions_are_assigned_whole_and_a_stratum_across_partitions_is_refused(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, fractions=(0.5, 0.5), stratifyby=PATIENT, partitionby=LABEL)
     patient = column(tbl, PATIENT)
@@ -367,18 +367,18 @@ def test_coverage_is_measured_in_the_workers_too(tmp_path):
 def test_a_core_part_and_a_carbon_copy_s_build_with_their_partitions_workers(tmp_path):
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, build=False, parallelization='multiprocessing', n_workers=2)
-    q = p.datamap(0).pullback(tbl, collator=Datacollator(spec=dict(columns={'carry': [X]})),
+    q = p.part(0).pullback(tbl, collator=Datacollator(spec=dict(columns={'carry': [X]})),
                               parallelization='multithreading', n_workers=4)
-    assert (p.part(0).parallelization, p.part(0).n_workers) == ('multiprocessing', 2)
+    assert (p.part(0).pullback(None, p.var.collator).parallelization, p.part(0).pullback(None, p.var.collator).n_workers) == ('multiprocessing', 2)
     assert (q.parallelization, q.n_workers) == ('multithreading', 4)
 
 
 def test_a_core_part_s_tree_builds_from_nothing(tmp_path):
-    """build_tree of a core part whose deal is not built: its journal records its slices before the deal deals."""
+    """build_tree of a core part whose partition is not built: its journal records its slices before the partition assigns."""
     tbl = points(tmp_path)
     p = core(tmp_path, tbl, build=False, rows_per_tablet=16)
-    assert not p.dealt()
-    part = p.part(0)
-    assert part.slices() == ('pts', 'source'), "known before the deal deals"
+    assert not p.partitioned()
+    part = p.part(0).pullback(None, p.var.collator)
+    assert part.slices() == ('pts', 'source'), "known before the partition assigns"
     part.build_tree()
-    assert p.dealt() and part.datamap.valid() and part.valid()
+    assert p.partitioned() and part.datamap.valid() and part.valid()

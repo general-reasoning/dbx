@@ -30,6 +30,7 @@ class DummySampleTablet(Datatablet):
     @dataclass
     class VAR(Datatablet.VAR):
         samples_per_tablet: int = 5
+        index: int = 0     # its place in its table: two tablets alike in all else are two blocks
 
     def __build__(self):
         samples_per_tablet = self.var.samples_per_tablet
@@ -64,7 +65,7 @@ class DummySampleTable(Datatable):
     def __tablet__(self, idx: int, tag=None) -> DummySampleTablet:
         return self.TABLET(
             datalake=self.path('tabs'),
-            spec=dict(samples_per_tablet=self.var.samples_per_tablet),
+            spec=dict(samples_per_tablet=self.var.samples_per_tablet, index=idx),
             tag=tag or f"tab_{idx}",
         )
 
@@ -93,7 +94,7 @@ def _fit_eval_(url, featuretable, tag='split'):
     from dbx.dataparts import DatatablePartition
     split = DatatablePartition(datalake=url, tag=tag, spec=dict(
         datatable=featuretable, fractions=[0.5, 0.5], partition_slice='features', balance='tablets')).build()
-    return dict(fit_table=split.fold(0).build(), eval_table=split.fold(1).build())
+    return dict(fit_table=split.part(0).pullback().build(), eval_table=split.part(1).pullback().build())
 
 
 def test_normalize_features():

@@ -52,8 +52,8 @@ All notable changes to this project will be documented in this file.
   tag leaves no room. `tags` in the settings turns it off.
 - **hyp --journal: `quote` and `cite` buttons.** In a pipeline's or a
   block's window, each opens a bash line to copy -- `dbx.pprint "..."` --
-  that makes the entry's block again from its recorded quote and prints it,
-  or, for `cite`, prints its `.cite()`. A checkbox pins the line to the
+  that makes the entry's block again from its recorded quote, by
+  `dbx.eval`, and prints it, or, for `cite`, prints its `.cite()`. A checkbox pins the line to the
   entry's revision, `--revision=`; off, it runs at today's checkout.
 
 ### Changed
@@ -72,6 +72,240 @@ All notable changes to this project will be documented in this file.
   question, each line kept in the store (`notes.json`, `Engine.arrow_notes`).
 - **`hyp --docs` is `hyp --markdowns`.** `--docs` is gone. Corpora already
   made stay where they were, under `~/.hyp/docs`.
+- **Journal files are read without Arrow's thread pool, and a compacted journal once per
+  process.** A specialization pass hung for good in one worker: reading an anchor's
+  compacted journal with a hash filter, through an open file, Arrow waited on a task no
+  thread of its pool held. Every journal `read_parquet` now passes `use_threads=False`
+  (journal files are KB to MB; threads gain nothing). `BuildJournal.read_hash` reads a
+  compacted journal whole, once per process -- by its file: path, size, modification
+  time, so one compacted again is read again; the 16 most recent are kept -- and filters
+  by hash in memory, rather than reading the file again for every past of every tablet.
+  The rows are those the filtered read gave.
+- **A core partition's layout is read once per process, shared, and memory-mapped.**
+  `DatatableClusterCorePartition._layouts_` -- what `lot` and `lot_tablets` read --
+  cached the layout on the instance, and each core tablet evaluates instances of its
+  own: forming ten tablets of a taps clip read one 12.9 MB layout 50 times and kept 34
+  copies, 439 MB. It is now shared by every instance, by its file (path, size,
+  modification time, so a layout written again is read again), read-only, and
+  memory-mapped: from the lake when it is local, from a copy pulled into local staging
+  when it is not. Ten tablets now read 3 MB and add 62 MB, not 478. `layout(part)` still
+  reads the whole array, as before.
+- **A quote writes its nested blocks bare: nothing in it is escaped, at any depth.** A
+  spec value that is a `$` specline -- a nested block's quote, or `$dbx.getenv('X')` --
+  is written `'upstream': fqcn(...)`, not as a string literal, in `quote()` and
+  `repr()` (`databits.bare_specline`). As a string, it was escaped once more at every
+  level of nesting, every backslash doubled: a feature tablet twelve levels deep had a
+  5 MB quote, 98% backslashes, now 113 KB with none. `dbx.eval` reads a bare value
+  back as the specline string it was (`databits.quote_spec`), and parses a datablock
+  constructor's arguments once per process, by their text. Forming a tablet of such a
+  clip went from 8 s to 1 s. No identity changes: a hash is computed from signatures,
+  which are unchanged. Quotes recorded the old way evaluate as before; one recorded
+  now does not evaluate under an earlier dbx (`inst(revision=...)` of an older one).
+  `cite_specline` lays out bare nested blocks as it does quoted ones.
+- **`slice_columns(slice)` and `slice_schema(slice)`, renamed from `declared_columns` and
+  `declared_schema`.** The columns a slice declares, as the MDS writer takes them (a
+  dict column as `'json'`), and as declared (a dict column's structure). The old names
+  remain as deprecated aliases.
+- **A Featuretable with fewer CPUs than GPUs raises before its workers start.** Its
+  device workers -- one per GPU -- need a CPU each to feed their GPUs; sharing fewer
+  (a Slurm job given `--gres=gpu:3` and no `--cpus-per-task` has one) they take turns,
+  and the GPUs run one after another. `_check_devices_` now raises a `RuntimeError`
+  naming the CPUs `os.sched_getaffinity` allows and the fix.
+- **`ModelEvaluatorBuilder.evaluator()` caches per process, not per builder.** The key is
+  `(type(builder), builder.hash, device)`, so the builders of a feature table's tablets --
+  one each, evaluated from the table's spec -- share one evaluator, and a process loads
+  its model once per device instead of once per tablet. The class is in the key because
+  an identity names none: two builder classes with the same spec have the same hash.
+  The cache holds each model for the life of the process;
+  `ModelEvaluatorBuilder.evaluator_cache_clear()` empties it (a subclass's, its own
+  entries). The `Evaluator` is constructed with `model` moved to *device*, `transform`
+  and the new `evaluator_kwargs` property, which `TransformerEvaluatorBuilder` extends
+  instead of overriding `evaluator()`. No identity changes.
+- **A failed build records why.** Its `build:exception` (or `build:keyboard_interrupt`)
+  entry holds `exception` -- `'<Type>: <message>'`, as the exec journal has it -- and
+  `traceback`, written in the process the build failed in, a worker's too: the
+  cause is in the journal whether or not output was captured.
+- **`BuildJournalEntry.block` is `.pretty`, and `Block` is `Pretty`.** The view of an
+  entry as the block it records; `Datastack.block(i)` is unchanged. `Pretty.quote()`
+  lays the recorded quote out as `cite()` does -- a keyword a line, nested blocks
+  indented, nothing escaped (`cite_specline`); `quote(pretty=False)` is the
+  evaluable text as recorded, which `to_dict()` exports.
+- **No entry records a `dfn`.** It said nothing the quote, the spec and the kwargs do
+  not; entries from before keep theirs, and PipeJournal compaction their files.
+- **`use_block_specializations=False` looks for no past.** A stack with it off no
+  longer enters its "ATTEMPTING SPECIALIZATION" pass -- no journal handed to its
+  blocks, no lookup per block -- but classifies its invalid blocks and builds them:
+  what a run whose blocks are known to have no earlier build of themselves asks for.
+- **`BlocksJournal` is gone: a stack hands its blocks a `BuildJournalFrame`.** The
+  build journal a stack reads once for its blocks -- or `BY_HASH` -- travels to the
+  workers forming them as the frame itself, its new `read_anchor` and
+  `read_datalake` saying whose it is (a block of another anchor, a tablet's
+  upstream, reads its own) and `by_hash` standing for `BY_HASH`.
+  `Datastack._blocks_buildjournal_(journal=None)` is the one way to get it, read or
+  given; `_shared_blocks_journal_` is gone, and so is its `(journal, anchor, url)`
+  tuple. `dbx.eval` returns a DataFrame or Series as it is: iterated, it rebuilt one
+  from its column names -- which is why the frame had been wrapped. A stack's block
+  methods refuse a `dict` or `list` journal, which no single frame can hold.
+- **`DataJournal` is `BuildJournal`: the journal of what happens to a block's data.**
+  Builds, clears, copies, redirects and adoptions, notes: entries keyed by
+  `(anchor, hash)` and filed under the block. A clean break, with no aliases:
+  `DataJournal` → `BuildJournal`, `DataJournalFrame` → `BuildJournalFrame`,
+  `DataJournalEntry` → `BuildJournalEntry`, `DEFAULT_DATAJOURNAL` →
+  `DEFAULT_BUILDJOURNAL` (and the other `*DATAJOURNAL*` names), `datajournal()` →
+  `buildjournal()` -- the module function, `Datablock.buildjournal`,
+  `ExecJournalEntry`/`ExecJournalFrame.buildjournal`, `Datablock.BuildJournal` --
+  `Datastack.block_datajournal` → `block_buildjournal`,
+  `child_specialization_datajournal` → `child_specialization_buildjournal`,
+  `Datatable.tablet_datajournal` → `tablet_buildjournal`, and every other
+  `*datajournal*` helper to match (`JournaledResult.buildjournal_entries`,
+  `CARRIES_BUILDJOURNAL`, ...). A subclass defining a builder under an old name is
+  refused, as before. On disk only the exec journal's column changes:
+  `datajournal_entries` is `buildjournal_entries`, and a row written under the old
+  name -- or `written_entries`, before it -- reads under the new one. Entry files,
+  `.journal/` directories and session markers are named for no class, and do not
+  change. An exec row recorded verbatim calling `.datajournal(...)` reads as it is,
+  but no longer runs again.
+- **A block the tree never builds is adopted, when a past of it resolves.**
+  `build_tree` specializes a `TREE_SKIP_BUILDING` child that is not valid -- whatever
+  `deep` -- and every such child below a child it skips as valid (`_adopt_exempt_`): an
+  adoption computes nothing, and a still an evaluator reads, moved to a new identity,
+  is valid again in every process that reads it, rather than in none.
+  `UNSAFE_specialize` installs what `find_specialization` finds and `build()` would
+  install -- a past composed with its nested blocks' pasts too -- not only a declared
+  specialization.
+- **A journal entry is found by what it is -- its `id` -- never by where it is filed.**
+  Every `DataJournal.write` keeps its entry: a file of its own, named by its `id`, so
+  a build leaves its `build:start` and its `build:end`, and the `journal_prefix`es
+  dbx passed to keep one write from overwriting another are gone. A session records
+  `DataJournal.entry_ref`s -- `anchor`, `hash`, `id`, and the `version`, `tag`,
+  `keyby` and `datalake` that finding a block's entries by hash takes -- in
+  `written_entries()`, its index's markers (named by `id`) and an exec-journal row's
+  `datajournal_entries`; `DataJournal.read_refs` reads them back from an entry's own
+  file or, compacted since, its anchor's compacted journal. An exec row from before
+  names paths: one whose file is gone is its block's entries under the row's
+  session. `journal={'id': ...}` selects an entry where `{'entry_path': ...}` did.
+  `UNSAFE_compact` compacts redirection entries too; `PipeJournal.UNSAFE_compact`
+  keeps the side files its kept entries name -- in their columns -- not the ones
+  whose file names share their instance's `dt`.
+- **`read_hash` reads a compacted journal too.** A block whose anchor was compacted
+  was "never recorded" to `_past_recorded_`, and no past nested in it composed.
+- **A pullback of whole tablets builds no map.** Every tablet taken whole, no lot is
+  read: each tablet is its table's own, from the partition's entries. Its map is not
+  built, nor asked for by its validity (`TREE_SKIP_BUILDING`/`TREE_SKIP_VALIDATION`,
+  per instance); another table laid out alike is pulled back along it all the same.
+- **Subtree banners name whose field they are:** `BUILDING SUBTREE at upstream of
+  <anchorkey> [<tag>]`.
+- **A pipeline is created once, journaled only when it says so, and cached by its call.**
+  `Pipeline.create()` -- and so `entrypoint`, `entry`, `entrypath` and
+  `read('entrypoint')` -- arranges the tree once per instance, not afresh on every
+  access. `Pipeline.JOURNAL`, False by default, says whether that creation is written
+  to the `PipeJournal`; `@pipeline(journal=True)` sets it. An `@pipeline` call is cached
+  by ALL its arguments (dicts, lists and blocks by value; an omitted `datalake=` by
+  `DBX_DATALAKE` at the call), so the pipelines several others nest are one instance,
+  created and journaled once per process; `f.cache_clear()` empties it. Until now every
+  `.entry` on every fresh instance wrote a 12-file entry: hundreds per command for one
+  nested collator. Pass `journal=True` to the pipelines whose entries you want.
+- **`PipeJournal.UNSAFE_compact()`: one entry per pipeline and entrypath, the rest removed.**
+  The newest entry of each distinct `entrypath` is kept, with its side files; `collect`
+  reads the same pipelines and entrypaths after. `unjournaled=True` also removes the
+  journals of pipelines whose class says `JOURNAL = False`, but those in `spare=`;
+  `dry_run=True` says what would go. Asks first, as every `UNSAFE_` does (`OVERRIDE=True`).
+- **`DataJournal.UNSAFE_compact(anchors)` and `ExecJournal.UNSAFE_compact()`: a journal
+  as one parquet file.** Every entry file of an anchor -- `dbx.anchors()` by default --
+  is read and written back, row for row, to `<anchor>/.journal/<anchor>/journal/
+  <anchor>-journal-compacted.parquet`, where `read` already finds entry files; the
+  exec journal to `.journal/exec/exec-compacted.parquet`. Nothing is deduplicated.
+  Anchors go to a `parallelization` executor (`'multithreading'` by default) of
+  `n_workers`; `dry_run=True` touches nothing. A compacted entry's `entry_path` is the
+  compacted file; a session finds it by reference all the same (above). `ExecJournal`
+  is new: the exec journal's directory and its compaction.
+- **Every tablet is filed by its hash, and tagged by its table: no tag in any path.**
+  `Datatablet.KEYBY` is `version_shorthash`, as every block's. A tablet filed under its
+  tag until 2026-10-17 -- hundreds of thousands, in tables valid as they stand -- is
+  read where it was filed, its own redirection there followed: a tablet not built where
+  it is filed now, nor redirected, looks where its tag filed it (`_tags_filed_under_`:
+  its tag; a mapped tablet's, its partition's `tag_of`; a map tablet's,
+  `map<hash>_<i>`). Nothing is built again. A map tablet and a mapped tablet are tagged
+  `<table's tag>:<i>`; a part's map `<partition's tag>:part<k>`; a pullback layer not
+  tagged otherwise `<its table's tag> along <its map's tag>`.
+- **Two blocks of a stack at one path are refused before either is built.** Filed by
+  hash, tablets that differ only in their tags -- nothing in their identity telling
+  them apart -- would be built and read as one; a stack's build raises, naming them.
+  Give each what tells it apart, its index say, in its spec. An error naming invalid
+  blocks names each by its tag.
+- **`Specialization(tag=...)`: a past filed under a tag** -- a block keyed by tag is
+  looked for under its tag, and this names the tag its past was filed under, as
+  `anchor` does a renamed class.
+- **Log names show a tag without its entrypoint's module** (`shown_tag`): `f:NAME`
+  for `pkg.mod.f:NAME`. The tag itself, the journals and the paths keep it whole.
+- **`BUILD ELIDED` is a VERBOSE line.**
+- **`TREE`, a log level of its own: the `BUILDING`/`SKIPPING SUBTREE` banners.**
+  `DBX_LOG_TREE=1`, `Datalog(tree=True)` or a `with Datalog(tree=...)` scope shows
+  them without every VERBOSE line; set nowhere, they follow `VERBOSE`, as before.
+- **Log lines: `main:12:------ <time>`.** A worker's name is dashed out to the
+  timestamp, not spaced, and its parts are joined by `:` -- a process by its bare
+  number (an executor's `p12` is `12`), a thread as `t<i>`: `main:12`, `main:t0`,
+  `main:12:t1`.
+- **A part's map and a pullback's layers carry tags, and log lines name tags.** A
+  map is tagged `<partition's tag>:part<k>`; a pullback layer not tagged otherwise,
+  `<its table's tag> along <its map's tag>` -- the top layer takes a tag given to
+  `pullback`. A tag is in no identity, and no tablet's tag moves. `PARTITION`, `MAP`
+  and `PULLBACK` lines name the blocks they mention with their tags.
+- **Devices are checked as features are evaluated, not as `build` starts:** a
+  feature table that adopts an earlier build needs no GPU.
+- **`DatatableCorePartition` is `DatatableClusterCorePartition`.** A core partition is
+  named for how it chooses its rows; another way would take other arguments, and be a
+  class of its own. Its specialization reaches what was built at the old class's path,
+  and its hash is pinned. `DatatablePartition._DealVAR_` is `_PartitionVAR_`.
+- **Fixed: the core partition's hash, moved by a reworded topic description.** The
+  ``layout`` topic's description -- part of its identity -- is restored as built.
+- **A part is its map; `DatatablePart`, `FeaturetablePart` and `fold` are gone.**
+  `partition.part(k)` is part *k*'s `PartitionDatamapTable`, VAR `{partition, part}`;
+  `part(k).pullback(table, collator)` is a table read along it, a `MappedDatatable`
+  or `MappedFeaturetable`, whose TOPICS are `Datatable`'s own, not its table's.
+  `fold(k)`, `map(k)` and `tablets()` are gone, `n_folds()` is `n_parts()`, and
+  every `fold` parameter is `part`. What a `DatatablePart` or `FeaturetablePart`
+  built is reached through `PART_PAST`: the pullback rendered as the part's VAR
+  `{partition, fold}`, its upstream `determined` by its map, table and collator.
+- **No more "deal": a partition is partitioned, and assigns.** `dealt()` is
+  `partitioned()`; `_dealt_tablets_` is `_assignments_`; `_deal_`,
+  `_cluster_and_deal_` and `_deal_rows_` are `_assign_`, `_cluster_and_assign_` and
+  `_assign_rows_`; the log says `PARTITION <partition>: partitioned`.
+- **A block whose fields a past moves out still composes the pasts nested in
+  them.** A dotted move -- `PART_PAST`'s `datamap.partition` -- renders that field's
+  own fields as they are now, and its nested blocks may still render as they were:
+  its pasts that rename and pin nothing. A `PartitionDatamapTable`'s past that
+  changes only how its partition renders is real when the partition's is, though no
+  map was built before 2026-10-16. A part built on a partition whose table changed
+  identity finds its past again.
+- **The most recent past wins.** `find_specialization` and `build` install the
+  most recently recorded of the pasts that resolve, ties in declaration order: a
+  later adoption of a build, redirecting to it, over the build itself.
+- **Each layer of a pullback says what it copies, as it is built.** In build
+  order, bottom up: `PULLBACK <table> along fold k of <deal>: n copies of
+  [slices]`, next to its `COPY: n tablets of <table>` bar -- the layers pulled back
+  independently along one map, a skipped layer saying nothing. The map says the
+  deal and itself once, as it builds: `DEAL <deal>: dealt; MAP <map>: fold k, n
+  lots`. The single summary with its arrows between layers is gone.
+- **`partition.map(k)` and `fold(k)`; a mapped feature table holds its upstream.**
+  `map(k)` is fold *k*'s map -- `DatamapTable` and `DatamapTablet` are
+  `PartitionDatamapTable` and `PartitionDatamapTablet` -- and `fold(k)` its own
+  table pulled back, the identity every fold built hashes through; `part(k)` and
+  `datamap(k)` are gone. `map.pullback(table, collator)` builds the stack from the
+  bottom: a `MappedFeaturetable`'s VAR ``upstream`` is the pullback of the nearest
+  layer below it copies, so `map.pullback(ft).upstream == map.pullback(ft.upstream)`
+  and so for every copy, and `build_tree` builds it bottom up, each layer in
+  parallel. A copy no longer builds its upstream copy: its table builds the layer
+  below first. A part of whole tablets builds no upstream. Every
+  `MappedFeaturetable` moves hash, the CPTAC 602020 cores' among them.
+- **Every layered block answers `.upstream`, and the mixin is `Layered`.** The
+  block a table or tablet reads upstream of is `.upstream`: its VAR's
+  ``upstream`` for a `Featuretable(t)` or `MappedFeaturetablet`, and, for a
+  `MappedFeaturetable` or a `FeaturetablePart` -- whose map and source already
+  fix it, so it is in no identity -- its source's upstream pulled back along the
+  same map. `upstream_mapped` is gone; `.upstream` replaces it. The mixin
+  `DataslicesUpstream` is `Layered`; it is no block's class, so no anchor or
+  hash moves.
 - **A partition's stages say what they are.** A deal's build opens with a
   `DEAL` line naming its stages; a mapped table's with a `PULLBACK` summary --
   the deal, dealt and kept or not; the map, built or to build; how many tablets
@@ -167,6 +401,17 @@ All notable changes to this project will be documented in this file.
   with every scroll; it is now as wide as its widest item.
 
 ### Added
+- **`Specialization(determined={field: (determining field, ...)})`**: VAR fields
+  the narrower block never had, left out of the past rendering whatever they
+  hold, because the fields named fix them -- which the past rendering keeps, or
+  pins. A pin leaves a field out only at the value it names; a field holding a
+  block that varies with the rest of the VAR -- a mapped feature table's
+  `upstream`, its source's upstream pulled back along its map -- has no one value
+  to name. The declarer states the dependency: no field both pinned and
+  determined, none determined by a field itself left out, every one named this
+  class's VAR field (raising otherwise, as a pin does). Recorded and keyed only
+  when set: no specialization from before keys differently. Blocks built on one
+  find their pasts through it, as through any nested past.
 - **`DatatableCarbonCorePartition`: a core partition's layout, over a table
   laid out as its table is, other columns copied.** A feature table and the
   table it was computed from, say. Its VAR is the `datatable`, the `template`

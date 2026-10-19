@@ -27,7 +27,7 @@ import pytest
 pytest.importorskip("streaming", reason="mosaicml-streaming is an optional dependency")
 
 from dbx.datatables import SLICETOPIC, Datatablet, Datatable
-from dbx.datatables import DataslicesUpstream
+from dbx.datatables import Layered
 
 
 @pytest.fixture(autouse=True)
@@ -44,6 +44,7 @@ class Samples(Datatablet):
     @dataclass
     class VAR(Datatablet.VAR):
         n: int = 4
+        index: int = 0     # its place in its table: two tablets alike in all else are two blocks
 
     def __build__(self):
         columns = {'a': {'idx': 'int', 'x': 'int'}, 'b': {'idx': 'int', 'y': 'int'}}
@@ -61,8 +62,11 @@ class SampleTable(Datatable):
     def n_tablets(self):
         return 2
 
+    def __tablet__(self, idx, **kw):
+        return super().__tablet__(idx, index=idx, **kw)
 
-class Derived(DataslicesUpstream, Datatablet):
+
+class Derived(Layered, Datatablet):
     """The shape a `Featuretablet` has: own slice plus an upstream block's.
 
     Carries the upstream's bookkeeping column through, which is what makes the

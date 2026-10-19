@@ -1966,7 +1966,7 @@ def main(argv=None):
     ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)")
     ap.add_argument("--journal", nargs="?", const="pipelines", default=None, metavar="ANCHOR",
                     help="a journal of dbx's datalake (DBX_DATALAKE): with no ANCHOR, or 'pipelines', its pipelines, from "
-                         "dbx.pipejournal(), one point each; with an ANCHOR, that anchor's blocks, from its block journal")
+                         "dbx.pipejournal(), one point each; with an ANCHOR, that anchor's blocks, from its build journal")
     ap.add_argument("--filter", default=None, metavar="'KEY=PATTERN, ...'",
                     help="with --journal ANCHOR: the anchor's journal filtered, each KEY a column, each PATTERN matched against it; "
                          "the filter field in the top bar changes it")

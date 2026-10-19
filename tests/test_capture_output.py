@@ -98,7 +98,9 @@ def _read(path):
 
 
 def _logs(row):
-    return [str(v) for v in row.datajournal(index=None)['log']]
+    """The capture each block's build recorded: its build:end's, its build:start recording the same."""
+    j = row.buildjournal(index=None)
+    return [str(v) for v in j[j['event'] == 'build:end']['log']]
 
 
 class TestTheMasterCapture:
@@ -151,7 +153,7 @@ class TestABlockRecordsTheCapture:
                  Loud=Loud, root=str(tmp_path))
         row = _row(tmp_path)
         assert _logs(row) == _captures(row)[:1]
-        assert 'PY x=1' in row.datajournal(iloc=0).read('log')
+        assert 'PY x=1' in row.buildjournal(iloc=0).read('log')
 
     def test_no_capture_no_log(self, tmp_path):
         _exec("Loud(datalake=root, spec={'x': 1}).build()", Loud=Loud, root=str(tmp_path))

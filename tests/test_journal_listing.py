@@ -1,11 +1,11 @@
-"""DataJournal._journal_files_: the entry files the journal globs find, listed a level at a time."""
+"""BuildJournal._journal_files_: the entry files the journal globs find, listed a level at a time."""
 import re
 
 import fsspec
 import pandas as pd
 import pytest
 
-from dbx.journals import DataJournal, Datalog
+from dbx.journals import BuildJournal, Datalog
 
 GLOBS = ('{a}/.dbx/*/journal/**/*.parquet', '{a}/**/.journal/*/journal/**/*.parquet')
 
@@ -43,7 +43,7 @@ def test_journal_files_are_what_the_globs_find_less_the_sibling_dirs(tmp_path, p
     anchor = str(tmp_path / 'Block') if protocol == 'file' else f'/lake-{tmp_path.name}/Block'
     expected = [fs._strip_protocol(p) for p in _lake_(fs, anchor)]
 
-    found = DataJournal._journal_files_(fs, anchor, n_workers=4, log=Datalog())
+    found = BuildJournal._journal_files_(fs, anchor, n_workers=4, log=Datalog())
     assert found == expected
 
     globbed = {f for g in GLOBS for f in fs.glob(g.format(a=anchor))}
@@ -55,26 +55,26 @@ def test_journal_files_are_what_the_globs_find_less_the_sibling_dirs(tmp_path, p
 
 def test_journal_files_of_a_missing_anchor_is_empty(tmp_path):
     fs = fsspec.filesystem('file')
-    assert DataJournal._journal_files_(fs, str(tmp_path / 'nowhere'), n_workers=4, log=Datalog()) == []
+    assert BuildJournal._journal_files_(fs, str(tmp_path / 'nowhere'), n_workers=4, log=Datalog()) == []
 
 
 def test_list_is_the_listing_as_full_paths(tmp_path):
     fs = fsspec.filesystem('memory')
     lake = f'memory://lake-{tmp_path.name}'
     expected = _lake_(fs, f'/lake-{tmp_path.name}/Block')
-    files = DataJournal.list('Block', datalake=lake, n_workers=4, storage_options={})
+    files = BuildJournal.list('Block', datalake=lake, n_workers=4, storage_options={})
     assert files == [f'memory://{p}' for p in expected]
 
 
 def test_list_of_a_missing_anchor_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
-        DataJournal.list('Block', datalake=str(tmp_path), storage_options={})
+        BuildJournal.list('Block', datalake=str(tmp_path), storage_options={})
 
 
 def test_list_tells_progress_the_files_found_so_far_with_no_total(tmp_path):
     _lake_(fsspec.filesystem('file'), str(tmp_path / 'Block'))
     told = []
-    DataJournal.list('Block', datalake=str(tmp_path), n_workers=4, storage_options={},
+    BuildJournal.list('Block', datalake=str(tmp_path), n_workers=4, storage_options={},
                      progress=lambda desc, n, total: told.append((n, total)))
     assert told and all(total is None for _, total in told)
     assert [n for n, _ in told] == sorted(n for n, _ in told) and told[-1][0] == 4
@@ -87,9 +87,9 @@ def test_read_frame_tells_progress_each_file_read_of_the_total(tmp_path):
         fs.makedirs(path.rsplit('/', 1)[0], exist_ok=True)
         with fs.open(path, 'wb') as f:
             pd.DataFrame([{'event': 'build:end', 'datetime': f'2026-10-0{i + 1}T00-00-00.000000'}]).to_parquet(f)
-    files = DataJournal.list('Block', datalake=str(tmp_path), storage_options={})
+    files = BuildJournal.list('Block', datalake=str(tmp_path), storage_options={})
     told = []
-    DataJournal.read_frame(files, n_workers=2, storage_options={}, unnormalized=True,
+    BuildJournal.read_frame(files, n_workers=2, storage_options={}, unnormalized=True,
                            progress=lambda desc, done, total: told.append((done, total)))
     assert told == [(i, 4) for i in range(1, 5)]
 
@@ -106,7 +106,7 @@ def test_progress_raising_interrupts_the_read(tmp_path):
             raise _Stop_()
 
     with pytest.raises(_Stop_):
-        DataJournal.read('Block', datalake=str(tmp_path), n_workers=1, storage_options={}, progress=progress)
+        BuildJournal.read('Block', datalake=str(tmp_path), n_workers=1, storage_options={}, progress=progress)
 
 
 def test_the_listing_reports_each_directory_not_each_level(tmp_path):
@@ -114,7 +114,7 @@ def test_the_listing_reports_each_directory_not_each_level(tmp_path):
     for i in range(5):
         _parquet_(fs, str(tmp_path / f'Block/k{i}/.journal/pkg.Block/journal/h{i}/e.parquet'))
     told = []
-    DataJournal.list('Block', datalake=str(tmp_path), n_workers=2, storage_options={},
+    BuildJournal.list('Block', datalake=str(tmp_path), n_workers=2, storage_options={},
                      progress=lambda desc, n, total: told.append(n))
     # The root, its five k*, then each level below them five at a time: far more reports than levels.
     assert len(told) > 20 and told[-1] == 5
@@ -127,4 +127,4 @@ def test_progress_raising_interrupts_the_listing(tmp_path):
         raise _Stop_()
 
     with pytest.raises(_Stop_):
-        DataJournal.list('Block', datalake=str(tmp_path), n_workers=1, storage_options={}, progress=progress)
+        BuildJournal.list('Block', datalake=str(tmp_path), n_workers=1, storage_options={}, progress=progress)

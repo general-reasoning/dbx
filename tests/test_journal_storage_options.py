@@ -1,4 +1,4 @@
-"""Tests for storage_options threading through DataJournalEntry and DataJournalFrame."""
+"""Tests for storage_options threading through BuildJournalEntry and BuildJournalFrame."""
 import os
 import pytest
 import pandas as pd
@@ -8,8 +8,8 @@ import fsspec
 
 from dbx.databits import parse_storage_options
 from dbx.datablocks import (
-    DataJournalEntry,
-    DataJournalFrame,
+    BuildJournalEntry,
+    BuildJournalFrame,
     Datablock,
     journal,
     default_storage_options,
@@ -42,12 +42,12 @@ class TestDefaultStorageOptions:
 
 
 # ---------------------------------------------------------------------------
-# DataJournalEntry storage_options
+# BuildJournalEntry storage_options
 # ---------------------------------------------------------------------------
 
 def _make_entry(datalake='/tmp/dbx', anchor='mod.Block', hash_='abc123',
                 storage_options=None):
-    """Helper to construct a DataJournalEntry with minimal fields."""
+    """Helper to construct a BuildJournalEntry with minimal fields."""
     data = {
         'anchor': anchor,
         'hash': hash_,
@@ -55,10 +55,10 @@ def _make_entry(datalake='/tmp/dbx', anchor='mod.Block', hash_='abc123',
         'keyby': 'taghash',
         'tag': None,
     }
-    return DataJournalEntry(pd.Series(data), storage_options=storage_options)
+    return BuildJournalEntry(pd.Series(data), storage_options=storage_options)
 
 
-class TestDataJournalEntryStorageOptions:
+class TestBuildJournalEntryStorageOptions:
 
     def test_default_storage_options_empty(self):
         entry = _make_entry()
@@ -74,19 +74,19 @@ class TestDataJournalEntryStorageOptions:
         so = {'account_name': 'test'}
         entry = _make_entry(datalake='memory://bucket/data', storage_options=so)
         # Should not raise; memory:// doesn't care about account_name
-        root = entry.block.root
+        root = entry.pretty.root
         assert 'bucket/data' in root
 
     def test_anchorkeypath_local(self):
         entry = _make_entry(datalake='/tmp/dbx', anchor='mod.Block', hash_='abc123')
         # local paths: no protocol prefix
-        path = entry.block.anchorkeypath
+        path = entry.pretty.anchorkeypath
         assert '/tmp/dbx/mod.Block' in path
 
     def test_anchorkeypath_memory_fs(self):
         entry = _make_entry(datalake='memory://bucket/data', anchor='mod.Block',
                             hash_='abc123')
-        path = entry.block.anchorkeypath
+        path = entry.pretty.anchorkeypath
         # Should include protocol for non-local fs
         assert path.startswith('memory://')
         assert 'mod.Block' in path
@@ -104,24 +104,24 @@ class TestDataJournalEntryStorageOptions:
 
 
 # ---------------------------------------------------------------------------
-# DataJournalFrame storage_options propagation
+# BuildJournalFrame storage_options propagation
 # ---------------------------------------------------------------------------
 
-class TestDataJournalStorageOptions:
+class TestBuildJournalStorageOptions:
 
     def test_default_storage_options_empty(self):
         df = pd.DataFrame({'hash': ['a'], 'datetime': ['2026-01-01T00-00-00.000000']})
-        frame = DataJournalFrame(df)
+        frame = BuildJournalFrame(df)
         assert frame.storage_options == {}
 
     def test_explicit_storage_options(self):
         so = {'key': 'val'}
         df = pd.DataFrame({'hash': ['a'], 'datetime': ['2026-01-01T00-00-00.000000']})
-        frame = DataJournalFrame(df, storage_options=so)
+        frame = BuildJournalFrame(df, storage_options=so)
         assert frame.storage_options == so
 
     def test_get_propagates_storage_options(self):
-        """DataJournalFrame.get() should create DataJournalEntry with storage_options."""
+        """BuildJournalFrame.get() should create BuildJournalEntry with storage_options."""
         so = {'key': 'val'}
         df = pd.DataFrame({
             'hash': ['abc'],
@@ -129,13 +129,13 @@ class TestDataJournalStorageOptions:
             'anchor': ['mod.Block'],
             'url': ['/tmp/dbx'],
         })
-        frame = DataJournalFrame(df, storage_options=so)
+        frame = BuildJournalFrame(df, storage_options=so)
         entry = frame.get(0)
-        assert isinstance(entry, DataJournalEntry)
+        assert isinstance(entry, BuildJournalEntry)
         assert entry.storage_options == so
 
     def test_call_propagates_storage_options(self):
-        """DataJournalFrame.__call__() should also propagate storage_options."""
+        """BuildJournalFrame.__call__() should also propagate storage_options."""
         so = {'key': 'val'}
         df = pd.DataFrame({
             'hash': ['abc'],
@@ -143,9 +143,9 @@ class TestDataJournalStorageOptions:
             'anchor': ['mod.Block'],
             'url': ['/tmp/dbx'],
         })
-        frame = DataJournalFrame(df, storage_options=so)
+        frame = BuildJournalFrame(df, storage_options=so)
         entry = frame(0)
-        assert isinstance(entry, DataJournalEntry)
+        assert isinstance(entry, BuildJournalEntry)
         assert entry.storage_options == so
 
 
@@ -156,9 +156,9 @@ class TestDataJournalStorageOptions:
 class TestJournalFunctionStorageOptions:
 
     def test_dataframe_path_propagates(self):
-        """journal(df, storage_options=...) should pass to DataJournalFrame."""
+        """journal(df, storage_options=...) should pass to BuildJournalFrame."""
         df = pd.DataFrame({'hash': ['a'], 'datetime': ['2026-01-01T00-00-00.000000']})
         so = {'k': 'v'}
         result = journal(df, storage_options=so)
-        assert isinstance(result, DataJournalFrame)
+        assert isinstance(result, BuildJournalFrame)
         assert result.storage_options == so

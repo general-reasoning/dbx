@@ -256,7 +256,7 @@ class TestCiteChunks:
 
 
 # =====================================================================
-# cite() as a recorded field: Bid, the journal, and DataJournalEntry
+# cite() as a recorded field: Bid, the journal, and BuildJournalEntry
 # =====================================================================
 
 class Solo(Datablock):
@@ -281,12 +281,12 @@ class TestCiteInJournal:
         return b
 
     def test_build_writes_cite_txt(self, built):
-        entry = built.datajournal(iloc=-1)
+        entry = built.buildjournal(iloc=-1)
         assert entry.get('cite') is not None, "journal has no cite column"
         assert '-cite-' in entry['cite'] and entry['cite'].endswith('.txt')
         assert entry.read('cite') == built.cite()
-        assert entry.block.cite() == built.cite()
-        assert entry.block.quote() == built.quote()
+        assert entry.pretty.cite() == built.cite()
+        assert entry.pretty.quote(pretty=False) == built.quote()
 
     def test_cite_is_absent_not_fatal_on_an_older_journal(self):
         """Journals written before `cite` existed have no such column.
@@ -296,10 +296,36 @@ class TestCiteInJournal:
         which is what a bare column lookup would do.
         """
         import pandas as pd
-        from dbx.datablocks import DataJournalEntry
-        entry = DataJournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B'}))
-        assert entry.block.cite() is None
+        from dbx.datablocks import BuildJournalEntry
+        entry = BuildJournalEntry(pd.Series({'hash': 'abc', 'anchor': 'a.B'}))
+        assert entry.pretty.cite() is None
         assert entry.read('cite') is None
+
+
+class TestPrettyQuote:
+    """A recorded quote reads as a cite: nested blocks indented, nothing escaped; ``pretty=False`` the evaluable text."""
+
+    def test_a_recorded_quote_lays_out_as_a_cite(self, nested):
+        nested.write_journal_entry(event='note')
+        entry = nested.buildjournal(iloc=0)
+        pretty = entry.pretty.quote()
+        assert '\\' not in pretty
+        lines = pretty.splitlines()
+        assert lines[0] == f"${nested.fqcn}(" and lines[-1] == ")"
+        assert f"        'mid': ${Mid.__module__}.Mid(" in lines
+        assert f"                'leaf': ${Leaf.__module__}.Leaf(" in lines, "two levels down, two indents more"
+        assert "                        'size': 3," in lines
+
+    def test_not_pretty_is_the_evaluable_text(self, nested):
+        nested.write_journal_entry(event='note')
+        entry = nested.buildjournal(iloc=0)
+        assert entry.pretty.quote(pretty=False) == nested.quote()
+        assert dbx_eval(entry.pretty.quote(pretty=False)).hash == nested.hash
+
+    def test_what_is_no_call_is_left_as_it_is(self):
+        from dbx.journals import cite_specline
+        assert cite_specline('not a specline') == 'not a specline'
+        assert cite_specline("$dbx.getenv('X')") == "$dbx.getenv('X')"
 
 
 class TestTagBeforeSpec:

@@ -5,7 +5,7 @@ The display is compact -- short ids and sessions, timestamps to the second,
 path lists as counts, nothing repeated, no traceback -- and the data is not:
 every value is there, in full, to index, filter and read. A short id is enough
 to get a row by. A selection, a slice or a sort is an `ExecJournalFrame` still,
-as a selection of a block journal is a `DataJournalFrame`.
+as a selection of a build journal is a `BuildJournalFrame`.
 """
 from dataclasses import dataclass
 
@@ -14,7 +14,7 @@ import pytest
 
 import dbx
 from dbx.datablocks import Datablock
-from dbx.journals import DataJournalFrame, ExecJournalEntry, ExecJournalFrame
+from dbx.journals import BuildJournalFrame, ExecJournalEntry, ExecJournalFrame
 
 
 @pytest.fixture(autouse=True)
@@ -67,9 +67,9 @@ class TestTheDisplay:
         assert all('.' not in v for v in shown['datetime'])
         assert list(shown.columns[:2]) == ['datetime', 'exec']
 
-    def test_paths_are_counted_and_the_traceback_left_out(self, ej):
+    def test_entries_are_counted_and_the_traceback_left_out(self, ej):
         shown = ExecJournalFrame._display_frame_(ej)
-        assert list(shown['datajournal_entries']) == ['[0]', '[0]', '[1]']
+        assert list(shown['buildjournal_entries']) == ['[0]', '[0]', '[2]'], "a build's start and end"
         assert 'traceback' not in shown.columns and 'exception' in shown.columns
 
     def test_comment_and_success_last(self, ej):
@@ -143,14 +143,14 @@ class TestDerivedFrames:
         built = ej[ej['comment'] == 'built']
         entry = built.get(built.index[0])
         assert isinstance(entry, ExecJournalEntry)
-        assert len(entry.dataentries()) == 1
+        assert len(entry.dataentries()) == 2
 
     def test_a_block_journal_selection_is_not_read_again(self, ej, tmp_path):
-        frame = dbx.datajournal(Built, datalake=str(tmp_path), storage_options={'k': 1})
+        frame = dbx.buildjournal(Built, datalake=str(tmp_path), storage_options={'k': 1})
         sub = frame[['anchor', 'hash']]
-        assert type(sub) is DataJournalFrame
+        assert type(sub) is BuildJournalFrame
         # Normalizing it again would add `type` and `signature` back.
         assert list(sub.columns) == ['anchor', 'hash']
         assert sub.storage_options == {'k': 1}
         built = frame[frame['event'] == 'build:end']
-        assert type(built) is DataJournalFrame and built.get(built.index[0])['anchor'] == frame['anchor'].iloc[0]
+        assert type(built) is BuildJournalFrame and built.get(built.index[0])['anchor'] == frame['anchor'].iloc[0]

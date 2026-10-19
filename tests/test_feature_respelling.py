@@ -173,7 +173,7 @@ def test_a_feature_tablet_built_under_the_sentinel_is_read_under_the_marker(tmp_
     assert tablet.redirected_topics() == ['features']
     assert tablet.valid()
     assert (tablet.data(('features', 'final'))['features']['final'] == old_final).all()
-    assert tablet.declared_columns('features') == {'final': 'ndarray:float32'}
+    assert tablet.slice_columns('features') == {'final': 'ndarray:float32'}
 
 
 def test_the_bipolar_blocks_reach_nothing_built_before_version_2():

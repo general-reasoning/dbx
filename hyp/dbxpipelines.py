@@ -553,9 +553,11 @@ def rerun_line(quote, cite=False, revision=None):
     Python: its nested blocks are written bare, and only ``dbx.eval`` reads
     them back as the speclines they were -- run as Python, they would be made
     into blocks, and the block made would not be the one quoted. The cite is
-    made from the quote, as the block's ``.cite()``: a recorded cite cannot be
-    run. With *revision* -- an entry's ``dbxsha:projsha`` -- it runs pinned to
-    it, ``--revision=``, as the block was built; without, at today's checkout.
+    made from the quote, as the block's ``.cite()``: the quote is the faithful
+    form, and a cite recorded before dbx kept speclines in it named this
+    machine's values. With *revision* -- an entry's ``dbxsha:projsha`` -- it
+    runs pinned to it, ``--revision=``, as the block was built; without, at
+    today's checkout.
     """
     import shlex
 

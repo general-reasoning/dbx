@@ -1135,7 +1135,7 @@ class Datablock:
     VERBOSE_VAR = False
 
     # Set to True on a subclass whose artifacts were already built and are
-    # identified by hashes computed BEFORE string kwargs were quoted in subsignature().
+    # identified by hashes computed BEFORE string kwargs were quoted in signature().
     #
     # The unquoted form is ambiguous in two ways that can collide two distinct
     # blocks onto one hash:
@@ -1883,7 +1883,7 @@ class Datablock:
     # what the block IS, so they are noise in a citation and they dominate it.
     #
     # `tag` is the one that cannot be dropped silently. It is NOT part of the
-    # identity hash (subsignature() is built from _rootkwargs_ + spec), but a
+    # identity hash (signature() is built from _rootkwargs_ + spec), but a
     # tag-keyed layout (a Datatablet's KEYBY, or an explicit
     # keyby='tag_version_shorthash') puts it in the artifact PATH, so a citation
     # without it re-evaluates to the same hash at a DIFFERENT key -- i.e. it
@@ -2007,7 +2007,7 @@ class Datablock:
         # a block whose dfn says validate_cfg=False -- and it would additionally
         # persist as a dead dynamic kwarg, drifting quote()/cite() (and hence
         # the journal) from an otherwise identical block. Identity is unaffected
-        # either way: subsignature() reads only url/anchor/hash and spec.
+        # either way: signature() reads only url/anchor/hash and spec.
         validate_cfg: bool = None,
         storage_options: dict = None,
         local: str|None = None,
@@ -2436,7 +2436,7 @@ class Datablock:
     def __expand_spec__(self, expansion='repr', *, legacy: 'bool | None' = None,
                         legacy_typing: 'bool | None' = None):
         """
-            . legacy: override LEGACY_NORM or LEGACY_SIGNATURE for the 'subsignature' expansion.
+            . legacy: override LEGACY_NORM or LEGACY_SIGNATURE for the 'signature' expansion.
                 None (default) = each block uses its own flag, i.e. the
                 identity-bearing rendering. True/False forces the legacy or the
                 modern form, and PROPAGATES to nested blocks, so the whole
@@ -2516,7 +2516,7 @@ class Datablock:
         elif expansion in ('quote', 'cite', 'repr_all'):
             for k, v in spec.items():
                 value = getattr(self.var, k)
-                raw_v = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else v
+                raw_v = self._var_term_(k)  # a default specline written as its line, not this machine's value
                 if not self.is_specline(raw_v) and hasattr(self, 'var') and hasattr(self.var, '__dict__'):
                     for var_val in self.var.__dict__.values():
                         if isinstance(var_val, Datablock) and isinstance(getattr(var_val, 'spec', None), dict) and k in var_val.spec:
@@ -2577,7 +2577,7 @@ class Datablock:
         # quote_strs is unconditional here, LEGACY_NORM or not: __repr__ is not
         # an input to signature, so quoting can only make the rendering more
         # faithful -- `url=abfss://x` is not evaluable at all, `url='abfss://x'`
-        # is. Only signature()/subsignature() have to honour the legacy form.
+        # is. Only signature() has to honour the legacy form.
         repr_spec = self.__expand_spec__('repr')
         r = self.__repr_from_kwargs__({
             **self._rootkwargs_,
@@ -4061,16 +4061,20 @@ class Datablock:
 
     def quote(self, *, deslash: int = 0, cite: bool = False, pretty: bool = False,
               tailkwargs: bool = True):
-        """Return an evaluable ``$fqcn(...)`` specline for this block.
+        """The evaluable ``$fqcn(...)`` specline that makes this datablock again, operating as it does.
+
+        What it shares with :meth:`cite`: ``dbx.eval(x.quote()).hash == x.hash``
+        wherever it is evaluated -- a specline naming no datablock is the line,
+        relocatable. What it adds: the operational kwargs. Nested datablocks are
+        written compactly, bare, not expanded as a cite expands them.
 
         ``tailkwargs=True`` (the default HERE) keeps every operational kwarg,
         because quote() is the **evaluable** form and those kwargs are part of
         reconstructing a working block -- ``local`` in particular decides where
         local artifacts are staged, so dropping it sends ``find_latest_ckpt``
         to a different directory even though the hash and key still match.
-        :meth:`cite` defaults the other way: it is presentation-only, so it
-        shows just ``CITE_KEEP_TAILKWARGS`` (``tag``) and omits the rest as
-        noise.
+        :meth:`cite` defaults the other way: it shows what affects identity, so
+        just ``CITE_KEEP_TAILKWARGS`` (``tag``) of these.
 
         ``pretty=True`` wraps one kwarg per line. It stays OFF by default
         because the result is a specline that gets ``eval``-ed on the way back
@@ -4112,12 +4116,14 @@ class Datablock:
 
     def cite(self, *, deslash: int = 2, pretty: bool = True,
              tailkwargs: bool = False, _indent: str = ''):
-        """Human-readable rendering of the block graph. **Presentation only.**
+        """Every identity-affecting setting of the datablock graph, at a glance.
 
-        Deliberately NOT evaluable -- :meth:`quote` is the evaluable form. That
-        distinction is what makes this readable at any depth: because the output
-        never has to survive ``eval``, a nested block is emitted as a real
-        indented block rather than as a quoted specline string.
+        Every nested datablock is expanded in place, an indented block of its
+        own however deep, and every VAR field shown, defaults included;
+        operational kwargs are left out (but ``CITE_KEEP_TAILKWARGS``). The
+        guarantee it shares with :meth:`quote`: ``dbx.eval(x.cite()).hash ==
+        x.hash`` wherever it is evaluated -- a specline naming no datablock is
+        the line, relocatable -- and the tests hold it to that.
 
         The difference matters most where it used to hurt. Representing a child
         as a string means the parent's ``repr`` escapes it, and a
@@ -4147,12 +4153,8 @@ class Datablock:
 
         lines.append(f"{inner}spec={{")
         for sk in sorted(self.VAR.__dataclass_fields__):
-            # The field's term, unevaluated: the spec's value where it gives one, else the VAR default's -- so a
-            # specline naming no datablock, ``$dbx.getenv('HOME')`` say, is cited as the line, relocatable, not
-            # as what it resolves to here.
-            loaded = object.__getattribute__(self.var, sk)
-            raw_v = (self.spec[sk] if (isinstance(getattr(self, 'spec', None), dict) and sk in self.spec)
-                     else loaded.term if isinstance(loaded, Datablock.VAR.LazyLoader) else None)
+            # A specline naming no datablock, ``$dbx.getenv('HOME')`` say, is cited as the line, relocatable.
+            raw_v = self._var_term_(sk)
             val = getattr(self.var, sk)
             if isinstance(val, Datablock):
                 rendered = val.cite(
@@ -5465,6 +5467,20 @@ class Datablock:
         # only when it clearly denoted something other than text.
         return value if isinstance(parsed, str) else parsed
 
+    def _var_term_(self, name):
+        """VAR field *name* unevaluated: the spec's value where it gives one, else the VAR default's term.
+
+        What a field was configured as, before it resolves. A specline -- given
+        or a default, ``$dbx.getenv('HOME')`` say -- stays the line here, where
+        ``getattr(self.var, name)`` is what it resolves to on this machine:
+        the identity, a quote and a cite render the line, so that they
+        relocate, and a default renders exactly as the same line given.
+        """
+        if isinstance(getattr(self, 'spec', None), dict) and name in self.spec:
+            return self.spec[name]
+        loaded = object.__getattribute__(self.var, name)
+        return loaded.term if isinstance(loaded, Datablock.VAR.LazyLoader) else loaded
+
     def _typed_specdict_(self, *, legacy: 'bool | None' = None, omit=(),
                          redirect_vars=None, nested=None) -> dict:
         """The spec as real Python values -- ints as ints, blocks as sub-dicts.
@@ -5519,7 +5535,7 @@ class Datablock:
         for k in keys:
             out_key = renames.get(k, k)
             value = getattr(self.var, k)
-            raw = self.spec[k] if (isinstance(getattr(self, 'spec', None), dict) and k in self.spec) else value
+            raw = self._var_term_(k)  # a default specline as its line, as the same line given: relocatable
             if k in nested:
                 block = value if isinstance(value, Datablock) else databits.eval(raw)
                 past = nested[k]

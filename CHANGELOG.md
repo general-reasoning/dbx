@@ -57,6 +57,14 @@ All notable changes to this project will be documented in this file.
   entry's revision, `--revision=`; off, it runs at today's checkout.
 
 ### Changed
+- **A specline `VAR` default hashes as its line: hashes move.** A default
+  such as `$dbx.getenv('HOME')` entered the signature as what it resolved to
+  on the machine, so the datablock's hash moved with the environment, and
+  differed from the same line given in the spec. It is now the line,
+  wherever it is configured -- in the hash, `quote()` and `cite()`. **Every
+  datablock whose `VAR` has a specline default naming no datablock changes
+  hash**; the legacy signature (`legacy_typing=True`) renders as before.
+  `dbx.eval(x.cite())` has `x`'s hash, and that is tested.
 - **`cite()` keeps a specline's line.** Nested datablocks are still
   expanded, but any other specline -- given in the spec or a VAR default,
   `$dbx.getenv('HOME')` say -- is cited as the line, relocatable, not as what

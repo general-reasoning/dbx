@@ -209,6 +209,48 @@ block = MyBlock(url=env('DATA_ROOT'), spec=dict(input_path=env('INPUT_DIR')))
 # The handle contains "$dbx.getenv('DATA_ROOT')" instead of the resolved path
 ```
 
+A specline stays the line wherever it is configured -- given in the spec or as
+a `VAR` default -- in the datablock's hash, its `quote()` and its `cite()`: the
+same configuration has the same hash on every machine. `block.var.input_path`
+is what it resolves to here.
+
+### `quote()` and `cite()`
+
+Two renderings of a datablock as text, with different jobs and one shared
+guarantee.
+
+- **`cite()` shows every identity-affecting setting at a glance.** Every
+  nested datablock is expanded in place, as an indented block of its own,
+  however deep the structure gets; every `VAR` field is shown, defaults
+  included; operational kwargs (`local`, `n_workers`, ...) are left out, as
+  they do not affect identity.
+- **`quote()` reproduces the datablock's operational behavior.** It is the
+  evaluable specline that makes the datablock again, operational kwargs and
+  all, with nested datablocks written compactly, not expanded.
+- **Both make the same datablock, wherever they are evaluated.**
+  `dbx.eval(x.quote()).hash == dbx.eval(x.cite()).hash == x.hash`, and both
+  are relocatable: a specline naming no datablock -- `$dbx.getenv('ROOT')` --
+  stays the line, never what it resolves to on the machine that rendered it.
+  The tests hold both to this.
+
+```python
+x.cite()
+# $pkg.Model(
+#     spec={
+#         'data': $pkg.Data(
+#             spec={
+#                 'root': "$dbx.getenv('ROOT')",
+#             },
+#             tag=None,
+#         ),
+#         'lr': 0.1,
+#     },
+#     tag='TRAIN',
+# )
+x.quote()
+# "$pkg.Model(spec={'data': pkg.Data(spec={'root': dbx.getenv('ROOT')}, ...), 'lr': 0.1}, tag='TRAIN', local=..., ...)"
+```
+
 ### Callable Executors
 
 Pluggable parallelism for any sequence of callables:

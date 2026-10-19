@@ -90,8 +90,10 @@ to -- and each row is a point:
   evaluated by `dbx.eval`, as recorded: its nested blocks are written bare,
   and only `dbx.eval` reads them back as the speclines they were -- run as
   Python, they would be made into blocks, and the block made would not be
-  the one quoted. The cite is made from the quote because a recorded cite
-  cannot be run. The window's title switches between the
+  the one quoted. The cite is made from the quote: the quote is the faithful
+  form, operational kwargs and all, and cites recorded before dbx kept
+  speclines in a cite name this machine's values. The window's title switches
+  between the
   two; beside it, `[ ] --revision=` pins the line to the entry's recorded
   revision, `dbx.pprint --revision=<dbxsha>:<projsha> "..."`, so it runs as
   the block was built. Off, as it starts, the line runs at today's checkout.

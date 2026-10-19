@@ -5,8 +5,13 @@ The two methods have opposite contracts, and neither was covered:
 * ``quote()`` is the **evaluable** form. ``dbx.eval(block.quote())`` must give
   back an equivalent block -- same identity *and* same operational kwargs,
   because ``local`` decides where artifacts are staged.
-* ``cite()`` is **presentation only**. It recurses over the object graph and is
-  deliberately not evaluable, which is what lets it stay readable at depth.
+* ``cite()`` is laid out to be read: it recurses over the object graph, which
+  keeps it readable at depth. It is faithful to identity all the same --
+  ``dbx.eval(block.cite())`` has the block's hash -- and that is tested, as
+  what keeps the presentation correct.
+* A specline naming no datablock -- given, or a ``VAR`` default -- stays the
+  line in the hash, the quote and the cite: a default hashes as the same line
+  given, and neither moves with the environment.
 
 Every test here corresponds to a failure that actually happened:
 
@@ -22,6 +27,7 @@ Every test here corresponds to a failure that actually happened:
 import pytest
 from dataclasses import dataclass
 
+from dbx import DATAFILE
 from dbx.datablocks import Datablock
 from dbx.databits import eval as dbx_eval
 
@@ -71,7 +77,7 @@ class Top(Datablock):
 
 class Located(Datablock):
     """VAR fields holding a specline that names no datablock: one a default, one given in the spec."""
-    TOPICS = {'output': 'output.txt'}
+    TOPICS = {'output': DATAFILE('output.txt')}
 
     @dataclass
     class VAR(Datablock.VAR):
@@ -233,6 +239,23 @@ class TestCiteRendering:
             assert line in given.cite()
         assert '/resolved/here' not in given.cite()
         assert given.var.root == '/resolved/here', "resolved when read, as before"
+
+    @pytest.mark.parametrize('render', ['quote', 'cite'])
+    def test_it_evaluates_to_the_same_hash(self, nested, tmp_path, monkeypatch, render):
+        """Nested, tagged, and a specline naming no datablock both given and defaulted."""
+        monkeypatch.setenv('CITE_TEST_ROOT', '/resolved/here')
+        located = Located(datalake=str(tmp_path), spec=dict(other="$dbx.getenv('CITE_TEST_ROOT')")).set(tag='loc')
+        for block in (nested, located, Located(datalake=str(tmp_path), spec={})):
+            assert dbx_eval(getattr(block, render)()).hash == block.hash
+
+    def test_a_default_specline_hashes_as_the_same_line_given_and_relocates(self, tmp_path, monkeypatch):
+        monkeypatch.setenv('CITE_TEST_ROOT', '/here')
+        default = Located(datalake=str(tmp_path), spec={})
+        given = Located(datalake=str(tmp_path), spec=dict(root="$dbx.getenv('CITE_TEST_ROOT')"))
+        assert default.hash == given.hash
+        assert "'/here'" not in default.quote() and "'root': dbx.getenv('CITE_TEST_ROOT')" in default.quote(), "bare, as quotes write speclines"
+        monkeypatch.setenv('CITE_TEST_ROOT', '/elsewhere')
+        assert Located(datalake=str(tmp_path), spec={}).hash == default.hash, "the line, not this machine's value"
 
     def test_a_cites_nested_datablock_reads_back_with_one_sigil(self, nested):
         """quote_spec takes a value already carrying its $ -- as a cite writes a nested datablock -- as it stands, not as $$."""

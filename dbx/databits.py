@@ -572,9 +572,9 @@ def eval(name):
             which preserves the Datablock's signature even after a trip through .quote().
         - Evaluating them here would expand e.g.
             "$os.path.join(...)" -> "/mnt/path/to/..." and bake
-            the absolute path into self.spec, making subsignature() emit
+            the absolute path into self.spec, making signature() emit
             the concrete path rather than the portable specline, breaking
-            signature() alignment.
+            its alignment across machines.
     """
     def get_named_args_kwargs(argkwargstr, cxt=None, *, func_is_datablock_ctor: bool = False):
         args = []

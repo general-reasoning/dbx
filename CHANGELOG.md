@@ -20,6 +20,15 @@ All notable changes to this project will be documented in this file.
   constructed.
 
 ### Changed
+- **A core partition's layout is read once per process, shared, and memory-mapped.**
+  `DatatableClusterCorePartition._layouts_` -- what `lot` and `lot_tablets` read --
+  cached the layout on the instance, and each core tablet evaluates instances of its
+  own: forming ten tablets of a taps clip read one 12.9 MB layout 50 times and kept 34
+  copies, 439 MB. It is now shared by every instance, by its file (path, size,
+  modification time, so a layout written again is read again), read-only, and
+  memory-mapped: from the lake when it is local, from a copy pulled into local staging
+  when it is not. Ten tablets now read 3 MB and add 62 MB, not 478. `layout(part)` still
+  reads the whole array, as before.
 - **A quote writes its nested blocks bare: nothing in it is escaped, at any depth.** A
   spec value that is a `$` specline -- a nested block's quote, or `$dbx.getenv('X')` --
   is written `'upstream': fqcn(...)`, not as a string literal, in `quote()` and

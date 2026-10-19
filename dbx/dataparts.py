@@ -20,6 +20,7 @@ import os
 from dataclasses import dataclass
 
 import numpy as np
+from fsspec.implementations.local import LocalFileSystem
 from streaming import StreamingDataset
 
 from .datablocks import DATADICT, DATADIR, DATAFILE, SAME, Datablock, Datastack, forward_property, shown_tag
@@ -29,6 +30,10 @@ from .datatables import DATASLICE, SLICETOPIC, Datacollator, Layered, Datatablet
 
 #: How `DatatablePartition` assigns tablets to parts -- see its docstring.
 PARTITION_METHODS = ('random', 'largest_first')
+
+#: Every partition layout this process has read, read-only, by its file: path, size, modification time.
+#: See `DatatableClusterCorePartition._layouts_`.
+_LAYOUTS_: dict = {}
 
 
 def _column_values_(tablet, spec) -> list:
@@ -1033,6 +1038,10 @@ class MappedDatatablet(Datatablet):
         On the class, with no map to ask, nothing: even ``source`` is spelled as the slices it copies are.
         """
         mt = self.var.map
+        # From the partition's layout, not the map tablet's built `lot`, which holds the same
+        # first tablet: TOPICS is in the identity, so read from the map, a hash could not be
+        # computed until the map is built -- and a stale map would move it. The layout is
+        # memory-mapped once per process (`_layouts_`), so this reads a few pages.
         first = self.source_table.tablet(mt.var.datamap.lot_tablets(mt.var.index)[0])
         topics = _slice_topics_(first, type(self).__name__)
         copied = self._copied_(first)
@@ -1939,11 +1948,35 @@ class DatatableClusterCorePartition(DatatablePartition):
         return self.var.rows_per_tablet
 
     def _layouts_(self, part: int) -> np.ndarray:
-        """Part *part*'s layout, read once for the lots of all its core tablets."""
-        cache = self.__dict__.setdefault('_layout_cache', {})
-        if part not in cache:
-            cache[part] = self.layout(part)
-        return cache[part]
+        """Part *part*'s layout, read-only: read once per process, for the lots of every core tablet.
+
+        Shared by every instance of this partition, not cached on one: each
+        core tablet evaluates partition instances of its own -- forming one
+        tablet of a taps clip made five of the same partition -- and a cache
+        per instance read its 12.9 MB layout five times a tablet, and kept
+        every copy (34 of them, 439 MB, after ten tablets). Keyed by the file
+        -- path, size and modification time -- so a partition built again is
+        read again. Memory-mapped -- a lot's few rows read a few pages, not the
+        file -- from the lake when it is local, and from a copy in local
+        staging when it is not. The process holds it for its life.
+        """
+        keys = self.__dict__.setdefault('_layout_keys_', {})
+        if part not in keys:
+            path = os.path.join(self.path('layout'), f'{int(part)}.npy')
+            info = self.fs.info(path)
+            keys[part] = (path, info.get('size'), info.get('mtime', info.get('last_modified')))
+        key = keys[part]
+        if key not in _LAYOUTS_:
+            path, size, _ = key
+            if isinstance(self.fs, LocalFileSystem):
+                local = self.fs._strip_protocol(path)
+            else:
+                # Staged in local staging, as `synclocal` stages a topic's files -- again when its size changed.
+                local = os.path.join(self.dirpath('layout', local=True, ensure=True), os.path.basename(path))
+                if not (self.localfs.exists(local) and self.localfs.size(local) == size):
+                    self.pull(path, local)
+            _LAYOUTS_[key] = np.load(local, mmap_mode='r')
+        return _LAYOUTS_[key]
 
     # 4. Helpers -----------------------------------------------------------
 

@@ -625,6 +625,24 @@ def test_the_footer_is_no_row(menu):
     assert copied == [] and d.open
 
 
+def test_a_list_keeps_its_width_as_it_scrolls():
+    """As wide as its widest item, wherever that is: not the widest of the rows shown, which changes with every scroll."""
+    import pygame
+    from hyp.app import Dropdown
+
+    pygame.font.init()
+    items = [(f"p{i}", i) for i in range(40)] + [("a point whose label runs on rather long", 40)]
+    d = Dropdown("points", items, lambda v: None)
+    d.button, d.open = pygame.Rect(10, 10, 60, 16), True
+    font, surf = pygame.font.Font(None, 16), pygame.Surface((800, 600))
+    widths = set()
+    for top in (0, 10, Dropdown.ROWS * 2, len(items) - Dropdown.ROWS):
+        d.top = top
+        d.draw_list(surf, font)
+        widths.add(d.list.width)
+    assert widths == {font.size(items[-1][0])[0] + 24}
+
+
 def test_without_copy_a_right_click_is_not_the_menus(menu):
     import pygame
     from hyp.app import Dropdown

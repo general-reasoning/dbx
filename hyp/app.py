@@ -54,6 +54,7 @@ ERROR_S = 15
 DRAG_RADIUS = 0.97
 LABEL_RADIUS = 0.72
 MAX_LABELS = 48
+SUBLABEL_CHARS = 48  # of each line under a point's label: a longer one is cut short
 
 BG = (17, 20, 24)
 DISK = (26, 31, 39)
@@ -318,6 +319,7 @@ class Dropdown:
         self.copy = copy
         self.copy_hint = copy_hint
         self.note = None  # (text, time): what the last right-click copied, shown in the footer for NOTE_S
+        self._widest_ = (None, 0)  # (what the items were, as told apart, the widest's width): measured once, not each frame
 
     def current(self):
         return self.items() if callable(self.items) else self.items
@@ -419,7 +421,11 @@ class Dropdown:
         if items and self.copy is not None:
             recent = self.note is not None and time.monotonic() - self.note[1] < self.NOTE_S
             footer = self.note[0] if recent else self.copy_hint
-        width = max(self.button.width, max(font.size(t)[0] for t in shown + ([footer] if footer else [])) + 24)
+        # As wide as its widest item, not the widest shown, so that it keeps its width as it scrolls; a note is fitted to it.
+        key = (len(texts), texts[0], texts[-1], footer is not None)
+        if self._widest_[0] != key:
+            self._widest_ = (key, max(font.size(t)[0] for t in texts + ([self.copy_hint] if footer else [])))
+        width = max(self.button.width, self._widest_[1] + 24)
         width = min(width, surf.get_width() - 8)
         self.list = pygame.Rect(self.button.x, self.button.bottom + 2, width, self.row_h * (len(shown) + bool(footer)) + 8)
         self.list.right = min(self.list.right, surf.get_width() - 4)
@@ -1137,7 +1143,7 @@ class Hyp:
     `__data_origin__`, `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
     `__context_point__`), and how a point is labeled (`__point_label__`,
-    `__point_name__`, `__point_version__`, `__point_datetime__`,
+    `__point_tag__`, `__point_name__`, `__point_version__`, `__point_datetime__`,
     `__point_tooltip__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
     """
@@ -1197,6 +1203,10 @@ class Hyp:
     def __point_label__(self, i):
         """The label drawn beside point *i*."""
         return self.snap.summaries[i]
+
+    def __point_tag__(self, i):
+        """A tag for point *i*, as text, drawn under its label on a line of its own, above its name and datetime; or None: here, none."""
+        return None
 
     def __point_name__(self, i):
         """A name for point *i*, as text, drawn under its label before its datetime; or None: here, none."""
@@ -1560,9 +1570,9 @@ class Hyp:
         if key not in self.labels:
             short = text if len(text) <= 32 else text[:31] + "…"
             lines = [self.small.render(short, True, LABEL)]
-            if sub:
-                sub = sub if len(sub) <= 48 else sub[:47] + "…"
-                lines.append(self.tiny.render(sub, True, STATUS))
+            for line in sub.split("\n") if sub else ():
+                line = line if len(line) <= SUBLABEL_CHARS else line[: SUBLABEL_CHARS - 1] + "…"
+                lines.append(self.tiny.render(line, True, STATUS))
             img = pygame.Surface((max(l.get_width() for l in lines), sum(l.get_height() for l in lines)), pygame.SRCALPHA)
             y = 0
             for line in lines:
@@ -1572,16 +1582,25 @@ class Hyp:
         return self.labels[key]
 
     def sublabel(self, i, full=False):
-        """The second line of point *i*'s label: its name, ``v<version>`` and datetime, each as the settings say; None for none.
+        """What is drawn under point *i*'s label: its tag, then its name, ``v<version>`` and datetime, each as the settings say; None for none.
 
-        A long name is cut short, so that the rest stays readable, unless *full*.
+        The tag is a line of its own; the rest follows it on that line where
+        both fit in SUBLABEL_CHARS, else on the next -- a long tag leaves the
+        datetime a line of its own. A long name is cut short, so that the rest
+        stays readable, unless *full*.
         """
+        tag = self.__point_tag__(i) if self.settings.get("tags") else None
         name = self.__point_name__(i) if self.settings.get("names") else None
         if name and len(name) > 30 and not full:
             name = name[:29] + "…"  # so that a long one leaves the rest readable
         version = self.__point_version__(i) if self.settings.get("versions") else None
         parts = [name, f"v{version}" if version else None, self.__point_datetime__(i) if self.settings.get("datetimes") else None]
-        return " · ".join(p for p in parts if p) or None
+        rest = " · ".join(p for p in parts if p)
+        if not tag:
+            return rest or None
+        if not rest:
+            return tag
+        return f"{tag} · {rest}" if len(tag) + 3 + len(rest) <= SUBLABEL_CHARS else f"{tag}\n{rest}"
 
     def point_color(self, z):
         """A point's color, by where it lies on the disk -- *z*, in data coordinates: its angle the hue, its radius the saturation."""
@@ -1603,6 +1622,7 @@ class Hyp:
         if self._points_[:2] != known:
             def text(i):
                 sub = self.sublabel(i, full=True)
+                sub = sub.replace("\n", " · ") if sub else sub  # one line, in a menu
                 t = f"{self.__point_label__(i)}  ·  {sub}" if sub else str(self.__point_label__(i))
                 return t if len(t) <= POINTS_MENU_CHARS else t[: POINTS_MENU_CHARS - 1] + "…"
 

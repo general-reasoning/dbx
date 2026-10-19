@@ -82,6 +82,17 @@ to -- and each row is a point:
   captured stdout and stderr -- its last 1 MB, escape codes dropped, a
   progress bar as last drawn. A capture is uploaded when its command ends,
   so one still running has none to show yet.
+- in either window, `quote` and `cite` buttons, where the entry shown
+  recorded its block's quote: each opens a bash line, to copy (Cmd+C), that
+  makes the block again from that quote and prints it --
+  `dbx.pprint "pkg.Block(spec={...}, ...)"` -- or, for `cite`, prints its
+  cite: `dbx.pprint "pkg.Block(...).cite()"`. The quote's `$` is dropped,
+  as `dbx.exec` runs Python; the cite is made from the quote because a
+  recorded cite cannot be run -- its nested blocks are cited without quotes
+  and their env values resolved. The window's title switches between the
+  two; beside it, `[ ] --revision=` pins the line to the entry's recorded
+  revision, `dbx.pprint --revision=<dbxsha>:<projsha> "..."`, so it runs as
+  the block was built. Off, as it starts, the line runs at today's checkout.
 
 The menus are read in the background once the points are up. Each launch adds
 new pipelines and re-embeds the ones whose spec changed.
@@ -180,7 +191,9 @@ DBX_DATALAKE=ssh://host/path/to/datalake hyp --journal pkg.Model --filter 'tag=T
 
 shows one point per block of the anchor, from its block journal -- each
 block's newest entry, embedded and labeled as a pipeline is; pipeline
-entries, filed in the pipeline journal, are not among them. Its corpus is
+entries, filed in the pipeline journal, are not among them. Beneath a
+block's label, its full `tag`, then its datetime -- on the same line where
+both fit in 48 characters, else on a third. Its corpus is
 kept under `{DBX_DATALAKE}/.hyp/anchors/<anchor>`.
 
 **Switching.** The **journal** menu in the top bar lists the pipelines and
@@ -386,7 +399,7 @@ a directory of markdowns, they are directions of content.
 | while a corpus loads | the window is dimmed and takes no input. A card in its middle shows the stage under way, with a bar, the files done out of the total, the time taken and the time left. An anchor's journal is listed first, as a stage of its own (`dbx.DataJournal.list`). Until the listing is done there is no total, so the bar slides and the card counts the files found so far, after every directory. Then the files are read (`dbx.DataJournal.read_frame`), counted against that total |
 | Esc, while a corpus loads | interrupt it at its next step and drop anything queued behind it. A reload that is interrupted leaves the disk as it was; a switch of journal leaves it empty until the next reload. Laying out the disk (UMAP) cannot be cut short, so an Esc during it waits for it to finish |
 | points (top right) | every point, by its label and second line in full, alphabetically (the first 2,000): picking one slides it to the center; a right click on one does what a right click on its point does |
-| settings (top right) | names and versions (`--journal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same |
+| settings (top right) | tags (an anchor's blocks), names and versions (`--journal`) and datetimes, each on and off: under labels and in tooltips; line numbers, in text windows (off by default); title colors -- a point's window titled in the point's color, and its entry blocks' windows in the same |
 | in a text window | scroll / Up Down / PgUp PgDn move; Left / Right step through its title menu; × or Esc closes it |
 | in a text window: the triangle by a line | a line whose next line is indented deeper folds the deeper lines after it into `… N lines`, and unfolds them. Spec, dfn and kwargs are shown one key per line, a level per four spaces, so they fold by nesting |
 | in a text window: *fold* (top right), or 1–9, 0 | fold every such line at that many levels of indentation or deeper; *unfold all*, or 0, unfolds them all |

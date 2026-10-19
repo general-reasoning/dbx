@@ -46,6 +46,15 @@ All notable changes to this project will be documented in this file.
   on; beneath the title, the session's tokens in and out, their cost at API
   rates, and the plan's 5-hour and 7-day windows. Both are kept in the
   session's front matter.
+- **hyp --journal <anchor>: a block's tag beneath its label.** The full
+  `tag` has a line of its own under the label -- which is only its last
+  component -- and the datetime follows it, or goes to a third line when the
+  tag leaves no room. `tags` in the settings turns it off.
+- **hyp --journal: `quote` and `cite` buttons.** In a pipeline's or a
+  block's window, each opens a bash line to copy -- `dbx.pprint "..."` --
+  that makes the entry's block again from its recorded quote and prints it,
+  or, for `cite`, prints its `.cite()`. A checkbox pins the line to the
+  entry's revision, `--revision=`; off, it runs at today's checkout.
 
 ### Changed
 - **hyp: an arrow is read by where else its direction runs, not by its
@@ -151,6 +160,11 @@ All notable changes to this project will be documented in this file.
   `PipeJournal.ENTRYPOINT_EVENTS`, and **`UNSAFE_copy_from:END` counts for a
   pipeline's entry blocks**, as it did for `constructed()`: the two lists
   name the same events.
+
+### Fixed
+- **hyp: a dropdown keeps its width as it scrolls.** The list was as wide
+  as the widest of the rows shown, so the points menu widened and narrowed
+  with every scroll; it is now as wide as its widest item.
 
 ### Added
 - **`DatatableCarbonCorePartition`: a core partition's layout, over a table

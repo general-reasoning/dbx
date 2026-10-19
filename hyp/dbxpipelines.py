@@ -534,6 +534,41 @@ def has_output(row):
     return bool(row) and not _is_blank_(row.get("log", None))
 
 
+def has_quote(row):
+    """Whether *row*'s entry recorded its block's quote -- the specline that makes the block again -- as dbx does, in a side file."""
+    return bool(row) and not _is_blank_(row.get("quote", None))
+
+
+def quote_text(row):
+    """The quote *row*'s entry recorded, in full: read, as the side files are, through the protocol and host of its ``entry_path``."""
+    from dbx.databits import read_str
+
+    return read_str(rebase(row["quote"], row.get("entry_path", ""))).strip()
+
+
+def rerun_line(quote, cite=False, revision=None):
+    """A bash line that makes the block *quote* names again and prints it -- ``dbx.pprint "..."`` -- or, with *cite*, prints its cite.
+
+    The specline's sigil goes: ``dbx.exec`` runs Python, importing the block's
+    module by its dotted path, and a ``$`` is no Python. The cite is made from
+    the quote, as the block's ``.cite()``: a recorded cite cannot be run, its
+    nested blocks cited without quotes and their env values resolved. With
+    *revision* -- an entry's ``dbxsha:projsha`` -- it runs pinned to it,
+    ``--revision=``, as the block was built; without, at today's checkout.
+    """
+    import shlex
+
+    from dbx.journals import _shell_double_quoted_
+
+    expr = quote.strip()
+    if expr.startswith(("$", "@", "#")):
+        expr = expr[1:]
+    if cite:
+        expr += ".cite()"
+    pin = f"--revision={shlex.quote(revision)} " if revision else ""
+    return f'dbx.pprint {pin}"{_shell_double_quoted_(expr)}"'
+
+
 def output_text(row, limit=OUTPUT_LIMIT):
     """The captured stdout and stderr of the process that wrote *row*'s entry, as text: its end, past *limit* bytes.
 
@@ -1043,8 +1078,8 @@ class HypDbxJournal(Hyp):
                                       visible=lambda: self.anchor is not None, text=format_filters(self.filters))
         self.controls = [self.journal_menu, self.filter_field]  # right to left from points: the journal, then its filter
         self._titled_()
-        # A pipeline's VAR.name and version, under its label before the datetime: listed first.
-        self.settings = {"names": True, "versions": True, **self.settings}
+        # A block's tag, under its label on a line of its own; a pipeline's VAR.name and version, before the datetime: listed first.
+        self.settings = {"tags": True, "names": True, "versions": True, **self.settings}
         self.n_workers = getattr(args, "n_workers", 16)
         # Events that make an entry block count as constructed, besides dbx's own: --extra-construction-events.
         self.extra_events = tuple(getattr(args, "extra_construction_events", None) or ())
@@ -1139,6 +1174,13 @@ class HypDbxJournal(Hyp):
     def __point_label__(self, i):
         return self.snap.points[i].get("label") or self.snap.summaries[i]
 
+    def __point_tag__(self, i):
+        """A block's tag, in full: its label is only the last component. A pipeline's label is its tag already: none."""
+        if self.anchor is None:
+            return None
+        tag = self.snap.points[i].get("row", {}).get("tag")
+        return None if _is_blank_(tag) else str(tag)
+
     def __point_name__(self, i):
         return self.snap.points[i].get("name")
 
@@ -1192,7 +1234,7 @@ class HypDbxJournal(Hyp):
             visible=lambda: bool(viewer.row) and not _is_blank_(viewer.row.get("session")),
             **self._copies_anchorkey_(viewer.row),
         )
-        viewer.menus = [times, roots, session, self._output_button_(viewer)]
+        viewer.menus = [times, roots, session, self._output_button_(viewer), *self._rerun_buttons_(viewer)]
         self.viewers = [viewer]
 
     # Helpers -----------------------------------------------------------------
@@ -1288,6 +1330,7 @@ class HypDbxJournal(Hyp):
             ),
             *self._slice_menus_(window),
             self._output_button_(window),
+            *self._rerun_buttons_(window),
         ]
         self.push_viewer(window)
         self._show_entrypoint_(window, row, entrypath)
@@ -1489,6 +1532,46 @@ class HypDbxJournal(Hyp):
     def _output_button_(self, viewer):
         """The ``output`` button of a journal entry's window: shown while the entry it shows -- ``viewer.row`` -- had its output captured."""
         return Button("output", lambda: self._open_output_(viewer.row), visible=lambda: has_output(getattr(viewer, "row", None)))
+
+    def _rerun_buttons_(self, viewer):
+        """The ``quote`` and ``cite`` buttons of a journal entry's window: shown while the entry it shows recorded its quote."""
+        shown = lambda: has_quote(getattr(viewer, "row", None))
+        return [Button(how, lambda how=how: self._open_rerun_(viewer.row, how), visible=shown) for how in ("quote", "cite")]
+
+    def _open_rerun_(self, row, how):
+        """Open the bash line that runs the entry *row*'s quote again -- *how*, "quote" or "cite", it prints -- over the window it was asked from, to copy.
+
+        Its title is a menu switching between the two; beside it, a checkbox
+        pins the line to the entry's revision, ``--revision=``: off at first.
+        """
+        revision = None if _is_blank_(row.get("revision")) else str(row["revision"])
+        state = {"how": how, "pinned": False, "quote": None}
+
+        def show():
+            title.label = f"{state['how']} · {when(row.get('datetime', ''), seconds=True)} · Cmd+C: copy the line"
+            pin.label = f"[{'x' if state['pinned'] else ' '}]  --revision={':'.join(s[:8] for s in revision.split(':'))}" if revision else ""
+            if state["quote"] is not None:
+                window.set_text(rerun_line(state["quote"], cite=state["how"] == "cite", revision=revision if state["pinned"] else None))
+
+        def pick(value):
+            state["how"] = value
+            show()
+
+        def toggle():
+            state["pinned"] = not state["pinned"]
+            show()
+
+        def read(quote):
+            state["quote"] = quote
+            show()
+
+        title = Dropdown(how, [("quote: makes the block again, and prints it", "quote"), ("cite: prints its cite", "cite")], pick,
+                         value=how)
+        pin = Button("", toggle, visible=lambda: revision is not None)
+        window = TextViewer(how, "reading the quote …", menus=[title, pin])
+        show()
+        self.push_viewer(window)
+        self.run_async(lambda: quote_text(row), read)
 
     def _open_output_(self, row):
         """Open the captured output of the entry *row* in a window over the one it was asked from, read off the UI thread."""

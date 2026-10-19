@@ -919,6 +919,64 @@ def test_a_right_click_on_a_block_lists_its_sessions_blocks(journal_app):
     assert app.viewers[-1].menus[0].value == "/lake/pkg.Data/d1"
 
 
+def test_a_blocks_tag_is_under_its_label_and_the_datetime_after_it_or_below(journal_app):
+    app = journal_app
+    assert app.__point_label__(0) == "models:SECOND" and app.__point_tag__(0) == "pkg.models:SECOND"
+    assert app.sublabel(0) == "pkg.models:SECOND · 2026-10-13 10:00"
+    app.snap.points[0]["row"]["tag"] = "pkg.some.rather.long.package.models:SECOND"
+    assert app.sublabel(0) == "pkg.some.rather.long.package.models:SECOND\n2026-10-13 10:00"
+    app.label(0, app.__point_label__(0), app.sublabel(0))  # three lines draw
+    app.snap.points[0]["row"]["tag"] = "None"
+    assert app.sublabel(0) == "2026-10-13 10:00", "dbx writes a missing tag as None"
+    app._toggle_setting_("tags")
+    assert app.sublabel(1) == "2026-10-12 10:00"
+
+
+def test_a_pipeline_is_labeled_by_its_tag_already_and_shows_it_no_more(pipelines_app):
+    assert pipelines_app.__point_tag__(0) is None
+
+
+def test_a_quote_is_rerun_without_its_sigil_quoted_for_bash():
+    quote = """$pkg.T(spec={'s': "a $b `c` \\\\ d"}, tag='x')"""
+    assert dbxpipelines.rerun_line(quote) == r'''dbx.pprint "pkg.T(spec={'s': \"a \$b \`c\` \\\\ d\"}, tag='x')"'''
+    assert dbxpipelines.rerun_line(quote, cite=True).endswith(r''', tag='x').cite()"''')
+    assert dbxpipelines.rerun_line("@pkg.T()") == 'dbx.pprint "pkg.T()"'
+
+
+def test_the_quote_and_cite_buttons_follow_the_entry_shown_and_open_the_line(journal_app, tmp_path):
+    app = journal_app
+    (tmp_path / "quote.txt").write_text("$pkg.T(spec={'n': 1})\n")
+    app.__click_point__(0, 0.0)
+    app.run_async = lambda fn, then: then(fn())  # the quote read at once: the journal's, by the click, never
+    window = app.viewers[-1]
+    quote, cite = [m for m in window.menus if getattr(m, "label", None) in ("quote", "cite")]
+    window.row = {"quote": "None"}
+    assert not quote.visible() and not cite.visible()
+    window.row = {"quote": str(tmp_path / "quote.txt"), "entry_path": str(tmp_path / "e.parquet"), "datetime": "2026-10-13 10:00:00",
+                  "revision": "aaaaaaaaaaaa:bbbbbbbbbbbb"}
+    assert quote.visible() and cite.visible()
+    cite.on_click()
+    line = app.viewers[-1]
+    assert line.text == '''dbx.pprint "pkg.T(spec={'n': 1}).cite()"''', "unpinned at first"
+    how, pin = line.menus
+    assert pin.visible() and pin.label.startswith("[ ]")
+    pin.on_click()
+    assert line.text == '''dbx.pprint --revision=aaaaaaaaaaaa:bbbbbbbbbbbb "pkg.T(spec={'n': 1}).cite()"'''
+    assert pin.label == "[x]  --revision=aaaaaaaa:bbbbbbbb"
+    how.select("quote")
+    assert line.text == '''dbx.pprint --revision=aaaaaaaaaaaa:bbbbbbbbbbbb "pkg.T(spec={'n': 1})"'''
+    assert how.label.startswith("quote · 2026-10-13 10:00:00")
+
+
+def test_an_entry_with_no_revision_has_no_pin(journal_app, tmp_path):
+    app = journal_app
+    (tmp_path / "quote.txt").write_text("$pkg.T()\n")
+    app.run_async = lambda fn, then: then(fn())
+    app._open_rerun_({"quote": str(tmp_path / "quote.txt"), "revision": "None"}, "quote")
+    assert not app.viewers[-1].menus[1].visible()
+    assert app.viewers[-1].text == 'dbx.pprint "pkg.T()"'
+
+
 @pytest.mark.parametrize("text, filters", [
     ("", {}),
     ("tag=gigapath", {"tag": "gigapath"}),

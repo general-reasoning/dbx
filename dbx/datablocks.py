@@ -17,6 +17,7 @@ This module defines the central abstractions of dbx:
 
 - :class:`SlurmRayCluster` — Slurm integration for launching Ray clusters.
 """
+import argparse
 import ast
 import collections
 import contextlib
@@ -31,6 +32,7 @@ import gc
 import hashlib
 import inspect
 import os
+from pprint import pformat
 import time
 import random
 import re
@@ -862,7 +864,6 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
     if not args:
         called_from_cli = True
         databits.pintrampoline()
-        import argparse
         parser = argparse.ArgumentParser(prog="dbx.valid", description="Validate latest builds for given anchors.")
         parser.add_argument("anchors", nargs="*", help="Anchor keys or Datablock names")
         parser.add_argument("--n-workers", type=int, default=None, help="Number of workers for journal scanning")
@@ -962,11 +963,10 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
         final_res = results
 
     if called_from_cli:
-        import pprint
         if isinstance(final_res, bool):
             print(final_res)
         else:
-            pprint.pprint(final_res)
+            print(pformat(final_res))
 
     return final_res
 
@@ -4211,8 +4211,7 @@ class Datablock:
         legacy_typing = self._legacy_typing_(legacy_typing)
         norm = self._legacy_norm_() if legacy_signature is None else bool(legacy_signature)
         if pretty:
-            import pprint
-            return pprint.pformat(
+            return pformat(
                 self.signature(legacy_typing=legacy_typing, legacy_signature=norm,
                                    deslash=deslash, omit=omit, redirect_vars=redirect_vars, nested=nested),
                 indent=2, width=120)
@@ -4616,8 +4615,7 @@ class Datablock:
             legacy_signature = legacy
         legacy_typing = self._legacy_typing_(legacy_typing)
         if pretty:
-            import pprint
-            return pprint.pformat(
+            return pformat(
                 self.type(deslash=deslash, legacy_typing=legacy_typing,
                               legacy_signature=legacy_signature), indent=2, width=120)
         # A redirection is emphatically NOT part of the identity: it says where

@@ -19,12 +19,25 @@ without a protocol, and are read through the protocol and host of the row's
 ``entry_path``.
 """
 
+import ast
+import pprint
 import re
+import shlex
 import threading
+import traceback
+import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
-from .app import Button, DiskViewer, Dropdown, Hyp, TextViewer
+import fsspec
+from fsspec.core import split_protocol
+import numpy as np
+import pandas as pd
+import yaml
+
+from . import layout, store
+from .app import Button, DiskViewer, Dropdown, Hyp, TextField, TextViewer
 
 # Columns shown first, in this order; the rest follow as the frame has them,
 # then the side files, then TAIL_COLUMNS.
@@ -95,7 +108,6 @@ class LabelFirstEmbedder:
         self.base.prepare(progress)
 
     def __call__(self, texts):
-        import numpy as np
 
         if not texts:
             return np.zeros((0, self.DIM), dtype=np.float32)
@@ -108,9 +120,7 @@ class LabelFirstEmbedder:
     @classmethod
     def label_vector(cls, label):
         """*label* as a unit vector: its character trigrams, each hashed to a dimension and a sign."""
-        import zlib
 
-        import numpy as np
 
         v = np.zeros(cls.DIM, dtype=np.float32)
         padded = f"_{label.strip().lower()}_"
@@ -200,7 +210,6 @@ def tail(tag):
 
 
 def _is_blank_(v):
-    import pandas as pd
 
     if isinstance(v, str):
         return v in ("", "None")  # dbx writes a missing value as "None"
@@ -227,7 +236,6 @@ def _inert_loader_():
     a dump names -- a block's dfn holds its upstream blocks, and making them
     instantiates each, here, with whatever of their code this process has.
     """
-    import yaml
 
     class Loader(yaml.SafeLoader):
         pass
@@ -249,7 +257,6 @@ def _inert_loader_():
 
 def read_dump(path):
     """The yaml dump at *path* -- a spec, dfn or kwargs side file -- as data, with `_inert_loader_`."""
-    import yaml
     from dbx.databits import read_str
 
     return yaml.load(read_str(path), Loader=_inert_loader_())
@@ -263,9 +270,7 @@ def _side_file_(column, path, url):
     pretty-printed, as points have always been embedded from: a change to
     how it is shown must not move every point. Otherwise both are the file.
     """
-    import pprint
 
-    import yaml
     from dbx.databits import read_str
 
     if not isinstance(path, str) or not re.search(r"\.(txt|yaml|yml|json)$", path):
@@ -295,7 +300,6 @@ def _side_file_(column, path, url):
 
 def var_name(row):
     """The pipeline's ``VAR.name``, from the spec side file *row* names; None where it has none, or it cannot be read."""
-    import yaml
 
     path = row.get("spec")
     if not isinstance(path, str) or not path.endswith((".yaml", ".yml")):
@@ -432,7 +436,6 @@ def blocks(anchor, progress=print, n_workers=16, filters=None):
     a block's newest is taken. A pipeline's entries -- filed under the pipeline
     journal, ``.pipelines`` -- are not among them.
     """
-    import pandas as pd
 
     filters = dict(filters or {})
     BuildJournal = _dbx_().BuildJournal
@@ -511,7 +514,6 @@ def journal_entries(n_workers=16):
     With a ``name`` column: each entry's `var_name`, read from its spec side
     file on *n_workers* threads -- what tells apart the runs the tag menu lists.
     """
-    import pandas as pd
 
     dbx = _dbx_()
     df = dbx.PipeJournal.read(dbx.PipeJournal.ANCHOR, datalake=datalake(), n_workers=n_workers, index=None)
@@ -559,7 +561,6 @@ def rerun_line(quote, cite=False, revision=None):
     runs pinned to it, ``--revision=``, as the block was built; without, at
     today's checkout.
     """
-    import shlex
 
     from dbx.journals import _shell_double_quoted_
 
@@ -582,7 +583,6 @@ def output_text(row, limit=OUTPUT_LIMIT):
     and a line redrawn with carriage returns -- a progress bar -- is shown as
     it was last drawn.
     """
-    import fsspec
 
     path = rebase(row["log"], row.get("entry_path", ""))
     fs, p = fsspec.url_to_fs(path, **_dbx_().default_storage_options())
@@ -612,7 +612,6 @@ def session_blocks(row, n_workers=16):
     A pipeline's entries are left out: they are its creations, filed in the
     pipeline journal, and its block directory holds none of them.
     """
-    import pandas as pd
 
     dbx = _dbx_()
     session, lake, url = row.get("session"), str(row.get("datalake", "")), row.get("entry_path", "")
@@ -632,7 +631,6 @@ def session_blocks(row, n_workers=16):
 
 def _entry_(row):
     """*row* -- a block's journal row, as a window keeps one -- as a `BuildJournalEntry` whose filesystem is the datalake's, over ssh if it is remote."""
-    import pandas as pd
 
     dbx = _dbx_()
     lake = rebase(str(row.get("datalake", "")), row.get("entry_path", ""))
@@ -721,7 +719,6 @@ def _remote_block_(row, python):
 
 def recorded_slices(row):
     """The slices *row*'s entry records its block can be read by -- its ``slices`` -- by name; none where it records none."""
-    import ast
 
     text = row.get("slices") if row else None
     if _is_blank_(text):
@@ -739,7 +736,6 @@ def declared_columns(row):
     What can be viewed of a block, and how: a slice that declares none -- a
     bare ``DATASLICE`` -- says nothing of what its rows hold, and is left out.
     """
-    import ast
 
     text = row.get("slices") if row else None
     if _is_blank_(text):
@@ -948,7 +944,6 @@ def slice_sample(row, data, labels=None, fraction=1.0, tablets=None, workers=DEF
 
 def _sample_indices_(n, fraction, seed=0):
     """The rows dbx's ``sample_rows`` picks of *n*, sorted: as it does, here."""
-    import numpy as np
 
     if n <= 0:
         return np.zeros(0, dtype=np.int64)
@@ -975,7 +970,6 @@ def read_text(row, topic, python=REMOTE_PYTHON, limit=READ_LIMIT):
     there, when the value stays there behind a proxy -- cut short past *limit*;
     or the traceback.
     """
-    import traceback
 
     where = _where_(row) or "here"
     head = f"read {'/'.join(topic)} of {row.get('anchorkeypath', '?')}  -- trueinst() on {where}"
@@ -1002,7 +996,6 @@ def entrypoint_text(entrypath, row, n_workers=16):
     ``(text, newest)``: *newest* the newest entry's row, as `entry` keeps
     one, or None where there is no entry.
     """
-    import pandas as pd
 
     dbx = _dbx_()
     lake = str(row.get("datalake", ""))
@@ -1053,7 +1046,6 @@ class HypDbxJournal(Hyp):
     @classmethod
     def __data_origin__(cls, args):
         """The variable the datalake came from; deprecated, if it is not DBX_DATALAKE; and local, if nothing gives it a protocol."""
-        from fsspec.core import split_protocol
 
         var = _dbx_().default_datalake_var()
         said = [var] if var == "DBX_DATALAKE" else [f"{var}, deprecated: set DBX_DATALAKE instead"]
@@ -1070,7 +1062,6 @@ class HypDbxJournal(Hyp):
         return journal_source(anchor_of(getattr(args, "journal", None)), parse_filters(getattr(args, "filter", None)), args.n_workers)
 
     def __init__(self, engine, worker, args=None):
-        from .app import TextField
 
         self.anchor = anchor_of(getattr(args, "journal", None))
         self.filters = parse_filters(getattr(args, "filter", None))
@@ -1140,7 +1131,6 @@ class HypDbxJournal(Hyp):
 
     def switch(self, anchor, filters=None):
         """Show another journal -- the pipelines, for *anchor* None, or *anchor*'s blocks with *filters* -- read, embedded and laid out in the background."""
-        from .store import Store
 
         self.anchor, self.filters = anchor, dict(filters or {})
         self.filter_field.text = self.filter_field.committed = format_filters(self.filters)
@@ -1156,7 +1146,7 @@ class HypDbxJournal(Hyp):
 
         def job(progress):
             progress(f"opening the corpus at {data}")
-            engine.switch(Store(data, options), source)
+            engine.switch(store.Store(data, options), source)
             engine.start(progress)
             events.put(("snapshot", (engine.snapshot(), None)))
             progress("ready")
@@ -1499,7 +1489,6 @@ class HypDbxJournal(Hyp):
 
     def _open_slice_disk_(self, window):
         """Sample the slice columns picked in the pinned worker, lay the sample out with hyperbolic UMAP, and show it on a disk over *window*."""
-        from . import layout
 
         row, pick = window.row, dict(window.slice_pick)
         data, labels, workers = pick["data"], pick["labels"], pick["workers"]
@@ -1598,7 +1587,6 @@ class HypDbxJournal(Hyp):
 
     def _block_context_(self, i, row, pos):
         """Right click on a block: the blocks journaled under its session, at the mouse; picking one opens its window."""
-        from types import SimpleNamespace
 
         if _is_blank_(row.get("session")):
             self.status = "no session: the block was built outside dbx.exec"

@@ -46,6 +46,7 @@ from .datablocks import (
     forming_with_journal,
     is_topicmarker,
 )
+from . import databits
 from .databits import read_yaml
 from .datastreams import (
     ChunkShuffleSampler,
@@ -1166,8 +1167,7 @@ class Datatablet(_Database_):
 
 def DatatableTablet(table, idx, tag=None, **spec):
     if isinstance(table, str) and (table.startswith('$') or table.startswith('@') or table.startswith('#')):
-        from .databits import eval as dbx_eval
-        table = dbx_eval(table)
+        table = databits.eval(table)
     return table(idx, tag=tag, **spec)
 
 

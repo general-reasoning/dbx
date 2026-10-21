@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import json
+from multiprocessing.shared_memory import SharedMemory as BuiltinSharedMemory
 import atexit
 import os
 import weakref
@@ -58,7 +59,6 @@ def _same_value_(a, b):
         return True
     try:
         if hasattr(a, 'shape') or hasattr(b, 'shape'):
-            import numpy as np
             return np.array_equal(np.asarray(a), np.asarray(b))
         return bool(a == b)
     except Exception:
@@ -114,7 +114,6 @@ class SharedMemoryManager:
         """Clean up shared memory segments created by the specified PID (defaults to current PID)."""
         target_pid = pid or os.getpid()
         try:
-            from multiprocessing.shared_memory import SharedMemory as BuiltinSharedMemory
             from streaming.base.constant import SHM_TO_CLEAN
             for prefix_int in range(100):
                 for shm_name in SHM_TO_CLEAN:

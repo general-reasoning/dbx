@@ -17,6 +17,7 @@ and asked to name the direction in a line; the evidence's strength -- how
 many other pairs make the same move, and how nearly -- is shown with it.
 """
 
+import json
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -112,7 +113,6 @@ def prompt(arrows):
 
 def parse(reply, n):
     """*reply*'s *n* lines, one per arrow; None where it holds no JSON array of *n* strings."""
-    import json
 
     a, b = reply.find("["), reply.rfind("]")
     try:

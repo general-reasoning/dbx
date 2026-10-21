@@ -23,6 +23,7 @@ except ImportError:
 import dbx
 from dbx.datablocks import DATADICT, DATADIR, DATAFILE, SAME, Datablock, Datastack, DIRTOPIC, forward_property
 from dbx.backbones import ModelEvaluatorBuilder
+from dbx.databits import read_npz, write_npz
 from dbx.datatables import (
     DATASLICE,
     Datacollator,
@@ -851,7 +852,6 @@ class TernaryFeaturetablet(Layered, Datatablet):
                              f"must lean to decide its sign, in (0, 1]; got {self.var.bag_threshold!r}")
 
     def __build__(self):
-        from dbx.databits import write_npz
         columns = self.bipolar_columns
         data = self.upstream.data(('bipolar', list(columns)), concat=True)['bipolar']
         ternary, counts = {}, set()
@@ -883,7 +883,6 @@ class TernaryFeaturetablet(Layered, Datatablet):
 
     def bag(self, column: str) -> dict:
         """``{'mean', 'sign', 'n_rows'}`` of *column*: the bag-level estimate its rows were judged against."""
-        from dbx.databits import read_npz
         if column not in self.bipolar_columns:
             raise KeyError(f"{type(self).__name__}: no bipolar column {column!r}; it has {self.bipolar_columns}")
         return read_npz(self.path('bag', column), 'mean', 'sign', 'n_rows', storage_options=self.storage_options)

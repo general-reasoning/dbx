@@ -10,6 +10,7 @@ import zlib
 from typing import Any
 
 import numpy as np
+import tqdm
 
 try:
     import torch
@@ -907,9 +908,8 @@ class FeatureStatsProbe(Datablock):
                       f"({held / 2**30:.2f} GiB); computing whole-table stats")
         whole_by_path = self._table_stats_(results)
 
-        from tqdm import tqdm
         tablet_counts = np.array([res['n_rows'] for res in results])
-        for path in tqdm(self.column_paths, desc=f"WRITING STATS [{type(self).__name__}]"):
+        for path in tqdm.tqdm(self.column_paths, desc=f"WRITING STATS [{type(self).__name__}]"):
             whole = whole_by_path[path]
             write_npz(self.path('stats', *path, ensure_dirpath=True),
                       **{name: whole[name] for name in self.PER_FEATURE_DATADICT.schema})
@@ -1009,7 +1009,6 @@ class FeatureStatsProbe(Datablock):
         at a time gives the same values holding only that band. ``norm`` is per
         sample, so it is the tablets' own, joined.
         """
-        from tqdm import tqdm
         plans = []
         for path in self.column_paths:
             parts = [res['columns'][path] for res in results]
@@ -1021,7 +1020,7 @@ class FeatureStatsProbe(Datablock):
         steps = sum(-(-width // band) for _, _, width, band in plans)
 
         out = {}
-        with tqdm(total=steps, desc=f"COMPUTING TABLE STATS [{self.__class__.__name__}]") as bar:
+        with tqdm.tqdm(total=steps, desc=f"COMPUTING TABLE STATS [{self.__class__.__name__}]") as bar:
             for path, parts, width, band in plans:
                 pieces = {name: [] for name in SAMPLE_REDUCTIONS}
                 for c0 in range(0, width, band):

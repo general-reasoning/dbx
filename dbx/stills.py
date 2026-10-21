@@ -59,8 +59,10 @@ from __future__ import annotations
 import atexit
 import inspect
 import os
+import pickle
 import re
 import shutil
+import types
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -135,8 +137,6 @@ class _GoneClass_:
 
 def _tolerant_pickle_module_(gone: list):
     """A pickle module whose Unpickler stands `_GoneClass_` in for a class it cannot find, noting it in *gone*."""
-    import pickle
-    import types
 
     class Unpickler(pickle.Unpickler):
         def find_class(self, mod_name, name):
@@ -2136,7 +2136,6 @@ class Still(CheckpointBuilder):
         if (self._device_count_(self._resolve_devices_()[1]) or 2) < 2:
             return
         try:
-            import inspect
             source = inspect.getsource(type(model))
             sites = source.count('experiment.add_')
         except Exception:

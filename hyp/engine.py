@@ -4,6 +4,7 @@ The UI talks to it from a worker thread; a lock serializes mutations, and
 snapshot() hands the UI an immutable copy to draw.
 """
 
+import hashlib
 import threading
 from dataclasses import dataclass
 
@@ -165,7 +166,6 @@ class Engine:
         as the evidence is the whole corpus's. An arrow between two equal
         embeddings is not asked about.
         """
-        import hashlib
 
         with self.lock:
             s = self.store

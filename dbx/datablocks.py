@@ -17,6 +17,7 @@ This module defines the central abstractions of dbx:
 
 - :class:`SlurmRayCluster` — Slurm integration for launching Ray clusters.
 """
+import argparse
 import ast
 import collections
 import contextlib
@@ -31,6 +32,7 @@ import gc
 import hashlib
 import inspect
 import os
+from pprint import pformat
 import time
 import random
 import re
@@ -862,7 +864,6 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
     if not args:
         called_from_cli = True
         databits.pintrampoline()
-        import argparse
         parser = argparse.ArgumentParser(prog="dbx.valid", description="Validate latest builds for given anchors.")
         parser.add_argument("anchors", nargs="*", help="Anchor keys or Datablock names")
         parser.add_argument("--n-workers", type=int, default=None, help="Number of workers for journal scanning")
@@ -962,11 +963,10 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
         final_res = results
 
     if called_from_cli:
-        import pprint
         if isinstance(final_res, bool):
             print(final_res)
         else:
-            pprint.pprint(final_res)
+            print(pformat(final_res))
 
     return final_res
 
@@ -3967,22 +3967,21 @@ class Datablock:
             assert not self.valid(), f"Attempting to overwrite a valid Datablock {self}. Missing 'overwrite' argument?"
         fs, _ = self._url_to_fs_(anchorkeypath)
         assert fs.isdir(anchorkeypath), f"Nonexistent hashpath {anchorkeypath}"
-        self.log.verbose(f"Copying files from {anchorkeypath}: BEGIN")
         self.write_journal_entry(event="UNSAFE_copy_from:BEGIN", note=anchorkeypath, inline_note=True)
         try:
-            topics = self.topics()
-            if not topics:
-                raise NotImplementedError(
-                    f"{self.__class__.__name__}.UNSAFE_copy_from() requires TOPICS"
-                )
-            topics_iter = tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic") if show_progress else topics
-            for topic in topics_iter:
-                self._UNSAFE_copy_topic_(
-                    topic, anchorkeypath, topicpaths=topicpaths,
-                    always_copy_whole_dirpath=always_copy_whole_dirpath, **kwargs,
-                )
+            with self.log.section(f"Copying files from {anchorkeypath}"):
+                topics = self.topics()
+                if not topics:
+                    raise NotImplementedError(
+                        f"{self.__class__.__name__}.UNSAFE_copy_from() requires TOPICS"
+                    )
+                topics_iter = tqdm.tqdm(topics, desc="UNSAFE_copy_from", unit="topic") if show_progress else topics
+                for topic in topics_iter:
+                    self._UNSAFE_copy_topic_(
+                        topic, anchorkeypath, topicpaths=topicpaths,
+                        always_copy_whole_dirpath=always_copy_whole_dirpath, **kwargs,
+                    )
 
-            self.log.verbose(f"Copying files from {anchorkeypath}: END")
             self.write_journal_entry(event="UNSAFE_copy_from:END", note=anchorkeypath, inline_note=True)
             if validate:
                 assert self.validate(), f"Invalid Datablock after copy: {self}"
@@ -4287,8 +4286,7 @@ class Datablock:
         legacy_typing = self._legacy_typing_(legacy_typing)
         norm = self._legacy_norm_() if legacy_signature is None else bool(legacy_signature)
         if pretty:
-            import pprint
-            return pprint.pformat(
+            return pformat(
                 self.signature(legacy_typing=legacy_typing, legacy_signature=norm,
                                    deslash=deslash, omit=omit, redirect_vars=redirect_vars, nested=nested),
                 indent=2, width=120)
@@ -4692,8 +4690,7 @@ class Datablock:
             legacy_signature = legacy
         legacy_typing = self._legacy_typing_(legacy_typing)
         if pretty:
-            import pprint
-            return pprint.pformat(
+            return pformat(
                 self.type(deslash=deslash, legacy_typing=legacy_typing,
                               legacy_signature=legacy_signature), indent=2, width=120)
         # A redirection is emphatically NOT part of the identity: it says where
@@ -5317,11 +5314,8 @@ class Datablock:
     @functools.cached_property
     def var(self):
         verbose = getattr(self, 'VERBOSE_VAR', False) or getattr(self, 'VERBOSE_CONFIG', False)
-        log_fn = self.log.verbose if verbose else self.log.detailed
-        log_fn(f"Forming var from spec: BEGIN")
-        var = self._spec_to_var_(self.spec)
-        log_fn(f"Forming var from spec: END")
-        return var
+        with self.log.section("Forming var from spec", 'verbose' if verbose else 'detailed'):
+            return self._spec_to_var_(self.spec)
 
     # DEPRECATED ALIASES of .var
     @property
@@ -6708,13 +6702,11 @@ class Datablock:
             or (isinstance(self._topicfiles_, dict) and self._is_dir_topic_(*topic))
         )
         if use_dir:
-            self.log.verbose(f"Using copy_topic_dir for topic {topic}: BEGIN")
-            self._UNSAFE_copy_topic_dir_(topic, anchorkeypath, topicpaths=topicpaths)
-            self.log.verbose(f"Using copy_topic_dir for topic {topic}: END")
+            with self.log.section(f"Using copy_topic_dir for topic {topic}"):
+                self._UNSAFE_copy_topic_dir_(topic, anchorkeypath, topicpaths=topicpaths)
         else:
-            self.log.verbose(f"Using copy_topic_file for topic {topic}: BEGIN")
-            self._UNSAFE_copy_topic_file_(topic, anchorkeypath, topicpaths=topicpaths)
-            self.log.verbose(f"Using copy_topic_file for topic {topic}: END")
+            with self.log.section(f"Using copy_topic_file for topic {topic}"):
+                self._UNSAFE_copy_topic_file_(topic, anchorkeypath, topicpaths=topicpaths)
 
     def _spec_to_var_(self, spec):
         var = self.VAR(**spec)

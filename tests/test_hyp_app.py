@@ -1,6 +1,7 @@
 """The hyp window's busy spinner: on while data are loaded or prepared, off once they are."""
 
 import os
+import sys
 import threading
 import time
 
@@ -655,3 +656,74 @@ def test_without_copy_a_right_click_is_not_the_menus(menu):
     plain.draw_list(pygame.Surface((400, 300)), font)
     assert not click(plain, 3, 1)
     assert copied == [] and picked == [] and plain.open
+
+
+def test_a_held_key_repeats_but_esc_and_enter_do_not(app):
+    import pygame
+
+    down = lambda k: pygame.event.Event(pygame.KEYDOWN, key=k, mod=0, unicode="")
+    up = lambda k: pygame.event.Event(pygame.KEYUP, key=k, mod=0)
+    assert pygame.key.get_repeat() == (400, 35), "on, as everywhere else"
+    assert not app._repeated_(down(pygame.K_BACKSPACE)) and not app._repeated_(down(pygame.K_BACKSPACE)), "Backspace held repeats"
+    assert not app._repeated_(down(pygame.K_ESCAPE)) and app._repeated_(down(pygame.K_ESCAPE)), "Esc held: once"
+    app._repeated_(up(pygame.K_ESCAPE))
+    assert not app._repeated_(down(pygame.K_ESCAPE)), "pressed again: again"
+
+
+def test_the_box_keeps_its_hint_inside_it():
+    import pygame
+    from hyp.app import TextBox, wrap
+    from hyp.docs import HypDocs
+
+    pygame.font.init()
+    font, surf = pygame.font.Font(None, 18), pygame.Surface((900, 600))
+    box = TextBox((10, 10), HypDocs.BOX_HINT)
+    box.draw(surf, font)
+    assert font.size(HypDocs.BOX_HINT)[0] > TextBox.WIDTH - 20, "a hint too long for one line"
+    assert all(font.size(ln)[0] <= TextBox.WIDTH - 20 for ln in wrap(font, box.hint, TextBox.WIDTH - 20))
+    assert box.rect.width == TextBox.WIDTH and box.rect.height >= 2 * font.get_linesize() * 2
+
+
+def test_hyp_gives_the_terminal_back_only_with_one_and_not_in_the_foreground(monkeypatch):
+    from hyp import app as app_mod
+
+    detached = []
+    monkeypatch.setattr(app_mod, "_detach_", lambda argv: detached.append(argv) or 0)
+    monkeypatch.delenv(app_mod.READY_FD, raising=False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    with pytest.raises(SystemExit) as done:
+        app_mod.main(["--docs", "--dir", "/tmp"])
+    assert done.value.code == 0 and detached == [["--docs", "--dir", "/tmp"]], "run again, in the background, as asked"
+    from hyp.docs import HypDocs
+
+    monkeypatch.setattr(HypDocs, "__default_data__", classmethod(lambda cls, args: (_ for _ in ()).throw(RuntimeError("ran here"))))
+    for argv in (["--docs", "--fg"], ["--docs"]):
+        if argv == ["--docs"]:
+            monkeypatch.setenv(app_mod.READY_FD, "99")  # the run in the background itself
+        with pytest.raises(RuntimeError, match="ran here"):
+            app_mod.main(argv)
+    assert len(detached) == 1
+
+
+def test_a_run_in_the_background_says_it_is_up_once():
+    import os
+    from hyp import app as app_mod
+
+    r, w = os.pipe()
+    os.environ[app_mod.READY_FD] = str(w)
+    app_mod._say_ready_()
+    app_mod._say_ready_()  # once only: the variable is gone, and the fd closed
+    with os.fdopen(r, "rb") as f:
+        assert f.read() == b"ok"
+    assert app_mod.READY_FD not in os.environ
+
+
+def test_a_start_that_fails_in_the_background_is_said_in_the_terminal(tmp_path, monkeypatch, capsys):
+    from hyp import app as app_mod
+
+    monkeypatch.setattr(app_mod.Hyp, "HOME", str(tmp_path))
+    monkeypatch.setattr(app_mod.sys, "executable", sys.executable)
+    code = app_mod._detach_(["--data", "ssh://no-such-host.invalid/corpus"])
+    err = capsys.readouterr().err
+    assert code == 1 and "cannot open the corpus ssh://no-such-host.invalid/corpus" in err
+    assert len(list((tmp_path / "logs").glob("hyp-*.log"))) == 1

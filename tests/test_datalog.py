@@ -6,7 +6,7 @@ import pytest
 
 from dbx.datablocks import Datablock, DATAFILE
 from dbx.databits import callable_executor
-from dbx.journals import Datalog
+from dbx.journals import Datalog, log_section
 
 
 LEAD = re.compile(r"^(?P<worker>\S+?):-*\s+(?P<dt>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}): (?P<rest>.*)$")
@@ -115,6 +115,40 @@ class TestSubtree:
         with Datalog().subtree('a'):
             pass
         assert _lines(capsys) == []
+
+
+class TestSection:
+    def test_brackets_its_body_at_verbose(self, capsys):
+        log = Datalog(verbose=True)
+        with log.section("copying"):
+            log.verbose("inside")
+        assert [_rest(l) for l in _lines(capsys)] == [
+            "VERBOSE: >>>--- copying", "VERBOSE: inside", "VERBOSE: <<<--- copying"]
+
+    def test_closes_when_its_body_raises(self, capsys):
+        with pytest.raises(KeyError):
+            with Datalog(verbose=True).section("copying"):
+                raise KeyError("x")
+        assert _rest(_lines(capsys)[-1]) == "VERBOSE: <<<--- copying: raised KeyError"
+
+    def test_at_the_level_given(self, capsys):
+        with Datalog(verbose=True, detailed=False).section("var", 'detailed'):
+            pass
+        assert _lines(capsys) == []
+        with Datalog(detailed=True).section("var", 'detailed'):
+            pass
+        assert [_rest(l) for l in _lines(capsys)] == ["DETAILED: >>>--- var", "DETAILED: <<<--- var"]
+
+    def test_any_log_with_the_level_will_do(self):
+        class Log:
+            def __init__(self):
+                self.lines = []
+            def verbose(self, msg):
+                self.lines.append(msg)
+        log = Log()
+        with log_section(log, "reading"):
+            log.verbose("inside")
+        assert log.lines == [">>>--- reading", "inside", "<<<--- reading"]
 
 
 def _work(i):

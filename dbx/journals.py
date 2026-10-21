@@ -26,8 +26,10 @@ import datetime
 import fnmatch
 import functools
 import hashlib
+import importlib
 import json
 import os
+from pprint import pformat
 import time
 import multiprocessing
 import re
@@ -48,6 +50,7 @@ import tqdm
 from . import databits
 from .databits import (
     OutputTee,
+    anchors,
     UNSAFE_allowed,
     callable_executor,
     Remote,
@@ -101,6 +104,26 @@ _THREAD_DATALOGS = threading.local()
 #: nothing carried, is named under. Keyed by pid, so a forked child does not
 #: take its parent's name for its own.
 _PROCESS_WORKERS = {}
+
+
+@contextlib.contextmanager
+def log_section(log, text, level: str = 'verbose'):
+    """Bracket a section of computation in two *level* lines of *log*: ``>>>--- text`` before it, ``<<<--- text`` after.
+
+    The closing line is written however the body ends -- ending
+    ``: raised <Error>`` when it raises -- so a section that opened always
+    says where it closed. *log* is anything with a *level* method taking a
+    message, as a ``log=`` argument is; a `Datalog` has it as
+    :meth:`Datalog.section`.
+    """
+    write = getattr(log, level)
+    write(f">>>--- {text}")
+    try:
+        yield log
+    except BaseException as e:
+        write(f"<<<--- {text}: raised {type(e).__name__}")
+        raise
+    write(f"<<<--- {text}")
 
 
 class Datalog:
@@ -296,6 +319,18 @@ class Datalog:
         finally:
             _THREAD_DATALOGS.depth = depth
             self._banner_('<<<', f"BUILDING SUBTREE at {at}")
+
+    @contextlib.contextmanager
+    def section(self, text, level: str = 'verbose'):
+        """Bracket a section of computation in two *level* lines: ``>>>--- text`` before it, ``<<<--- text`` after.
+
+        The closing line is written however the body ends -- ending
+        ``: raised <Error>`` when it raises -- so a section that opened always
+        says where it closed. Unlike :meth:`subtree`, the lines are ordinary
+        *level* lines, under the view's name, and nest no deeper.
+        """
+        with log_section(self, text, level):
+            yield self
 
     def skip_subtree(self, at, why: str):
         """The TREE banner of a subtree *at* not built, and *why*, where its :meth:`subtree` banners would be."""
@@ -1557,10 +1592,9 @@ class CallableSignature(CallableStr):
         if deslash:
             s = s.replace('\\', '')
         if pretty:
-            import pprint
             parsed = datablocks.Datablock._parse_signature_(s)
             sig_dict = {k: datablocks.Datablock._structure_from_signature_text_(v) for k, v in parsed.items()}
-            return pprint.pformat(sig_dict, indent=2, width=120)
+            return pformat(sig_dict, indent=2, width=120)
         return s
 
 
@@ -1586,10 +1620,9 @@ class CallableSig(CallableStr):
         if deslash:
             s = s.replace('\\', '')
         if pretty:
-            import pprint
             parsed = datablocks.Datablock._parse_signature_(s)
             sig_dict = {k: datablocks.Datablock._structure_from_signature_text_(v) for k, v in parsed.items()}
-            return pprint.pformat(sig_dict, indent=2, width=120)
+            return pformat(sig_dict, indent=2, width=120)
         return s
 
 
@@ -1601,7 +1634,6 @@ class CallableType(CallableStr):
 
     def __call__(self, *, deslash: bool = False, pretty: bool = False, **kwargs):
         if pretty:
-            import pprint
             try:
                 t_str = str(self)
                 parts = t_str.split(os.sep) if os.sep in t_str else t_str.split('/')
@@ -1626,7 +1658,7 @@ class CallableType(CallableStr):
                     'topics': tuple(topics),
                     'version': version,
                 }
-                return pprint.pformat(d, indent=2, width=120)
+                return pformat(d, indent=2, width=120)
             except Exception:
                 pass
         t = str(self)
@@ -1643,7 +1675,6 @@ class CallableTp(CallableStr):
 
     def __call__(self, *, deslash: bool = False, pretty: bool = True, **kwargs):
         if pretty:
-            import pprint
             try:
                 t_str = str(self)
                 parts = t_str.split(os.sep) if os.sep in t_str else t_str.split('/')
@@ -1668,7 +1699,7 @@ class CallableTp(CallableStr):
                     'topics': tuple(topics),
                     'version': version,
                 }
-                return pprint.pformat(d, indent=2, width=120)
+                return pformat(d, indent=2, width=120)
             except Exception:
                 pass
         t = str(self)
@@ -1688,7 +1719,6 @@ def cite_specline(text: str, *, deslash: bool = True) -> str:
     backslashes are left, last, as `cite` does. Not evaluable, as a cite is
     not. *text* comes back unchanged when it does not parse as a call.
     """
-    import ast
     IND = '    '
 
     def call_of(value):
@@ -2892,15 +2922,14 @@ class BuildJournal:
                                                              storage_options, log)
         report = progress if callable(progress) else None
 
-        log.verbose(f"Retrieving journal files from {anchordirpath=} BEGIN")
-        if progress is True:
-            log.info(f"Listing the {anchor} journal files under {anchordirpath} ...")
-        listing_started = time.time()
-        parquet_files = cls._list_(fs, anchordirpath, anchor, n_workers=n_workers, log=log, progress=report)
-        log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
-        if progress is True:
-            log.info(f"Listed {len(parquet_files)} {anchor} journal files in {time.time() - listing_started:.0f} s; reading them")
-        log.verbose(f"Retrieving journal files from {anchordirpath=} END")
+        with log_section(log, f"Retrieving journal files from {anchordirpath=}"):
+            if progress is True:
+                log.info(f"Listing the {anchor} journal files under {anchordirpath} ...")
+            listing_started = time.time()
+            parquet_files = cls._list_(fs, anchordirpath, anchor, n_workers=n_workers, log=log, progress=report)
+            log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
+            if progress is True:
+                log.info(f"Listed {len(parquet_files)} {anchor} journal files in {time.time() - listing_started:.0f} s; reading them")
 
         log.detailed(f"READING JOURNAL: from {anchordirpath=}, files: {parquet_files}")
         df = None
@@ -3486,7 +3515,6 @@ class BuildJournal:
     @classmethod
     def _anchors_(cls, datalake, storage_options) -> list:
         """The anchors `UNSAFE_compact` compacts by default: `dbx.anchors`."""
-        from .databits import anchors
         return anchors(datalake, storage_options=storage_options)
 
     @classmethod
@@ -3944,14 +3972,12 @@ class PipeJournal(BuildJournal):
     @classmethod
     def _anchors_(cls, datalake, storage_options) -> list:
         """Every pipeline class with a journal under ``{datalake}/.pipelines``."""
-        from .databits import anchors
         return anchors(os.path.join(datalake, cls.ANCHOR), storage_options=storage_options)
 
     @classmethod
     def _compact_anchor_(cls, anchor, datalake, storage_options, dry_run, *, unjournaled=False, spare=(),
                          log=None) -> dict:
         """Compact one pipeline class's journal -- see `UNSAFE_compact` -- and say what was done."""
-        import importlib
 
         log = log or Datalog()
         fs, lake = fsspec.url_to_fs(datalake, **storage_options)
@@ -4425,7 +4451,6 @@ if os.environ.get(JOURNAL_SESSION_ENV):
 
 def _expand_levels_(fs, prefix: str, levels: list[str]) -> list[str]:
     """The paths under *prefix* matching *levels*, one path component each -- listing a directory only for a wildcard."""
-    import fnmatch
     paths = [prefix]
     for level in levels:
         nxt = []

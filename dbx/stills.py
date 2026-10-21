@@ -59,8 +59,10 @@ from __future__ import annotations
 import atexit
 import inspect
 import os
+import pickle
 import re
 import shutil
+import types
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -135,8 +137,6 @@ class _GoneClass_:
 
 def _tolerant_pickle_module_(gone: list):
     """A pickle module whose Unpickler stands `_GoneClass_` in for a class it cannot find, noting it in *gone*."""
-    import pickle
-    import types
 
     class Unpickler(pickle.Unpickler):
         def find_class(self, mod_name, name):
@@ -398,7 +398,7 @@ class Weights(Datablock):
         if self._is_intact(local):
             return True
         if local is not None and os.path.isfile(local):
-            self.log.warning("valid(): corrupt local weights, removing: %s", local)
+            self.log.warning(f"valid(): corrupt local weights, removing: {local}")
             os.remove(local)
         remote = self.path('weights')
         if remote is None:
@@ -416,7 +416,7 @@ class Weights(Datablock):
 
         url = self.source_url()
         dest = self.path('weights', ensure_dirpath=True)
-        self.log.info("Weights: fetching %s -> %s", url, dest)
+        self.log.info(f"Weights: fetching {url} -> {dest}")
         # Streamed in chunks rather than read whole: these are multi-GB files,
         # and fsspec.open takes the http(s)/abfs(s)/file url a registry might
         # name, which self.pull() cannot -- pull's source must already be a
@@ -427,7 +427,7 @@ class Weights(Datablock):
                 if not chunk:
                     break
                 dst.write(chunk)
-        self.log.info("Weights: persisted %s", dest)
+        self.log.info(f"Weights: persisted {dest}")
         return self
 
     # 2. Declared API ------------------------------------------------------
@@ -577,7 +577,7 @@ class CheckpointPath(CheckpointBuilder):
         dest = self._local_ckpt_path_()
         if not is_intact_archive(dest):
             self.localfs.makedirs(os.path.dirname(dest), exist_ok=True)
-            self.log.info("%s: fetching %s -> %s", type(self).__name__, src, dest)
+            self.log.info(f"{type(self).__name__}: fetching {src} -> {dest}")
             self.pull(src, dest, show_progress=True)
         self._require_intact_(dest, src)
         return dest
@@ -662,7 +662,7 @@ class StillDataModule(L.pytorch.LightningDataModule):
         """Build both loaders once, on whichever rank Lightning calls this on."""
         if self._loaders is not None:
             return
-        self._still.log.info("Building dataloaders (stage=%s)...", stage)
+        self._still.log.info(f"Building dataloaders (stage={stage})...")
         self._loaders = self._still.dataloaders(model=self._model)
         self._still.log.info("DataLoaders ready")
 
@@ -716,7 +716,7 @@ class _LogCiteOnStart_(L.pytorch.Callback):
                 global_step=trainer.global_step,
             )
         except Exception as e:
-            self.still.log.warning("could not log cite() to TensorBoard: %s", e)
+            self.still.log.warning(f"could not log cite() to TensorBoard: {e}")
 
 
 class _StepCheckpoint_(L.pytorch.callbacks.Callback):
@@ -1096,8 +1096,8 @@ class Still(CheckpointBuilder):
             version=f"run_{datetime.now().strftime('%Y-%m-%d_%H.%M.%S')}",
         )
 
-        self.log.info("path/ckpts: %s", self.dirpath('ckpts'))
-        self.log.info("path/logs: %s", self.dirpath('logs'))
+        self.log.info(f"path/ckpts: {self.dirpath('ckpts')}")
+        self.log.info(f"path/logs: {self.dirpath('logs')}")
 
         callbacks = self.callbacks(ckpts_dir=ckpts_dir)
         trainer = L.pytorch.Trainer(**self.trainer_kwargs(
@@ -1131,7 +1131,7 @@ class Still(CheckpointBuilder):
                     if own_resume_ckpt:
                         self._free_local_ckpt_(ckpt)
                 else:
-                    self.log.info("Resuming from checkpoint: %s", ckpt)
+                    self.log.info(f"Resuming from checkpoint: {ckpt}")
                     fit_kwargs["ckpt_path"] = ckpt
                     if own_resume_ckpt:
                         # Lightning reads ckpt_path lazily inside fit(), so it
@@ -1169,10 +1169,8 @@ class Still(CheckpointBuilder):
                 # key that claims a finished run and a `valid()` that agrees --
                 # so the next real build would skip it entirely.
                 self.log.warning(
-                    "check_run=%r: ran %s batch(es), NOT writing the done "
+                    f"check_run={self.check_run!r}: ran {self.check_run if self.check_run is not True else 1} batch(es), NOT writing the done "
                     "topic. This block is still unbuilt.",
-                    self.check_run,
-                    self.check_run if self.check_run is not True else 1,
                 )
             else:
                 self.UNSAFE_done(OVERRIDE=True)
@@ -1282,8 +1280,7 @@ class Still(CheckpointBuilder):
             with self.fs.open(self.path('done', ensure_dirpath=True), "w") as f:
                 f.write(timestamp)
         self.log.info(
-            "UNSAFE_done: wrote the done topic (%s)",
-            "local" if self.is_local_fs else "local + remote",
+            f'UNSAFE_done: wrote the done topic ({"local" if self.is_local_fs else "local + remote"})',
         )
         return self
 
@@ -1350,15 +1347,15 @@ class Still(CheckpointBuilder):
             return self
         workdir = self._local_workdir_
         if os.path.isdir(workdir):
-            self.log.info("UNSAFE_clear_cache: removing local workdir %s", workdir)
+            self.log.info(f"UNSAFE_clear_cache: removing local workdir {workdir}")
             shutil.rmtree(workdir, ignore_errors=True)
         logslink = self._logslink_
         if logslink and os.path.lexists(logslink):
-            self.log.info("UNSAFE_clear_cache: removing logslink %s", logslink)
+            self.log.info(f"UNSAFE_clear_cache: removing logslink {logslink}")
             try:
                 os.remove(logslink)
             except OSError as e:
-                self.log.warning("UNSAFE_clear_cache: could not remove logslink: %s", e)
+                self.log.warning(f"UNSAFE_clear_cache: could not remove logslink: {e}")
         return self
 
     def UNSAFE_copy_from(self, anchorkeypath, *, ckpts: int = 0, **kwargs):
@@ -1431,8 +1428,7 @@ class Still(CheckpointBuilder):
 
         if result:
             self.log.info(
-                "find_latest_ckpt: using %s (step=%s)",
-                os.path.basename(result), self._ckpt_step_(os.path.basename(result)),
+                f"find_latest_ckpt: using {os.path.basename(result)} (step={self._ckpt_step_(os.path.basename(result))})",
             )
         return result
 
@@ -1493,7 +1489,7 @@ class Still(CheckpointBuilder):
         var = self.var
         train_builder = var.training_dataset_builder
         val_builder = var.validation_dataset_builder
-        self.log.debug("module hooks: %s", self.module_hooks(model))
+        self.log.debug(f"module hooks: {self.module_hooks(model)}")
         train_transform = self._module_hook_(model, 'train_transform')
         val_transform = self._module_hook_(model, 'val_transform')
         train_kwargs = self._module_hook_(model, 'train_dataset_kwargs', {}) or {}
@@ -1561,10 +1557,8 @@ class Still(CheckpointBuilder):
         )
         if val_workers != self.num_workers:
             self.log.info(
-                "val loader sized for val_max_batches=%s: num_workers=%d "
-                "prefetch_factor=%d (train: %d/%d)",
-                var.val_max_batches, val_workers, val_prefetch,
-                self.num_workers, self.prefetch_factor,
+                f"val loader sized for val_max_batches={var.val_max_batches}: num_workers={val_workers} "
+                f"prefetch_factor={val_prefetch} (train: {self.num_workers}/{self.prefetch_factor})",
             )
 
         # A sampler in place of shuffle=True: each Subset above was built by
@@ -1623,9 +1617,8 @@ class Still(CheckpointBuilder):
         val_check_interval = var.val_every_n_steps * var.accumulate_grad_batches
         if var.accumulate_grad_batches > 1:
             self.log.info(
-                "val_every_n_steps=%d optimizer steps -> val_check_interval=%d "
-                "micro-batches (accumulate_grad_batches=%d)",
-                var.val_every_n_steps, val_check_interval, var.accumulate_grad_batches,
+                f"val_every_n_steps={var.val_every_n_steps} optimizer steps -> val_check_interval={val_check_interval} "
+                f"micro-batches (accumulate_grad_batches={var.accumulate_grad_batches})",
             )
         kwargs = dict(
             default_root_dir=ckpts_dir,
@@ -1701,8 +1694,8 @@ class Still(CheckpointBuilder):
             # ckpt_every_n_epochs=1 fires even when the step interval is
             # nowhere near. That is what a check run did before this.
             self.log.info(
-                "check_run=%r: checkpoint callbacks disabled -- a check saves "
-                "nothing", self.check_run,
+                f"check_run={self.check_run!r}: checkpoint callbacks disabled -- a check saves "
+                "nothing",
             )
             return callbacks
 
@@ -1756,16 +1749,16 @@ class Still(CheckpointBuilder):
         try:
             remote_path = os.path.join(self.dirpath("ckpts", ensure=True), filename)
             self.push(local_path, remote_path, free_src=True)
-            self.log.info("Uploaded %s and freed local copy", filename)
+            self.log.info(f"Uploaded {filename} and freed local copy")
         except Exception as e:
-            self.log.warning("Ckpt upload failed: %s", e)
+            self.log.warning(f"Ckpt upload failed: {e}")
 
     def _journal_ckpt_(self, ckpt_tag):
         """Record that a checkpoint exists, never raising into the loop."""
         try:
             self.write_journal_entry(event=f"ckpt={ckpt_tag}")
         except Exception as e:
-            self.log.warning("Ckpt journal entry failed: %s", e)
+            self.log.warning(f"Ckpt journal entry failed: {e}")
 
     def _save_checkpoint_(self, trainer, epoch, step, *, ckpts_dir):
         """Save on every rank, but upload, free and journal on rank 0 only.
@@ -1811,8 +1804,8 @@ class Still(CheckpointBuilder):
         filename = f"epoch={epoch:03d}-step={step:07d}.ckpt"
         if filename == getattr(trainer, '_dbx_last_saved_ckpt_', None):
             self.log.info(
-                "Checkpoint %s was just written by another callback at this "
-                "same step -- not writing it twice", filename,
+                f"Checkpoint {filename} was just written by another callback at this "
+                "same step -- not writing it twice",
             )
             return
         trainer._dbx_last_saved_ckpt_ = filename
@@ -1820,7 +1813,7 @@ class Still(CheckpointBuilder):
         trainer.save_checkpoint(local_path)
         if trainer.global_rank != 0:
             return
-        self.log.info("Saved checkpoint: %s", filename)
+        self.log.info(f"Saved checkpoint: {filename}")
         self._upload_and_free_(local_path, filename)
         self._journal_ckpt_(filename)
 
@@ -1919,8 +1912,7 @@ class Still(CheckpointBuilder):
             return None
         latest_name, latest_path = candidates[-1]
         self.log.info(
-            "find_latest_ckpt(pull=False): latest is %s (step=%s) at %s -- not downloaded",
-            latest_name, self._ckpt_step_(latest_name), latest_path,
+            f"find_latest_ckpt(pull=False): latest is {latest_name} (step={self._ckpt_step_(latest_name)}) at {latest_path} -- not downloaded",
         )
         return latest_path
 
@@ -1938,9 +1930,9 @@ class Still(CheckpointBuilder):
         try:
             if os.path.exists(local_path):
                 os.remove(local_path)
-                self.log.info("Freed local resume checkpoint: %s", local_path)
+                self.log.info(f"Freed local resume checkpoint: {local_path}")
         except OSError as e:
-            self.log.warning("Could not free local resume checkpoint: %s", e)
+            self.log.warning(f"Could not free local resume checkpoint: {e}")
 
     # ── Sync helpers ───────────────────────────────────────────────
 
@@ -1953,13 +1945,13 @@ class Still(CheckpointBuilder):
     def _sync_ckpts_to_remote_(self, reason='?'):
         if self.is_local_fs:
             return
-        self.log.info("%s: syncing ckpts to remote", reason)
+        self.log.info(f"{reason}: syncing ckpts to remote")
         self.pushtopic('ckpts')
 
     def _sync_logs_to_remote_(self, reason='?'):
         if self.is_local_fs:
             return
-        self.log.info("%s: syncing logs to remote", reason)
+        self.log.info(f"{reason}: syncing logs to remote")
         self.pushtopic('logs')
 
     def _sync_to_remote_(self, *, reason):
@@ -1976,20 +1968,19 @@ class Still(CheckpointBuilder):
         """
         if self.check_run:
             self.log.info(
-                "%s: check_run=%r, nothing to sync -- a check writes no "
+                f"{reason}: check_run={self.check_run!r}, nothing to sync -- a check writes no "
                 "checkpoints and runs with logger=False",
-                reason, self.check_run,
             )
             return
         try:
             self._sync_ckpts_to_remote_(reason)
         except Exception as e:
-            self.log.warning("%s: ckpt sync failed: %s", reason, e)
+            self.log.warning(f"{reason}: ckpt sync failed: {e}")
         if self.save_remote_logs:
             try:
                 self._sync_logs_to_remote_(reason)
             except Exception as e:
-                self.log.warning("%s: log sync failed: %s", reason, e)
+                self.log.warning(f"{reason}: log sync failed: {e}")
 
     # ── Dataloaders ────────────────────────────────────────────────
     @staticmethod
@@ -2145,7 +2136,6 @@ class Still(CheckpointBuilder):
         if (self._device_count_(self._resolve_devices_()[1]) or 2) < 2:
             return
         try:
-            import inspect
             source = inspect.getsource(type(model))
             sites = source.count('experiment.add_')
         except Exception:
@@ -2154,13 +2144,12 @@ class Still(CheckpointBuilder):
             return
         how_many = "some" if sites is None else str(sites)
         self.log.warning(
-            "UNREDUCED SCALARS: %s direct `logger.experiment.add_*` call(s) in %s. "
+            f"UNREDUCED SCALARS: {how_many} direct `logger.experiment.add_*` call(s) in {type(model).__name__}. "
             "Those bypass self.log() and write RANK 0's VALUE ONLY -- on other ranks "
             "`logger.experiment` is Lightning's _DummyExperiment and the call does "
             "nothing. sync_dist= cannot reach them; reducing one means an explicit "
             "all_gather/all_reduce before the write. Every curve they produce is a "
             "sample of this run, not a measurement of it.",
-            how_many, type(model).__name__,
         )
 
     def _resuming_own_ckpts_(self):
@@ -2216,9 +2205,9 @@ class Still(CheckpointBuilder):
             own_it = ckpt is not None
         elif self.check_run and not self.var.from_scratch:
             self.log.warning(
-                "check_run=%r: NOT resuming this block's own checkpoints -- a check "
+                f"check_run={self.check_run!r}: NOT resuming this block's own checkpoints -- a check "
                 "that resumes past its own step budget runs zero batches and reports "
-                "success. Any warm start still applies.", self.check_run,
+                "success. Any warm start still applies.",
             )
         # Our own run always wins: once this still has checkpoints of its own,
         # a resume continues it and the warm-start source is history.
@@ -2403,7 +2392,7 @@ class Still(CheckpointBuilder):
         parameters wherever the source tensors live, so staging on the host
         costs nothing and is what makes the checkpoint portable.
         """
-        self.log.info("Loading weights only (%s) from %s", why, ckpt)
+        self.log.info(f"Loading weights only ({why}) from {ckpt}")
         checkpoint = read_checkpoint(ckpt, log=self.log)
         if "state_dict" not in checkpoint:
             raise KeyError(
@@ -2427,8 +2416,7 @@ class Still(CheckpointBuilder):
                 f"from random init while reporting otherwise."
             )
         self.log.info(
-            "Loaded %d/%d tensors (missing=%d unexpected=%d)",
-            loaded, len(state_dict), len(missing), len(unexpected),
+            f"Loaded {loaded}/{len(state_dict)} tensors (missing={len(missing)} unexpected={len(unexpected)})",
         )
 
     def _report_resume_divergence_(self, ckpt, resume_plan, *, warm_start=False):
@@ -2441,12 +2429,11 @@ class Still(CheckpointBuilder):
         if (not warm_start and ckpt is not None and resume_plan is not None
                 and os.path.basename(str(ckpt)) != os.path.basename(str(resume_plan))):
             self.log.warning(
-                "resume checkpoint is NOT the one in the banner: %s -> %s "
+                f"resume checkpoint is NOT the one in the banner: {os.path.basename(str(resume_plan))} -> {os.path.basename(str(ckpt))} "
                 "(the newer one failed validation and was skipped)",
-                os.path.basename(str(resume_plan)), os.path.basename(str(ckpt)),
             )
         elif ckpt is None and resume_plan is not None:
             self.log.warning(
-                "banner announced a resume from %s but none could be fetched; "
-                "starting at step 0 instead", resume_plan,
+                f"banner announced a resume from {resume_plan} but none could be fetched; "
+                "starting at step 0 instead",
             )

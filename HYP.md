@@ -4,7 +4,13 @@
 the Poincaré disk. Texts are embedded (nomic-embed-text, through Ollama, by
 default), laid out with UMAP's hyperbolic embedding
 (`output_metric="hyperboloid"`), and drawn in a pygame window navigated
-hyperbolically. Pointed at a datalake, its texts are the datalake's pipelines.
+hyperbolically. Fewer than five texts are too few for UMAP, which scales
+each point's distances by its nearest neighbor's and so draws three points
+equidistant whatever they mean: they are placed by their cosine distances
+instead (classical multidimensional scaling), the farthest at radius 0.3.
+A character the window's font has no glyph for -- `⊙`, `∧`, `⟨⟩` in
+Helvetica Neue -- is drawn from a fallback that has it (`hyp/fonts.py`:
+STIX Two Math, STIX General, Apple Symbols, Menlo), not as a box. Pointed at a datalake, its texts are the datalake's pipelines.
 
 Nothing in dbx imports `hyp`; `hyp` imports dbx only to read a datalake.
 
@@ -17,6 +23,15 @@ the `[hyp]` extra. Into another env, `pip install -e '.[hyp]'`.
 brew install ollama            # hyp starts `ollama serve` itself if it is not running
 hyp                            # or: dbx.hyp, or python -m hyp
 ```
+
+Run from a terminal, hyp gives it back once its window is up: it goes on in
+the background, in a session of its own, its output in
+`~/.hyp/logs/hyp-<started>-<pid>.log` (the newest 20 kept), and is ended by
+closing its window -- not by Ctrl+C there, nor by the terminal closing. What
+goes wrong before the window is up is said in the terminal all the same, as
+the log's end, with the run's exit status. `--fg` keeps the terminal,
+as before; a hyp whose output is no terminal -- a pipe, a script -- keeps
+running where it is.
 
 On first run it pulls `nomic-embed-text` (embeddings) and `deepseek-r1:1.5b`
 (one-line summaries) through Ollama. The seed corpus is kept under
@@ -221,8 +236,8 @@ nothing; those shown are laid out by themselves.
 ## A directory's documents
 
 ```bash
-hyp --markdowns                          # the current directory
-hyp --markdowns --dir ssh://host/notes   # or any directory, local or an fsspec url
+hyp --docs                               # the current directory
+hyp --docs --dir ssh://host/notes        # or any directory, local or an fsspec url
 ```
 
 Every `.md`, `.markdown` and `.pdf` under the directory -- hidden
@@ -240,8 +255,25 @@ the next start or reload. A markdown's YAML front matter is not drawn.
   windows, each showing the part of the window it takes -- the quarters in
   its corners, the halves at its edges, the center in its middle; the one
   under the mouse is named beneath. A window placed replaces the windows it
-  would overlap. A right click on a document in the **points** menu offers
-  the same.
+  would overlap. Beneath the grid, **ask Claude about it** opens a new Claude
+  session instead, its box holding `About <path>: ` for the question to
+  follow. A right click on a document in the **points** menu offers the same;
+- **right click elsewhere** on the disk offers **Claude** or **Markdown**,
+  then a box to type in. Enter, for Claude, asks it as the first turn of a
+  new session; for Markdown, makes it the first line of a new markdown --
+  saved at once in the directory scanned as `<first line>.md`, never over a
+  file there -- and opens it in the middle, the size of a Claude session's
+  window, to go on writing (`hyp/notes.py`). There Enter starts a new line,
+  the text edits as the box does, the wheel scrolls, Cmd+S saves, and Esc or
+  × close it, saving what is not saved; each save embeds it. Its title is its
+  file's name, edited in place as a Claude session's title is: kept, the file
+  is renamed -- never over another, which is refused, said in the window.
+  **preview**, at the title row's right, splits it: the markdown rendered
+  above, mermaid diagrams too, as it is written below; the bar between them
+  is dragged to share the window, and the wheel scrolls the pane under the
+  mouse. (Outside
+  `--docs`, the box embeds its text as a point of its own; here every point
+  is a file.)
 
 A markdown is rendered -- headings, lists, quotes, code, tables, links -- and
 its ` ```mermaid ` diagrams are drawn by the mermaid CLI, `mmdc` (or the one
@@ -250,9 +282,19 @@ source. `npm install -g @mermaid-js/mermaid-cli` installs it. A pdf is shown
 page under page, as wide as its window at 100%, rendered by pdfium.
 
 In a document's window: the wheel, or the arrows and Page Up/Down, scroll; a
-sideways swipe, or Shift and the wheel, scroll across; a drag pans; + and -
-zoom, 0 back to 100%; Home and End go to its ends; × or Esc closes it. The
-keys go to the window under the mouse, else to the one last clicked.
+sideways swipe, or Shift and the wheel, scroll across; + and - zoom, 0 back
+to 100%, with Cmd or without -- in a Claude session's window, with it, as
++ and - alone are typed into its box; Home and End go to its ends; × or Esc
+closes it. A right click on its title bar is the place picker for it: a
+slot moves it there, closing what it would cover, and the middle expands it
+to fill the window, a Claude session's too. A drag that starts
+on text selects it -- the window scrolls, dragged past its edge -- Shift+click
+extends the selection, a double click selects a word, Cmd+A all of it, and
+Cmd+C copies it, as it reads: a paragraph's wrapped lines joined, code's lines
+kept. A drag that starts anywhere else pans. A Claude session's transcript is
+selected the same way, and Cmd+C copies it even while its box is typed in: to
+paste it there (Cmd+V) and feed it back. The keys go to the window under the
+mouse, else to the one last clicked.
 
 **Layers.** The disk, the placed windows ("tiles") and the center window are
 three layers. What is under the mouse in the front-most of them gets the
@@ -266,14 +308,20 @@ over the layers behind it. Opening a window brings its layer to the front.
 ### Claude sessions
 
 ```bash
-hyp --markdowns                          # sessions saved in the current directory
-hyp --markdowns --claude-dir claude      # or in ./claude, under it
+hyp --docs                               # sessions saved in the current directory
+hyp --docs --claude-dir claude           # or in ./claude, under it
 ```
 
-The **Claude** button (top right) opens a conversation with Claude in a
-window a third of the window's area, in its middle (`hyp/claude.py`). The
+A right click opens a conversation with Claude -- on empty disk, asking what
+is typed in its box; on a document, about it (above) -- in a window a third
+of the window's area, in its middle (`hyp/claude.py`). The
 conversation is above and what is being typed below: Enter sends,
-Shift+Enter starts a new line, Cmd+V pastes. The reply streams in as it is
+Shift+Enter starts a new line. The box edits as the title does (below) --
+a cursor, placed by a click; a selection, by a drag, Shift with the arrows
+or a click, a double click or Cmd+A; Up and Down a line -- and Cmd+Z or
+Ctrl+Z undoes, a run of typing at once, Cmd+Shift+Z or Ctrl+Y redoes.
+Cmd+V pastes, its lines kept, in place of what is selected; Cmd+C copies the
+box's selection, or else the transcript's. The reply streams in as it is
 written. PageUp/PageDown, Home/End and the wheel scroll the conversation;
 Esc or × closes the window. A turn that fails says why beneath, and puts
 what was sent back in the box, to send again.
@@ -295,25 +343,47 @@ in.
 **The model, and the usage.** At the right of the box, `model: default ▾`:
 a click switches it -- Claude Code's default, `opus`, `sonnet`, `haiku` --
 from the next turn on, which resumes the session on that model
-(`--model`). Beneath the window's title, the session's usage: the model the
-last turn ran on, the tokens in (cached or not) and out over every turn,
-what they would cost at API rates -- a subscription is not billed them --
-and how much of the plan's 5-hour and 7-day windows is used. The choice and
+(`--model`). Beneath the window's title, two lines. First, the session's
+file and the account Claude Code runs as -- email, organization and plan,
+from `claude auth status`, read once in the background. Then the session's
+usage: the model the last turn ran on, the tokens in (cached or not) and
+out over every turn, what they would cost at API rates -- a subscription is
+not billed them -- and the quota: what is left of the plan's 5-hour and
+7-day windows and when each resets (`quota: 5 h 96% left (resets 12:40) ·
+7 d 59% left (resets Fri 05:00)`), and `on overage` past them. A turn
+reports the quota, so until one has it says it is known after a turn. The choice and
 the totals are kept in the front matter (`choice`, `tokens_in`,
 `tokens_out`, `cost_usd`), so a session reopened goes on from them.
 
-**Renaming a session.** Its file can be renamed, or moved anywhere the scan
+**Titling a session.** The window's title is the session's -- `Claude ·
+<title>`, its first line until it is given one. A click on it edits it, the
+cursor where it was clicked. Left and Right move the cursor, Option with
+them a word, Cmd with them -- or Home and End -- to either end; Shift with
+any of them selects, as a drag does, Shift+click extends the selection, a
+double click selects a word, and Cmd+A all of it. Typing or pasting replaces
+the selection; Backspace and Delete remove it, or else before and after the
+cursor, Option+Backspace a word; Cmd+C copies it, Cmd+X cuts it. Enter keeps the
+title, and so does a click anywhere off it -- into the box below, say, which
+then takes what is typed; Esc puts it back, and a blank one puts back the
+first line. A session with no title yet starts the edit empty: its start
+time, shown until then, is no title.
+A title kept is written into the front matter (`title:`) and the
+transcript's heading at once, and the point relabeled -- or, before the
+first turn, with it, as there is no file to write until then. The point is
+labeled `Claude · <title>`, and beneath it is dated by the session's last
+write, its front matter's `updated`, not by the file's.
+
+**Renaming its file.** The file can be renamed, or moved anywhere the scan
 reaches, while its window is closed: what resumes it is the `session` id in
-its front matter, not its name. Keep the `.md`, and reload. The point's
-label is the front matter's `title`, not the file's name: edit `title:` to
-change it. A file renamed while its window is open is written again under
-its old name at the next turn.
+its front matter, not its name. Keep the `.md`, and reload. A file renamed
+while its window is open is written again under its old name at the next
+turn.
 
 **Saved and embedded at every turn.** As each reply comes in whole, the
 session is saved into the directory scanned (`--dir`), or into
 `--claude-dir`: a directory relative to it that the scan reaches, so not
 absolute, not above `--dir`, and not a hidden or skipped one. It is one
-markdown, `claude-session-<started>.md`, a `## You` / `## Claude` section a
+markdown, `claude-session-<started>-<id>.md`, a `## You` / `## Claude` section a
 turn. Its front matter says what it is: `hyp: claude-session`, the session's
 id, the model, and the first line as its `title`. The disk is brought up to
 date with it at once, in the background, the window usable meanwhile: the
@@ -324,10 +394,14 @@ its arcs and arrows relate it to them as they do any document. Closing the
 window saves nothing more, unless a turn is not yet saved.
 
 **Embedded whole.** A document is embedded by its name and its first 4,000
-characters; a session by all of its transcript, up to 256,000 characters.
+characters; a session by its title and what was said in it, up to 256,000
+characters -- not its file's name, nor the transcript's markup (the
+`# Claude ·` heading, the `## You` and `## Claude` lines), which are every
+session's: they lifted every pair of sessions' cosine by about 0.09, the
+unrelated as much as the related, and so drew all sessions together.
 Hence `ChunkedEmbedder` (`hyp/docs.py`): a text longer than that is
 embedded a 4,000-character piece at a time -- cut at paragraph breaks where
-it can be, the name before each piece -- and the pieces' unit vectors
+it can be, the name -- a session's title -- before each piece -- and the pieces' unit vectors
 averaged, so a long session lies where all of it points, not where its
 first turns do. A text of one piece gets the embedder's own vector, as
 before. No markdown's front matter is embedded, a session's or any other's.
@@ -390,12 +464,13 @@ a directory of markdowns, they are directions of content.
 |---|---|
 | left click | slide the clicked point to the center along a geodesic; time ∝ distance |
 | reload (top left) | read the corpus's source again, re-embed what changed, and lay it out afresh |
+| re-embed (beside it) | embed the whole corpus afresh, from its source, and lay it out anew; points the source no longer gives -- a text typed in, where every point is a file -- are dropped |
 | left click on a pipeline (`--journal`) | its window, as a right click opens a point otherwise |
 | right click on a pipeline (`--journal`) | its constructed entry blocks, in a menu at the mouse: picking one opens that block's window directly |
 | left drag | move the plane rigidly (a hyperbolic translation); the grabbed point stays under the cursor |
 | scroll | hyperbolic zoom: a point at distance *d* is drawn at *k·d* |
 | right click on a point | its stored text |
-| right click elsewhere | type a text; Enter embeds, summarizes, stores and places it |
+| right click elsewhere | type a text; Enter embeds, summarizes, stores and places it -- in `--docs`, asks it of Claude in a new session |
 | hover | the point's label, in full, and geodesics to the 5 nearest neighbors in embedding space -- by cosine over the whole vectors, so an arc may reach a point far off on the disk |
 | Shift, while hovering | each of those arcs labeled with what its direction means, named by Claude from where else it runs in the corpus, and what that rests on. See [Arrows](#arrows) |
 | Home (fn+← on a Mac), or double click off the disk | back to the original view: the corpus center, zoom 1 -- on a slice disk too |
@@ -415,13 +490,14 @@ a directory of markdowns, they are directions of content.
 hyp --data DIR               # the corpus directory, local or an fsspec url
                              # (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)
 hyp --reset                  # discard the corpus and start over
+hyp --fg                     # keep the terminal: the output there, Ctrl+C stopping it
 hyp --journal                # the pipelines of DBX_DATALAKE (HypDbxJournal); also: --journal pipelines
 hyp --journal ANCHOR         # the blocks of ANCHOR, from its build journal; the journal menu switches either
 hyp --journal ANCHOR --filter 'key=pattern, ...'   # its blocks filtered; the filter field changes it
 hyp --journal --ece ckpt     # --extra-construction-events: events that also make an entry block count as
                              # constructed, each alone or followed by = or : -- here, a still that checkpointed
-hyp --markdowns [--dir DIR]  # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
-hyp --markdowns --claude-dir REL   # Claude sessions saved under DIR/REL, not DIR itself (REL relative, and scanned)
+hyp --docs [--dir DIR]       # the markdowns and pdfs under DIR, local or an fsspec url (HypDocs; default: the current directory)
+hyp --docs --claude-dir REL        # Claude sessions saved under DIR/REL, not DIR itself (REL relative, and scanned)
 hyp --n-workers N            # threads reading the datalake (default 16)
 hyp --remote-python PATH     # the python on the datalake's host whose Ray read's and hyp's trueinst() run in,
                              # with dbx, ray (the version here) and the project; a path there, quoted so ~
@@ -442,7 +518,10 @@ stored corpus.
 `hyp.app.Hyp` is the app; a specialization overrides its hooks, and only
 those: `__source__`, `__default_data__` and `__data_origin__` (where the
 corpus comes from, and what to name when it cannot be opened),
-`__open_point__` (a right click on a point), and `__point_label__`,
+`__open_point__` (a right click on a point), `__submit_text__` and
+`BOX_HINT` (what a text typed on empty disk does), `__wants_text__`
+(whether anything is being typed into: text input is on exactly then), and
+`__point_label__`,
 `__point_datetime__`, `__point_tooltip__` (how a point is labeled).
 `hyp.dbxpipelines.HypDbxJournal` is the example.
 

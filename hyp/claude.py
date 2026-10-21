@@ -1,4 +1,4 @@
-"""A Claude session in hyp --markdowns: a conversation with Claude Code, saved as a markdown of the directory scanned.
+"""A Claude session in hyp --docs: a conversation with Claude Code, saved as a markdown of the directory scanned.
 
 The **Claude** button opens a window in the middle of the disk -- a third
 of the window's area -- with the conversation above and a box to type in
@@ -13,7 +13,7 @@ change nothing. A ``--dir`` that is a url is not a directory Claude Code can
 work in, so there it has no tools at all.
 
 Every turn writes the session into ``--dir``, or a directory under it
-(``--claude-dir``), as one markdown, ``claude-session-<started>.md``: the
+(``--claude-dir``), as one markdown, ``claude-session-<started>-<id>.md``: the
 transcript, with front matter saying what it is -- ``hyp: claude-session``
 and the session's id. The disk is brought up to date with it at once: the
 whole transcript embedded, the layout nudged, so the session moves among the
@@ -25,6 +25,7 @@ import glob
 import json
 import os
 import posixpath
+import re
 import shutil
 import subprocess
 import time
@@ -32,7 +33,7 @@ import uuid
 
 import pygame
 
-from .docview import DIM, EDGE, TEXT, DocWindow, MarkdownDoc, front_matter
+from .docview import DIM, EDGE, TEXT, AreaEdit, DocWindow, EditableTitle, MarkdownDoc, front_matter
 
 KIND = "claude-session"
 PREFIX = "claude-session-"
@@ -75,13 +76,19 @@ class Session:
         self.resumable = resumable
         self.turns = []  # this time's: (text you sent, Claude's reply)
         self.saved = 0  # how many of them the file has
+        self.renamed = False  # a title given since the file was last written
         self.model = None  # the model the last turn ran on, as Claude Code says
         self.choice = choice  # the model asked for, of MODELS: None, Claude Code's default
         # Over every turn, saved ones too: tokens in (cached or not) and out, and what they would cost at API rates.
         self.usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, **(usage or {})}
         self.plan = None  # the plan's windows, as the last turn left them: {"five_hour": {"utilization", "resetsAt"}, ...}
+        self.overage = False  # whether the last turn ran on overage, past the plan's windows
+        self.plan_at = None  # when a turn last said what is left of the plan's windows: the time the quota is as of
+        self.plan_account = None  # who Claude Code ran as then, as its owner read it just after: whose the quota is
         stamp = self.started.replace("-", "").replace(":", "").replace("T", "-")
-        self.md_url = md_url or posixpath.join(self.root, *([subdir] if subdir else []), f"{PREFIX}{stamp}.md")
+        # By its start and its id: two sessions begun in one second are two files, not one written over.
+        name = f"{PREFIX}{stamp}-{self.id[:8]}.md"
+        self.md_url = md_url or posixpath.join(self.root, *([subdir] if subdir else []), name)
 
     # 2. Declared API ---------------------------------------------------------
 
@@ -125,7 +132,10 @@ class Session:
                     self.resumable = True  # Claude Code has the session now, whatever comes of the turn
                     self.model = event.get("model") or self.model
                 elif event.get("type") == "rate_limit_event":
-                    self.plan = (event.get("rate_limit_info") or {}).get("unifiedWindows") or self.plan
+                    info = event.get("rate_limit_info") or {}
+                    self.plan = info.get("unifiedWindows") or self.plan
+                    self.overage = bool(info.get("isUsingOverage"))
+                    self.plan_at = time.time()
                 elif event.get("type") == "result":
                     result = event
                     self._count_(event)
@@ -154,11 +164,19 @@ class Session:
         with fs.open(path, "w") as f:
             f.write(self.markdown())
         self.saved = max(self.saved, n)
+        self.renamed = False
         return self.md_url
 
     def dirty(self):
-        """Whether a turn is not yet in the file."""
-        return len(self.turns) > self.saved
+        """Whether a turn, or a title given, is not yet in the file; a session with no turn has no file to write."""
+        return len(self.turns) > self.saved or (self.renamed and bool(self.prior or self.turns))
+
+    def rename(self, title):
+        """Title the session *title* -- its point's label -- from the next save; a blank one puts back the default, its first line."""
+        title = " ".join(str(title).split())
+        if title != (self._title_ or ""):
+            self._title_ = title or None
+            self.renamed = True
 
     def markdown(self, partial=None):
         """The transcript: front matter, what was saved before, this time's turns -- and *partial*, a reply still coming, last."""
@@ -170,7 +188,11 @@ class Session:
             fields["choice"] = self.choice
         fields.update(tokens_in=self.usage["tokens_in"], tokens_out=self.usage["tokens_out"], cost_usd=round(self.usage["cost_usd"], 4))
         lines = ["---", *(f"{k}: {json.dumps(v)}" for k, v in fields.items()), "---", ""]
-        lines += [self.prior, ""] if self.prior else [f"# Claude · {self.title()}", ""]
+        heading = f"# Claude · {self.title()}"
+        prior = self.prior
+        if prior.startswith("# Claude · "):
+            prior = heading + prior[len(prior.split("\n", 1)[0]):]  # its heading, retitled as the session is
+        lines += [prior, ""] if prior else [heading, ""]
         for said, answer in self.turns:
             lines += ["## You", "", said.strip(), "", "## Claude", "", answer, ""]
         if partial is not None:
@@ -178,27 +200,38 @@ class Session:
         return "\n".join(lines)
 
     def title(self):
-        """The title it was saved with; else the first line of its first turn; else the time it began."""
+        """The title it was given or saved with; else the first line of its first turn; else the time it began."""
+        return self.given_title() or self.started.replace("T", " ")
+
+    def given_title(self):
+        """The title it was given or saved with, else the first line of its first turn; "" while it has neither -- its start time is no title."""
         if self._title_:
             return self._title_
         line = (self.turns[0][0] if self.turns else "").strip().split("\n", 1)[0]
-        return (line[:77] + "…" if len(line) > 80 else line) or self.started.replace("T", " ")
+        return line[:77] + "…" if len(line) > 80 else line
 
     def switch(self):
         """Ask for the next of MODELS from the next turn on: Claude Code resumes the session on it."""
         self.choice = MODELS[(MODELS.index(self.choice) + 1) % len(MODELS)]
 
     def usage_line(self):
-        """The session's usage, as its window shows it: the model, tokens in and out, the cost at API rates, and the plan's windows."""
+        """The session's usage, as its window shows it: the model, tokens in and out, and the cost at API rates."""
         u = self.usage
         said = [self.model or "model: Claude Code's default",
                 f"{_tokens_(u['tokens_in'])} in · {_tokens_(u['tokens_out'])} out",
                 f"≈${u['cost_usd']:.2f} at API rates"]
-        if self.plan:
-            names = {"five_hour": "5 h", "seven_day": "7 d"}
-            said.append("plan " + ", ".join(f"{names.get(k, k)} {w.get('utilization', 0):.0%}" for k, w in self.plan.items()
-                                            if isinstance(w, dict)))
         return " · ".join(said)
+
+    def quota_line(self, now=None):
+        """What is left of the plan's windows, as the last turn said -- and when it said so -- and when each resets; or that no turn has said yet."""
+        if not self.plan:
+            return "quota: known after a turn"
+        names = {"five_hour": "5 h", "seven_day": "7 d"}
+        said = [f"{names.get(k, k)} {max(0.0, 1 - float(w.get('utilization') or 0)):.0%} left"
+                + (f" (resets {_when_(w['resetsAt'], now)})" if w.get("resetsAt") else "")
+                for k, w in self.plan.items() if isinstance(w, dict)]
+        as_of = f" (as of {_when_(self.plan_at, now)})" if self.plan_at else ""
+        return f"quota{as_of}: " + " · ".join(said) + (" · on overage" if self.overage else "")
 
     # 4. Helpers --------------------------------------------------------------
 
@@ -242,8 +275,29 @@ def ask(prompt, timeout=180, command=None):
     return str(result.get("result") or "")
 
 
+def account(command=None, timeout=20):
+    """The account Claude Code is logged in as, as the window shows it -- email, organization, plan -- from ``claude auth status``; None if not."""
+    try:
+        done = subprocess.run([command or claude_command(), "auth", "status", "--json"], capture_output=True, text=True,
+                              timeout=timeout, cwd=os.path.expanduser("~"))
+    except (OSError, subprocess.TimeoutExpired, Failed):
+        return None
+    status = _event_(done.stdout.strip()) if done.stdout.strip() else None
+    if not status or not status.get("loggedIn"):
+        return "not logged in: run `claude` once in a terminal and log in" if status else None
+    plan = status.get("subscriptionType")
+    return " · ".join(str(p) for p in (status.get("email"), status.get("orgName"), plan and f"{plan} plan") if p) or None
+
+
 def _tokens_(n):
     return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.1f}k" if n >= 1e3 else str(n)
+
+
+def _when_(epoch, now=None):
+    """A reset time, as the window says it: the hour where it is today, else the weekday and the hour."""
+    at, today = time.localtime(float(epoch)), time.localtime(now if now is not None else time.time())
+    same_day = (at.tm_year, at.tm_yday) == (today.tm_year, today.tm_yday)
+    return time.strftime("%H:%M" if same_day else "%a %H:%M", at)
 
 
 def claude_command():
@@ -269,22 +323,29 @@ def explain(said):
     return said.splitlines()[-1] if said else "Claude Code failed, saying nothing"
 
 
-class ClaudeWindow(DocWindow):
+class ClaudeWindow(EditableTitle, DocWindow):
     """A session's window: the transcript above, scrolled as a document's; below it, what is being typed.
 
     Enter sends, Shift+Enter starts a new line, Cmd+V pastes; PageUp and
     PageDown, Home and End, and the wheel scroll the transcript; Esc or ×
-    closes the window, and its owner saves the session. Beneath its title,
-    the session's usage; at the right of the box, the model, which a click
-    switches, from the next turn on.
+    closes the window, and its owner saves the session. Its title is the
+    session's: a click edits it, Enter keeps it -- *on_rename(window)*, for
+    its owner to file -- and Esc puts it back. Beneath the title, the account
+    Claude Code is logged in as (*account*, once its owner has read it), the
+    session's usage, and what is left of the plan's quota; at the right of
+    the box, the model, which a click switches, from the next turn on.
     """
 
     INPUT_LINES = 8  # the box grows to this many lines, then scrolls
+    TITLE_PREFIX = "Claude · "
 
-    def __init__(self, session, on_send):
+    def __init__(self, session, on_send, on_rename=lambda window: None):
         super().__init__("Claude", posixpath.basename(session.md_url))
-        self.session, self.on_send = session, on_send
-        self.text = ""
+        self.session, self.on_send, self.on_rename = session, on_send, on_rename
+        self.edit = AreaEdit()  # what is typed in the box
+        self._box_selecting_ = False  # the mouse pressed in the box, and not yet let go: a drag selects
+        self._init_title_()
+        self.account = None  # who Claude Code runs as, as `account` last said; None until read
         self.sending = None  # what was sent, while its reply is awaited
         self.partial = None  # the reply coming in, while one is
         self.cancelled = False
@@ -292,7 +353,15 @@ class ClaudeWindow(DocWindow):
         self.input = pygame.Rect(0, 0, 0, 0)
         self.chip = pygame.Rect(0, 0, 0, 0)  # the model's, as last drawn
         self._render_()
-        pygame.key.start_text_input()
+
+    @property
+    def text(self):
+        """What is typed in the box."""
+        return self.edit.text
+
+    @text.setter
+    def text(self, value):
+        self.edit.set_text(value)
 
     def busy(self):
         return self.partial is not None
@@ -313,9 +382,23 @@ class ClaudeWindow(DocWindow):
         self.sending, self.partial, self.note = None, None, note
         self._render_(follow=True)
 
+    def quota_line(self):
+        """The session's quota line, and whose it is where the account has changed since: a turn shows this one's."""
+        s = self.session
+        line = s.quota_line()
+        if s.plan and s.plan_account and self.account and s.plan_account != self.account:
+            line += f" -- {s.plan_account.split(' · ')[0]}'s; a turn shows this account's"
+        return line
+
+    def _title_text_(self):
+        return self.session.given_title()  # its start time, shown till it has a title, is no title to edit
+
+    def _title_kept_(self, text):
+        self.session.rename(text)
+        self.on_rename(self)  # for the owner to file
+
     def close_input(self):
         self.cancelled = True
-        pygame.key.stop_text_input()
 
     def animating(self):
         return self.busy() or self.doc.pending()
@@ -328,48 +411,65 @@ class ClaudeWindow(DocWindow):
             if not self.busy():
                 self.session.switch()
             return None
+        if self._title_event_(ev):  # a click off the title, while edited, keeps it and goes on: into the box, say
+            return None
+        if ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+            self._box_selecting_ = False
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.input.collidepoint(ev.pos):
+            self.edit.press(ev.pos, shift=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
+            self._box_selecting_ = True
+            return None
+        if self._box_selecting_ and ev.type == pygame.MOUSEMOTION:
+            self.edit.drag(ev.pos)
+            return None
         if ev.type == pygame.TEXTINPUT:
-            self.text += ev.text
+            self.edit.handle(ev)
             return None
         if ev.type == pygame.KEYDOWN:
-            k, mods = ev.key, pygame.key.get_mods()
+            k, mods = ev.key, pygame.key.get_mods() | getattr(ev, "mod", 0)
+            cmd = mods & (pygame.KMOD_META | pygame.KMOD_CTRL)
             if k == pygame.K_ESCAPE:
                 return "close"
-            if k in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                if mods & pygame.KMOD_SHIFT:
-                    self.text += "\n"
-                elif self.text.strip() and not self.busy():
-                    text, self.text = self.text.strip(), ""
+            if k in (pygame.K_RETURN, pygame.K_KP_ENTER) and not mods & pygame.KMOD_SHIFT:
+                if self.text.strip() and not self.busy():
+                    text = self.text.strip()
+                    self.edit.set_text("")
                     self.on_send(self, text)
-            elif k == pygame.K_BACKSPACE:
-                self.text = self.text[:-1]
-            elif k == pygame.K_v and mods & (pygame.KMOD_META | pygame.KMOD_CTRL):
-                try:
-                    self.text += (pygame.scrap.get_text() or "").replace("\r\n", "\n")
-                except Exception:
-                    pass
-            elif k in (pygame.K_PAGEUP, pygame.K_PAGEDOWN, pygame.K_HOME, pygame.K_END):
-                return super().handle(ev)
+                return None
+            if k in (pygame.K_PAGEUP, pygame.K_PAGEDOWN, pygame.K_HOME, pygame.K_END):
+                return super().handle(ev)  # the transcript scrolled
+            if cmd and k in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS, pygame.K_MINUS, pygame.K_KP_MINUS,
+                             pygame.K_0, pygame.K_KP0):
+                return super().handle(ev)  # Cmd and + or -, or 0: the transcript zoomed, as any document's window
+            if k == pygame.K_c and cmd and self.edit.selection() is None:
+                return super().handle(ev)  # the transcript's selection copied, to paste into the box, say
+            self.edit.handle(ev)
             return None
         return super().handle(ev)
 
     def draw(self, surf, rect, font, small):
-        from .app import wrap
 
         rect = pygame.Rect(rect)
         pad, lh = 10, font.get_linesize()
-        lines = wrap(font, self.text + "|", rect.width - 2 * pad - 2) or ["|"]
-        shown = lines[-self.INPUT_LINES:]
-        hint = "Claude is answering …" if self.busy() else "Enter: send · Shift+Enter: new line · Esc: close and save"
-        box_h = 2 * pad + lh * len(shown) + small.get_linesize() + 4
-        self.sub = f"{posixpath.basename(self.session.md_url)} · {self.session.usage_line()}"
+        width = rect.width - 2 * pad - 4
+        shown = min(len(self.edit.rows(font, width)), self.INPUT_LINES)
+        if self.naming is not None:
+            hint = "Enter: keep this title · Esc: put it back"
+        elif self.busy():
+            hint = "Claude is answering …"
+        else:
+            hint = "Enter: send · Shift+Enter: new line · click the title: rename · Esc: close and save"
+        box_h = 2 * pad + lh * shown + small.get_linesize() + 4
+        self.title = "" if self.naming is not None else f"Claude · {self.session.title()}"  # being edited: drawn below
+        self.sub = "\n".join([f"{posixpath.basename(self.session.md_url)} · {self.account or 'account: reading …'}",
+                              f"{self.session.usage_line()} · {self.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
+        self._draw_title_(surf, font, small)
         self.rect = rect  # the box's too: a click on it is the window's, not the disk's
         self.input = pygame.Rect(rect.x, rect.bottom - box_h + 4, rect.width, box_h - 4)
         pygame.draw.rect(surf, (32, 38, 48), self.input, border_radius=8)
         pygame.draw.rect(surf, EDGE, self.input, 1, border_radius=8)
-        for i, ln in enumerate(shown):
-            surf.blit(font.render(ln, True, DIM if self.busy() else TEXT), (self.input.x + pad, self.input.y + pad + i * lh))
+        self.edit.draw(surf, font, self.input.x + pad, self.input.y + pad, width, self.INPUT_LINES, DIM if self.busy() else TEXT)
         chip = small.render(f"model: {self.session.choice or 'default'} ▾", True, DIM if self.busy() else TEXT)
         bottom = self.input.bottom - pad - small.get_linesize() + 4
         self.chip = chip.get_rect(topright=(self.input.right - pad, bottom)).inflate(8, 2)
@@ -382,12 +482,20 @@ class ClaudeWindow(DocWindow):
 
     def _render_(self, follow=False):
         at_end = self.sy >= self._size[1] - self.body.height - 4
+        self.anchor = self.cursor = None  # laid out again: a selection of the old layout would point anywhere
         text = self.session.markdown()
         if self.sending is not None:
             text += f"\n## You\n\n{self.sending}\n\n## Claude\n\n{self.partial or '…'}\n"
         self.doc = MarkdownDoc(_body_(text))
         if follow or at_end:
             self.sy = 10**9  # clamped to the end at the next draw
+
+
+def said(body):
+    """A saved transcript's *body* as what was said: its markup -- the ``# Claude · <title>`` heading, the ``## You`` and ``## Claude`` lines -- left out."""
+    body = re.sub(r"^# Claude · .*$", "", body, flags=re.M)
+    body = re.sub(r"^## (You|Claude)[ \t]*$", "", body, flags=re.M)
+    return re.sub(r"\n{3,}", "\n\n", body).strip()
 
 
 def is_session(fields):

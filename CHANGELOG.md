@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp gives the terminal back.** Run from one, it goes on in the
+  background once its window is up -- a session of its own, its output in
+  `~/.hyp/logs` -- and what goes wrong before then is said in the terminal,
+  with the exit status. `--fg` keeps the terminal.
+- **hyp --docs: a markdown, written in place.** A right click on empty disk
+  offers Claude or Markdown. Markdown's box, on Enter, begins a new markdown
+  -- saved at once as `<first line>.md` in the directory scanned, embedded --
+  and opens it in the middle, a Claude session's size, to go on writing
+  (`hyp.notes`): Enter a new line, Cmd+S to save, closed saved. Its title,
+  its file's name, edits in place as a Claude session's does and renames
+  the file, never over another (`EditableTitle`, which both windows now
+  share); **preview** splits it, the markdown -- mermaid too -- rendered
+  above as it is written below, the bar between them dragged.
+- **hyp: a window's title bar places it; Cmd and + or - zoom.** A right click
+  on a window's title bar is the place picker for it -- a quadrant, a half,
+  or the middle, which expands it to fill the window, a Claude session's
+  too, whose window opens at a third. Cmd+= (or +), Cmd+- and Cmd+0 zoom a
+  window's text, a Claude transcript's among them.
+- **hyp: a re-embed button.** Beside reload: the whole corpus embedded
+  afresh, from its source, and laid out anew (`Engine.reembed`); points the
+  source no longer gives are dropped. The `--docs` **Claude** button is
+  gone: a right click opens a session.
+- **hyp --docs: right click asks Claude.** On empty disk, the box's
+  text is the first turn of a new Claude session; on a document, the place
+  picker has **ask Claude about it**, a new session with the document's path
+  in its box. Before, the typed text was added as a point with no file,
+  which could not be opened (`FileNotFoundError` on the text as a path).
+- **hyp --docs: a Claude session's title is edited in its window.** A
+  click on the title edits it; Enter keeps it, into the front matter and the
+  transcript's heading, and relabels the session's point, which is dated by
+  its last write (`updated`). The window shows the account Claude Code runs
+  as (`claude auth status`) and what is left of the plan's 5-hour and 7-day
+  windows, with when each resets.
 - **`Datablock.update_tree(note)` and `touch_tree(note)`** run `update` or
   `touch` on every block of the tree, bottom up, each block once. They skip
   the subtrees `build_tree` skips (`TREE_SKIP_BUILDING`, unless `skips=`
@@ -31,7 +64,7 @@ All notable changes to this project will be documented in this file.
   toward and away from, read against the corpus's own phrases, embedded once
   and kept in the store (`hyp/arrows.py`, `Engine.arrows`). See Arrows in
   HYP.md, which also sketches an LLM's reading for later.
-- **hyp --markdowns: Claude sessions.** A **Claude** button opens a
+- **hyp --docs: Claude sessions.** A **Claude** button opens a
   conversation with Claude in a window a third of the window's area. Each
   turn runs the Claude Code CLI (`claude -p`, streamed, `--resume` after the
   first) under the user's own login, so a subscription covers it. Claude
@@ -57,6 +90,11 @@ All notable changes to this project will be documented in this file.
   entry's revision, `--revision=`; off, it runs at today's checkout.
 
 ### Changed
+- **hyp --docs: a Claude session is embedded by its title and what was
+  said.** Not its file's name, put before every piece, nor the transcript's
+  markup: every session's, they lifted every pair of sessions' cosine by
+  about 0.09 and drew unrelated sessions together. Sessions re-embed on the
+  next sync.
 - **A specline `VAR` default hashes as its line: hashes move.** A default
   such as `$dbx.getenv('HOME')` entered the signature as what it resolved to
   on the machine, so the datablock's hash moved with the environment, and
@@ -84,8 +122,6 @@ All notable changes to this project will be documented in this file.
   what Claude Code is given, with their scores, to say in one short line
   what moving along the arrow means: all of a hover's arrows in one
   question, each line kept in the store (`notes.json`, `Engine.arrow_notes`).
-- **`hyp --docs` is `hyp --markdowns`.** `--docs` is gone. Corpora already
-  made stay where they were, under `~/.hyp/docs`.
 - **Journal files are read without Arrow's thread pool, and a compacted journal once per
   process.** A specialization pass hung for good in one worker: reading an anchor's
   compacted journal with a hash filter, through an open file, Arrow waited on a task no
@@ -410,6 +446,34 @@ All notable changes to this project will be documented in this file.
   name the same events.
 
 ### Fixed
+- **hyp: a few points are placed by what they mean.** Fewer than five were
+  put on a ring, evenly, whatever their embeddings: two Claude sessions on
+  quantum mechanics and one on nothing of the kind came out equidistant. They
+  are now placed by their cosine distances (classical MDS).
+- **hyp: symbols a font lacks are drawn, not boxed.** `hyp.fonts.Font` draws
+  a character its font has no glyph for from a fallback that has it -- STIX
+  Two Math first -- on the same baseline: `⊙`, `∧`, `∨`, `→`, `⟨⟩` and the
+  like were boxes in Helvetica Neue.
+- **hyp: the Claude box edits as text.** A cursor, a selection by the mouse
+  or the keys, Up and Down between lines, undo (Cmd+Z, Ctrl+Z) and redo
+  (Cmd+Shift+Z, Ctrl+Y), the title's undo too; Cmd+C copies the box's
+  selection, or else the transcript's.
+- **hyp: text is edited as text.** A Claude session's title has a cursor
+  and a selection -- a click places it, a drag, Shift with the arrows or a
+  click, a double click or Cmd+A selects; typing replaces the selection,
+  Backspace and Delete remove it, Cmd+C and Cmd+X copy and cut it -- and a
+  click off it keeps it. A document's window, a Claude transcript among
+  them, selects text by a drag on it -- Shift+click, a double click, Cmd+A --
+  and Cmd+C copies it as it reads; a drag off the text still pans; a held key repeats, everywhere (Esc, Enter and Tab do
+  not, so a held Esc closes one window, not each). A window's x closes on
+  the first click: the click that makes hyp active is passed through on
+  macOS, and a press whose release never came no longer takes the next
+  click for the disk. Text input is on exactly while something is typed
+  into (`__wants_text__`): each box and window switched it itself, and a
+  Claude session opened in place of another -- as a right click does -- was
+  switched off by the old one closing, and took no typing, in its box or its
+  title. Two Claude sessions begun in one second are two files,
+  `claude-session-<started>-<id>.md`, not one written over.
 - **hyp: a dropdown keeps its width as it scrolls.** The list was as wide
   as the widest of the rows shown, so the points menu widened and narrowed
   with every scroll; it is now as wide as its widest item.

@@ -43,6 +43,33 @@ def _align_(new, old):
     return best
 
 
+#: The radius the farthest of a few points is placed at, scaled by `_scaled_`: as far out as the ring they were on.
+FEW_RADIUS = 0.3
+
+
+def _scaled_(embeddings):
+    """A few points on the disk, placed by classical multidimensional scaling of their cosine distances.
+
+    The plane positions whose distances best match theirs, centered on the
+    origin and scaled so that the farthest is at FEW_RADIUS: their distances
+    relative to one another are theirs, and near the origin the disk's
+    distances are the plane's, near enough. One point is at the origin.
+    """
+    e = _normalized_(np.asarray(embeddings, dtype=np.float64))
+    n = len(e)
+    if n < 2:
+        return np.zeros(n, dtype=complex)
+    d2 = np.maximum(0.0, 1.0 - e @ e.T) ** 2
+    j = np.eye(n) - 1.0 / n
+    vals, vecs = np.linalg.eigh(-0.5 * j @ d2 @ j)
+    top = np.argsort(vals)[::-1][:2]
+    xy = vecs[:, top] * np.sqrt(np.maximum(vals[top], 0.0))
+    w = xy[:, 0] + 1j * (xy[:, 1] if xy.shape[1] > 1 else 0.0)
+    w = w - w.mean()
+    far = float(np.abs(w).max())
+    return w * (FEW_RADIUS / far) if far > 1e-12 else np.zeros(n, dtype=complex)
+
+
 # One layout at a time: UMAP's numba kernels run parallel, and numba's default
 # threading layer aborts the process -- uncatchably -- when two threads launch
 # them at once, as a slice disk laid out during a reload would.
@@ -67,8 +94,14 @@ def _compute_(embeddings, previous=None, seed=0):
     if n == 0:
         return np.zeros(0, dtype=complex)
     if n < 5:
-        # Too few points for a neighbor graph: a small ring.
-        return 0.3 * np.exp(2j * np.pi * np.arange(n) / n) if n > 1 else np.zeros(1, dtype=complex)
+        # Too few points for a neighbor graph -- and UMAP's would not do: it scales each point's distances by its
+        # nearest neighbor's, so three points come out equidistant whatever they mean. Placed by their cosine
+        # distances themselves instead; they were once a ring, the same for every corpus.
+        w = _scaled_(embeddings)
+        if previous is not None and len(previous) == n:
+            reflect, rot = _align_(w, np.asarray(previous))
+            w = (np.conj(w) if reflect else w) * rot
+        return w
 
     import umap
 

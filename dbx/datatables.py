@@ -46,6 +46,7 @@ from .datablocks import (
     forming_with_journal,
     is_topicmarker,
 )
+from . import databits
 from .databits import read_yaml
 from .datastreams import (
     ChunkShuffleSampler,
@@ -1166,8 +1167,7 @@ class Datatablet(_Database_):
 
 def DatatableTablet(table, idx, tag=None, **spec):
     if isinstance(table, str) and (table.startswith('$') or table.startswith('@') or table.startswith('#')):
-        from .databits import eval as dbx_eval
-        table = dbx_eval(table)
+        table = databits.eval(table)
     return table(idx, tag=tag, **spec)
 
 
@@ -1403,8 +1403,7 @@ class Datatable(_Database_, Datastack):
             self.path('tab_paths', ensure_dirpath=True)
         n = self.n_tablets
         self.log.info(
-            "%s: %d tablets x %d slices %s",
-            self.__class__.__name__, n, len(self.slices()), list(self.slices()),
+            f"{self.__class__.__name__}: {n} tablets x {len(self.slices())} slices {list(self.slices())}",
         )
         devices = getattr(self, '_devices', None) or getattr(self, 'devices', None)
         device_mapping = kwargs.get('device_mapping', None)
@@ -1481,17 +1480,15 @@ class Datatable(_Database_, Datastack):
             n_tablets += 1
             n_skipped += bool(result.get('skipped'))
         self.log.info(
-            "%s.__stack__: %d tablets (%d already built)",
-            self.__class__.__name__, n_tablets, n_skipped,
+            f"{self.__class__.__name__}.__stack__: {n_tablets} tablets ({n_skipped} already built)",
         )
 
         if self.valid_topic('done'):
-            self.log.info("%s.__stack__: done marker already present",
-                          self.__class__.__name__)
+            self.log.info(f"{self.__class__.__name__}.__stack__: done marker already present")
         else:
             with self.fs.open(self.path('done', ensure_dirpath=True), 'wb'):
                 pass
-            self.log.info("%s.__stack__: done marker written", self.__class__.__name__)
+            self.log.info(f"{self.__class__.__name__}.__stack__: done marker written")
         return self
 
     def __read__(self, *topicpath):

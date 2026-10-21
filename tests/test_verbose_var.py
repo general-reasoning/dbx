@@ -42,11 +42,9 @@ def test_verbose_var_false():
     # Trigger var formation
     _ = b.var
 
-    # Check if 'detailed' was used for BEGIN/END
+    # Check if 'detailed' was used for the section's >>>/<<< lines
     detailed_calls = _calls(b, 'detailed')
-    assert len(detailed_calls) == 2
-    assert any("BEGIN" in msg for msg in detailed_calls)
-    assert any("END" in msg for msg in detailed_calls)
+    assert detailed_calls == [">>>--- Forming var from spec", "<<<--- Forming var from spec"]
 
     # Check that 'verbose' was NOT used for this specific message
     assert len(_calls(b, 'verbose')) == 0
@@ -60,11 +58,9 @@ def test_verbose_var_true():
     # Trigger var formation
     _ = b.var
 
-    # Check if 'verbose' was used for BEGIN/END
+    # Check if 'verbose' was used for the section's >>>/<<< lines
     verbose_calls = _calls(b, 'verbose')
-    assert len(verbose_calls) == 2
-    assert any("BEGIN" in msg for msg in verbose_calls)
-    assert any("END" in msg for msg in verbose_calls)
+    assert verbose_calls == [">>>--- Forming var from spec", "<<<--- Forming var from spec"]
 
     # Check that 'detailed' was NOT used for this specific message
     assert len(_calls(b, 'detailed')) == 0

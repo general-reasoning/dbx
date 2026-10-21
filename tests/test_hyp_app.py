@@ -655,3 +655,29 @@ def test_without_copy_a_right_click_is_not_the_menus(menu):
     plain.draw_list(pygame.Surface((400, 300)), font)
     assert not click(plain, 3, 1)
     assert copied == [] and picked == [] and plain.open
+
+
+def test_a_held_key_repeats_but_esc_and_enter_do_not(app):
+    import pygame
+
+    down = lambda k: pygame.event.Event(pygame.KEYDOWN, key=k, mod=0, unicode="")
+    up = lambda k: pygame.event.Event(pygame.KEYUP, key=k, mod=0)
+    assert pygame.key.get_repeat() == (400, 35), "on, as everywhere else"
+    assert not app._repeated_(down(pygame.K_BACKSPACE)) and not app._repeated_(down(pygame.K_BACKSPACE)), "Backspace held repeats"
+    assert not app._repeated_(down(pygame.K_ESCAPE)) and app._repeated_(down(pygame.K_ESCAPE)), "Esc held: once"
+    app._repeated_(up(pygame.K_ESCAPE))
+    assert not app._repeated_(down(pygame.K_ESCAPE)), "pressed again: again"
+
+
+def test_the_box_keeps_its_hint_inside_it():
+    import pygame
+    from hyp.app import TextBox, wrap
+    from hyp.docs import HypDocs
+
+    pygame.font.init()
+    font, surf = pygame.font.Font(None, 18), pygame.Surface((900, 600))
+    box = TextBox((10, 10), HypDocs.BOX_HINT)
+    box.draw(surf, font)
+    assert font.size(HypDocs.BOX_HINT)[0] > TextBox.WIDTH - 20, "a hint too long for one line"
+    assert all(font.size(ln)[0] <= TextBox.WIDTH - 20 for ln in wrap(font, box.hint, TextBox.WIDTH - 20))
+    assert box.rect.width == TextBox.WIDTH and box.rect.height >= 2 * font.get_linesize() * 2

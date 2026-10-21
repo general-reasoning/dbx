@@ -23,6 +23,8 @@ import traceback
 import numpy as np
 import pygame
 
+from .fonts import Font
+
 from . import poincare as P
 from .engine import Engine
 from .models import EMBED_MODEL, SUMMARY_MODEL, DeepSeekEmbedder, Ollama, OllamaEmbedder, Summarizer
@@ -55,6 +57,9 @@ DRAG_RADIUS = 0.97
 LABEL_RADIUS = 0.72
 MAX_LABELS = 48
 SUBLABEL_CHARS = 48  # of each line under a point's label: a longer one is cut short
+KEY_REPEAT_DELAY_MS, KEY_REPEAT_MS = 400, 35  # a key held: repeats after this long, then this often
+# Keys whose repeat is dropped: held, Esc would close one window after another, and Enter send twice.
+NO_REPEAT = {pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_TAB}
 
 BG = (17, 20, 24)
 DISK = (26, 31, 39)
@@ -228,15 +233,14 @@ def wrap(font, text, width):
 
 
 class TextBox:
+    """A box to type a text in, at *pos*: Enter submits it, Shift+Enter starts a new line, Esc cancels; *hint* says so beneath."""
+
     WIDTH = 440
 
-    def __init__(self, pos):
+    def __init__(self, pos, hint="Enter: embed   Shift+Enter: newline   Esc: cancel"):
         self.pos = pos
+        self.hint = hint
         self.text = ""
-        pygame.key.start_text_input()
-
-    def close(self):
-        pygame.key.stop_text_input()
 
     def handle(self, ev):
         """Returns "submit", "cancel" or None."""
@@ -264,8 +268,8 @@ class TextBox:
         pad = 10
         lines = wrap(font, self.text + ("|" if time.time() % 1 < 0.5 else " "), self.WIDTH - 2 * pad)
         lh = font.get_linesize()
-        hint = font.render("Enter: embed   Shift+Enter: newline   Esc: cancel", True, STATUS)
-        h = 2 * pad + lh * max(1, len(lines)) + lh + 4
+        hints = wrap(font, self.hint, self.WIDTH - 2 * pad)  # inside the box, however long, as the text is
+        h = 2 * pad + lh * max(1, len(lines)) + lh * len(hints) + 4
         x = min(self.pos[0], surf.get_width() - self.WIDTH - 8)
         y = min(self.pos[1], surf.get_height() - h - 8)
         rect = pygame.Rect(x, y, self.WIDTH, h)
@@ -273,7 +277,9 @@ class TextBox:
         pygame.draw.rect(surf, EDGE, rect, 1, border_radius=6)
         for i, ln in enumerate(lines):
             surf.blit(font.render(ln, True, LABEL), (x + pad, y + pad + i * lh))
-        surf.blit(hint, (x + pad, y + h - pad - lh + 2))
+        for i, ln in enumerate(hints):
+            surf.blit(font.render(ln, True, STATUS), (x + pad, y + h - pad - lh * (len(hints) - i) + 2))
+        self.rect = rect  # as last drawn
         pygame.key.set_text_input_rect(rect)
 
 
@@ -506,7 +512,6 @@ class TextField:
         if not keep:
             self.text = self.committed
         self.editing = False
-        pygame.key.stop_text_input()
 
     def handle(self, ev):
         """Whether *ev* was this field's to handle."""
@@ -516,9 +521,7 @@ class TextField:
             return False
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             if self.button.collidepoint(ev.pos):
-                if not self.editing:
-                    self.editing = True
-                    pygame.key.start_text_input()
+                self.editing = True
                 return True
             if self.editing:
                 self._stop_(keep=False)
@@ -1142,13 +1145,17 @@ class Hyp:
     corpus comes from and how it is embedded (`__source__`, `__embedder__`, `__default_data__`,
     `__data_origin__`, `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
-    `__context_point__`), and how a point is labeled (`__point_label__`,
+    `__context_point__`), what a text typed on empty disk does
+    (`__submit_text__`, `BOX_HINT`), and how a point is labeled (`__point_label__`,
     `__point_tag__`, `__point_name__`, `__point_version__`, `__point_datetime__`,
     `__point_tooltip__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
     """
 
     title = "hyp"
+
+    #: What the box a right click on empty disk opens says beneath it: what Enter does, `__submit_text__`.
+    BOX_HINT = "Enter: embed   Shift+Enter: newline   Esc: cancel"
 
     #: The controls, at the right of the status line.
     HINT = "click: center · drag: move · scroll: zoom · right-click: open / add · Shift over a point: its arrows · Home or double-click outside: reset"
@@ -1184,6 +1191,14 @@ class Hyp:
 
     def __reload__(self):
         """What reload does besides reloading the corpus: here, nothing."""
+
+    def __wants_text__(self):
+        """Whether anything is being typed into, so that text input is on: here, the box, or a field of the top bar being edited."""
+        return self.box is not None or any(getattr(c, "editing", False) for c in self.controls)
+
+    def __submit_text__(self, text):
+        """What the box a right click on empty disk opens does with *text*, on Enter: here, embed it as a point of its own."""
+        self.submit(text)
 
     def __click_point__(self, i, now):
         """Left click on point *i*: slide it to the center."""
@@ -1325,6 +1340,7 @@ class Hyp:
         self.error_at = 0.0
         self.reading = 0  # run_async reads under way: with the worker's jobs, what the spinner shows
         self.box = None
+        self._held_ = set()  # the keys down, as KEYDOWN and KEYUP say: what tells a held key's repeat
         self.viewers = []  # open text windows, the last on top
         self.hover = None
         self.arrows = {}  # (snapshot, point) -> its arrows decoded, or None while they are being decoded: Shift over a point
@@ -1341,24 +1357,31 @@ class Hyp:
         self._points_ = (None, None, [])  # (snapshot, settings, items): what the points menu last listed
         self.popup = None  # a menu opened on the disk, at the mouse: see open_popup
         self.reload_button = Button("reload", self.reload)
+        self.reembed_button = Button("re-embed", self.reembed)
         # A specialization's own controls in the top bar, right to left from the points menu: see draw_chrome.
         self.controls = []
         # Back to front. A specialization adds layers of its own: see __draw_layer__.
         self.layers = ["disk"]
         self.grid = _grid_()
 
+        # On macOS the click that makes the window active is dropped unless SDL passes it through: an x clicked from
+        # another app took two clicks.
+        os.environ.setdefault("SDL_MOUSE_FOCUS_CLICKTHROUGH", "1")
         pygame.init()
         pygame.display.set_caption(self.title)
         self.screen = pygame.display.set_mode((1100, 1000), pygame.RESIZABLE)
+        # A key held repeats -- Backspace, Delete, the arrows -- as it does everywhere else: pygame's default is once a press.
+        pygame.key.set_repeat(KEY_REPEAT_DELAY_MS, KEY_REPEAT_MS)
         try:
             pygame.scrap.init()
         except Exception:
             pass
         pygame.key.stop_text_input()
-        self.font = pygame.font.SysFont("helveticaneue,helvetica,arial", 15)
-        self.small = pygame.font.SysFont("helveticaneue,helvetica,arial", 12)
-        self.tiny = pygame.font.SysFont("helveticaneue,helvetica,arial", 10)
-        self.mono = pygame.font.SysFont("menlo,monaco,couriernew", 13)
+        self._typing_ = False  # text input on, as `_sync_text_input_` last set it
+        self.font = Font("helveticaneue,helvetica,arial", 15)
+        self.small = Font("helveticaneue,helvetica,arial", 12)
+        self.tiny = Font("helveticaneue,helvetica,arial", 10)
+        self.mono = Font("menlo,monaco,couriernew", 13)
         self.clock = pygame.time.Clock()
 
     # -- geometry -----------------------------------------------------------
@@ -1423,6 +1446,18 @@ class Hyp:
         self.__reload__()
         self.worker.submit(job)
 
+    def reembed(self):
+        """Embed the whole corpus afresh, from its source, lay it out anew, and redraw it: what reload does, for every point, not only the changed."""
+        engine = self.engine
+
+        def job(progress):
+            engine.reembed(progress)
+            self.worker.events.put(("snapshot", (engine.snapshot(), None)))
+            progress("re-embedded")
+
+        self.__reload__()
+        self.worker.submit(job)
+
     def submit(self, text):
         engine = self.engine
 
@@ -1446,7 +1481,8 @@ class Hyp:
             return
         if any(c.handle(ev) for c in self.controls if c.visible()) and not self.viewers:
             return
-        if self.settings_menu.handle(ev) or (not self.viewers and (self.reload_button.handle(ev) or self.points_menu.handle(ev))):
+        if self.settings_menu.handle(ev) or (not self.viewers and (self.reload_button.handle(ev) or self.reembed_button.handle(ev)
+                                                                   or self.points_menu.handle(ev))):
             return
         if len(self.layers) > 1 and not self.viewers and self.layers_menu.handle(ev):
             return
@@ -1465,6 +1501,10 @@ class Hyp:
                 self.rotate_layers()
                 return
             pos = getattr(ev, "pos", None) or pygame.mouse.get_pos()
+            if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                # A button going down ends any press before it: one whose release never came -- let go outside
+                # the window -- held every click after it for the disk, an x's among them, till a second came.
+                self.press, self.dragging = None, False
             layer = self.layer_at(pos) if self.press is None else "disk"  # a drag of the disk stays the disk's
             if ev.type == pygame.MOUSEBUTTONDOWN and ev.button in (1, 3):
                 self.bring_to_front(layer)  # a click on a layer, wherever it shows, brings it to the front
@@ -1475,14 +1515,12 @@ class Hyp:
         if self.box is not None and ev.type in (pygame.TEXTINPUT, pygame.KEYDOWN):
             action = self.box.handle(ev)
             if action == "submit" and self.box.text.strip():
-                self.submit(self.box.text)
+                self.__submit_text__(self.box.text)
             if action in ("submit", "cancel"):
-                self.box.close()
                 self.box = None
             return
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             if self.box is not None:
-                self.box.close()
                 self.box = None
                 return
             if abs(self.to_disk(ev.pos)) < 1:
@@ -1512,12 +1550,11 @@ class Hyp:
             self.dragging = False
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
             if self.box is not None:
-                self.box.close()
                 self.box = None
             if self.hover is not None:
                 self.__context_point__(self.hover, ev.pos)
             else:
-                self.box = TextBox(ev.pos)
+                self.box = TextBox(ev.pos, self.BOX_HINT)
         elif ev.type == pygame.MOUSEWHEEL:
             self.view.zoom_by(ZOOM_STEP ** getattr(ev, "precise_y", ev.y))
         elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_HOME:
@@ -1790,6 +1827,7 @@ class Hyp:
                 px -= control.width(self.small) + 14
                 control.draw_button(surf, self.small, px, 10, STATUS)
         x = 14 + self.reload_button.draw_button(surf, self.small, 14, 10, STATUS) + 12
+        x += self.reembed_button.draw_button(surf, self.small, x, 10, STATUS) + 12
         if len(self.layers) > 1:
             self.layers_menu.draw_button(surf, self.small, x, 10, STATUS)
         for viewer in self.viewers:
@@ -1906,6 +1944,29 @@ class Hyp:
         except Exception:
             pass
 
+    def _sync_text_input_(self):
+        """Text input on exactly while `__wants_text__`: one switch for the whole app, set here only.
+
+        Each box and window turned it on and off itself, and the last to do so
+        won: a Claude window opened in place of another was made -- on -- and
+        then the old one closed -- off -- and took no typing, in its box or its
+        title, though its keys still came.
+        """
+        wanted = bool(self.__wants_text__())
+        if wanted != self._typing_:
+            (pygame.key.start_text_input if wanted else pygame.key.stop_text_input)()
+            self._typing_ = wanted
+
+    def _repeated_(self, ev):
+        """Whether *ev* is a held key's repeat of one of NO_REPEAT, to drop: pygame does not mark a repeat, so the keys down are kept."""
+        if ev.type == pygame.KEYUP:
+            self._held_.discard(ev.key)
+        elif ev.type == pygame.KEYDOWN:
+            if ev.key in self._held_ and ev.key in NO_REPEAT:
+                return True
+            self._held_.add(ev.key)
+        return False
+
     def run(self):
         self.raise_window()
         while True:
@@ -1915,8 +1976,11 @@ class Hyp:
                 if ev.type == pygame.QUIT:
                     pygame.quit()
                     return
+                if self._repeated_(ev):
+                    continue
                 self.handle(ev, now)
             news = self.drain(now)
+            self._sync_text_input_()  # after the events and what came back: either may open or close what is typed into
             # Redraw only while something can change on screen; an idle frame
             # at 60 fps costs half a core for nothing.
             moving = (self.view.anim is not None or self.tween is not None
@@ -1938,7 +2002,7 @@ def _arrow_evidence_(note):
 
 
 def _unscanned_(rel):
-    """Why sessions saved under *rel* would not be found by --markdowns' scan, or None: it must be relative, below --dir, and scanned."""
+    """Why sessions saved under *rel* would not be found by --docs' scan, or None: it must be relative, below --dir, and scanned."""
     from .docs import SKIP_DIRS
 
     if "://" in rel or rel.startswith(("/", "~")):
@@ -1973,10 +2037,10 @@ def main(argv=None):
     ap.add_argument("--extra-construction-events", "--ece", nargs="+", default=[], metavar="EVENT",
                     help="with --journal (pipelines): events that also make an entry block count as constructed -- each alone, or "
                          "followed by = or : and the rest: `--ece ckpt` takes a block that has checkpointed (ckpt=<tag>)")
-    ap.add_argument("--markdowns", action="store_true", help="the documents -- markdowns and pdfs -- under --dir, one point each")
-    ap.add_argument("--dir", default=None, help="with --markdowns: the directory scanned, local or an fsspec url (default: the current one)")
+    ap.add_argument("--docs", action="store_true", help="the documents -- markdowns and pdfs -- under --dir, one point each")
+    ap.add_argument("--dir", default=None, help="with --docs: the directory scanned, local or an fsspec url (default: the current one)")
     ap.add_argument("--claude-dir", default=None, metavar="REL",
-                    help="with --markdowns: where Claude sessions are saved -- a directory relative to --dir, scanned with it (default: --dir itself)")
+                    help="with --docs: where Claude sessions are saved -- a directory relative to --dir, scanned with it (default: --dir itself)")
     ap.add_argument("--remote-python", default=None, help="with --journal: the python, on the datalake's host, that read runs trueinst() in -- with dbx, ray and the project (default: $HYP_REMOTE_PYTHON, else the one each entry records its build ran in, else python3)")
     ap.add_argument("--n-workers", type=int, default=16, help="threads reading a remote source, e.g. the dbx journal and its side files (default: 16)")
     ap.add_argument("--embedder", choices=["ollama", "deepseek"], default="ollama", help="ollama: an Ollama embedding model; deepseek: pooled DeepSeek hidden states via transformers")
@@ -1988,15 +2052,15 @@ def main(argv=None):
 
     cls = Hyp
     pipelines = args.journal in ("pipelines", ".pipelines")
-    if args.journal is not None and args.markdowns:
-        ap.error("--journal and --markdowns are two corpora: one at a time")
+    if args.journal is not None and args.docs:
+        ap.error("--journal and --docs are two corpora: one at a time")
     if args.extra_construction_events and not pipelines:
         ap.error("--extra-construction-events is for the entry blocks of --journal's pipelines")
-    if args.dir is not None and not args.markdowns:
-        ap.error("--dir is the directory --markdowns scans")
+    if args.dir is not None and not args.docs:
+        ap.error("--dir is the directory --docs scans")
     if args.claude_dir is not None:
-        if not args.markdowns:
-            ap.error("--claude-dir is where --markdowns saves Claude sessions")
+        if not args.docs:
+            ap.error("--claude-dir is where --docs saves Claude sessions")
         if problem := _unscanned_(args.claude_dir):
             ap.error(f"--claude-dir {args.claude_dir}: {problem}")
     if args.filter and (args.journal is None or pipelines):
@@ -2008,7 +2072,7 @@ def main(argv=None):
             parse_filters(args.filter)
         except ValueError as e:
             ap.error(f"--filter: {e}")
-    elif args.markdowns:
+    elif args.docs:
         from .docs import HypDocs as cls
     origin = "--data" if args.data is not None else cls.__data_origin__(args)
     if args.data is None:

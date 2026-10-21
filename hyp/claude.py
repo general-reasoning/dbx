@@ -1,4 +1,4 @@
-"""A Claude session in hyp --markdowns: a conversation with Claude Code, saved as a markdown of the directory scanned.
+"""A Claude session in hyp --docs: a conversation with Claude Code, saved as a markdown of the directory scanned.
 
 The **Claude** button opens a window in the middle of the disk -- a third
 of the window's area -- with the conversation above and a box to type in
@@ -13,7 +13,7 @@ change nothing. A ``--dir`` that is a url is not a directory Claude Code can
 work in, so there it has no tools at all.
 
 Every turn writes the session into ``--dir``, or a directory under it
-(``--claude-dir``), as one markdown, ``claude-session-<started>.md``: the
+(``--claude-dir``), as one markdown, ``claude-session-<started>-<id>.md``: the
 transcript, with front matter saying what it is -- ``hyp: claude-session``
 and the session's id. The disk is brought up to date with it at once: the
 whole transcript embedded, the layout nudged, so the session moves among the
@@ -25,6 +25,7 @@ import glob
 import json
 import os
 import posixpath
+import re
 import shutil
 import subprocess
 import time
@@ -32,7 +33,7 @@ import uuid
 
 import pygame
 
-from .docview import DIM, EDGE, TEXT, DocWindow, MarkdownDoc, front_matter
+from .docview import DIM, EDGE, TEXT, AreaEdit, DocWindow, LineEdit, MarkdownDoc, front_matter
 
 KIND = "claude-session"
 PREFIX = "claude-session-"
@@ -83,7 +84,9 @@ class Session:
         self.plan = None  # the plan's windows, as the last turn left them: {"five_hour": {"utilization", "resetsAt"}, ...}
         self.overage = False  # whether the last turn ran on overage, past the plan's windows
         stamp = self.started.replace("-", "").replace(":", "").replace("T", "-")
-        self.md_url = md_url or posixpath.join(self.root, *([subdir] if subdir else []), f"{PREFIX}{stamp}.md")
+        # By its start and its id: two sessions begun in one second are two files, not one written over.
+        name = f"{PREFIX}{stamp}-{self.id[:8]}.md"
+        self.md_url = md_url or posixpath.join(self.root, *([subdir] if subdir else []), name)
 
     # 2. Declared API ---------------------------------------------------------
 
@@ -194,11 +197,15 @@ class Session:
         return "\n".join(lines)
 
     def title(self):
-        """The title it was saved with; else the first line of its first turn; else the time it began."""
+        """The title it was given or saved with; else the first line of its first turn; else the time it began."""
+        return self.given_title() or self.started.replace("T", " ")
+
+    def given_title(self):
+        """The title it was given or saved with, else the first line of its first turn; "" while it has neither -- its start time is no title."""
         if self._title_:
             return self._title_
         line = (self.turns[0][0] if self.turns else "").strip().split("\n", 1)[0]
-        return (line[:77] + "…" if len(line) > 80 else line) or self.started.replace("T", " ")
+        return line[:77] + "…" if len(line) > 80 else line
 
     def switch(self):
         """Ask for the next of MODELS from the next turn on: Claude Code resumes the session on it."""
@@ -330,9 +337,12 @@ class ClaudeWindow(DocWindow):
     def __init__(self, session, on_send, on_rename=lambda window: None):
         super().__init__("Claude", posixpath.basename(session.md_url))
         self.session, self.on_send, self.on_rename = session, on_send, on_rename
-        self.naming = None  # the title being typed, while it is edited
+        self.edit = AreaEdit()  # what is typed in the box
+        self._box_selecting_ = False  # the mouse pressed in the box, and not yet let go: a drag selects
+        self.naming = None  # the title, a LineEdit, while it is edited
+        self._font_ = None  # the title's font, as last drawn: what a click in it is placed by
+        self._selecting_ = False  # the mouse pressed in the title, and not yet let go: a drag selects
         self.account = None  # who Claude Code runs as, as `account` says; None until read
-        self.text = ""
         self.sending = None  # what was sent, while its reply is awaited
         self.partial = None  # the reply coming in, while one is
         self.cancelled = False
@@ -340,7 +350,15 @@ class ClaudeWindow(DocWindow):
         self.input = pygame.Rect(0, 0, 0, 0)
         self.chip = pygame.Rect(0, 0, 0, 0)  # the model's, as last drawn
         self._render_()
-        pygame.key.start_text_input()
+
+    @property
+    def text(self):
+        """What is typed in the box."""
+        return self.edit.text
+
+    @text.setter
+    def text(self, value):
+        self.edit.set_text(value)
 
     def busy(self):
         return self.partial is not None
@@ -361,9 +379,16 @@ class ClaudeWindow(DocWindow):
         self.sending, self.partial, self.note = None, None, note
         self._render_(follow=True)
 
+    def keep_title(self):
+        """The title being edited kept -- Enter, or a click anywhere off it -- for the owner to file (*on_rename*); nothing while none is."""
+        if self.naming is None:
+            return
+        self.session.rename(self.naming.text)
+        self.naming = None
+        self.on_rename(self)
+
     def close_input(self):
         self.cancelled = True
-        pygame.key.stop_text_input()
 
     def animating(self):
         return self.busy() or self.doc.pending()
@@ -376,61 +401,79 @@ class ClaudeWindow(DocWindow):
             if not self.busy():
                 self.session.switch()
             return None
+        if self.naming is not None and ev.type == pygame.MOUSEBUTTONDOWN and not self.title_rect.collidepoint(ev.pos):
+            self.keep_title()  # a click away keeps it, and then does what it does: into the box, say
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.title_rect.collidepoint(ev.pos):
             if self.naming is None:
-                self.naming = self.session.title()
+                self.naming = LineEdit(self.session.given_title())  # its start time is no title to edit
+                # Laid out as the title was drawn, so the press lands where it was clicked; a start time shown, at the end.
+                self.naming._laid_ = (self.title_rect.x, "Claude · ", 0)
+            if self._font_ is not None:
+                self.naming.press(self._font_, ev.pos[0], shift=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
+                self._selecting_ = True
             return None
+        if self._selecting_ and ev.type == pygame.MOUSEMOTION and self.naming is not None and self._font_ is not None:
+            self.naming.drag(self._font_, ev.pos[0])
+            return None
+        if ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+            self._selecting_ = self._box_selecting_ = False
         if self.naming is not None and ev.type in (pygame.TEXTINPUT, pygame.KEYDOWN):
             return self._name_(ev)
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.input.collidepoint(ev.pos):
+            self.edit.press(ev.pos, shift=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
+            self._box_selecting_ = True
+            return None
+        if self._box_selecting_ and ev.type == pygame.MOUSEMOTION:
+            self.edit.drag(ev.pos)
+            return None
         if ev.type == pygame.TEXTINPUT:
-            self.text += ev.text
+            self.edit.handle(ev)
             return None
         if ev.type == pygame.KEYDOWN:
-            k, mods = ev.key, pygame.key.get_mods()
+            k, mods = ev.key, pygame.key.get_mods() | getattr(ev, "mod", 0)
+            cmd = mods & (pygame.KMOD_META | pygame.KMOD_CTRL)
             if k == pygame.K_ESCAPE:
                 return "close"
-            if k in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                if mods & pygame.KMOD_SHIFT:
-                    self.text += "\n"
-                elif self.text.strip() and not self.busy():
-                    text, self.text = self.text.strip(), ""
+            if k in (pygame.K_RETURN, pygame.K_KP_ENTER) and not mods & pygame.KMOD_SHIFT:
+                if self.text.strip() and not self.busy():
+                    text = self.text.strip()
+                    self.edit.set_text("")
                     self.on_send(self, text)
-            elif k == pygame.K_BACKSPACE:
-                self.text = self.text[:-1]
-            elif k == pygame.K_v and mods & (pygame.KMOD_META | pygame.KMOD_CTRL):
-                try:
-                    self.text += (pygame.scrap.get_text() or "").replace("\r\n", "\n")
-                except Exception:
-                    pass
-            elif k in (pygame.K_PAGEUP, pygame.K_PAGEDOWN, pygame.K_HOME, pygame.K_END):
-                return super().handle(ev)
+                return None
+            if k in (pygame.K_PAGEUP, pygame.K_PAGEDOWN, pygame.K_HOME, pygame.K_END):
+                return super().handle(ev)  # the transcript scrolled
+            if k == pygame.K_c and cmd and self.edit.selection() is None:
+                return super().handle(ev)  # the transcript's selection copied, to paste into the box, say
+            self.edit.handle(ev)
             return None
         return super().handle(ev)
 
     def draw(self, surf, rect, font, small):
-        from .app import wrap
 
         rect = pygame.Rect(rect)
         pad, lh = 10, font.get_linesize()
-        lines = wrap(font, self.text + "|", rect.width - 2 * pad - 2) or ["|"]
-        shown = lines[-self.INPUT_LINES:]
+        width = rect.width - 2 * pad - 4
+        shown = min(len(self.edit.rows(font, width)), self.INPUT_LINES)
         if self.naming is not None:
             hint = "Enter: keep this title · Esc: put it back"
         elif self.busy():
             hint = "Claude is answering …"
         else:
             hint = "Enter: send · Shift+Enter: new line · click the title: rename · Esc: close and save"
-        box_h = 2 * pad + lh * len(shown) + small.get_linesize() + 4
-        self.title = f"{self.naming}|" if self.naming is not None else f"Claude · {self.session.title()}"
+        box_h = 2 * pad + lh * shown + small.get_linesize() + 4
+        self.title = "" if self.naming is not None else f"Claude · {self.session.title()}"  # being edited: drawn below
         self.sub = "\n".join([f"{posixpath.basename(self.session.md_url)} · {self.account or 'account: reading …'}",
                               f"{self.session.usage_line()} · {self.session.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
+        if self.naming is not None:
+            x, room = self.rect.x + 12, self.close.x - small.size("100%")[0] - 24 - (self.rect.x + 12)
+            self.title_rect = self.naming.draw(surf, font, x, self.rect.y + 10, room, self.title_color() or EDGE, prefix="Claude · ")
+        self._font_ = font
         self.rect = rect  # the box's too: a click on it is the window's, not the disk's
         self.input = pygame.Rect(rect.x, rect.bottom - box_h + 4, rect.width, box_h - 4)
         pygame.draw.rect(surf, (32, 38, 48), self.input, border_radius=8)
         pygame.draw.rect(surf, EDGE, self.input, 1, border_radius=8)
-        for i, ln in enumerate(shown):
-            surf.blit(font.render(ln, True, DIM if self.busy() else TEXT), (self.input.x + pad, self.input.y + pad + i * lh))
+        self.edit.draw(surf, font, self.input.x + pad, self.input.y + pad, width, self.INPUT_LINES, DIM if self.busy() else TEXT)
         chip = small.render(f"model: {self.session.choice or 'default'} ▾", True, DIM if self.busy() else TEXT)
         bottom = self.input.bottom - pad - small.get_linesize() + 4
         self.chip = chip.get_rect(topright=(self.input.right - pad, bottom)).inflate(8, 2)
@@ -442,32 +485,30 @@ class ClaudeWindow(DocWindow):
         pygame.key.set_text_input_rect(self.input)
 
     def _name_(self, ev):
-        """A key or text while the title is edited: typed into it; Enter keeps it, Esc puts it back. Never closes the window."""
-        if ev.type == pygame.TEXTINPUT:
-            self.naming += ev.text
-        elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-            self.session.rename(self.naming)
+        """A key or text while the title is edited: the `LineEdit`'s; Enter keeps it, Esc puts it back. Never closes the window."""
+        said = self.naming.handle(ev)
+        if said == "submit":
+            self.keep_title()
+        elif said == "cancel":
             self.naming = None
-            self.on_rename(self)
-        elif ev.key == pygame.K_ESCAPE:
-            self.naming = None
-        elif ev.key == pygame.K_BACKSPACE:
-            self.naming = self.naming[:-1]
-        elif ev.key == pygame.K_v and pygame.key.get_mods() & (pygame.KMOD_META | pygame.KMOD_CTRL):
-            try:
-                self.naming += " ".join((pygame.scrap.get_text() or "").split())
-            except Exception:
-                pass
         return None
 
     def _render_(self, follow=False):
         at_end = self.sy >= self._size[1] - self.body.height - 4
+        self.anchor = self.cursor = None  # laid out again: a selection of the old layout would point anywhere
         text = self.session.markdown()
         if self.sending is not None:
             text += f"\n## You\n\n{self.sending}\n\n## Claude\n\n{self.partial or '…'}\n"
         self.doc = MarkdownDoc(_body_(text))
         if follow or at_end:
             self.sy = 10**9  # clamped to the end at the next draw
+
+
+def said(body):
+    """A saved transcript's *body* as what was said: its markup -- the ``# Claude · <title>`` heading, the ``## You`` and ``## Claude`` lines -- left out."""
+    body = re.sub(r"^# Claude · .*$", "", body, flags=re.M)
+    body = re.sub(r"^## (You|Claude)[ \t]*$", "", body, flags=re.M)
+    return re.sub(r"\n{3,}", "\n\n", body).strip()
 
 
 def is_session(fields):

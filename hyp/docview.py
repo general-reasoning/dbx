@@ -18,9 +18,12 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 
 import pygame
+
+from .fonts import Font
 
 SANS = "helveticaneue,helvetica,arial"
 MONO = "menlo,monaco,couriernew"
@@ -54,7 +57,7 @@ class Fonts:
     def get(self, size, bold=False, italic=False, mono=False):
         key = (max(6, round(size)), bold, italic, mono)
         if key not in self._made:
-            self._made[key] = pygame.font.SysFont(MONO if mono else SANS, key[0], bold=bold, italic=italic)
+            self._made[key] = Font(MONO if mono else SANS, key[0], bold=bold, italic=italic)  # what it lacks, from a fallback
         return self._made[key]
 
 
@@ -183,13 +186,29 @@ def parse_markdown(text):
     return blocks
 
 
+@dataclass(frozen=True)
+class Run:
+    """A piece of text as drawn: where, in what font, and of which block -- what a selection is made of."""
+
+    x: int
+    y: int
+    w: int
+    h: int
+    text: str
+    font: object
+    block: int  # the markdown block it is of: runs of one block on lines of their own are one paragraph
+    hard: bool  # its block's lines are lines -- code, a table -- not a paragraph wrapped
+
+
 class Laid:
-    """What a document draws, as laid out: items sorted by top, each ``(top, bottom, draw)``."""
+    """What a document draws, as laid out: items sorted by top, each ``(top, bottom, draw)``; and its text, as `Run`s in reading order."""
 
     def __init__(self):
         self.items = []
         self.width = 0
         self.height = 0
+        self.runs = []  # the text drawn, in reading order
+        self.block, self.hard = 0, False  # what the runs added now are of: set as each block is laid out
 
     def add(self, top, bottom, fn):
         self.items.append((top, bottom, fn))
@@ -208,6 +227,44 @@ class Laid:
 
         draw.right = x + w
         self.add(y, y + h, draw)
+
+    def run(self, x, y, img, text, font):
+        """Record *text*, drawn as *img* at (*x*, *y*) with *font*, as a `Run` of the block being laid out."""
+        self.runs.append(Run(x, y, img.get_width(), img.get_height(), text, font, self.block, self.hard))
+
+    def text_at(self, x, y, near=False):
+        """The text position -- ``(run, character)`` -- at content (*x*, *y*): on a run, or with *near* the nearest; None off them all."""
+        if not self.runs:
+            return None
+        on = [i for i, r in enumerate(self.runs) if r.y <= y < r.y + r.h and r.x - 4 <= x <= r.x + r.w + 4]
+        if on:
+            i = on[0]
+        elif near:
+            i = min(range(len(self.runs)), key=lambda k: (_gap_(y, self.runs[k].y, self.runs[k].y + self.runs[k].h),
+                                                           _gap_(x, self.runs[k].x, self.runs[k].x + self.runs[k].w)))
+        else:
+            return None
+        r = self.runs[i]
+        edges = [r.font.size(r.text[:c])[0] for c in range(len(r.text) + 1)]
+        return i, min(range(len(edges)), key=lambda c: abs(r.x + edges[c] - x))
+
+    def text_between(self, a, b):
+        """The text from position *a* to *b*, as it reads: a paragraph's wrapped lines joined by a space, code's kept, blocks apart."""
+        (i, c), (j, d) = sorted((a, b))
+        out = []
+        for k in range(i, j + 1):
+            r = self.runs[k]
+            piece = r.text[c if k == i else 0: d if k == j else len(r.text)]
+            if k > i:
+                prev = self.runs[k - 1]
+                if r.block != prev.block:
+                    out.append("\n\n")
+                elif r.y != prev.y:
+                    out.append("\n" if r.hard else " ")
+                elif r.x > prev.x + prev.w + 1:
+                    out.append("\t" if r.hard else " ")
+            out.append(piece)
+        return "".join(out)
 
     def finish(self):
         self.items.sort(key=lambda t: t[0])
@@ -239,6 +296,7 @@ def flow(laid, spans, x0, y, width, size, bold=False, color=TEXT):
             if code:
                 laid.rect(rx - 2, y + dy - 1, img.get_width() + 4, img.get_height() + 2, CODE_BG, radius=3)
             laid.surf(img, rx, y + dy)
+            laid.run(rx, y + dy, img, text, font)
         y += line_h
         line, x, line_h = [], x0, FONTS.get(size, bold).get_linesize()
 
@@ -300,6 +358,7 @@ class MarkdownDoc:
         m = round(16 * zoom)
         y = m
         for n, b in enumerate(self.blocks):
+            laid.block, laid.hard = n, b.kind in ("code", "mermaid", "table")
             x0 = m + round(24 * zoom) * b.indent + round(16 * zoom) * b.quote
             avail = max(80, width - x0 - m)
             top = y
@@ -342,8 +401,10 @@ class MarkdownDoc:
         h = sum(i.get_height() for i in imgs) + 2 * pad
         laid.rect(x0, y, max(avail, max(i.get_width() for i in imgs) + 2 * pad), h, CODE_BG, radius=4)
         ty = y + pad
-        for img in imgs:
+        for ln, img in zip(lines, imgs):
             laid.surf(img, x0 + pad, ty)
+            if ln is not None:
+                laid.run(x0 + pad, ty, img, ln.expandtabs(4), font)
             ty += img.get_height()
         return y + h
 
@@ -370,11 +431,14 @@ class MarkdownDoc:
         cells = [[(spans, i == 0) for spans in row] for i, row in enumerate(rows)]
         ncol = max(len(r) for r in cells)
 
+        def text_of(spans):
+            return "".join(t for t, _ in spans).replace("\n", " ")
+
         def img(spans, head):
-            text = "".join(t for t, _ in spans).replace("\n", " ")
-            return FONTS.get(size, bold=head).render(text or " ", True, HEAD if head else TEXT)
+            return FONTS.get(size, bold=head).render(text_of(spans) or " ", True, HEAD if head else TEXT)
 
         imgs = [[img(s, h) for s, h in row] + [None] * (ncol - len(row)) for row in cells]
+        texts = [[(text_of(s), FONTS.get(size, bold=h)) for s, h in row] + [None] * (ncol - len(row)) for row in cells]
         widths = [max((r[c].get_width() for r in imgs if r[c] is not None), default=0) + 2 * pad for c in range(ncol)]
         row_h = FONTS.get(size, bold=True).get_linesize() + pad
         for r, row in enumerate(imgs):
@@ -385,6 +449,7 @@ class MarkdownDoc:
                 laid.rect(x, y, widths[c], row_h, RULE, width=1)
                 if cell is not None:
                     laid.surf(cell, x + pad, y + pad // 2)
+                    laid.run(x + pad, y + pad // 2, cell, *texts[r][c])
                 x += widths[c]
             y += row_h
         return y
@@ -581,14 +646,359 @@ class Message:
 # -- the window --------------------------------------------------------------
 
 
+SELECTION = (60, 90, 140)  # the highlight beneath selected text being edited
+
+
+class TextEdit:
+    """Text being edited, with a cursor, a selection and undo: what `LineEdit` and `AreaEdit` draw.
+
+    Typing and pasting (Cmd+V) insert at the cursor, in place of what is
+    selected. Left and Right move the cursor, Option with them a word, Cmd
+    with them -- and Home and End -- to either end, and Up and Down a line;
+    Shift with any of them selects as it goes, and Cmd+A selects all.
+    Backspace and Delete remove the selection, or else before and after the
+    cursor, Option+Backspace a word; Cmd+C copies the selection and Cmd+X cuts
+    it. Cmd+Z -- or Ctrl+Z -- undoes, a run of typing at once, and Cmd+Shift+Z
+    or Ctrl+Y redoes. With the mouse: a press places the cursor, a drag
+    selects, Shift+click extends the selection, a double click selects a word
+    (`press`, `drag`, at a character position: the subclass says which).
+    Enter submits, Esc cancels: `handle` says which.
+    """
+
+    DOUBLE_CLICK_S = 0.4
+    UNDO_LIMIT = 200
+
+    def __init__(self, text=""):
+        self.text = text
+        self.cursor = len(text)
+        self.anchor = None  # where the selection began, the cursor its other end; None for none
+        self._undo_, self._redo_ = [], []  # (text, cursor) before each edit, and those undone
+        self._typing_ = False  # the last edit was typing: the next typed joins it, one undo
+        self._last_press_ = (0.0, -1)  # (when, where): what tells a double click
+
+    def selection(self):
+        """The selection, as (start, end), start < end; None for none."""
+        if self.anchor is None or self.anchor == self.cursor:
+            return None
+        return min(self.anchor, self.cursor), max(self.anchor, self.cursor)
+
+    def set_text(self, text):
+        """Put *text* in, the cursor at its end, with nothing to undo."""
+        self.text, self.cursor, self.anchor = text, len(text), None
+        self._undo_, self._redo_, self._typing_ = [], [], False
+
+    def handle(self, ev):
+        """Returns "submit", "cancel" or None."""
+        if ev.type == pygame.TEXTINPUT:
+            self._insert_(ev.text, typing=True)
+            return None
+        if ev.type != pygame.KEYDOWN:
+            return None
+        mods = pygame.key.get_mods() | getattr(ev, "mod", 0)
+        meta, ctrl = mods & pygame.KMOD_META, mods & pygame.KMOD_CTRL
+        cmd, alt, shift = meta or ctrl, mods & pygame.KMOD_ALT, mods & pygame.KMOD_SHIFT
+        k, t, c = ev.key, self.text, self.cursor
+        if k in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            return "submit"
+        if k == pygame.K_ESCAPE:
+            return "cancel"
+        if k == pygame.K_z and cmd:
+            self._redo_step_() if shift else self._undo_step_()
+            return None
+        if k == pygame.K_y and ctrl:
+            self._redo_step_()
+            return None
+        moves = {pygame.K_LEFT: lambda: 0 if cmd else self._word_start_(c) if alt else max(0, c - 1),
+                 pygame.K_RIGHT: lambda: len(t) if cmd else self._word_end_(c) if alt else min(len(t), c + 1),
+                 pygame.K_HOME: lambda: 0, pygame.K_END: lambda: len(t),
+                 pygame.K_UP: lambda: 0 if cmd else self._vertical_(c, -1),
+                 pygame.K_DOWN: lambda: len(t) if cmd else self._vertical_(c, +1)}
+        if k in moves:
+            self._typing_ = False
+            sel = self.selection()
+            if shift:
+                self.anchor = c if self.anchor is None else self.anchor
+                self.cursor = moves[k]()
+            elif sel is not None and not (cmd or alt) and k in (pygame.K_LEFT, pygame.K_RIGHT):
+                self.cursor, self.anchor = sel[0] if k == pygame.K_LEFT else sel[1], None  # collapsed to its edge
+            else:
+                self.cursor, self.anchor = moves[k](), None
+        elif k == pygame.K_a and cmd:
+            self.anchor, self.cursor = 0, len(t)
+        elif k in (pygame.K_BACKSPACE, pygame.K_DELETE) and self.selection() is not None:
+            self._edit_(*self._without_selection_())
+        elif k == pygame.K_BACKSPACE:
+            start = 0 if cmd else self._word_start_(c) if alt else max(0, c - 1)
+            if start < c:
+                self._edit_(t[:start] + t[c:], start)
+        elif k == pygame.K_DELETE:
+            if c < len(t):
+                self._edit_(t[:c] + t[c + 1:], c)
+        elif k in (pygame.K_c, pygame.K_x) and cmd and self.selection() is not None:
+            from .app import _copy_
+
+            a, b = self.selection()
+            _copy_(t[a:b])
+            if k == pygame.K_x:
+                self._edit_(*self._without_selection_())
+        elif k == pygame.K_v and cmd:
+            try:
+                self._insert_(self._pasted_(pygame.scrap.get_text() or ""))
+            except Exception:
+                pass
+        return None
+
+    def press(self, at, shift=False, now=None):
+        """The mouse pressed at character position *at*: the cursor placed there -- the selection extended to it, with *shift*; a word selected, pressed twice."""
+        self._typing_ = False
+        now = time.monotonic() if now is None else now
+        when, where = self._last_press_
+        self._last_press_ = (now, at)
+        if not shift and at == where and now - when < self.DOUBLE_CLICK_S:
+            self.anchor, self.cursor = self._word_at_(at)
+            return
+        if shift:
+            self.anchor = self.cursor if self.anchor is None else self.anchor
+        else:
+            self.anchor = at  # where a drag from here selects from
+        self.cursor = at
+
+    def drag(self, at):
+        """The mouse dragged to character position *at*, pressed: the selection from where it was pressed to there."""
+        self.cursor = at
+
+    def _vertical_(self, c, step):
+        """Where Up (*step* -1) or Down (+1) takes the cursor from *c*: here, one line, the ends."""
+        return 0 if step < 0 else len(self.text)
+
+    def _pasted_(self, text):
+        """What pasted *text* inserts: here, one line of it."""
+        return " ".join(text.split())
+
+    def _edit_(self, text, cursor, typing=False):
+        """Make the text *text*, the cursor at *cursor*: undoable -- a run of typing as one step."""
+        if not (typing and self._typing_):
+            self._undo_.append((self.text, self.cursor))
+            del self._undo_[: -self.UNDO_LIMIT]
+        self._redo_.clear()
+        self.text, self.cursor, self.anchor, self._typing_ = text, cursor, None, typing
+
+    def _undo_step_(self):
+        if self._undo_:
+            self._redo_.append((self.text, self.cursor))
+            self.text, self.cursor = self._undo_.pop()
+            self.anchor, self._typing_ = None, False
+
+    def _redo_step_(self):
+        if self._redo_:
+            self._undo_.append((self.text, self.cursor))
+            self.text, self.cursor = self._redo_.pop()
+            self.anchor, self._typing_ = None, False
+
+    def _without_selection_(self):
+        a, b = self.selection()
+        return self.text[:a] + self.text[b:], a
+
+    def _insert_(self, text, typing=False):
+        if self.selection() is not None:
+            base, at = self._without_selection_()
+            typing = False  # replacing a selection is a step of its own
+        else:
+            base, at = self.text, self.cursor
+        self._edit_(base[:at] + text + base[at:], at + len(text), typing=typing)
+
+    def _word_at_(self, c):
+        """The word *c* is in or at the edge of, as (start, end): grown from *c* out to the spaces either side."""
+        t, a, b = self.text, c, c
+        while a > 0 and not t[a - 1].isspace():
+            a -= 1
+        while b < len(t) and not t[b].isspace():
+            b += 1
+        return a, b
+
+    def _word_start_(self, c):
+        t = self.text
+        while c > 0 and t[c - 1].isspace():
+            c -= 1
+        while c > 0 and not t[c - 1].isspace():
+            c -= 1
+        return c
+
+    def _word_end_(self, c):
+        t = self.text
+        while c < len(t) and t[c].isspace():
+            c += 1
+        while c < len(t) and not t[c].isspace():
+            c += 1
+        return c
+
+
+class LineEdit(TextEdit):
+    """One line of `TextEdit`: what a window's title is while it is renamed. `draw` scrolls it, where it is wider than its room, so the cursor shows."""
+
+    def __init__(self, text=""):
+        super().__init__(text)
+        self._laid_ = (0, "", 0)  # (x, what precedes the text as drawn, the first character drawn): what a click is placed by
+
+    def press(self, font, x, shift=False, now=None):
+        """The mouse pressed at screen *x*, on the text as last drawn: `TextEdit.press`."""
+        super().press(self._index_at_(font, x), shift, now)
+
+    def drag(self, font, x):
+        super().drag(self._index_at_(font, x))
+
+    def draw(self, surf, font, x, y, room, color, prefix=""):
+        """Draw *prefix*, then the text, from (*x*, *y*) in *room* pixels, its selection and the cursor; scrolled so the cursor shows. The rect drawn."""
+        t, c = self.text, self.cursor
+        first = 0
+        while first < c and font.size(prefix + ("…" if first else "") + t[first:c])[0] > room - 4:
+            first += 1  # scrolled right, a character at a time, till the cursor is in the room
+        lead = prefix + ("…" if first else "")
+        sel = self.selection()
+        lh = font.get_linesize()
+        if sel is not None:
+            a, b = max(sel[0], first), sel[1]
+            xa, xb = x + font.size(lead + t[first:a])[0], min(x + room, x + font.size(lead + t[first:b])[0])
+            if xb > xa:
+                pygame.draw.rect(surf, SELECTION, pygame.Rect(xa, y, xb - xa, lh))
+        shown = _fit_(font, lead + t[first:], room)
+        rect = surf.blit(font.render(shown, True, color), (x, y))
+        cx = x + font.size(lead + t[first:c])[0]
+        if sel is None and time.time() % 1 < 0.6:
+            pygame.draw.line(surf, color, (cx, y + 2), (cx, y + lh - 2), 2)
+        self._laid_ = (x, lead, first)
+        return rect.union(pygame.Rect(x, y, room, lh))
+
+    def _index_at_(self, font, x):
+        """The character boundary nearest screen *x*, on the text as last drawn."""
+        x0, lead, first = self._laid_
+        t = self.text
+        edges = [x0 + font.size(lead + t[first:i])[0] for i in range(first, len(t) + 1)]
+        return first + min(range(len(edges)), key=lambda j: abs(edges[j] - x))
+
+
+class AreaEdit(TextEdit):
+    """`TextEdit` of several lines, wrapped to a width: what a Claude session's box holds.
+
+    Shift+Enter starts a new line; pasted text keeps its lines. `rows` wraps
+    it -- a long word broken where it must be -- and `draw` shows at most
+    so many rows, scrolled to keep the cursor among them.
+    """
+
+    def __init__(self, text=""):
+        super().__init__(text)
+        self._rows_key_, self._rows_ = None, []
+        self._laid_ = None  # (x, y, line height, the first row shown, the font): what a click is placed by
+
+    def handle(self, ev):
+        if ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER) \
+                and (pygame.key.get_mods() | getattr(ev, "mod", 0)) & pygame.KMOD_SHIFT:
+            self._insert_("\n")
+            return None
+        return super().handle(ev)
+
+    def rows(self, font, width):
+        """The text wrapped to *width*: its rows as (start, end) of the text, every character in one but the newlines between."""
+        key = (self.text, width, id(font))
+        if self._rows_key_ == key:
+            return self._rows_
+        rows, o = [], 0
+        for para in self.text.split("\n"):
+            s = 0
+            while True:
+                if font.size(para[s:])[0] <= width:
+                    rows.append((o + s, o + len(para)))
+                    break
+                e = s + 1
+                while e < len(para) and font.size(para[s:e + 1])[0] <= width:
+                    e += 1
+                space = para.rfind(" ", s, e)
+                if space > s:
+                    e = space + 1  # the space ends this row
+                rows.append((o + s, o + e))
+                s = e
+            o += len(para) + 1
+        self._rows_key_, self._rows_ = key, rows
+        return rows
+
+    def row_of(self, c, rows):
+        """The row the cursor at *c* is on: a row wrapped where *c* is, the next one."""
+        for i, (a, b) in enumerate(rows):
+            if c < b or (c == b and (i + 1 == len(rows) or rows[i + 1][0] > b)):
+                return i
+        return len(rows) - 1
+
+    def draw(self, surf, font, x, y, width, most, color):
+        """Draw at most *most* rows from (*x*, *y*), *width* wide, its selection and the cursor; scrolled so the cursor shows."""
+        rows, lh, t = self.rows(font, width), font.get_linesize(), self.text
+        here = self.row_of(self.cursor, rows)
+        first = 0
+        if self._laid_ is not None:
+            first = self._laid_[3]
+        first = min(max(first, here - most + 1), here, max(0, len(rows) - most))
+        sel = self.selection()
+        for n, (a, b) in enumerate(rows[first: first + most]):
+            ry = y + n * lh
+            if sel is not None and sel[0] <= b and sel[1] >= a:
+                xa = x + font.size(t[a: max(a, sel[0])])[0]
+                xb = x + font.size(t[a: min(b, sel[1])])[0]
+                if xb > xa:
+                    pygame.draw.rect(surf, SELECTION, pygame.Rect(xa, ry, xb - xa, lh))
+            surf.blit(font.render(t[a:b], True, color), (x, ry))
+        if sel is None and time.time() % 1 < 0.6:
+            a, _ = rows[here]
+            cx, cy = x + font.size(t[a: self.cursor])[0], y + (here - first) * lh
+            pygame.draw.line(surf, color, (cx, cy + 2), (cx, cy + lh - 2), 2)
+        self._laid_ = (x, y, lh, first, font)
+
+    def index_at(self, pos):
+        """The character boundary nearest screen *pos*, on the rows as last drawn."""
+        if self._laid_ is None:
+            return self.cursor
+        x, y, lh, first, font = self._laid_
+        rows = self._rows_
+        r = min(max(first + (pos[1] - y) // lh, 0), len(rows) - 1)
+        return self._nearest_in_row_(rows[r], pos[0] - x, font)
+
+    def press(self, pos, shift=False, now=None):
+        super().press(self.index_at(pos), shift, now)
+
+    def drag(self, pos):
+        super().drag(self.index_at(pos))
+
+    def _vertical_(self, c, step):
+        if self._laid_ is None:
+            return super()._vertical_(c, step)
+        font, rows = self._laid_[4], self._rows_
+        r = self.row_of(c, rows)
+        if not 0 <= r + step < len(rows):
+            return 0 if step < 0 else len(self.text)
+        x = font.size(self.text[rows[r][0]: c])[0]
+        return self._nearest_in_row_(rows[r + step], x, font)
+
+    def _nearest_in_row_(self, row, x, font):
+        a, b = row
+        edges = [font.size(self.text[a:i])[0] for i in range(a, b + 1)]
+        return a + min(range(len(edges)), key=lambda j: abs(edges[j] - x))
+
+    def _pasted_(self, text):
+        return text.replace("\r\n", "\n")
+
+
 class DocWindow:
     """A document's window: its title and modification time above it, scrolled both ways, zoomed by + and -.
 
     Where it is -- *rect* -- its owner says, at each draw. Wheel and arrows
-    scroll (shift and the wheel, or a sideways swipe, scroll across); a drag
-    pans; + and - zoom, 0 back to 1; Home and End go to the ends; Esc or ×
-    closes it.
+    scroll (shift and the wheel, or a sideways swipe, scroll across); + and -
+    zoom, 0 back to 1; Home and End go to the ends; Esc or × closes it. A
+    drag that starts on text selects it -- scrolling, dragged past the edge
+    -- Shift+click extends the selection, a double click selects a word,
+    Cmd+A all of it, and Cmd+C copies it; a drag that starts anywhere else
+    pans.
     """
+
+    DOUBLE_CLICK_S = 0.4
+    SELECTION = (70, 110, 170, 110)  # the highlight over selected text, drawn over it: RGBA
 
     def __init__(self, title, sub=""):
         self.title = title
@@ -603,9 +1013,20 @@ class DocWindow:
         self.title_color = lambda: None
         self.press = None
         self._size = (1, 1)  # the content's, as last laid out
+        self._laid_ = None  # the layout as last drawn: what a press is placed on
+        self.anchor = self.cursor = None  # the selection's two ends, as (run, character) of the layout; None for none
+        self.selecting = False  # pressed on text and not yet let go: a drag selects
+        self._last_press_ = (0.0, None)  # (when, where): what tells a double click
 
     def set_doc(self, doc):
         self.doc, self.sx, self.sy = doc, 0, 0
+        self.anchor = self.cursor = None
+
+    def selection_text(self):
+        """The text selected, as it reads; "" for none."""
+        if self.anchor is None or self.cursor is None or self.anchor == self.cursor or self._laid_ is None:
+            return ""
+        return self._laid_.text_between(self.anchor, self.cursor)
 
     def animating(self):
         return self.doc.pending()
@@ -627,6 +1048,19 @@ class DocWindow:
             return "close"
         if ev.type == pygame.KEYDOWN:
             k, shift = ev.key, bool(ev.mod & pygame.KMOD_SHIFT)
+            cmd = (ev.mod | pygame.key.get_mods()) & (pygame.KMOD_META | pygame.KMOD_CTRL)
+            if k == pygame.K_c and cmd:
+                from .app import _copy_
+
+                text = self.selection_text()
+                if text:
+                    _copy_(text)
+                return None
+            if k == pygame.K_a and cmd:
+                runs = self._laid_.runs if self._laid_ is not None else []
+                if runs:
+                    self.anchor, self.cursor = (0, 0), (len(runs) - 1, len(runs[-1].text))
+                return None
             if k == pygame.K_ESCAPE:
                 return "close"
             if k in (pygame.K_PLUS, pygame.K_KP_PLUS) or (k == pygame.K_EQUALS):
@@ -660,13 +1094,18 @@ class DocWindow:
             self.sy -= dy * SCROLL_PX
             self._clamp_()
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.body.collidepoint(ev.pos):
-            self.press = (ev.pos, self.sx, self.sy)
+            if not self._press_text_(ev.pos):
+                self.anchor = self.cursor = None
+                self.press = (ev.pos, self.sx, self.sy)
+        elif ev.type == pygame.MOUSEMOTION and self.selecting:
+            self._drag_text_(ev.pos)
         elif ev.type == pygame.MOUSEMOTION and self.press is not None:
             (px, py), sx, sy = self.press
             self.sx, self.sy = sx - (ev.pos[0] - px), sy - (ev.pos[1] - py)
             self._clamp_()
         elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
             self.press = None
+            self.selecting = False
         return None
 
     def draw(self, surf, rect, font, small):
@@ -700,8 +1139,66 @@ class DocWindow:
         old = surf.get_clip()
         surf.set_clip(self.body.clip(old) if old else self.body)
         self.doc.draw(surf, self.body.x - round(self.sx), self.body.y - round(self.sy), self.body)
+        self._laid_ = laid
+        self._highlight_(surf, laid)
         surf.set_clip(old)
         self._scrollbars_(surf)
+
+    def _content_(self, pos):
+        """Screen *pos* in the content's coordinates, as laid out."""
+        return pos[0] - self.body.x + self.sx, pos[1] - self.body.y + self.sy
+
+    def _press_text_(self, pos):
+        """A press at *pos*: on text, the selection begun there -- or extended, with Shift; a word, pressed twice. Whether it was on text."""
+        laid = self._laid_
+        if laid is None or not laid.runs:
+            return False
+        shift = pygame.key.get_mods() & pygame.KMOD_SHIFT
+        at = laid.text_at(*self._content_(pos), near=bool(shift and self.anchor is not None))
+        if at is None:
+            return False
+        now = time.monotonic()
+        when, where = self._last_press_
+        self._last_press_ = (now, at)
+        if shift and self.anchor is not None:
+            self.cursor = at
+        elif where == at and now - when < self.DOUBLE_CLICK_S:
+            r, c = at
+            text, a, b = laid.runs[r].text, c, c
+            while a > 0 and not text[a - 1].isspace():
+                a -= 1
+            while b < len(text) and not text[b].isspace():
+                b += 1
+            self.anchor, self.cursor = (r, a), (r, b)
+        else:
+            self.anchor = self.cursor = at
+        self.selecting = True
+        return True
+
+    def _drag_text_(self, pos):
+        """The mouse dragged to *pos*, pressed on text: the selection to the text nearest it -- scrolled, dragged past the body's edge."""
+        if pos[1] < self.body.top:
+            self.sy -= SCROLL_PX
+        elif pos[1] > self.body.bottom:
+            self.sy += SCROLL_PX
+        self._clamp_()
+        if self._laid_ is not None:
+            self.cursor = self._laid_.text_at(*self._content_(pos), near=True)
+
+    def _highlight_(self, surf, laid):
+        """Shade the selected text, run by run, over what is drawn."""
+        if self.anchor is None or self.cursor is None or self.anchor == self.cursor:
+            return
+        (i, c), (j, d) = sorted((self.anchor, self.cursor))
+        ox, oy = self.body.x - round(self.sx), self.body.y - round(self.sy)
+        for k in range(i, min(j, len(laid.runs) - 1) + 1):
+            r = laid.runs[k]
+            a = r.font.size(r.text[:c])[0] if k == i else 0
+            b = r.font.size(r.text[:d])[0] if k == j else r.w
+            if b > a:
+                shade = pygame.Surface((b - a, r.h), pygame.SRCALPHA)
+                shade.fill(self.SELECTION)
+                surf.blit(shade, (ox + r.x + a, oy + r.y))
 
     def _scrollbars_(self, surf):
         (cw, ch), b = self._size, self.body
@@ -713,6 +1210,11 @@ class DocWindow:
             tw = max(20, b.width * b.width // cw)
             tx = b.x + (b.width - tw) * self.sx / max(1, cw - b.width)
             pygame.draw.rect(surf, BAR, (tx, b.bottom - 6, tw, 4), border_radius=2)
+
+
+def _gap_(v, lo, hi):
+    """How far *v* is outside [*lo*, *hi*): 0 inside."""
+    return lo - v if v < lo else v - hi + 1 if v >= hi else 0
 
 
 def _fit_(font, text, width):

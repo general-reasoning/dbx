@@ -103,6 +103,35 @@ class Engine:
                 s.layout = layout.compute(s.embeddings, seed=self.seed)
             s.save()
 
+    def reembed(self, progress=print):
+        """Embed the whole corpus afresh and lay it out anew: from the source where there is one, else the texts stored.
+
+        Points the source no longer gives are dropped -- a text typed in, say,
+        where every point is a file. Everything is embedded before the store
+        changes, so a job interrupted on the way leaves it as it was. The
+        arrows' lines are kept: they are read by the embed texts, which a
+        re-embedding by the same model does not change.
+        """
+        with self.lock:
+            s = self.store
+            if self.source is not None:
+                entries = self.source(progress)
+                rows = [(e.text, e.summary, {"key": e.key, "embed": e.embed, **e.extra}, e.embed) for e in entries]
+            else:
+                rows = [(p["text"], p["summary"], {k: v for k, v in p.items() if k not in ("text", "summary", "added")},
+                         p.get("embed", p["text"])) for p in s.points]
+            vecs = self._embed_([r[3] for r in rows], progress, f"re-embedding {len(rows)} texts with {self.embedder.name}")
+            notes = s.notes
+            s.reset(self.embedder.name)
+            s.notes = notes
+            if rows:
+                s.add([r[0] for r in rows], [r[1] for r in rows], vecs, [r[2] for r in rows])
+            self.keys = {e.key for e in entries} if self.source is not None else None
+            self._shown_ = None
+            progress(f"computing hyperbolic UMAP layout of {len(s)} texts")
+            s.layout = layout.compute(s.embeddings, seed=self.seed) if len(s) else None
+            s.save()
+
     def refresh(self, progress=print):
         """Read the source again and embed what is new or changed -- the layout nudged from where it was, not laid out afresh; whether anything moved.
 
@@ -203,13 +232,7 @@ class Engine:
         changed = [e for e in entries if e.key in index and s.points[index[e.key]].get("embed") != e.embed]
         todo = new + changed
         if todo:
-            msg = f"embedding {len(new)} new and {len(changed)} changed entries"
-            batches = []
-            for i in range(0, len(todo), 64):
-                progress(msg, i, len(todo))
-                batches.append(self.embedder([e.embed for e in todo[i : i + 64]]))
-            progress(msg, len(todo), len(todo))
-            vecs = np.concatenate(batches)
+            vecs = self._embed_([e.embed for e in todo], progress, f"embedding {len(new)} new and {len(changed)} changed entries")
         self.keys, self._shown_ = {e.key for e in entries}, None
         for e in entries:
             if e.key in index:
@@ -224,6 +247,15 @@ class Engine:
         if new:
             s.add([e.text for e in new], [e.summary for e in new], vecs[: len(new)], [{"key": e.key, "embed": e.embed, **e.extra} for e in new])
         return True
+
+    def _embed_(self, texts, progress, msg, batch=64):
+        """*texts* embedded, *batch* at a time, saying *msg* with the count done: one row each."""
+        batches = []
+        for i in range(0, len(texts), batch):
+            progress(msg, i, len(texts))
+            batches.append(self.embedder(texts[i : i + batch]))
+        progress(msg, len(texts), len(texts))
+        return np.concatenate(batches) if batches else np.zeros((0, 0), dtype=np.float32)
 
     def add(self, text, progress=print):
         """Embed, summarize, store and place one text; returns its index."""

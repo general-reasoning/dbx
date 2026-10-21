@@ -1,6 +1,6 @@
-"""hyp --markdowns: the documents of a directory -- markdowns and pdfs -- on the disk.
+"""hyp --docs: the documents of a directory -- markdowns and pdfs -- on the disk.
 
-``hyp --markdowns`` scans the current directory, ``hyp --markdowns --dir URL`` another,
+``hyp --docs`` scans the current directory, ``hyp --docs --dir URL`` another,
 local or any fsspec url (``ssh://host/path``, ``gs://bucket/path``, ...): every
 ``.md``, ``.markdown`` and ``.pdf`` under it, but for hidden directories and
 the usual heaps (`SKIP_DIRS`). Each is embedded by its name and the start of
@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 import pygame
 
 from . import claude
-from .app import Button, Hyp
+from .app import Hyp
 from .docview import DocWindow, MarkdownDoc, Message, PdfDoc, front_matter, pdf_text
 
 KINDS = {".md": "markdown", ".markdown": "markdown", ".pdf": "pdf"}
@@ -64,16 +64,21 @@ class TilePicker:
 
     A popup as `Hyp.open_popup` opens one: *open* until a click picks an icon
     or lands elsewhere, or Esc. The slot under the mouse is named beneath.
+    With *on_claude*, a row beneath the icons asks Claude about the document
+    instead: a click on it calls ``on_claude()``.
     """
 
     ICON = (36, 26)
     PAD = 6
+    CLAUDE = "ask Claude about it"
+    ROW = 20  # the Claude row's height
 
-    def __init__(self, on_select, pos):
+    def __init__(self, on_select, pos, on_claude=None):
         self.on_select = on_select
+        self.on_claude = on_claude
         self.open = True
         iw, ih = self.ICON
-        self.rect = pygame.Rect(pos[0], pos[1], 3 * iw + 4 * self.PAD, 3 * ih + 4 * self.PAD + 18)
+        self.rect = pygame.Rect(pos[0], pos[1], 3 * iw + 4 * self.PAD, 3 * ih + 4 * self.PAD + 18 + (self.ROW if on_claude else 0))
         self.icons = {}  # slot -> its rect, as last drawn
 
     def _icons_(self):
@@ -84,12 +89,21 @@ class TilePicker:
     def slot_at(self, pos):
         return next((slot for slot, r in self._icons_().items() if r.collidepoint(pos)), None)
 
+    def claude_row(self):
+        """The Claude row's rect, beneath the icons and their label; empty without *on_claude*."""
+        if self.on_claude is None:
+            return pygame.Rect(0, 0, 0, 0)
+        return pygame.Rect(self.rect.x + 2, self.rect.bottom - self.ROW - 2, self.rect.width - 4, self.ROW)
+
     def handle(self, ev):
         if ev.type == pygame.MOUSEBUTTONDOWN:
             slot = self.slot_at(ev.pos) if ev.button == 1 else None
+            claude_hit = ev.button == 1 and self.claude_row().collidepoint(ev.pos)
             self.open = False
             if slot is not None:
                 self.on_select(slot)
+            elif claude_hit:
+                self.on_claude()
         elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
             self.open = False
         return True
@@ -114,7 +128,14 @@ class TilePicker:
             pygame.draw.rect(surf, EDGE if hot else TEXT, part, border_radius=2)
             pygame.draw.rect(surf, EDGE if hot else BAR, r, 1, border_radius=3)
         label = font.render(hover or "place it …", True, TEXT if hover else DIM)
-        surf.blit(label, label.get_rect(midbottom=(self.rect.centerx, self.rect.bottom - 4)))
+        below = self.rect.bottom - 4 - (self.ROW if self.on_claude else 0)
+        surf.blit(label, label.get_rect(midbottom=(self.rect.centerx, below)))
+        row = self.claude_row()
+        if row.width:
+            hot = row.collidepoint(pygame.mouse.get_pos())
+            pygame.draw.rect(surf, (52, 60, 76) if hot else (24, 28, 36), row, border_radius=3)
+            text = font.render(self.CLAUDE, True, EDGE if hot else TEXT)
+            surf.blit(text, text.get_rect(center=row.center))
 
 
 @dataclass(frozen=True)
@@ -261,8 +282,11 @@ def documents(root, progress=print, n_workers=16, cache=None, storage_options=No
         if claude.is_session(fields):
             # A Claude session: embedded whole, as long as it gets; its point opens the session again, labeled by its title and dated by its last write.
             extra.update(kind=claude.KIND, session=fields.get("session"), updated=fields.get("updated"))
-            summary = f"Claude · {fields.get('title') or base}"
-            embed = f"{base}\n\n{body}"
+            title = fields.get("title") or base
+            summary = f"Claude · {title}"
+            # By its title and what was said: the file's name and the transcript's markup are every session's, and
+            # pulled them all together, the unrelated as much as the related.
+            embed = f"{title}\n\n{claude.said(body)}"
         return Doc(key=url, text=text[:TEXT_CHARS], embed=embed, summary=summary, extra=extra)
 
     with ThreadPoolExecutor(max_workers=n_workers) as ex:
@@ -345,6 +369,7 @@ class HypDocs(Hyp):
     """One point per document of a directory; a document opens in the center, or in a quarter or half of the window."""
 
     title = "hyp: docs"
+    BOX_HINT = "Enter: ask Claude, in a new session   Shift+Enter: newline   Esc: cancel"
     HINT = "click: open · right-click: place · drag: move · scroll: zoom · Tab: next layer · double-click outside: reset"
     LAYERS = ("disk", "tiles", "center")
     CLAUDE_AREA = 1 / 3  # of the window's, a Claude session's window takes, in its middle
@@ -399,7 +424,7 @@ class HypDocs(Hyp):
         self.center = None
         self.focus = None  # the window keys go to, when the mouse is over none: the one last clicked
         self.capture = None  # the window a drag began in
-        self.controls = [Button("Claude", self.open_claude)]
+        self.controls = []  # a Claude session is opened by a right click: on empty disk, or on a document
         self.claude_account = None  # who Claude Code runs as, read once, when a session's window first opens
 
     def __click_point__(self, i, now):
@@ -412,8 +437,17 @@ class HypDocs(Hyp):
         self.run_async(lambda: claude.Session.load(point["path"], self.root(args), self.claude_dir(args)), self.open_claude)
 
     def __context_point__(self, i, pos):
-        """Right click on a document -- on the disk, or in the points menu: where to place it, as a `TilePicker` at the mouse."""
-        self.popup = TilePicker(lambda slot: self.place(i, slot), pos)
+        """Right click on a document -- on the disk, or in the points menu: where to place it, or ask Claude about it, as a `TilePicker` at the mouse."""
+        self.popup = TilePicker(lambda slot: self.place(i, slot), pos, on_claude=lambda: self.ask_about(i))
+
+    def __wants_text__(self):
+        """Typed into: a Claude session's window, whenever one is open -- its box, or its title -- besides what the disk's are."""
+        return super().__wants_text__() or isinstance(self.center, claude.ClaudeWindow)
+
+    def __submit_text__(self, text):
+        """A text typed on empty disk -- a right click there -- is asked of Claude, as the first turn of a new session."""
+        window = self._new_claude_()
+        self._send_claude_(window, text.strip())
 
     def __point_datetime__(self, i):
         """When a document was last changed; a Claude session, when its last turn was: its front matter's ``updated``."""
@@ -449,10 +483,17 @@ class HypDocs(Hyp):
         self.bring_to_front("center")
         self.focus = window
 
+    def ask_about(self, i):
+        """A new Claude session about document *i*: its path, relative to the directory scanned, typed in the box, for the question to follow."""
+        path = self.snap.points[i].get("path") or self.snap.summaries[i]
+        root = self.root(self.args)
+        rel = posixpath.relpath(path, root) if str(path).startswith(root.rstrip("/") + "/") else path
+        self._new_claude_().text = f"About {rel}: "
+
     def place(self, i, slot):
         """Open document *i* at *slot* -- "center", or one of SLOTS -- in place of any window there, its layer brought to the front."""
         point = self.snap.points[i]
-        url, kind = point.get("path", self.snap.summaries[i]), point.get("kind", "markdown")
+        url, kind = point.get("path"), point.get("kind", "markdown")
         when = self.__point_datetime__(i)
         window = DocWindow(self.snap.summaries[i], " · ".join(p for p in (when, url) if p))
         window.title_color = self.title_color(i)
@@ -467,6 +508,9 @@ class HypDocs(Hyp):
             self.tiles[slot] = window
             self.bring_to_front("tiles")
         self.focus = window
+        if url is None:  # no file: a text added to the store as a point of its own, as hyp did with a typed one
+            window.set_doc(MarkdownDoc(self.snap.texts[i]))
+            return
         self.run_async(lambda: load(url, kind), window.set_doc)
 
     def area(self):
@@ -508,6 +552,12 @@ class HypDocs(Hyp):
                 self._file_(window.session)
 
         self.run_async(turn, then)
+
+    def _new_claude_(self):
+        """A new session's window, in the middle -- in place of any open, which is saved -- and the window."""
+        args = self.args
+        self.open_claude(claude.Session(self.root(args), self.claude_dir(args)))
+        return self.center
 
     def _rename_claude_(self, window):
         """A session's title kept: filed at once -- its point relabeled -- unless a turn is in flight, which files it as it ends."""
@@ -561,6 +611,11 @@ class HypDocs(Hyp):
         return self._window_at_(layer, pos) is not None
 
     def __layer_event__(self, layer, ev, now):
+        editing = self.center if isinstance(self.center, claude.ClaudeWindow) and self.center.naming is not None else None
+        if editing is not None and ev.type == pygame.MOUSEBUTTONDOWN and not editing.rect.collidepoint(ev.pos):
+            editing.keep_title()  # a click off its window -- on the disk, or another window -- keeps the title too
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            self.capture = None  # a press before this one has ended, whether or not its release came
         if layer is None:
             # Not over a window of the front layer at the mouse: a drag one began, or the keys of the last one clicked.
             if self.capture is not None and ev.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONUP):
@@ -587,6 +642,8 @@ class HypDocs(Hyp):
                 self.capture = window
         if ev.type == pygame.MOUSEMOTION and self.capture is None:
             return True
+        if ev.type == pygame.MOUSEBUTTONUP:
+            self.capture = None  # released over a window: its drag is over too, not only one released off them
         if window.handle(ev) == "close":
             self._close_(window)
         return True

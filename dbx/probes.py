@@ -502,67 +502,65 @@ class FeatureAffineLogisticProbe(Datablock):
         self.work_stealing = getattr(self, 'work_stealing', getattr(self, 'works_stealing', False))
 
     def __build__(self):
-        self.log.verbose(f"FeatureAffineLogisticProbe.__build__: BEGIN {self.anchorkeypath}")
-        self._check_disjoint_()
+        with self.log.section(f"FeatureAffineLogisticProbe.__build__ {self.anchorkeypath}"):
+            self._check_disjoint_()
 
-        sides, layouts, keys = {}, set(), {}
-        for side in ('fit', 'eval'):
-            table = getattr(self.var, f'{side}_table')
-            results = self._tablet_results_(f"COMPUTING LOGISTIC INPUT DATA ({side})", table,
-                                         lambda i, t=table: TabletAffineLogisticCallable(self, t, i))
-            results = self._kept_(side, table, results)
-            layouts |= {tuple(res['layout']) for res in results}
-            if self.var.aggregation == 'mean':
-                X, y, keys[side] = self._aggregate_means_(results)
-            else:
-                X = np.concatenate([res['signals'] for res in results], axis=0)
-                y = np.concatenate([res['labels'] for res in results], axis=0)
-                if any('keys' in res for res in results):
-                    keys[side] = np.unique(np.concatenate([res['keys'] for res in results]))
-            write_npz(self.path(side, 'labels', ensure_dirpath=True), labels=y)
-            write_tensor(torch.from_numpy(X), self.path(side, 'features', ensure_dirpath=True))
-            sides[side] = (X, y)
+            sides, layouts, keys = {}, set(), {}
+            for side in ('fit', 'eval'):
+                table = getattr(self.var, f'{side}_table')
+                results = self._tablet_results_(f"COMPUTING LOGISTIC INPUT DATA ({side})", table,
+                                             lambda i, t=table: TabletAffineLogisticCallable(self, t, i))
+                results = self._kept_(side, table, results)
+                layouts |= {tuple(res['layout']) for res in results}
+                if self.var.aggregation == 'mean':
+                    X, y, keys[side] = self._aggregate_means_(results)
+                else:
+                    X = np.concatenate([res['signals'] for res in results], axis=0)
+                    y = np.concatenate([res['labels'] for res in results], axis=0)
+                    if any('keys' in res for res in results):
+                        keys[side] = np.unique(np.concatenate([res['keys'] for res in results]))
+                write_npz(self.path(side, 'labels', ensure_dirpath=True), labels=y)
+                write_tensor(torch.from_numpy(X), self.path(side, 'features', ensure_dirpath=True))
+                sides[side] = (X, y)
 
-        # Every tablet -- of both tables -- must lay its columns out identically,
-        # or the rows stacked here do not describe the same feature at the same
-        # position, and the eval rows are not what the classifier was fitted on.
-        if len(layouts) != 1:
-            raise ValueError(f"{self.__class__.__name__}: tablets disagree on the signal column layout: {sorted(layouts)}")
-        if len(keys) == 2:
-            shared = np.intersect1d(keys['fit'], keys['eval'])
-            if len(shared):
-                raise ValueError(
-                    f"{type(self).__name__}: fit_table and eval_table share {len(shared)} value(s) of "
-                    f"aggregateby {self.var.collator.pairs('aggregateby')[0]!r}, e.g. {shared[:5].tolist()} -- "
-                    f"their rows would be scored by a classifier fitted on the same ones. Partition with a stratifyby "
-                    f"column whose strata the aggregates lie within.")
-        layout = list(layouts.pop())
-        write_pickle(layout, self.path('columns', ensure_dirpath=True))
+            # Every tablet -- of both tables -- must lay its columns out identically,
+            # or the rows stacked here do not describe the same feature at the same
+            # position, and the eval rows are not what the classifier was fitted on.
+            if len(layouts) != 1:
+                raise ValueError(f"{self.__class__.__name__}: tablets disagree on the signal column layout: {sorted(layouts)}")
+            if len(keys) == 2:
+                shared = np.intersect1d(keys['fit'], keys['eval'])
+                if len(shared):
+                    raise ValueError(
+                        f"{type(self).__name__}: fit_table and eval_table share {len(shared)} value(s) of "
+                        f"aggregateby {self.var.collator.pairs('aggregateby')[0]!r}, e.g. {shared[:5].tolist()} -- "
+                        f"their rows would be scored by a classifier fitted on the same ones. Partition with a stratifyby "
+                        f"column whose strata the aggregates lie within.")
+            layout = list(layouts.pop())
+            write_pickle(layout, self.path('columns', ensure_dirpath=True))
 
-        (X_fit, y_fit), (X_eval, y_eval) = sides['fit'], sides['eval']
-        self.log.verbose(
-            f"FITTING LogisticRegression "
-            f"(n_fit={len(y_fit)}, n_eval={len(y_eval)}, "
-            f"aggregation={self.var.aggregation!r}, "
-            f"max_rows_per_tab={self.var.max_rows_per_tablet!r}, "
-            f"fit_intercept={self.var.fit_intercept}, "
-            f"signals={self.var.collator.signal_pairs!r}, "
-            f"labels={self.var.collator.label_pairs!r}, "
-            f"layout={layout!r}, "
-            f"signal_reduction={self.var.signal_reduction!r}, "
-            f"normalization={self.var.normalization!r})"
-        )
-        clf = LogisticRegression(fit_intercept=self.var.fit_intercept)
-        clf.fit(X_fit, y_fit)
-        report = classification_report(y_eval, clf.predict(X_eval))
-        self.log.verbose(f"Classification report:\n{report}")
+            (X_fit, y_fit), (X_eval, y_eval) = sides['fit'], sides['eval']
+            self.log.verbose(
+                f"FITTING LogisticRegression "
+                f"(n_fit={len(y_fit)}, n_eval={len(y_eval)}, "
+                f"aggregation={self.var.aggregation!r}, "
+                f"max_rows_per_tab={self.var.max_rows_per_tablet!r}, "
+                f"fit_intercept={self.var.fit_intercept}, "
+                f"signals={self.var.collator.signal_pairs!r}, "
+                f"labels={self.var.collator.label_pairs!r}, "
+                f"layout={layout!r}, "
+                f"signal_reduction={self.var.signal_reduction!r}, "
+                f"normalization={self.var.normalization!r})"
+            )
+            clf = LogisticRegression(fit_intercept=self.var.fit_intercept)
+            clf.fit(X_fit, y_fit)
+            report = classification_report(y_eval, clf.predict(X_eval))
+            self.log.verbose(f"Classification report:\n{report}")
 
-        write_pickle(report, self.path('evaluation_report', ensure_dirpath=True))
-        write_tensor(torch.from_numpy(clf.coef_), self.path('coef', ensure_dirpath=True))
-        write_tensor(torch.from_numpy(clf.intercept_), self.path('intercept', ensure_dirpath=True))
-        write_npz(self.path('classes', ensure_dirpath=True), classes=clf.classes_)
-
-        self.log.verbose(f"FeatureAffineLogisticProbe.__build__: END {self.anchorkeypath}")
+            write_pickle(report, self.path('evaluation_report', ensure_dirpath=True))
+            write_tensor(torch.from_numpy(clf.coef_), self.path('coef', ensure_dirpath=True))
+            write_tensor(torch.from_numpy(clf.intercept_), self.path('intercept', ensure_dirpath=True))
+            write_npz(self.path('classes', ensure_dirpath=True), classes=clf.classes_)
         return self
 
     def __read__(self, *topicpath):
@@ -887,42 +885,40 @@ class FeatureStatsProbe(Datablock):
         self.work_stealing = getattr(self, 'work_stealing', getattr(self, 'works_stealing', False))
 
     def __build__(self):
-        self.log.verbose(f"FeatureStatsProbe.__build__: BEGIN {self.anchorkeypath}")
-        check_probe_inputs(self)
-        table = self.var.feature_table
+        with self.log.section(f"FeatureStatsProbe.__build__ {self.anchorkeypath}"):
+            check_probe_inputs(self)
+            table = self.var.feature_table
 
-        n_tablets = getattr(table, 'n_tablets', 0) or 0
-        executor_kwargs = dict(n_workers=self.n_workers,
-                               tag=f"COMPUTING TABLET STATS [{self.__class__.__name__}, n_workers={self.n_workers}]")
-        if getattr(self, 'work_stealing', False):
-            executor_kwargs['work_stealing'] = self.work_stealing
-        executor = callable_executor(self.parallelization, **executor_kwargs)
-        indices = list(range(n_tablets)) if n_tablets > 0 else [None]
-        self.log.info(f"{type(self).__name__}: computing per-tablet stats of "
-                      f"{len(self.column_paths)} column(s) over {len(indices)} tablet(s)")
-        results = executor.exec_callables([TabletColumnStatsCallable(self, i) for i in indices])
+            n_tablets = getattr(table, 'n_tablets', 0) or 0
+            executor_kwargs = dict(n_workers=self.n_workers,
+                                   tag=f"COMPUTING TABLET STATS [{self.__class__.__name__}, n_workers={self.n_workers}]")
+            if getattr(self, 'work_stealing', False):
+                executor_kwargs['work_stealing'] = self.work_stealing
+            executor = callable_executor(self.parallelization, **executor_kwargs)
+            indices = list(range(n_tablets)) if n_tablets > 0 else [None]
+            self.log.info(f"{type(self).__name__}: computing per-tablet stats of "
+                          f"{len(self.column_paths)} column(s) over {len(indices)} tablet(s)")
+            results = executor.exec_callables([TabletColumnStatsCallable(self, i) for i in indices])
 
-        n_rows = sum(res['n_rows'] for res in results)
-        held = sum(arr.nbytes for res in results for arr in res['columns'].values())
-        self.log.info(f"{type(self).__name__}: {len(results)} tablet(s), {n_rows} row(s) in hand "
-                      f"({held / 2**30:.2f} GiB); computing whole-table stats")
-        whole_by_path = self._table_stats_(results)
+            n_rows = sum(res['n_rows'] for res in results)
+            held = sum(arr.nbytes for res in results for arr in res['columns'].values())
+            self.log.info(f"{type(self).__name__}: {len(results)} tablet(s), {n_rows} row(s) in hand "
+                          f"({held / 2**30:.2f} GiB); computing whole-table stats")
+            whole_by_path = self._table_stats_(results)
 
-        tablet_counts = np.array([res['n_rows'] for res in results])
-        for path in tqdm.tqdm(self.column_paths, desc=f"WRITING STATS [{type(self).__name__}]"):
-            whole = whole_by_path[path]
-            write_npz(self.path('stats', *path, ensure_dirpath=True),
-                      **{name: whole[name] for name in self.PER_FEATURE_DATADICT.schema})
-            write_npz(self.path('tab_stats', *path, ensure_dirpath=True),
-                      **{name: np.stack([res['stats'][path][name] for res in results])
-                         for name in self.PER_TABLET_DATADICT.schema})
-            write_npz(self.path('norm', *path, ensure_dirpath=True),
-                      norm=whole['norm'], tab_counts=tablet_counts)        # tab_counts: the key on disk
+            tablet_counts = np.array([res['n_rows'] for res in results])
+            for path in tqdm.tqdm(self.column_paths, desc=f"WRITING STATS [{type(self).__name__}]"):
+                whole = whole_by_path[path]
+                write_npz(self.path('stats', *path, ensure_dirpath=True),
+                          **{name: whole[name] for name in self.PER_FEATURE_DATADICT.schema})
+                write_npz(self.path('tab_stats', *path, ensure_dirpath=True),
+                          **{name: np.stack([res['stats'][path][name] for res in results])
+                             for name in self.PER_TABLET_DATADICT.schema})
+                write_npz(self.path('norm', *path, ensure_dirpath=True),
+                          norm=whole['norm'], tab_counts=tablet_counts)        # tab_counts: the key on disk
 
-        write_npz(self.path('count', ensure_dirpath=True), count=np.array(n_rows))
-        self.log.info(f"{type(self).__name__}: stats written")
-
-        self.log.verbose(f"FeatureStatsProbe.__build__: END {self.anchorkeypath}")
+            write_npz(self.path('count', ensure_dirpath=True), count=np.array(n_rows))
+            self.log.info(f"{type(self).__name__}: stats written")
         return self
 
     def __read__(self, *topicpath):

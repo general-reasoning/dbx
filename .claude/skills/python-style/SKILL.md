@@ -1,11 +1,11 @@
 ---
 name: python-style
-description: The Python style rules in this repo that are not about class layout - imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray, and strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere. Load when writing or reviewing any Python in dbx or hyp, adding an import, or formatting a string. For member order and private naming, load class-layout.
+description: The Python style rules in this repo that are not about class layout - imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; and dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them. Load when writing or reviewing any Python in dbx or hyp, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
 ---
 
 # Python style
 
-Two rules, and the few exceptions each one allows. Member order and naming
+Four rules, and the few exceptions each one allows. Member order and naming
 inside a class are covered in class-layout. This skill covers everything else
 in a Python file.
 
@@ -59,7 +59,9 @@ in `datablocks` replaced `dbx.pprint`, the function from `databits`. `from
 tqdm import tqdm` replaced `dbx.tqdm`, the module, with the function. Import
 in a form that adds no clashing name, such as `from pprint import pformat`,
 `import tqdm` called as `tqdm.tqdm(...)`, or `databits.eval` through `from .
-import databits`, and compare `dir(dbx)` before and after.
+import databits`, and compare `dir(dbx)` before and after. A private alias
+also works, because a star import skips names that start with an underscore:
+`databits` imports `pprint as _pprint_`.
 
 Moving an import to the top also changes what a test's `monkeypatch` sees:
 `from .store import Store` binds the class when the module is imported, so a
@@ -95,3 +97,52 @@ One exception:
 Format codes that are not string formatting are not affected:
 `time.strftime('%Y-%m-%dT%H:%M:%S')`, `squeue -o %t`, and similar arguments
 passed to other programs stay as they are.
+
+## Bracket a section of computation with `Datalog.section`
+
+To log where a step starts and ends, use `section` on the log, not a
+hand-written pair of BEGIN and END lines:
+
+```python
+with self.log.section(f"Copying files from {anchorkeypath}"):
+    ...
+```
+
+It writes `>>>--- text` before the body and `<<<--- text` after it, at
+VERBOSE by default. Pass the level as the second argument, for example
+`self.log.section("Forming var from spec", 'detailed')`. The closing line is
+written however the body ends, and reads `<<<--- text: raised ValueError`
+when it raises. A hand-written END line is skipped by an exception, and a log
+where a step opens and never closes cannot be read for where it failed.
+
+For a `log=` argument, which may be any object with the level methods, use
+`log_section(log, text, level)` from `dbx.journals` instead.
+`Datalog.section` calls it.
+
+`section` lines are ordinary lines at their level, under the view's name. The
+build of a subtree has its own banners, `Datalog.subtree`, at the TREE level.
+Use those only for that.
+
+## Run dbx commands through `dbx.exec` or `dbx.pprint`
+
+Run a dbx command through `dbx.exec` or `dbx.pprint`, from the shell or from
+Python, not by calling the blocks directly. `exec` writes one row to the exec
+journal for each command, when the command finishes or fails. The row holds
+the command's text, its trailing `# comment`, and the build session every
+block it builds writes under. `pprint` runs through `exec` and also prints
+the result. A build called directly from Python leaves no row, so the
+journal cannot say what produced the block or why.
+
+```bash
+dbx.pprint "b = pkg.Block(spec={'x': 1}); b.build(); b.read()  # why it was run"
+```
+
+```python
+dbx.exec("b = pkg.Block(spec={'x': 1}); b.build()  # why it was run")
+dbx.pprint("pkg.Block(spec={'x': 1}).read()")
+```
+
+Add `--capture-output` (or `capture_output=True`) to keep what the command
+printed, too. `dbx.eval` only resolves a `@`, `$` or `#` term and writes
+nothing to the journal, so run a term inside `exec` or `pprint` when the run
+has to be recorded.

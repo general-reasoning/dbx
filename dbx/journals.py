@@ -106,6 +106,26 @@ _THREAD_DATALOGS = threading.local()
 _PROCESS_WORKERS = {}
 
 
+@contextlib.contextmanager
+def log_section(log, text, level: str = 'verbose'):
+    """Bracket a section of computation in two *level* lines of *log*: ``>>>--- text`` before it, ``<<<--- text`` after.
+
+    The closing line is written however the body ends -- ending
+    ``: raised <Error>`` when it raises -- so a section that opened always
+    says where it closed. *log* is anything with a *level* method taking a
+    message, as a ``log=`` argument is; a `Datalog` has it as
+    :meth:`Datalog.section`.
+    """
+    write = getattr(log, level)
+    write(f">>>--- {text}")
+    try:
+        yield log
+    except BaseException as e:
+        write(f"<<<--- {text}: raised {type(e).__name__}")
+        raise
+    write(f"<<<--- {text}")
+
+
 class Datalog:
     """dbx's log: printf-style lines gated by level, led by the worker that wrote them and when.
 
@@ -299,6 +319,18 @@ class Datalog:
         finally:
             _THREAD_DATALOGS.depth = depth
             self._banner_('<<<', f"BUILDING SUBTREE at {at}")
+
+    @contextlib.contextmanager
+    def section(self, text, level: str = 'verbose'):
+        """Bracket a section of computation in two *level* lines: ``>>>--- text`` before it, ``<<<--- text`` after.
+
+        The closing line is written however the body ends -- ending
+        ``: raised <Error>`` when it raises -- so a section that opened always
+        says where it closed. Unlike :meth:`subtree`, the lines are ordinary
+        *level* lines, under the view's name, and nest no deeper.
+        """
+        with log_section(self, text, level):
+            yield self
 
     def skip_subtree(self, at, why: str):
         """The TREE banner of a subtree *at* not built, and *why*, where its :meth:`subtree` banners would be."""
@@ -2890,15 +2922,14 @@ class BuildJournal:
                                                              storage_options, log)
         report = progress if callable(progress) else None
 
-        log.verbose(f"Retrieving journal files from {anchordirpath=} BEGIN")
-        if progress is True:
-            log.info(f"Listing the {anchor} journal files under {anchordirpath} ...")
-        listing_started = time.time()
-        parquet_files = cls._list_(fs, anchordirpath, anchor, n_workers=n_workers, log=log, progress=report)
-        log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
-        if progress is True:
-            log.info(f"Listed {len(parquet_files)} {anchor} journal files in {time.time() - listing_started:.0f} s; reading them")
-        log.verbose(f"Retrieving journal files from {anchordirpath=} END")
+        with log_section(log, f"Retrieving journal files from {anchordirpath=}"):
+            if progress is True:
+                log.info(f"Listing the {anchor} journal files under {anchordirpath} ...")
+            listing_started = time.time()
+            parquet_files = cls._list_(fs, anchordirpath, anchor, n_workers=n_workers, log=log, progress=report)
+            log.verbose(f"Retrieved {len(parquet_files)} parquet_files")
+            if progress is True:
+                log.info(f"Listed {len(parquet_files)} {anchor} journal files in {time.time() - listing_started:.0f} s; reading them")
 
         log.detailed(f"READING JOURNAL: from {anchordirpath=}, files: {parquet_files}")
         df = None

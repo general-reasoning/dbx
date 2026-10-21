@@ -674,6 +674,7 @@ class TextEdit:
         self.anchor = None  # where the selection began, the cursor its other end; None for none
         self._undo_, self._redo_ = [], []  # (text, cursor) before each edit, and those undone
         self._typing_ = False  # the last edit was typing: the next typed joins it, one undo
+        self._follow_ = True  # the cursor moved, or the text changed: shown where it is, at the next draw
         self._last_press_ = (0.0, -1)  # (when, where): what tells a double click
 
     def selection(self):
@@ -714,7 +715,7 @@ class TextEdit:
                  pygame.K_UP: lambda: 0 if cmd else self._vertical_(c, -1),
                  pygame.K_DOWN: lambda: len(t) if cmd else self._vertical_(c, +1)}
         if k in moves:
-            self._typing_ = False
+            self._typing_, self._follow_ = False, True
             sel = self.selection()
             if shift:
                 self.anchor = c if self.anchor is None else self.anchor
@@ -782,14 +783,17 @@ class TextEdit:
             del self._undo_[: -self.UNDO_LIMIT]
         self._redo_.clear()
         self.text, self.cursor, self.anchor, self._typing_ = text, cursor, None, typing
+        self._follow_ = True
 
     def _undo_step_(self):
+        self._follow_ = True
         if self._undo_:
             self._redo_.append((self.text, self.cursor))
             self.text, self.cursor = self._undo_.pop()
             self.anchor, self._typing_ = None, False
 
     def _redo_step_(self):
+        self._follow_ = True
         if self._redo_:
             self._undo_.append((self.text, self.cursor))
             self.text, self.cursor = self._redo_.pop()
@@ -882,11 +886,13 @@ class AreaEdit(TextEdit):
 
     Shift+Enter starts a new line; pasted text keeps its lines. `rows` wraps
     it -- a long word broken where it must be -- and `draw` shows at most
-    so many rows, scrolled to keep the cursor among them.
+    so many rows: scrolled to the cursor once it moves or the text changes,
+    and otherwise where `scroll` left them.
     """
 
     def __init__(self, text=""):
         super().__init__(text)
+        self.top = 0  # the first row shown
         self._rows_key_, self._rows_ = None, []
         self._laid_ = None  # (x, y, line height, the first row shown, the font): what a click is placed by
 
@@ -932,10 +938,10 @@ class AreaEdit(TextEdit):
         """Draw at most *most* rows from (*x*, *y*), *width* wide, its selection and the cursor; scrolled so the cursor shows."""
         rows, lh, t = self.rows(font, width), font.get_linesize(), self.text
         here = self.row_of(self.cursor, rows)
-        first = 0
-        if self._laid_ is not None:
-            first = self._laid_[3]
-        first = min(max(first, here - most + 1), here, max(0, len(rows) - most))
+        first = self.top
+        if self._follow_:
+            first, self._follow_ = min(max(first, here - most + 1), here), False
+        first = self.top = min(max(0, first), max(0, len(rows) - most))
         sel = self.selection()
         for n, (a, b) in enumerate(rows[first: first + most]):
             ry = y + n * lh
@@ -945,11 +951,15 @@ class AreaEdit(TextEdit):
                 if xb > xa:
                     pygame.draw.rect(surf, SELECTION, pygame.Rect(xa, ry, xb - xa, lh))
             surf.blit(font.render(t[a:b], True, color), (x, ry))
-        if sel is None and time.time() % 1 < 0.6:
+        if sel is None and first <= here < first + most and time.time() % 1 < 0.6:
             a, _ = rows[here]
             cx, cy = x + font.size(t[a: self.cursor])[0], y + (here - first) * lh
             pygame.draw.line(surf, color, (cx, cy + 2), (cx, cy + lh - 2), 2)
         self._laid_ = (x, y, lh, first, font)
+
+    def scroll(self, rows):
+        """Scroll the rows shown by *rows*, down for more than 0: the cursor left where it is."""
+        self.top += rows
 
     def index_at(self, pos):
         """The character boundary nearest screen *pos*, on the rows as last drawn."""
@@ -1021,6 +1031,10 @@ class DocWindow:
     def set_doc(self, doc):
         self.doc, self.sx, self.sy = doc, 0, 0
         self.anchor = self.cursor = None
+
+    def header(self):
+        """The window's title bar, as last drawn: its title and the lines beneath, above the document."""
+        return pygame.Rect(self.rect.x, self.rect.y, self.rect.width, max(0, self.body.top - self.rect.y))
 
     def selection_text(self):
         """The text selected, as it reads; "" for none."""

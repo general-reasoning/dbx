@@ -1,6 +1,7 @@
 """hyp --docs' Claude sessions: run through a fake Claude Code CLI, saved in the directory scanned, found again, resumed."""
 
 import json
+import re
 import os
 import stat
 import sys
@@ -351,7 +352,7 @@ def test_a_sessions_usage_adds_up_turn_by_turn_and_is_kept_with_it(cli, tree):
     assert s.usage == {"tokens_in": 6020, "tokens_out": 600, "cost_usd": 0.5}
     line = s.usage_line()
     assert line == "claude-opus-5-5 · 6.0k in · 600 out · ≈$0.50 at API rates"
-    assert s.quota_line() == "quota: 5 h 29% left · 7 d 35% left"
+    assert re.fullmatch(r"quota \(as of \d\d:\d\d\): 5 h 29% left · 7 d 35% left", s.quota_line())
     again = claude.Session.load(s.save(), str(tree))
     assert again.usage == s.usage and again.model == "claude-opus-5-5"
     again.send("three")
@@ -399,7 +400,7 @@ def test_the_account_is_who_claude_code_is_logged_in_as(cli, monkeypatch):
     assert claude.account() is None
 
 
-def test_the_window_shows_the_account_and_the_quota_read_once(app, cli, monkeypatch):
+def test_the_account_is_read_as_a_window_opens_and_after_each_turn(app, cli, monkeypatch):
     reads = []
     monkeypatch.setattr(claude, "account", lambda real=claude.account: reads.append(1) or real())
     app.open_claude()
@@ -410,10 +411,31 @@ def test_the_window_shows_the_account_and_the_quota_read_once(app, cli, monkeypa
     _type_(window, "Hello")
     app.drain(0)
     app.draw(0)
-    assert "quota: 5 h 29% left · 7 d 35% left" in window.sub
+    assert re.search(r"quota \(as of \d\d:\d\d\): 5 h 29% left · 7 d 35% left$", window.sub)
+    assert window.session.plan_account == window.account and len(reads) == 2, "opened, and after the turn"
     app._close_(window)
     app.open_claude()
-    assert app.center.account == window.account and len(reads) == 1, "read once, for every window after"
+    assert app.center.account == window.account and len(reads) == 3, "read again for the next window"
+
+
+def test_an_account_switched_to_is_shown_and_the_quota_said_to_be_the_old_ones_till_a_turn(app, cli, monkeypatch):
+    app.open_claude()
+    window = app.center
+    _type_(window, "Hello")
+    app.drain(0)
+    monkeypatch.setenv("FAKE_ACCOUNT", json.dumps({"loggedIn": True, "email": "other@example.com", "orgName": "Other",
+                                                   "subscriptionType": "max"}))
+    app._close_(window)
+    app.open_claude(window.session)  # the same session, the turn's quota with it
+    again = app.center
+    app.draw(0)
+    head, usage = again.sub.split("\n")
+    assert head.endswith("other@example.com · Other · max plan"), "the account switched to"
+    assert usage.endswith("-- me@example.com's; a turn shows this account's")
+    _type_(again, "Again")
+    app.drain(0)
+    app.draw(0)
+    assert again.session.plan_account == again.account and "a turn shows" not in again.sub
 
 
 def _click_title_(window):
@@ -476,12 +498,24 @@ def test_a_sessions_point_is_dated_by_its_last_turn(app, saved):
     assert app.__point_datetime__(i) == "2026-10-20 08:15"
 
 
-def test_a_text_typed_on_empty_disk_is_asked_of_claude_in_a_new_session(app, saved):
-    tree, _ = saved
+def _right_click_empty_disk_(app, kind="claude"):
+    """A right click on empty disk -- off any window, off any point -- and *kind* picked from its menu: the box it opens."""
     app.draw(0)
     app.hover = None
-    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=app.area().center), 0)
-    assert app.box is not None and "ask Claude" in app.box.hint
+    w = app.center
+    pos = (w.rect.left - 30, w.rect.centery) if w is not None else app.area().center
+    assert app.layer_at(pos) == "disk"
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=pos), 0)
+    assert [v for _, v in app.popup.current()] == ["claude", "markdown"], "Claude or Markdown"
+    app.popup.select(kind)
+    app.popup = None
+    return app.box
+
+
+def test_a_text_typed_on_empty_disk_is_asked_of_claude_in_a_new_session(app, saved):
+    tree, _ = saved
+    box = _right_click_empty_disk_(app)
+    assert box is not None and "ask Claude" in box.hint
     app.handle(pygame.event.Event(pygame.TEXTINPUT, text="What is in here?"), 0)
     app.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0, unicode="\r"), 0)
     app.drain(0)
@@ -628,15 +662,14 @@ def test_typing_reaches_a_session_that_replaced_another_its_title_then_its_box(a
     app.open_claude()
     app._sync_text_input_()
     assert typing.on, "a session's window is typed into"
-    app.draw(0)
-    app.hover = None
-    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=app.area().center), 0)
+    first = app.center
+    _right_click_empty_disk_(app)
     app.handle(pygame.event.Event(pygame.TEXTINPUT, text="first question"), 0)
     app.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0, unicode="\r"), 0)
     app.drain(0)
     app._sync_text_input_()
     window = app.center
-    assert app.box is None and window.session.turns, "a new session, in place of the first"
+    assert app.box is None and window is not first and window.session.turns, "a new session, in place of the first"
     assert typing.on, "still on: the old window closing and the box closing no longer turn it off"
     app.draw(0)
     _click_title_(window)
@@ -920,3 +953,114 @@ def test_symbols_a_font_lacks_are_drawn_from_a_fallback_not_as_boxes():
     img = f.render(text, True, (255, 255, 255))
     assert img.get_size()[0] == f.size(text)[0], "measured as drawn: the cursor and selections land on it"
     assert f.render("plain", True, (255, 255, 255)).get_size() == f.font.render("plain", True, (255, 255, 255)).get_size()
+
+
+def test_cmd_plus_and_minus_zoom_a_sessions_transcript_not_type_into_its_box(app):
+    app.open_claude()
+    window = app.center
+    z = window.zoom
+    _key_(window, pygame.K_EQUALS, pygame.KMOD_META)
+    assert window.zoom > z and window.text == ""
+    _key_(window, pygame.K_MINUS, pygame.KMOD_META)
+    _key_(window, pygame.K_MINUS, pygame.KMOD_META)
+    assert window.zoom < z
+    _key_(window, pygame.K_0, pygame.KMOD_META)
+    assert window.zoom == 1.0
+
+
+def _right_click_title_(app, window):
+    app.draw(0)
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=(window.rect.centerx, window.rect.y + 12)), 0)
+    return app.popup
+
+
+def test_a_right_click_on_a_title_bar_moves_the_window_and_the_center_expands_it(app):
+    from hyp.docs import TilePicker
+
+    app.open_claude()
+    window = app.center
+    picker = _right_click_title_(app, window)
+    assert isinstance(picker, TilePicker) and picker.on_claude is None
+    picker.on_select("right half")
+    app.popup = None
+    assert app.center is None and app.tiles == {"right half": window}
+    app._sync_text_input_()
+    app.draw(0)
+    assert window.rect.left >= app.area().centerx - 10, "drawn in the right half"
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text="still typed into"))
+    assert window.text == "still typed into" and app.__wants_text__()
+    app.open_claude()
+    assert app.tiles == {"right half": window} and app.focus is window, "the one open, where it is: not another"
+    _right_click_title_(app, window).on_select("center")
+    app.popup = None
+    app.draw(0)
+    assert app.center is window and window.rect.size == app.area().size, "expanded: the whole area"
+
+
+def test_a_documents_window_moves_too_and_what_it_covers_closes(app):
+    i = next(k for k, p in enumerate(app.snap.points) if p["path"].endswith("a.md"))
+    app.place(i, "top left")
+    doc = app.tiles["top left"]
+    app.place(i, "bottom right")
+    other = app.tiles["bottom right"]
+    _right_click_title_(app, doc).on_select("bottom half")
+    app.popup = None
+    assert app.tiles == {"bottom half": doc} and other not in app.windows()
+
+
+def test_a_right_click_in_a_windows_body_is_no_title_bars(app):
+    app.open_claude()
+    window = app.center
+    app.draw(0)
+    app.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=3, pos=window.body.center), 0)
+    assert app.popup is None
+
+
+def test_markdown_from_empty_disk_opens_in_the_middle_to_go_on_writing_and_is_saved(app, saved):
+    from hyp import notes
+
+    tree, _ = saved
+    box = _right_click_empty_disk_(app, "markdown")
+    assert "markdown" in box.hint
+    app.handle(pygame.event.Event(pygame.TEXTINPUT, text="My notes: on QBism"), 0)
+    app.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0, unicode="\r"), 0)
+    window = app.center
+    assert app.box is None and isinstance(window, notes.NoteWindow)
+    md = tree / "my-notes-on-qbism.md"
+    assert md.read_text() == "My notes: on QBism\n" and app.refreshed == 1, "saved at once, and embedded"
+    app._sync_text_input_()
+    assert app.__wants_text__()
+    app.draw(0)
+    a, r = app.area(), window.rect
+    assert r.center == a.center and r.width * r.height == pytest.approx(a.width * a.height / 3, rel=0.02), "a Claude session's size"
+    for ev in (pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0, unicode="\r"),
+               pygame.event.Event(pygame.TEXTINPUT, text="A second line.")):
+        window.handle(ev)
+    assert window.edit.text == "My notes: on QBism\n\nA second line.", "Enter: a new line, nothing submitted"
+    app.draw(0)
+    assert "unsaved" in window.sub
+    window.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_s, mod=pygame.KMOD_META, unicode=""))
+    assert md.read_text() == "My notes: on QBism\n\nA second line." and app.refreshed == 2
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text=" More."))
+    app._close_(window)
+    assert md.read_text().endswith("A second line. More."), "closed: what was unsaved, saved"
+    app.open_note("My notes: on QBism\n")
+    assert (tree / "my-notes-on-qbism-2.md").exists(), "a name taken: not written over"
+
+
+def test_a_markdown_being_written_expands_from_its_title_bar(app):
+    app.open_note("Draft\n")
+    window = app.center
+    _right_click_title_(app, window).on_select("center")
+    app.popup = None
+    app.draw(0)
+    assert app.center is window and window.rect.size == app.area().size
+
+
+def test_a_notes_name_is_its_first_line(tmp_path):
+    from hyp import notes
+
+    assert notes._stem_("# QM: TT -- Formalisation (draft)\nbody") == "qm-tt-formalisation-draft"
+    assert notes._stem_("   \n") == "note"
+    n = notes.Note(str(tmp_path), "")
+    assert n.save().endswith("/note.md") and not n.dirty()

@@ -249,9 +249,16 @@ the next start or reload. A markdown's YAML front matter is not drawn.
   would overlap. Beneath the grid, **ask Claude about it** opens a new Claude
   session instead, its box holding `About <path>: ` for the question to
   follow. A right click on a document in the **points** menu offers the same;
-- **right click elsewhere** on the disk opens a box to type in: Enter asks it
-  of Claude, as the first turn of a new session. (Outside `--docs`, the
-  box embeds its text as a point of its own; here every point is a file.)
+- **right click elsewhere** on the disk offers **Claude** or **Markdown**,
+  then a box to type in. Enter, for Claude, asks it as the first turn of a
+  new session; for Markdown, makes it the first line of a new markdown --
+  saved at once in the directory scanned as `<first line>.md`, never over a
+  file there -- and opens it in the middle, the size of a Claude session's
+  window, to go on writing (`hyp/notes.py`). There Enter starts a new line,
+  the text edits as the box does, the wheel scrolls, Cmd+S saves, and Esc or
+  × close it, saving what is not saved; each save embeds it. (Outside
+  `--docs`, the box embeds its text as a point of its own; here every point
+  is a file.)
 
 A markdown is rendered -- headings, lists, quotes, code, tables, links -- and
 its ` ```mermaid ` diagrams are drawn by the mermaid CLI, `mmdc` (or the one
@@ -261,7 +268,11 @@ page under page, as wide as its window at 100%, rendered by pdfium.
 
 In a document's window: the wheel, or the arrows and Page Up/Down, scroll; a
 sideways swipe, or Shift and the wheel, scroll across; + and - zoom, 0 back
-to 100%; Home and End go to its ends; × or Esc closes it. A drag that starts
+to 100%, with Cmd or without -- in a Claude session's window, with it, as
++ and - alone are typed into its box; Home and End go to its ends; × or Esc
+closes it. A right click on its title bar is the place picker for it: a
+slot moves it there, closing what it would cover, and the middle expands it
+to fill the window, a Claude session's too. A drag that starts
 on text selects it -- the window scrolls, dragged past its edge -- Shift+click
 extends the selection, a double click selects a word, Cmd+A all of it, and
 Cmd+C copies it, as it reads: a paragraph's wrapped lines joined, code's lines

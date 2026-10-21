@@ -1146,7 +1146,7 @@ class Hyp:
     `__data_origin__`, `__storage_options__`), what opening a point
     does (`__open_point__`), what clicking one does (`__click_point__`,
     `__context_point__`), what a text typed on empty disk does
-    (`__submit_text__`, `BOX_HINT`), and how a point is labeled (`__point_label__`,
+    (`__context_empty__`, `__submit_text__`, `BOX_HINT`), and how a point is labeled (`__point_label__`,
     `__point_tag__`, `__point_name__`, `__point_version__`, `__point_datetime__`,
     `__point_tooltip__`). The hooks are the only methods
     a specialization is meant to override; everything else is shared.
@@ -1195,6 +1195,10 @@ class Hyp:
     def __wants_text__(self):
         """Whether anything is being typed into, so that text input is on: here, the box, or a field of the top bar being edited."""
         return self.box is not None or any(getattr(c, "editing", False) for c in self.controls)
+
+    def __context_empty__(self, pos):
+        """A right click on empty disk, at screen *pos*: here, a box to type a text in, at *pos* (`__submit_text__`)."""
+        self.box = TextBox(pos, self.BOX_HINT)
 
     def __submit_text__(self, text):
         """What the box a right click on empty disk opens does with *text*, on Enter: here, embed it as a point of its own."""
@@ -1554,7 +1558,7 @@ class Hyp:
             if self.hover is not None:
                 self.__context_point__(self.hover, ev.pos)
             else:
-                self.box = TextBox(ev.pos, self.BOX_HINT)
+                self.__context_empty__(ev.pos)
         elif ev.type == pygame.MOUSEWHEEL:
             self.view.zoom_by(ZOOM_STEP ** getattr(ev, "precise_y", ev.y))
         elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_HOME:

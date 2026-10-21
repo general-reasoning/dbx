@@ -83,6 +83,8 @@ class Session:
         self.usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, **(usage or {})}
         self.plan = None  # the plan's windows, as the last turn left them: {"five_hour": {"utilization", "resetsAt"}, ...}
         self.overage = False  # whether the last turn ran on overage, past the plan's windows
+        self.plan_at = None  # when a turn last said what is left of the plan's windows: the time the quota is as of
+        self.plan_account = None  # who Claude Code ran as then, as its owner read it just after: whose the quota is
         stamp = self.started.replace("-", "").replace(":", "").replace("T", "-")
         # By its start and its id: two sessions begun in one second are two files, not one written over.
         name = f"{PREFIX}{stamp}-{self.id[:8]}.md"
@@ -133,6 +135,7 @@ class Session:
                     info = event.get("rate_limit_info") or {}
                     self.plan = info.get("unifiedWindows") or self.plan
                     self.overage = bool(info.get("isUsingOverage"))
+                    self.plan_at = time.time()
                 elif event.get("type") == "result":
                     result = event
                     self._count_(event)
@@ -220,14 +223,15 @@ class Session:
         return " · ".join(said)
 
     def quota_line(self, now=None):
-        """What is left of the plan's windows, as the last turn said, and when each resets; or that no turn has said yet."""
+        """What is left of the plan's windows, as the last turn said -- and when it said so -- and when each resets; or that no turn has said yet."""
         if not self.plan:
             return "quota: known after a turn"
         names = {"five_hour": "5 h", "seven_day": "7 d"}
         said = [f"{names.get(k, k)} {max(0.0, 1 - float(w.get('utilization') or 0)):.0%} left"
                 + (f" (resets {_when_(w['resetsAt'], now)})" if w.get("resetsAt") else "")
                 for k, w in self.plan.items() if isinstance(w, dict)]
-        return "quota: " + " · ".join(said) + (" · on overage" if self.overage else "")
+        as_of = f" (as of {_when_(self.plan_at, now)})" if self.plan_at else ""
+        return f"quota{as_of}: " + " · ".join(said) + (" · on overage" if self.overage else "")
 
     # 4. Helpers --------------------------------------------------------------
 
@@ -342,7 +346,7 @@ class ClaudeWindow(DocWindow):
         self.naming = None  # the title, a LineEdit, while it is edited
         self._font_ = None  # the title's font, as last drawn: what a click in it is placed by
         self._selecting_ = False  # the mouse pressed in the title, and not yet let go: a drag selects
-        self.account = None  # who Claude Code runs as, as `account` says; None until read
+        self.account = None  # who Claude Code runs as, as `account` last said; None until read
         self.sending = None  # what was sent, while its reply is awaited
         self.partial = None  # the reply coming in, while one is
         self.cancelled = False
@@ -378,6 +382,14 @@ class ClaudeWindow(DocWindow):
             self.text = self.sending
         self.sending, self.partial, self.note = None, None, note
         self._render_(follow=True)
+
+    def quota_line(self):
+        """The session's quota line, and whose it is where the account has changed since: a turn shows this one's."""
+        s = self.session
+        line = s.quota_line()
+        if s.plan and s.plan_account and self.account and s.plan_account != self.account:
+            line += f" -- {s.plan_account.split(' · ')[0]}'s; a turn shows this account's"
+        return line
 
     def keep_title(self):
         """The title being edited kept -- Enter, or a click anywhere off it -- for the owner to file (*on_rename*); nothing while none is."""
@@ -442,6 +454,9 @@ class ClaudeWindow(DocWindow):
                 return None
             if k in (pygame.K_PAGEUP, pygame.K_PAGEDOWN, pygame.K_HOME, pygame.K_END):
                 return super().handle(ev)  # the transcript scrolled
+            if cmd and k in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS, pygame.K_MINUS, pygame.K_KP_MINUS,
+                             pygame.K_0, pygame.K_KP0):
+                return super().handle(ev)  # Cmd and + or -, or 0: the transcript zoomed, as any document's window
             if k == pygame.K_c and cmd and self.edit.selection() is None:
                 return super().handle(ev)  # the transcript's selection copied, to paste into the box, say
             self.edit.handle(ev)
@@ -463,7 +478,7 @@ class ClaudeWindow(DocWindow):
         box_h = 2 * pad + lh * shown + small.get_linesize() + 4
         self.title = "" if self.naming is not None else f"Claude · {self.session.title()}"  # being edited: drawn below
         self.sub = "\n".join([f"{posixpath.basename(self.session.md_url)} · {self.account or 'account: reading …'}",
-                              f"{self.session.usage_line()} · {self.session.quota_line()}"])
+                              f"{self.session.usage_line()} · {self.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
         if self.naming is not None:
             x, room = self.rect.x + 12, self.close.x - small.size("100%")[0] - 24 - (self.rect.x + 12)

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp --docs: a markdown, written in place.** A right click on empty disk
+  offers Claude or Markdown. Markdown's box, on Enter, begins a new markdown
+  -- saved at once as `<first line>.md` in the directory scanned, embedded --
+  and opens it in the middle, a Claude session's size, to go on writing
+  (`hyp.notes`): Enter a new line, Cmd+S to save, closed saved.
+- **hyp: a window's title bar places it; Cmd and + or - zoom.** A right click
+  on a window's title bar is the place picker for it -- a quadrant, a half,
+  or the middle, which expands it to fill the window, a Claude session's
+  too, whose window opens at a third. Cmd+= (or +), Cmd+- and Cmd+0 zoom a
+  window's text, a Claude transcript's among them.
 - **hyp: a re-embed button.** Beside reload: the whole corpus embedded
   afresh, from its source, and laid out anew (`Engine.reembed`); points the
   source no longer gives are dropped. The `--docs` **Claude** button is

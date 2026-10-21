@@ -66,10 +66,7 @@ The value is written where it appears in the output, so a reader does not
 have to match up positions in an argument list.
 
 This includes log messages: write `self.log.info(f"Saved checkpoint:
-{filename}")`, not `self.log.info("Saved checkpoint: %s", filename)`. About
-40 calls in `dbx/stills.py` and `dbx/datatables.py` still use the `%s` form.
-They are known and will be converted later. Do not copy them, and do not
-convert them as a side effect of an unrelated change.
+{filename}")`, not `self.log.info("Saved checkpoint: %s", filename)`.
 
 One exception:
 

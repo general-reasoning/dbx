@@ -4027,6 +4027,82 @@ class Datablock:
             **kwargs,
         )
 
+    def UNSAFE_ship(self, targets=None, /, *, OVERRIDE: bool = False, overwrite: bool = False,
+                    validate: bool = True, show_progress: bool = True, **topic_targets):
+        """Copy named topics OUT, to locations a reader needs no dbx to find.
+
+        The outbound mirror of :meth:`UNSAFE_copy_from`: that one takes one source
+        anchorkeypath and copies every topic in, this one takes a target PER TOPIC and
+        copies only the topics named. A topic left out is not shipped, which is how a
+        block ships its generated config and keeps its checkpoints to itself.
+
+        Targets may be given positionally as a dict or as keywords --
+        ``UNSAFE_ship({'configs': path})`` or ``UNSAFE_ship(configs=path)`` -- so a
+        topic whose name collides with an option still has a spelling. Either side may
+        be local or an fsspec URL.
+
+        Unlike :meth:`UNSAFE_copy_from`, this asserts the block IS valid: shipping
+        copies data out, and data that is not there is not what you meant to send.
+
+        The targets go in the journal. That is what makes a shipped file traceable: a
+        yaml checked into another repo is otherwise anonymous, and nothing says which
+        block's VAR produced it.
+        """
+        targets = {**(dict(targets) if targets else {}), **topic_targets}
+        if not targets:
+            raise ValueError(
+                f"{self.__class__.__name__}.UNSAFE_ship() names no topic to ship; pass "
+                f"{{topic: target}} or topic=target"
+            )
+        known = set(self.topics())
+        unknown = [t for t in targets if self._normtopic_((t,))[0] not in known]
+        if unknown:
+            raise ValueError(
+                f"{self.__class__.__name__}.UNSAFE_ship(): {unknown!r} are not topics of "
+                f"this block; have {sorted(known)!r}"
+            )
+        if not UNSAFE_allowed("UNSAFE_ship", OVERRIDE=OVERRIDE):
+            return {}
+        if validate:
+            assert self.valid(), f"Attempting to ship an invalid Datablock {self}"
+        note = ', '.join(f"{t}->{d}" for t, d in sorted(targets.items()))
+        self.log.verbose(f"Shipping topics: BEGIN ({note})")
+        self.write_journal_entry(event="UNSAFE_ship:BEGIN", note=note, inline_note=True)
+        try:
+            items = sorted(targets.items())
+            items_iter = tqdm.tqdm(items, desc="UNSAFE_ship", unit="topic") if show_progress else items
+            shipped = {}
+            for topic, target in items_iter:
+                shipped.update(self._UNSAFE_ship_topic_(topic, target, overwrite=overwrite))
+            self.log.verbose(f"Shipping topics: END ({note})")
+            self.write_journal_entry(event="UNSAFE_ship:END", note=note, inline_note=True)
+        except Exception as e:
+            self.log.error(f"UNSAFE_ship: Error when trying to ship {note}")
+            self.log.error(f"EXCEPTION: {e}")
+            self.write_journal_entry(event="UNSAFE_ship:ERROR", note=note, inline_note=True)
+            raise e
+        return shipped
+
+    def UNSAFE_ship_redirect(self, targets=None, /, *, OVERRIDE: bool = False,
+                             overwrite: bool = False, validate: bool = True,
+                             show_progress: bool = True, **topic_targets):
+        """Ship, then read the shipped topics from where they were shipped.
+
+        After this the shipped location is the single source of truth: :meth:`read`
+        and :meth:`path` answer through it, so the block and the team are looking at
+        one copy rather than two that can drift. Topics not named keep reading their
+        own data -- :meth:`UNSAFE_redirect` redirects only what it is given.
+        """
+        shipped = self.UNSAFE_ship(targets, OVERRIDE=OVERRIDE, overwrite=overwrite,
+                                   validate=validate, show_progress=show_progress,
+                                   **topic_targets)
+        if not shipped:
+            return shipped
+        # merge=True: shipping one topic now must not drop a redirection already in
+        # place for another. OVERRIDE: the one confirmation was given to UNSAFE_ship.
+        self.UNSAFE_redirect(paths=shipped, topics=sorted(shipped), merge=True, OVERRIDE=True)
+        return shipped
+
     def leave_breadcrumbs_at_path(self, path, crumbs=None):
         """Bring a breadcrumb file into existence for the directory at *path*.
 
@@ -6546,6 +6622,53 @@ class Datablock:
                 _executor.exec_callables(_callables)
         else:
             self._UNSAFE_copy_fs_(src_path=src_path, dst_path=dst_path, recursive=True)
+
+    def _UNSAFE_ship_topic_(self, topic, target, *, overwrite: bool = False):
+        """Copy one topic OUT to *target*. Returns ``{topic: target}`` as shipped.
+
+        The outbound counterpart of :meth:`_UNSAFE_copy_topic_`, and the same
+        extension point: override it to ship a subset of a topic's files.
+
+        A group ships its leaves under *target* as a directory, so the returned dict
+        is nested the way :meth:`_redirect_path_` walks it.
+        """
+        topic = self._normtopic_((topic,))
+        if self._is_syntopic_(*topic):
+            # No location on either side -- there is nothing to ship.
+            self.log.verbose(f"Skipping SYNTOPIC topic {'/'.join(topic)}: it has no location")
+            return {}
+        if self.is_topicgroup(*topic):
+            out = {}
+            for leaf in self._leaves_under_(*topic):
+                leaf = self._normtopic_((leaf,))
+                sub = self._UNSAFE_ship_topic_(
+                    leaf, os.path.join(str(target), *leaf[len(topic):]), overwrite=overwrite)
+                out.update(sub)
+            return {topic[0]: out} if len(topic) == 1 else out
+
+        is_dir = self._is_dir_topic_(*topic) or self._topicfiles_ is None
+        src_path = self.dirpath(*topic) if is_dir else self.path(*topic)
+        if src_path is None:
+            raise ValueError(f"UNSAFE_ship: topic {'/'.join(topic)!r} has no path to ship from")
+        target = str(target)
+        if not overwrite:
+            dst_fs, _ = self._url_to_fs_(target)
+            if dst_fs.exists(target):
+                raise FileExistsError(
+                    f"UNSAFE_ship: {target!r} already holds data for topic "
+                    f"{'/'.join(topic)!r}. Pass overwrite=True to replace it."
+                )
+        self.log.detailed(f"Shipping {'/'.join(topic)} from {src_path} to {target}")
+        self._UNSAFE_copy_fs_(src_path=src_path, dst_path=target, recursive=is_dir)
+        return self._nest_topic_path_(topic, target)
+
+    @staticmethod
+    def _nest_topic_path_(topic, path):
+        """``('a','b'), p -> {'a': {'b': p}}`` -- the shape `_redirect_path_` walks."""
+        out = path
+        for name in reversed(topic):
+            out = {name: out}
+        return out
 
     def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False, **kwargs):
         """Copy one topic's data from anchorkeypath into this Datablock.

@@ -689,6 +689,7 @@ def test_a_title_is_selected_by_drag_shift_and_double_click_and_the_selection_re
 
     copied = []
     monkeypatch.setattr(app_mod, "_copy_", lambda text: copied.append(text) or True)
+    monkeypatch.setattr(docview, "_copy_", lambda text: copied.append(text) or True)  # where the editors and windows use it
     monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
     app.open_claude()
     window = app.center
@@ -755,6 +756,7 @@ def test_the_transcript_is_selected_by_a_drag_copied_and_pasted_into_the_box(app
 
     clipboard = []
     monkeypatch.setattr(app_mod, "_copy_", lambda text: clipboard.append(text) or True)
+    monkeypatch.setattr(docview, "_copy_", lambda text: clipboard.append(text) or True)  # where the editors and windows use it
     monkeypatch.setattr(pygame.scrap, "get_text", lambda: clipboard[-1] if clipboard else "")
     app.open_claude()
     window = app.center
@@ -864,6 +866,7 @@ def test_the_box_selects_by_the_mouse_and_undoes(app, monkeypatch):
 
     clipboard = []
     monkeypatch.setattr(app_mod, "_copy_", lambda text: clipboard.append(text) or True)
+    monkeypatch.setattr(docview, "_copy_", lambda text: clipboard.append(text) or True)  # where the editors and windows use it
     monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
     app.open_claude()
     window = app.center
@@ -1064,3 +1067,106 @@ def test_a_notes_name_is_its_first_line(tmp_path):
     assert notes._stem_("   \n") == "note"
     n = notes.Note(str(tmp_path), "")
     assert n.save().endswith("/note.md") and not n.dirty()
+
+
+def test_a_markdowns_title_is_its_files_name_edited_in_place_and_kept_renames_it(app, saved, monkeypatch):
+    tree, _ = saved
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    app.open_note("Draft notes\n")
+    window = app.center
+    old = tree / "draft-notes.md"
+    assert old.exists()
+    app.draw(0)
+    assert window.title == "Markdown · draft-notes.md"
+    _click_title_(window)
+    assert window.naming.text == "draft-notes"
+    _key_(window, pygame.K_a, pygame.KMOD_META)
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text="wrong"))
+    _key_(window, pygame.K_z, pygame.KMOD_META)
+    assert window.naming.text == "draft-notes", "undone"
+    _key_(window, pygame.K_a, pygame.KMOD_META)
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text="draft-QBism"))
+    refreshed = app.refreshed
+    _key_(window, pygame.K_RETURN)
+    assert window.naming is None and not old.exists() and (tree / "draft-QBism.md").read_text() == "Draft notes\n"
+    assert app.refreshed == refreshed + 1, "filed under its new name"
+    (tree / "taken.md").write_text("someone else's")
+    app.draw(0)
+    _click_title_(window)
+    _key_(window, pygame.K_a, pygame.KMOD_META)
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text="taken"))
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.body.center))  # a click off it keeps it
+    assert (tree / "taken.md").read_text() == "someone else's" and "taken" in window.problem
+    assert (tree / "draft-QBism.md").exists(), "refused: not written over, not moved"
+
+
+def test_a_markdown_named_before_its_first_save_takes_the_name(tmp_path):
+    from hyp import notes
+
+    n = notes.Note(str(tmp_path), "First line\n")
+    assert n.rename("chosen") and n.name() == "chosen.md"
+    assert n.save().endswith("/chosen.md")
+
+
+def test_a_markdowns_text_selects_undoes_and_copies_as_the_claude_box_does(app, monkeypatch):
+    from hyp import app as app_mod
+
+    clipboard = []
+    monkeypatch.setattr(app_mod, "_copy_", lambda text: clipboard.append(text) or True)
+    monkeypatch.setattr(docview, "_copy_", lambda text: clipboard.append(text) or True)  # where the editors and windows use it
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    app.open_note("alpha beta gamma\n")
+    window = app.center
+    app.draw(0)
+    e = window.edit
+    x, y, lh, first, font = e._laid_
+    at = lambda i: (x + font.size(e.text[:i])[0], y + lh // 2)
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=at(6)))
+    window.handle(pygame.event.Event(pygame.MOUSEMOTION, pos=at(10), rel=(1, 0), buttons=(1, 0, 0)))
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=at(10)))
+    _key_(window, pygame.K_c, pygame.KMOD_META)
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text="BETA"))
+    assert clipboard == ["beta"] and e.text == "alpha BETA gamma\n"
+    _key_(window, pygame.K_z, pygame.KMOD_CTRL)
+    assert e.text == "alpha beta gamma\n"
+
+
+def test_the_preview_splits_the_window_renders_as_written_and_its_bar_moves(app, monkeypatch):
+    monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
+    app.open_note("# Heading\n\nSome *text*.\n")
+    window = app.center
+    app.draw(0)
+    assert window.preview_rect.height == 0 and window.text_rect == window.body
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.preview_button.center))
+    app.draw(0)
+    p, t = window.preview_rect, window.text_rect
+    assert window.previewed and p.bottom < t.top and p.height == pytest.approx(t.height, abs=8), "split in half"
+    doc = window._preview_[1]
+    assert [r.text for r in doc.layout(p.width - 10, 1.0).runs][:1] == ["Heading"], "rendered: the heading a heading"
+    window.edit.cursor = len(window.edit.text)
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text="More."))
+    app.draw(0)
+    assert window._preview_[1] is not doc and "More." in window._preview_[0], "as it is written"
+    bar = window._bar_()
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=bar.center))
+    window.handle(pygame.event.Event(pygame.MOUSEMOTION, pos=(bar.centerx, window.body.y + window.body.height // 4), rel=(0, -1), buttons=(1, 0, 0)))
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=bar.center))
+    app.draw(0)
+    assert window.split == pytest.approx(0.25, abs=0.02) and window.preview_rect.height < window.text_rect.height
+    monkeypatch.setattr(pygame.mouse, "get_pos", lambda: window.preview_rect.center)
+    window.handle(pygame.event.Event(pygame.MOUSEWHEEL, x=0, y=-1, precise_y=-1.0))
+    assert window.edit.top == 0, "the wheel over the preview scrolls the preview, not the text"
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.preview_button.center))
+    assert not window.previewed
+
+
+def test_the_preview_renders_mermaid(app, monkeypatch):
+    from hyp import docview
+
+    asked = []
+    monkeypatch.setattr(docview.Mermaid, "state", lambda self, source: asked.append(source) or "pending")
+    app.open_note("A diagram:\n\n```mermaid\ngraph TD; A-->B\n```\n")
+    window = app.center
+    window.toggle_preview()
+    app.draw(0)
+    assert "graph TD; A-->B" in asked and window.animating(), "drawn again till the diagram is in"

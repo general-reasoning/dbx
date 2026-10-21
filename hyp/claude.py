@@ -33,7 +33,7 @@ import uuid
 
 import pygame
 
-from .docview import DIM, EDGE, TEXT, AreaEdit, DocWindow, LineEdit, MarkdownDoc, front_matter
+from .docview import DIM, EDGE, TEXT, AreaEdit, DocWindow, EditableTitle, MarkdownDoc, front_matter
 
 KIND = "claude-session"
 PREFIX = "claude-session-"
@@ -323,7 +323,7 @@ def explain(said):
     return said.splitlines()[-1] if said else "Claude Code failed, saying nothing"
 
 
-class ClaudeWindow(DocWindow):
+class ClaudeWindow(EditableTitle, DocWindow):
     """A session's window: the transcript above, scrolled as a document's; below it, what is being typed.
 
     Enter sends, Shift+Enter starts a new line, Cmd+V pastes; PageUp and
@@ -337,15 +337,14 @@ class ClaudeWindow(DocWindow):
     """
 
     INPUT_LINES = 8  # the box grows to this many lines, then scrolls
+    TITLE_PREFIX = "Claude · "
 
     def __init__(self, session, on_send, on_rename=lambda window: None):
         super().__init__("Claude", posixpath.basename(session.md_url))
         self.session, self.on_send, self.on_rename = session, on_send, on_rename
         self.edit = AreaEdit()  # what is typed in the box
         self._box_selecting_ = False  # the mouse pressed in the box, and not yet let go: a drag selects
-        self.naming = None  # the title, a LineEdit, while it is edited
-        self._font_ = None  # the title's font, as last drawn: what a click in it is placed by
-        self._selecting_ = False  # the mouse pressed in the title, and not yet let go: a drag selects
+        self._init_title_()
         self.account = None  # who Claude Code runs as, as `account` last said; None until read
         self.sending = None  # what was sent, while its reply is awaited
         self.partial = None  # the reply coming in, while one is
@@ -391,13 +390,12 @@ class ClaudeWindow(DocWindow):
             line += f" -- {s.plan_account.split(' · ')[0]}'s; a turn shows this account's"
         return line
 
-    def keep_title(self):
-        """The title being edited kept -- Enter, or a click anywhere off it -- for the owner to file (*on_rename*); nothing while none is."""
-        if self.naming is None:
-            return
-        self.session.rename(self.naming.text)
-        self.naming = None
-        self.on_rename(self)
+    def _title_text_(self):
+        return self.session.given_title()  # its start time, shown till it has a title, is no title to edit
+
+    def _title_kept_(self, text):
+        self.session.rename(text)
+        self.on_rename(self)  # for the owner to file
 
     def close_input(self):
         self.cancelled = True
@@ -413,24 +411,10 @@ class ClaudeWindow(DocWindow):
             if not self.busy():
                 self.session.switch()
             return None
-        if self.naming is not None and ev.type == pygame.MOUSEBUTTONDOWN and not self.title_rect.collidepoint(ev.pos):
-            self.keep_title()  # a click away keeps it, and then does what it does: into the box, say
-        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.title_rect.collidepoint(ev.pos):
-            if self.naming is None:
-                self.naming = LineEdit(self.session.given_title())  # its start time is no title to edit
-                # Laid out as the title was drawn, so the press lands where it was clicked; a start time shown, at the end.
-                self.naming._laid_ = (self.title_rect.x, "Claude · ", 0)
-            if self._font_ is not None:
-                self.naming.press(self._font_, ev.pos[0], shift=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
-                self._selecting_ = True
-            return None
-        if self._selecting_ and ev.type == pygame.MOUSEMOTION and self.naming is not None and self._font_ is not None:
-            self.naming.drag(self._font_, ev.pos[0])
+        if self._title_event_(ev):  # a click off the title, while edited, keeps it and goes on: into the box, say
             return None
         if ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
-            self._selecting_ = self._box_selecting_ = False
-        if self.naming is not None and ev.type in (pygame.TEXTINPUT, pygame.KEYDOWN):
-            return self._name_(ev)
+            self._box_selecting_ = False
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.input.collidepoint(ev.pos):
             self.edit.press(ev.pos, shift=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
             self._box_selecting_ = True
@@ -480,10 +464,7 @@ class ClaudeWindow(DocWindow):
         self.sub = "\n".join([f"{posixpath.basename(self.session.md_url)} · {self.account or 'account: reading …'}",
                               f"{self.session.usage_line()} · {self.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
-        if self.naming is not None:
-            x, room = self.rect.x + 12, self.close.x - small.size("100%")[0] - 24 - (self.rect.x + 12)
-            self.title_rect = self.naming.draw(surf, font, x, self.rect.y + 10, room, self.title_color() or EDGE, prefix="Claude · ")
-        self._font_ = font
+        self._draw_title_(surf, font, small)
         self.rect = rect  # the box's too: a click on it is the window's, not the disk's
         self.input = pygame.Rect(rect.x, rect.bottom - box_h + 4, rect.width, box_h - 4)
         pygame.draw.rect(surf, (32, 38, 48), self.input, border_radius=8)
@@ -498,15 +479,6 @@ class ClaudeWindow(DocWindow):
         note = small.render(self.note or hint, True, (240, 120, 110) if self.note else DIM)
         surf.blit(note, (self.input.x + pad, bottom))
         pygame.key.set_text_input_rect(self.input)
-
-    def _name_(self, ev):
-        """A key or text while the title is edited: the `LineEdit`'s; Enter keeps it, Esc puts it back. Never closes the window."""
-        said = self.naming.handle(ev)
-        if said == "submit":
-            self.keep_title()
-        elif said == "cancel":
-            self.naming = None
-        return None
 
     def _render_(self, follow=False):
         at_end = self.sy >= self._size[1] - self.body.height - 4

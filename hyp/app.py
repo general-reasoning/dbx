@@ -14,6 +14,7 @@ import math
 import os
 import queue
 import re
+import subprocess
 import sys
 import textwrap
 import threading
@@ -1973,6 +1974,7 @@ class Hyp:
 
     def run(self):
         self.raise_window()
+        _say_ready_()  # the window is up: a terminal waiting on it is given back
         while True:
             now = time.monotonic()
             events = pygame.event.get()
@@ -2029,6 +2031,60 @@ def _connection_errors_():
     return (OSError, asyncssh.Error)
 
 
+#: The environment variable a hyp run in the background is told, by the one that started it, where to say it is up.
+READY_FD = "HYP_READY_FD"
+#: How many logs of runs in the background are kept, the newest.
+LOGS_KEPT = 20
+
+
+def _detach_(argv):
+    """Run hyp again, with *argv*, in the background -- a session of its own, its output to a log -- and give the terminal back.
+
+    The terminal waits until the window is up, so that what goes wrong in
+    starting -- a corpus that cannot be opened -- is said there: the log's
+    end, and the run's exit status. A run in the background is not stopped by
+    Ctrl+C there, nor by the terminal closing; closing its window ends it.
+    Not `fork`: on macOS, a process that has loaded pygame and Cocoa cannot
+    safely go on in a fork of itself.
+    """
+    logs = os.path.join(Hyp.HOME, "logs")
+    os.makedirs(logs, exist_ok=True)
+    for old in sorted(f for f in os.listdir(logs) if f.startswith("hyp-") and f.endswith(".log"))[:-(LOGS_KEPT - 1)]:
+        try:
+            os.remove(os.path.join(logs, old))
+        except OSError:
+            pass
+    log = os.path.join(logs, time.strftime("hyp-%Y%m%d-%H%M%S") + f"-{os.getpid()}.log")
+    r, w = os.pipe()
+    with open(log, "ab") as out:
+        proc = subprocess.Popen([sys.executable, "-m", "hyp", *argv], stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, start_new_session=True, pass_fds=(w,),
+                                env={**os.environ, READY_FD: str(w), "PYGAME_HIDE_SUPPORT_PROMPT": "1"})  # its banner said once, here
+    os.close(w)
+    with os.fdopen(r, "rb") as f:
+        said = f.read(2)  # "ok" once the window is up; nothing, should it end before
+    if said == b"ok":
+        print(f"hyp: running in the background (pid {proc.pid}); its output: {log}")
+        return 0
+    code = proc.wait()
+    with open(log, errors="replace") as f:
+        tail = f.read().strip().splitlines()[-20:]
+    print("\n".join(tail) or f"hyp: ended before its window was up (exit {code}); its output: {log}", file=sys.stderr)
+    return code or 1
+
+
+def _say_ready_():
+    """Tell the hyp that started this one in the background, if one did, that the window is up -- once."""
+    fd = os.environ.pop(READY_FD, None)
+    if fd is None:
+        return
+    try:
+        os.write(int(fd), b"ok")
+        os.close(int(fd))
+    except OSError:
+        pass
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="hyp", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", default=None, help="corpus directory, local or an fsspec url (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)")
@@ -2052,6 +2108,10 @@ def main(argv=None):
     ap.add_argument("--summary-model", default=SUMMARY_MODEL)
     ap.add_argument("--reset", action="store_true", help="discard the stored corpus and start over")
     ap.add_argument("--seed", type=int, default=0, help="UMAP random state")
+    ap.add_argument("--fg", action="store_true",
+                    help="keep the terminal: run here, its output here, Ctrl+C stopping it (default: run in the background "
+                         "once the window is up, the output to ~/.hyp/logs)")
+    argv = sys.argv[1:] if argv is None else list(argv)
     args = ap.parse_args(argv)
 
     cls = Hyp
@@ -2078,6 +2138,8 @@ def main(argv=None):
             ap.error(f"--filter: {e}")
     elif args.docs:
         from .docs import HypDocs as cls
+    if not args.fg and READY_FD not in os.environ and sys.stdout.isatty():
+        raise SystemExit(_detach_(argv))
     origin = "--data" if args.data is not None else cls.__data_origin__(args)
     if args.data is None:
         args.data = cls.__default_data__(args)

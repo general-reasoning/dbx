@@ -5,11 +5,19 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp gives the terminal back.** Run from one, it goes on in the
+  background once its window is up -- a session of its own, its output in
+  `~/.hyp/logs` -- and what goes wrong before then is said in the terminal,
+  with the exit status. `--fg` keeps the terminal.
 - **hyp --docs: a markdown, written in place.** A right click on empty disk
   offers Claude or Markdown. Markdown's box, on Enter, begins a new markdown
   -- saved at once as `<first line>.md` in the directory scanned, embedded --
   and opens it in the middle, a Claude session's size, to go on writing
-  (`hyp.notes`): Enter a new line, Cmd+S to save, closed saved.
+  (`hyp.notes`): Enter a new line, Cmd+S to save, closed saved. Its title,
+  its file's name, edits in place as a Claude session's does and renames
+  the file, never over another (`EditableTitle`, which both windows now
+  share); **preview** splits it, the markdown -- mermaid too -- rendered
+  above as it is written below, the bar between them dragged.
 - **hyp: a window's title bar places it; Cmd and + or - zoom.** A right click
   on a window's title bar is the place picker for it -- a quadrant, a half,
   or the middle, which expands it to fill the window, a Claude session's

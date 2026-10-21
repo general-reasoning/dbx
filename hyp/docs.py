@@ -31,8 +31,8 @@ from dataclasses import dataclass, field
 import pygame
 
 from . import claude, notes
-from .app import Hyp
-from .docview import DocWindow, MarkdownDoc, Message, PdfDoc, front_matter, pdf_text
+from .app import Hyp, TextBox
+from .docview import BAR, DIM, EDGE, TEXT, DocWindow, MarkdownDoc, Message, PdfDoc, front_matter, pdf_text
 
 KINDS = {".md": "markdown", ".markdown": "markdown", ".pdf": "pdf"}
 # Directories never scanned, besides hidden ones.
@@ -109,8 +109,6 @@ class TilePicker:
         return True
 
     def draw_list(self, surf, font):
-        from .docview import BAR, DIM, EDGE, TEXT
-
         self.rect.clamp_ip(surf.get_rect())
         pygame.draw.rect(surf, (30, 35, 45), self.rect, border_radius=6)
         pygame.draw.rect(surf, EDGE, self.rect, 1, border_radius=6)
@@ -504,7 +502,8 @@ class HypDocs(Hyp):
     def open_note(self, text):
         """A new markdown, begun with *text*: saved at once, in the directory scanned, and opened in the middle to go on writing."""
         args = self.args
-        window = notes.NoteWindow(notes.Note(self.root(args), text), self._save_note_)  # as sessions are: fsspec's own options
+        # As sessions are, with fsspec's own options; a name kept, the file renamed and the disk brought up to date.
+        window = notes.NoteWindow(notes.Note(self.root(args), text), self._save_note_, lambda w: self._file_(w.note))
         if self.center is not None:
             self._close_(self.center)
         self.center, self.expanded = window, False
@@ -613,8 +612,6 @@ class HypDocs(Hyp):
 
     def _type_new_(self, kind, pos):
         """The box of a right click on empty disk, for *kind* -- "claude" or "markdown" -- at *pos*."""
-        from .app import TextBox
-
         self.box_kind = kind
         self.box = TextBox(pos, self.NEW[kind][1])
 
@@ -679,10 +676,10 @@ class HypDocs(Hyp):
         return self._window_at_(layer, pos) is not None
 
     def __layer_event__(self, layer, ev, now):
-        editing = self._claude_window_()
-        editing = editing if editing is not None and editing.naming is not None else None
-        if editing is not None and ev.type == pygame.MOUSEBUTTONDOWN and not editing.rect.collidepoint(ev.pos):
-            editing.keep_title()  # a click off its window -- on the disk, or another window -- keeps the title too
+        if ev.type == pygame.MOUSEBUTTONDOWN:
+            for editing in [w for w in self.windows() if getattr(w, "naming", None) is not None]:
+                if not editing.rect.collidepoint(ev.pos):
+                    editing.keep_title()  # a click off its window -- on the disk, or another window -- keeps the title too
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             self.capture = None  # a press before this one has ended, whether or not its release came
         if layer is None:

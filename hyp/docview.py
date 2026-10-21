@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 import pygame
 
+from .app import _copy_
 from .fonts import Font
 
 SANS = "helveticaneue,helvetica,arial"
@@ -736,8 +737,6 @@ class TextEdit:
             if c < len(t):
                 self._edit_(t[:c] + t[c + 1:], c)
         elif k in (pygame.K_c, pygame.K_x) and cmd and self.selection() is not None:
-            from .app import _copy_
-
             a, b = self.selection()
             _copy_(t[a:b])
             if k == pygame.K_x:
@@ -881,6 +880,77 @@ class LineEdit(TextEdit):
         return first + min(range(len(edges)), key=lambda j: abs(edges[j] - x))
 
 
+class EditableTitle:
+    """A window's title, edited in place as a `LineEdit`: mixed into a `DocWindow`, before it.
+
+    A click on the title edits it, the cursor where it was clicked; the
+    `LineEdit` then takes the keys and the text -- a selection, undo -- and a
+    drag selects. Enter keeps it, and so does a click anywhere off it, which
+    then does what it does; Esc puts it back. The window says what is edited
+    -- `_title_text_`, shown after TITLE_PREFIX -- and what keeping it does,
+    `_title_kept_`; it calls `_title_event_` first with each event, and
+    `_draw_title_` after it is drawn, its own title blank while edited.
+    """
+
+    TITLE_PREFIX = ""
+
+    def _init_title_(self):
+        self.naming = None  # the title, a LineEdit, while it is edited
+        self._font_ = None  # the title's font, as last drawn: what a click in it is placed by
+        self._selecting_ = False  # the mouse pressed in the title, and not yet let go: a drag selects
+
+    def _title_text_(self):
+        """What editing the title begins with."""
+        raise NotImplementedError
+
+    def _title_kept_(self, text):
+        """The title edited to *text*, and kept."""
+        raise NotImplementedError
+
+    def keep_title(self):
+        """The title being edited kept -- Enter, or a click anywhere off it; nothing while none is."""
+        if self.naming is None:
+            return
+        text, self.naming = self.naming.text, None
+        self._title_kept_(text)
+
+    def _title_event_(self, ev):
+        """*ev* as the title takes it: whether it was the title's -- a press on it, a drag from one, a key or text while it is edited."""
+        if self.naming is not None and ev.type == pygame.MOUSEBUTTONDOWN and not self.title_rect.collidepoint(ev.pos):
+            self.keep_title()  # a click away keeps it, and then does what it does
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.title_rect.collidepoint(ev.pos):
+            if self.naming is None:
+                self.naming = LineEdit(self._title_text_())
+                # Laid out as the title was drawn, so the press lands where it was clicked.
+                self.naming._laid_ = (self.title_rect.x, self.TITLE_PREFIX, 0)
+            if self._font_ is not None:
+                self.naming.press(self._font_, ev.pos[0], shift=bool(pygame.key.get_mods() & pygame.KMOD_SHIFT))
+                self._selecting_ = True
+            return True
+        if self._selecting_ and ev.type == pygame.MOUSEMOTION and self.naming is not None and self._font_ is not None:
+            self.naming.drag(self._font_, ev.pos[0])
+            return True
+        if ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
+            self._selecting_ = False
+        if self.naming is not None and ev.type in (pygame.TEXTINPUT, pygame.KEYDOWN):
+            said = self.naming.handle(ev)
+            if said == "submit":
+                self.keep_title()
+            elif said == "cancel":
+                self.naming = None
+            return True
+        return False
+
+    def _draw_title_(self, surf, font, small):
+        """The title being edited, drawn where the window's title is, after the window."""
+        if self.naming is not None:
+            x = self.rect.x + 12
+            room = self.close.x - small.size("100%")[0] - 24 - self.header_reserve - x
+            self.title_rect = self.naming.draw(surf, font, x, self.rect.y + 10, room, self.title_color() or EDGE,
+                                               prefix=self.TITLE_PREFIX)
+        self._font_ = font
+
+
 class AreaEdit(TextEdit):
     """`TextEdit` of several lines, wrapped to a width: what a Claude session's box holds.
 
@@ -1020,6 +1090,7 @@ class DocWindow:
         self.body = pygame.Rect(0, 0, 0, 0)
         self.close = pygame.Rect(0, 0, 0, 0)
         self.title_rect = pygame.Rect(0, 0, 0, 0)  # the title's, as last drawn
+        self.header_reserve = 0  # pixels kept free at the title row's right, by the zoom: a button of the window's own there
         self.title_color = lambda: None
         self.press = None
         self._size = (1, 1)  # the content's, as last laid out
@@ -1064,8 +1135,6 @@ class DocWindow:
             k, shift = ev.key, bool(ev.mod & pygame.KMOD_SHIFT)
             cmd = (ev.mod | pygame.key.get_mods()) & (pygame.KMOD_META | pygame.KMOD_CTRL)
             if k == pygame.K_c and cmd:
-                from .app import _copy_
-
                 text = self.selection_text()
                 if text:
                     _copy_(text)
@@ -1137,7 +1206,7 @@ class DocWindow:
             pygame.draw.line(surf, EDGE if hot else TEXT, a, b, 2)
         zoom = small.render(f"{self.zoom:.0%}", True, DIM)
         surf.blit(zoom, (self.close.x - zoom.get_width() - 10, y + pad))
-        room = self.close.x - zoom.get_width() - 24 - (x + pad)
+        room = self.close.x - zoom.get_width() - 24 - self.header_reserve - (x + pad)
         title = font.render(_fit_(font, self.title, room), True, self.title_color() or EDGE)
         self.title_rect = surf.blit(title, (x + pad, y + pad - 2))  # where a click finds it
         top = y + pad + font.get_linesize()

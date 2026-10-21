@@ -24,6 +24,15 @@ brew install ollama            # hyp starts `ollama serve` itself if it is not r
 hyp                            # or: dbx.hyp, or python -m hyp
 ```
 
+Run from a terminal, hyp gives it back once its window is up: it goes on in
+the background, in a session of its own, its output in
+`~/.hyp/logs/hyp-<started>-<pid>.log` (the newest 20 kept), and is ended by
+closing its window -- not by Ctrl+C there, nor by the terminal closing. What
+goes wrong before the window is up is said in the terminal all the same, as
+the log's end, with the run's exit status. `--fg` keeps the terminal,
+as before; a hyp whose output is no terminal -- a pipe, a script -- keeps
+running where it is.
+
 On first run it pulls `nomic-embed-text` (embeddings) and `deepseek-r1:1.5b`
 (one-line summaries) through Ollama. The seed corpus is kept under
 `~/.hyp/seeds`; a datalake's pipelines, in the datalake itself.
@@ -256,7 +265,13 @@ the next start or reload. A markdown's YAML front matter is not drawn.
   file there -- and opens it in the middle, the size of a Claude session's
   window, to go on writing (`hyp/notes.py`). There Enter starts a new line,
   the text edits as the box does, the wheel scrolls, Cmd+S saves, and Esc or
-  × close it, saving what is not saved; each save embeds it. (Outside
+  × close it, saving what is not saved; each save embeds it. Its title is its
+  file's name, edited in place as a Claude session's title is: kept, the file
+  is renamed -- never over another, which is refused, said in the window.
+  **preview**, at the title row's right, splits it: the markdown rendered
+  above, mermaid diagrams too, as it is written below; the bar between them
+  is dragged to share the window, and the wheel scrolls the pane under the
+  mouse. (Outside
   `--docs`, the box embeds its text as a point of its own; here every point
   is a file.)
 
@@ -475,6 +490,7 @@ a directory of markdowns, they are directions of content.
 hyp --data DIR               # the corpus directory, local or an fsspec url
                              # (default: ~/.hyp/seeds; with --journal, {DBX_DATALAKE}/.hyp, or .hyp/anchors/ANCHOR)
 hyp --reset                  # discard the corpus and start over
+hyp --fg                     # keep the terminal: the output there, Ctrl+C stopping it
 hyp --journal                # the pipelines of DBX_DATALAKE (HypDbxJournal); also: --journal pipelines
 hyp --journal ANCHOR         # the blocks of ANCHOR, from its build journal; the journal menu switches either
 hyp --journal ANCHOR --filter 'key=pattern, ...'   # its blocks filtered; the filter field changes it

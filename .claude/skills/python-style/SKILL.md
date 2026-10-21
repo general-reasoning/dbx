@@ -51,6 +51,21 @@ Those go at the top. Some existing code imports them inside functions. That
 is not a precedent: when you edit a function like that, move the import to
 the top of the module.
 
+**Watch the names a module-level import adds.** `dbx/__init__` star-imports
+`databits`, `datablocks`, `journals` and the other modules that have no
+`__all__`, so every name imported at the top of one of them becomes a `dbx`
+name too. A later module can replace an earlier one's name. `import pprint`
+in `datablocks` replaced `dbx.pprint`, the function from `databits`. `from
+tqdm import tqdm` replaced `dbx.tqdm`, the module, with the function. Import
+in a form that adds no clashing name, such as `from pprint import pformat`,
+`import tqdm` called as `tqdm.tqdm(...)`, or `databits.eval` through `from .
+import databits`, and compare `dir(dbx)` before and after.
+
+Moving an import to the top also changes what a test's `monkeypatch` sees:
+`from .store import Store` binds the class when the module is imported, so a
+test that patches `hyp.store.Store` no longer reaches it. Import the module
+and call `store.Store(...)`, rather than editing the test.
+
 A test module follows the same rule. A missing optional dependency is
 handled as described in running-tests, not by importing inside the test.
 

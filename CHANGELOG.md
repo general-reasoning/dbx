@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp --markdowns: a Claude session's title is edited in its window.** A
+  click on the title edits it; Enter keeps it, into the front matter and the
+  transcript's heading, and relabels the session's point, which is dated by
+  its last write (`updated`). The window shows the account Claude Code runs
+  as (`claude auth status`) and what is left of the plan's 5-hour and 7-day
+  windows, with when each resets.
 - **`Datablock.update_tree(note)` and `touch_tree(note)`** run `update` or
   `touch` on every block of the tree, bottom up, each block once. They skip
   the subtrees `build_tree` skips (`TREE_SKIP_BUILDING`, unless `skips=`

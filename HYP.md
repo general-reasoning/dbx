@@ -295,19 +295,32 @@ in.
 **The model, and the usage.** At the right of the box, `model: default ▾`:
 a click switches it -- Claude Code's default, `opus`, `sonnet`, `haiku` --
 from the next turn on, which resumes the session on that model
-(`--model`). Beneath the window's title, the session's usage: the model the
-last turn ran on, the tokens in (cached or not) and out over every turn,
-what they would cost at API rates -- a subscription is not billed them --
-and how much of the plan's 5-hour and 7-day windows is used. The choice and
+(`--model`). Beneath the window's title, two lines. First, the session's
+file and the account Claude Code runs as -- email, organization and plan,
+from `claude auth status`, read once in the background. Then the session's
+usage: the model the last turn ran on, the tokens in (cached or not) and
+out over every turn, what they would cost at API rates -- a subscription is
+not billed them -- and the quota: what is left of the plan's 5-hour and
+7-day windows and when each resets (`quota: 5 h 96% left (resets 12:40) ·
+7 d 59% left (resets Fri 05:00)`), and `on overage` past them. A turn
+reports the quota, so until one has it says it is known after a turn. The choice and
 the totals are kept in the front matter (`choice`, `tokens_in`,
 `tokens_out`, `cost_usd`), so a session reopened goes on from them.
 
-**Renaming a session.** Its file can be renamed, or moved anywhere the scan
+**Titling a session.** The window's title is the session's -- `Claude ·
+<title>`, its first line until it is given one. A click on it edits it:
+Enter keeps it, Esc puts it back, and a blank one puts back the first line.
+A title kept is written into the front matter (`title:`) and the
+transcript's heading at once, and the point relabeled -- or, before the
+first turn, with it, as there is no file to write until then. The point is
+labeled `Claude · <title>`, and beneath it is dated by the session's last
+write, its front matter's `updated`, not by the file's.
+
+**Renaming its file.** The file can be renamed, or moved anywhere the scan
 reaches, while its window is closed: what resumes it is the `session` id in
-its front matter, not its name. Keep the `.md`, and reload. The point's
-label is the front matter's `title`, not the file's name: edit `title:` to
-change it. A file renamed while its window is open is written again under
-its old name at the next turn.
+its front matter, not its name. Keep the `.md`, and reload. A file renamed
+while its window is open is written again under its old name at the next
+turn.
 
 **Saved and embedded at every turn.** As each reply comes in whole, the
 session is saved into the directory scanned (`--dir`), or into

@@ -259,8 +259,8 @@ def documents(root, progress=print, n_workers=16, cache=None, storage_options=No
         body = body.strip() if fields is not None else text  # the front matter is no part of what a document says
         embed = f"{base}\n\n{body[:EMBED_CHARS]}"
         if claude.is_session(fields):
-            # A Claude session: embedded whole, as long as it gets; its point opens the session again, labeled by its first line.
-            extra.update(kind=claude.KIND, session=fields.get("session"))
+            # A Claude session: embedded whole, as long as it gets; its point opens the session again, labeled by its title and dated by its last write.
+            extra.update(kind=claude.KIND, session=fields.get("session"), updated=fields.get("updated"))
             summary = f"Claude · {fields.get('title') or base}"
             embed = f"{base}\n\n{body}"
         return Doc(key=url, text=text[:TEXT_CHARS], embed=embed, summary=summary, extra=extra)
@@ -400,6 +400,7 @@ class HypDocs(Hyp):
         self.focus = None  # the window keys go to, when the mouse is over none: the one last clicked
         self.capture = None  # the window a drag began in
         self.controls = [Button("Claude", self.open_claude)]
+        self.claude_account = None  # who Claude Code runs as, read once, when a session's window first opens
 
     def __click_point__(self, i, now):
         """Left click on a document: open it in the center; on a saved Claude session, the session, to go on with."""
@@ -415,7 +416,12 @@ class HypDocs(Hyp):
         self.popup = TilePicker(lambda slot: self.place(i, slot), pos)
 
     def __point_datetime__(self, i):
-        mtime = self.snap.points[i].get("mtime") if self.snap.points else None
+        """When a document was last changed; a Claude session, when its last turn was: its front matter's ``updated``."""
+        point = self.snap.points[i] if self.snap.points else {}
+        updated = point.get("updated")
+        if updated:
+            return str(updated).replace("T", " ")[:16]
+        mtime = point.get("mtime")
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime)) if mtime else None
 
     def __animating__(self):
@@ -433,7 +439,10 @@ class HypDocs(Hyp):
         else:
             args = self.args
             session = session or claude.Session(self.root(args), self.claude_dir(args))
-            window = claude.ClaudeWindow(session, self._send_claude_)
+            window = claude.ClaudeWindow(session, self._send_claude_, self._rename_claude_)
+            window.account = self.claude_account
+            if self.claude_account is None:
+                self.run_async(claude.account, lambda said: self._account_(window, said))
             if self.center is not None:
                 self._close_(self.center)
             self.center = window
@@ -499,6 +508,14 @@ class HypDocs(Hyp):
                 self._file_(window.session)
 
         self.run_async(turn, then)
+
+    def _rename_claude_(self, window):
+        """A session's title kept: filed at once -- its point relabeled -- unless a turn is in flight, which files it as it ends."""
+        if not window.busy() and window.session.dirty():
+            self._file_(window.session)
+
+    def _account_(self, window, said):
+        self.claude_account = window.account = said or "account: unknown (claude auth status said nothing)"
 
     def _file_(self, session):
         """Save *session* and bring the disk up to date with it -- embedded whole, the layout nudged -- in the background, the window usable meanwhile."""

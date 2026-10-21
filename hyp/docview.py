@@ -599,6 +599,7 @@ class DocWindow:
         self.rect = pygame.Rect(0, 0, 0, 0)
         self.body = pygame.Rect(0, 0, 0, 0)
         self.close = pygame.Rect(0, 0, 0, 0)
+        self.title_rect = pygame.Rect(0, 0, 0, 0)  # the title's, as last drawn
         self.title_color = lambda: None
         self.press = None
         self._size = (1, 1)  # the content's, as last laid out
@@ -685,10 +686,10 @@ class DocWindow:
         surf.blit(zoom, (self.close.x - zoom.get_width() - 10, y + pad))
         room = self.close.x - zoom.get_width() - 24 - (x + pad)
         title = font.render(_fit_(font, self.title, room), True, self.title_color() or EDGE)
-        surf.blit(title, (x + pad, y + pad - 2))
+        self.title_rect = surf.blit(title, (x + pad, y + pad - 2))  # where a click finds it
         top = y + pad + font.get_linesize()
-        if self.sub:
-            surf.blit(small.render(_fit_(small, self.sub, w - 2 * pad), True, DIM), (x + pad, top))
+        for line in self.sub.split("\n") if self.sub else ():  # a line each
+            surf.blit(small.render(_fit_(small, line, w - 2 * pad), True, DIM), (x + pad, top))
             top += small.get_linesize()
         self.body = pygame.Rect(x + 1, top + 6, w - 2, y + h - 1 - (top + 6))
         if self.body.width < 40 or self.body.height < 20:

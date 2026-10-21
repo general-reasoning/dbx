@@ -19,6 +19,10 @@ from hyp import claude, docs, docview
 # FAKE_REPLY (words streamed), or FAKE_FAIL's message as a failed result, or FAKE_STDERR on stderr with no result.
 FAKE = r'''#!{python}
 import json, os, sys
+if sys.argv[1:3] == ["auth", "status"]:  # FAKE_ACCOUNT, as `claude auth status --json` says it; read before stdin, which it never gets
+    print(os.environ.get("FAKE_ACCOUNT", json.dumps({{"loggedIn": True, "email": "me@example.com", "orgName": "Example Org",
+                                                      "subscriptionType": "team"}})))
+    sys.exit(0)
 text = sys.stdin.read()
 with open(os.environ["FAKE_LOG"], "a") as f:
     f.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "stdin": text}}) + "\n")
@@ -56,7 +60,7 @@ def cli(tmp_path, monkeypatch):
     log = tmp_path / "runs.jsonl"
     monkeypatch.setenv("HYP_CLAUDE", str(path))
     monkeypatch.setenv("FAKE_LOG", str(log))
-    for v in ("FAKE_REPLY", "FAKE_FAIL", "FAKE_STDERR", "FAKE_TOOL"):
+    for v in ("FAKE_REPLY", "FAKE_FAIL", "FAKE_STDERR", "FAKE_TOOL", "FAKE_ACCOUNT"):
         monkeypatch.delenv(v, raising=False)
     return NS(runs=lambda: [json.loads(ln) for ln in log.read_text().splitlines()] if log.exists() else [])
 
@@ -346,7 +350,8 @@ def test_a_sessions_usage_adds_up_turn_by_turn_and_is_kept_with_it(cli, tree):
     s.send("two")
     assert s.usage == {"tokens_in": 6020, "tokens_out": 600, "cost_usd": 0.5}
     line = s.usage_line()
-    assert line == "claude-opus-5-5 · 6.0k in · 600 out · ≈$0.50 at API rates · plan 5 h 71%, 7 d 65%"
+    assert line == "claude-opus-5-5 · 6.0k in · 600 out · ≈$0.50 at API rates"
+    assert s.quota_line() == "quota: 5 h 29% left · 7 d 35% left"
     again = claude.Session.load(s.save(), str(tree))
     assert again.usage == s.usage and again.model == "claude-opus-5-5"
     again.send("three")
@@ -373,3 +378,97 @@ def test_a_click_on_the_model_switches_it_and_the_usage_is_shown(app):
     assert "in · " in window.sub and "API rates" in window.sub
     window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.chip.center))
     assert window.session.choice == "opus"
+
+
+def test_the_quota_says_what_is_left_and_when_it_resets():
+    s = claude.Session("/tmp")
+    assert s.quota_line() == "quota: known after a turn"
+    now = time.mktime((2026, 10, 21, 9, 0, 0, 0, 0, -1))
+    s.plan = {"five_hour": {"utilization": 0.04, "resetsAt": now + 3600},
+              "seven_day": {"utilization": 0.41, "resetsAt": now + 3 * 86400}}
+    assert s.quota_line(now) == "quota: 5 h 96% left (resets 10:00) · 7 d 59% left (resets Sat 09:00)"
+    s.overage = True
+    assert s.quota_line(now).endswith(" · on overage")
+
+
+def test_the_account_is_who_claude_code_is_logged_in_as(cli, monkeypatch):
+    assert claude.account() == "me@example.com · Example Org · team plan"
+    monkeypatch.setenv("FAKE_ACCOUNT", json.dumps({"loggedIn": False}))
+    assert claude.account().startswith("not logged in")
+    monkeypatch.setenv("FAKE_ACCOUNT", "not json")
+    assert claude.account() is None
+
+
+def test_the_window_shows_the_account_and_the_quota_read_once(app, cli, monkeypatch):
+    reads = []
+    monkeypatch.setattr(claude, "account", lambda real=claude.account: reads.append(1) or real())
+    app.open_claude()
+    window = app.center
+    app.draw(0)
+    assert window.sub.split("\n")[0].endswith("me@example.com · Example Org · team plan")
+    assert "quota: known after a turn" in window.sub.split("\n")[1]
+    _type_(window, "Hello")
+    app.drain(0)
+    app.draw(0)
+    assert "quota: 5 h 29% left · 7 d 35% left" in window.sub
+    app._close_(window)
+    app.open_claude()
+    assert app.center.account == window.account and len(reads) == 1, "read once, for every window after"
+
+
+def _click_title_(window):
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.title_rect.center))
+
+
+def test_a_sessions_title_is_edited_in_its_window_and_relabels_its_point(app, saved):
+    tree, url = saved
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    app.__click_point__(i, 0.0)
+    window = app.center
+    app.draw(0)
+    assert window.title == "Claude · What is alpha?"
+    _click_title_(window)
+    assert window.naming == "What is alpha?"
+    for _ in "What is alpha?":
+        window.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_BACKSPACE, mod=0, unicode=""))
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text="Alpha, explained"))
+    assert window.text == "", "the title takes what is typed, not the box"
+    refreshed = app.refreshed
+    window.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0, unicode="\r"))
+    assert window.naming is None and app.refreshed == refreshed + 1, "filed at once"
+    fields, body = docview.front_matter(open(url).read())
+    assert fields["title"] == "Alpha, explained" and body.lstrip().startswith("# Claude · Alpha, explained")
+    found = {d.key: d for d in docs.documents(str(tree), progress=lambda *a: None)}
+    assert found[url].summary == "Claude · Alpha, explained" and found[url].extra["updated"] == fields["updated"]
+
+
+def test_escape_puts_the_title_back_and_keeps_the_window_open(app):
+    app.open_claude()
+    window = app.center
+    app.draw(0)
+    _click_title_(window)
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text=" and more"))
+    assert window.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE, mod=0, unicode="")) is None
+    assert window.naming is None and window.session._title_ is None and app.center is window
+
+
+def test_a_title_given_before_any_turn_waits_for_the_first(app, saved):
+    tree, _ = saved
+    app.open_claude()
+    window = app.center
+    app.draw(0)
+    _click_title_(window)
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text=" named"))
+    window.handle(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0, unicode="\r"))
+    assert not (tree / "sessions").exists(), "no turn: no file to write"
+    _type_(window, "Hello")
+    app.drain(0)
+    (md,) = os.listdir(tree / "sessions")
+    assert docview.front_matter((tree / "sessions" / md).read_text())[0]["title"].endswith(" named")
+
+
+def test_a_sessions_point_is_dated_by_its_last_turn(app, saved):
+    _, url = saved
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    app.snap.points[i]["updated"] = "2026-10-20T08:15:42"
+    assert app.__point_datetime__(i) == "2026-10-20 08:15"

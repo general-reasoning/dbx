@@ -75,11 +75,13 @@ class Session:
         self.resumable = resumable
         self.turns = []  # this time's: (text you sent, Claude's reply)
         self.saved = 0  # how many of them the file has
+        self.renamed = False  # a title given since the file was last written
         self.model = None  # the model the last turn ran on, as Claude Code says
         self.choice = choice  # the model asked for, of MODELS: None, Claude Code's default
         # Over every turn, saved ones too: tokens in (cached or not) and out, and what they would cost at API rates.
         self.usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, **(usage or {})}
         self.plan = None  # the plan's windows, as the last turn left them: {"five_hour": {"utilization", "resetsAt"}, ...}
+        self.overage = False  # whether the last turn ran on overage, past the plan's windows
         stamp = self.started.replace("-", "").replace(":", "").replace("T", "-")
         self.md_url = md_url or posixpath.join(self.root, *([subdir] if subdir else []), f"{PREFIX}{stamp}.md")
 
@@ -125,7 +127,9 @@ class Session:
                     self.resumable = True  # Claude Code has the session now, whatever comes of the turn
                     self.model = event.get("model") or self.model
                 elif event.get("type") == "rate_limit_event":
-                    self.plan = (event.get("rate_limit_info") or {}).get("unifiedWindows") or self.plan
+                    info = event.get("rate_limit_info") or {}
+                    self.plan = info.get("unifiedWindows") or self.plan
+                    self.overage = bool(info.get("isUsingOverage"))
                 elif event.get("type") == "result":
                     result = event
                     self._count_(event)
@@ -154,11 +158,19 @@ class Session:
         with fs.open(path, "w") as f:
             f.write(self.markdown())
         self.saved = max(self.saved, n)
+        self.renamed = False
         return self.md_url
 
     def dirty(self):
-        """Whether a turn is not yet in the file."""
-        return len(self.turns) > self.saved
+        """Whether a turn, or a title given, is not yet in the file; a session with no turn has no file to write."""
+        return len(self.turns) > self.saved or (self.renamed and bool(self.prior or self.turns))
+
+    def rename(self, title):
+        """Title the session *title* -- its point's label -- from the next save; a blank one puts back the default, its first line."""
+        title = " ".join(str(title).split())
+        if title != (self._title_ or ""):
+            self._title_ = title or None
+            self.renamed = True
 
     def markdown(self, partial=None):
         """The transcript: front matter, what was saved before, this time's turns -- and *partial*, a reply still coming, last."""
@@ -170,7 +182,11 @@ class Session:
             fields["choice"] = self.choice
         fields.update(tokens_in=self.usage["tokens_in"], tokens_out=self.usage["tokens_out"], cost_usd=round(self.usage["cost_usd"], 4))
         lines = ["---", *(f"{k}: {json.dumps(v)}" for k, v in fields.items()), "---", ""]
-        lines += [self.prior, ""] if self.prior else [f"# Claude · {self.title()}", ""]
+        heading = f"# Claude · {self.title()}"
+        prior = self.prior
+        if prior.startswith("# Claude · "):
+            prior = heading + prior[len(prior.split("\n", 1)[0]):]  # its heading, retitled as the session is
+        lines += [prior, ""] if prior else [heading, ""]
         for said, answer in self.turns:
             lines += ["## You", "", said.strip(), "", "## Claude", "", answer, ""]
         if partial is not None:
@@ -189,16 +205,22 @@ class Session:
         self.choice = MODELS[(MODELS.index(self.choice) + 1) % len(MODELS)]
 
     def usage_line(self):
-        """The session's usage, as its window shows it: the model, tokens in and out, the cost at API rates, and the plan's windows."""
+        """The session's usage, as its window shows it: the model, tokens in and out, and the cost at API rates."""
         u = self.usage
         said = [self.model or "model: Claude Code's default",
                 f"{_tokens_(u['tokens_in'])} in · {_tokens_(u['tokens_out'])} out",
                 f"≈${u['cost_usd']:.2f} at API rates"]
-        if self.plan:
-            names = {"five_hour": "5 h", "seven_day": "7 d"}
-            said.append("plan " + ", ".join(f"{names.get(k, k)} {w.get('utilization', 0):.0%}" for k, w in self.plan.items()
-                                            if isinstance(w, dict)))
         return " · ".join(said)
+
+    def quota_line(self, now=None):
+        """What is left of the plan's windows, as the last turn said, and when each resets; or that no turn has said yet."""
+        if not self.plan:
+            return "quota: known after a turn"
+        names = {"five_hour": "5 h", "seven_day": "7 d"}
+        said = [f"{names.get(k, k)} {max(0.0, 1 - float(w.get('utilization') or 0)):.0%} left"
+                + (f" (resets {_when_(w['resetsAt'], now)})" if w.get("resetsAt") else "")
+                for k, w in self.plan.items() if isinstance(w, dict)]
+        return "quota: " + " · ".join(said) + (" · on overage" if self.overage else "")
 
     # 4. Helpers --------------------------------------------------------------
 
@@ -242,8 +264,29 @@ def ask(prompt, timeout=180, command=None):
     return str(result.get("result") or "")
 
 
+def account(command=None, timeout=20):
+    """The account Claude Code is logged in as, as the window shows it -- email, organization, plan -- from ``claude auth status``; None if not."""
+    try:
+        done = subprocess.run([command or claude_command(), "auth", "status", "--json"], capture_output=True, text=True,
+                              timeout=timeout, cwd=os.path.expanduser("~"))
+    except (OSError, subprocess.TimeoutExpired, Failed):
+        return None
+    status = _event_(done.stdout.strip()) if done.stdout.strip() else None
+    if not status or not status.get("loggedIn"):
+        return "not logged in: run `claude` once in a terminal and log in" if status else None
+    plan = status.get("subscriptionType")
+    return " · ".join(str(p) for p in (status.get("email"), status.get("orgName"), plan and f"{plan} plan") if p) or None
+
+
 def _tokens_(n):
     return f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.1f}k" if n >= 1e3 else str(n)
+
+
+def _when_(epoch, now=None):
+    """A reset time, as the window says it: the hour where it is today, else the weekday and the hour."""
+    at, today = time.localtime(float(epoch)), time.localtime(now if now is not None else time.time())
+    same_day = (at.tm_year, at.tm_yday) == (today.tm_year, today.tm_yday)
+    return time.strftime("%H:%M" if same_day else "%a %H:%M", at)
 
 
 def claude_command():
@@ -274,16 +317,21 @@ class ClaudeWindow(DocWindow):
 
     Enter sends, Shift+Enter starts a new line, Cmd+V pastes; PageUp and
     PageDown, Home and End, and the wheel scroll the transcript; Esc or ×
-    closes the window, and its owner saves the session. Beneath its title,
-    the session's usage; at the right of the box, the model, which a click
-    switches, from the next turn on.
+    closes the window, and its owner saves the session. Its title is the
+    session's: a click edits it, Enter keeps it -- *on_rename(window)*, for
+    its owner to file -- and Esc puts it back. Beneath the title, the account
+    Claude Code is logged in as (*account*, once its owner has read it), the
+    session's usage, and what is left of the plan's quota; at the right of
+    the box, the model, which a click switches, from the next turn on.
     """
 
     INPUT_LINES = 8  # the box grows to this many lines, then scrolls
 
-    def __init__(self, session, on_send):
+    def __init__(self, session, on_send, on_rename=lambda window: None):
         super().__init__("Claude", posixpath.basename(session.md_url))
-        self.session, self.on_send = session, on_send
+        self.session, self.on_send, self.on_rename = session, on_send, on_rename
+        self.naming = None  # the title being typed, while it is edited
+        self.account = None  # who Claude Code runs as, as `account` says; None until read
         self.text = ""
         self.sending = None  # what was sent, while its reply is awaited
         self.partial = None  # the reply coming in, while one is
@@ -328,6 +376,12 @@ class ClaudeWindow(DocWindow):
             if not self.busy():
                 self.session.switch()
             return None
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.title_rect.collidepoint(ev.pos):
+            if self.naming is None:
+                self.naming = self.session.title()
+            return None
+        if self.naming is not None and ev.type in (pygame.TEXTINPUT, pygame.KEYDOWN):
+            return self._name_(ev)
         if ev.type == pygame.TEXTINPUT:
             self.text += ev.text
             return None
@@ -360,9 +414,16 @@ class ClaudeWindow(DocWindow):
         pad, lh = 10, font.get_linesize()
         lines = wrap(font, self.text + "|", rect.width - 2 * pad - 2) or ["|"]
         shown = lines[-self.INPUT_LINES:]
-        hint = "Claude is answering …" if self.busy() else "Enter: send · Shift+Enter: new line · Esc: close and save"
+        if self.naming is not None:
+            hint = "Enter: keep this title · Esc: put it back"
+        elif self.busy():
+            hint = "Claude is answering …"
+        else:
+            hint = "Enter: send · Shift+Enter: new line · click the title: rename · Esc: close and save"
         box_h = 2 * pad + lh * len(shown) + small.get_linesize() + 4
-        self.sub = f"{posixpath.basename(self.session.md_url)} · {self.session.usage_line()}"
+        self.title = f"{self.naming}|" if self.naming is not None else f"Claude · {self.session.title()}"
+        self.sub = "\n".join([f"{posixpath.basename(self.session.md_url)} · {self.account or 'account: reading …'}",
+                              f"{self.session.usage_line()} · {self.session.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
         self.rect = rect  # the box's too: a click on it is the window's, not the disk's
         self.input = pygame.Rect(rect.x, rect.bottom - box_h + 4, rect.width, box_h - 4)
@@ -379,6 +440,25 @@ class ClaudeWindow(DocWindow):
         note = small.render(self.note or hint, True, (240, 120, 110) if self.note else DIM)
         surf.blit(note, (self.input.x + pad, bottom))
         pygame.key.set_text_input_rect(self.input)
+
+    def _name_(self, ev):
+        """A key or text while the title is edited: typed into it; Enter keeps it, Esc puts it back. Never closes the window."""
+        if ev.type == pygame.TEXTINPUT:
+            self.naming += ev.text
+        elif ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self.session.rename(self.naming)
+            self.naming = None
+            self.on_rename(self)
+        elif ev.key == pygame.K_ESCAPE:
+            self.naming = None
+        elif ev.key == pygame.K_BACKSPACE:
+            self.naming = self.naming[:-1]
+        elif ev.key == pygame.K_v and pygame.key.get_mods() & (pygame.KMOD_META | pygame.KMOD_CTRL):
+            try:
+                self.naming += " ".join((pygame.scrap.get_text() or "").split())
+            except Exception:
+                pass
+        return None
 
     def _render_(self, follow=False):
         at_end = self.sy >= self._size[1] - self.body.height - 4

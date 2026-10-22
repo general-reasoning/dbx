@@ -1,11 +1,11 @@
 ---
 name: python-style
-description: The Python style rules in this repo that are not about class layout - imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; and dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them. Load when writing or reviewing any Python in dbx or hyp, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
+description: The Python style rules in this repo that are not about class layout - imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings use no Sphinx roles like :meth: or :func:. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
 ---
 
 # Python style
 
-Four rules, and the few exceptions each one allows. Member order and naming
+Five rules, and the few exceptions each one allows. Member order and naming
 inside a class are covered in class-layout. This skill covers everything else
 in a Python file.
 
@@ -97,6 +97,22 @@ One exception:
 Format codes that are not string formatting are not affected:
 `time.strftime('%Y-%m-%dT%H:%M:%S')`, `squeue -o %t`, and similar arguments
 passed to other programs stay as they are.
+
+## No Sphinx markup in docstrings
+
+This repo does not build its docs with Sphinx, so Sphinx roles in a
+docstring only make it harder to read. Name a function, method, class or
+attribute in plain backticks:
+
+```python
+"""`UNSAFE_clear_redirection` undoes it, and is the only thing that does."""
+```
+
+not `:meth:`UNSAFE_clear_redirection` undoes it`. Never use any role:
+`:meth:`, `:func:`, `:class:`, `:attr:`, `:mod:`, `:data:`, `:exc:` or `:obj:`.
+About 390 of them are left in `dbx/`, mostly in `datablocks.py` and
+`journals.py`. Don't copy them. When you edit a docstring that has them,
+rewrite them as plain backticks.
 
 ## Bracket a section of computation with `Datalog.section`
 

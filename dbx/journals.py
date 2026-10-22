@@ -114,7 +114,7 @@ def log_section(log, text, level: str = 'verbose'):
     ``: raised <Error>`` when it raises -- so a section that opened always
     says where it closed. *log* is anything with a *level* method taking a
     message, as a ``log=`` argument is; a `Datalog` has it as
-    :meth:`Datalog.section`.
+    `Datalog.section`.
     """
     write = getattr(log, level)
     write(f">>>--- {text}")
@@ -326,7 +326,7 @@ class Datalog:
 
         The closing line is written however the body ends -- ending
         ``: raised <Error>`` when it raises -- so a section that opened always
-        says where it closed. Unlike :meth:`subtree`, the lines are ordinary
+        says where it closed. Unlike `subtree`, the lines are ordinary
         *level* lines, under the view's name, and nest no deeper.
         """
         with log_section(self, text, level):

@@ -854,20 +854,19 @@ class TestTheNewMarkersArgumentsAreChecked:
                     make(bad)
 
 
-# --- DATADIR(subdirs=...): a directory that declares what is under it -----
+# --- DATADIR('a', 'b'): a directory that declares what is under it --------
 
 def test_a_declared_subdir_tree_canonicalises(tmp_path):
     """A sequence and a dict of the same tree reach one rendering, so one hash."""
-    assert repr(DATADIR(subdirs=('meta', 'data'))) == \
-        repr(DATADIR(subdirs={'meta': None, 'data': None}))
-    assert repr(DATADIR('a lerobot dataset', subdirs=('meta',))) == \
-        "DATADIR('a lerobot dataset', subdirs=(('meta', ()),))"
+    assert repr(DATADIR('meta', 'data')) == repr(DATADIR({'meta': None, 'data': None}))
+    assert repr(DATADIR('meta', note='a lerobot dataset')) == \
+        "DATADIR('meta', note='a lerobot dataset')"
 
 
 def test_declaring_subdirs_keeps_it_one_directory_topic(tmp_path):
     """Unlike a nested TOPICS dict, which makes a group whose root is no topic at all."""
     class D(Datablock):
-        TOPICS = {'data': DATADIR('a lerobot dataset', subdirs=('meta', 'data', 'videos'))}
+        TOPICS = {'data': DATADIR('meta', 'data', 'videos', note='a lerobot dataset')}
 
     b = D(url=str(tmp_path))
     assert b._is_dir_topic_('data') is True
@@ -879,7 +878,7 @@ def test_validity_wants_every_declared_subdir(tmp_path):
     """The point: a directory that exists says nothing about a build that died after
     writing the first of three subtrees."""
     class D(Datablock):
-        TOPICS = {'data': DATADIR(subdirs=('meta', 'data', 'videos'))}
+        TOPICS = {'data': DATADIR('meta', 'data', 'videos')}
 
     b = D(url=str(tmp_path))
     root = pathlib.Path(b.path('data', local=True))
@@ -893,7 +892,7 @@ def test_validity_wants_every_declared_subdir(tmp_path):
 
 def test_subdirs_nest(tmp_path):
     class D(Datablock):
-        TOPICS = {'data': DATADIR(subdirs={'videos': ('chunk-000',)})}
+        TOPICS = {'data': DATADIR({'videos': ('chunk-000',)})}
 
     b = D(url=str(tmp_path))
     root = pathlib.Path(b.path('data', local=True))
@@ -903,16 +902,27 @@ def test_subdirs_nest(tmp_path):
     assert b.valid_topic('data') is True
 
 
-def test_only_a_directory_may_declare_subdirs():
-    with pytest.raises(TypeError, match="not a directory"):
+def test_only_a_directory_takes_subdirs():
+    """SYNTHETIC keeps its positional NOTE: it has no location, so it has nothing to
+    declare, and reading its note as a directory name would be nonsense."""
+    assert repr(SYNTHETIC('derived on read')) == "SYNTHETIC('derived on read')"
+    with pytest.raises(TypeError):
         SYNTHETIC('derived on read', subdirs=('a',))
 
 
 def test_a_subdir_name_may_not_be_a_path():
     with pytest.raises(ValueError, match="may not contain"):
-        DATADIR(subdirs=('videos/chunk-000',))
-    with pytest.raises(TypeError, match="not a single string"):
-        DATADIR(subdirs='videos')
+        DATADIR('videos/chunk-000')
+
+
+def test_one_spaced_positional_is_still_the_note():
+    """`DATADIR('one PNG per frame')` meant a note before subdirs existed and still
+    does: a directory name has no spaces, so the two never collide and nothing re-keys.
+    Alongside subdirectories it is ambiguous, and refused."""
+    assert DATADIR('one PNG per frame').note == 'one PNG per frame'
+    assert DATADIR('one PNG per frame').subdirs is None
+    with pytest.raises(TypeError, match="may not hold whitespace"):
+        DATADIR('meta', 'one PNG per frame')
 
 
 @pytest.mark.pinned
@@ -926,7 +936,7 @@ def test_declaring_subdirs_moves_the_hash_and_a_bare_marker_does_not(tmp_path):
         TOPICS = {'data': DATADIR('a lerobot dataset')}
 
     class Declared(Datablock):
-        TOPICS = {'data': DATADIR('a lerobot dataset', subdirs=('meta',))}
+        TOPICS = {'data': DATADIR('meta', note='a lerobot dataset')}
 
     hashes = {c.__name__: c(url=str(tmp_path)).hash for c in (Bare, Noted, Declared)}
     assert len(set(hashes.values())) == 3, hashes

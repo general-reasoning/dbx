@@ -41,7 +41,7 @@ from .datablocks import (
     BuildJournalFrame,
     Datastack,
     TopicMarkerMeta,
-    _NotedMarkerMeta_,
+    _DirMarkerMeta_, _NotedMarkerMeta_,
     forward_property,
     forming_with_journal,
     is_topicmarker,
@@ -90,7 +90,7 @@ def sample_rows(n: int, fraction: float, seed: int = 0) -> np.ndarray:
     return np.sort(np.random.default_rng(seed).choice(n, size=k, replace=False))
 
 
-class _DataSliceMeta_(_NotedMarkerMeta_):
+class _DataSliceMeta_(_DirMarkerMeta_):
     """Makes ``DATASLICE(idx='int')`` a marker carrying those columns.
 
     A call returns a SUBCLASS rather than an instance, so everything a TOPICS

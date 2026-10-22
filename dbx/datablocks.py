@@ -319,6 +319,21 @@ class TOPICMARKER(metaclass=TopicMarkerMeta):
     """
 
 
+def _render_subdirs_(subdirs) -> str:
+    """``((name, children), ...)`` back as the positionals that spell it.
+
+    A leaf is its name; a level with children is a dict. The rendering reaches the type
+    string, so it has to be injective -- which it is, because a name is a string and a
+    nesting is a dict, and the two never render alike.
+    """
+    out = []
+    for name, children in subdirs:
+        out.append(repr(name) if not children
+                   else "{%r: (%s)}" % (name, _render_subdirs_(children) +
+                                        ("," if len(children) == 1 else "")))
+    return ", ".join(out)
+
+
 def _check_subdirs_(kind, subdirs):
     """A declared subdirectory tree, canonicalised to ``((name, children), ...)``.
 
@@ -328,9 +343,13 @@ def _check_subdirs_(kind, subdirs):
     reach one hash.
     """
     if isinstance(subdirs, str):
-        raise TypeError(f"{kind} subdirs must be a sequence or dict of names, not a "
-                        f"single string {subdirs!r}")
-    items = subdirs.items() if isinstance(subdirs, dict) else ((n, None) for n in subdirs)
+        subdirs = (subdirs,)
+    if isinstance(subdirs, dict):
+        items = list(subdirs.items())
+    else:
+        items = []
+        for entry in subdirs:
+            items.extend(entry.items() if isinstance(entry, dict) else [(entry, None)])
     out = []
     for name, children in items:
         if not isinstance(name, str) or not name:
@@ -407,7 +426,58 @@ class SYNTHETIC(TOPICMARKER, metaclass=_NotedMarkerMeta_):
     note = None
 
 
-class DATADIR(TOPICMARKER, metaclass=_NotedMarkerMeta_):
+class _DirMarkerMeta_(_NotedMarkerMeta_):
+    """``DATADIR('meta', 'data', 'videos', note='a lerobot dataset')``.
+
+    Positionals are the subdirectories the topic must contain -- a name, or a dict for
+    a nested level -- and the note is a keyword, because a directory far more often
+    wants to say what is under it than to carry prose.
+
+    A positional holding whitespace is REFUSED rather than taken as a subdirectory:
+    ``DATADIR('one PNG per frame')`` was a note before this signature existed, and
+    reading it as a directory name would re-key the block and change what makes it
+    valid, both in silence.
+    """
+
+    def __call__(cls, *subdirs, note=None):
+        # One positional holding whitespace is the NOTE, as it was before subdirs
+        # existed -- `DATADIR('one PNG per frame')`. A directory name has no spaces in
+        # it, so the two never collide, and no declaration written before this re-keys.
+        if (note is None and len(subdirs) == 1 and isinstance(subdirs[0], str)
+                and any(c.isspace() for c in subdirs[0])):
+            return super().__call__(subdirs[0])
+        for entry in subdirs:
+            if isinstance(entry, str) and any(c.isspace() for c in entry):
+                raise TypeError(
+                    f"{cls.__name__}({entry!r}): a subdirectory name may not hold "
+                    f"whitespace. For a note alongside subdirectories, say "
+                    f"{cls.__name__}(..., note={entry!r})")
+        if not subdirs:
+            return super().__call__(note)
+        return _DirMarkerMeta_(cls.__name__, (cls,),
+                               {'note': note,
+                                'subdirs': _check_subdirs_(cls.__name__, subdirs)})
+
+    def __repr__(cls):
+        note, subdirs = cls.__dict__.get('note'), cls.__dict__.get('subdirs')
+        if note is None and subdirs is None:
+            return cls.__name__
+        if not subdirs:
+            # Exactly as it rendered before subdirs existed, so no declaration carrying
+            # a note re-keys -- and it evaluates back to a note, because it has spaces.
+            # A note WITHOUT spaces has to say so, or reading it back would make a
+            # directory name of it.
+            return (f"{cls.__name__}({note!r})" if any(c.isspace() for c in note)
+                    else f"{cls.__name__}(note={note!r})")
+        args = [_render_subdirs_(subdirs)]
+        if note is not None:
+            args.append(f"note={note!r}")
+        return f"{cls.__name__}({', '.join(args)})"
+
+    __str__ = __repr__
+
+
+class DATADIR(TOPICMARKER, metaclass=_DirMarkerMeta_):
     """A directory topic: the topic IS the directory.  :data:`DIRTOPIC` as a marker.
 
     A location, unlike :class:`SYNTHETIC` -- a real directory that merely has no
@@ -415,13 +485,16 @@ class DATADIR(TOPICMARKER, metaclass=_NotedMarkerMeta_):
 
         TOPICS = {'masks': DATADIR('one PNG per frame')}
 
-    It may also DECLARE its subdirectories, which makes the topic valid only when every
-    one of them is there -- not merely when the directory exists::
+    It may also DECLARE its subdirectories, positionally, which makes the topic valid
+    only when every one of them is there -- not merely when the directory exists::
 
-        TOPICS = {'data': DATADIR('a lerobot dataset',
-                                  subdirs=('meta', 'data', 'videos'))}
+        TOPICS = {'data': DATADIR('meta', 'data', 'videos',
+                                  note='a lerobot dataset')}
 
-    Nest by giving a dict: ``subdirs={'videos': ('chunk-000',)}``. The topic stays ONE
+    Nest by giving a dict: ``DATADIR('meta', {'videos': ('chunk-000',)})``. The note is
+    a keyword, because a directory more often says what is under it than carries prose,
+    and a positional holding whitespace is refused rather than read as a directory name
+    -- see `_DirMarkerMeta_`. The topic stays ONE
     topic -- one path, shipped and cleared whole -- unlike a nested dict in TOPICS,
     which makes a group whose leaves are separate topics and whose root is no topic at
     all. Declared subdirs render into the type string, so adding them re-keys.

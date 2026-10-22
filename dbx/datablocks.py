@@ -3925,7 +3925,7 @@ class Datablock:
             self.__dict__.pop('__redirected_paths__', None)
             self.write_journal_entry(event=f"UNSAFE_clear:{list(topics)}", redirection={'cleared': True})
 
-        msg = f"UNSAFE_clear: cleared block {self.hash}"
+        msg = f"UNSAFE_clear: cleared datablock {self.hash}"
         if had_redirection:
             msg += " (redirection removed)"
         self.log.info(msg)

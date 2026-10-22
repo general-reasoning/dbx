@@ -174,3 +174,43 @@ def test_try_specialize_tree_specializes_what_resolves_and_builds_nothing(lake):
     status = tree.try_specialize_tree()
     assert status == {grown.anchorkey: ('valid', []), tree.anchorkey: ('not-valid', [])}
     assert grown.path('x') == old.path('old') and not tree.valid()
+
+
+# --- entrypoint_tag: the root block's label ---------------------------
+
+def an_entry(name):
+    ...
+
+
+def test_entrypoint_tag_is_the_qualified_name_and_the_preset():
+    assert dbx.entrypoint_tag(an_entry, 'navgold_joint') == f"{__name__}.an_entry:navgold_joint"
+
+
+def test_entrypoint_tag_tells_apart_pipelines_selecting_by_the_same_name():
+    def other(name):
+        ...
+    assert dbx.entrypoint_tag(an_entry, 'x') != dbx.entrypoint_tag(other, 'x')
+
+
+@pytest.mark.pinned
+def test_a_tag_is_a_label_not_a_location(lake, tmp_path):
+    """`keyby='version_shorthash'` is the default, so tagging a block does not move it
+    -- which is what makes it safe to tag blocks that are already built. A Datatablet
+    keeps 'tag_version_shorthash' and is deliberately not covered here."""
+    untagged = Leaf(url=str(tmp_path), spec={'n': 1})
+    tagged = Leaf(url=str(tmp_path), spec={'n': 1}, tag='pkg.fn:preset')
+    assert untagged.hash == tagged.hash
+    assert untagged.key == tagged.key
+    assert untagged.anchorkeypath == tagged.anchorkeypath
+
+
+def test_an_entrypoint_declaring_tag_passes_it_twice(lake, tmp_path):
+    """Why `entrypoint_tag` exists rather than a `tag` parameter on the function:
+    `pipeline` already hands its own tag to the pipeline class, so a second one arrives
+    in `**ops` and the class gets two values for one keyword."""
+    @pipeline
+    def with_tag(name, *, tag=None, datalake=None):
+        return Leaf(datalake=datalake, spec={'n': 1}, tag=tag)
+
+    with pytest.raises(TypeError, match="multiple values for keyword argument 'tag'"):
+        with_tag('preset', tag='mine', datalake=str(tmp_path))

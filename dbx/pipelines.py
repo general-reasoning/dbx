@@ -22,7 +22,7 @@ from .datablocks import SYNTHETIC, Datablock
 from .journals import PipeJournal
 
 
-__all__ = ['Pipeline', 'PipelineFromEntrypointFn', 'pipeline']
+__all__ = ['Pipeline', 'PipelineFromEntrypointFn', 'pipeline', 'entrypoint_tag']
 
 
 class Pipeline(Datablock):
@@ -156,6 +156,26 @@ def _camel_(name: str) -> str:
     return ''.join(part[:1].upper() + part[1:] for part in name.split('_'))
 
 
+def entrypoint_tag(fn, name: str) -> str:
+    """The tag of the root block an entrypoint *fn* builds for *name*: ``module.qualname:name``.
+
+    *name* selects the preset; the function's qualified name tells apart the pipelines that select by
+    the same one. A label to filter journals by -- since dbx keys blocks by 'version_shorthash', not a
+    location, so tagging a block that is already built does not move it.
+
+    `pipeline` tags the PIPELINE, which is a different thing: the pipeline does not construct the
+    tree, the entrypoint does, so the root's tag is the entrypoint's to set::
+
+        @pipeline(journal=True)
+        def my_clip(name, *, datalake=None):
+            return MyClip(tag=entrypoint_tag(my_clip, name), datalake=datalake, spec=...)
+
+    An entrypoint must NOT declare a ``tag`` parameter of its own: `pipeline` already passes its tag
+    to the pipeline class, and a second one arrives in ``**ops`` -- two values for one keyword.
+    """
+    return f"{fn.__module__}.{fn.__qualname__}:{name}"
+
+
 def pipeline(fn=None, *, tag: str | None = None, journal: bool = False):
     """*fn*, returning a `PipelineFromEntrypointFn` rather than the tree it arranges.
 
@@ -185,6 +205,10 @@ def pipeline(fn=None, *, tag: str | None = None, journal: bool = False):
     the `PipeJournal` by; a tag filter matches by containment, so the function's own name finds it too.
     ``@pipeline(journal=True)`` sets the pipeline's `Pipeline.JOURNAL`: only then is its creation
     journaled. Leave it off for the minor pipelines -- collators, factories -- others nest.
+
+    This tag is the PIPELINE's. The root block the function returns is tagged by the function, with
+    `entrypoint_tag` -- so an entrypoint takes no ``tag`` parameter of its own, which would reach
+    the pipeline class twice.
 
     A call is cached by ALL its arguments, as `functools.cache` would cache it, for the life of the
     process: the same arguments return the same pipeline, so a pipeline that several others nest is

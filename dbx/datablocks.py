@@ -6754,7 +6754,13 @@ class Datablock:
                     f"Topic {'/'.join(topic)} already reads from {target}; nothing to ship")
                 return self._nest_topic_path_(topic, target)
             self.log.detailed(f"Shipping {'/'.join(topic)} from {src_path} to {target}")
-            self._UNSAFE_copy_fs_(src_path=src_path, dst_path=target, recursive=is_dir)
+            # The trailing slash is load-bearing: fsspec nests a source DIRECTORY under
+            # a destination that already exists, so without it a re-ship, or a ship onto
+            # a prefix some earlier partial transfer created, silently lands the tree one
+            # level deep -- `<target>/<topic>/...` instead of `<target>/...`.
+            self._UNSAFE_copy_fs_(src_path=f"{str(src_path).rstrip('/')}/" if is_dir
+                                  else src_path,
+                                  dst_path=target, recursive=is_dir)
             return self._nest_topic_path_(topic, target)
         finally:
             if made:

@@ -190,3 +190,41 @@ def test_ship_redirect_refuses_a_relocation(tmp_path):
         source.UNSAFE_ship_redirect({'facts': str(tmp_path / 'repo' / 'facts.json')},
                                     relocate={'root_env': 'ROOT'}, OVERRIDE=True,
                                     show_progress=False)
+
+
+@pytest.mark.pinned
+@pytest.mark.parametrize("target_exists", [False, True], ids=['fresh', 'existing'])
+def test_a_directory_topic_ships_its_contents_whatever_is_at_the_target(block, tmp_path,
+                                                                        target_exists):
+    """`<target>/data/bc.yaml`, never `<target>/configs/data/bc.yaml`.
+
+    fsspec nests a source DIRECTORY under a destination that already exists, so without
+    a trailing slash the shape depended on whether anything had created the target --
+    which on object storage an earlier partial transfer does. A dataset shipped to the
+    lake came out one level deep, and the config pointing at it was then wrong.
+    """
+    target = tmp_path / 'repo' / 'configs'
+    if target_exists:
+        target.mkdir(parents=True)
+    block.UNSAFE_ship({'configs': str(target)}, OVERRIDE=True, overwrite=True,
+                      show_progress=False)
+
+    assert (target / 'data' / 'bc.yaml').is_file()
+    assert not (target / 'configs').exists()
+
+
+@pytest.mark.pinned
+def test_a_directory_topic_ships_its_contents_to_a_remote_target(block, tmp_path):
+    """The same, where the destination is not a local filesystem -- `put` rather than
+    `get`, which is the path a lake ship takes."""
+    import fsspec
+    memory = fsspec.filesystem('memory')
+    for path in list(memory.store):
+        memory.rm(path)
+    memory.makedirs('/repo/configs', exist_ok=True)          # the target pre-exists
+
+    block.UNSAFE_ship({'configs': 'memory:///repo/configs'}, OVERRIDE=True,
+                      overwrite=True, show_progress=False)
+
+    got = sorted(p.lstrip('/') for p in memory.find('/repo/configs'))
+    assert got == ['repo/configs/data/bc.yaml'], got

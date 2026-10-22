@@ -4036,6 +4036,16 @@ class Datablock:
             **kwargs,
         )
 
+    def ship_targets(self) -> dict:
+        """``{topic: target}`` this datablock ships to by DEFAULT; ``{}`` unless overridden.
+
+        The one place a subclass says where its generated files belong, so a caller
+        can write :meth:`UNSAFE_ship` with no arguments and still land them in the
+        right place. A subclass may take keywords of its own (which checkout, which
+        store) as long as calling it bare works.
+        """
+        return {}
+
     def UNSAFE_ship(self, targets=None, /, *, OVERRIDE: bool = False, overwrite: bool = False,
                     validate: bool = True, show_progress: bool = True, **topic_targets):
         """Copy named topics OUT, to locations a reader needs no dbx to find.
@@ -4059,8 +4069,12 @@ class Datablock:
         """
         targets = {**(dict(targets) if targets else {}), **topic_targets}
         if not targets:
+            # The subclass's own defaults -- see `ship_targets`.
+            targets = dict(self.ship_targets() or {})
+        if not targets:
             raise ValueError(
-                f"{self.__class__.__name__}.UNSAFE_ship() names no topic to ship; pass "
+                f"{self.__class__.__name__}.UNSAFE_ship() names no topic to ship, and "
+                f"{self.__class__.__name__}.ship_targets() names none either; pass "
                 f"{{topic: target}} or topic=target"
             )
         known = set(self.topics())
@@ -4100,7 +4114,11 @@ class Datablock:
         After this the shipped location is the single source of truth: :meth:`read`
         and :meth:`path` answer through it, so the block and the team are looking at
         one copy rather than two that can drift. Topics not named keep reading their
-        own data -- :meth:`UNSAFE_redirect` redirects only what it is given.
+        own data -- :meth:`UNSAFE_redirect` redirects only what it is given, and
+        :meth:`UNSAFE_clear_redirection` is what undoes it.
+
+        Shipping a topic that already reads from its target is a no-op rather than
+        an error, so calling this twice is harmless.
         """
         shipped = self.UNSAFE_ship(targets, OVERRIDE=OVERRIDE, overwrite=overwrite,
                                    validate=validate, show_progress=show_progress,
@@ -6662,9 +6680,33 @@ class Datablock:
                     f"UNSAFE_ship: {target!r} already holds data for topic "
                     f"{'/'.join(topic)!r}. Pass overwrite=True to replace it."
                 )
+        if self._same_location_(src_path, target):
+            # Already shipped and redirected onto this target: the data IS there, so
+            # re-shipping is a copy onto itself. Idempotent rather than SameFileError.
+            self.log.verbose(
+                f"Topic {'/'.join(topic)} already reads from {target}; nothing to ship")
+            return self._nest_topic_path_(topic, target)
         self.log.detailed(f"Shipping {'/'.join(topic)} from {src_path} to {target}")
         self._UNSAFE_copy_fs_(src_path=src_path, dst_path=target, recursive=is_dir)
         return self._nest_topic_path_(topic, target)
+
+    def _same_location_(self, left, right) -> bool:
+        """Whether two paths name the same data. Compared as strings, and for local
+        paths that both exist by identity, so `a/../a/x` and `a/x` are one file."""
+        left, right = str(left), str(right)
+        if left == right:
+            return True
+        try:
+            left_fs, _ = self._url_to_fs_(left)
+            right_fs, _ = self._url_to_fs_(right)
+            if left_fs is not right_fs and left_fs != right_fs:
+                return False
+            if 'file' in getattr(left_fs, 'protocol', ()):
+                return (os.path.exists(left) and os.path.exists(right)
+                        and os.path.samefile(left, right))
+            return os.path.normpath(left) == os.path.normpath(right)
+        except Exception:
+            return False
 
     @staticmethod
     def _nest_topic_path_(topic, path):

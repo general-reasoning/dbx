@@ -3502,15 +3502,21 @@ class Datablock:
                                 specialization=specialization)
 
     def redirected(self) -> bool:
-        """True if this block is redirected (checks presence of hidden .redirection topic without reading the journal)."""
+        """True if this datablock is redirected, from the hidden ``.redirection`` topic alone -- no journal read.
+
+        The DIRECTORY existing is not a redirection: ``paths.yaml`` is the only
+        file written there and the only one every reader resolves through, so a
+        ``.redirection/`` left empty -- by a cleared redirection, or by a write
+        that failed after the directory was made -- used to report True here
+        while :meth:`get_redirection` returned None for the same datablock.
+        """
         if not getattr(self, 'redirect', False):
             return False
         if '__redirected_paths__' in self.__dict__ and self.__dict__['__redirected_paths__'] is not None:
             return True
-        red_dir = os.path.join(self.anchorkeypath, '.redirection')
-        red_yaml = os.path.join(red_dir, 'paths.yaml')
+        red_yaml = os.path.join(self.anchorkeypath, '.redirection', 'paths.yaml')
         try:
-            return self.fs.exists(red_yaml) or self.fs.exists(red_dir)
+            return self.fs.exists(red_yaml)
         except Exception as e:
             self.log.detailed(f"redirected: error checking .redirection topic: {e}")
             return False
@@ -3533,6 +3539,10 @@ class Datablock:
         the hash reconstructed from it. It implies its own ``topics``, and is
         recorded as itself, so the journal says a specialization was installed
         and which one -- not merely that some paths were.
+
+        :meth:`UNSAFE_clear_redirection` undoes it, and is the only thing that
+        does: deleting ``.redirection/paths.yaml`` by hand leaves the journal's
+        record in place, and the journal is what :meth:`get_redirection` reads first.
 
         *dry_run* resolves the whole thing and reports what it WOULD record --
         to stdout, and as the :class:`Redirection` it returns -- without

@@ -27,7 +27,7 @@ class ModelEvaluator:
     Parameters
     ----------
     model
-        A pre-loaded model, a lazy-eval string (e.g. ``"$module.func()"``), or ``None``.
+        A pre-loaded model, a lazy-eval string (e.g. `"$module.func()"`), or `None`.
     capture_layers : list[str]
         Named model layers to capture.
     capture_final : bool
@@ -35,7 +35,7 @@ class ModelEvaluator:
     transform : callable, optional
         Preprocessing transform applied to inputs before forward pass.
     device : str
-        Target device string (default ``"cuda"``).
+        Target device string (default `"cuda"`).
     log : Datalog
         Datalog view.
     """
@@ -111,7 +111,7 @@ class ModelEvaluator:
 
     @property
     def layer_names(self) -> list[str]:
-        """Return the ordered list of capture keys that ``__call__`` produces."""
+        """Return the ordered list of capture keys that `__call__` produces."""
         names = list(self.capture_layers)
         if self.capture_final:
             names.append('final')
@@ -155,7 +155,7 @@ class ModelEvaluatorBuilder(Datablock):
     It exists so that feature blocks/clips can declare their evaluator configuration
     as a spec dependency, enabling deterministic hashing and lineage tracking.
 
-    Concrete subclasses may extend ``VAR`` with model-specific fields,
+    Concrete subclasses may extend `VAR` with model-specific fields,
     and give `model`, `transform` and `evaluator_kwargs`: what `evaluator()`
     constructs its `Evaluator` with.
     """
@@ -163,7 +163,7 @@ class ModelEvaluatorBuilder(Datablock):
     VERSION = 1
     Evaluator: type[ModelEvaluator] = ModelEvaluator
 
-    #: The live evaluators of this process, by ``(type(builder), builder.hash, device)``: see `evaluator`.
+    # The live evaluators of this process, by `(type(builder), builder.hash, device)`: see `evaluator`.
     _evaluator_cache: ClassVar[dict[tuple, ModelEvaluator]] = {}
 
     @dataclass
@@ -181,7 +181,7 @@ class ModelEvaluatorBuilder(Datablock):
     def evaluator(self, *, device: str = "cuda", log: Datalog | None = None) -> ModelEvaluator:
         """The live `Evaluator` on *device*, with `model` moved there.
 
-        Cached per process, by ``(type(self), self.hash, device)``: every
+        Cached per process, by `(type(self), self.hash, device)`: every
         builder of the same class and spec -- one per tablet of a feature
         table -- shares one evaluator, and its model is loaded once per device,
         as it is for the batches within a tablet. The class is in the key
@@ -260,20 +260,20 @@ class TransformerEvaluator(ModelEvaluator):
     Parameters
     ----------
     model
-        A pre-loaded model, a lazy-eval string (e.g. ``"$module.func()"``), or ``None``.
+        A pre-loaded model, a lazy-eval string (e.g. `"$module.func()"`), or `None`.
     capture_blocks : list[int] | str
-        Transformer block indices to capture, or ``'all'``.
+        Transformer block indices to capture, or `'all'`.
     capture_layers : list[str]
         Named model layers to capture.
     capture_final : bool
         Whether to capture the model's final output tensor.
     cls_token_only : bool
-        When ``True``, hooks capture only the CLS token activation (index 0 of
+        When `True`, hooks capture only the CLS token activation (index 0 of
         the sequence dimension).
     transform : callable, optional
         Preprocessing transform applied to inputs before forward pass.
     device : str
-        Target device string (default ``"cuda"``).
+        Target device string (default `"cuda"`).
     log : Datalog
         Datalog view.
     """

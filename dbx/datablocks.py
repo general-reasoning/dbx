@@ -1,21 +1,21 @@
 """Core framework classes: Datablock, Datastack, and remote execution.
 
-The journals blocks record their builds in are in :mod:`dbx.journals`.
+The journals blocks record their builds in are in `dbx.journals`.
 
 This module defines the central abstractions of dbx:
 
-- :class:`Datablock` — a config-addressed, journaled unit of computation.
+- `Datablock` — a config-addressed, journaled unit of computation.
   Each block is uniquely identified by a SHA-256 hash derived from its
-  fully-qualified class name, configuration (``spec``), and version.
+  fully-qualified class name, configuration (`spec`), and version.
   Builds are journaled as Parquet entries for full reproducibility.
 
-- :class:`Datastack` — a Datablock that orchestrates the parallel
+- `Datastack` — a Datablock that orchestrates the parallel
   construction of child Datablocks (blocks).
 
-- :class:`Remote` / :func:`remote` — Ray-based remote execution of
+- `Remote` / `remote` — Ray-based remote execution of
   dbx pipelines.
 
-- :class:`SlurmRayCluster` — Slurm integration for launching Ray clusters.
+- `SlurmRayCluster` — Slurm integration for launching Ray clusters.
 """
 import argparse
 import ast
@@ -122,9 +122,9 @@ __version__ = "0.2.0"
 class _SentinelMeta_(type):
     """A sentinel that is its own class: one object, usable as a value and in an annotation.
 
-    ``x: int | None | ABSENT = ABSENT`` works as ``str | None`` does, because the
+    `x: int | None | ABSENT = ABSENT` works as `str | None` does, because the
     sentinel is a type -- and pickle and copy keep it one object, since a class
-    is always taken by reference. It renders as its ``REPR`` and is truthy
+    is always taken by reference. It renders as its `REPR` and is truthy
     unless it says otherwise; it is never instantiated.
     """
 
@@ -141,11 +141,11 @@ class _SentinelMeta_(type):
 
 
 class ABSENT(metaclass=_SentinelMeta_):
-    """Marks a key present on only ONE side of a :meth:`Datablock.diffsig`.
+    """Marks a key present on only ONE side of a `Datablock.diffsig`.
 
-    Needed because diffsubsig reports typed values: a key whose value *is* ``None``
+    Needed because diffsubsig reports typed values: a key whose value *is* `None`
     and a key that is missing entirely would otherwise both come back as
-    ``None``, which are very different findings -- "this setting changed to None"
+    `None`, which are very different findings -- "this setting changed to None"
     versus "this setting did not exist when that build ran".
     """
     REPR = '<absent>'
@@ -153,7 +153,7 @@ class ABSENT(metaclass=_SentinelMeta_):
 
 
 class SAME(metaclass=_SentinelMeta_):
-    """A :class:`Datablock.Specialization`'s anchor when it is its block's own.
+    """A `Datablock.Specialization`'s anchor when it is its block's own.
 
     The default, and the behaviour from before a specialization could name one:
     the narrower block is looked for in the journal of the block declaring it.
@@ -161,8 +161,8 @@ class SAME(metaclass=_SentinelMeta_):
     since renamed, whose fqcn is the directory its journal is in.
 
     A class used as a value, as the topic markers are, so that it can stand in
-    an annotation -- ``anchor: str | SAME = SAME`` -- as ``None`` does in
-    ``str | None``. See `_SentinelMeta_`.
+    an annotation -- `anchor: str | SAME = SAME` -- as `None` does in
+    `str | None`. See `_SentinelMeta_`.
     """
 
 
@@ -174,7 +174,7 @@ class BY_HASH(metaclass=_SentinelMeta_):
     `BuildJournal.read_hash`, which lists only the directories that hash can
     be filed in, and a hash filed nowhere is a past that never was -- not a
     reason to read every entry the anchor has. Reading those took minutes over
-    thousands of blocks (11,079 entries, 423 s, for ``DeepFeatureBag``), once
+    thousands of blocks (11,079 entries, 423 s, for `DeepFeatureBag`), once
     per build, to adopt nothing when the blocks were new. See
     `Datastack._build_journal_`.
     """
@@ -192,14 +192,14 @@ class LegacyTopicsWarning(UserWarning):
 
 
 class SIGNATURE_TOPICS(metaclass=_SentinelMeta_):
-    """The key under which :meth:`Datablock.difftopics` reports a whole-rendering
+    """The key under which `Datablock.difftopics` reports a whole-rendering
     difference -- one that belongs to no single topic.
 
-    Two of those exist. The topics are joined into the :attr:`Datablock.signature`
+    Two of those exist. The topics are joined into the `Datablock.signature`
     in declaration order, so the same topics declared in a different order are a
     different signature and a different hash, though no one topic changed. And a
-    block declaring ``TOPICS = {}`` contributes no segment at all where a block
-    declaring none contributes ``topics:None``, which again differs without any
+    block declaring `TOPICS = {}` contributes no segment at all where a block
+    declaring none contributes `topics:None`, which again differs without any
     topic differing.
 
     Reported under a sentinel rather than a string key so it cannot collide with
@@ -208,46 +208,46 @@ class SIGNATURE_TOPICS(metaclass=_SentinelMeta_):
     REPR = '<signature topics>'
 
 
-#: The filename of a directory topic in a dict-valued ``TOPICS``, i.e. no file
-#: at all -- the topic IS the directory::
-#:
-#:     TOPICS = {'images': 'images.csv', 'masks': DIRTOPIC}
-#:
-#: It is literally ``None``, which is what the topic machinery has always
-#: tested for, so ``{'masks': None}`` stays valid and identical. The name only
-#: says out loud what a bare ``None`` leaves the reader to infer -- and reads
-#: correctly against a topic whose filename is genuinely unset.
+# The filename of a directory topic in a dict-valued `TOPICS`, i.e. no file
+# at all -- the topic IS the directory:
+#
+#     TOPICS = {'images': 'images.csv', 'masks': DIRTOPIC}
+#
+# It is literally `None`, which is what the topic machinery has always
+# tested for, so `{'masks': None}` stays valid and identical. The name only
+# says out loud what a bare `None` leaves the reader to infer -- and reads
+# correctly against a topic whose filename is genuinely unset.
 DIRTOPIC = None
 
-#: A SYNTHETIC topic: one the block presents but never stores, so it has no
-#: location -- neither a file nor a directory::
-#:
-#:     TOPICS = {'data': 'data.parquet', 'cache': SYNTOPIC}
-#:
-#: ``path()`` and ``dirpath()`` are both ``None``, nothing on the filesystem is
-#: created, listed, copied or cleared for it, and it is vacuously valid -- a
-#: topic that was never going to be written cannot be missing, so it must not
-#: hold the block back from being built or read as valid.
-#:
-#: Distinct from :data:`DIRTOPIC`, which IS a location: a real directory that
-#: merely has no filename inside it. The empty tuple is used precisely so the
-#: two cannot collide -- it is falsy like ``None`` but never equal to it, and
-#: in CPython it is interned, so ``is SYNTOPIC`` is an exact test.
+# A SYNTHETIC topic: one the block presents but never stores, so it has no
+# location -- neither a file nor a directory:
+#
+#     TOPICS = {'data': 'data.parquet', 'cache': SYNTOPIC}
+#
+# `path()` and `dirpath()` are both `None`, nothing on the filesystem is
+# created, listed, copied or cleared for it, and it is vacuously valid -- a
+# topic that was never going to be written cannot be missing, so it must not
+# hold the block back from being built or read as valid.
+#
+# Distinct from `DIRTOPIC`, which IS a location: a real directory that
+# merely has no filename inside it. The empty tuple is used precisely so the
+# two cannot collide -- it is falsy like `None` but never equal to it, and
+# in CPython it is interned, so `is SYNTOPIC` is an exact test.
 SYNTOPIC = ()
 
 
 class TopicMarkerMeta(type):
     """Renders a topic marker as the declaration that made it.
 
-    A leaf reaches :meth:`Datablock._topics_signature_` as ``str(node)``, and the
-    journal records ``str(TOPICS)``, which ``repr``s it -- so a marker has to
+    A leaf reaches `Datablock._topics_signature_` as `str(node)`, and the
+    journal records `str(TOPICS)`, which `repr`s it -- so a marker has to
     spell itself the same way in both, and that spelling has to be text that
-    :func:`literal_topics` reads back into this very class.
+    `literal_topics` reads back into this very class.
     """
 
-    #: ``{name: marker}`` for every marker a declaration may name, so a recorded
-    #: ``{'masks': DIR}`` reads back as the class DIR while ``{'masks': 'DIR'}``
-    #: stays a topic stored in a file called ``DIR``.
+    # `{name: marker}` for every marker a declaration may name, so a recorded
+    # `{'masks': DIR}` reads back as the class DIR while `{'masks': 'DIR'}`
+    # stays a topic stored in a file called `DIR`.
     REGISTRY = {}
 
     def __init__(cls, name, bases, namespace, **kwargs):
@@ -275,7 +275,7 @@ class TopicMarkerMeta(type):
 def _reduce_marker_(marker):
     """Pickle a topic marker: a declared one by its name, a parameterised one as the call that made it.
 
-    ``DATAFILE('tabs.json', 'a note')`` is a class made on the call, under the name ``DATAFILE``, which
+    `DATAFILE('tabs.json', 'a note')` is a class made on the call, under the name `DATAFILE`, which
     is another class: pickled by name, it would be refused as "not the same object". Its rendering is
     its identity and `literal_topics` reads it back, so that is what travels -- to a worker, say, inside
     a specialization naming a narrower block's topics.
@@ -294,21 +294,21 @@ copyreg.pickle(TopicMarkerMeta, _reduce_marker_)
 
 
 class TOPICMARKER(metaclass=TopicMarkerMeta):
-    """Base of the topic markers: :class:`DATADIR`, :class:`SYNTHETIC`, ``DATAFILE``, ``DATASLICE``.
+    """Base of the topic markers: `DATADIR`, `SYNTHETIC`, `DATAFILE`, `DATASLICE`.
 
     A marker says what a topic IS.  The sentinels say it by what value they
-    happen to be -- :data:`DIRTOPIC` is ``None`` and :data:`SYNTOPIC` the empty
+    happen to be -- `DIRTOPIC` is `None` and `SYNTOPIC` the empty
     tuple -- which a reader has to know by heart and which a filename can be
-    mistaken for.  A marker is a CLASS and never a string, so ``{'masks': DIR}``
-    and ``{'masks': 'DIR'}`` are different declarations and stay different
+    mistaken for.  A marker is a CLASS and never a string, so `{'masks': DIR}`
+    and `{'masks': 'DIR'}` are different declarations and stay different
     everywhere: the first is a directory topic, the second a topic stored in a
-    file named ``DIR``.  Which is why a filename renders quoted under the flag
-    and a marker does not -- see :meth:`Datablock._topictext_`.
+    file named `DIR`.  Which is why a filename renders quoted under the flag
+    and a marker does not -- see `Datablock._topictext_`.
 
     A declaration that holds a marker IS a modern one -- there is nothing else
     it could mean, so nothing announces it.  It may hold no sentinel as well:
     one declaration renders one way, and the two spellings render differently
-    (``topic:masks=DIR`` against ``topic:masks=None``, and a filename quoted
+    (`topic:masks=DIR` against `topic:masks=None`, and a filename quoted
     against bare), so a mixture is refused rather than left to render half of
     itself each way.
 
@@ -332,15 +332,15 @@ def _check_note_(kind, note):
 
 
 class _NotedMarkerMeta_(TopicMarkerMeta):
-    """Makes ``DATADIR('per-frame masks')`` a marker carrying that note.
+    """Makes `DATADIR('per-frame masks')` a marker carrying that note.
 
     The note is documentation that reaches the identity: it renders into the
     type string, so writing one re-keys the block that writes it.  That is the
     price of it being recorded at all, and it is paid only by a declaration
-    that asks for it -- ``DATADIR`` bare renders exactly as ``DIR`` always has.
+    that asks for it -- `DATADIR` bare renders exactly as `DIR` always has.
 
     A call with no note returns the class ITSELF rather than an empty subclass,
-    so ``DATADIR() is DATADIR`` and the two spell the same thing.
+    so `DATADIR() is DATADIR` and the two spell the same thing.
     """
 
     def __call__(cls, note=None):
@@ -357,50 +357,50 @@ class _NotedMarkerMeta_(TopicMarkerMeta):
 
 
 class SYNTHETIC(TOPICMARKER, metaclass=_NotedMarkerMeta_):
-    """A synthetic topic: presented, never stored.  :data:`SYNTOPIC` as a marker.
+    """A synthetic topic: presented, never stored.  `SYNTOPIC` as a marker.
 
-    ``path()`` and ``dirpath()`` are both ``None``, nothing is created, listed,
+    `path()` and `dirpath()` are both `None`, nothing is created, listed,
     copied or cleared for it, and it is vacuously valid.
 
-    Takes an optional note -- ``SYNTHETIC('derived on read')`` -- which renders
-    and so re-keys.  Bare ``SYNTHETIC`` renders as itself, exactly as before,
+    Takes an optional note -- `SYNTHETIC('derived on read')` -- which renders
+    and so re-keys.  Bare `SYNTHETIC` renders as itself, exactly as before,
     so no existing declaration moves.
     """
 
-    #: Unset on the bare marker, and set by the call that parameterises it.
+    # Unset on the bare marker, and set by the call that parameterises it.
     note = None
 
 
 class DATADIR(TOPICMARKER, metaclass=_NotedMarkerMeta_):
-    """A directory topic: the topic IS the directory.  :data:`DIRTOPIC` as a marker.
+    """A directory topic: the topic IS the directory.  `DIRTOPIC` as a marker.
 
-    A location, unlike :class:`SYNTHETIC` -- a real directory that merely has no
-    filename inside it -- and it may say what is in it::
+    A location, unlike `SYNTHETIC` -- a real directory that merely has no
+    filename inside it -- and it may say what is in it:
 
         TOPICS = {'masks': DATADIR('one PNG per frame')}
 
-    The base of every directory marker: ``DATASLICE`` is one, because a slice
-    IS a directory, and so is the deprecated :class:`DIR`. Every test that asks
-    whether a topic is a directory asks ``is_topicmarker(node, DATADIR)``.
+    The base of every directory marker: `DATASLICE` is one, because a slice
+    IS a directory, and so is the deprecated `DIR`. Every test that asks
+    whether a topic is a directory asks `is_topicmarker(node, DATADIR)`.
     """
 
-    #: Unset on the bare marker, and set by the call that parameterises it.
+    # Unset on the bare marker, and set by the call that parameterises it.
     note = None
 
 
 class DIR(DATADIR):
-    """Deprecated: :class:`DATADIR`, under the name it had first.
+    """Deprecated: `DATADIR`, under the name it had first.
 
-    A subclass that renders as ``DIR``, not an alias: the rendering is the
-    identity, so ``DIR = DATADIR`` would re-key every block that ever declared
-    ``DIR``. A class declaring it is warned (`LegacyTopicsWarning`); respell it
-    ``DATADIR`` and keep ``DIR`` in a ``Specialization(spec={}, topics=...)`` to
+    A subclass that renders as `DIR`, not an alias: the rendering is the
+    identity, so `DIR = DATADIR` would re-key every block that ever declared
+    `DIR`. A class declaring it is warned (`LegacyTopicsWarning`); respell it
+    `DATADIR` and keep `DIR` in a `Specialization(spec={}, topics=...)` to
     reach what was built under it.
     """
 
 
 class _DataFileMeta_(TopicMarkerMeta):
-    """Makes ``DATAFILE('rows.csv', 'one row per frame')`` a marker carrying both."""
+    """Makes `DATAFILE('rows.csv', 'one row per frame')` a marker carrying both."""
 
     def __call__(cls, filename, note=None):
         cls._check_filename_(filename)
@@ -421,12 +421,12 @@ class _DataFileMeta_(TopicMarkerMeta):
 
 
 class DATAFILE(TOPICMARKER, metaclass=_DataFileMeta_):
-    """A topic stored as one file, named and optionally described::
+    """A topic stored as one file, named and optionally described:
 
         TOPICS = {'rows': DATAFILE('rows.csv', 'one row per frame')}
 
-    The marker spelling of a bare filename.  ``DATAFILE('rows.csv')`` and
-    ``'rows.csv'`` name the same file, and differ only in what they render as
+    The marker spelling of a bare filename.  `DATAFILE('rows.csv')` and
+    `'rows.csv'` name the same file, and differ only in what they render as
     -- which is why adopting the marker re-keys the block, and why the bare
     string goes on working untouched for every block that has not.
 
@@ -437,11 +437,11 @@ class DATAFILE(TOPICMARKER, metaclass=_DataFileMeta_):
     re-keys the block, the same as changing anything else that renders.
     """
 
-    #: Unset on the bare marker, and set by the call that parameterises it.
-    #: A bare DATAFILE names no file -- see :func:`_topic_filename_`.
+    # Unset on the bare marker, and set by the call that parameterises it.
+    # A bare DATAFILE names no file -- see `_topic_filename_`.
     filename = None
 
-    #: Unset unless the declaration gave one.
+    # Unset unless the declaration gave one.
     note = None
 
     @staticmethod
@@ -460,11 +460,11 @@ class DATAFILE(TOPICMARKER, metaclass=_DataFileMeta_):
 
 
 class _DataDictMeta_(_DataFileMeta_):
-    """Makes ``DATADICT('meta.json', run=dict(id='str'))`` a marker carrying that schema.
+    """Makes `DATADICT('meta.json', run=dict(id='str'))` a marker carrying that schema.
 
     A call returns a SUBCLASS rather than an instance, exactly as
-    ``DATASLICE``'s does, so everything a TOPICS declaration holds is a class
-    and one test -- :func:`is_topicmarker` -- recognises the lot of them.
+    `DATASLICE`'s does, so everything a TOPICS declaration holds is a class
+    and one test -- `is_topicmarker` -- recognises the lot of them.
     """
 
     def __call__(cls, filename, *mapping, **typed):
@@ -492,23 +492,23 @@ class _DataDictMeta_(_DataFileMeta_):
 
 
 class DATADICT(DATAFILE, metaclass=_DataDictMeta_):
-    """A topic stored as ONE FILE holding a dict, declared with its schema::
+    """A topic stored as ONE FILE holding a dict, declared with its schema:
 
         TOPICS = {'meta': DATADICT('meta.json', rows='int',
                                    run=dict(id='str', started='str'))}
 
     A file topic, not a directory: the filename is the marker's first argument
-    and is where the data lands, so ``DATADICT('meta.json')`` and the plain
-    string ``'meta.json'`` name the same file.  What the marker adds is the
+    and is where the data lands, so `DATADICT('meta.json')` and the plain
+    string `'meta.json'` name the same file.  What the marker adds is the
     SHAPE of what is in it -- which a bare filename says nothing about, leaving
     every reader to open the file to find out, and leaving a schema free to
     change under artifacts that go on claiming to be the same block.
 
-    A value is a dtype name as a string, or a nested ``dict(...)`` for a nested
+    A value is a dtype name as a string, or a nested `dict(...)` for a nested
     key.  Both render into the type string --
-    ``topic:meta=DATADICT('meta.json', rows='int', run=dict(id='str'))`` -- so
+    `topic:meta=DATADICT('meta.json', rows='int', run=dict(id='str'))` -- so
     adding, dropping, retyping or REORDERING a key re-keys the block, the same
-    way ``DATASLICE``'s columns do.
+    way `DATASLICE`'s columns do.
 
     Documentation, not enforcement: nothing yet checks that what is written
     matches what is declared.  The declaration is still worth having before the
@@ -516,13 +516,13 @@ class DATADICT(DATAFILE, metaclass=_DataDictMeta_):
     because it is in the hash either way.
     """
 
-    #: Unset on the bare marker, and set by the call that parameterises it.
-    #: A bare DATADICT names no file and cannot locate a topic -- see
-    #: :func:`_topic_filename_`.
+    # Unset on the bare marker, and set by the call that parameterises it.
+    # A bare DATADICT names no file and cannot locate a topic -- see
+    # `_topic_filename_`.
     filename = None
 
-    #: ``{key: dtype | {key: ...}}``.  Empty when the file's shape is declared
-    #: nowhere, which is the bare filename's behaviour under this spelling.
+    # `{key: dtype | {key: ...}}`.  Empty when the file's shape is declared
+    # nowhere, which is the bare filename's behaviour under this spelling.
     schema = {}
 
     @classmethod
@@ -551,13 +551,13 @@ class DATADICT(DATAFILE, metaclass=_DataDictMeta_):
                 )
 
 
-#: One node of a TOPICS declaration: a marker -- ``DATAFILE('x')``, ``DATADICT(...)``,
-#: ``DATADIR``, ``DATASLICE(...)``, ``SYNTHETIC`` -- or, in the older spellings a
-#: Specialization may still have to say, a bare filename, ``DIRTOPIC`` (None),
-#: ``SYNTOPIC`` (``()``) or ``SLICETOPIC``. A dict groups nodes under a name.
+# One node of a TOPICS declaration: a marker -- `DATAFILE('x')`, `DATADICT(...)`,
+# `DATADIR`, `DATASLICE(...)`, `SYNTHETIC` -- or, in the older spellings a
+# Specialization may still have to say, a bare filename, `DIRTOPIC` (None),
+# `SYNTOPIC` (`()`) or `SLICETOPIC`. A dict groups nodes under a name.
 TopicNode = Union[type[TOPICMARKER], str, None, tuple[()], dict[str, 'TopicNode']]
 
-#: A TOPICS declaration: ``{topic name: TopicNode}``.
+# A TOPICS declaration: `{topic name: TopicNode}`.
 Topics = dict[str, TopicNode]
 
 
@@ -568,17 +568,17 @@ class forward_property:
     holding only the class can be told, and a promise every instance keeps. On
     an instance it is the decorated method's value, which may say more --
     computed once, checked against the promise, and cached in the instance's
-    ``__dict__`` under its own name, as with `functools.cached_property`.
+    `__dict__` under its own name, as with `functools.cached_property`.
 
     Made for a TOPICS the instance declares. A table reads its TABLET's slice
     NAMES off the TABLET class, before any tablet exists; a tablet's full declaration --
-    the slice's columns -- follows from its VAR::
+    the slice's columns -- follows from its VAR:
 
         @forward_property({'features': DATASLICE})
         def TOPICS(self):
             return {'features': DATASLICE({c: 'ndarray:float32' for c in self.feature_for_column})}
 
-    The class says "a ``features`` slice"; each tablet says which columns. A plain
+    The class says "a `features` slice"; each tablet says which columns. A plain
     `property` cannot: on the class it is the property object, and a table
     reading one finds no slices and says nothing.
 
@@ -586,15 +586,15 @@ class forward_property:
     value is computed, rather than wherever it would otherwise fail:
 
     - a class (a topic marker included): the instance's value is it, a
-      subclass of it, or an instance of it -- ``DATASLICE(final='ndarray:float32')``
-      refines ``DATASLICE``, a part's ``Featuretablet`` refines ``Datatablet``, and
-      ``'final'`` refines ``str``;
+      subclass of it, or an instance of it -- `DATASLICE(final='ndarray:float32')`
+      refines `DATASLICE`, a part's `Featuretablet` refines `Datatablet`, and
+      `'final'` refines `str`;
     - a dict: every key it declares is the instance's too, each refined in
       turn; the instance may declare more;
     - None: no promise;
     - anything else: equal, by value or as rendered.
 
-    A non-data descriptor -- no ``__set__`` -- so assigning the attribute on an
+    A non-data descriptor -- no `__set__` -- so assigning the attribute on an
     instance replaces it, as it would a cached_property. It is not pickled with
     the block (`Datablock.__getstate__` keeps the explicit parameters only), so
     an unpickled block computes it again from its own VAR.
@@ -638,7 +638,7 @@ class forward_property:
 
 
 def refines(value, promise, _path=()):
-    """None when *value* keeps the forward declaration *promise*; else ``(path, why)``.
+    """None when *value* keeps the forward declaration *promise*; else `(path, why)`.
 
     See `forward_property` for what each kind of promise asks.
     """
@@ -677,7 +677,7 @@ def _check_forward_override_(cls, name: str) -> None:
     a subclass hides the descriptor -- for the class AND for every instance. A
     copy of the forward declaration therefore replaces each instance's own
     value with the placeholder, and nothing says so: for a `Featuretablet`, every
-    tablet then declares a ``features`` slice without columns, its hash moves, and
+    tablet then declares a `features` slice without columns, its hash moves, and
     whatever reads the columns fails far from here. A DIFFERENT value is taken
     as a deliberate override, and stands.
     """
@@ -714,13 +714,13 @@ def is_topicmarker(node, kind=TOPICMARKER):
 
 
 def _render_columns_(columns):
-    """A marker's ``columns`` as the call arguments that reconstruct it.
+    """A marker's `columns` as the call arguments that reconstruct it.
 
     Keyword form when every name is an identifier, which is what a declaration
-    almost always looks like, and the mapping form when one is not -- ``DATASLICE``
+    almost always looks like, and the mapping form when one is not -- `DATASLICE`
     accepts both, so either rendering reads back as the same marker.  A column
-    declared by the structure of the dict it holds renders as ``dict(...)``, as a
-    ``DATADICT`` nested key does; a column declared by its MDS type renders as it
+    declared by the structure of the dict it holds renders as `dict(...)`, as a
+    `DATADICT` nested key does; a column declared by its MDS type renders as it
     always has.
     """
     if all(isinstance(name, str) and name.isidentifier() for name in columns):
@@ -731,13 +731,13 @@ def _render_columns_(columns):
 
 
 def _render_schema_(schema):
-    """A ``DATADICT`` schema as the call arguments that reconstruct it.
+    """A `DATADICT` schema as the call arguments that reconstruct it.
 
     Keyword form when every key is an identifier, and the mapping form when one
-    is not -- the same rule :func:`_render_columns_` follows, and for the same
+    is not -- the same rule `_render_columns_` follows, and for the same
     reason: either rendering reads back as the same marker.  A nested key
-    renders as ``dict(...)`` under the keyword form and as a plain dict literal
-    under the mapping form, and :func:`_topic_literal_` reads both.
+    renders as `dict(...)` under the keyword form and as a plain dict literal
+    under the mapping form, and `_topic_literal_` reads both.
     """
     if not schema:
         return ''
@@ -753,8 +753,8 @@ def _render_schema_(schema):
 def _topic_filename_(node):
     """The filename a topic leaf stores its data under.
 
-    A plain string IS the filename; a :class:`DATAFILE` carries one, and so
-    does every marker that is one -- :class:`DATADICT` included.  Every
+    A plain string IS the filename; a `DATAFILE` carries one, and so
+    does every marker that is one -- `DATADICT` included.  Every
     other leaf -- a directory, a synthetic topic -- has no filename and never
     reaches here, since the callers test for those first.
     """
@@ -770,7 +770,7 @@ def _topic_filename_(node):
 
 
 def _legacy_topics_(topics, prefix=()):
-    """The topics of a TOPICS declaration spelled the pre-marker way, as ``'a/b'`` paths."""
+    """The topics of a TOPICS declaration spelled the pre-marker way, as `'a/b'` paths."""
     if isinstance(topics, list):
         return [f"the list form ({', '.join(map(str, topics))})" if topics else "the list form"]
     if not isinstance(topics, dict):
@@ -786,11 +786,11 @@ def _legacy_topics_(topics, prefix=()):
 
 
 def literal_topics(text):
-    """A recorded ``str(TOPICS)`` back as a TOPICS declaration.
+    """A recorded `str(TOPICS)` back as a TOPICS declaration.
 
-    :func:`ast.literal_eval` with the markers added to its grammar: a bare name
+    `ast.literal_eval` with the markers added to its grammar: a bare name
     is the marker declared under it, and a call is that marker parameterised.
-    So the distinction a declaration drew between ``DIR`` and ``'DIR'`` survives
+    So the distinction a declaration drew between `DIR` and `'DIR'` survives
     a round trip through the journal, where both are just text in a column.
 
     A parse, not an eval -- nothing outside the marker registry is resolved, and
@@ -804,7 +804,7 @@ def literal_topics(text):
 
 
 def _topic_literal_(node):
-    """One :mod:`ast` node of a recorded TOPICS as the value it stands for."""
+    """One `ast` node of a recorded TOPICS as the value it stands for."""
     if isinstance(node, ast.Dict):
         return {_topic_literal_(k): _topic_literal_(v)
                 for k, v in zip(node.keys, node.values)}
@@ -850,7 +850,7 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
     url : str, optional
         Storage URL for reading journals.
     events : list[str] | str, optional
-        Event name(s) to check validity for. Defaults to ``['build:end']``.
+        Event name(s) to check validity for. Defaults to `['build:end']`.
     **kwargs
         Additional keyword arguments forwarded to journal query.
 
@@ -974,9 +974,9 @@ def valid(*args, n_workers=None, summary=False, datalake=None, events=None, url=
 class _ClassOrInstance_:
     """A read-only attribute that answers on the class and on an instance alike.
 
-    ``Cls.x`` is ``for_class(Cls)`` and ``obj.x`` is ``for_instance(obj)`` --
+    `Cls.x` is `for_class(Cls)` and `obj.x` is `for_instance(obj)` --
     so what a class says about all its instances (its anchor) and what one
-    instance says about itself (an ``anchor=`` it was given) are one name.
+    instance says about itself (an `anchor=` it was given) are one name.
     """
 
     def __init__(self, for_class, for_instance, doc=None):
@@ -987,20 +987,20 @@ class _ClassOrInstance_:
         return self.for_class(owner) if obj is None else self.for_instance(obj)
 
 
-#: The ``use_specializations`` a stack's ``use_block_specializations`` gives the
-#: blocks it is forming, innermost last -- per thread, since blocks are formed
-#: in parallel. A block's own ``use_specializations=`` wins over it.
+# The `use_specializations` a stack's `use_block_specializations` gives the
+# blocks it is forming, innermost last -- per thread, since blocks are formed
+# in parallel. A block's own `use_specializations=` wins over it.
 _BLOCK_SPECIALIZATIONS = threading.local()
 
 
-#: The journals stacks have read for the blocks they are forming, innermost
-#: last -- per thread -- each a `BuildJournalFrame` with its ``read_anchor``. A block of that anchor, in
-#: that datalake, resolves its specializations against it instead of reading
-#: the journal itself: which is what a block formed in a WORKER needs, since
-#: the stack that read it is in another process.
+# The journals stacks have read for the blocks they are forming, innermost
+# last -- per thread -- each a `BuildJournalFrame` with its `read_anchor`. A block of that anchor, in
+# that datalake, resolves its specializations against it instead of reading
+# the journal itself: which is what a block formed in a WORKER needs, since
+# the stack that read it is in another process.
 _FORMING_JOURNALS = threading.local()
 
-#: What builds a `BuildJournal` or `BuildJournalFrame` is named for it: old name -> new.
+# What builds a `BuildJournal` or `BuildJournalFrame` is named for it: old name -> new.
 _RENAMED_BUILDJOURNAL_BUILDERS_ = {
     'journal': 'buildjournal',
     'Journal': 'BuildJournal',
@@ -1018,7 +1018,7 @@ _RENAMED_BUILDJOURNAL_BUILDERS_ = {
 
 @contextlib.contextmanager
 def forming_with_journal(journal):
-    """Blocks formed inside resolve against *journal* -- when it is theirs: its ``read_anchor`` and ``read_datalake``.
+    """Blocks formed inside resolve against *journal* -- when it is theirs: its `read_anchor` and `read_datalake`.
 
     What a block-forming callable wraps its forming in, having been handed the
     journal its stack read -- as a ctx kwarg, once per worker. None forms
@@ -1049,15 +1049,15 @@ def _forming_journal_(anchor, datalake):
     return None
 
 
-#: Pushed by a stack forming a block with no setting of its own, so that an
-#: outer stack's -- or a query's -- does not reach it: a block formed for a
-#: stack's cache must be formed as that stack forms it, whatever is in progress
-#: around it.
+# Pushed by a stack forming a block with no setting of its own, so that an
+# outer stack's -- or a query's -- does not reach it: a block formed for a
+# stack's cache must be formed as that stack forms it, whatever is in progress
+# around it.
 _OWN_SETTING = object()
 
 
 def _forming_with_specializations_():
-    """The ``use_specializations`` the innermost stack forming a block asks for, or None."""
+    """The `use_specializations` the innermost stack forming a block asks for, or None."""
     stack = getattr(_BLOCK_SPECIALIZATIONS, 'stack', None)
     top = stack[-1] if stack else None
     return None if top is _OWN_SETTING else top
@@ -1066,12 +1066,12 @@ def _forming_with_specializations_():
 gitwrkreposetup(reason="datablocks import")
 
 
-#: A dotted module path before a function's name and its ``:`` -- an entrypoint's tag, ``pkg.mod.f:NAME``.
+# A dotted module path before a function's name and its `:` -- an entrypoint's tag, `pkg.mod.f:NAME`.
 _TAG_MODULE_ = re.compile(r'\b(?:[A-Za-z_]\w*\.)+(?=[A-Za-z_]\w*:)')
 
 
 def shown_tag(tag: str) -> str:
-    """*tag* as a log line shows it: each entrypoint's module path dropped -- ``f:NAME`` for ``pkg.mod.f:NAME``.
+    """*tag* as a log line shows it: each entrypoint's module path dropped -- `f:NAME` for `pkg.mod.f:NAME`.
 
     A pipeline function's name is unique where it is used; the module adds a line's worth of
     width and nothing to read. The journals keep the tag whole.
@@ -1081,7 +1081,7 @@ def shown_tag(tag: str) -> str:
 
 class Datablock:
     """
-    Declare topics via TOPICS::
+    Declare topics via TOPICS:
 
         TOPICS = ['images', 'masks']                             # directory topics
         TOPICS = {'images': 'images.csv', 'masks': DIRTOPIC}     # file and directory
@@ -1089,12 +1089,12 @@ class Datablock:
         TOPICS = {'data': 'data.parquet', 'cache': SYNTOPIC}     # 'cache' is synthetic
 
     TOPICS must be a list or a dict.  Every topic has a name.  In the dict form
-    a filename of :data:`DIRTOPIC` (which is ``None``) marks a directory topic,
-    the same thing every entry of the list form is; :data:`SYNTOPIC` marks a
-    synthetic topic -- one that is never stored, so ``path()`` and ``dirpath()``
-    are ``None``, nothing is created or copied, and validity is vacuous.
+    a filename of `DIRTOPIC` (which is `None`) marks a directory topic,
+    the same thing every entry of the list form is; `SYNTOPIC` marks a
+    synthetic topic -- one that is never stored, so `path()` and `dirpath()`
+    are `None`, nothing is created or copied, and validity is vacuous.
 
-    A dict value may itself be a dict, which nests topics::
+    A dict value may itself be a dict, which nests topics:
 
         TOPICS = {
             'data': {'frames': DIRTOPIC, 'annotations': SYNTOPIC,
@@ -1102,16 +1102,16 @@ class Datablock:
             'model': 'model.pt',
         }
 
-    Every topic-addressing method then takes one name per level -- ``path('data',
-    'frames')``, ``read('data', 'annotations')``, ``ls``, ``size``,
-    ``validtopic`` -- and the nesting is mirrored on disk under the block's key.
-    A GROUP is addressable in its own right: ``dirpath('data')`` is the parent
-    directory of its members, ``path('data')`` is the dict of their paths, and
-    ``validtopic('data')`` is true when every leaf beneath it is.
-    :meth:`leaftopics` enumerates the leaves as name tuples.  A topic name may
-    not contain ``'/'``, which is the separator the signature nests with.
+    Every topic-addressing method then takes one name per level -- `path('data',
+    'frames')`, `read('data', 'annotations')`, `ls`, `size`,
+    `validtopic` -- and the nesting is mirrored on disk under the block's key.
+    A GROUP is addressable in its own right: `dirpath('data')` is the parent
+    directory of its members, `path('data')` is the dict of their paths, and
+    `validtopic('data')` is true when every leaf beneath it is.
+    `leaftopics` enumerates the leaves as name tuples.  A topic name may
+    not contain `'/'`, which is the separator the signature nests with.
 
-    Storage layout::
+    Storage layout:
 
         protocol://path --- module/class/ --- topic [--- file]
                url            [anchor]        [topic]   [file]
@@ -1122,7 +1122,7 @@ class Datablock:
         dirpath:            '{root}/{anchor}/{key}/topic'
         path:               '{root}/{anchor}/{key}/topic/{TOPICS[topic]}'
 
-    Attributes::
+    Attributes:
 
         self._url_ = URL as supplied to the dunders (a specline, or None);
                      the underscores are theirs, worn by what was supplied
@@ -1151,9 +1151,9 @@ class Datablock:
     # and reprs spec values exactly once, which removes both collisions -- and
     # necessarily changes the hash. Existing subclasses set it to True so their
     # already-computed hashes, keys and storage paths stay valid.
-    #: Journal column order: identity first, then when, then where, then what
-    #: was recorded, and the event last. Columns not listed here are kept, in
-    #: their own order, just ahead of 'event'.
+    # Journal column order: identity first, then when, then where, then what
+    # was recorded, and the event last. Columns not listed here are kept, in
+    # their own order, just ahead of 'event'.
     JOURNAL_COLUMNS = [
         'hash', 'code', 'tree', 'session', 'id',
         'datetime', 'build:start:datetime', 'build:end:datetime',
@@ -1167,10 +1167,10 @@ class Datablock:
     LEGACY_NORM = False
     LEGACY_SIGNATURE = False
 
-    #: Render signature/type the pre-typing way.  LEGACY_SIGNATURE is accepted
-    #: as an equivalent spelling, and LEGACY_NORM still implies it, so a
-    #: subclass already pinned to the old rendering keeps its hashes without
-    #: being touched.
+    # Render signature/type the pre-typing way.  LEGACY_SIGNATURE is accepted
+    # as an equivalent spelling, and LEGACY_NORM still implies it, so a
+    # subclass already pinned to the old rendering keeps its hashes without
+    # being touched.
     LEGACY_TYPING = False
 
     @dataclass
@@ -1185,10 +1185,10 @@ class Datablock:
             places that render one.
             """
 
-            #: Distinct from None, which is an ordinary resolved value and a very
-            #: common VAR default. With None as the sentinel a field holding one
-            #: re-resolves on every read, so a specline evaluating to None was
-            #: re-eval'd forever.
+            # Distinct from None, which is an ordinary resolved value and a very
+            # common VAR default. With None as the sentinel a field holding one
+            # re-resolves on every read, so a specline evaluating to None was
+            # re-eval'd forever.
             _UNSET = object()
 
             # 1. Protocol and hooks ----------------------------------------
@@ -1225,7 +1225,7 @@ class Datablock:
                 A VAR leaf that is neither a Datablock nor plain data falls
                 through to repr() when the signature is rendered, and for a
                 class with no content-bearing __repr__ that is
-                ``<C object at 0x...>``: a memory address, inside the string the
+                `<C object at 0x...>`: a memory address, inside the string the
                 hash is taken over. The block then hashes differently on every
                 construction, and since set() is a deepcopy-and-reconstruct the
                 address moves on every call -- so a Datastack writes its children
@@ -1291,84 +1291,84 @@ class Datablock:
     # subclass-declared CONFIG onto self.VAR (see _resolve_legacy_CONFIG_).
     CONFIG = VAR
 
-    #: Spec keys whose upstream subtree the tree walks must not descend into:
-    #: ``TREE_SKIP_VALIDATION`` for ``valid_var()``/``valid_tree()``,
-    #: ``TREE_SKIP_BUILDING`` for ``build_tree()``.  A pair, named alike,
-    #: because they are the same idea applied to the two walks -- and a field
-    #: is routinely in both, as a warm-start source is: do not train it on my
-    #: behalf, and do not hold its unfinished state against me.
-    #:
-    #: Tuples, both, and tuples in subclasses too.  Only membership is ever
-    #: asked of them, so a set would do; declaring them alike is what stops a
-    #: reader wondering what the difference is meant to mean.
-    #:
-    #: ``TREE_SKIP_VALIDATION`` supersedes the retired VALIDATE_CFG_EXEMPTIONS;
-    #: ``TREE_SKIP_BUILDING`` supersedes BUILD_TREE_EXEMPTIONS.
+    # Spec keys whose upstream subtree the tree walks must not descend into:
+    # `TREE_SKIP_VALIDATION` for `valid_var()`/`valid_tree()`,
+    # `TREE_SKIP_BUILDING` for `build_tree()`.  A pair, named alike,
+    # because they are the same idea applied to the two walks -- and a field
+    # is routinely in both, as a warm-start source is: do not train it on my
+    # behalf, and do not hold its unfinished state against me.
+    #
+    # Tuples, both, and tuples in subclasses too.  Only membership is ever
+    # asked of them, so a set would do; declaring them alike is what stops a
+    # reader wondering what the difference is meant to mean.
+    #
+    # `TREE_SKIP_VALIDATION` supersedes the retired VALIDATE_CFG_EXEMPTIONS;
+    # `TREE_SKIP_BUILDING` supersedes BUILD_TREE_EXEMPTIONS.
     TREE_SKIP_VALIDATION = ()
     TREE_SKIP_BUILDING = ()
 
-    #: Where this block coincides with a NARROWER one that was already built.
-    #:
-    #: A class grows: a new VAR field, a new topic, a bumped VERSION. Every
-    #: block of it re-keys, and the topics that did not change are rebuilt for
-    #: nothing. A :class:`Specialization` says that when the new fields hold
-    #: the values given in its ``spec``, the topics it names ARE the topics of
-    #: the block this class used to be -- whose identity is this one's with
-    #: those fields dropped, those topics alone, and its own ``version`` if it
-    #: names one. That block's hash is reconstructible from here (see
-    #: :meth:`get_hash`), so its build can be found in the journal and read
-    #: instead of repeated.
-    #:
-    #: Declared in preference order; the first one that both matches and
-    #: resolves is the one used::
-    #:
-    #:     SPECIALIZATIONS = [
-    #:         Datablock.Specialization(
-    #:             spec=dict(window='hann'),
-    #:             topics={'spectra': 'spectra.npy'},   # as the narrower block declared them
-    #:             note="hann was the only window before the field existed",
-    #:         ),
-    #:     ]
-    #:
-    #: It is a claim about semantics that no reader can check from the code --
-    #: that the two computations produce the same bytes -- which is what
-    #: ``note`` is for.
+    # Where this block coincides with a NARROWER one that was already built.
+    #
+    # A class grows: a new VAR field, a new topic, a bumped VERSION. Every
+    # block of it re-keys, and the topics that did not change are rebuilt for
+    # nothing. A `Specialization` says that when the new fields hold
+    # the values given in its `spec`, the topics it names ARE the topics of
+    # the block this class used to be -- whose identity is this one's with
+    # those fields dropped, those topics alone, and its own `version` if it
+    # names one. That block's hash is reconstructible from here (see
+    # `get_hash`), so its build can be found in the journal and read
+    # instead of repeated.
+    #
+    # Declared in preference order; the first one that both matches and
+    # resolves is the one used:
+    #
+    #     SPECIALIZATIONS = [
+    #         Datablock.Specialization(
+    #             spec=dict(window='hann'),
+    #             topics={'spectra': 'spectra.npy'},   # as the narrower block declared them
+    #             note="hann was the only window before the field existed",
+    #         ),
+    #     ]
+    #
+    # It is a claim about semantics that no reader can check from the code --
+    # that the two computations produce the same bytes -- which is what
+    # `note` is for.
     SPECIALIZATIONS = []
 
-    #: Whether :attr:`SPECIALIZATIONS` are consulted, and whether installing one
-    #: is recorded. ``True`` installs and records it in the journal, through
-    #: :meth:`UNSAFE_redirect`; ``'memory'`` installs it on the instance and
-    #: writes nothing; ``False`` declines to look.
-    #:
-    #: Recording is the default because an installed specialization is a claim
-    #: about where a block's data came from, and a claim that is nowhere written
-    #: down cannot be checked afterwards -- the journal entry is the only record
-    #: that this block read another's build, and which specialization said it
-    #: could. It also costs less, not more: the record includes the hidden
-    #: ``.redirection`` topic, which every later construction reads instead of
-    #: scanning the journal again.
-    #:
-    #: The per-instance ``use_specializations=`` overrides it; this is the
-    #: default, and it lives here because it belongs next to the declaration it
-    #: switches off.
+    # Whether `SPECIALIZATIONS` are consulted, and whether installing one
+    # is recorded. `True` installs and records it in the journal, through
+    # `UNSAFE_redirect`; `'memory'` installs it on the instance and
+    # writes nothing; `False` declines to look.
+    #
+    # Recording is the default because an installed specialization is a claim
+    # about where a block's data came from, and a claim that is nowhere written
+    # down cannot be checked afterwards -- the journal entry is the only record
+    # that this block read another's build, and which specialization said it
+    # could. It also costs less, not more: the record includes the hidden
+    # `.redirection` topic, which every later construction reads instead of
+    # scanning the journal again.
+    #
+    # The per-instance `use_specializations=` overrides it; this is the
+    # default, and it lives here because it belongs next to the declaration it
+    # switches off.
     USE_SPECIALIZATIONS = True
 
-    #: Constructor parameters that are NOT part of what a block IS: aids handed
-    #: in to save it work, rather than properties of it. They are in the
-    #: signature, so they are discoverable and typed like any other parameter,
-    #: and out of :meth:`__explicit_params__` -- hence out of `parameters`,
-    #: `dfn`, `quote()`, `cite()` and the journal record -- because a block
-    #: reconstructed from any of those must come back the same block, and one
-    #: that came back carrying a stale journal would not.
+    # Constructor parameters that are NOT part of what a block IS: aids handed
+    # in to save it work, rather than properties of it. They are in the
+    # signature, so they are discoverable and typed like any other parameter,
+    # and out of `__explicit_params__` -- hence out of `parameters`,
+    # `dfn`, `quote()`, `cite()` and the journal record -- because a block
+    # reconstructed from any of those must come back the same block, and one
+    # that came back carrying a stale journal would not.
     TRANSIENT_PARAMS = ('specialization_journal', 'url', 'capture_output')
 
-    #: VAR field names exempt from :meth:`VAR.LazyLoader._check_renderable_` --
-    #: the check that a value can be rendered into the identity deterministically.
-    #: An exemption does not take the field out of the identity: it goes on
-    #: rendering through repr(), address and all, and the hash moves with it. It
-    #: says only that this class knows, which is why it is written on the class
-    #: rather than switched on from the environment -- it belongs where the next
-    #: reader of the declaration will see it.
+    # VAR field names exempt from `VAR.LazyLoader._check_renderable_` --
+    # the check that a value can be rendered into the identity deterministically.
+    # An exemption does not take the field out of the identity: it goes on
+    # rendering through repr(), address and all, and the hash moves with it. It
+    # says only that this class knows, which is why it is written on the class
+    # rather than switched on from the environment -- it belongs where the next
+    # reader of the declaration will see it.
     VAR_IDENTITY_EXEMPTIONS = frozenset()
 
     #REDIRECT: BEGIN
@@ -1380,20 +1380,20 @@ class Datablock:
         at which the two computations agree. *topics* names the topics that
         come from it -- MY names, which are also its names -- in the order it
         declared them, since that order is in its identity. It is a DICT, the
-        narrower block's own declaration -- ``{'tiles': SLICETOPIC, 'meta':
-        'meta.json'}`` -- and is rendered as that, in that declaration's era:
+        narrower block's own declaration -- `{'tiles': SLICETOPIC, 'meta':
+        'meta.json'}` -- and is rendered as that, in that declaration's era:
         nothing of the narrower block's topics is taken from this class, which
         is what lets a specialization describe a block whose topics were
         SPELLED differently, as every block from before the topic markers was.
         (A Datatable still adds its TABLET's slices, as its own identity always did.) *version* is the
-        :attr:`VERSION` the narrower block carried, left :data:`ABSENT` to
-        inherit this class's. The sentinel rather than ``None``, because
-        ``None`` is what :attr:`version` reads as for a class that declares no
+        `VERSION` the narrower block carried, left `ABSENT` to
+        inherit this class's. The sentinel rather than `None`, because
+        `None` is what `version` reads as for a class that declares no
         VERSION at all -- a real value a specialization has to be able to name,
         and the one a class names on the day it starts versioning. *note* says
         why the coincidence holds; nothing else records it.
 
-        Those three are the whole of an identity -- :meth:`typestr` is built from
+        Those three are the whole of an identity -- `typestr` is built from
         the spec, the version and the topics and nothing else -- so a
         specialization that names all three describes the narrower block
         COMPLETELY, rather than inheriting whatever the class happens to carry
@@ -1404,89 +1404,89 @@ class Datablock:
         bump that turned out not to change any.
 
         A pin is matched against the RENDERED spec (`_typed_specdict_`), not
-        against the raw ``spec`` dict a caller passed: a field left at its
+        against the raw `spec` dict a caller passed: a field left at its
         default is absent from that dict, and a field left at its default is
         exactly the case this exists for. *version* is not matched against
         anything -- it is a statement about the OTHER block, not a condition on
         this one.
 
-        *anchor* is where the narrower block was built: :data:`SAME`, the
+        *anchor* is where the narrower block was built: `SAME`, the
         default, for this block's own anchor, or the anchor it had -- typically
         a class's fqcn before a rename. It says which journal to look in and
         nothing else: an identity names no class, so the reconstructed hash is
         the same wherever it was built.
         """
-        #: The VAR fields the narrower block never had, each at the value that
-        #: makes the two computations agree: ``{field: value}``.
+        # The VAR fields the narrower block never had, each at the value that
+        # makes the two computations agree: `{field: value}`.
         spec: dict
-        #: The narrower block's TOPICS declaration, ``{name: TopicNode}``, in its
-        #: own spelling -- or, read back from a record, that rendered as text.
-        #: SAME when it declared exactly what this block does, as after a pure
-        #: VAR rename (`redirect_vars`) -- which a block whose TOPICS it computes
-        #: per instance has no other way to say.
+        # The narrower block's TOPICS declaration, `{name: TopicNode}`, in its
+        # own spelling -- or, read back from a record, that rendered as text.
+        # SAME when it declared exactly what this block does, as after a pure
+        # VAR rename (`redirect_vars`) -- which a block whose TOPICS it computes
+        # per instance has no other way to say.
         topics: Topics | str | SAME
-        #: The narrower block's VERSION, or ABSENT to take this class's.
+        # The narrower block's VERSION, or ABSENT to take this class's.
         version: int | str | None | ABSENT = ABSENT
-        #: The anchor whose journal the narrower block is looked for in: SAME
-        #: for this block's own, or the one it was built under.
+        # The anchor whose journal the narrower block is looked for in: SAME
+        # for this block's own, or the one it was built under.
         anchor: str | SAME = SAME
-        #: Legacy serialization flags to reconstruct historical identities.
-        #: Can be a collection of flags (e.g. ['signature', 'typing']), ['all']
-        #: (or True) for all legacy flags, or None.
+        # Legacy serialization flags to reconstruct historical identities.
+        # Can be a collection of flags (e.g. ['signature', 'typing']), ['all']
+        # (or True) for all legacy flags, or None.
         legacy: tuple[str, ...] | list[str] | str | bool | None = field(default=None, kw_only=True)
-        #: Whether to redirect all topics recorded by the matched build entry,
-        #: rather than restricting redirection to the subset named in `topics`.
-        #:
-        #: By default (False), a specialization only redirects the topics declared
-        #: in its `topics` mapping, leaving any other topics to be built by this block.
-        #: When True, all topics recorded in the matched build's journal entry are
-        #: redirected.
-        #:
-        #: NOTE: This is an UNSAFE escape hatch intended strictly for historical
-        #: corner cases where a build wrote and recorded multiple topics, but an
-        #: earlier hash implementation underdeclared topics (e.g. hashed on a single
-        #: topic like 'count' before instance topics were added to the hash).
-        #: Its use is discouraged unless absolutely necessary to reach such legacy builds.
+        # Whether to redirect all topics recorded by the matched build entry,
+        # rather than restricting redirection to the subset named in `topics`.
+        #
+        # By default (False), a specialization only redirects the topics declared
+        # in its `topics` mapping, leaving any other topics to be built by this block.
+        # When True, all topics recorded in the matched build's journal entry are
+        # redirected.
+        #
+        # NOTE: This is an UNSAFE escape hatch intended strictly for historical
+        # corner cases where a build wrote and recorded multiple topics, but an
+        # earlier hash implementation underdeclared topics (e.g. hashed on a single
+        # topic like 'count' before instance topics were added to the hash).
+        # Its use is discouraged unless absolutely necessary to reach such legacy builds.
         UNSAFE_redirect_all_topics: bool = field(default=False, kw_only=True)
-        #: Specific subset of topics to redirect from the matched build. If None,
-        #: redirects all topics declared in `topics` (or all recorded topics if
-        #: `UNSAFE_redirect_all_topics` is True). A mapping
-        #: ``{current_name: historical_name}`` redirects each topic to the one
-        #: the narrower block recorded under its old name -- a topic renamed, as
-        #: `redirect_vars` is for a VAR field; iterated, it is the current names.
+        # Specific subset of topics to redirect from the matched build. If None,
+        # redirects all topics declared in `topics` (or all recorded topics if
+        # `UNSAFE_redirect_all_topics` is True). A mapping
+        # `{current_name: historical_name}` redirects each topic to the one
+        # the narrower block recorded under its old name -- a topic renamed, as
+        # `redirect_vars` is for a VAR field; iterated, it is the current names.
         redirect_topics: tuple[str, ...] | list[str] | dict | None = field(default=None, kw_only=True)
-        #: Mapping from current VAR field names to historical ones,
-        #: ``{current_name: historical_name}``.  Mirrors `redirect_topics`
-        #: for vars: when a VAR field has been renamed, the specialization
-        #: reconstructs the historical identity under the old key name so
-        #: the hash matches what was built before the rename.  A dotted
-        #: current name moves an entry out of a nested field: to the top level
-        #: under a plain historical name, or to where a dotted one says -- a
-        #: key renamed within its dict, ``{'collator.columns.stratifyby':
-        #: 'collator.columns.groupby'}``.
+        # Mapping from current VAR field names to historical ones,
+        # `{current_name: historical_name}`.  Mirrors `redirect_topics`
+        # for vars: when a VAR field has been renamed, the specialization
+        # reconstructs the historical identity under the old key name so
+        # the hash matches what was built before the rename.  A dotted
+        # current name moves an entry out of a nested field: to the top level
+        # under a plain historical name, or to where a dotted one says -- a
+        # key renamed within its dict, `{'collator.columns.stratifyby':
+        # 'collator.columns.groupby'}`.
         redirect_vars: dict | None = field(default=None, kw_only=True)
-        #: How this block's nested VAR blocks rendered then: ``{field: their
-        #: Specialization}``, each one of THAT block's own -- never written by
-        #: hand, but composed when a block looks for its past (see
-        #: `_specialization_variants_`). A field not named renders as it is now.
+        # How this block's nested VAR blocks rendered then: `{field: their
+        # Specialization}`, each one of THAT block's own -- never written by
+        # hand, but composed when a block looks for its past (see
+        # `_specialization_variants_`). A field not named renders as it is now.
         nested: dict | None = field(default=None, kw_only=True)
-        #: VAR fields the narrower block never had that no pin can name, each
-        #: with the fields that determine it: ``{field: (determining field, ...)}``.
-        #: Left out of the past rendering whatever they hold -- a pin leaves a field
-        #: out only at the value it names -- because what they hold is fixed by
-        #: their determining fields, which the past rendering keeps, or pins. A
-        #: mapped feature table's ``upstream`` is its source's upstream pulled back
-        #: along its map: ``{'upstream': ('datamap', 'datatable', 'collator')}``.
-        #: The claim is the declarer's to make; it is what makes leaving the field
-        #: out safe, since two blocks alike in their determining fields are alike
-        #: in it too.
+        # VAR fields the narrower block never had that no pin can name, each
+        # with the fields that determine it: `{field: (determining field, ...)}`.
+        # Left out of the past rendering whatever they hold -- a pin leaves a field
+        # out only at the value it names -- because what they hold is fixed by
+        # their determining fields, which the past rendering keeps, or pins. A
+        # mapped feature table's `upstream` is its source's upstream pulled back
+        # along its map: `{'upstream': ('datamap', 'datatable', 'collator')}`.
+        # The claim is the declarer's to make; it is what makes leaving the field
+        # out safe, since two blocks alike in their determining fields are alike
+        # in it too.
         determined: dict | None = field(default=None, kw_only=True)
-        #: The tag the narrower block was filed under, when it is not this block's: a block
-        #: keyed by tag -- a tablet -- is looked for under its tag, and the same identity
-        #: filed under a tag since renamed is found only where this says. None: this block's.
+        # The tag the narrower block was filed under, when it is not this block's: a block
+        # keyed by tag -- a tablet -- is looked for under its tag, and the same identity
+        # filed under a tag since renamed is found only where this says. None: this block's.
         tag: str | None = field(default=None, kw_only=True)
-        #: Why the coincidence holds. Last -- and keyword-only, so that it is
-        #: last in a subclass's constructor too, after its BLOCK or TABLET.
+        # Why the coincidence holds. Last -- and keyword-only, so that it is
+        # last in a subclass's constructor too, after its BLOCK or TABLET.
         note: str = field(default='', kw_only=True)
 
         # 1. Protocol and hooks --------------------------------------------
@@ -1639,9 +1639,9 @@ class Datablock:
         def from_record(cls, record: dict) -> 'Datablock.Specialization':
             """A Specialization from its `to_dict` record -- or from one written before.
 
-            Records written while the declaration was a separate ``declared``
-            field carry ``'topics'`` as the names and ``'declared'`` as the
-            declaration's rendering; the declaration is what ``topics`` is now.
+            Records written while the declaration was a separate `declared`
+            field carry `'topics'` as the names and `'declared'` as the
+            declaration's rendering; the declaration is what `topics` is now.
             """
             record = dict(record)
             if 'declared' in record:
@@ -1681,14 +1681,14 @@ class Datablock:
 
         # 4. Helpers -------------------------------------------------------
 
-        #: The fields every Specialization has; a subclass's others -- a
-        #: Datastack's BLOCK, a Datatable's TABLET -- are recorded and keyed too.
+        # The fields every Specialization has; a subclass's others -- a
+        # Datastack's BLOCK, a Datatable's TABLET -- are recorded and keyed too.
         _base_fields = frozenset({'spec', 'topics', 'version', 'note', 'anchor',
                                   'legacy', 'UNSAFE_redirect_all_topics', 'redirect_topics',
                                   'redirect_vars', 'nested', 'determined', 'tag'})
 
         def _extra_fields_(self):
-            """``(name, value)`` of the fields a subclass adds, in declaration order."""
+            """`(name, value)` of the fields a subclass adds, in declaration order."""
             return [(f.name, getattr(self, f.name)) for f in fields(self)
                     if f.name not in self._base_fields]
 
@@ -1726,20 +1726,20 @@ class Datablock:
     class Redirection:
         """A resolved redirection: where this block's topics are read from instead,
         and what it was resolved from. `paths` is the nested {topic: path}
-        mapping :meth:`path` answers out of; `entry` is the journal entry a
+        mapping `path` answers out of; `entry` is the journal entry a
         filter matched, and is None for a redirection given paths directly.
         """
         paths: dict | None = None
         entry: Optional['BuildJournalEntry'] = None
         filter: dict | None = None
         topic_map: dict | None = None
-        #: The topics this redirection covers, when it covers only some. None
-        #: means "whatever the other side records", which is the older meaning
-        #: and still the common one.
+        # The topics this redirection covers, when it covers only some. None
+        # means "whatever the other side records", which is the older meaning
+        # and still the common one.
         topics: list | None = None
-        #: The :class:`Specialization` this redirection came from, when it came
-        #: from one. It is what makes a specialized redirection legible as such
-        #: -- in `redirection`, and in the journal entry that records it.
+        # The `Specialization` this redirection came from, when it came
+        # from one. It is what makes a specialized redirection legible as such
+        # -- in `redirection`, and in the journal entry that records it.
         specialization: Optional['Datablock.Specialization'] = None
 
     class SpecializationRow(dict, Specialization):
@@ -1750,7 +1750,7 @@ class Datablock:
         goes on working -- and a `Specialization` subclass, so attributes like
         `spec`, `topics`, `legacy`, etc. and equality comparison against
         `Specialization` work directly. Truthy exactly when it RESOLVED,
-        which is the question being asked::
+        which is the question being asked:
 
             row = block.specializations()[0]
             if not row:
@@ -1856,10 +1856,10 @@ class Datablock:
         __str__ = __repr__
 
     class Validation(dict):
-        """``{topic: bool}`` -- whether each topic's data is where it is read from.
+        """`{topic: bool}` -- whether each topic's data is where it is read from.
 
         A dict, so it says WHICH topic is missing; and False as a whole unless
-        every topic is True, so ``if not valid:`` means what it reads as rather
+        every topic is True, so `if not valid:` means what it reads as rather
         than "the report is empty". An empty one is True, as `valid_topics`
         answers for a block with no topics.
         """
@@ -1874,7 +1874,7 @@ class Datablock:
     fqcn = _ClassOrInstance_(
         lambda cls: f"{cls.__module__}.{cls.__name__}",
         lambda self: f"{type(self).__module__}.{type(self).__name__}",
-        doc="``module.Name`` of the class -- on the class itself, too.")
+        doc="`module.Name` of the class -- on the class itself, too.")
 
     # Tailkwargs that quote()/cite() keep when `tailkwargs=False` (the default).
     #
@@ -1890,25 +1890,25 @@ class Datablock:
     # points at storage that does not hold the artifact you cited.
     CITE_KEEP_TAILKWARGS = ('tag',)
 
-    #: The keyby a block is given when its constructor is not: what its key,
-    #: and so its path, is made of. 'version_shorthash' leaves the tag out, so
-    #: a tag is a label and tagging a built block does not move it; for an
-    #: untagged block it is the key 'tag_version_shorthash' made. `Datatablet`
-    #: keeps 'tag_version_shorthash': a tablet's tag has always been in its path.
+    # The keyby a block is given when its constructor is not: what its key,
+    # and so its path, is made of. 'version_shorthash' leaves the tag out, so
+    # a tag is a label and tagging a built block does not move it; for an
+    # untagged block it is the key 'tag_version_shorthash' made. `Datatablet`
+    # keeps 'tag_version_shorthash': a tablet's tag has always been in its path.
     KEYBY = 'version_shorthash'
 
     Diff = collections.namedtuple('Diff', ['subsig', 'topics', 'version'])
 
     #SPECIALIZE: BEGIN
-    #: The events that count as "this hash has data": a build, or a redirection
-    #: to one. A redirect entry records the paths AFTER redirection (it is
-    #: written once they are installed), so following a chain costs nothing
-    #: beyond reading the entry -- and cannot loop, since nothing is followed.
+    # The events that count as "this hash has data": a build, or a redirection
+    # to one. A redirect entry records the paths AFTER redirection (it is
+    # written once they are installed), so following a chain costs nothing
+    # beyond reading the entry -- and cannot loop, since nothing is followed.
     SPECIALIZATION_EVENTS = ('build:end', 'UNSAFE_redirect')
 
     ### anchorage: begin
-    #: The anchor every instance of this class is stored under, unless it is
-    #: given an ``anchor=`` of its own. None means the class's `fqcn`.
+    # The anchor every instance of this class is stored under, unless it is
+    # given an `anchor=` of its own. None means the class's `fqcn`.
     ANCHOR = None
 
     anchor = _ClassOrInstance_(
@@ -1918,9 +1918,9 @@ class Datablock:
         doc="""The directory a block is stored under, below its datalake.
 
         On the CLASS, the anchor every instance takes when not given its own --
-        :attr:`ANCHOR`, else the `fqcn` -- which is what lets a stack find its
-        blocks' journal from its ``BLOCK`` alone. On an instance, its own
-        ``anchor=`` when it was given one.""")
+        `ANCHOR`, else the `fqcn` -- which is what lets a stack find its
+        blocks' journal from its `BLOCK` alone. On an instance, its own
+        `anchor=` when it was given one.""")
 
     # 1. Protocol and hooks ------------------------------------------------
 
@@ -1983,7 +1983,7 @@ class Datablock:
         # signature; it is how the journal groups the entries of a tree.
         tree: str | None = None,
         # When a read fails, follow a redirection recorded by UNSAFE_redirect()
-        # and read from the entry it names instead. See :meth:`read`.
+        # and read from the entry it names instead. See `read`.
         redirect: bool = True,
         # Whether this block may read a narrower, already-built block's data
         # instead of rebuilding it -- see SPECIALIZATIONS. None defers to the
@@ -1995,7 +1995,7 @@ class Datablock:
         # never what this block is: not in the hash.
         SPECIALIZATIONS: 'list[Datablock.Specialization | dict] | Datablock.Specialization | dict | None' = None,
         SPECIALIZATION: 'list[Datablock.Specialization | dict] | Datablock.Specialization | dict | None' = None,
-        # A journal already read, for :meth:`_install_specialization_` to resolve
+        # A journal already read, for `_install_specialization_` to resolve
         # against instead of reading one itself. Operational, and transient: it
         # travels under a private state key so it never reaches `parameters`,
         # `quote()` or a pickle -- see __setstate__.
@@ -2315,8 +2315,8 @@ class Datablock:
         #           faithfully reconstructed by __setstate__.
         #   {k}   = the *resolved* / post-processed value used at runtime.
         #           For most params the resolution is simple (e.g. eval of
-        #           a default expression), but for ``url`` and ``local`` it
-        #           involves evaluating speclines like ``$dbx.getenv('KEY')``.
+        #           a default expression), but for `url` and `local` it
+        #           involves evaluating speclines like `$dbx.getenv('KEY')`.
         #
         # The loop below prefers _{k}_ over {k} to capture the original, which
         # for url/local is what keeps env() relocatable: serializing the
@@ -2365,7 +2365,7 @@ class Datablock:
         return self._invalidity_(validation)[1]
 
     def _invalidity_(self, validation: str = 'valid') -> tuple[str | None, str | None]:
-        """``(kind, why)``: *kind* 'fails_validation', 'owes', 'unadopted' or 'unbuilt' -- or ``(None, None)`` when valid."""
+        """`(kind, why)`: *kind* 'fails_validation', 'owes', 'unadopted' or 'unbuilt' -- or `(None, None)` when valid."""
         owed = self.owedtopics()
         if self.valid() and not owed:
             if validation == 'validate' and not self.validate():
@@ -2384,12 +2384,12 @@ class Datablock:
         """Whether this block's data is there; override to decide differently.
 
         *path* is the directory this block has been redirected to -- the
-        anchorkeypath of the entry a ``filter`` matched -- and None when it has
+        anchorkeypath of the entry a `filter` matched -- and None when it has
         not been redirected, or when the redirection gave paths outright and so
         names no single block directory. It is for an override that validates a
         redirected-to location by more than the presence of its topics; the
         default needs no such thing, since a redirected block's own
-        :meth:`path` already answers with the redirected-to paths.
+        `path` already answers with the redirected-to paths.
         """
         return self.valid_topics(reduce=True)
 
@@ -2416,8 +2416,8 @@ class Datablock:
         """The journal entry for a build that ended: *event*, and -- for one that raised -- *failure*.
 
         A failure is recorded in the entry itself, written in the process the
-        build failed in, a worker's too: ``exception``, ``'<Type>: <message>'`` as
-        the exec journal has it, and ``traceback`` as Python prints it. So why a
+        build failed in, a worker's too: `exception`, `'<Type>: <message>'` as
+        the exec journal has it, and `traceback` as Python prints it. So why a
         block failed is in its journal, whether or not anything captured output.
         """
         columns = None
@@ -2550,13 +2550,13 @@ class Datablock:
         return _spec_
 
     def __repr_from_kwargs__(self, kwargs, anchor='anchor', *, quote_strs: bool = False):
-        """Render ``kwargs`` as a ``k=v, ...`` argument list.
+        """Render `kwargs` as a `k=v, ...` argument list.
 
-        ``quote_strs`` reprs string-valued kwargs, so ``url=abfss://x`` becomes
-        ``url='abfss://x'``. It is named for what it does rather than for
+        `quote_strs` reprs string-valued kwargs, so `url=abfss://x` becomes
+        `url='abfss://x'`. It is named for what it does rather than for
         `rootkwargs`, because this method is called with the root kwargs, the
         `spec` dict AND the tailkwargs, and it quotes strings in all of them
-        (``tag``, ``local``, ``keyby``, ... as well as ``url``/``anchor``).
+        (`tag`, `local`, `keyby`, ... as well as `url`/`anchor`).
 
         """
         def quotestr(v):
@@ -2635,18 +2635,18 @@ class Datablock:
     def set(self, **kw):
         """This block again, with *kw* replacing its non-identity parameters.
 
-        ``spec`` is refused. Identity is sha256(:meth:`typestr`), and typestr() is
+        `spec` is refused. Identity is sha256(`typestr`), and typestr() is
         built from the spec, so re-specifying here would hand back a DIFFERENT
         block through a method that reads as an amendment of this one -- and
         would carry this block's state, resolved against this block's identity,
         over to one it was never resolved for. Construct the other block
-        instead, which says what it is doing::
+        instead, which says what it is doing:
 
             type(b)(**{**b.dfn, 'spec': {...}})
 
-        Everything else is fair game: ``tag``, ``keyby``, ``local``, ``tree``,
+        Everything else is fair game: `tag`, `keyby`, `local`, `tree`,
         the log levels, the dynamic kwargs -- none of them reach the signature,
-        so :attr:`hash` is the same on both sides of the call.
+        so `hash` is the same on both sides of the call.
         """
         if 'spec' in kw:
             raise ValueError(
@@ -2660,7 +2660,7 @@ class Datablock:
         return self.__class__(**_kw)
 
     def replace(self, **kw):
-        """Alias of :meth:`set`, and refuses ``spec`` for the same reason."""
+        """Alias of `set`, and refuses `spec` for the same reason."""
         return self.set(**kw)
 
     def valid_topic(self, *topicpath):
@@ -2746,7 +2746,7 @@ class Datablock:
 
         For dict-TOPICS, returns the keys.  For list-TOPICS, returns the list.
         Returns an empty list when TOPICS is not defined.  A key naming a
-        nested group is returned as itself; :meth:`leaftopics` enumerates
+        nested group is returned as itself; `leaftopics` enumerates
         what is underneath it.
         """
         if not hasattr(self, 'TOPICS'):
@@ -2762,7 +2762,7 @@ class Datablock:
 
         Empty when it is not redirected; every topic when the redirection is
         total. In between is a PARTIAL redirection, and this is the list a
-        `__build__` must not write to -- :meth:`ownedtopics` is its complement,
+        `__build__` must not write to -- `ownedtopics` is its complement,
         and the one to build.
         """
         paths = self._redirected_paths_
@@ -2774,13 +2774,13 @@ class Datablock:
         """The top-level topics this block is RESPONSIBLE for producing.
 
         All of them unless it is redirected, and under a partial redirection
-        the ones the redirection does not cover. A ``__build__`` that can be
+        the ones the redirection does not cover. A `__build__` that can be
         asked to build part of a block reads this; one that cannot may ignore
         it, and will simply rebuild what it always did -- into the redirected
-        location, which is why :meth:`path` refuses to ensure a directory for a
+        location, which is why `path` refuses to ensure a directory for a
         redirected topic.
 
-        Not to be confused with :meth:`owedtopics`, one letter away and a
+        Not to be confused with `owedtopics`, one letter away and a
         subset of this: these are the topics that are MINE, those are the ones
         of mine that are not there yet. Ownership does not change when a build
         runs; owing does.
@@ -2788,25 +2788,25 @@ class Datablock:
         redirected = set(self.redirected_topics())
         return [t for t in self.topics() if t not in redirected]
 
-    #: The name this went by before the pair with :meth:`owedtopics` made the
-    #: distinction worth spelling: "build" said what to do with the topics and
-    #: not which ones they were, so a reader had to guess whether it meant "must
-    #: produce" or "has yet to produce" -- which are now two methods.
+    # The name this went by before the pair with `owedtopics` made the
+    # distinction worth spelling: "build" said what to do with the topics and
+    # not which ones they were, so a reader had to guess whether it meant "must
+    # produce" or "has yet to produce" -- which are now two methods.
     buildtopics = ownedtopics
 
     def owedtopics(self):
-        """The topics of :meth:`ownedtopics` that are not there -- :meth:`build`'s question.
+        """The topics of `ownedtopics` that are not there -- `build`'s question.
 
         OWED, not OWNED: the subset of this block's own topics that it has yet
-        to produce. Everything in :meth:`ownedtopics` is this block's to build;
+        to produce. Everything in `ownedtopics` is this block's to build;
         these are the ones it has not built.
 
         Empty unless the block is PARTIALLY redirected, which is the only case
-        in which :meth:`valid` can answer True about topics that are not this
+        in which `valid` can answer True about topics that are not this
         block's to answer for. Under a specialization the redirected topics are
         another build's and are there by definition, so a `valid()` that reads
-        only those -- a marker topic like :class:`~dbx.datatables.Datatable`'s
-        ``done``, which is a perfectly good definition of validity for a table
+        only those -- a marker topic like `Datatable`'s
+        `done`, which is a perfectly good definition of validity for a table
         that built itself -- pronounces the block built before the topics it
         still owes exist. `build()` would then never call `__build__`, and the
         whole point of a specialization (reuse what did not change, build what
@@ -2833,8 +2833,8 @@ class Datablock:
         """Every leaf topic, as a tuple of names, depth-first in declaration order.
 
         A flat TOPICS yields one-element tuples, in the same order as
-        :meth:`topics`, so anything built from this reads identically to the
-        pre-hierarchy form -- which is what keeps :attr:`signature` stable.
+        `topics`, so anything built from this reads identically to the
+        pre-hierarchy form -- which is what keeps `signature` stable.
         """
         def walk(node, prefix):
             if not isinstance(node, dict):
@@ -2946,7 +2946,7 @@ class Datablock:
         return self
 
     def pull(self, src, dest, *, show_progress: bool = False):
-        """Copy *src* (a path on this block's ``fs``) to *dest* (a local path).
+        """Copy *src* (a path on this block's `fs`) to *dest* (a local path).
 
         A no-op when *src* and *dest* already refer to the same location
         (e.g. when this block's storage is itself local, so local staging
@@ -2971,7 +2971,7 @@ class Datablock:
         return self
 
     def push(self, src, dest, *, free_src: bool = False, show_progress: bool = False):
-        """Copy *src* (a local path) to *dest* (a path on this block's ``fs``).
+        """Copy *src* (a local path) to *dest* (a path on this block's `fs`).
 
         A no-op when *src* and *dest* already refer to the same location
         (e.g. when this block's storage is itself local, so local staging
@@ -3009,20 +3009,20 @@ class Datablock:
     def pulltopic(self, topic, *, path=None, root='.'):
         """Download topic *topic* to a local destination.
 
-        By default (*path* is ``None``), pulls to local staging
-        (``self.path(topic, local=True)``) — the topic's canonical path
+        By default (*path* is `None`), pulls to local staging
+        (`self.path(topic, local=True)`) — the topic's canonical path
         when this block's url is itself local, otherwise the DBX_LOCAL
         staging path. When *path* is given, pulls to
-        ``os.path.join(root, path)`` instead.
+        `os.path.join(root, path)` instead.
 
         Parameters
         ----------
         topic : str
             The topic to download.
         path : str, optional
-            Destination path, joined with *root*. When ``None``, pulls
+            Destination path, joined with *root*. When `None`, pulls
             to local staging instead.
-        root : str, default ``'.'``
+        root : str, default `'.'`
             Prefix joined with *path* when *path* is given.
 
         Returns
@@ -3047,19 +3047,19 @@ class Datablock:
     def pushtopic(self, topic, *, path=None, root='.'):
         """Upload topic *topic* from a local source to this block's canonical storage.
 
-        By default (*path* is ``None``), uploads from local staging
-        (``self.path(topic, local=True)``) — the counterpart of
-        :meth:`pulltopic`'s default. When *path* is given, uploads from
-        ``os.path.join(root, path)`` instead.
+        By default (*path* is `None`), uploads from local staging
+        (`self.path(topic, local=True)`) — the counterpart of
+        `pulltopic`'s default. When *path* is given, uploads from
+        `os.path.join(root, path)` instead.
 
         Parameters
         ----------
         topic : str
             The topic to upload.
         path : str, optional
-            Source path, joined with *root*. When ``None``, uploads
+            Source path, joined with *root*. When `None`, uploads
             from local staging instead.
-        root : str, default ``'.'``
+        root : str, default `'.'`
             Prefix joined with *path* when *path* is given.
 
         Returns
@@ -3079,10 +3079,10 @@ class Datablock:
                   show_progress: bool = False):
         """Sync entries of directory-topic *topic* to local staging.
 
-        Lists ``dirpath(topic)``, optionally keeping only entries whose
+        Lists `dirpath(topic)`, optionally keeping only entries whose
         name ends with *suffix*, and sorts them ascending by
-        ``key(basename)`` (lexical order when *key* is omitted) — e.g.
-        a checkpoints topic with filenames like ``ckpt_step_{n}.pt``,
+        `key(basename)` (lexical order when *key* is omitted) — e.g.
+        a checkpoints topic with filenames like `ckpt_step_{n}.pt`,
         sorted by the numeric step parsed out of the name. Generalizes
         the find-latest-checkpoint-and-pull-it-if-missing pattern.
 
@@ -3095,7 +3095,7 @@ class Datablock:
         *validate* is given and rejects it (e.g. a truncated/corrupt
         checkpoint), the next-latest entry is tried instead, and so on.
         Returns the local path of the first entry to validate, or
-        ``None`` if none did (or there were no matching entries).
+        `None` if none did (or there were no matching entries).
 
         Parameters
         ----------
@@ -3104,15 +3104,15 @@ class Datablock:
         suffix : str, optional
             Only consider entries whose name ends with *suffix*.
         key : callable, optional
-            ``key(basename) -> sortable``. Defaults to lexical order;
+            `key(basename) -> sortable`. Defaults to lexical order;
             pass one to sort e.g. by an embedded step number instead.
         validate : callable, optional
-            ``validate(local_path) -> bool``. Only consulted when
+            `validate(local_path) -> bool`. Only consulted when
             *latest* is True.
         latest : bool, default False
             See above.
         show_progress : bool, default False
-            Forwarded to the underlying :meth:`pull` calls.
+            Forwarded to the underlying `pull` calls.
 
         Returns
         -------
@@ -3144,21 +3144,21 @@ class Datablock:
     def note(self, note: str | None = None, event: str = 'note', *, inline: bool = False, message: str | None = None):
         """Write a journal entry with the given *event* and optional *note*.
 
-        The journal parquet file is prepended with ``{event}-`` so it can
+        The journal parquet file is prepended with `{event}-` so it can
         be distinguished from regular journal entries, but it still
-        lives under the ``journal/`` directory and therefore is read
-        by :meth:`buildjournal`.
+        lives under the `journal/` directory and therefore is read
+        by `buildjournal`.
 
         Parameters
         ----------
         note : str, optional
-            If provided, recorded in the journal ``note`` field.
+            If provided, recorded in the journal `note` field.
         event : str, default 'note'
-            The event name recorded in the journal (e.g. ``'keep'``,
-            ``'note'``).
+            The event name recorded in the journal (e.g. `'keep'`,
+            `'note'`).
         inline : bool, default False
-            When ``True`` the *note* string is stored directly in the
-            journal record.  When ``False`` the note is written to a
+            When `True` the *note* string is stored directly in the
+            journal record.  When `False` the note is written to a
             separate text file and the journal stores the file path.
         message : str, optional
             Legacy alias for *note*.
@@ -3177,11 +3177,11 @@ class Datablock:
         return self
 
     def update(self, note: str | None = None, *, inline: bool = False, message: str | None = None):
-        """`note`, under the event ``'update'``: what this block's journal entry says now -- its slices, say -- re-recorded."""
+        """`note`, under the event `'update'`: what this block's journal entry says now -- its slices, say -- re-recorded."""
         return self.note(note, event='update', inline=inline, message=message)
 
     def touch(self, note: str | None = None, *, inline: bool = False, message: str | None = None):
-        """`note`, under the event ``'touch'``: the block marked constructed, as it stands -- its data there, however they got there."""
+        """`note`, under the event `'touch'`: the block marked constructed, as it stands -- its data there, however they got there."""
         return self.note(note, event='touch', inline=inline, message=message)
 
     def update_tree(self, note: str | None = None, *, inline: bool = False, skips: str | None = 'TREE_SKIP_BUILDING',
@@ -3202,10 +3202,10 @@ class Datablock:
         """Touch a breadcrumb for every topic that has a location.
 
         A file topic's breadcrumb IS its file, so the block reads as valid.
-        A directory topic has no filename, so it gets ``{dirpath}.crumbs``
+        A directory topic has no filename, so it gets `{dirpath}.crumbs`
         beside it rather than a stray entry inside a listing of it -- writing
         to the directory path itself is what used to raise IsADirectoryError.
-        A :data:`SYNTOPIC` topic is synthetic, has no location, and is skipped.
+        A `SYNTOPIC` topic is synthetic, has no location, and is skipped.
         """
         topics = self.topics()
         if not topics:
@@ -3226,13 +3226,13 @@ class Datablock:
 
         *deep* says what a child already valid is taken to vouch for:
 
-        - ``False`` -- its whole subtree: it is skipped.
-        - ``'try_specialize_children'`` -- itself, not its children: its VAR subtrees and, a stack's,
+        - `False` -- its whole subtree: it is skipped.
+        - `'try_specialize_children'` -- itself, not its children: its VAR subtrees and, a stack's,
           its blocks. Each is tried for a specialization, as `try_specialize_tree` does, and nothing
           is built. A child whose identity moved -- a new hash under a parent that kept its own --
           adopts the earlier build its specialization resolves to, rather than being found unbuilt
           by whatever reads it later.
-        - ``True`` -- nothing: every block is built anew, valid or not.
+        - `True` -- nothing: every block is built anew, valid or not.
 
         A child not valid is built in every case, with the same *deep*. A child
         `TREE_SKIP_BUILDING` exempts is never built here, but it is specialized
@@ -3244,7 +3244,7 @@ class Datablock:
             raise ValueError(f"build_tree(deep={deep!r}): deep is False, True or 'try_specialize_children'")
         log = self.log
         log.verbose(f"Building tree for {self} with roots {self.spec.keys()}")
-        # Each banner names whose field it is, as a log line names a block: ``upstream of <anchorkey> [<tag>]``.
+        # Each banner names whose field it is, as a log line names a block: `upstream of <anchorkey> [<tag>]`.
         of = f" of {self.anchorkey}" + (f" [{shown_tag(self.tag)}]" if self.tag else "")
         def skip_cb(s):
             # Never built here -- but adopted, if a past of it resolves: an adoption computes nothing.
@@ -3299,7 +3299,7 @@ class Datablock:
 
     def walk_tree(self, skips: str | None = 'TREE_SKIP_BUILDING', *, exclude_self: bool = False, adopt: bool = False,
                   skip_callback=None):
-        """Every block of this one's tree, bottom up, each once: ``(path, block)``, *path* the spec keys from this one to it.
+        """Every block of this one's tree, bottom up, each once: `(path, block)`, *path* the spec keys from this one to it.
 
         A tree is a block and the Datablocks its VAR holds, theirs, and so on;
         each is yielded after every block below it -- the order `build_tree`
@@ -3309,8 +3309,8 @@ class Datablock:
         sees its children as the walk left them.
 
         *skips* names the class attribute whose spec keys are not descended
-        into -- ``'TREE_SKIP_BUILDING'``, the default, as `build_tree` skips;
-        ``'TREE_SKIP_VALIDATION'``, as `valid_tree` does -- or None for none.
+        into -- `'TREE_SKIP_BUILDING'`, the default, as `build_tree` skips;
+        `'TREE_SKIP_VALIDATION'`, as `valid_tree` does -- or None for none.
         *skip_callback(path)* is told of each subtree skipped. *adopt* hands
         each block below this one this tree's id first (`_adopt_`), as
         `build_tree` does, so that the journal entries a walk writes are found
@@ -3338,13 +3338,13 @@ class Datablock:
         blocks moved to identities of their own leave it. What is left not valid, or owing
         topics, stays so, to be built deliberately rather than as a side effect of adopting the rest.
 
-        Returns ``{anchorkey: ('valid' | 'not-valid', owed topics)}`` for every block of the tree, each
+        Returns `{anchorkey: ('valid' | 'not-valid', owed topics)}` for every block of the tree, each
         once, in the order they were tried.
         """
         return self._specialize_tree_('TREE_SKIP_VALIDATION', {})
 
     def _specialize_tree_(self, skips: str, status: dict) -> dict:
-        """`try_specialize_tree`'s walk, over the children *skips* -- a ``TREE_SKIP_*`` -- leaves; *status* filled."""
+        """`try_specialize_tree`'s walk, over the children *skips* -- a `TREE_SKIP_*` -- leaves; *status* filled."""
         for _, block in self.walk_tree(skips):
             if block.anchorkey in status:
                 continue
@@ -3373,15 +3373,15 @@ class Datablock:
         }
 
     def read(self, *topicpath):
-        """Read a topic: ``read('out')``, or ``read('data', 'annotations')``.
+        """Read a topic: `read('out')`, or `read('data', 'annotations')`.
 
         The path is validated against TOPICS first, so a mistyped name fails
-        here naming the level it failed at, rather than inside ``__read__``.
-        A single name is forwarded to ``__read__`` bare, which keeps every
+        here naming the level it failed at, rather than inside `__read__`.
+        A single name is forwarded to `__read__` bare, which keeps every
         existing one-argument override working untouched.
 
         Nothing here knows about redirection: an override reads
-        ``self.path(topic)``, and that is where a :meth:`UNSAFE_redirect` takes
+        `self.path(topic)`, and that is where a `UNSAFE_redirect` takes
         effect, so a redirected block reads the redirected-to data through the
         same override that reads its own.
         """
@@ -3392,10 +3392,10 @@ class Datablock:
         return self.__read__(*topicpath)
 
     def get_redirection(self, journal=None):
-        """Where this block reads from instead, as a :attr:`Redirection`, or None.
+        """Where this block reads from instead, as a `Redirection`, or None.
 
         If *journal* is provided, use it directly to find matching redirection entries
-        instead of reloading journal files from storage. :meth:`redirected` is the
+        instead of reloading journal files from storage. `redirected` is the
         cheap question -- whether there is one -- and reads no journal.
         """
         if not getattr(self, 'redirect', False):
@@ -3529,14 +3529,14 @@ class Datablock:
         *specialization*, and is available on its own for any redirection.
 
         *specialization* is the fourth way of saying where: one of this class's
-        :attr:`SPECIALIZATIONS`, resolved to the narrower block's build through
-        the hash reconstructed from it. It implies its own ``topics``, and is
+        `SPECIALIZATIONS`, resolved to the narrower block's build through
+        the hash reconstructed from it. It implies its own `topics`, and is
         recorded as itself, so the journal says a specialization was installed
         and which one -- not merely that some paths were.
 
         *dry_run* resolves the whole thing and reports what it WOULD record --
-        to stdout, and as the :class:`Redirection` it returns -- without
-        installing it on this block, writing the hidden ``.redirection`` topic,
+        to stdout, and as the `Redirection` it returns -- without
+        installing it on this block, writing the hidden `.redirection` topic,
         or putting anything in the journal. The return type says which happened:
         a Redirection is a proposal, True is a redirection that is now in place.
 
@@ -3545,10 +3545,10 @@ class Datablock:
         the target RECORDED, so a build whose data has since been cleared
         proposes just as cleanly as one whose data is intact. It installs the
         proposal in memory only, checks each redirected topic through it, and
-        returns ``(Redirection, Validation)`` instead of the bare Redirection --
+        returns `(Redirection, Validation)` instead of the bare Redirection --
         the pair is how a caller tells a proposal that was checked from one that
         was not, which a None field could not say. It needs *dry_run*;
-        ``validate=`` is the same question asked after a real redirection is
+        `validate=` is the same question asked after a real redirection is
         installed.
         """
         if dry_validate and not dry_run:
@@ -3789,17 +3789,17 @@ class Datablock:
         return True
 
     def UNSAFE_clear_redirection(self, *, OVERRIDE: bool = False) -> bool:
-        """Stop this block reading elsewhere: undo :meth:`UNSAFE_redirect`, and nothing else.
+        """Stop this block reading elsewhere: undo `UNSAFE_redirect`, and nothing else.
 
-        Unlike :meth:`UNSAFE_clear`, no data is touched -- neither this block's
+        Unlike `UNSAFE_clear`, no data is touched -- neither this block's
         nor the block it was redirected to. What goes is the redirection: the
-        hidden ``.redirection`` topic, the paths installed on this instance, and
+        hidden `.redirection` topic, the paths installed on this instance, and
         -- in the journal, whose latest redirection record is the one that
-        holds -- an ``UNSAFE_clear_redirection`` entry that supersedes it.
+        holds -- an `UNSAFE_clear_redirection` entry that supersedes it.
 
         A specialized block BUILT again with specializations on will find its
         specialization again and redirect itself again; construct it with
-        ``use_specializations=False`` to keep it reading its own. Returns
+        `use_specializations=False` to keep it reading its own. Returns
         whether there was a redirection to clear.
         """
         if not UNSAFE_allowed("UNSAFE_clear_redirection", OVERRIDE=OVERRIDE):
@@ -3928,37 +3928,37 @@ class Datablock:
         ----------
         anchorkeypath : str
             Filesystem path to the source anchor+key directory containing
-            the topic subdirectories (e.g. ``ckpts/``, ``logs/``).
+            the topic subdirectories (e.g. `ckpts/`, `logs/`).
         OVERRIDE : bool, default False
             If True, skip the interactive confirmation prompt (see
-            :func:`UNSAFE_allowed`) -- same convention as
-            :meth:`UNSAFE_clear`/:meth:`UNSAFE_copy_blocks_from`.
+            `UNSAFE_allowed`) -- same convention as
+            `UNSAFE_clear`/`UNSAFE_copy_blocks_from`.
         overwrite : bool, default False
             If False (default), asserts that this Datablock is not already
             valid before copying.  Set to True to overwrite existing data.
         topicpaths : dict or str, optional
             Override the default source-relative paths for each topic.
-            For dict TOPICS: a ``{topic: relative_path}`` dict.
+            For dict TOPICS: a `{topic: relative_path}` dict.
             For string TOPICS: a single relative path string.
             When None, source paths are derived from the Datablock's own
             TOPICS definitions.
         validate : bool, default True
-            If True, asserts that ``self.valid()`` returns True after
+            If True, asserts that `self.valid()` returns True after
             the copy completes.  Set to False to skip post-copy validation.
         always_copy_whole_dirpath : bool, default False
             If False (default), copies individual topic files via
-            ``self.path(topic)``.  If True, copies entire topic
-            directories via ``self.dirpath(topic)`` recursively.
+            `self.path(topic)`.  If True, copies entire topic
+            directories via `self.dirpath(topic)` recursively.
         show_progress : bool, default True
             If True (default), show a per-topic tqdm progress bar. Set to
-            False when a caller (e.g. :meth:`UNSAFE_copy_blocks_from`) is
+            False when a caller (e.g. `UNSAFE_copy_blocks_from`) is
             already reporting aggregate progress across many blocks, so
             each block's own (typically 1-topic, so always instantly
             "100%") bar doesn't flood the output.
         **kwargs
-            Forwarded to :meth:`_UNSAFE_copy_topic_` for every topic; ignored
+            Forwarded to `_UNSAFE_copy_topic_` for every topic; ignored
             by the base implementation but available to subclasses that
-            override :meth:`_UNSAFE_copy_topic_` to accept additional
+            override `_UNSAFE_copy_topic_` to accept additional
             per-topic options.
         """
         if not UNSAFE_allowed("UNSAFE_copy_from", OVERRIDE=OVERRIDE):
@@ -3993,26 +3993,26 @@ class Datablock:
         return self
 
     def UNSAFE_copy_from_journal(self, journal: dict, *, OVERRIDE: bool = False, overwrite: bool = False, topicpaths=None, validate: bool = True, always_copy_whole_dirpath: bool = False, show_progress: bool = True, **kwargs):
-        """Copy topic data using the ``anchorkeypath`` recorded in a journal entry.
+        """Copy topic data using the `anchorkeypath` recorded in a journal entry.
 
-        Thin wrapper around :meth:`UNSAFE_copy_from`: it extracts a single
-        journal entry (via :meth:`buildjournal`) and forwards that entry's
-        ``anchorkeypath`` as the copy source.
+        Thin wrapper around `UNSAFE_copy_from`: it extracts a single
+        journal entry (via `buildjournal`) and forwards that entry's
+        `anchorkeypath` as the copy source.
 
         Parameters
         ----------
         journal : dict
-            Keyword arguments passed to :meth:`buildjournal` to select the entry
-            whose ``anchorkeypath`` is used as the copy source, e.g.
-            ``{'iloc': 0}``, ``{'loc': 3}``, or filter kwargs like
-            ``{'event': 'build:end'}``. Must resolve to a single
-            :class:`BuildJournalEntry`.
+            Keyword arguments passed to `buildjournal` to select the entry
+            whose `anchorkeypath` is used as the copy source, e.g.
+            `{'iloc': 0}`, `{'loc': 3}`, or filter kwargs like
+            `{'event': 'build:end'}`. Must resolve to a single
+            `BuildJournalEntry`.
         OVERRIDE : bool, default False
             If True, skip the interactive confirmation prompt. Forwarded to
-            :meth:`UNSAFE_copy_from`.
+            `UNSAFE_copy_from`.
 
-        All remaining keyword arguments (including ``**kwargs``) are
-        forwarded to :meth:`UNSAFE_copy_from`.
+        All remaining keyword arguments (including `**kwargs`) are
+        forwarded to `UNSAFE_copy_from`.
         """
         entry = self.buildjournal(**journal)
         return self.UNSAFE_copy_from(
@@ -4030,8 +4030,8 @@ class Datablock:
         """Bring a breadcrumb file into existence for the directory at *path*.
 
         *path* is ALWAYS a directory path -- never a file path.  With *crumbs*
-        the breadcrumb is that named file inside it (``{path}/{crumbs}``);
-        without, it is ``{path}.crumbs`` alongside it, since a directory topic
+        the breadcrumb is that named file inside it (`{path}/{crumbs}`);
+        without, it is `{path}.crumbs` alongside it, since a directory topic
         has no filename to use.
 
         Existing content is never clobbered: a breadcrumb is only touched when
@@ -4060,24 +4060,24 @@ class Datablock:
 
     def quote(self, *, deslash: int = 0, cite: bool = False, pretty: bool = False,
               tailkwargs: bool = True):
-        """The evaluable ``$fqcn(...)`` specline that makes this datablock again, operating as it does.
+        """The evaluable `$fqcn(...)` specline that makes this datablock again, operating as it does.
 
-        What it shares with :meth:`cite`: ``dbx.eval(x.quote()).hash == x.hash``
+        What it shares with `cite`: `dbx.eval(x.quote()).hash == x.hash`
         wherever it is evaluated -- a specline naming no datablock is the line,
         relocatable. What it adds: the operational kwargs. Nested datablocks are
         written compactly, bare, not expanded as a cite expands them.
 
-        ``tailkwargs=True`` (the default HERE) keeps every operational kwarg,
+        `tailkwargs=True` (the default HERE) keeps every operational kwarg,
         because quote() is the **evaluable** form and those kwargs are part of
-        reconstructing a working block -- ``local`` in particular decides where
-        local artifacts are staged, so dropping it sends ``find_latest_ckpt``
+        reconstructing a working block -- `local` in particular decides where
+        local artifacts are staged, so dropping it sends `find_latest_ckpt`
         to a different directory even though the hash and key still match.
-        :meth:`cite` defaults the other way: it shows what affects identity, so
-        just ``CITE_KEEP_TAILKWARGS`` (``tag``) of these.
+        `cite` defaults the other way: it shows what affects identity, so
+        just `CITE_KEEP_TAILKWARGS` (`tag`) of these.
 
-        ``pretty=True`` wraps one kwarg per line. It stays OFF by default
-        because the result is a specline that gets ``eval``-ed on the way back
-        in (see ``databits.eval``), so formatting must be opt-in rather than
+        `pretty=True` wraps one kwarg per line. It stays OFF by default
+        because the result is a specline that gets `eval`-ed on the way back
+        in (see `databits.eval`), so formatting must be opt-in rather than
         silently changing what every caller emits.
         """
         mode = 'quote' if not cite else 'cite'
@@ -4092,18 +4092,18 @@ class Datablock:
         return quote
 
     def repr(self, *, deslash: int = 0, pretty: bool = False) -> str:
-        """An evaluable ``$fqcn(...)`` specline carrying EVERY constructor kwarg.
+        """An evaluable `$fqcn(...)` specline carrying EVERY constructor kwarg.
 
-        :meth:`quote` renders what reconstructs a working block, and leaves out
-        what belongs to one run (``tree``); :meth:`cite`
-        renders for reading. This renders the whole of :attr:`dfn`: spec and
+        `quote` renders what reconstructs a working block, and leaves out
+        what belongs to one run (`tree`); `cite`
+        renders for reading. This renders the whole of `dfn`: spec and
         every other parameter, operational ones included -- what the block WAS,
-        down to the run it was part of. ``url`` and ``anchor`` are rendered as
-        :meth:`quote` renders them, only when given, so a block rooted by
+        down to the run it was part of. `url` and `anchor` are rendered as
+        `quote` renders them, only when given, so a block rooted by
         the environment's datalake stays relocatable. Private state
-        (``__redirected_paths__``) is not a kwarg and is not rendered. A nested
-        block renders as its own ``repr()``. *pretty* and *deslash* are as for
-        :meth:`quote`.
+        (`__redirected_paths__`) is not a kwarg and is not rendered. A nested
+        block renders as its own `repr()`. *pretty* and *deslash* are as for
+        `quote`.
         """
         self.tree   # generated on first access; render the one this block has
         kwargs = {**self._rootkwargs_, 'spec': self.__expand_spec__('repr_all')}
@@ -4119,24 +4119,24 @@ class Datablock:
 
         Every nested datablock is expanded in place, an indented block of its
         own however deep, and every VAR field shown, defaults included;
-        operational kwargs are left out (but ``CITE_KEEP_TAILKWARGS``). The
-        guarantee it shares with :meth:`quote`: ``dbx.eval(x.cite()).hash ==
-        x.hash`` wherever it is evaluated -- a specline naming no datablock is
+        operational kwargs are left out (but `CITE_KEEP_TAILKWARGS`). The
+        guarantee it shares with `quote`: `dbx.eval(x.cite()).hash ==
+        x.hash` wherever it is evaluated -- a specline naming no datablock is
         the line, relocatable -- and the tests hold it to that.
 
         The difference matters most where it used to hurt. Representing a child
-        as a string means the parent's ``repr`` escapes it, and a
+        as a string means the parent's `repr` escapes it, and a
         grandchild ends up inside a string inside a string -- doubling
         backslashes at every level until the deep entries are unreadable no
         matter how they are wrapped. Recursing over the *object graph* instead
         removes the quoting entirely, so depth costs nothing but indentation.
 
         Nested datablocks are expanded; every other specline -- given in the
-        spec or a VAR default -- is cited as the line, ``'$dbx.getenv(...)'``,
+        spec or a VAR default -- is cited as the line, `'$dbx.getenv(...)'`,
         never as what it resolves to on this machine: it is there to relocate.
 
-        ``tailkwargs=False`` (default) shows only :attr:`CITE_KEEP_TAILKWARGS`.
-        ``deslash`` is retained for compatibility and applied last; it is
+        `tailkwargs=False` (default) shows only `CITE_KEEP_TAILKWARGS`.
+        `deslash` is retained for compatibility and applied last; it is
         normally a no-op here, since the recursive form emits no escaped
         strings to begin with.
         """
@@ -4152,7 +4152,7 @@ class Datablock:
 
         lines.append(f"{inner}spec={{")
         for sk in sorted(self.VAR.__dataclass_fields__):
-            # A specline naming no datablock, ``$dbx.getenv('HOME')`` say, is cited as the line, relocatable.
+            # A specline naming no datablock, `$dbx.getenv('HOME')` say, is cited as the line, relocatable.
             raw_v = self._var_term_(sk)
             val = getattr(self.var, sk)
             if isinstance(val, Datablock):
@@ -4195,11 +4195,11 @@ class Datablock:
         only thing that has ever made a signature non-relocatable. Pinning the
         typing does not turn it on.
 
-        ``legacy=`` is the era switch and sets BOTH -- which is what it has
+        `legacy=` is the era switch and sets BOTH -- which is what it has
         always meant, back when they were one thing. The two named arguments
         override it individually.
 
-        *redirect_vars*, when given, is ``{current_name: historical_name}`` and
+        *redirect_vars*, when given, is `{current_name: historical_name}` and
         is forwarded to `_typed_specdict_` so the rendered spec uses the
         historical key names and sort order.
         """
@@ -4243,11 +4243,11 @@ class Datablock:
         return sig
 
     def subsignaturestr(self, *args, **kwargs):
-        """Alias for :meth:`signaturestr` for backwards compatibility."""
+        """Alias for `signaturestr` for backwards compatibility."""
         return self.signaturestr(*args, **kwargs)
 
     def normstr(self, *args, **kwargs):
-        """Alias for :meth:`signaturestr` for backwards compatibility."""
+        """Alias for `signaturestr` for backwards compatibility."""
         return self.signaturestr(*args, **kwargs)
 
     def diffsignature(
@@ -4337,7 +4337,7 @@ class Datablock:
         return self.diffsignature(*args, **kwargs)
 
     def diffsig(self, *args, **kwargs):
-        """Alias for :meth:`diffsignature`."""
+        """Alias for `diffsignature`."""
         return self.diffsignature(*args, **kwargs)
 
     def diffsubsig(self, *args, **kwargs):
@@ -4352,13 +4352,13 @@ class Datablock:
                       deslash: bool = False, omit=(), redirect_vars=None, nested=None) -> dict:
         """The signature as a nested dict of correctly-typed values.
 
-        Built from ``var`` via `_typed_specdict_`, so an ``int`` field comes
-        back an ``int``. Speclines stay strings.
+        Built from `var` via `_typed_specdict_`, so an `int` field comes
+        back an `int`. Speclines stay strings.
 
         Under LEGACY_TYPING it is the old thing: the rendered signature parsed
         back into text leaves. *deslash* applies to that rendering before it is
         parsed -- stripping backslashes from the formatted output afterwards
-        would eat the escapes ``repr`` put inside the leaves.
+        would eat the escapes `repr` put inside the leaves.
         """
         if legacy_typing is None:
             legacy_typing = legacy
@@ -4384,7 +4384,7 @@ class Datablock:
         return self.signature(*args, **kwargs)
 
     def sigstr(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
-        """Alias for :meth:`signaturestr` (defaults to pretty=True)."""
+        """Alias for `signaturestr` (defaults to pretty=True)."""
         return self.signaturestr(deslash=deslash, legacy=legacy, pretty=pretty)
 
     def subsigstr(self, *, deslash: bool = False, legacy: bool | None = None, pretty: bool = True):
@@ -4395,10 +4395,10 @@ class Datablock:
                  legacy_signature: 'bool | None' = None,
                  specialization: 'Datablock.Specialization | None' = None,
                  with_block: bool = True) -> dict:
-        """The full type as a dictionary: the structured form of :meth:`typestr`.
+        """The full type as a dictionary: the structured form of `typestr`.
 
         *specialization* describes the narrower block that one names instead,
-        as ``typestr(specialization=)`` renders it; *with_block* is typestr's.
+        as `typestr(specialization=)` renders it; *with_block* is typestr's.
         """
         if specialization is None:
             return {
@@ -4427,7 +4427,7 @@ class Datablock:
         return self.type(deslash=deslash, legacy=legacy)
 
     def tpstr(self, *, deslash: bool = False, legacy: 'bool | None' = None, pretty: bool = True):
-        """Alias for :meth:`typestr` (defaults to pretty=True)."""
+        """Alias for `typestr` (defaults to pretty=True)."""
         return self.typestr(deslash=deslash, legacy=legacy, pretty=pretty)
 
     def difftopics(
@@ -4438,31 +4438,31 @@ class Datablock:
         report: bool = False,
         maxlen: 'int | None' = 160,
     ) -> 'dict | str':
-        """Diff this block's topics against another's, the way :attr:`signature` sees them.
+        """Diff this block's topics against another's, the way `signature` sees them.
 
-        Compares :meth:`_topics_signature_` -- the very segments the signature is
+        Compares `_topics_signature_` -- the very segments the signature is
         built from -- so the two agree by construction: the result is empty
         exactly when the topics contribute nothing to a difference in signature,
         and non-empty exactly when they do.
 
         Returns a **sparse** dict keyed by topic path, valued by
-        ``(self_filename, other_filename)`` as those render into the signature,
-        with :data:`ABSENT` for a path one side does not declare. A difference
-        belonging to no single path -- a reordering, or ``TOPICS = {}`` against
-        no TOPICS at all -- is reported under the :data:`SIGNATURE_TOPICS`
+        `(self_filename, other_filename)` as those render into the signature,
+        with `ABSENT` for a path one side does not declare. A difference
+        belonging to no single path -- a reordering, or `TOPICS = {}` against
+        no TOPICS at all -- is reported under the `SIGNATURE_TOPICS`
         sentinel key, carrying both segment tuples.
 
         Parameters
         ----------
         other_topics:
-            A :class:`Datablock`, a :class:`BuildJournalEntry`, a ``TOPICS``
-            declaration (dict or list, ``None`` for a block declaring none), or
-            the ``str(dict)`` form a journal records. Omit it to read the other
+            A `Datablock`, a `BuildJournalEntry`, a `TOPICS`
+            declaration (dict or list, `None` for a block declaring none), or
+            the `str(dict)` form a journal records. Omit it to read the other
             side from *journal*.
         journal:
             Selector dict for the journal entry to compare against, as
-            :meth:`diffsubsig`. Note that a journal records a list-``TOPICS``
-            block as a mapping of :data:`DIRTOPIC`, so a list declaration and the
+            `diffsubsig`. Note that a journal records a list-`TOPICS`
+            block as a mapping of `DIRTOPIC`, so a list declaration and the
             equivalent dict one are indistinguishable once written -- against an
             entry they compare equal, against the live block they do not.
         report:
@@ -4490,26 +4490,26 @@ class Datablock:
         return self.format_diff(diff, maxlen=maxlen)
 
     def diffversion(self, other_version=ABSENT, *, journal: 'dict | None' = None):
-        """Diff this block's :attr:`version` against another's.
+        """Diff this block's `version` against another's.
 
-        Returns ``(self_version, other_version)`` when they differ, and ``None``
+        Returns `(self_version, other_version)` when they differ, and `None`
         when they do not -- so it is empty in the same sense the other two diffs
-        are, and ``if block.diffversion(...)`` reads as "did the version move".
+        are, and `if block.diffversion(...)` reads as "did the version move".
 
-        Compared as :attr:`signature` renders them (``f"version={v}"``), so
-        ``1`` and ``'1'`` are the same version -- they are the same signature,
+        Compared as `signature` renders them (`f"version={v}"`), so
+        `1` and `'1'` are the same version -- they are the same signature,
         and this method exists to answer for the signature. Both values are
         reported as they are, so the type difference is still visible.
 
         Parameters
         ----------
         other_version:
-            A :class:`Datablock`, a :class:`BuildJournalEntry`, or a version
-            value (``None`` being the version of a block declaring no
-            ``VERSION``). Omit it to read the other side from *journal*.
+            A `Datablock`, a `BuildJournalEntry`, or a version
+            value (`None` being the version of a block declaring no
+            `VERSION`). Omit it to read the other side from *journal*.
         journal:
             Selector dict for the journal entry to compare against, as
-            :meth:`diffsubsig`.
+            `diffsubsig`.
         """
         if other_version is ABSENT:
             if journal is None:
@@ -4546,7 +4546,7 @@ class Datablock:
 
     @classmethod
     def format_diff(cls, diff: dict, *, maxlen: 'int | None' = 160) -> str:
-        """Render a diff dict as one ``path`` + self/other per difference."""
+        """Render a diff dict as one `path` + self/other per difference."""
         def crop(value):
             # repr() unconditionally: leaves are typed, so a bare rendering would
             # print the float 15.0 and the string '15.0' identically -- which is
@@ -4578,19 +4578,19 @@ class Datablock:
              legacy_signature: 'bool | None' = None, pretty: bool = False,
              specialization: 'Datablock.Specialization | None' = None,
              with_block: bool = True):
-        """The identity string :attr:`hash` is the sha256 of.
+        """The identity string `hash` is the sha256 of.
 
         *specialization* renders the identity of the NARROWER block that one
-        describes instead of this one's: its ``spec`` fields dropped, its
-        ``topics`` alone, and its ``version`` when it names one. Its topics are
+        describes instead of this one's: its `spec` fields dropped, its
+        `topics` alone, and its `version` when it names one. Its topics are
         rendered from the declaration it carries -- that block's own nodes, in
         that block's era -- and NOTHING of them is inherited from this class's
         TOPICS. (A Datatable adds its TABLET's slices, as its own identity does.)
-        See :meth:`get_hash`.
+        See `get_hash`.
 
         *with_block* False computes it under the rules from before a stack's
         type named its BLOCK -- a Datatable's its TABLET -- which is what
-        reconstructing a stack built then needs. See :meth:`_type_entries_`.
+        reconstructing a stack built then needs. See `_type_entries_`.
         """
         omit, topics = ((), None) if specialization is None else (
             specialization.omitted, list(self._specialization_topics_(specialization)))
@@ -4643,20 +4643,20 @@ class Datablock:
 
     def get_hash(self, specialization: 'Datablock.Specialization | None' = None, *,
                  with_block: bool = True):
-        """This block's hash, or the hash of one of its :attr:`SPECIALIZATIONS`.
+        """This block's hash, or the hash of one of its `SPECIALIZATIONS`.
 
         With *specialization*, the hash of the narrower block it describes --
         which is a real hash of a real identity, the one that block was built
         under, and so the one its journal entries are filed by. That is the
         whole mechanism: the reconstruction is a string operation on
-        :meth:`typestr`, needing no access to the older class and no record that
+        `typestr`, needing no access to the older class and no record that
         it ever existed.
 
-        Cached per specialization, and never into ``_hash``: that one is this
+        Cached per specialization, and never into `_hash`: that one is this
         block's own, and a specialized hash is emphatically not it.
 
         *with_block* False: the hash under the rules from before a stack's type
-        named its BLOCK -- see :meth:`typestr`. Not cached.
+        named its BLOCK -- see `typestr`. Not cached.
         """
         if not with_block:
             return hashlib.sha256(self.typestr(specialization=specialization,
@@ -4678,11 +4678,11 @@ class Datablock:
         return cache[key]
 
     def get_type(self, specialization: 'Datablock.Specialization | None' = None, **kwargs) -> dict:
-        """``type(specialization=...)``: the structured identity, to pair with :meth:`get_hash`."""
+        """`type(specialization=...)`: the structured identity, to pair with `get_hash`."""
         return self.type(specialization=specialization, **kwargs)
 
     def get_signature(self, specialization: 'Datablock.Specialization | None' = None, **kwargs) -> dict:
-        """:meth:`signature`, or the narrower block's: the fields *specialization* pins, dropped."""
+        """`signature`, or the narrower block's: the fields *specialization* pins, dropped."""
         if specialization is None:
             return self.signature(**kwargs)
         return self.get_type(specialization)['signature']
@@ -4696,25 +4696,25 @@ class Datablock:
                                 redirect_vars=redirect_vars, **kwargs)
 
     def get_typestr(self, specialization: 'Datablock.Specialization | None' = None, **kwargs) -> str:
-        """``typestr(specialization=...)``: the identity :meth:`get_hash` is the sha256 of."""
+        """`typestr(specialization=...)`: the identity `get_hash` is the sha256 of."""
         return self.typestr(specialization=specialization, **kwargs)
 
     def specialization_types(self) -> list:
-        """:meth:`get_type` of every declared specialization, in declaration order.
+        """`get_type` of every declared specialization, in declaration order.
 
         For looking at what each one reconstructs -- next to
-        :meth:`specialization_typestrs`, and the hashes a journal is searched
-        for, :meth:`specialization_hashes`. A reconstruction that differs from
+        `specialization_typestrs`, and the hashes a journal is searched
+        for, `specialization_hashes`. A reconstruction that differs from
         the identity on disk shows up here, before anything fails to resolve.
         """
         return [self.get_type(sp) for sp in (self.SPECIALIZATIONS or [])]
 
     def specialization_typestrs(self) -> list:
-        """:meth:`get_typestr` of every declared specialization, in declaration order."""
+        """`get_typestr` of every declared specialization, in declaration order."""
         return [self.get_typestr(sp) for sp in (self.SPECIALIZATIONS or [])]
 
     def specialization_hashes(self) -> list:
-        """:meth:`get_hash` of every declared specialization, in declaration order."""
+        """`get_hash` of every declared specialization, in declaration order."""
         return [self.get_hash(sp) for sp in (self.SPECIALIZATIONS or [])]
 
     def matching_specializations(self):
@@ -4819,18 +4819,18 @@ class Datablock:
         that outlives this instance, so the next run reads the narrower block's
         data without scanning the journal for it, and the journal says which
         specialization was installed and when. Here for a block constructed
-        with ``use_specializations='memory'``, and for adopting one without
+        with `use_specializations='memory'`, and for adopting one without
         building the topics it does not cover.
 
-        What it installs is what :meth:`find_specialization` finds and
-        ``build()`` would install: the most recently recorded past that
+        What it installs is what `find_specialization` finds and
+        `build()` would install: the most recently recorded past that
         resolves -- a declared specialization, or a composition of one, or of
         this block as it is, with its nested blocks' pasts.
 
         *dry_run* reports what that specialization WOULD do and
-        returns its proposed :class:`Redirection`, writing nothing -- the same
-        handle :meth:`UNSAFE_redirect` has, *dry_validate* included, which makes
-        the return a ``(Redirection, Validation)`` pair.
+        returns its proposed `Redirection`, writing nothing -- the same
+        handle `UNSAFE_redirect` has, *dry_validate* included, which makes
+        the return a `(Redirection, Validation)` pair.
         """
         if not UNSAFE_allowed("UNSAFE_specialize", OVERRIDE=OVERRIDE):
             return None
@@ -4903,11 +4903,11 @@ class Datablock:
         )
 
     def ls(self, *topicpath, detail=False, local: bool = False):
-        """List the contents at ``.path(*topicpath)`` using *fsspec*.
+        """List the contents at `.path(*topicpath)` using *fsspec*.
 
         If the path points to a file (i.e. a dict-TOPICS entry with a
         non-None filename), the parent directory is listed.  If the path
-        is a directory (list-TOPICS, or dict-TOPICS with ``None``), it
+        is a directory (list-TOPICS, or dict-TOPICS with `None`), it
         is listed directly.
 
         Parameters
@@ -4915,7 +4915,7 @@ class Datablock:
         topic : str
             The topic whose path to list.
         detail : bool, optional
-            When *True* return full ``fsspec.ls`` dicts instead of plain
+            When *True* return full `fsspec.ls` dicts instead of plain
             path strings.
 
         Returns
@@ -4934,9 +4934,9 @@ class Datablock:
         return ls_path(fs, p, self._is_dir_topic_(*topicpath), detail=detail)
 
     def list(self, *topicpath, local: bool = False):
-        """Detailed, recursive listing of every file under ``.path(*topicpath)``.
+        """Detailed, recursive listing of every file under `.path(*topicpath)`.
 
-        Parallels :meth:`ls`, but recurses and returns full ``fsspec``
+        Parallels `ls`, but recurses and returns full `fsspec`
         detail dicts for all files (directory entries excluded) beneath the
         topic's path.  For a dict-TOPICS single-file topic the file itself
         is returned.  Returns an empty list when the path is absent.
@@ -4947,13 +4947,13 @@ class Datablock:
             The topic whose files to list.
         local : bool, optional
             When *True* operate on the local cache of the topic
-            (``.path(topic, local=True)``) rather than the (possibly
+            (`.path(topic, local=True)`) rather than the (possibly
             remote) canonical path.
 
         Returns
         -------
         list[dict]
-            One ``fsspec`` detail dict per file, with ``name`` normalized
+            One `fsspec` detail dict per file, with `name` normalized
             to a fully-qualified path.
         """
         fs = self.localfs if local else self.fs
@@ -4966,9 +4966,9 @@ class Datablock:
         return list_path(fs, p, self._is_dir_topic_(*topicpath))
 
     def size(self, *topicpath, local: bool = False):
-        """Total size in bytes of all files under ``.path(*topicpath)``.
+        """Total size in bytes of all files under `.path(*topicpath)`.
 
-        Sums the ``size`` of every file reported by :meth:`list`.  Returns
+        Sums the `size` of every file reported by `list`.  Returns
         0 when the topic has no files.
 
         Parameters
@@ -4992,14 +4992,14 @@ class Datablock:
     ):
         """The directory for a topic, one path segment per level.
 
-        A group has a directory of its own -- ``dirpath('data')`` is the parent
-        of ``dirpath('data', 'frames')`` -- so this answers for groups and
-        leaves alike.  A `SYNTOPIC` has no location and gives ``None``.
+        A group has a directory of its own -- `dirpath('data')` is the parent
+        of `dirpath('data', 'frames')` -- so this answers for groups and
+        leaves alike.  A `SYNTOPIC` has no location and gives `None`.
 
         A redirected topic answers with the directory of the path it is
         redirected to -- the path itself for a directory topic, its parent for a
         file one -- so a listing of a redirected block lists the data it
-        actually reads. As in `path()`, ``local=True`` is never redirected:
+        actually reads. As in `path()`, `local=True` is never redirected:
         the local cache is this block's own.
         """
         topicpath = self._normtopic_(topicpath)
@@ -5028,17 +5028,17 @@ class Datablock:
     def linklocal(self, topic, target: str|None = None):
         """Symlink *target* — a plain local filesystem path required by
         external tooling (e.g. TensorBoard) — to wherever *topic* resolves
-        under local staging (``path(topic, local=True)``/``dirpath(topic,
-        local=True)``).  When this block's url is itself local this is the
+        under local staging (`path(topic, local=True)`/`dirpath(topic,
+        local=True)`).  When this block's url is itself local this is the
         topic's canonical path; otherwise it is the DBX_LOCAL staging path,
         so writers always see a real local path regardless of where
         url/DBX_ROOT points.
 
-        For directory topics (list-TOPICS, or dict-TOPICS with a :data:`DIRTOPIC`
+        For directory topics (list-TOPICS, or dict-TOPICS with a `DIRTOPIC`
         value) *target* is linked to the topic directory itself. For file
         topics *target* is linked to the topic file path, with its parent
         directory created so a writer can create the file through the
-        link. A no-op when *target* is ``None`` or already links to the
+        link. A no-op when *target* is `None` or already links to the
         resolved path; repointing a stale link and refusing to clobber a
         non-symlink at *target* are both logged.
         """
@@ -5086,7 +5086,7 @@ class Datablock:
         return self
 
     def paths(self):
-        """``{topic: path}``, nested wherever TOPICS is."""
+        """`{topic: path}`, nested wherever TOPICS is."""
         return {topic: self.path(topic) for topic in self.topics()}
 
     def anchorpath(self):
@@ -5164,7 +5164,7 @@ class Datablock:
 
     @functools.cached_property
     def redirection(self):
-        """Where this block reads from instead, as a :attr:`Redirection`, or None.
+        """Where this block reads from instead, as a `Redirection`, or None.
 
         An informational property describing how this block is redirected.
         """
@@ -5187,10 +5187,10 @@ class Datablock:
         One live instance keeps one tree id for as long as it is alive, and a
         whole build tree shares it, because `build_tree` and `Datastack.block`
         hand it down. That is what makes a run's journal entries findable
-        together -- ``id`` identifies one row and ``hash`` one block, but
+        together -- `id` identifies one row and `hash` one block, but
         neither says "these were written by the same run".
 
-        Not part of :attr:`signature`, so which run built a block cannot
+        Not part of `signature`, so which run built a block cannot
         change what the block IS.
         """
         if getattr(self, '_tree_', None) is None:
@@ -5219,11 +5219,11 @@ class Datablock:
         """The full definition (state) of this Datablock instance.
 
         Returns a dict containing ALL parameters — both the explicit parameters
-        declared in ``Datablock.__init__`` (e.g. ``root``, ``tag``, ``revision``,
-        ``keyby``, …) and any extra ``**kwargs`` that were passed at construction
+        declared in `Datablock.__init__` (e.g. `root`, `tag`, `revision`,
+        `keyby`, …) and any extra `**kwargs` that were passed at construction
         time.
 
-        This is the dict that would be needed to reconstruct the block::
+        This is the dict that would be needed to reconstruct the block:
 
             block2 = MyBlock(**block1.dfn)
             assert block1.dfn == block2.dfn
@@ -5255,12 +5255,12 @@ class Datablock:
         """The dynamically-supplied keyword arguments of this Datablock instance.
 
         Returns a dict containing *only* the parameters that are NOT declared
-        as explicit keyword arguments in ``Datablock.__init__``.  For example,
-        if a block is created as::
+        as explicit keyword arguments in `Datablock.__init__`.  For example,
+        if a block is created as:
 
             block = MyBlock(root='/data', my_custom_param=42)
 
-        then ``block.kwargs == {'my_custom_param': 42}`` — the ``root`` key is
+        then `block.kwargs == {'my_custom_param': 42}` — the `root` key is
         excluded because it is an explicit parameter.
 
         These are the "user-defined" parameters that distinguish one block
@@ -5282,7 +5282,7 @@ class Datablock:
 
     @property
     def specialization(self):
-        """The :class:`Specialization` this block is reading through, or None."""
+        """The `Specialization` this block is reading through, or None."""
         sp = self.__dict__.get('__specialization__')
         if sp is not None:
             return sp
@@ -5387,7 +5387,7 @@ class Datablock:
         """This block's view of the current `Datalog`: named for the block, its own levels over the scope's.
 
         A view looks its levels up when it is written to, so the one kept here
-        hears whatever ``with Datalog(...)`` is open then. A level the block
+        hears whatever `with Datalog(...)` is open then. A level the block
         was not given -- None -- is the scope's, then the environment's. Made
         again only when the block's name or levels have moved; never pickled.
         """
@@ -5431,8 +5431,8 @@ class Datablock:
         """*value* as its declared type, when it arrived as text.
 
         VAR is a dataclass with real annotations, but nothing enforces them, so
-        ``shard_size='256'`` reaches a field declared ``int``. Left alone it
-        renders quoted and hashes differently from ``256`` -- the same config
+        `shard_size='256'` reaches a field declared `int`. Left alone it
+        renders quoted and hashes differently from `256` -- the same config
         silently becoming two blocks. Coercion is attempted only for a string
         standing in for a non-string field, and only when it is unambiguous:
         anything that does not parse, or parses to the wrong type, is returned
@@ -5465,8 +5465,8 @@ class Datablock:
         """VAR field *name* unevaluated: the spec's value where it gives one, else the VAR default's term.
 
         What a field was configured as, before it resolves. A specline -- given
-        or a default, ``$dbx.getenv('HOME')`` say -- stays the line here, where
-        ``getattr(self.var, name)`` is what it resolves to on this machine:
+        or a default, `$dbx.getenv('HOME')` say -- stays the line here, where
+        `getattr(self.var, name)` is what it resolves to on this machine:
         the identity, a quote and a cite render the line, so that they
         relocate, and a default renders exactly as the same line given.
         """
@@ -5479,23 +5479,23 @@ class Datablock:
                          redirect_vars=None, nested=None) -> dict:
         """The spec as real Python values -- ints as ints, blocks as sub-dicts.
 
-        Built from ``self.var``, NOT by parsing the rendered signature. The
+        Built from `self.var`, NOT by parsing the rendered signature. The
         rendering is text, and reading it back gives text: that is why
-        ``sigdict()`` (now ``sig()``) used to report ``'256'`` for a field holding ``256``,
+        `sigdict()` (now `sig()`) used to report `'256'` for a field holding `256`,
         with no coercion bug anywhere in sight.
 
         Speclines stay strings, since a specline IS a string; every other leaf
         is its declared type.
 
-        *redirect_vars*, when given, is a ``{current_name: historical_name}``
+        *redirect_vars*, when given, is a `{current_name: historical_name}`
         mapping.  Each current field is emitted under its historical name, and
         the keys are sorted by historical name so the rendered spec matches the
         identity of the build before the rename. A DOTTED current name,
-        ``'columns.signals'``, names an entry inside a field's dict value: it is
+        `'columns.signals'`, names an entry inside a field's dict value: it is
         moved out to the top level under its historical name -- a restructure,
         such as fields gathered into one dict, rendered as before it. An entry
         the dict does not hold moves out as None: the historical field left at
-        its default, as a collator of signals alone had ``labels=None`` -- and
+        its default, as a collator of signals alone had `labels=None` -- and
         so does every entry of a field that is None, a nested block not given,
         and the field itself is dropped. A dict left empty by the moves is
         dropped.
@@ -5503,7 +5503,7 @@ class Datablock:
         *omit* may hold DOTTED names too: that entry is dropped after the moves,
         as a dotted pin says a nested block's field did not exist then.
 
-        *nested*, when given, is ``{field: Specialization}``: that field's
+        *nested*, when given, is `{field: Specialization}`: that field's
         block renders as that specialization -- one of the nested block's OWN --
         says it rendered, recursively. See `_specialization_variants_`.
         """
@@ -5627,7 +5627,7 @@ class Datablock:
         """Whether the pre-LEGACY_NORM rendering applies: root kwargs, str()'d spec.
 
         Untouched by the typing change, and deliberately SEPARATE from
-        :meth:`_legacy_typing_`. signature() and hash are relocatable -- free of
+        `_legacy_typing_`. signature() and hash are relocatable -- free of
         url -- and only this flag has ever decided otherwise. Tying the typing
         opt-out to it would put a url into the identity of every block pinned
         for typing, which is the opposite of preserving it.
@@ -5638,7 +5638,7 @@ class Datablock:
     def _legacy_typing_(self, legacy: 'bool | None' = None) -> bool:
         """Whether to render the pre-typing way: text leaves, nested blocks as strings.
 
-        Independent of :meth:`_legacy_norm_`: this chooses the TYPING, and that
+        Independent of `_legacy_norm_`: this chooses the TYPING, and that
         one chooses whether root kwargs are in the identity. A block pinned
         here keeps exactly the rendering it had, relocatable or not.
 
@@ -5653,12 +5653,12 @@ class Datablock:
 
     @staticmethod
     def _topictext_(node, modern):
-        """A topic leaf as the text that follows the ``=`` in its segment.
+        """A topic leaf as the text that follows the `=` in its segment.
 
         In a *modern* declaration a filename is QUOTED and a marker is not,
         which is what keeps the rendering injective now that a leaf can be
-        either: bare, a topic stored in a file called ``DIR`` and a :class:`DIR`
-        topic would both render ``topic:masks=DIR`` and collide onto one hash
+        either: bare, a topic stored in a file called `DIR` and a `DIR`
+        topic would both render `topic:masks=DIR` and collide onto one hash
         while meaning different things -- a file in the one and a directory in
         the other.
 
@@ -5678,7 +5678,7 @@ class Datablock:
         holding a marker is a modern one, and there is nothing else it could
         mean.  Derived on each call, so a TOPICS assigned or amended after the
         class body -- or computed per instance, as
-        :class:`~dbx.dataparts.MappedDatatable`'s is -- is answered as it stands.
+        `MappedDatatable`'s is -- is answered as it stands.
 
         A declaration holding both spellings has no era, and raises rather than
         rendering half of itself each way.
@@ -5862,13 +5862,13 @@ class Datablock:
         return None
 
     def _resolve_legacy_CONFIG_(self):
-        """Honor a subclass that still declares ``class CONFIG`` instead of ``VAR``.
+        """Honor a subclass that still declares `class CONFIG` instead of `VAR`.
 
-        ``Datablock.CONFIG`` is only an alias of ``Datablock.VAR``, so a subclass
-        declaring ``CONFIG`` shadows the alias without overriding ``VAR``.  Walk
-        the MRO up to ``Datablock`` and take whichever name that subclass chain
-        declares first: a ``VAR`` override needs nothing, a ``CONFIG`` override
-        is bound to ``self.VAR`` so the rest of the code only ever reads ``VAR``.
+        `Datablock.CONFIG` is only an alias of `Datablock.VAR`, so a subclass
+        declaring `CONFIG` shadows the alias without overriding `VAR`.  Walk
+        the MRO up to `Datablock` and take whichever name that subclass chain
+        declares first: a `VAR` override needs nothing, a `CONFIG` override
+        is bound to `self.VAR` so the rest of the code only ever reads `VAR`.
         """
         for klass in type(self).__mro__:
             if klass is Datablock:
@@ -5880,7 +5880,7 @@ class Datablock:
                 break
 
     def _url_to_fs_(self, path):
-        """Wrapper around ``fsspec.url_to_fs`` that injects ``self.storage_options``."""
+        """Wrapper around `fsspec.url_to_fs` that injects `self.storage_options`."""
         return fsspec.url_to_fs(path, **self.storage_options)
 
 
@@ -5902,9 +5902,9 @@ class Datablock:
 
     @staticmethod
     def _normtopic_(topicpath):
-        """Accept ``('data', 'frames')``, ``(('data', 'frames'),)`` and ``('data',)``.
+        """Accept `('data', 'frames')`, `(('data', 'frames'),)` and `('data',)`.
 
-        The tuple form lets a caller feed a :meth:`leaftopics` entry straight
+        The tuple form lets a caller feed a `leaftopics` entry straight
         back in without unpacking it.
         """
         if len(topicpath) == 1 and isinstance(topicpath[0], (tuple, list)):
@@ -5914,8 +5914,8 @@ class Datablock:
     def _topicnode_(self, *topicpath):
         """Resolve a topic path to its TOPICS entry.
 
-        Returns a filename (``str``), :data:`DIRTOPIC`, :data:`SYNTOPIC`, or a
-        ``dict`` for a group.  Raises KeyError naming the offending segment
+        Returns a filename (`str`), `DIRTOPIC`, `SYNTOPIC`, or a
+        `dict` for a group.  Raises KeyError naming the offending segment
         when the path does not exist, so a typo in a nested name says which
         level it failed at rather than surfacing as a missing file later.
         """
@@ -5961,14 +5961,14 @@ class Datablock:
 
     @staticmethod
     def _node_is_syntopic_(node):
-        """True when node is :data:`SYNTOPIC` or the :class:`SYNTHETIC` marker."""
+        """True when node is `SYNTOPIC` or the `SYNTHETIC` marker."""
         return (isinstance(node, tuple) and len(node) == 0) or is_topicmarker(node, SYNTHETIC)
 
     @staticmethod
     def _check_topicname_(name):
         """A topic name may not contain '/'.
 
-        Nesting is rendered into :attr:`signature` as ``topic:data/frames=...``,
+        Nesting is rendered into `signature` as `topic:data/frames=...`,
         and the signature's own segments are '/'-joined. Allowing a '/' inside
         a name would let two different TOPICS trees render identically and so
         collide onto one hash.
@@ -5998,20 +5998,20 @@ class Datablock:
 
     @staticmethod
     def _node_is_dirtopic_(node):
-        """True when node is :data:`DIRTOPIC` or a :class:`DATADIR` marker.
+        """True when node is `DIRTOPIC` or a `DATADIR` marker.
 
         A parameterised marker is a subclass of the one it parameterises, so
-        ``DATASLICE(idx='int')`` -- a slice IS a directory -- lands here too,
-        and so does the deprecated :class:`DIR`.
+        `DATASLICE(idx='int')` -- a slice IS a directory -- lands here too,
+        and so does the deprecated `DIR`.
         """
         return node is DIRTOPIC or is_topicmarker(node, DATADIR)
 
     def _is_dir_topic_(self, *topicpath):
         """True when the topic resolves to a directory rather than a file.
 
-        True for list-TOPICS entries and for :data:`DIRTOPIC` leaves.  A
-        :data:`SYNTOPIC` is neither, and neither is a group -- a group has a
-        directory, but :meth:`path` describes it by its members.
+        True for list-TOPICS entries and for `DIRTOPIC` leaves.  A
+        `SYNTOPIC` is neither, and neither is a group -- a group has a
+        directory, but `path` describes it by its members.
         """
         topicpath = self._normtopic_(topicpath)
         if not topicpath or topicpath[0] is None:
@@ -6020,7 +6020,7 @@ class Datablock:
         return self._node_is_dirtopic_(node)
 
     def _is_syntopic_(self, *topicpath):
-        """True when the topic is declared :data:`SYNTOPIC` -- so it has no location.
+        """True when the topic is declared `SYNTOPIC` -- so it has no location.
 
         Only dict-TOPICS can declare one; every entry of a list-TOPICS is a
         directory.
@@ -6055,12 +6055,12 @@ class Datablock:
     def _tree_skips_(self, attr):
         """The spec keys *attr* exempts, as a set, refusing what cannot be one.
 
-        A bare string is the error worth catching: ``TREE_SKIP_BUILDING =
-        'ckpt_builder'`` -- the tuple written without its trailing comma --
-        leaves membership testing SUBSTRINGS, so ``'ckpt'`` would be exempt and
-        ``'ckpt_builderish'`` would not, and nothing would say so.
+        A bare string is the error worth catching: `TREE_SKIP_BUILDING =
+        'ckpt_builder'` -- the tuple written without its trailing comma --
+        leaves membership testing SUBSTRINGS, so `'ckpt'` would be exempt and
+        `'ckpt_builderish'` would not, and nothing would say so.
 
-        The retired ``BUILD_TREE_EXEMPTIONS`` is refused here rather than
+        The retired `BUILD_TREE_EXEMPTIONS` is refused here rather than
         ignored for the same reason: a class still declaring it would go on
         having its subtree built on its behalf, which for a warm-start source
         is a full training run nobody asked for.
@@ -6124,13 +6124,13 @@ class Datablock:
         """*paths*, re-keyed by *topic_map* -- which reads mine -> theirs.
 
         Topics line up by name to begin with, as they would with no map at all;
-        ``{'out': 'output'}`` then says this block's ``out`` is that entry's
-        ``output``, so the entry's ``output`` path also comes back under ``out``.
+        `{'out': 'output'}` then says this block's `out` is that entry's
+        `output`, so the entry's `output` path also comes back under `out`.
         Every topic the map does not mention is untouched.
 
         A mapping whose target the other side does not have leaves its topic
         with NO redirected path, rather than falling back to the name it was
-        told not to use: asking for ``theirs`` and silently getting ``mine`` is
+        told not to use: asking for `theirs` and silently getting `mine` is
         the one answer that is certainly wrong. That topic then reads as it
         would unredirected, and the mapping is reported.
         """
@@ -6190,7 +6190,7 @@ class Datablock:
         """The path this block's *topicpath* is redirected to, or None.
 
         None whenever there is no redirection, or it records nothing for this
-        topic -- which leaves :meth:`path` to answer with this block's own, so a
+        topic -- which leaves `path` to answer with this block's own, so a
         partial redirection redirects only what it names.
         """
         if len(topicpath) > 0 and str(topicpath[0]).startswith('.'):
@@ -6211,8 +6211,8 @@ class Datablock:
         """The directory of the path *topicpath* is redirected to, or None.
 
         A directory topic IS its path; a file topic's directory is the parent of
-        the file it was redirected to -- which is what makes ``ls``, ``list``
-        and ``size`` describe the redirected-to data rather than this block's
+        the file it was redirected to -- which is what makes `ls`, `list`
+        and `size` describe the redirected-to data rather than this block's
         empty one, since all three resolve through here.
         """
         redirected = self._redirect_path_(*topicpath)
@@ -6380,7 +6380,7 @@ class Datablock:
     def _UNSAFE_copy_fs_(self, *, src_path, dst_path, recursive: bool = False):
         """Copy a single file or directory between two fsspec paths.
 
-        fsspec does not implement a generic cross-filesystem ``.copy()``, so
+        fsspec does not implement a generic cross-filesystem `.copy()`, so
         this dispatches to put/get directly when either side is local, and
         falls back to a temporary local directory when both are remote.
         """
@@ -6416,11 +6416,11 @@ class Datablock:
         When *src_path* and *dst_path* resolve to the same non-local
         filesystem (e.g. two Azure blob paths in the same account), this
         does a direct blob-to-blob copy with no data transiting the local
-        machine. Otherwise it falls back to :meth:`_UNSAFE_copy_fs_`
+        machine. Otherwise it falls back to `_UNSAFE_copy_fs_`
         (get+put, possibly via a local temporary directory), which is the
         only option when a real cross-filesystem or local-disk hop is
-        required. Mirrors the ``use_server_side`` branch already used by
-        :meth:`_UNSAFE_copy_topic_dir_` for whole-directory copies, exposed
+        required. Mirrors the `use_server_side` branch already used by
+        `_UNSAFE_copy_topic_dir_` for whole-directory copies, exposed
         here for single-file copies (e.g. a subclass copying a subset of a
         topic's files instead of the whole directory).
         """
@@ -6475,7 +6475,7 @@ class Datablock:
         """What this block's work off its devices runs on: *worker_parallelization*, else *parallelization*.
 
         None when neither is given. The work on its devices -- a `Datastack`'s
-        ``devices`` -- is *device_parallelization*'s; see `Datastack`.
+        `devices` -- is *device_parallelization*'s; see `Datastack`.
         """
         return getattr(self, 'worker_parallelization', None) or getattr(self, 'parallelization', None)
 
@@ -6544,19 +6544,19 @@ class Datablock:
     def _UNSAFE_copy_topic_(self, topic, anchorkeypath, *, topicpaths=None, always_copy_whole_dirpath: bool = False, **kwargs):
         """Copy one topic's data from anchorkeypath into this Datablock.
 
-        Dispatches to :meth:`_UNSAFE_copy_topic_dir_` or
-        :meth:`_UNSAFE_copy_topic_file_` depending on TOPICS shape. Overriding
+        Dispatches to `_UNSAFE_copy_topic_dir_` or
+        `_UNSAFE_copy_topic_file_` depending on TOPICS shape. Overriding
         this in a subclass is the extension point for customizing how a
         *specific* topic gets copied (e.g. copying only a subset of files
         instead of the whole directory) while leaving the rest of
-        :meth:`UNSAFE_copy_from` (overwrite check, journal entries,
+        `UNSAFE_copy_from` (overwrite check, journal entries,
         post-copy validation) untouched -- see
-        ``IJEPAsaurUSStill._UNSAFE_copy_topic_`` in soundworld for an example
-        that restricts the ``ckpts`` topic to a subset of checkpoints.
-        ``**kwargs`` is accepted (and ignored here) so subclasses can declare
+        `IJEPAsaurUSStill._UNSAFE_copy_topic_` in soundworld for an example
+        that restricts the `ckpts` topic to a subset of checkpoints.
+        `**kwargs` is accepted (and ignored here) so subclasses can declare
         extra keyword-only parameters on their override without changing
-        this base signature; :meth:`UNSAFE_copy_from` forwards its own
-        ``**kwargs`` to every topic's call.
+        this base signature; `UNSAFE_copy_from` forwards its own
+        `**kwargs` to every topic's call.
         """
         topic = self._normtopic_((topic,))
         if self.is_topicgroup(*topic):
@@ -6612,7 +6612,7 @@ class Datablock:
         """Hand *child* what it should inherit from this block.
 
         Called by the framework AFTER the user's hook returns, so a subclass
-        that only overrides ``__block__`` never has to think about it.
+        that only overrides `__block__` never has to think about it.
         """
         kw = {'tree': self.tree}
         if keyby and self._keyby_given_():
@@ -6624,7 +6624,7 @@ class Datablock:
 
         What decides whether a stack hands its keyby to its blocks: a table at
         its default leaves each tablet its own (tag-keyed) KEYBY, so a tablet's
-        path is the same built by the table and read back by ``tablet(i)``.
+        path is the same built by the table and read back by `tablet(i)`.
         Judged by value, not by how the block was constructed, so a pickled
         or re-quoted stack, which always spells its keyby, says the same.
         """
@@ -6632,7 +6632,7 @@ class Datablock:
 
     @functools.cached_property
     def _rootkwargs_(self):
-        """The root kwargs as quote(), cite() and repr() render them: ``datalake=``, ``anchor=``."""
+        """The root kwargs as quote(), cite() and repr() render them: `datalake=`, `anchor=`."""
         rootkwargs = {}
         if self._datalake_ is not None:
             rootkwargs['datalake'] = self._datalake_
@@ -6642,10 +6642,10 @@ class Datablock:
 
     @functools.cached_property
     def _identity_rootkwargs_(self):
-        """The root kwargs as a LEGACY signature renders them -- spelled ``url=``, as it always was.
+        """The root kwargs as a LEGACY signature renders them -- spelled `url=`, as it always was.
 
         A block built under LEGACY_SIGNATURE or LEGACY_NORM carries its root
-        kwargs in its identity, so the text ``url=...`` is in its hash, and the
+        kwargs in its identity, so the text `url=...` is in its hash, and the
         rename to datalake may not reach it.
         """
         rootkwargs = {}
@@ -6676,9 +6676,9 @@ class Datablock:
 
     @staticmethod
     def _split_top_level_(text, seps=(', ',)):
-        """Split ``text`` at ``seps`` occurrences that are NOT nested or quoted.
+        """Split `text` at `seps` occurrences that are NOT nested or quoted.
 
-        Depth-aware over ``() [] {}`` and quote-aware over ``' "`` (honouring
+        Depth-aware over `() [] {}` and quote-aware over `' "` (honouring
         backslash escapes), so a separator inside a nested specline or a URL is
         left alone. Used only to choose where to break a citation for display;
         the pieces are re-joined verbatim, so a missed boundary costs
@@ -6720,12 +6720,12 @@ class Datablock:
         """Render a nested specline as indented implicit-concatenation chunks.
 
         A nested block lives in the spec as a STRING, so putting real newlines
-        in it only makes the outer repr() show ``\\n`` escapes -- unreadable in a
+        in it only makes the outer repr() show `\\n` escapes -- unreadable in a
         different way from one 4000-character line. Python's implicit string
-        concatenation escapes that bind: ``('a' 'b')`` is one string, so the
+        concatenation escapes that bind: `('a' 'b')` is one string, so the
         pieces can sit on their own indented lines and still evaluate to
         exactly the original specline. Correctness is structural here -- the
-        chunks are ``repr``-ed and concatenated verbatim, so only the choice of
+        chunks are `repr`-ed and concatenated verbatim, so only the choice of
         break points is a judgement call.
         """
         # Break after the opening "$fqcn(", then at each top-level kwarg, then
@@ -6749,9 +6749,9 @@ class Datablock:
 
     @staticmethod
     def _tag_first_(tailkwargs) -> dict:
-        """``{'tag': tag}`` from *tailkwargs* when it is set, else ``{}``: what quote and cite render before ``spec``.
+        """`{'tag': tag}` from *tailkwargs* when it is set, else `{}`: what quote and cite render before `spec`.
 
-        A tag names the block for a reader -- ``gigapath_deep_feature_clip`` --
+        A tag names the block for a reader -- `gigapath_deep_feature_clip` --
         where its spec, often dozens of entries, says how it was made; ahead
         of the spec it is read first, rather than found under it. Unset, it is
         left where it was.
@@ -6760,11 +6760,11 @@ class Datablock:
         return {'tag': tag} if tag is not None else {}
 
     def _render_call_(self, kwargs, *, pretty: bool, deslash: int, dollar: bool) -> str:
-        """``fqcn(k=v, ...)`` for *kwargs*: the rendering :meth:`quote` and :meth:`repr` share.
+        """`fqcn(k=v, ...)` for *kwargs*: the rendering `quote` and `repr` share.
 
-        Evaluable (*dollar*), a spec value that is a ``$`` specline -- a nested
-        block's quote, or ``$dbx.getenv('X')`` -- is written bare,
-        ``'upstream': X(...)``, not as a string (`databits.bare_specline`):
+        Evaluable (*dollar*), a spec value that is a `$` specline -- a nested
+        block's quote, or `$dbx.getenv('X')` -- is written bare,
+        `'upstream': X(...)`, not as a string (`databits.bare_specline`):
         held as a string, it is escaped once more at every level of nesting.
         `databits.eval` reads it back as the specline string it was.
         """
@@ -6938,9 +6938,9 @@ class Datablock:
     def _structure_from_signature_text_(cls, value):
         """Structure a signature value, recovering typed leaves where it can.
 
-        A non-legacy signature is a faithful ``repr`` of a typed dict, so
-        ``literal_eval`` reconstructs it exactly -- an ``int`` comes back an
-        ``int``, not the substring ``'256'``. This is the read-side
+        A non-legacy signature is a faithful `repr` of a typed dict, so
+        `literal_eval` reconstructs it exactly -- an `int` comes back an
+        `int`, not the substring `'256'`. This is the read-side
         counterpart for anything holding a rendered signature rather than the
         block, such as a journal row.
 
@@ -7005,14 +7005,14 @@ class Datablock:
         return self.buildjournal(**{key: value}, **filters)
 
     def _topic_map_(self, topics):
-        """A TOPICS declaration as an ordered ``{path: value}`` map, or None.
+        """A TOPICS declaration as an ordered `{path: value}` map, or None.
 
-        The structured counterpart of :meth:`_topics_signature_`: one entry per
-        leaf, keyed by its ``'/'``-joined path, valued by the text that follows
-        the ``=`` in that leaf's segment -- :data:`ABSENT` for a list-``TOPICS``
-        entry, whose segment has no ``=`` at all. None for a block that declares
-        no topics, which is the ``topics:None`` segment and NOT the same as the
-        empty map of ``TOPICS = {}``.
+        The structured counterpart of `_topics_signature_`: one entry per
+        leaf, keyed by its `'/'`-joined path, valued by the text that follows
+        the `=` in that leaf's segment -- `ABSENT` for a list-`TOPICS`
+        entry, whose segment has no `=` at all. None for a block that declares
+        no topics, which is the `topics:None` segment and NOT the same as the
+        empty map of `TOPICS = {}`.
         """
         if isinstance(topics, dict):
             out = {}
@@ -7035,10 +7035,10 @@ class Datablock:
         return None
 
     def _other_topics_(self, other_topics, journal):
-        """The other side of a :meth:`difftopics`, as ``(segments, map)``.
+        """The other side of a `difftopics`, as `(segments, map)`.
 
-        Accepts a live block, a journal entry, a ``TOPICS`` declaration, or the
-        ``str(dict)`` a journal records one as.
+        Accepts a live block, a journal entry, a `TOPICS` declaration, or the
+        `str(dict)` a journal records one as.
         """
         if other_topics is ABSENT:
             if journal is None:
@@ -7064,12 +7064,12 @@ class Datablock:
                      for path, value in topicmap.items())
 
     def _topics_signature_(self, topics=None, *, declared=None):
-        """The topic segments of :attr:`signature`, in the order it joins them.
+        """The topic segments of `signature`, in the order it joins them.
 
-        The one rendering of a block's topics into its identity: :attr:`signature`
-        and :attr:`supersignature` join what this returns, and :meth:`difftopics`
+        The one rendering of a block's topics into its identity: `signature`
+        and `supersignature` join what this returns, and `difftopics`
         compares it. Two blocks whose signatures differ only in their topics are
-        exactly the two whose ``_topics_signature_()`` differ -- which is what makes
+        exactly the two whose `_topics_signature_()` differ -- which is what makes
         the diff answer the question the hash asks.
         """
         #CAUTION! Changing this code may invalidate Datablocks that have already been computed and identified by their hashes
@@ -7097,7 +7097,7 @@ class Datablock:
 
     @staticmethod
     def _declared_leaves_(declared, prefix=()):
-        """``[(path, node)]`` for every leaf of a topic declaration, in its order."""
+        """`[(path, node)]` for every leaf of a topic declaration, in its order."""
         out = []
         for name, node in declared.items():
             path = prefix + (str(name),)
@@ -7115,7 +7115,7 @@ class Datablock:
         in the identity being reconstructed. A group expands to its own leaves,
         in ITS declaration order, which is the only order it has.
 
-        A name that is not a topic raises out of :meth:`_topicnode_`, naming it.
+        A name that is not a topic raises out of `_topicnode_`, naming it.
         """
         leaves = []
         for topic in topics:
@@ -7131,7 +7131,7 @@ class Datablock:
         """A pinned value, rendered as `_typed_specdict_` renders that field.
 
         Compared as rendered rather than as given, because the rendering is
-        what the hash is made of: ``1``, ``'1'`` and ``True`` are three
+        what the hash is made of: `1`, `'1'` and `True` are three
         different pins only if they render differently.
         """
         if isinstance(value, Datablock):
@@ -7160,7 +7160,7 @@ class Datablock:
         return node
 
     def _specialization_topics_(self, specialization) -> 'Topics | tuple':
-        """The narrower block's TOPICS declaration: its own, or -- for ``topics=SAME`` -- this block's."""
+        """The narrower block's TOPICS declaration: its own, or -- for `topics=SAME` -- this block's."""
         return self.TOPICS if specialization.topics is SAME else specialization.topics
 
     def _specialization_mismatch_(self, specialization):
@@ -7171,7 +7171,7 @@ class Datablock:
         mistake in the declaration, and a declaration that quietly never matches
         is the one failure this feature cannot afford. A topic the narrower
         block declared and this one no longer does is named in its identity and
-        never read -- left out of ``redirect_topics`` -- and is no mistake.
+        never read -- left out of `redirect_topics` -- and is no mistake.
         """
         fields = self.VAR.__dataclass_fields__
         unknown = [k for k in specialization.spec if k.split('.')[0] not in fields]
@@ -7227,7 +7227,7 @@ class Datablock:
         return journal
 
     def _specialization_paths_(self, specialization, journal=None, why=None):
-        """``{topic: path}`` for *specialization*, from the journal, or None.
+        """`{topic: path}` for *specialization*, from the journal, or None.
 
         The entry is looked up by the reconstructed hash -- there is no other
         handle on the narrower block -- and its recorded paths are taken, cut
@@ -7239,7 +7239,7 @@ class Datablock:
         *why* is a list to append the reason to, when there is no result. There
         are four different ways to come back with nothing and they call for four
         different things to be done about it, so "it did not resolve" is not an
-        answer anyone can act on. :meth:`specializations` passes one.
+        answer anyone can act on. `specializations` passes one.
         """
         def note(reason):
             # One line per reason: these are joined into a single `why`, and an
@@ -7314,9 +7314,9 @@ class Datablock:
         return None
 
     def _type_entries_(self, specialization=None, *, with_block: bool = True) -> dict:
-        """Entries of this block's type beyond its signature, version and topics: ``{name: text}``.
+        """Entries of this block's type beyond its signature, version and topics: `{name: text}`.
 
-        Rendered ``name=text``, after the signature and before the version --
+        Rendered `name=text`, after the signature and before the version --
         so, like everything in the type, they are identity. None here; a
         Datastack names its BLOCK, a Datatable its TABLET.
         """
@@ -7407,19 +7407,19 @@ class Datablock:
         return [tp[0] if isinstance(tp, (tuple, list)) else tp for tp in topics]
 
     def _specializing_(self):
-        """Whether this block may consult its pasts at all: its :attr:`SPECIALIZATIONS`, or its nested blocks'."""
+        """Whether this block may consult its pasts at all: its `SPECIALIZATIONS`, or its nested blocks'."""
         return bool(getattr(self, 'redirect', False)
                     and getattr(self, 'use_specializations', False)
                     and self._specialization_variants_())
 
-    #: The most compositions `_composed_` makes of one specialization with its
-    #: nested blocks' pasts; past it, the rest are not tried, and that is said.
+    # The most compositions `_composed_` makes of one specialization with its
+    # nested blocks' pasts; past it, the rest are not tried, and that is said.
     MAX_SPECIALIZATION_VARIANTS = 256
 
     def _specialization_variants_(self) -> list:
         """Every specialization this block looks for its past through, in the order it tries them.
 
-        Its declared :attr:`SPECIALIZATIONS` first, exactly as before -- then
+        Its declared `SPECIALIZATIONS` first, exactly as before -- then
         each again with its nested blocks rendered as they were, and, when a
         nested block has a past, this block's own fields as they are around
         it. A nested block's past is ITS OWN business: its own specializations,
@@ -7440,7 +7440,7 @@ class Datablock:
         return variants
 
     def _nested_var_blocks_(self) -> list:
-        """``(field, block)`` for each VAR field holding a block -- itself, or a specline that denotes one."""
+        """`(field, block)` for each VAR field holding a block -- itself, or a specline that denotes one."""
         out = []
         spec = self.spec if isinstance(getattr(self, 'spec', None), dict) else {}
         for k in self.VAR.__dataclass_fields__:
@@ -7544,7 +7544,7 @@ class Datablock:
     def _unbuilt_(self, topics=None):
         """True when NONE of the named topics are there, default all of them.
 
-        Its own: resolved through ``__path__``, never ``path()``, which consults
+        Its own: resolved through `__path__`, never `path()`, which consults
         the redirection this is deciding whether to install.
 
         None rather than "not all", because a block with SOME of the named
@@ -7564,10 +7564,10 @@ class Datablock:
         for the life of the block.
 
         In the usual case the difference is invisible, because a resolved
-        specialization writes ``.redirection`` and later constructions read
+        specialization writes `.redirection` and later constructions read
         that, and later builds do not ask again. It shows up when the memo is not there:
         cleared, never written because the resolving instance was configured
-        ``use_specializations='memory'``, or written at another path because
+        `use_specializations='memory'`, or written at another path because
         the instance that resolved was retagged afterwards. A cache that is
         load-bearing is not a cache.
         """
@@ -7647,15 +7647,15 @@ class Datablock:
     def _install_specialization_(self, journal=None):
         """Read a narrower block's data instead of having none, or None.
 
-        What :meth:`find_specialization` finds, installed: candidates
+        What `find_specialization` finds, installed: candidates
         that resolve are installed to satisfy missing topics.
 
-        Installing it is recorded, through :meth:`UNSAFE_redirect`: the journal
+        Installing it is recorded, through `UNSAFE_redirect`: the journal
         says this block read another's build and which specialization said it
-        could, and the hidden ``.redirection`` topic it writes is what every
+        could, and the hidden `.redirection` topic it writes is what every
         later construction reads INSTEAD of scanning the journal again -- so the
         write happens once per block, not once per construction.
-        ``use_specializations='memory'`` installs the paths on this instance and
+        `use_specializations='memory'` installs the paths on this instance and
         writes nothing, at the cost of resolving again next time.
         """
         # If the block is not specializing or already valid, do not install a redirection.
@@ -7759,7 +7759,7 @@ class DatablockValidityChecker:
 
     *validation* 'valid' asks the block's valid(), 'validate' its validate(),
     and anything else is the stack's `valid_block`. With *with_path*, the
-    answer comes as ``(ok, anchorkeypath)``: what a full pass records in the
+    answer comes as `(ok, anchorkeypath)`: what a full pass records in the
     stack's manifest without forming every block a second time.
     """
 
@@ -7836,17 +7836,17 @@ class DatablockSpecializationInstaller:
 
     What the block's own build() would do first. Run over a stack's blocks by
     the stack's build(), which is the call that sanctions writing it.
-    Returns ``(specialization | None, status)``, *status* one of:
+    Returns `(specialization | None, status)`, *status* one of:
 
-    - ``'valid'``: its data is there, and passes *validation*;
-    - ``'fails_validation'``: its data is there but fails validate(). Nothing
+    - `'valid'`: its data is there, and passes *validation*;
+    - `'fails_validation'`: its data is there but fails validate(). Nothing
       but clearing and building it again makes it valid;
-    - ``'adoption_fails_validation'``: what its specialization resolves to
+    - `'adoption_fails_validation'`: what its specialization resolves to
       fails validate(), and was not adopted. Only building it without its
       specializations makes it valid;
-    - ``'adopted'``: a specialization was installed, and the block is valid;
-    - ``'owes'``: a specialization was installed, and topics are left owed;
-    - ``'unresolved'``: no specialization resolves -- or *install* is False.
+    - `'adopted'`: a specialization was installed, and the block is valid;
+    - `'owes'`: a specialization was installed, and topics are left owed;
+    - `'unresolved'`: no specialization resolves -- or *install* is False.
     """
 
     def __init__(self, idx: int, validation: str = 'valid', install: bool = True):
@@ -7955,10 +7955,10 @@ class InvalidBlocksError(RuntimeError):
     *validation* how they were found invalid.
     """
 
-    #: How many of the invalid blocks the message names.
+    # How many of the invalid blocks the message names.
     SHOWN = 5
 
-    #: Why a block fails validation, when whoever raises knows -- see `DatablockSpecializationInstaller`.
+    # Why a block fails validation, when whoever raises knows -- see `DatablockSpecializationInstaller`.
     REASONS = {
         'fails_validation': ("its data is there but fails validate(), which no build repairs: "
                              "clear it -- UNSAFE_clear() -- and build it again"),
@@ -8017,9 +8017,9 @@ class Datastack(Datablock):
         blocks() -> list[Datablock]
             Return the list of child Datablocks to be built.
 
-    Parallelisation is controlled by two ``__init__``-only parameters
-    (they are passed through to the Datablock ``__init__`` via ``**kwargs``
-    and stored on ``self``, but do **not** affect the hash):
+    Parallelisation is controlled by two `__init__`-only parameters
+    (they are passed through to the Datablock `__init__` via `**kwargs`
+    and stored on `self`, but do **not** affect the hash):
 
         parallelization : str | None
             Which CallableExecutor to use:
@@ -8033,7 +8033,7 @@ class Datastack(Datablock):
             Passed straight through to the selected executor.
         devices : list[str] | str | None
             Required for torch parallelizations.  Devices are assigned to
-            workers round-robin when ``n_workers > len(devices)``.
+            workers round-robin when `n_workers > len(devices)`.
         worker_parallelization : str | None
             The executor of every pass but the build on *devices* -- checking,
             validating, adopting, clearing the blocks, and building them when
@@ -8057,7 +8057,6 @@ class Datastack(Datablock):
 
     Example
     -------
-    ::
 
         class MyStack(Datastack):
             BLOCK = MyBlock
@@ -8082,7 +8081,7 @@ class Datastack(Datablock):
         """Lightweight callable that forms and optionally builds a block.
 
         Designed to be dispatched to a CallableExecutor so that both
-        block *formation* (``__block__``) and *building* happen inside
+        block *formation* (`__block__`) and *building* happen inside
         the worker, parallelizing the expensive Datablock instantiation.
         """
 
@@ -8102,14 +8101,14 @@ class Datastack(Datablock):
             del block
             gc.collect()
 
-    #: The Datablock class this stack's blocks are -- every ``block(i)`` is one.
-    #: A declaration: it says what the stack holds and is checked as each block
-    #: is formed, but it does not locate anything -- a block's journal is under
-    #: that block's url and anchor, which ``block(0)`` knows. A `Datatable`'s
-    #: ``TABLET`` is its BLOCK. Not declaring one is deprecated.
+    # The Datablock class this stack's blocks are -- every `block(i)` is one.
+    # A declaration: it says what the stack holds and is checked as each block
+    # is formed, but it does not locate anything -- a block's journal is under
+    # that block's url and anchor, which `block(0)` knows. A `Datatable`'s
+    # `TABLET` is its BLOCK. Not declaring one is deprecated.
     BLOCK = None
 
-    #: Classes already warned about a missing BLOCK, so a stack built in a loop warns once.
+    # Classes already warned about a missing BLOCK, so a stack built in a loop warns once.
     _NO_BLOCK_WARNED = set()
 
     DatablockValidityChecker = DatablockValidityChecker
@@ -8127,10 +8126,10 @@ class Datastack(Datablock):
 
     # 1. Protocol and hooks ------------------------------------------------
 
-    #: How a stack establishes that its blocks are valid -- see `valid_blocks`.
+    # How a stack establishes that its blocks are valid -- see `valid_blocks`.
     VALIDATIONS = ('cross_check', 'valid', 'validate')
     VALIDATION = 'cross_check'
-    #: How many blocks 'cross_check' compares with the manifest: block 0 and the rest at random.
+    # How many blocks 'cross_check' compares with the manifest: block 0 and the rest at random.
     CROSS_CHECK_BLOCKS = 3
 
     def __init__(self, *args, parallelization: str | None = None, n_workers: int = 1, devices: list | str | None = None, multiprocessing_start_method: str = 'spawn', worker_done_timeout_sec: int = 1000, result_idle_timeout_sec: float | None = None, shuffle_callables: bool = False, work_stealing: bool = False, worker_parallelization: str | None = None, worker_work_stealing: bool | None = None, device_parallelization: str | None = None, device_work_stealing: bool | None = None, use_block_specializations: 'bool | str | None' = None, validation: str | None = None, cross_check_blocks: int | None = None, cross_check_seed: int | None = None, specialization_use_full_journal: bool = False, **kwargs):
@@ -8179,7 +8178,7 @@ class Datastack(Datablock):
             self._executor_class_(getattr(self, name, None), name)
 
     def __block__(self, idx: int):
-        """Return a single child :class:`Datablock` for the given index.
+        """Return a single child `Datablock` for the given index.
 
         Subclasses **must** override this method.
         """
@@ -8208,7 +8207,7 @@ class Datastack(Datablock):
             return self.BLOCK
 
     def _type_entries_(self, specialization=None, *, with_block: bool = True) -> dict:
-        """``{'BLOCK': fqcn}``: the block class is part of what a stack IS -- a Datatable calls it TABLET.
+        """`{'BLOCK': fqcn}`: the block class is part of what a stack IS -- a Datatable calls it TABLET.
 
         Without it a stack's hash disregarded its BLOCK -- an identity names no
         class, and a marker-spelled table carries none of its TABLET's topics --
@@ -8239,7 +8238,7 @@ class Datastack(Datablock):
                           journal=None, validation: str | None = None, **kwargs) -> pd.Series | None:
         """Install the specialization each block that is not valid resolves -- building nothing (parallelized).
 
-        The block half of :meth:`specialize`, whatever the stack's own state:
+        The block half of `specialize`, whatever the stack's own state:
         every block is asked whether it is valid, by *validation* -- see
         `valid_blocks` -- and those that are not adopt what their
         specializations resolve to. Returns the installed `Specialization`s by
@@ -8339,8 +8338,8 @@ class Datastack(Datablock):
         does not repair.
 
         Journaled on the stack, as well as by each block it builds: a
-        ``build_blocks:end`` entry -- or ``build_blocks:exception`` -- noting
-        which blocks, in a file of its own beside any ``build:end``. A pass
+        `build_blocks:end` entry -- or `build_blocks:exception` -- noting
+        which blocks, in a file of its own beside any `build:end`. A pass
         with every block valid builds nothing and writes nothing.
         """
         validation = self._validation_(validation)
@@ -8383,7 +8382,7 @@ class Datastack(Datablock):
     def __build__(self, *args, **kwargs):
         """Build all blocks using BlockMaker + the configured executor.
 
-        Block formation (``__block__``) and building both happen inside
+        Block formation (`__block__`) and building both happen inside
         the worker callables, so they are fully parallelized.
         """
         callables, callable_kwargs = self.__split__(*args, **kwargs)
@@ -8411,10 +8410,10 @@ class Datastack(Datablock):
     # 2. Declared API ------------------------------------------------------
 
     def block(self, idx: int):
-        """Return the block at *idx*, lazily forming ``_blocks_`` if needed.
+        """Return the block at *idx*, lazily forming `_blocks_` if needed.
 
-        Does **not** require :attr:`n_blocks` to be available — a block can
-        be formed by index alone via :meth:`__block__`.  When ``n_blocks``
+        Does **not** require `n_blocks` to be available — a block can
+        be formed by index alone via `__block__`.  When `n_blocks`
         *is* available it is used for bounds-checking.
         """
         if not hasattr(self, '_blocks_') or self._blocks_ is None:
@@ -8434,7 +8433,7 @@ class Datastack(Datablock):
         return self._blocks_[idx]
 
     def blocks(self) -> list:
-        """Return all blocks, forming them via :meth:`block` if needed."""
+        """Return all blocks, forming them via `block` if needed."""
         n = self.n_blocks
         indices = tqdm.tqdm(range(n), desc=f"Forming {n} blocks") if n > 100 else range(n)
         return [self.block(idx) for idx in indices]
@@ -8452,16 +8451,16 @@ class Datastack(Datablock):
     def child_specialization_buildjournal(self):
         """The children's journal, read ONCE, for them to resolve against.
 
-        A block that declares :attr:`SPECIALIZATIONS` resolves them in its
+        A block that declares `SPECIALIZATIONS` resolves them in its
         build() -- never at construction -- and resolving means reading the
         journal. A stack's build builds every child, so a stack whose children
         are specialized would pay one journal read PER CHILD: invisible against
-        a local directory, and a glob over ``**/*.parquet`` plus a parquet read
+        a local directory, and a glob over `**/*.parquet` plus a parquet read
         per child against object storage, which is where these stacks live.
 
         A stack's build reads it once and hands it to the callables that adopt
         and build its blocks; this is the same read, for a caller that forms
-        the children itself and hands it down as ``specialization_journal=``.
+        the children itself and hands it down as `specialization_journal=`.
         A stack whose children declare no specializations should not call this
         at all -- there is nothing for them to resolve.
 
@@ -8519,13 +8518,13 @@ class Datastack(Datablock):
 
         *validation*, this stack's own unless given:
 
-        - ``'cross_check'``: the manifest -- recorded when a full pass last
+        - `'cross_check'`: the manifest -- recorded when a full pass last
           found every block valid -- vouches for all of them when block 0 and
-          ``cross_check_blocks - 1`` others at random still have the paths it
+          `cross_check_blocks - 1` others at random still have the paths it
           records; no data is looked at. Without a manifest, or when one does
           not match, every block is asked, as by 'valid'.
-        - ``'valid'``: every block's valid() -- its data is there.
-        - ``'validate'``: every block's validate() -- whatever its __validate__
+        - `'valid'`: every block's valid() -- its data is there.
+        - `'validate'`: every block's validate() -- whatever its __validate__
           checks, which is valid() unless a block says otherwise.
 
         A full pass that finds every block valid, and this stack too, records
@@ -8543,7 +8542,7 @@ class Datastack(Datablock):
 
     def _check_blocks_(self, validation: str | None = None, parallelization: str | None = None,
                        n_workers: int | None = None, **kwargs):
-        """``(valid, paths)``: whether each block is valid, and each block's path -- None when the manifest vouched."""
+        """`(valid, paths)`: whether each block is valid, and each block's path -- None when the manifest vouched."""
         n = self.n_blocks
         if n == 0:
             return pd.Series([], dtype=bool), []
@@ -8572,7 +8571,7 @@ class Datastack(Datablock):
         """Whether each block is redirected, as a Series of booleans (parallelized).
 
         Each block's `redirected`: the cheap question, reading no journal. For
-        WHERE they read from, see :meth:`get_block_redirections`.
+        WHERE they read from, see `get_block_redirections`.
         """
         if false_only and true_only:
             raise ValueError("false_only and true_only are mutually exclusive")
@@ -8590,7 +8589,7 @@ class Datastack(Datablock):
             return series[series]
         return series
 
-    #: The name `blocks_redirected` had first.
+    # The name `blocks_redirected` had first.
     redirected_blocks = blocks_redirected
 
     def get_block_redirections(self, parallelization: str | None = None, n_workers: int | None = None,
@@ -8598,8 +8597,8 @@ class Datastack(Datablock):
         """Each block's `Redirection`, or None, as a Series indexed by block (parallelized).
 
         Resolving one reads the journal its entries are in, unlike
-        :meth:`blocks_redirected`. The stack reads it ONCE -- its blocks'
-        journal, through ``block(0)``, as :meth:`block_buildjournal` does -- and
+        `blocks_redirected`. The stack reads it ONCE -- its blocks'
+        journal, through `block(0)`, as `block_buildjournal` does -- and
         hands it to every block; a block of another anchor reads its own. A
         *journal* passed in is used for every block as it is.
         *redirected_only* drops the Nones.
@@ -8631,7 +8630,7 @@ class Datastack(Datablock):
 
         Each block is formed with specializations off, so nothing is redirected
         or recorded: what this reports is what forming them normally WOULD do.
-        The journal is read once, as :meth:`get_block_redirections` reads it.
+        The journal is read once, as `get_block_redirections` reads it.
         *found_only* drops the Nones.
         """
         n = self.n_blocks
@@ -8700,7 +8699,7 @@ class Datastack(Datablock):
     def _adopt_block_specializations_(self, parallelization: str | None = None,
                                       n_workers: int | None = None, journal=None,
                                       validation: str | None = None, **kwargs):
-        """The blocks that are not valid adopt what their specializations resolve to: ``(specializations, invalid, failed, paths)``.
+        """The blocks that are not valid adopt what their specializations resolve to: `(specializations, invalid, failed, paths)`.
 
         Which blocks need one is asked of the blocks themselves, by
         *validation* -- see `valid_blocks` -- never of the stack: a stack's own
@@ -8712,7 +8711,7 @@ class Datastack(Datablock):
         or None when BLOCK declares none or there is no journal to resolve
         against; *invalid* the indices of the blocks STILL not valid --
         unresolved, or adopted with topics left owed; *failed* those that fail
-        validate(), which no build as it stands repairs, as ``{index: why}`` --
+        validate(), which no build as it stands repairs, as `{index: why}` --
         see `DatablockSpecializationInstaller`; *paths*
         every block's path, when a full pass found them -- else None.
         """
@@ -8879,11 +8878,11 @@ class Datastack(Datablock):
         idx : int
             Index of the block to clear.
         *topics : str
-            Forwarded to the block's ``UNSAFE_clear()``.
+            Forwarded to the block's `UNSAFE_clear()`.
         OVERRIDE : bool
-            If ``True``, skip the interactive confirmation.
+            If `True`, skip the interactive confirmation.
         clear_dirpath : bool
-            Forwarded to the block's ``UNSAFE_clear()``.
+            Forwarded to the block's `UNSAFE_clear()`.
         """
         if not UNSAFE_allowed("UNSAFE_clear_block", OVERRIDE=OVERRIDE):
             return self.block(idx)
@@ -8978,12 +8977,12 @@ class Datastack(Datablock):
         Parameters
         ----------
         anchorkeypath_callable : callable
-            Called as ``anchorkeypath_callable(block)`` for each block to obtain
-            the ``anchorkeypath`` forwarded to that block's ``UNSAFE_copy_from()``.
+            Called as `anchorkeypath_callable(block)` for each block to obtain
+            the `anchorkeypath` forwarded to that block's `UNSAFE_copy_from()`.
         OVERRIDE : bool
-            If ``True``, skip the interactive confirmation.
+            If `True`, skip the interactive confirmation.
         overwrite, topicpaths, validate, always_copy_whole_dirpath :
-            Forwarded to each block's ``UNSAFE_copy_from()``.
+            Forwarded to each block's `UNSAFE_copy_from()`.
         callable : callable, default UNSAFE_copy_block_from_callable
             Callable invoked per block to execute the copy operation.
         """
@@ -9020,10 +9019,10 @@ class Datastack(Datablock):
         Parameters
         ----------
         redirector : Callable
-            Callable with signature ``redirector(block, stack, idx, journal=journal) -> dict | None``.
-            Returns kwargs for ``block.UNSAFE_redirect(**target)``, or None/empty if not redirecting.
+            Callable with signature `redirector(block, stack, idx, journal=journal) -> dict | None`.
+            Returns kwargs for `block.UNSAFE_redirect(**target)`, or None/empty if not redirecting.
         filter : dict, default {}
-            Column filter kwargs passed to ``buildjournal()`` when reading the child block's journal.
+            Column filter kwargs passed to `buildjournal()` when reading the child block's journal.
         validate : bool, default False
             If True, validates each block after redirection and considers invalid blocks as failures.
         OVERRIDE : bool, default False
@@ -9036,9 +9035,9 @@ class Datastack(Datablock):
         Returns
         -------
         list
-            What each block's :meth:`UNSAFE_redirect` returned, in block order:
-            a ``(Redirection, Validation)`` pair under ``dry_run, dry_validate``,
-            a bare :class:`Datablock.Redirection` under ``dry_run`` alone, True
+            What each block's `UNSAFE_redirect` returned, in block order:
+            a `(Redirection, Validation)` pair under `dry_run, dry_validate`,
+            a bare `Datablock.Redirection` under `dry_run` alone, True
             when a redirection was installed and False when it was refused, and
             None where the redirector declined a block entirely.
         """
@@ -9105,7 +9104,7 @@ class Datastack(Datablock):
 
     @functools.cached_property
     def block_redirections(self) -> pd.Series:
-        """:meth:`get_block_redirections` with its defaults, resolved once."""
+        """`get_block_redirections` with its defaults, resolved once."""
         return self.get_block_redirections()
 
     # 4. Helpers -----------------------------------------------------------
@@ -9423,12 +9422,12 @@ class Datastack(Datablock):
         """Whether the manifest vouches for every block, cross-checked against the blocks as they are now.
 
         The manifest was recorded after a full pass found every block valid,
-        with the path each had. Block 0, and ``cross_check_blocks - 1`` others
+        with the path each had. Block 0, and `cross_check_blocks - 1` others
         drawn at random, are formed and their paths compared with it: whatever
         moves blocks to identities of their own -- BLOCK renamed, its TOPICS or
         VERSION changed, blocks reordered -- shows as a mismatch, and the
         manifest vouches for nothing. What it cannot see is data removed
-        behind the stack's back: ``validation='valid'`` asks every block.
+        behind the stack's back: `validation='valid'` asks every block.
         Once per instance.
         """
         if '_blocks_cross_checked_cache' not in self.__dict__:
@@ -9500,15 +9499,15 @@ class Datastack(Datablock):
     def _blocks_buildjournal_(self, journal=None, **kwargs) -> BuildJournalFrame:
         """The build journal of this stack's blocks' anchor: read once, for all of them, as one frame.
 
-        Its ``read_anchor`` and ``read_datalake`` say whose it is: handed to the
+        Its `read_anchor` and `read_datalake` say whose it is: handed to the
         workers forming the blocks, it is what a block of that anchor in that
         datalake resolves against, and any other block -- a tablet's upstream --
         reads its own (`forming_with_journal`). *journal*, given, is used rather
-        than read: a frame, or `BY_HASH`, as an empty frame with ``by_hash``.
+        than read: a frame, or `BY_HASH`, as an empty frame with `by_hash`.
 
         Read from `BLOCK` when the stack declares one: the class's anchor under
         `_blocks_datalake_()` -- the blocks are taken to share it -- with no block
-        formed at all. Otherwise from ``block(0)``, formed only to say where its
+        formed at all. Otherwise from `block(0)`, formed only to say where its
         journal is: uncached, and with specializations off, since forming it
         normally can install one and record it. Raises FileNotFoundError when
         nothing was ever journalled there.
@@ -9570,7 +9569,7 @@ class Datastack(Datablock):
 
         By default nothing is read: the blocks get `BY_HASH`, and each looks its
         own pasts up by hash, in the workers. With
-        ``specialization_use_full_journal=True`` the whole journal is read here.
+        `specialization_use_full_journal=True` the whole journal is read here.
         """
         # Read once per build(): the blocks' adoption and the building of the
         # rest are both this build's -- see build() -- and share the one read.
@@ -9610,7 +9609,7 @@ class Datastack(Datablock):
         """*callable_kwargs*, with the build's journal -- when the callables take one.
 
         A ctx kwarg, so the executor sends it once per worker, not once per
-        callable. Only to callables whose ``__call__`` accepts ``journal=``: a
+        callable. Only to callables whose `__call__` accepts `journal=`: a
         BlockMaker subclass written before it did would be handed an argument
         it cannot take.
         """
@@ -9632,10 +9631,10 @@ class Datastack(Datablock):
 
     @contextlib.contextmanager
     def _block_specializations_in_force_(self, use_specializations='stack'):
-        """This stack's ``use_block_specializations`` in force while a block is formed -- see `_form_block_`.
+        """This stack's `use_block_specializations` in force while a block is formed -- see `_form_block_`.
 
         Wherever a block of it is formed: `_form_block_`, and the makers that
-        form and build blocks in the stack's workers, which call ``__block__``
+        form and build blocks in the stack's workers, which call `__block__`
         themselves -- and so, without it, formed every block with its own
         setting, whatever the stack's said.
         """
@@ -9651,13 +9650,13 @@ class Datastack(Datablock):
             stack.pop()
 
     def _form_block_(self, idx: int, *, use_specializations='stack'):
-        """Block *idx*, formed and adopted -- uncached; :meth:`block` caches it.
+        """Block *idx*, formed and adopted -- uncached; `block` caches it.
 
-        Formed with ``use_specializations`` as this stack's
-        ``use_block_specializations`` says, unless the call names one: forming
-        is inside ``__block__``, which is the subclass's, so the setting has to
+        Formed with `use_specializations` as this stack's
+        `use_block_specializations` says, unless the call names one: forming
+        is inside `__block__`, which is the subclass's, so the setting has to
         be in force while it runs, for the block's build to use it later. A
-        block's own ``use_specializations=`` wins over it.
+        block's own `use_specializations=` wins over it.
         """
         with self._block_specializations_in_force_(use_specializations):
             try:
@@ -9691,10 +9690,10 @@ class Datastack(Datablock):
 
 
 def _redirect_succeeded_(result) -> bool:
-    """Whether one block's ``UNSAFE_redirect`` result counts as a success.
+    """Whether one block's `UNSAFE_redirect` result counts as a success.
 
-    True is an installed redirection. A :class:`Datablock.Redirection` is a dry
-    run's proposal, which counts as resolved. A ``(Redirection, Validation)``
+    True is an installed redirection. A `Datablock.Redirection` is a dry
+    run's proposal, which counts as resolved. A `(Redirection, Validation)`
     pair is a proposal whose data was looked for as well, and one that was not
     found is not something to count.
     """

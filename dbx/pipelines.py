@@ -1,15 +1,15 @@
 """Pipelines: a Datablock tree defined flat, and the journal that finds every pipeline.
 
-:class:`Pipeline` is an abstract Datablock whose one topic, ``entrypoint``, is
+`Pipeline` is an abstract Datablock whose one topic, `entrypoint`, is
 SYNTHETIC: the root of a tree of blocks it arranges, parceling its own VAR out
-among them, in ``__create__``. Every creation is recorded in the
-`PipeJournal` (in ``journals``) -- when its ``JOURNAL`` says so -- under
-``{datalake}/.pipelines``, with the ``entrypath`` it led to; :func:`dbx.pipejournal`
+among them, in `__create__`. Every creation is recorded in the
+`PipeJournal` (in `journals`) -- when its `JOURNAL` says so -- under
+`{datalake}/.pipelines`, with the `entrypath` it led to; `dbx.pipejournal`
 reads them back, one row per pipeline.
 
-:func:`pipeline` makes a Pipeline of a function that arranges a tree and returns
+`pipeline` makes a Pipeline of a function that arranges a tree and returns
 its root -- an entrypoint function -- its arguments the pipeline's VAR: a
-:class:`PipelineFromEntrypointFn`.
+`PipelineFromEntrypointFn`.
 """
 import dataclasses
 import functools
@@ -29,8 +29,8 @@ class Pipeline(Datablock):
     """A Datablock tree, defined flat: one block whose VAR is parceled out among the blocks it arranges.
 
     A subclass declares the VAR of the whole tree and implements
-    ``__create__``, which builds the tree out of it -- each block given the
-    part of the VAR that is its -- and returns the root: the ENTRYPOINT. ::
+    `__create__`, which builds the tree out of it -- each block given the
+    part of the VAR that is its -- and returns the root: the ENTRYPOINT.
 
         class Train(Pipeline):
             @dataclass
@@ -44,21 +44,21 @@ class Pipeline(Datablock):
 
         Train().entrypoint.build_tree()
 
-    The one topic, ``entrypoint``, is SYNTHETIC: a pipeline stores nothing
-    of its own, and is valid vacuously. ``read('entrypoint')``,
-    :attr:`entrypoint` (or :attr:`entry`, for short) and :meth:`create` all
-    return the one tree :meth:`create` arranges, once per instance. A
-    pipeline whose :attr:`JOURNAL` is True records that creation in the
-    `PipeJournal`, with the entrypoint's anchorkeypath as ``entrypath`` --
+    The one topic, `entrypoint`, is SYNTHETIC: a pipeline stores nothing
+    of its own, and is valid vacuously. `read('entrypoint')`,
+    `entrypoint` (or `entry`, for short) and `create` all
+    return the one tree `create` arranges, once per instance. A
+    pipeline whose `JOURNAL` is True records that creation in the
+    `PipeJournal`, with the entrypoint's anchorkeypath as `entrypath` --
     which is how the pipelines that led to a block are found again
     (`PipeJournal.collect`).
     """
 
     TOPICS = {'entrypoint': SYNTHETIC}
 
-    #: Whether a creation is recorded in the `PipeJournal`. Off by default:
-    #: only the pipelines one runs and looks for again -- not the collators,
-    #: factories and builders they nest -- are worth an entry.
+    # Whether a creation is recorded in the `PipeJournal`. Off by default:
+    # only the pipelines one runs and looks for again -- not the collators,
+    # factories and builders they nest -- are worth an entry.
     JOURNAL: bool = False
 
     # 1. Datablock protocol ------------------------------------------------
@@ -76,14 +76,14 @@ class Pipeline(Datablock):
     # 2. Declared API ------------------------------------------------------
 
     def create(self) -> Datablock:
-        """The entrypoint ``__create__`` returns, arranged once per instance; see `_created_`."""
+        """The entrypoint `__create__` returns, arranged once per instance; see `_created_`."""
         return self._created_
 
     # 3. Accessors ---------------------------------------------------------
 
     @functools.cached_property
     def _created_(self) -> Datablock:
-        """The entrypoint ``__create__`` returns, its creation recorded in the `PipeJournal` as event ``'create'`` when `JOURNAL`."""
+        """The entrypoint `__create__` returns, its creation recorded in the `PipeJournal` as event `'create'` when `JOURNAL`."""
         entrypoint = self.__create__()
         if not isinstance(entrypoint, Datablock):
             raise TypeError(f"{self.__class__.__name__}.__create__() returned a "
@@ -94,12 +94,12 @@ class Pipeline(Datablock):
 
     @property
     def entrypoint(self) -> Datablock:
-        """:meth:`create`: the root of this pipeline's tree."""
+        """`create`: the root of this pipeline's tree."""
         return self.create()
 
     @property
     def entry(self) -> Datablock:
-        """:attr:`entrypoint`, for short: the root of this pipeline's tree."""
+        """`entrypoint`, for short: the root of this pipeline's tree."""
         return self.entrypoint
 
     @property
@@ -111,9 +111,9 @@ class Pipeline(Datablock):
 class PipelineFromEntrypointFn(Pipeline):
     """A Pipeline whose tree -- its entrypoint the root -- an entrypoint function arranges; see `pipeline`."""
 
-    #: The function arranging the tree; set on each subclass by `pipeline`.
+    # The function arranging the tree; set on each subclass by `pipeline`.
     FUNCTION = None
-    #: The function's leading arguments, passed back positionally.
+    # The function's leading arguments, passed back positionally.
     LEADING: tuple = ()
 
     def __create__(self):
@@ -159,10 +159,10 @@ def _camel_(name: str) -> str:
 def pipeline(fn=None, *, tag: str | None = None, journal: bool = False):
     """*fn*, returning a `PipelineFromEntrypointFn` rather than the tree it arranges.
 
-    An entrypoint function ``f(name, ..., *, var_a=..., var_b=..., n_workers=..., datalake=...)``
+    An entrypoint function `f(name, ..., *, var_a=..., var_b=..., n_workers=..., datalake=...)`
     returns the root block of a tree. Its leading arguments -- a configuration's name, a block -- and
-    its ``var_*`` ones are what the tree IS: each lands in some block's VAR. Its other keyword arguments
-    say how and where it builds, and land in no identity. ``@pipeline`` makes it return a pipeline::
+    its `var_*` ones are what the tree IS: each lands in some block's VAR. Its other keyword arguments
+    say how and where it builds, and land in no identity. `@pipeline` makes it return a pipeline:
 
         @pipeline
         def deep_feature_clip(name, *, var_cls_token_only=False, n_devices=None, datalake=None):
@@ -171,28 +171,28 @@ def pipeline(fn=None, *, tag: str | None = None, journal: bool = False):
 
         deep_feature_clip('CPTAC_TEST', var_cls_token_only=True).entry.build_tree()
 
-    The pipeline's VAR is the leading arguments, under their names, and the ``var_*`` ones without the
+    The pipeline's VAR is the leading arguments, under their names, and the `var_*` ones without the
     prefix; the operational ones are its own keyword arguments, kept out of its identity, as a
-    Datastack's ``n_workers`` is. Its ``__create__`` calls the function back with all of them -- so the
+    Datastack's `n_workers` is. Its `__create__` calls the function back with all of them -- so the
     function is the one definition of the tree, and the pipeline its name, its configuration, and its
-    record in the `PipeJournal`. Within a function, another entrypoint's block is held as ``g(...).entry``:
-    a block held directly hashes as its quote does. A ``**kwargs`` of the function's is operational:
-    passed through, never a VAR, and refusing a ``var_*``. ``datalake=`` is every pipeline's -- where
+    record in the `PipeJournal`. Within a function, another entrypoint's block is held as `g(...).entry`:
+    a block held directly hashes as its quote does. A `**kwargs` of the function's is operational:
+    passed through, never a VAR, and refusing a `var_*`. `datalake=` is every pipeline's -- where
     it is journaled -- and passed to the function only when the function takes one.
 
-    ``@pipeline`` or ``@pipeline(tag=...)``: each pipeline is tagged *tag*, by default the function's
-    fully qualified name, ``module.qualname`` -- several projects may write to one journal -- to filter
+    `@pipeline` or `@pipeline(tag=...)`: each pipeline is tagged *tag*, by default the function's
+    fully qualified name, `module.qualname` -- several projects may write to one journal -- to filter
     the `PipeJournal` by; a tag filter matches by containment, so the function's own name finds it too.
-    ``@pipeline(journal=True)`` sets the pipeline's `Pipeline.JOURNAL`: only then is its creation
+    `@pipeline(journal=True)` sets the pipeline's `Pipeline.JOURNAL`: only then is its creation
     journaled. Leave it off for the minor pipelines -- collators, factories -- others nest.
 
     A call is cached by ALL its arguments, as `functools.cache` would cache it, for the life of the
     process: the same arguments return the same pipeline, so a pipeline that several others nest is
     created -- and journaled -- once. Arguments `functools.cache` would refuse -- dicts, lists, sets,
-    blocks -- are keyed by value, a block by its quote -- and an omitted ``datalake=`` by the
-    ``DBX_DATALAKE`` it stands for at the call. ``f.cache_clear()`` empties it.
-    The pipeline class, ``<FnInCamelCase>Pipeline``, is put in the function's module under that name,
-    so its quote -- the journal's record -- evaluates. ``fn(None)``, the block class some entrypoints
+    blocks -- are keyed by value, a block by its quote -- and an omitted `datalake=` by the
+    `DBX_DATALAKE` it stands for at the call. `f.cache_clear()` empties it.
+    The pipeline class, `<FnInCamelCase>Pipeline`, is put in the function's module under that name,
+    so its quote -- the journal's record -- evaluates. `fn(None)`, the block class some entrypoints
     answer with, is passed through.
     """
     if fn is None:

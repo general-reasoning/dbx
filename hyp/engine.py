@@ -32,8 +32,8 @@ def _label_(point):
 class Engine:
     def __init__(self, store, embedder, summarizer, seed=0, source=None):
         """*source*, if given, replaces the seed corpus: a callable taking a
-        progress callback and returning objects with ``key``, ``text``,
-        ``embed``, ``summary`` and ``extra`` (more fields to store), such as
+        progress callback and returning objects with `key`, `text`,
+        `embed`, `summary` and `extra` (more fields to store), such as
         `dbxpipelines.Entry`. Each start adds the ones whose key is not stored
         yet, and updates the ones that changed.
         """
@@ -155,7 +155,7 @@ class Engine:
             return moved
 
     def arrow_notes(self, i, js, ask, progress=print):
-        """What each arrow from point *i* to points *js* -- indices into the snapshot -- means: ``{"line", "same", "cos"}``.
+        """What each arrow from point *i* to points *js* -- indices into the snapshot -- means: `{"line", "same", "cos"}`.
 
         An arrow is read where else its direction runs in the corpus
         (`arrows.evidence`): the other neighbor pairs making the same move,

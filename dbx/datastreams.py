@@ -1,13 +1,13 @@
 """datastreams — Utilities for composing streaming datasets.
 
-This module requires ``torch`` AND ``mosaicml-streaming`` at *import time*
-(``torch.utils.data.Dataset`` and the ``streaming.base`` readers).  Both are
+This module requires `torch` AND `mosaicml-streaming` at *import time*
+(`torch.utils.data.Dataset` and the `streaming.base` readers).  Both are
 optional extras; importing without them raises an ImportError naming what to
 install.  The module is intentionally **not** re-exported from
-``dbx.__init__``, so the rest of ``dbx`` never forces a dependency on PyTorch
+`dbx.__init__`, so the rest of `dbx` never forces a dependency on PyTorch
 or any streaming library.
 
-Usage::
+Usage:
 
     from dbx.datastreams import ZipStreamingDataset          # map-style
     from dbx.datastreams import ZipIterableStreamingDatasets  # iterator-style
@@ -70,18 +70,18 @@ class SharedMemoryManager:
 
     _patched: bool = False
 
-    #: Held while a `StreamingDataset` is opened, and while a failed open is cleaned up and
-    #: retried. It takes the first prefix of this process whose names are free, and only then
-    #: creates them: two threads opening one at once -- a table built one thread per device --
-    #: take the same prefix, and the second fails, FileExistsError. And the clean-up before a
-    #: retry releases every segment of the process, those of a dataset another thread has open.
+    # Held while a `StreamingDataset` is opened, and while a failed open is cleaned up and
+    # retried. It takes the first prefix of this process whose names are free, and only then
+    # creates them: two threads opening one at once -- a table built one thread per device --
+    # take the same prefix, and the second fails, FileExistsError. And the clean-up before a
+    # retry releases every segment of the process, those of a dataset another thread has open.
     OPEN_LOCK = threading.RLock()
 
     @classmethod
     def enable_pid_prefixes(cls) -> None:
         """Monkey-patch MosaicML streaming to use PID-qualified shared memory names.
 
-        This isolates shared memory namespaces per PID (e.g. ``p12345_0000_locals``),
+        This isolates shared memory namespaces per PID (e.g. `p12345_0000_locals`),
         preventing cross-process and cross-user shared memory collisions on shared nodes.
         """
         if cls._patched:
@@ -100,7 +100,7 @@ class SharedMemoryManager:
             # `from ... import _get_path`. Patched in `prefix` and `util` alone,
             # the prefix was chosen among this process's names -- 0, in every
             # process -- while `dataset` named its arrays the unpatched way,
-            # ``000000_shard_states``: the same segment in every process that
+            # `000000_shard_states`: the same segment in every process that
             # opened a stream, mapped at another's size ("buffer is too small
             # for requested array", 2026-10-03, four feature workers on one GPU).
             for module in (shm_prefix_module, shm_util_module, shm_shared_module, shm_dataset_module):
@@ -131,7 +131,7 @@ def release_shared_memory_when_collected(dataset):
     """*dataset*, its shared memory released when it is garbage-collected.
 
     mosaicml-streaming registers every `SharedMemory` it creates with
-    ``atexit`` -- ``atexit.register(self.cleanup)`` -- so the registry holds
+    `atexit` -- `atexit.register(self.cleanup)` -- so the registry holds
     each one, and its file descriptors, until the PROCESS exits, long after the
     `StreamingDataset` that made it is gone. A process that opens a dataset per
     tablet, as a probe or a table build does, accumulates them without bound until
@@ -139,7 +139,7 @@ def release_shared_memory_when_collected(dataset):
     next, which is how it surfaced: Metal failing to load its shader library.
 
     So the dataset's segments are found now, while it holds them, and released
-    -- closed, and taken off ``atexit`` -- by a finalizer when it is collected.
+    -- closed, and taken off `atexit` -- by a finalizer when it is collected.
     """
     try:
         from streaming.base.shared.memory import SharedMemory as StreamingSharedMemory
@@ -191,7 +191,7 @@ SharedMemoryManager.enable_pid_prefixes()
 # ---------------------------------------------------------------------------
 
 def key_path(key) -> tuple:
-    """A key or path as a tuple: ``'a'`` is ``('a',)``; nested tuples are depth, flattened."""
+    """A key or path as a tuple: `'a'` is `('a',)`; nested tuples are depth, flattened."""
     if isinstance(key, tuple):
         out = []
         for k in key:
@@ -207,8 +207,8 @@ def key_path(key) -> tuple:
 def _path_keys_(parts) -> 'tuple | list | None':
     """The keys a sequence of path parts selects: depth throughout, and a list -- last -- branches.
 
-    ``('site', 'code')`` is one path; ``('site', ['code', 'name'])`` two, both
-    under 'site'; ``(['label', ('site', 'code')],)`` two from the top.
+    `('site', 'code')` is one path; `('site', ['code', 'name'])` two, both
+    under 'site'; `(['label', ('site', 'code')],)` two from the top.
     """
     prefix = []
     parts = tuple(p for p in parts if p is not None)     # (column, None): the whole column
@@ -222,19 +222,19 @@ def _path_keys_(parts) -> 'tuple | list | None':
 
 
 def column_specs(selection) -> list:
-    """What a slice's column selection names, as ``[(column, keys)]``.
+    """What a slice's column selection names, as `[(column, keys)]`.
 
     LISTS are several things side by side, TUPLES are depth:
 
-    * ``'annotations'`` -- the column;
-    * ``['annotations', 'idx']`` -- two columns;
-    * ``('annotations', 'site', 'code')`` -- the column, narrowed to the path
-      ``value['site']['code']``; ``('annotations', ('site', 'code'))`` is the
+    * `'annotations'` -- the column;
+    * `['annotations', 'idx']` -- two columns;
+    * `('annotations', 'site', 'code')` -- the column, narrowed to the path
+      `value['site']['code']`; `('annotations', ('site', 'code'))` is the
       same, nested tuples being more depth;
-    * ``('annotations', ['label', ('site', 'code')])`` -- the column narrowed
+    * `('annotations', ['label', ('site', 'code')])` -- the column narrowed
       to several keys or paths at once: the dict pruned to them,
-      ``{'label': ..., 'site': {'code': ...}}``;
-    * ``[('annotations', 'site', 'code'), 'idx']`` -- any of these, side by side.
+      `{'label': ..., 'site': {'code': ...}}`;
+    * `[('annotations', 'site', 'code'), 'idx']` -- any of these, side by side.
 
     *keys* is None (the whole column), one path (a tuple), or a list of paths.
     """
@@ -253,10 +253,10 @@ def column_specs(selection) -> list:
 
 
 def slice_spec(item) -> tuple:
-    """One ``dataset()``/``data()`` request item as ``(slice, [(column, keys)] | None)``.
+    """One `dataset()`/`data()` request item as `(slice, [(column, keys)] | None)`.
 
-    ``'frames'`` is a whole slice; a tuple goes deeper -- ``(slice, selection)``
-    or ``(slice, column, key, ...)`` -- where the selection is as
+    `'frames'` is a whole slice; a tuple goes deeper -- `(slice, selection)`
+    or `(slice, column, key, ...)` -- where the selection is as
     `column_specs` reads it. A list item is read as a tuple, for callers that
     built one as a list.
     """
@@ -274,7 +274,7 @@ def slice_spec(item) -> tuple:
 
 
 def column_spec(spec) -> tuple:
-    """ONE column spec as ``(column, keys)`` -- `column_specs` for a selection naming one column."""
+    """ONE column spec as `(column, keys)` -- `column_specs` for a selection naming one column."""
     if isinstance(spec, tuple) and len(spec) == 2 and (spec[1] is None or isinstance(spec[1], list)):
         # Already normalized, or (column, [keys]).
         column, keys = str(spec[0]), spec[1]
@@ -360,7 +360,7 @@ def project_column(value, keys, *, where: str = '', allow_none: bool = False):
 def conform_structure(value, schema: dict):
     """*value* as its declared dict *schema* shapes it: every declared key there, None where the row has none.
 
-    What a dict-structured column reads as, so that a ``(slice, column, key)``
+    What a dict-structured column reads as, so that a `(slice, column, key)`
     read -- or a collator's pick, made of the whole column -- takes None for a
     declared key a row left out, or one under a None, as `check_structure`
     lets it: a column of Nones where the row did not have the field. A key
@@ -380,7 +380,7 @@ def conform_structure(value, schema: dict):
 def check_structure(value, schema: dict, *, where: str = ''):
     """Refuse a dict with a key *schema* does not declare, at any level.
 
-    The keys, not their types: a declared ``'int'`` is written by json, and a
+    The keys, not their types: a declared `'int'` is written by json, and a
     numpy integer and a Python one are the same value to it. What matters is
     the shape -- an undeclared key is data the hash says is not there. A
     declared key may be left out, and a declared dict may be None: either
@@ -402,19 +402,19 @@ def check_structure(value, schema: dict, *, where: str = ''):
 class ZipBase:
     """Merge configuration and merge logic, shared by the two zip datasets.
 
-    ``ZipStreamingDataset`` (map-style, index-addressed) and
-    ``ZipIterableStreamingDatasets`` (iterator-style, lockstep) differ only
+    `ZipStreamingDataset` (map-style, index-addressed) and
+    `ZipIterableStreamingDatasets` (iterator-style, lockstep) differ only
     in how they *obtain* one sample per source; what they then do with those
     samples is identical.  Keeping that half here means one merge policy,
     one set of error messages, and one place to change either.
 
-    Not a dataset itself -- it defines no ``__getitem__`` and no
-    ``__iter__``, and is mixed in front of whichever ``torch`` base supplies
+    Not a dataset itself -- it defines no `__getitem__` and no
+    `__iter__`, and is mixed in front of whichever `torch` base supplies
     one.  A third way of reading the sources subclasses this and adds only
-    that, calling ``_merge_(idx, samples)`` with one sample per source.
+    that, calling `_merge_(idx, samples)` with one sample per source.
 
     Beyond the plain merge, two things a multi-slice
-    ``Datatable`` needs:
+    `Datatable` needs:
 
     * **Per-source column projection** (*columns*), so a caller can say
       "frames, and only these two annotation columns" without paying to
@@ -430,27 +430,27 @@ class ZipBase:
     Parameters
     ----------
     *datasets
-        One or more ``StreamingDataset`` instances to zip.
+        One or more `StreamingDataset` instances to zip.
     names : sequence[str]
         Source names, positionally parallel to *datasets* -- normally the
         slice names.  Required, and required to be distinct: every row is
         keyed by them under either value of *nested*.
     nested : bool
-        How a merged row is keyed.  ``True`` (the default) gives
-        ``{name: {column: value}}``, keeping each source's columns in their
-        own sub-dict; ``False`` flattens to ``{(name, column): value}``.
+        How a merged row is keyed.  `True` (the default) gives
+        `{name: {column: value}}`, keeping each source's columns in their
+        own sub-dict; `False` flattens to `{(name, column): value}`.
         Both are collision-free -- the source name is part of every key --
         which is the point: two slices may carry the same column name and
         both values survive, where the older un-named flat row could keep
         only one of them.
     columns : sequence | None
         Per-dataset column projection, positionally parallel to *datasets*.
-        Entry *i* is either ``None`` ("every column of dataset *i*") or an
-        iterable of column specs to keep -- a column name, or ``(column, key)``
-        / ``(column, [keys])`` for part of a dict column (see `column_spec`).
-        ``None`` means no projection at all.
+        Entry *i* is either `None` ("every column of dataset *i*") or an
+        iterable of column specs to keep -- a column name, or `(column, key)`
+        / `(column, [keys])` for part of a dict column (see `column_spec`).
+        `None` means no projection at all.
 
-        Deliberately a separate argument rather than ``(dataset, columns)``
+        Deliberately a separate argument rather than `(dataset, columns)`
         pairs: a dataset may itself be a tuple or a list subclass, so there
         is no reliable way to tell a pair from a bare list-like dataset, and
         guessing wrong silently reinterprets the caller's data as a
@@ -464,14 +464,14 @@ class ZipBase:
         stream loud instead of silently misaligned.  Off by default: it
         costs a comparison per shared key per item.
     skip_none : bool
-        Drop ``None`` values while projecting, so a row does not carry a
+        Drop `None` values while projecting, so a row does not carry a
         column the source left empty.  On by default; a projection that
-        means to carry a genuinely null column wants ``skip_none=False``.
+        means to carry a genuinely null column wants `skip_none=False`.
     zip_validator : callable | None
-        Optional callable ``(idx, *samples) → None`` that is invoked
+        Optional callable `(idx, *samples) → None` that is invoked
         with the flat index and the individual sample dicts **before**
         they are projected or merged.  It should raise on inconsistency
-        (e.g. when ``bag_name`` or ``tile_index`` disagree across the
+        (e.g. when `bag_name` or `tile_index` disagree across the
         datasets).
     """
 
@@ -535,7 +535,7 @@ class ZipBase:
     # 4. Helpers -----------------------------------------------------------
 
     def _project_(self, pos, sample, idx):
-        """One source's sample as an ordered ``[(column, value)]`` list.
+        """One source's sample as an ordered `[(column, value)]` list.
 
         Column order is the caller's projection order when there is one, and
         otherwise the order the source wrote them in -- never a set's order.
@@ -628,11 +628,11 @@ class ZipBase:
 
         *idx* only labels the item in error messages and is what the
         *zip_validator* is handed.  It is a physical sample index in
-        ``ZipStreamingDataset`` and a position within the stream in
-        ``ZipIterableStreamingDatasets`` -- the merge itself never uses it
+        `ZipStreamingDataset` and a position within the stream in
+        `ZipIterableStreamingDatasets` -- the merge itself never uses it
         to address anything, so the difference does not matter here.
 
-        The row is keyed by :attr:`nested`. Either keying is collision-free,
+        The row is keyed by `nested`. Either keying is collision-free,
         because a source's name is part of every key, so nothing here decides
         which of two values to keep -- both are kept, under distinct keys.
         """
@@ -652,34 +652,34 @@ class ZipBase:
 
 
 class ZipStreamingDataset(ZipBase, Dataset):
-    """Pairs multiple ``StreamingDataset`` objects by index.
+    """Pairs multiple `StreamingDataset` objects by index.
 
-    All datasets must have the same length.  ``__getitem__`` merges
+    All datasets must have the same length.  `__getitem__` merges
     the sample dicts from all datasets into a single dict.  Merge parameters
-    are documented on ``ZipBase``.
+    are documented on `ZipBase`.
 
     This avoids opening per-bag tile datasets inside DataLoader
     workers (which breaks DDP barriers) by creating multiple
-    rank-coordinated ``StreamingDataset`` objects at the top level.
+    rank-coordinated `StreamingDataset` objects at the top level.
 
     Map-style, so index-addressed: every source is read through
-    ``StreamingDataset.get_item()``, which is a *blocking* read that
+    `StreamingDataset.get_item()`, which is a *blocking* read that
     downloads the sample's shard inline on the calling thread if it is not
-    already cached.  ``StreamingDataset``'s download-ahead thread is started
-    by its ``__iter__`` and so never runs here.  Two consequences worth
-    knowing before choosing this over ``ZipIterableStreamingDatasets``:
+    already cached.  `StreamingDataset`'s download-ahead thread is started
+    by its `__iter__` and so never runs here.  Two consequences worth
+    knowing before choosing this over `ZipIterableStreamingDatasets`:
 
     * Shard misses stall the worker for a full download round-trip rather
       than being prefetched.  For local storage there is nothing to
       download and this costs nothing; for remote storage it is the
       dominant cost.
     * Access order is the caller's, so cache locality is the caller's
-      problem.  ``DataLoader(shuffle=True)`` is a full permutation and will
-      thrash a bounded ``cache_limit``; use ``Datatable.sampler()``,
+      problem.  `DataLoader(shuffle=True)` is a full permutation and will
+      thrash a bounded `cache_limit`; use `Datatable.sampler()`,
       which shuffles in shard-sized chunks instead.
 
     What it buys in exchange is genuine random access: an index means the
-    same sample every time, so inspection, subsetting, a ``Subset``, or any
+    same sample every time, so inspection, subsetting, a `Subset`, or any
     sampler at all work normally.
     """
 
@@ -688,15 +688,15 @@ class ZipStreamingDataset(ZipBase, Dataset):
 
 
 class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
-    """Pairs multiple ``StreamingDataset`` objects by *iteration order*.
+    """Pairs multiple `StreamingDataset` objects by *iteration order*.
 
-    The same merge as ``ZipStreamingDataset`` -- merge parameters are
-    documented on ``ZipBase`` -- reached by iterating every source in
+    The same merge as `ZipStreamingDataset` -- merge parameters are
+    documented on `ZipBase` -- reached by iterating every source in
     lockstep rather than indexing them.  That is what puts each source back
-    on its own ``__iter__``, and so back in possession of the machinery
+    on its own `__iter__`, and so back in possession of the machinery
     map-style access leaves switched off: the download-ahead thread, the
-    rank/worker partitioning, ``num_canonical_nodes``, the shard-locality
-    shuffle, and mid-epoch resumption via ``state_dict()``.
+    rank/worker partitioning, `num_canonical_nodes`, the shard-locality
+    shuffle, and mid-epoch resumption via `state_dict()`.
 
     On remote storage this is the difference between a blocking download per
     shard miss and a background one, which is normally the largest single
@@ -707,58 +707,58 @@ class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
     ---------
     Zipping iterators is only correct if every source yields the **same
     sequence of samples**.  Sources of equal length are aligned by
-    construction under ``shuffle=False``: the partition comes from
-    ``get_partitions(algo, num_samples, num_canonical_nodes,
-    num_physical_nodes, ranks_per_node, workers_per_rank, batch_size)``,
+    construction under `shuffle=False`: the partition comes from
+    `get_partitions(algo, num_samples, num_canonical_nodes,
+    num_physical_nodes, ranks_per_node, workers_per_rank, batch_size)`,
     which reads sample *counts* and the world, never shard structure.
 
-    Shuffling is the part that can silently break it.  ``get_shuffle(algo,
-    shard_sizes, ...)`` derives the permutation from the *per-shard sample
+    Shuffling is the part that can silently break it.  `get_shuffle(algo,
+    shard_sizes, ...)` derives the permutation from the *per-shard sample
     counts*, and slices shard by bytes -- so a frames slice and an
     annotations slice holding the same samples split into different shards,
     shuffle differently, and pair unrelated samples.  Hence:
 
-    * ``shuffle=False`` on every source: aligned, no shuffle.  Shuffle
-      cannot then be recovered with a sampler, because an ``IterableDataset``
+    * `shuffle=False` on every source: aligned, no shuffle.  Shuffle
+      cannot then be recovered with a sampler, because an `IterableDataset`
       takes none; it has to come from the source config.
-    * ``shuffle=True`` on every source with identical ``shuffle_seed``,
-      ``shuffle_algo``, ``num_canonical_nodes`` and ``batch_size``, **and**
+    * `shuffle=True` on every source with identical `shuffle_seed`,
+      `shuffle_algo`, `num_canonical_nodes` and `batch_size`, **and**
       shard boundaries that coincide: aligned, full locality-aware shuffle.
-      ``Datatablet.slice_writers(..., flush_every=N)`` is what makes the
+      `Datatablet.slice_writers(..., flush_every=N)` is what makes the
       boundaries coincide.
-    * ``shuffle_algo='naive'`` is the exception that needs no aligned
-      boundaries -- it permutes ``sum(shard_sizes)`` and so depends only on
+    * `shuffle_algo='naive'` is the exception that needs no aligned
+      boundaries -- it permutes `sum(shard_sizes)` and so depends only on
       the total -- but it is a full global permutation with no locality at
       all, which is the thing iterating was meant to avoid.
-    * Per-source sampling (``proportion``/``repeat``/``choose``) resamples
+    * Per-source sampling (`proportion`/`repeat`/`choose`) resamples
       *per shard* and must stay unset.
 
-    ``__init__`` checks the shard boundaries of any shuffling source and
+    `__init__` checks the shard boundaries of any shuffling source and
     refuses to build a zip that cannot be aligned; pass
-    ``check_alignment=False`` to skip it.  That check is static, so the
-    running safety net is still ``shared={'sample_id', ...}`` with
-    ``validate_shared=True`` -- cheap for scalar keys, and the only thing
+    `check_alignment=False` to skip it.  That check is static, so the
+    running safety net is still `shared={'sample_id', ...}` with
+    `validate_shared=True` -- cheap for scalar keys, and the only thing
     that catches the drift described below.
 
     Sharp edges
     -----------
     * **Barriers must be entered in the same order by every worker.**  Each
-      source's ``__iter__`` waits on a shared barrier across the node's
-      workers.  ``zip()`` advances the sources in a fixed order, which is
+      source's `__iter__` waits on a shared barrier across the node's
+      workers.  `zip()` advances the sources in a fixed order, which is
       what makes that safe -- iterating a subset of the sources, or in a
       different order, in some worker deadlocks the rest.
     * **Epoch counters are per source.**  The shuffle seed is
-      ``shuffle_seed + epoch``, and ``next_epoch`` is incremented by each
-      source's own ``__iter__``.  Iterate one slice out of band -- a
-      ``stats()`` pass, a debugging loop -- and that slice alone advances an
+      `shuffle_seed + epoch`, and `next_epoch` is incremented by each
+      source's own `__iter__`.  Iterate one slice out of band -- a
+      `stats()` pass, a debugging loop -- and that slice alone advances an
       epoch, changing its permutation and silently misaligning the zip.
       Nothing but *validate_shared* will notice.
-    * **No random access.**  No ``__getitem__``, no sampler, no ``Subset``.
-      ``__len__`` is each source's per-rank length, so ``len(loader)``
+    * **No random access.**  No `__getitem__`, no sampler, no `Subset`.
+      `__len__` is each source's per-rank length, so `len(loader)`
       works.
-    * **Every source needs ``batch_size=``.**  ``StreamingDataset``
+    * **Every source needs `batch_size=`.**  `StreamingDataset`
       partitions in whole batches and refuses to iterate without it.  It
-      must be the per-device batch size the ``DataLoader`` uses, and the
+      must be the per-device batch size the `DataLoader` uses, and the
       same on every source.
     * **Threads.**  Two per source per worker, plus an executor.
 
@@ -766,10 +766,10 @@ class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
     ----------
     check_alignment : bool
         Verify at construction that all shuffling sources shard identically.
-        On by default.  Sources that are not ``StreamingDataset``\\ s, or are
+        On by default.  Sources that are not `StreamingDataset`\\ s, or are
         not shuffling, carry no shard metadata to check and are skipped.
     *datasets, names, nested, columns, shared, validate_shared, skip_none, zip_validator
-        As ``ZipBase``.
+        As `ZipBase`.
     """
 
     def __init__(self, *datasets, check_alignment=True, **kwargs):
@@ -790,7 +790,7 @@ class ZipIterableStreamingDatasets(ZipBase, IterableDataset):
     def _check_shard_alignment_(self):
         """Refuse a zip whose shuffling sources shard differently.
 
-        Static and cheap: ``samples_per_shard`` is read off the index each
+        Static and cheap: `samples_per_shard` is read off the index each
         source already loaded, so this costs no downloads.  It cannot catch
         epoch drift or a mid-run reconfiguration, which is what
         *validate_shared* is for.
@@ -836,7 +836,7 @@ ZippedStreamingDatasets = ZipStreamingDataset
 # ═══════════════════════════════════════════════════════════════════════
 
 def shuffled_chunk_order(num_chunks: int, seed: int) -> list:
-    """A random permutation of ``range(num_chunks)`` for the given seed."""
+    """A random permutation of `range(num_chunks)` for the given seed."""
     generator = torch.Generator().manual_seed(seed)
     return torch.randperm(num_chunks, generator=generator).tolist()
 
@@ -847,7 +847,7 @@ class ChunkShuffleSampler(Sampler):
 
     For anything backed by shard-organised storage, which is what an MDS
     table is: consecutive sample indices live in the same shard. A full
-    global shuffle (``torch.randperm`` over the whole dataset) scatters
+    global shuffle (`torch.randperm` over the whole dataset) scatters
     every access across the whole table. Shuffling in chunks keeps the
     working set down to a handful of shards, small enough to stay
     cache-resident, while both chunk order and within-chunk order are
@@ -856,14 +856,14 @@ class ChunkShuffleSampler(Sampler):
     Parameters
     ----------
     n : int
-        Length of the index space (e.g. ``len(dataset)``).
+        Length of the index space (e.g. `len(dataset)`).
     chunk_size : int
         Consecutive indices per chunk.
     seed : int
         Base seed, combined with the epoch so each epoch shuffles
         independently but reproducibly.
     fixed_epoch : bool
-        Ignore :meth:`set_epoch` and stay on epoch 0, so the order never
+        Ignore `set_epoch` and stay on epoch 0, so the order never
         changes for the life of the sampler.
     """
 
@@ -924,11 +924,11 @@ class ChunkShuffleSampler(Sampler):
 
 
 class ResumableDataLoader(DataLoader):
-    """A ``DataLoader`` that forwards ``state_dict``/``load_state_dict`` to its
+    """A `DataLoader` that forwards `state_dict`/`load_state_dict` to its
     sampler.
 
     Trainers that support mid-epoch resume check the *loader* for those
-    methods, not the sampler, so a :class:`ChunkShuffleSampler`'s resume
+    methods, not the sampler, so a `ChunkShuffleSampler`'s resume
     state is inert unless the loader surfaces it.  Only meaningful with a
     sampler that implements them.
     """
@@ -945,25 +945,25 @@ class ResumableDataLoader(DataLoader):
     def _stateful_sampler_(self):
         """The sampler carrying resume state, through whatever wraps it.
 
-        Not ``self.sampler`` directly: under DDP, Lightning replaces the
-        sampler with a ``DistributedSamplerWrapper`` so each rank draws a
-        disjoint subset -- correct, since :class:`ChunkShuffleSampler` knows
-        nothing about ranks -- and that wrapper has no ``state_dict`` of its
+        Not `self.sampler` directly: under DDP, Lightning replaces the
+        sampler with a `DistributedSamplerWrapper` so each rank draws a
+        disjoint subset -- correct, since `ChunkShuffleSampler` knows
+        nothing about ranks -- and that wrapper has no `state_dict` of its
         own.  Asking it for one raised, which is how a run reaches
-        ``on_save_checkpoint`` and dies at the first checkpoint rather than at
-        the first batch::
+        `on_save_checkpoint` and dies at the first checkpoint rather than at
+        the first batch:
 
             AttributeError: 'DistributedSamplerWrapper' object has no
             attribute 'state_dict'
 
-        The wrapper keeps the original at ``.dataset._sampler``, so the walk
-        below finds it.  ``None`` when nothing in the chain is stateful, which
+        The wrapper keeps the original at `.dataset._sampler`, so the walk
+        below finds it.  `None` when nothing in the chain is stateful, which
         is the honest answer for a plain sampler: an empty state dict rather
         than an exception.
 
-        What this gives back under DDP is ``consumed=0``: the wrapper
-        materialises the whole order once per epoch (``reset()`` calls
-        ``list(sampler)``), which runs the inner sampler to exhaustion and
+        What this gives back under DDP is `consumed=0`: the wrapper
+        materialises the whole order once per epoch (`reset()` calls
+        `list(sampler)`), which runs the inner sampler to exhaustion and
         leaves its counter at zero.  So a resume restarts the epoch instead of
         landing mid-way through it -- which is what the state says, not a
         position that would be wrong.
@@ -990,13 +990,13 @@ class ResumableDataLoader(DataLoader):
 # union of contiguous runs.
 
 def chunk_split_ranges(n: int, chunk_size: int, fractions, seed: int = 0) -> list:
-    """Partition ``range(n)`` into groups at chunk granularity, as ranges.
+    """Partition `range(n)` into groups at chunk granularity, as ranges.
 
-    Each group comes back as ascending, maximally-merged ``(start, end)``
+    Each group comes back as ascending, maximally-merged `(start, end)`
     pairs: adjacent selected chunks coalesce, so three consecutive 2048-chunks
-    are one ``(s, s + 6144)`` range rather than three.
+    are one `(s, s + 6144)` range rather than three.
 
-    See :func:`chunk_split_indices` for the ``fractions`` semantics.
+    See `chunk_split_indices` for the `fractions` semantics.
     """
     fractions = list(fractions)
     if any(f is None for f in fractions[:-1]):
@@ -1030,27 +1030,27 @@ def chunk_split_ranges(n: int, chunk_size: int, fractions, seed: int = 0) -> lis
 
 
 def chunk_split_indices(n: int, chunk_size: int, fractions, seed: int = 0) -> list:
-    """Partition ``range(n)`` into ``len(fractions)`` groups at chunk granularity.
+    """Partition `range(n)` into `len(fractions)` groups at chunk granularity.
 
     Whole chunks, not individual samples, are assigned to each group, so a
     group stays a union of contiguous index ranges.  Each group's indices come
     back ascending -- pair with
-    :class:`~dbx.datastreams.ChunkShuffleSampler` for a shuffled iteration
+    `ChunkShuffleSampler` for a shuffled iteration
     order on top.
 
     Parameters
     ----------
     n : int
-        Length of the index space to split (e.g. ``len(dataset)``).
+        Length of the index space to split (e.g. `len(dataset)`).
     chunk_size : int
         Consecutive indices per chunk.
     fractions : Sequence[float | None]
         Fraction of the *chunks* per group, in order.  At most the **last**
-        entry may be ``None``, meaning "every remaining chunk" -- which is
-        what a plain train/val split wants (``[0.8, None]``), since two
+        entry may be `None`, meaning "every remaining chunk" -- which is
+        what a plain train/val split wants (`[0.8, None]`), since two
         independently-rounded fractions summing to 1.0 can leave a chunk or
         two assigned to neither.  Give every entry a float when the leftover
-        should be deliberately unused (``[0.05, 0.02]`` -- a 7% smoke test).
+        should be deliberately unused (`[0.05, 0.02]` -- a 7% smoke test).
     seed : int
         Seed for the chunk-order shuffle.
     """
@@ -1063,16 +1063,16 @@ def chunk_split_indices(n: int, chunk_size: int, fractions, seed: int = 0) -> li
 def val_loader_workers(num_workers, prefetch_factor, val_max_batches):
     """Right-size a validation loader that only ever consumes a few batches.
 
-    A DataLoader prefetches ``num_workers * prefetch_factor`` batches.  With
-    ``val_max_batches=1`` that is 12 workers x 4 = 48 batches fetched to
+    A DataLoader prefetches `num_workers * prefetch_factor` batches.  With
+    `val_max_batches=1` that is 12 workers x 4 = 48 batches fetched to
     consume **one**, and because each worker walks its own slice of the index
     space those 48 batches touch ~48x as many shards as the validation reads.
     Under a cache limit that evicts, the discarded prefetches push the training
     working set out of the cache, so every validation is followed by a burst of
     re-downloads.
 
-    Returns ``(num_workers, prefetch_factor)`` capped so the loader fetches at
-    most one batch beyond what will be read.  ``val_max_batches=None`` ("read
+    Returns `(num_workers, prefetch_factor)` capped so the loader fetches at
+    most one batch beyond what will be read.  `val_max_batches=None` ("read
     the whole split") passes through untouched.
     """
     if not val_max_batches or num_workers <= 0:
@@ -1087,11 +1087,11 @@ def val_loader_workers(num_workers, prefetch_factor, val_max_batches):
 # ═══════════════════════════════════════════════════════════════════════
 
 class _CountingWriter_:
-    """An ``MDSWriter`` that counts its writes and tells a ``ShardSync``.
+    """An `MDSWriter` that counts its writes and tells a `ShardSync`.
 
-    A proxy rather than a subclass so that ``slice_writers(flush_every=N)``
-    is the only change a ``__build__()`` needs -- every other attribute and
-    method, ``finish()`` included, passes straight through, so the writers
+    A proxy rather than a subclass so that `slice_writers(flush_every=N)`
+    is the only change a `__build__()` needs -- every other attribute and
+    method, `finish()` included, passes straight through, so the writers
     a tablet is handed behave exactly as before.
     """
 
@@ -1102,8 +1102,8 @@ class _CountingWriter_:
         self.n_written = 0
         self._writer = writer
         self._sync = sync
-        #: ``{column: schema}`` for the columns this slice declares by the
-        #: structure of the dict they hold -- ``DATASLICE(a=dict(k='int'))``.
+        # `{column: schema}` for the columns this slice declares by the
+        # structure of the dict they hold -- `DATASLICE(a=dict(k='int'))`.
         self._structures = dict(structures or {})
 
     def __getattr__(self, name):
@@ -1152,14 +1152,14 @@ class _CountingWriter_:
     def flush_shard(self):
         """End the current shard here, if it has anything in it.
 
-        Both calls, in this order, are what ``MDSWriter.write()`` itself does
-        when the byte budget is hit and what ``finish()`` does for the
-        remainder: ``flush_shard()`` emits the pending samples as a shard and
-        ``_reset_cache()`` starts the next one.  Flushing without resetting
+        Both calls, in this order, are what `MDSWriter.write()` itself does
+        when the byte budget is hit and what `finish()` does for the
+        remainder: `flush_shard()` emits the pending samples as a shard and
+        `_reset_cache()` starts the next one.  Flushing without resetting
         would write those samples again.
 
-        The emptiness guard matters at the boundary: ``finish()`` flushes
-        only ``if self.new_samples``, so a sample count that is an exact
+        The emptiness guard matters at the boundary: `finish()` flushes
+        only `if self.new_samples`, so a sample count that is an exact
         multiple of *flush_every* must not leave a zero-sample shard behind
         for the merged index to name.
         """
@@ -1175,7 +1175,7 @@ class ShardSync:
     wrote every slice once per item -- the invariant the slices exist to keep,
     since sample i of one must describe what sample i of another does -- and
     costs an increment per write, so it is always on.  Breaking them onto a
-    shared shard boundary is what ``flush_every`` asks for.
+    shared shard boundary is what `flush_every` asks for.
 
     The condition is deliberately "every writer has written the same number
     of samples, and that number is a multiple of *every*" rather than
@@ -1183,16 +1183,16 @@ class ShardSync:
     sample each per item but in whatever order the tablet's loop body
     happens to use, so the sync has to fire on the last of them, not the
     first.  A tablet that does not write its slices in lockstep never satisfies
-    the condition, which is what ``check_lockstep()`` reports at the end.
+    the condition, which is what `check_lockstep()` reports at the end.
     """
 
     # 1. Protocol and hooks ------------------------------------------------
 
     def __init__(self, every: 'int | None' = None):
-        #: None counts without ever rotating: the lockstep COUNT is what says
-        #: whether a tablet wrote its slices one sample per item, and that question
-        #: is worth answering on every build.  Sharing shard boundaries is a
-        #: separate thing to want, and only that one costs anything.
+        # None counts without ever rotating: the lockstep COUNT is what says
+        # whether a tablet wrote its slices one sample per item, and that question
+        # is worth answering on every build.  Sharing shard boundaries is a
+        # separate thing to want, and only that one costs anything.
         self.every = every
         self.writers = []
 
@@ -1230,7 +1230,7 @@ class ShardSync:
 # ═══════════════════════════════════════════════════════════════════════
 
 def _sanitize_(obj):
-    """Recursively replace ``None`` with ``{}`` in nested dicts/lists."""
+    """Recursively replace `None` with `{}` in nested dicts/lists."""
     if obj is None:
         return {}
     if isinstance(obj, dict):
@@ -1241,17 +1241,17 @@ def _sanitize_(obj):
 
 
 def sanitize_collate(batch):
-    """Collate a batch of sample dicts, tolerating missing or ``None`` values.
+    """Collate a batch of sample dicts, tolerating missing or `None` values.
 
-    MDS JSON columns can deserialise to ``None`` (e.g. bags without a
+    MDS JSON columns can deserialise to `None` (e.g. bags without a
     valid case-id have no annotations), or be absent entirely from some
-    samples.  PyTorch's ``default_collate`` rejects both cases, so we:
+    samples.  PyTorch's `default_collate` rejects both cases, so we:
 
     1. Union all keys across the batch (some shards may omit optional
        columns entirely).
-    2. Fill missing keys with ``None``.
-    3. Recursively replace ``None`` with ``{}`` via ``_sanitize_()``.
-    4. Delegate to ``default_collate``.
+    2. Fill missing keys with `None`.
+    3. Recursively replace `None` with `{}` via `_sanitize_()`.
+    4. Delegate to `default_collate`.
     """
     from torch.utils.data._utils.collate import default_collate
     all_keys = set().union(*(s.keys() for s in batch))
@@ -1264,22 +1264,22 @@ def sanitize_collate(batch):
 # ═══════════════════════════════════════════════════════════════════════
 
 def abfs_to_mds_azure(path: str) -> str:
-    """Convert an ``abfs(s)://`` URL to the ``azure-dl://`` scheme used by MosaicML.
+    """Convert an `abfs(s)://` URL to the `azure-dl://` scheme used by MosaicML.
 
-    MosaicML StreamingDataset does not recognise ``abfs://`` or ``abfss://``.
-    Its ``AzureDataLakeDownloader`` expects::
+    MosaicML StreamingDataset does not recognise `abfs://` or `abfss://`.
+    Its `AzureDataLakeDownloader` expects:
 
         azure-dl://container/blob_path
 
-    with the account name provided via the ``AZURE_ACCOUNT_NAME`` env var
+    with the account name provided via the `AZURE_ACCOUNT_NAME` env var
     (set automatically by this function if not already present).
 
-    Supported input formats::
+    Supported input formats:
 
         abfss://container@account.dfs.core.windows.net/path   (full form)
         abfs://container/path                                  (short form)
 
-    The short form requires ``AZURE_ACCOUNT_NAME`` in the environment.
+    The short form requires `AZURE_ACCOUNT_NAME` in the environment.
 
     Non-abfs paths (local, etc.) are returned unchanged.
     """
@@ -1313,39 +1313,39 @@ def abfs_to_mds_azure(path: str) -> str:
 def open_datastream(index_dir, *, local=None, cache_dir=None, cache=None,
                     cache_limit=None, shuffle=False, allow_unsafe_types=True,
                     **kwargs):
-    """Open a ``streaming.StreamingDataset`` over an MDS index directory.
+    """Open a `streaming.StreamingDataset` over an MDS index directory.
 
-    *index_dir* is the directory holding ``index.json``; ``StreamingDataset``
-    resolves every shard in it as ``os.path.join(index_dir, split, basename)``,
+    *index_dir* is the directory holding `index.json`; `StreamingDataset`
+    resolves every shard in it as `os.path.join(index_dir, split, basename)`,
     so it must be an **ancestor** of the shards it names.
 
-    Three things this does that a bare ``StreamingDataset(...)`` does not:
+    Three things this does that a bare `StreamingDataset(...)` does not:
 
-    1. A local *index_dir* is passed as ``local=`` with no ``remote=``, so
-       nothing is copied; a remote one is passed as ``remote=`` with a local
+    1. A local *index_dir* is passed as `local=` with no `remote=`, so
+       nothing is copied; a remote one is passed as `remote=` with a local
        cache directory alongside.
-    2. ``abfs://``/``abfss://`` is translated to the ``azure-dl://`` scheme
-       MosaicML actually understands (see ``abfs_to_mds_azure()``).
-    3. ``Reused local directory`` -- which is what a previous process that
+    2. `abfs://`/`abfss://` is translated to the `azure-dl://` scheme
+       MosaicML actually understands (see `abfs_to_mds_azure()`).
+    3. `Reused local directory` -- which is what a previous process that
        died without releasing its shared-memory bookkeeping looks like -- is
-       retried once after ``clean_stale_shared_memory()``.
+       retried once after `clean_stale_shared_memory()`.
 
     Parameters
     ----------
     index_dir : str
-        Directory containing ``index.json``.  Local or remote.
+        Directory containing `index.json`.  Local or remote.
     local : str, optional
         Explicit local cache directory.  Ignored when *index_dir* is itself
         local (it is then its own cache).
     cache_dir : str, optional
         Basename of the cache directory to create under *cache* when *local*
         is not given.  Required for a remote *index_dir*.  It must be unique
-        per open dataset: two ``StreamingDataset`` objects alive at once over
+        per open dataset: two `StreamingDataset` objects alive at once over
         one cache directory is exactly the collision retried above.
     cache : str, optional
         Parent of *cache_dir*.  Defaults to the system temporary directory.
     cache_limit, shuffle, allow_unsafe_types, **kwargs
-        Passed through to ``StreamingDataset``.
+        Passed through to `StreamingDataset`.
     """
     scheme = urllib.parse.urlparse(index_dir).scheme
     if scheme in ('', 'file'):
@@ -1391,12 +1391,12 @@ def open_datastream(index_dir, *, local=None, cache_dir=None, cache=None,
 def read_mds_shard(shard_dir, fs, cache_limit='2gb', tmpdir=None):
     """Read all samples from an MDS shard directory.
 
-    Uses the streaming library's low-level ``reader_from_json`` / ``Reader``
-    API rather than ``StreamingDataset``.  ``StreamingDataset`` allocates
-    shared-memory segments backed by ``mmap`` on every call; in a long
+    Uses the streaming library's low-level `reader_from_json` / `Reader`
+    API rather than `StreamingDataset`.  `StreamingDataset` allocates
+    shared-memory segments backed by `mmap` on every call; in a long
     single-process loop those mappings accumulate and eventually exhaust the
-    kernel's ``vm.max_map_count`` limit, producing ``OSError: [Errno 12]
-    Cannot allocate memory``.  The low-level reader reads MDS files directly
+    kernel's `vm.max_map_count` limit, producing `OSError: [Errno 12]
+    Cannot allocate memory`.  The low-level reader reads MDS files directly
     from disk with no shared memory.
 
     Remote shards (abfs/abfss or other schemes) are downloaded to a temporary
@@ -1407,7 +1407,7 @@ def read_mds_shard(shard_dir, fs, cache_limit='2gb', tmpdir=None):
     ----------
     shard_dir : str
         Path (local or remote) to the shard directory containing
-        ``index.json`` and ``.mds`` / ``.mds.zstd`` files.
+        `index.json` and `.mds` / `.mds.zstd` files.
     fs : fsspec filesystem
         Filesystem for *shard_dir*.  Used to download files when the path is
         remote.
@@ -1416,7 +1416,7 @@ def read_mds_shard(shard_dir, fs, cache_limit='2gb', tmpdir=None):
     tmpdir : str, optional
         Base directory for temporary files (decompression scratch space and
         remote-shard download staging).  Defaults to the system temporary
-        directory (usually ``/tmp``).  The directory must already exist.
+        directory (usually `/tmp`).  The directory must already exist.
 
     Returns
     -------

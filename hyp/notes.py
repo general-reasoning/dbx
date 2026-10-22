@@ -1,7 +1,7 @@
 """A markdown written in hyp --docs: begun from what a right click on empty disk typed, edited in a window of its own, saved as a document.
 
 A right click on empty disk offers **Markdown**: what is typed in its box,
-on Enter, becomes a new markdown in the directory scanned, ``<first line>.md``,
+on Enter, becomes a new markdown in the directory scanned, `<first line>.md`,
 and opens in the middle -- the size of a Claude session's window -- as text
 to go on writing in (`NoteWindow`): Enter starts a new line there. It is
 saved, and the disk brought up to date with it, as it begins, at Cmd+S, and
@@ -20,7 +20,7 @@ import pygame
 
 from .docview import BAR, DIM, EDGE, FONTS, TEXT, AreaEdit, DocWindow, EditableTitle, MarkdownDoc, Message
 
-#: A name's longest, before its ``.md``.
+# A name's longest, before its `.md`.
 NAME_CHARS = 60
 
 
@@ -59,13 +59,13 @@ class Note:
         return f"{self.stem()}.md"
 
     def stem(self):
-        """Its file's name less its ``.md``: as saved, as given, or by its first line."""
+        """Its file's name less its `.md`: as saved, as given, or by its first line."""
         if self.url:
             return posixpath.basename(self.url)[: -len(".md")]
         return self._named_ or _stem_(self.text)
 
     def rename(self, stem):
-        """Name it *stem*, ``.md`` after: the file moved, where it is saved; the name taken at its first save, where not.
+        """Name it *stem*, `.md` after: the file moved, where it is saved; the name taken at its first save, where not.
 
         Whether it changed: a blank name changes nothing. A name another file
         has is refused -- `FileExistsError` -- not written over.
@@ -268,7 +268,7 @@ class NoteWindow(EditableTitle, DocWindow):
 
 
 def _stem_(text):
-    """A file's name for *text*: its first line, lower-cased, words joined by hyphens; ``note`` for none."""
+    """A file's name for *text*: its first line, lower-cased, words joined by hyphens; `note` for none."""
     line = (text.strip().split("\n", 1)[0] if text.strip() else "").lstrip("#").strip()
     stem = re.sub(r"[^\w\s-]", "", line).strip().lower()
     stem = re.sub(r"[\s_-]+", "-", stem)[:NAME_CHARS].strip("-")  # a run of spaces and hyphens, one hyphen

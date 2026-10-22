@@ -1,6 +1,6 @@
 ---
 name: python-style
-description: The Python style rules in this repo that are not about class layout - imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings use no Sphinx roles like :meth: or :func:. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
+description: The Python style rules in this repo that are not about class layout - imports go at module level, except to break a circular import or to defer a heavy or questionable dependency like torch or ray; strings are formatted with f-strings, not % or .format(), except for a named template filled elsewhere; a section of computation is bracketed in log lines with Datalog.section(), not hand-written BEGIN/END lines; dbx commands are run through dbx.exec or dbx.pprint, even from Python, so that the exec journal records them; and docstrings and comments carry no reStructuredText or Sphinx markup - no :meth:/:func: roles, no double backticks, no :: before an example, no #: comments. Load when writing or reviewing any Python in dbx or hyp, writing a docstring or comment, adding an import, formatting a string, logging the start and end of a step, or running a dbx command. For member order and private naming, load class-layout.
 ---
 
 # Python style
@@ -98,21 +98,39 @@ Format codes that are not string formatting are not affected:
 `time.strftime('%Y-%m-%dT%H:%M:%S')`, `squeue -o %t`, and similar arguments
 passed to other programs stay as they are.
 
-## No Sphinx markup in docstrings
+## No reStructuredText or Sphinx markup in docstrings and comments
 
-This repo does not build its docs with Sphinx, so Sphinx roles in a
-docstring only make it harder to read. Name a function, method, class or
-attribute in plain backticks:
+This repo does not build its docs with Sphinx, so reStructuredText markup in a
+docstring or comment only makes it harder to read where it is actually read:
+in the source. None of it:
 
-```python
-"""`UNSAFE_clear_redirection` undoes it, and is the only thing that does."""
-```
+- **No roles.** Not `:meth:`, `:func:`, `:class:`, `:attr:`, `:mod:`, `:data:`,
+  `:exc:` or `:obj:`. Name a function, method, class or attribute in plain
+  backticks:
 
-not `:meth:`UNSAFE_clear_redirection` undoes it`. Never use any role:
-`:meth:`, `:func:`, `:class:`, `:attr:`, `:mod:`, `:data:`, `:exc:` or `:obj:`.
-About 390 of them are left in `dbx/`, mostly in `datablocks.py` and
-`journals.py`. Don't copy them. When you edit a docstring that has them,
-rewrite them as plain backticks.
+  ```python
+  """`UNSAFE_clear_redirection` undoes it, and is the only thing that does."""
+  ```
+
+- **No double backticks.** A literal value, command or path goes in single
+  backticks, the same as a name: `DBX_LOG_TREE=1`, `dbx.pprint "..."`,
+  `{datalake}/.hyp`.
+- **No `::` before an example.** End the sentence with a colon and indent the
+  example under it:
+
+  ```python
+  """A line reads:
+
+      main:-------- 2026-10-01T12:03:44.123456: VERBOSE: anchor/key: message
+  """
+  ```
+
+- **No `#:` comments.** A comment above an attribute is a plain `#` comment.
+
+All of these were converted in one pass on 2026-10-22, so any you find came
+back in a later edit. Fix it when you see it. The numpydoc headings
+(`Parameters`, `Returns` or `Example` underlined with `-------`) are still in
+about 68 docstrings, and were left for a separate pass.
 
 ## Bracket a section of computation with `Datalog.section`
 

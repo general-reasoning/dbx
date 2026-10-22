@@ -1,9 +1,9 @@
-"""Hyp over a journal of a dbx datalake (`HypDbxJournal`): its pipelines, ``hyp --journal``, or an anchor's blocks, ``hyp --journal ANCHOR``.
+"""Hyp over a journal of a dbx datalake (`HypDbxJournal`): its pipelines, `hyp --journal`, or an anchor's blocks, `hyp --journal ANCHOR`.
 
 `dbx.pipejournal()` reads the datalake's pipeline journal and aggregates it:
-one row per pipeline, its newest entry, with ``entrypaths`` -- every entrypoint
+one row per pipeline, its newest entry, with `entrypaths` -- every entrypoint
 it was created to. Each row is a point, embedded from the pipeline's class
-(``anchor``, its fqcn) and its spec and signature (or type) side files.
+(`anchor`, its fqcn) and its spec and signature (or type) side files.
 
 Right click opens the row. Its header has two menus: the pipeline journal's
 other entries with the same tag, by datetime, to switch to; and the
@@ -11,12 +11,12 @@ entrypoints dbx found constructed (`pipejournal(construct_only=True)`), each
 opening its own journal in a window over this one. Both are read in the
 background once the points are up.
 
-The datalake is dbx's -- ``DBX_DATALAKE`` -- and the corpus is kept in it,
-under ``{datalake}/.hyp``. It may be any fsspec url; over ``ssh://host/path``,
-sshfs connects through asyncssh, which resolves ``host`` from
-``~/.ssh/config``. Side file paths are recorded as the host wrote them,
+The datalake is dbx's -- `DBX_DATALAKE` -- and the corpus is kept in it,
+under `{datalake}/.hyp`. It may be any fsspec url; over `ssh://host/path`,
+sshfs connects through asyncssh, which resolves `host` from
+`~/.ssh/config`. Side file paths are recorded as the host wrote them,
 without a protocol, and are read through the protocol and host of the row's
-``entry_path``.
+`entry_path`.
 """
 
 import ast
@@ -76,7 +76,7 @@ DEFAULT_WORKERS = 16
 # The interpreter on the datalake's host whose Ray -- started there, for the
 # session, by dbx.SshRay -- trueinst() instantiates blocks in: it needs dbx,
 # ray (the version this one is) and the project's package. An entry records
-# the one its build ran in, ``python``, and that one is used; HYP_REMOTE_PYTHON
+# the one its build ran in, `python`, and that one is used; HYP_REMOTE_PYTHON
 # -- or --remote-python, for one launch -- overrides it, and FALLBACK_PYTHON
 # stands in where an entry, written before entries recorded it, does not say.
 REMOTE_PYTHON = __import__("os").environ.get("HYP_REMOTE_PYTHON") or None
@@ -90,11 +90,11 @@ class LabelFirstEmbedder:
     Each vector is two unit vectors side by side: the label's own, *weight*
     times over, and *base*'s embedding of the rest of the text. Under the
     cosine metric the layout uses, two texts with one label are then at
-    least ``(w**2 - 1) / (w**2 + 1)`` alike -- 0.8 for the default 3 --
+    least `(w**2 - 1) / (w**2 + 1)` alike -- 0.8 for the default 3 --
     however their rests differ, so they lie together; their rests place
     them within that. A label's vector is its character trigrams, hashed
     into `DIM` dimensions: one label is one vector, and labels sharing
-    words -- ``gigapath_probe``, ``gigapath_probe_partition`` -- lie near.
+    words -- `gigapath_probe`, `gigapath_probe_partition` -- lie near.
     """
 
     DIM = 256
@@ -142,7 +142,7 @@ class Entry:
 def rebase(path, url):
     """*path*, as the datalake's host recorded it, as a url readable from here.
 
-    *url* is any url on the datalake's filesystem: dbx's ``entry_path``, the
+    *url* is any url on the datalake's filesystem: dbx's `entry_path`, the
     journal file a row was read from, names it in full.
     """
     m = re.match(r"^([a-z0-9+]+://[^/]+)/", str(url))
@@ -162,8 +162,8 @@ def when(dt, seconds=False):
 def dict_lines(text, indent="    "):
     """A dict's repr, one key per line at every level, as lines.
 
-    ``topics`` and ``paths`` are recorded as ``str(dict)`` -- with
-    ``DATAFILE(...)`` in them, so not literals to parse back -- and are laid
+    `topics` and `paths` are recorded as `str(dict)` -- with
+    `DATAFILE(...)` in them, so not literals to parse back -- and are laid
     out by their brackets instead: a dict opens a level, its commas end a
     line; tuples, lists and calls stay on one.
     """
@@ -220,7 +220,7 @@ def _is_blank_(v):
 
 
 class _Tagged_:
-    """A python object a yaml dump records -- ``!!python/object:...`` and kin -- as its tag and contents: never made."""
+    """A python object a yaml dump records -- `!!python/object:...` and kin -- as its tag and contents: never made."""
 
     def __init__(self, name, value):
         self.name, self.value = name, value
@@ -263,7 +263,7 @@ def read_dump(path):
 
 
 def _side_file_(column, path, url):
-    """The side file *path* names, as ``(shown, compact)`` text; None where it cannot be read.
+    """The side file *path* names, as `(shown, compact)` text; None where it cannot be read.
 
     For DICT_FILES, *shown* is the dict one key per line, a level per four
     spaces -- so that a viewer folds it by level -- and *compact* the dict
@@ -299,7 +299,7 @@ def _side_file_(column, path, url):
 
 
 def var_name(row):
-    """The pipeline's ``VAR.name``, from the spec side file *row* names; None where it has none, or it cannot be read."""
+    """The pipeline's `VAR.name`, from the spec side file *row* names; None where it has none, or it cannot be read."""
 
     path = row.get("spec")
     if not isinstance(path, str) or not path.endswith((".yaml", ".yml")):
@@ -378,7 +378,7 @@ def _dbx_():
 
 
 def datalake():
-    """dbx's datalake -- ``DBX_DATALAKE``, then ``DBX_ROOT``, ``DBX_URL`` -- where hyp reads the pipelines and keeps its corpus."""
+    """dbx's datalake -- `DBX_DATALAKE`, then `DBX_ROOT`, `DBX_URL` -- where hyp reads the pipelines and keeps its corpus."""
     lake = _dbx_().default_datalake()
     if not lake:
         raise SystemExit("hyp --journal: no datalake; set DBX_DATALAKE")
@@ -386,7 +386,7 @@ def datalake():
 
 
 def _counted_(progress, msg):
-    """A progress callback for dbx's journal reads -- ``(desc, done, total)`` -- telling *progress* *msg*, with the counts.
+    """A progress callback for dbx's journal reads -- `(desc, done, total)` -- telling *progress* *msg*, with the counts.
 
     `BuildJournal.read` lists the journal's files before it reads them: while
     it does, there is no total, and *done* is the files found so far.
@@ -431,10 +431,10 @@ def pipelines(progress=print, n_workers=16):
 def blocks(anchor, progress=print, n_workers=16, filters=None):
     """Every block of *anchor* in dbx's datalake, from its build journal: one each, its newest entry, newest first.
 
-    *filters* -- ``{column: pattern}``, as `parse_filters` makes them -- are
+    *filters* -- `{column: pattern}`, as `parse_filters` makes them -- are
     the journal's own: `BuildJournal.read` applies them, to the entries, before
     a block's newest is taken. A pipeline's entries -- filed under the pipeline
-    journal, ``.pipelines`` -- are not among them.
+    journal, `.pipelines` -- are not among them.
     """
 
     filters = dict(filters or {})
@@ -464,17 +464,17 @@ def blocks(anchor, progress=print, n_workers=16, filters=None):
     return _entries_(df, progress, f"reading the specs and renderings of {len(df):,} blocks of {anchor}", n_workers)
 
 
-#: What the journal menu calls the pipeline journal: no anchor can be named so, starting with a dot.
+# What the journal menu calls the pipeline journal: no anchor can be named so, starting with a dot.
 PIPELINES = ".pipelines"
 
 
 def anchor_of(journal):
-    """The anchor ``--journal`` names, or None for the pipelines: none named, ``pipelines`` or ``.pipelines``."""
+    """The anchor `--journal` names, or None for the pipelines: none named, `pipelines` or `.pipelines`."""
     return None if journal in (None, "pipelines", PIPELINES) else journal
 
 
 def corpus_dir(anchor=None):
-    """Where a journal's corpus is kept: the pipelines', ``{datalake}/.hyp``; an anchor's, ``{datalake}/.hyp/anchors/{anchor}``."""
+    """Where a journal's corpus is kept: the pipelines', `{datalake}/.hyp`; an anchor's, `{datalake}/.hyp/anchors/{anchor}`."""
     lake = datalake().rstrip("/")
     return f"{lake}/.hyp" if anchor is None else f"{lake}/.hyp/anchors/{anchor}"
 
@@ -487,10 +487,10 @@ def journal_source(anchor=None, filters=None, n_workers=16):
 
 
 def parse_filters(text):
-    """``key=value, key=value, ...`` as ``{key: value}``: each value a pattern, as the journal's filters take them.
+    """`key=value, key=value, ...` as `{key: value}`: each value a pattern, as the journal's filters take them.
 
-    A comma splits only before another ``key=``, so a value may hold one --
-    ``tag=a{1,3}`` -- and ``|`` alternates, as in any pattern: ``event=build:end|note``.
+    A comma splits only before another `key=`, so a value may hold one --
+    `tag=a{1,3}` -- and `|` alternates, as in any pattern: `event=build:end|note`.
     """
     out = {}
     for part in re.split(r",\s*(?=[\w.:-]+\s*=)", (text or "").strip()):
@@ -511,7 +511,7 @@ def format_filters(filters):
 def journal_entries(n_workers=16):
     """Every entry of the pipeline journal, unaggregated, newest first, as a DataFrame.
 
-    With a ``name`` column: each entry's `var_name`, read from its spec side
+    With a `name` column: each entry's `var_name`, read from its spec side
     file on *n_workers* threads -- what tells apart the runs the tag menu lists.
     """
 
@@ -524,7 +524,7 @@ def journal_entries(n_workers=16):
 
 
 def constructed_entrypaths(n_workers=16, extra_events=()):
-    """``{anchorkeypath: [entrypath]}``: each pipeline's entry blocks that were built, redirected or noted -- or have an event of *extra_events*."""
+    """`{anchorkeypath: [entrypath]}`: each pipeline's entry blocks that were built, redirected or noted -- or have an event of *extra_events*."""
     df = _dbx_().pipejournal(construct_only=True, extra_construction_events=extra_events, n_workers=n_workers)
     if not len(df):
         return {}
@@ -532,7 +532,7 @@ def constructed_entrypaths(n_workers=16, extra_events=()):
 
 
 def has_output(row):
-    """Whether the process that wrote *row*'s entry had its output captured: dbx records where, as ``log``."""
+    """Whether the process that wrote *row*'s entry had its output captured: dbx records where, as `log`."""
     return bool(row) and not _is_blank_(row.get("log", None))
 
 
@@ -542,23 +542,23 @@ def has_quote(row):
 
 
 def quote_text(row):
-    """The quote *row*'s entry recorded, in full: read, as the side files are, through the protocol and host of its ``entry_path``."""
+    """The quote *row*'s entry recorded, in full: read, as the side files are, through the protocol and host of its `entry_path`."""
     from dbx.databits import read_str
 
     return read_str(rebase(row["quote"], row.get("entry_path", ""))).strip()
 
 
 def rerun_line(quote, cite=False, revision=None):
-    """A bash line that makes the block *quote* names again and prints it -- ``dbx.pprint "..."`` -- or, with *cite*, prints its cite.
+    """A bash line that makes the block *quote* names again and prints it -- `dbx.pprint "..."` -- or, with *cite*, prints its cite.
 
-    The quote is evaluated as ``dbx.eval`` evaluates a specline, not as
-    Python: its nested blocks are written bare, and only ``dbx.eval`` reads
+    The quote is evaluated as `dbx.eval` evaluates a specline, not as
+    Python: its nested blocks are written bare, and only `dbx.eval` reads
     them back as the speclines they were -- run as Python, they would be made
     into blocks, and the block made would not be the one quoted. The cite is
-    made from the quote, as the block's ``.cite()``: the quote is the faithful
+    made from the quote, as the block's `.cite()`: the quote is the faithful
     form, and a cite recorded before dbx kept speclines in it named this
-    machine's values. With *revision* -- an entry's ``dbxsha:projsha`` -- it
-    runs pinned to it, ``--revision=``, as the block was built; without, at
+    machine's values. With *revision* -- an entry's `dbxsha:projsha` -- it
+    runs pinned to it, `--revision=`, as the block was built; without, at
     today's checkout.
     """
 
@@ -576,9 +576,9 @@ def rerun_line(quote, cite=False, revision=None):
 def output_text(row, limit=OUTPUT_LIMIT):
     """The captured stdout and stderr of the process that wrote *row*'s entry, as text: its end, past *limit* bytes.
 
-    ``log`` is recorded as the datalake's host wrote it and is read, as the
+    `log` is recorded as the datalake's host wrote it and is read, as the
     side files are, through the protocol and host of the row's
-    ``entry_path``. A capture is uploaded when its command ends, so one not
+    `entry_path`. A capture is uploaded when its command ends, so one not
     there yet may be of a command still running. Escape codes are dropped,
     and a line redrawn with carriage returns -- a progress bar -- is shown as
     it was last drawn.
@@ -601,14 +601,14 @@ def output_text(row, limit=OUTPUT_LIMIT):
 
 
 def session_blocks(row, n_workers=16):
-    """The blocks journaled under *row*'s session: ``[(anchorkeypath, last event)]``, in the order first written.
+    """The blocks journaled under *row*'s session: `[(anchorkeypath, last event)]`, in the order first written.
 
-    From the index a ``dbx.exec`` command keeps of every entry written under
+    From the index a `dbx.exec` command keeps of every entry written under
     its session, by any process -- `BuildJournal.session_entries` -- under
-    ``{datalake}/.journal/sessions/{session}/``. The index and the entries it
+    `{datalake}/.journal/sessions/{session}/`. The index and the entries it
     lists are recorded as the datalake's host wrote them, and are read, as the
-    side files are, through the row's ``entry_path``. A session no command
-    ran -- a block built outside ``dbx.exec`` -- has no index, and no blocks.
+    side files are, through the row's `entry_path`. A session no command
+    ran -- a block built outside `dbx.exec` -- has no index, and no blocks.
     A pipeline's entries are left out: they are its creations, filed in the
     pipeline journal, and its block directory holds none of them.
     """
@@ -638,7 +638,7 @@ def _entry_(row):
 
 
 def topics(row):
-    """The leaf topics *row*'s block recorded, ``[(topicpath, stored)]``: *stored* False for a synthetic one, which has no location."""
+    """The leaf topics *row*'s block recorded, `[(topicpath, stored)]`: *stored* False for a synthetic one, which has no location."""
     from dbx.datablocks import SYNTHETIC, SYNTOPIC, is_topicmarker
 
     if _is_blank_(row.get("topics") if row else None):
@@ -699,7 +699,7 @@ def remote_python(entry, python=None):
 
 
 def _remote_block_(row, python):
-    """*row*'s block, by ``trueinst()`` where its data are: kept for the next call. Called holding `_REMOTE_LOCK_`."""
+    """*row*'s block, by `trueinst()` where its data are: kept for the next call. Called holding `_REMOTE_LOCK_`."""
     dbx = _dbx_()
     url = str(row.get("entry_path", ""))
     key = (url, str(row.get("id")))
@@ -718,7 +718,7 @@ def _remote_block_(row, python):
 
 
 def recorded_slices(row):
-    """The slices *row*'s entry records its block can be read by -- its ``slices`` -- by name; none where it records none."""
+    """The slices *row*'s entry records its block can be read by -- its `slices` -- by name; none where it records none."""
 
     text = row.get("slices") if row else None
     if _is_blank_(text):
@@ -731,10 +731,10 @@ def recorded_slices(row):
 
 
 def declared_columns(row):
-    """``{slice: {column: type}}``: the columns *row*'s recorded slices declare -- their ``DATASLICE(...)`` -- by slice.
+    """`{slice: {column: type}}`: the columns *row*'s recorded slices declare -- their `DATASLICE(...)` -- by slice.
 
     What can be viewed of a block, and how: a slice that declares none -- a
-    bare ``DATASLICE`` -- says nothing of what its rows hold, and is left out.
+    bare `DATASLICE` -- says nothing of what its rows hold, and is left out.
     """
 
     text = row.get("slices") if row else None
@@ -748,11 +748,11 @@ def declared_columns(row):
 
 
 def column_choices(row):
-    """``[(slice, column, path, type)]``: what can be viewed of *row*'s block, a column or -- a dict column -- each key in it.
+    """`[(slice, column, path, type)]`: what can be viewed of *row*'s block, a column or -- a dict column -- each key in it.
 
     A column the journal records by its declared structure, a dict, is
     offered key by key, down to its leaves -- *path* the keys -- and read as
-    ``data((slice, [(column, *path)]))`` reads one; a column recorded by its
+    `data((slice, [(column, *path)]))` reads one; a column recorded by its
     type alone is offered whole, *path* empty.
     """
     out = []
@@ -772,13 +772,13 @@ def column_choices(row):
 
 
 def _selection_(pick):
-    """What ``data()`` reads for a *pick*, ``(slice, column, path)``: the column, or ``(column, *path)``."""
+    """What `data()` reads for a *pick*, `(slice, column, path)`: the column, or `(column, *path)`."""
     _, c, path = pick
     return (c, *path) if path else c
 
 
 def _remote_fns_():
-    """``(describe, sample)``: what runs in the pinned worker, defined here so that it is sent by value.
+    """`(describe, sample)`: what runs in the pinned worker, defined here so that it is sent by value.
 
     The worker runs the entry's revision of dbx and the project, and no hyp:
     a function of this module's would be sent by reference, and not found
@@ -789,7 +789,7 @@ def _remote_fns_():
     """
 
     def describe(quote, slices):
-        """``{"tablets": n, "rows0": {slice: rows}}``: a table's tablets, and each slice's rows in its first -- what a sample is planned by."""
+        """`{"tablets": n, "rows0": {slice: rows}}`: a table's tablets, and each slice's rows in its first -- what a sample is planned by."""
         import dbx
 
         b = dbx.eval(quote)
@@ -804,12 +804,12 @@ def _remote_fns_():
         return {"tablets": n or 1, "rows0": rows0}
 
     def sample(quote, specs, tablets, fraction, per_tablet, seed, workers, data, labels):
-        """A *fraction* of the rows of each of *tablets* -- or *per_tablet* of them -- read *workers* at a time: ``{"X", "labels", "rows", "errors"}``.
+        """A *fraction* of the rows of each of *tablets* -- or *per_tablet* of them -- read *workers* at a time: `{"X", "labels", "rows", "errors"}`.
 
         Each tablet is constructed and read whole -- its rows together, as its
         shards hold them -- in a process forked from this one, which has the
         pinned code already; then its sample is taken, the rows `sample_rows`
-        picks with *seed* + its index. *rows* are ``(tablet, row)``.
+        picks with *seed* + its index. *rows* are `(tablet, row)`.
         """
         import multiprocessing
         import queue as queues
@@ -898,17 +898,17 @@ def _remote_fns_():
 
 
 def _quote_and_handle_(row, python):
-    """The quote of *row*'s block and the pinned worker its ``trueinst()`` runs in. Called holding `_REMOTE_LOCK_`."""
+    """The quote of *row*'s block and the pinned worker its `trueinst()` runs in. Called holding `_REMOTE_LOCK_`."""
     block = _remote_block_(row, python)
     return _REMOTE_["quote"], block._origin
 
 
 def slice_plan(row, python=REMOTE_PYTHON):
-    """What a sample of *row*'s block is planned by: ``{"tablets": n, "rows0": {slice: rows}}``.
+    """What a sample of *row*'s block is planned by: `{"tablets": n, "rows0": {slice: rows}}`.
 
     A table's tablets, and the rows of each declared slice in its first --
     a table has about *tablets* times as many. Read in the worker
-    ``trueinst()`` pins to the entry's revision, where the data are.
+    `trueinst()` pins to the entry's revision, where the data are.
     """
     describe, _ = _remote_fns_()
     with _REMOTE_LOCK_:
@@ -918,9 +918,9 @@ def slice_plan(row, python=REMOTE_PYTHON):
 
 def slice_sample(row, data, labels=None, fraction=1.0, tablets=None, workers=DEFAULT_WORKERS, python=REMOTE_PYTHON, seed=0,
                  per_tablet=None):
-    """A sample of *row*'s block -- *fraction* of the rows of each of *tablets*, or *per_tablet* of them -- as ``(X, labels, rows, errors)``.
+    """A sample of *row*'s block -- *fraction* of the rows of each of *tablets*, or *per_tablet* of them -- as `(X, labels, rows, errors)`.
 
-    *data* and *labels* are ``(slice, column, path)`` -- *path* the keys of a
+    *data* and *labels* are `(slice, column, path)` -- *path* the keys of a
     dict column, empty for all of it -- labels None for none. Read
     in the pinned worker on the datalake's host, *workers* tablets at a time;
     *X* is the data column, a row a vector. *tablets* are indices, all of a
@@ -943,7 +943,7 @@ def slice_sample(row, data, labels=None, fraction=1.0, tablets=None, workers=DEF
 
 
 def _sample_indices_(n, fraction, seed=0):
-    """The rows dbx's ``sample_rows`` picks of *n*, sorted: as it does, here."""
+    """The rows dbx's `sample_rows` picks of *n*, sorted: as it does, here."""
 
     if n <= 0:
         return np.zeros(0, dtype=np.int64)
@@ -959,7 +959,7 @@ def pick_tablets(n, fraction, seed=0):
 
 
 def read_text(row, topic, python=REMOTE_PYTHON, limit=READ_LIMIT):
-    """``read(*topic)`` of *row*'s block, instantiated with ``trueinst()`` where its data are, as text.
+    """`read(*topic)` of *row*'s block, instantiated with `trueinst()` where its data are, as text.
 
     trueinst() pins a Ray worker to the entry's own revision of dbx and of
     the project, so the block comes back with the hash it was built under,
@@ -991,9 +991,9 @@ def read_text(row, topic, python=REMOTE_PYTHON, limit=READ_LIMIT):
 def entrypoint_text(entrypath, row, n_workers=16):
     """The journal of the block at *entrypath*: its events, then its newest entry as `entry` shows one.
 
-    *row* is a pipeline's journal row: its ``datalake`` and ``entry_path`` say
+    *row* is a pipeline's journal row: its `datalake` and `entry_path` say
     where *entrypath*, recorded as the host wrote it, is read from. Returns
-    ``(text, newest)``: *newest* the newest entry's row, as `entry` keeps
+    `(text, newest)`: *newest* the newest entry's row, as `entry` keeps
     one, or None where there is no entry.
     """
 
@@ -1017,9 +1017,9 @@ def entrypoint_text(entrypath, row, n_workers=16):
 class HypDbxJournal(Hyp):
     """A journal of a dbx datalake on the disk: its pipelines, one point each, or an anchor's blocks.
 
-    Which, the journal menu in the top bar says -- ``--journal [ANCHOR]`` at
+    Which, the journal menu in the top bar says -- `--journal [ANCHOR]` at
     the start -- and switches, each journal a corpus of its own. An anchor's
-    blocks may be filtered, by the filter field beside it: ``key=value, ...``,
+    blocks may be filtered, by the filter field beside it: `key=value, ...`,
     each a pattern on the journal's column *key*.
 
     A pipeline opens its window, its entry blocks and session blocks listed;
@@ -1234,7 +1234,7 @@ class HypDbxJournal(Hyp):
 
     @staticmethod
     def _title_(row, name=None):
-        """A pipeline window's title: its tag's last component, its ``VAR.name`` where it has one, and its datetime."""
+        """A pipeline window's title: its tag's last component, its `VAR.name` where it has one, and its datetime."""
         parts = [tail(row.get("tag", row.get("anchor", "?"))), name, when(row.get("datetime", ""), seconds=True)]
         return " · ".join(p for p in parts if p)
 
@@ -1374,7 +1374,7 @@ class HypDbxJournal(Hyp):
         return [("/".join(t), t) for t, stored in topics(window.row) if stored or not stored_only]
 
     def _open_topic_(self, row, topic, how):
-        """Open ``ls`` or ``read`` of *row*'s block's *topic* in a window over the one it was asked from, run off the UI thread."""
+        """Open `ls` or `read` of *row*'s block's *topic* in a window over the one it was asked from, run off the UI thread."""
         name = "/".join(topic)
         if how == "ls":
             window = TextViewer(f"ls {name} · {self._relative_(row, str(row.get('anchorkeypath', '')))}", f"listing {name} …")
@@ -1392,7 +1392,7 @@ class HypDbxJournal(Hyp):
                    "workers": f"workers: {DEFAULT_WORKERS}"}
 
     def _slice_menus_(self, window):
-        """A block window's ``data``, ``labels``, ``rows``, ``tablets`` and ``workers`` menus, and its ``hyp`` button: where the block records slices."""
+        """A block window's `data`, `labels`, `rows`, `tablets` and `workers` menus, and its `hyp` button: where the block records slices."""
         shown = lambda: bool(recorded_slices(window.row))  # noqa: E731
         declared = lambda: bool(declared_columns(window.row))  # noqa: E731
         empty = "no declared columns: its DATASLICEs declare none, so nothing of it can be viewed"
@@ -1448,7 +1448,7 @@ class HypDbxJournal(Hyp):
         return ([("none", None)] if none and items else []) + items
 
     def _plan_(self, window):
-        """``(tablets, fraction, per tablet, expected rows)`` the picks come to.
+        """`(tablets, fraction, per tablet, expected rows)` the picks come to.
 
         Auto: AUTO_TABLETS of the tablets, and AUTO_ROWS rows split among
         them -- a number per tablet, since tablets differ in size. *expected*
@@ -1522,11 +1522,11 @@ class HypDbxJournal(Hyp):
         self.run_async(work, lambda result: disk.set_points(*result))
 
     def _output_button_(self, viewer):
-        """The ``output`` button of a journal entry's window: shown while the entry it shows -- ``viewer.row`` -- had its output captured."""
+        """The `output` button of a journal entry's window: shown while the entry it shows -- `viewer.row` -- had its output captured."""
         return Button("output", lambda: self._open_output_(viewer.row), visible=lambda: has_output(getattr(viewer, "row", None)))
 
     def _rerun_buttons_(self, viewer):
-        """The ``quote`` and ``cite`` buttons of a journal entry's window: shown while the entry it shows recorded its quote."""
+        """The `quote` and `cite` buttons of a journal entry's window: shown while the entry it shows recorded its quote."""
         shown = lambda: has_quote(getattr(viewer, "row", None))
         return [Button(how, lambda how=how: self._open_rerun_(viewer.row, how), visible=shown) for how in ("quote", "cite")]
 
@@ -1534,7 +1534,7 @@ class HypDbxJournal(Hyp):
         """Open the bash line that runs the entry *row*'s quote again -- *how*, "quote" or "cite", it prints -- over the window it was asked from, to copy.
 
         Its title is a menu switching between the two; beside it, a checkbox
-        pins the line to the entry's revision, ``--revision=``: off at first.
+        pins the line to the entry's revision, `--revision=`: off at first.
         """
         revision = None if _is_blank_(row.get("revision")) else str(row["revision"])
         state = {"how": how, "pinned": False, "quote": None}

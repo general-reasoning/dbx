@@ -1,56 +1,56 @@
 """dbx — Config-addressed, journaled data-experiment management.
 
-The ``dbx`` package provides :class:`~dbx.datablocks.Datablock` and
-:class:`~dbx.datablocks.Datastack`, config-addressed building blocks for
+The `dbx` package provides `Datablock` and
+`Datastack`, config-addressed building blocks for
 organising data pipelines.  Every block is identified by a deterministic
 hash of its configuration; every build is journaled for full
 reproducibility.
 
-Quick start::
+Quick start:
 
     from dbx import Datablock, Datastack
 
 Key modules
 -----------
 databits
-    Standalone utilities: I/O helpers (``read_frame``,
-    ``write_tensor``, …), callable executors for threading / multiprocessing /
+    Standalone utilities: I/O helpers (`read_frame`,
+    `write_tensor`, …), callable executors for threading / multiprocessing /
     Ray parallelism.
 datablocks
-    :class:`Datablock`, :class:`Datastack`, git-revision tracking, remote
+    `Datablock`, `Datastack`, git-revision tracking, remote
     execution via Ray.
 datatables
-    :class:`Datatablet`, :class:`Datatable` and :class:`Datacollator`: tables of
+    `Datatablet`, `Datatable` and `Datacollator`: tables of
     MDS slices, and the columns a consumer reads from them.
 dataparts
-    :class:`DatatablePartition` and :class:`DatatableClusterCorePartition`: a table
-    assigned into parts; :class:`PartitionDatamapTable`, a part's map; and
-    :class:`MappedDatatable`, a table pulled back along a map -- a part.
+    `DatatablePartition` and `DatatableClusterCorePartition`: a table
+    assigned into parts; `PartitionDatamapTable`, a part's map; and
+    `MappedDatatable`, a table pulled back along a map -- a part.
 journals
-    :class:`BuildJournal` and the build records it reads and writes
-    (:class:`BuildJournalFrame`, :class:`BuildJournalEntry`); the exec journal
-    (:func:`execjournal`, :class:`ExecJournalFrame`); the filters both are
-    queried with; and the log, :class:`Datalog`.
+    `BuildJournal` and the build records it reads and writes
+    (`BuildJournalFrame`, `BuildJournalEntry`); the exec journal
+    (`execjournal`, `ExecJournalFrame`); the filters both are
+    queried with; and the log, `Datalog`.
 pipelines
-    :class:`Pipeline`, a Datablock tree defined flat; every creation of
-    one is recorded in the :class:`PipeJournal`, read with
-    :func:`pipejournal`.
+    `Pipeline`, a Datablock tree defined flat; every creation of
+    one is recorded in the `PipeJournal`, read with
+    `pipejournal`.
 
 Modules NOT imported here
 -------------------------
-``import dbx`` must work without torch, so two modules are imported by name
-instead -- ``from dbx.datastreams import ...``, ``from dbx.stills import
-...``:
+`import dbx` must work without torch, so two modules are imported by name
+instead -- `from dbx.datastreams import ...`, `from dbx.stills import
+...`:
 
 datastreams
-    Shard-backed dataset/loader plumbing: :class:`ZipStreamingDataset`,
-    :class:`ChunkShuffleSampler`, :class:`ResumableDataLoader`,
-    ``chunk_split_indices``, ``val_loader_workers``. Needs torch, and
+    Shard-backed dataset/loader plumbing: `ZipStreamingDataset`,
+    `ChunkShuffleSampler`, `ResumableDataLoader`,
+    `chunk_split_indices`, `val_loader_workers`. Needs torch, and
     mosaicml-streaming for the MDS parts.
 stills
-    One training run as a Datablock: :class:`Still`,
-    :class:`LightningBuilder`, :class:`ModelBuilder`, :class:`DatasetBuilder`,
-    :class:`CheckpointBuilder`, :class:`Weights`. Needs
+    One training run as a Datablock: `Still`,
+    `LightningBuilder`, `ModelBuilder`, `DatasetBuilder`,
+    `CheckpointBuilder`, `Weights`. Needs
     lightning.
 """
 

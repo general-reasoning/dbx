@@ -114,11 +114,11 @@ def _to_tensor_(inputs, device=None) -> torch.Tensor:
 
 
 def feature_map(feature_for_column, evaluator_factory) -> dict[str, str]:
-    """``{column: layer}``: which evaluator layer each ``features`` column holds.
+    """`{column: layer}`: which evaluator layer each `features` column holds.
 
     See `Featuretablet.VAR.feature_for_column`: a dict is the map itself; a list,
     tuple or single string keeps just those layers, each under its own name;
-    None keeps every layer in ``evaluator_factory.layer_names``.
+    None keeps every layer in `evaluator_factory.layer_names`.
     """
     if feature_for_column is None:
         layer_names = evaluator_factory.layer_names if evaluator_factory is not None else []
@@ -133,7 +133,7 @@ def feature_map(feature_for_column, evaluator_factory) -> dict[str, str]:
 class Featuretablet(Layered, Datatablet):
     """A tablet storing multi-layer feature activations captured by an evaluator.
 
-    Inherits access to the slices of its ``upstream`` tablet, the one its features
+    Inherits access to the slices of its `upstream` tablet, the one its features
     were computed from. Calling `dataset()` or `data()` with slice names present
     upstream zips them in using the `ZipStreamingDataset` mechanism.
     """
@@ -142,7 +142,7 @@ class Featuretablet(Layered, Datatablet):
 
     @forward_property({'features': DATASLICE})
     def TOPICS(self):
-        """One ``ndarray:float32`` column per feature: the evaluator's layers, or `feature_for_column`'s columns.
+        """One `ndarray:float32` column per feature: the evaluator's layers, or `feature_for_column`'s columns.
 
         On the class -- what a table sees of its TABLET -- the slice alone: the
         columns are each tablet's spec's to say.
@@ -173,17 +173,17 @@ class Featuretablet(Layered, Datatablet):
         upstream: Datatablet
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
-        #: The feature -- the evaluator layer -- for each column of the
-        #: `features` slice: ``{column: layer}``.  ``{"custom_output": "final"}``
-        #: writes the evaluator's ``final`` layer as the column
-        #: ``custom_output``.  None keeps every layer in
-        #: ``evaluator_factory.layer_names``, each under its own name; a list,
-        #: tuple or single string keeps just those layers, likewise unrenamed.
-        #:
-        #: The keys are the slice's declared columns.  A layer the evaluator
-        #: does not return is skipped at build time without complaint, so its
-        #: column is declared but never written.  Being VAR, it is part of the
-        #: block's identity: tablets differing only here are different blocks.
+        # The feature -- the evaluator layer -- for each column of the
+        # `features` slice: `{column: layer}`.  `{"custom_output": "final"}`
+        # writes the evaluator's `final` layer as the column
+        # `custom_output`.  None keeps every layer in
+        # `evaluator_factory.layer_names`, each under its own name; a list,
+        # tuple or single string keeps just those layers, likewise unrenamed.
+        #
+        # The keys are the slice's declared columns.  A layer the evaluator
+        # does not return is skipped at build time without complaint, so its
+        # column is declared but never written.  Being VAR, it is part of the
+        # block's identity: tablets differing only here are different blocks.
         feature_for_column: dict[str, str] | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
@@ -348,12 +348,12 @@ class Featuretablet(Layered, Datatablet):
 
     @property
     def feature_columns(self) -> list[str]:
-        """The columns of the ``features`` slice, in declared order."""
+        """The columns of the `features` slice, in declared order."""
         return list(self.feature_for_column)
 
     @functools.cached_property
     def feature_for_column(self) -> dict[str, str]:
-        """``{column: layer}``, from `VAR.feature_for_column` and the evaluator's layers."""
+        """`{column: layer}`, from `VAR.feature_for_column` and the evaluator's layers."""
         return feature_map(self.var.feature_for_column, self.var.evaluator_factory)
 
     # 4. Helpers -----------------------------------------------------------
@@ -368,8 +368,8 @@ def _featuretable_pasts_(tablet) -> list:
         Datatable.Specialization(
             TABLET=tablet, spec={}, topics=SAME, redirect_vars={'upstream': 'datapoint_table', 'feature_for_column': 'feature_namemap'},
             note="... and from feature_namemap to feature_for_column"),
-        # Built while Datatable declared ``tabs`` and ``tab_paths`` (before dbx 4a25684): they are in
-        # its identity, so they are named here for its hash, and ``done`` alone is read. Its tablets are
+        # Built while Datatable declared `tabs` and `tab_paths` (before dbx 4a25684): they are in
+        # its identity, so they are named here for its hash, and `done` alone is read. Its tablets are
         # reached by the TABLET's own specializations. To be retired with the tables built then.
         *(Datatable.Specialization(
             TABLET=tablet, spec={}, topics={'tabs': DATADIR, 'tab_paths': DATADIR, 'done': DATAFILE('done')},
@@ -402,7 +402,7 @@ class Featuretable(Layered, Datatable):
         upstream: Datatable
         evaluator_factory: ModelEvaluatorBuilder
         collator: Datacollator
-        #: Passed unchanged to every tablet; see `Featuretablet.VAR.feature_for_column`.
+        # Passed unchanged to every tablet; see `Featuretablet.VAR.feature_for_column`.
         feature_for_column: dict | None = None
         shard_size_limit_bytes: int = 1 << 26  # 64 MiB default, in bytes
 
@@ -477,18 +477,18 @@ class Featuretable(Layered, Datatable):
         return cls(**kwargs)
 
     def _check_devices_(self) -> None:
-        """Raise for a ``cuda:<i>`` this process cannot see, or GPUs with fewer CPUs than there are of them.
+        """Raise for a `cuda:<i>` this process cannot see, or GPUs with fewer CPUs than there are of them.
 
         Each worker takes one of *devices*; one naming a GPU the job was not
-        given fails as ``CUDA error: invalid device ordinal`` -- in a worker,
+        given fails as `CUDA error: invalid device ordinal` -- in a worker,
         after the blocks are checked and the journal read, minutes in. Here --
         from `_build_executor_`, before any worker starts -- it fails saying how
         many devices there are.
 
         A worker also needs a CPU of its own to feed its GPU. Workers sharing
         fewer CPUs than GPUs fail nothing: they take turns, and the GPUs run
-        one after another -- a job given ``--gres=gpu:3`` and no
-        ``--cpus-per-task`` has one CPU. Here that is an error too.
+        one after another -- a job given `--gres=gpu:3` and no
+        `--cpus-per-task` has one CPU. Here that is an error too.
         """
         cuda = [str(d) for d in self.devices if str(d).startswith('cuda')]
         if not cuda:
@@ -561,12 +561,12 @@ class Featuretable(Layered, Datatable):
 
     @property
     def feature_columns(self) -> list[str]:
-        """The columns of every tablet's ``features`` slice, in declared order."""
+        """The columns of every tablet's `features` slice, in declared order."""
         return list(self.feature_for_column)
 
     @functools.cached_property
     def feature_for_column(self) -> dict[str, str]:
-        """``{column: layer}``, as each of its tablets has it."""
+        """`{column: layer}`, as each of its tablets has it."""
         return feature_map(self.var.feature_for_column, self.var.evaluator_factory)
 
     @property
@@ -577,22 +577,22 @@ class Featuretable(Layered, Datatable):
 class BipolarFeaturetablet(Layered, Datatablet):
     """Bipolar encoding of a `Featuretablet`'s feature columns against a calibration.
 
-    Each column is mapped to ``{-1, +1}`` elementwise: ``+1`` where the value
-    is at or above the column's median, ``-1`` below it. The median is the
-    whole-table one in ``VAR.stats_probe`` -- a `FeatureStatsProbe` over a
+    Each column is mapped to `{-1, +1}` elementwise: `+1` where the value
+    is at or above the column's median, `-1` below it. The median is the
+    whole-table one in `VAR.stats_probe` -- a `FeatureStatsProbe` over a
     calibration table, usually another part than the one this tablet is in -- and
     the values are normalized first exactly as that probe normalized them
-    before taking it (`normalize_features` with its ``normalization``, one
+    before taking it (`normalize_features` with its `normalization`, one
     column at a time), so value and median are in the same space.
 
     Not the tablet's own median. Centring every tablet on itself makes each column
-    exactly half ``+1`` within every tablet, which erases whatever sets one tablet
+    exactly half `+1` within every tablet, which erases whatever sets one tablet
     apart from another -- for slides, the very signal a slide-level probe is
     after -- and the encoding then describes only variation within a tablet.
 
-    One ``bipolar`` column per encoded feature column, of the same name, so
-    ``('bipolar', c)`` is the encoding of ``('features', c)``. Every column of
-    the featuretab's ``features`` slice by default; ``VAR.features`` names a
+    One `bipolar` column per encoded feature column, of the same name, so
+    `('bipolar', c)` is the encoding of `('features', c)`. Every column of
+    the featuretab's `features` slice by default; `VAR.features` names a
     subset. The columns are declared per instance, from the featuretab's own
     declaration.
     """
@@ -611,7 +611,7 @@ class BipolarFeaturetablet(Layered, Datatablet):
 
     @forward_property({'bipolar': DATASLICE})
     def TOPICS(self):
-        """One ``ndarray:int8`` column per encoded feature column, of the same name.
+        """One `ndarray:int8` column per encoded feature column, of the same name.
 
         On the class -- what a table sees of its TABLET -- the slice alone.
         """
@@ -717,7 +717,7 @@ class BipolarFeaturetablet(Layered, Datatablet):
 class BipolarFeaturetable(Layered, Datatable):
     """A table of `BipolarFeaturetablet` blocks built over a `Featuretable`.
 
-    Every tablet is calibrated by the one ``stats_probe``: that is what makes the
+    Every tablet is calibrated by the one `stats_probe`: that is what makes the
     tablets' encodings comparable with each other.
     """
 
@@ -784,7 +784,7 @@ class BipolarFeaturetable(Layered, Datatable):
 
     @property
     def bipolar_columns(self) -> list[str]:
-        """The columns of every tablet's ``bipolar`` slice, in declared order -- from VAR, no tablet read."""
+        """The columns of every tablet's `bipolar` slice, in declared order -- from VAR, no tablet read."""
         declared = self.upstream.feature_columns
         if self.var.features is None:
             return list(declared)
@@ -803,22 +803,22 @@ class TernaryFeaturetablet(Layered, Datatablet):
     """A `BipolarFeaturetablet`'s tiles, kept where their bag is sure of the sign and they agree with it, else 0.
 
     The bag-level estimate, per column and dimension, is the mean of the
-    tablet's bipolar rows, ``m = 2p - 1`` where ``p`` is the fraction at ``+1``:
+    tablet's bipolar rows, `m = 2p - 1` where `p` is the fraction at `+1`:
     how far the bag leans, and so how sure its sign is. The bag's sign is
-    ``sign(m)`` where ``|m| >= bag_threshold``, and 0 -- undecided -- where it
+    `sign(m)` where `|m| >= bag_threshold`, and 0 -- undecided -- where it
     leans less. A row's ternary value is its bipolar value where the bag's
-    sign is decided and the row agrees with it, and 0 otherwise: ``{-1, 0, +1}``,
+    sign is decided and the row agrees with it, and 0 otherwise: `{-1, 0, +1}`,
     0 marking a dimension where the tile does not speak for its bag.
 
-    This is the June BitPath encoding (``bag_aggregation_threshold``, 0.5,
+    This is the June BitPath encoding (`bag_aggregation_threshold`, 0.5,
     with its tiles ternarized), now a block of its own: the targets it gives a
     still are an artifact with an identity, built once, rather than computed
     inside a dataset.
 
-    Topics: ``ternary`` -- one ``ndarray:int8`` column per bipolar column, of
-    the same name; ``bag/<column>`` -- ``mean``, ``sign`` and ``n_rows``, the
+    Topics: `ternary` -- one `ndarray:int8` column per bipolar column, of
+    the same name; `bag/<column>` -- `mean`, `sign` and `n_rows`, the
     estimate each row was judged against, from which another rule (an
-    interval on ``p``, say) can be read without a rebuild.
+    interval on `p`, say) can be read without a rebuild.
     """
 
     VERSION = 1
@@ -830,7 +830,7 @@ class TernaryFeaturetablet(Layered, Datatablet):
 
     @forward_property({'ternary': DATASLICE})
     def TOPICS(self):
-        """``ternary``, one ``ndarray:int8`` column per bipolar column, and ``bag/<column>``.
+        """`ternary`, one `ndarray:int8` column per bipolar column, and `bag/<column>`.
 
         On the class -- what a table sees of its TABLET -- the slice alone.
         """
@@ -882,7 +882,7 @@ class TernaryFeaturetablet(Layered, Datatablet):
     # 2. Declared API ------------------------------------------------------
 
     def bag(self, column: str) -> dict:
-        """``{'mean', 'sign', 'n_rows'}`` of *column*: the bag-level estimate its rows were judged against."""
+        """`{'mean', 'sign', 'n_rows'}` of *column*: the bag-level estimate its rows were judged against."""
         if column not in self.bipolar_columns:
             raise KeyError(f"{type(self).__name__}: no bipolar column {column!r}; it has {self.bipolar_columns}")
         return read_npz(self.path('bag', column), 'mean', 'sign', 'n_rows', storage_options=self.storage_options)
@@ -951,7 +951,7 @@ class TernaryFeaturetable(Layered, Datatable):
 
     @property
     def ternary_columns(self) -> list[str]:
-        """The columns of every tablet's ``ternary`` slice, one per bipolar column -- from VAR, no tablet read."""
+        """The columns of every tablet's `ternary` slice, one per bipolar column -- from VAR, no tablet read."""
         return self.upstream.bipolar_columns
 
     @property

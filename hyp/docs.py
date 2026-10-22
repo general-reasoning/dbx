@@ -1,8 +1,8 @@
 """hyp --docs: the documents of a directory -- markdowns and pdfs -- on the disk.
 
-``hyp --docs`` scans the current directory, ``hyp --docs --dir URL`` another,
-local or any fsspec url (``ssh://host/path``, ``gs://bucket/path``, ...): every
-``.md``, ``.markdown`` and ``.pdf`` under it, but for hidden directories and
+`hyp --docs` scans the current directory, `hyp --docs --dir URL` another,
+local or any fsspec url (`ssh://host/path`, `gs://bucket/path`, ...): every
+`.md`, `.markdown` and `.pdf` under it, but for hidden directories and
 the usual heaps (`SKIP_DIRS`). Each is embedded by its name and the start of
 its text, and labeled by its name, its modification time beneath.
 
@@ -14,7 +14,7 @@ in an order the layers menu -- or Tab, which brings the back one to the front
 
 The **Claude** button opens a Claude session in a window of its own
 (`hyp.claude`); each turn saves the session as a markdown in the directory
-scanned, or one under it (``--claude-dir``), embedded whole at once, whose
+scanned, or one under it (`--claude-dir`), embedded whole at once, whose
 point opens the session again. That is all hyp writes there: the corpus is
 kept under ~/.hyp/docs/, one directory per scanned directory. A markdown's
 front matter is no part of what is embedded of it.
@@ -65,7 +65,7 @@ class TilePicker:
     A popup as `Hyp.open_popup` opens one: *open* until a click picks an icon
     or lands elsewhere, or Esc. The slot under the mouse is named beneath.
     With *on_claude*, a row beneath the icons asks Claude about the document
-    instead: a click on it calls ``on_claude()``.
+    instead: a click on it calls `on_claude()`.
     """
 
     ICON = (36, 26)
@@ -175,9 +175,9 @@ def canonical(root):
 
 
 def find_docs(root, storage_options=None, limit=MAX_DOCS):
-    """``(fs, [info], cut)``: the documents under *root*, their fsspec infos, in path order; *cut* if past *limit*.
+    """`(fs, [info], cut)`: the documents under *root*, their fsspec infos, in path order; *cut* if past *limit*.
 
-    *fs* knows the urls of what it found: ``fs.url_of(name)`` -- see `url_of`.
+    *fs* knows the urls of what it found: `fs.url_of(name)` -- see `url_of`.
     """
     import fsspec
 
@@ -211,9 +211,9 @@ def find_docs(root, storage_options=None, limit=MAX_DOCS):
 
 
 def _prefix_(url, top):
-    """What precedes *top*, the path fsspec made of *url*, in *url*: ``ssh://host`` of ``ssh://host/a/b``, ``gs://`` of ``gs://b/a``.
+    """What precedes *top*, the path fsspec made of *url*, in *url*: `ssh://host` of `ssh://host/a/b`, `gs://` of `gs://b/a`.
 
-    fsspec's own ``unstrip_protocol`` drops an ssh url's host, which a file's
+    fsspec's own `unstrip_protocol` drops an ssh url's host, which a file's
     url must keep to be opened again.
     """
     if "://" not in url:
@@ -247,7 +247,7 @@ def read_text(fs, info, kind):
 def documents(root, progress=print, n_workers=16, cache=None, storage_options=None):
     """The documents under *root*, as the engine takes them, read on *n_workers* threads.
 
-    *cache* -- ``{url: {"mtime", "size", "text"}}`` -- holds what was read
+    *cache* -- `{url: {"mtime", "size", "text"}}` -- holds what was read
     before: a document whose time and size are unchanged is not read again.
     It is updated in place.
     """
@@ -368,7 +368,7 @@ class HypDocs(Hyp):
 
     title = "hyp: docs"
     BOX_HINT = "Enter: ask Claude, in a new session   Shift+Enter: newline   Esc: cancel"
-    #: What a right click on empty disk offers, and what its box then says it does on Enter.
+    # What a right click on empty disk offers, and what its box then says it does on Enter.
     NEW = {"claude": ("Claude: ask it, in a new session", BOX_HINT),
            "markdown": ("Markdown: a new document, to write", "Enter: a new markdown, to go on writing   Shift+Enter: newline   Esc: cancel")}
     HINT = "click: open · right-click: place · drag: move · scroll: zoom · Tab: next layer · double-click outside: reset"
@@ -464,7 +464,7 @@ class HypDocs(Hyp):
         self._send_claude_(window, text.strip())
 
     def __point_datetime__(self, i):
-        """When a document was last changed; a Claude session, when its last turn was: its front matter's ``updated``."""
+        """When a document was last changed; a Claude session, when its last turn was: its front matter's `updated`."""
         point = self.snap.points[i] if self.snap.points else {}
         updated = point.get("updated")
         if updated:

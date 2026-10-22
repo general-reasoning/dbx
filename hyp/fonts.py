@@ -1,22 +1,22 @@
 """Fonts that draw every character they can find: a system font, and for what it lacks, the first of FALLBACKS that has it.
 
 A pygame font draws a character it has no glyph for as a box -- Helvetica Neue
-has no ``⊙``, ``∧``, ``∨``, ``→`` or ``⟨⟩``, so a transcript about logic or
+has no `⊙`, `∧`, `∨`, `→` or `⟨⟩`, so a transcript about logic or
 physics came out in boxes. `Font` has a pygame font's interface -- `render`,
 `size`, `get_linesize` and the rest -- and draws each run of characters its
 font lacks in a fallback that has them, on the same baseline. Text all its
 font has is drawn by that font alone, as before.
 
-pygame says nothing of a missing glyph (``metrics`` answers for it as for any),
+pygame says nothing of a missing glyph (`metrics` answers for it as for any),
 so a font is taken to lack a character when it draws it exactly as it draws
 one no font has: its missing-glyph box.
 """
 
 import pygame
 
-#: Where a character the font lacks is looked for, in order: broad mathematical and symbol coverage first.
+# Where a character the font lacks is looked for, in order: broad mathematical and symbol coverage first.
 FALLBACKS = ("stixtwomath", "stixgeneral", "applesymbols", "menlo", "dejavusans", "notosanssymbols", "notosansmath")
-#: A character no font has a glyph for: what a font draws for it is its missing-glyph box.
+# A character no font has a glyph for: what a font draws for it is its missing-glyph box.
 NO_GLYPH = "\U000F0000"
 
 
@@ -57,7 +57,7 @@ class Font:
     # 4. Helpers ----------------------------------------------------------------
 
     def _runs_(self, text):
-        """*text* as runs, ``(pygame font, piece)``, each piece drawn by the first font that has its characters."""
+        """*text* as runs, `(pygame font, piece)`, each piece drawn by the first font that has its characters."""
         if text.isascii():
             return [(self.font, text)]
         runs = []

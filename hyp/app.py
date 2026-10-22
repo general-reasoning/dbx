@@ -92,7 +92,7 @@ def ease(s):
 
 
 def _double_click_(last, pos, now):
-    """``(whether, last')``: whether a click at *pos* is the second of a double click after *last* -- ``(pos, time)`` or None -- and what to keep for the next."""
+    """`(whether, last')`: whether a click at *pos* is the second of a double click after *last* -- `(pos, time)` or None -- and what to keep for the next."""
     if last is not None:
         (x, y), t = last
         if now - t <= DOUBLE_CLICK_S and (pos[0] - x) ** 2 + (pos[1] - y) ** 2 <= DOUBLE_CLICK_PX**2:
@@ -101,7 +101,7 @@ def _double_click_(last, pos, now):
 
 
 def _duration_(seconds) -> str:
-    """*seconds* as ``m:ss``, or ``h:mm:ss`` from an hour."""
+    """*seconds* as `m:ss`, or `h:mm:ss` from an hour."""
     m, sec = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
@@ -121,8 +121,8 @@ class Interrupted(Exception):
 class Worker:
     """One background thread running engine jobs in order, reporting through a queue.
 
-    A job is called with a progress callback, ``progress(msg, done=None,
-    total=None)``: *msg* for the status line and, with counts, a bar -- *done*
+    A job is called with a progress callback, `progress(msg, done=None,
+    total=None)`: *msg* for the status line and, with counts, a bar -- *done*
     of *total*, or *done* so far where *total* is None, not yet known. Once
     `cancel` is called the callback of every job submitted before it raises
     `Interrupted`, so a job stops at its next report: it is interruptible
@@ -287,9 +287,9 @@ class TextBox:
 class Dropdown:
     """A button in a viewer's header that opens a list to pick one item from.
 
-    *items* is a list of ``(text, value)``, or a function returning one, asked
+    *items* is a list of `(text, value)`, or a function returning one, asked
     each time the list opens -- None from it while the items are still being
-    read. Picking an item calls ``on_select(value)``. Shown only while
+    read. Picking an item calls `on_select(value)`. Shown only while
     *visible()*, and usable only while *enabled()*: shown dimmed, and opening
     on no click, until then.
 
@@ -298,7 +298,7 @@ class Dropdown:
     anchorkey, say, to paste into a journal filter -- and leaves the list open,
     saying what it copied, in a footer that otherwise says *copy_hint*. With
     *on_context* instead, right-clicking an item closes the list and calls
-    ``on_context(value, pos)`` -- the points menu's, a point's own right click.
+    `on_context(value, pos)` -- the points menu's, a point's own right click.
     """
 
     ROWS = 16
@@ -307,7 +307,7 @@ class Dropdown:
     def __init__(self, label, items, on_select, empty="none", value=None, match=None, visible=lambda: True,
                  enabled=lambda: True, on_context=None, copy=None, copy_hint="right-click: copy"):
         self.label = label
-        # Right click on an item: ``on_context(value, pos)``; None, and a right click only closes the list.
+        # Right click on an item: `on_context(value, pos)`; None, and a right click only closes the list.
         self.on_context = on_context
         self.visible = visible
         self.enabled = enabled
@@ -578,19 +578,19 @@ class TextViewer:
     so that one opened over another shows the one beneath around its edges.
 
     A line whose next line is indented deeper has a triangle in the gutter:
-    clicking it folds the lines indented deeper that follow -- into ``… N
-    lines`` -- and unfolds them. The ``fold`` menu at the right of the title
+    clicking it folds the lines indented deeper that follow -- into `… N
+    lines` -- and unfolds them. The `fold` menu at the right of the title
     row (and the keys 0-9) folds every such line at a level at once. With
     *numbers*, the gutter numbers the text's own lines. Text is selected by
     dragging over it, every line by Cmd+A, and copied by Cmd+C -- the
     selection, or all of it when there is none.
     """
 
-    #: Spaces per level of nesting, for the fold menu: as `dbxpipelines.dict_lines` lays a dict out.
+    # Spaces per level of nesting, for the fold menu: as `dbxpipelines.dict_lines` lays a dict out.
     INDENT = 4
-    #: The levels the fold menu offers; the keys reach 1-9.
+    # The levels the fold menu offers; the keys reach 1-9.
     FOLD_LEVELS = 6
-    #: Seconds a note -- "copied ..." -- stays in the hint line.
+    # Seconds a note -- "copied ..." -- stays in the hint line.
     NOTE_S = 2.5
 
     def __init__(self, title, text, menus=(), inset=0):
@@ -641,7 +641,7 @@ class TextViewer:
         self.clear_selection()
 
     def shown(self):
-        """``[(line, hidden)]``: the lines shown, by index, each with how many deeper lines its fold hides."""
+        """`[(line, hidden)]`: the lines shown, by index, each with how many deeper lines its fold hides."""
         out, i, n = [], 0, len(self.paras)
         while i < n:
             if i in self.collapsed and self.foldable(i):
@@ -656,7 +656,7 @@ class TextViewer:
         return out
 
     def folded(self):
-        """The lines shown, as text: a folded one ends with ``… N lines``."""
+        """The lines shown, as text: a folded one ends with `… N lines`."""
         return [self.paras[i] + (f"  … {k} line{'s' if k > 1 else ''}" if k else "") for i, k in self.shown()]
 
     def lines(self, cols):
@@ -694,7 +694,7 @@ class TextViewer:
         self.selecting = False
 
     def selection(self):
-        """The selected span, ``((row, col), (row, col))`` start first; None when nothing is selected."""
+        """The selected span, `((row, col), (row, col))` start first; None when nothing is selected."""
         if self.anchor is None or self.head is None or self.anchor == self.head:
             return None
         return tuple(sorted((self.anchor, self.head)))
@@ -928,7 +928,7 @@ class DiskViewer:
 
     Navigated as the main disk is -- click to center, drag to move, scroll to
     zoom, Home or a double click off the disk to go back -- and closed as a text window is. Until
-    :meth:`set_points` gives it points it shows *note*: what it is waiting on.
+    `set_points` gives it points it shows *note*: what it is waiting on.
     Labels are colored by how many points have them, the most first; past
     `PALETTE`, the rest share one gray, as "other".
     """
@@ -1155,13 +1155,13 @@ class Hyp:
 
     title = "hyp"
 
-    #: What the box a right click on empty disk opens says beneath it: what Enter does, `__submit_text__`.
+    # What the box a right click on empty disk opens says beneath it: what Enter does, `__submit_text__`.
     BOX_HINT = "Enter: embed   Shift+Enter: newline   Esc: cancel"
 
-    #: The controls, at the right of the status line.
+    # The controls, at the right of the status line.
     HINT = "click: center · drag: move · scroll: zoom · right-click: open / add · Shift over a point: its arrows · Home or double-click outside: reset"
 
-    #: Where corpora are kept unless --data says otherwise: one directory each.
+    # Where corpora are kept unless --data says otherwise: one directory each.
     HOME = os.path.join(os.path.expanduser("~"), ".hyp")
 
     # 1. Hooks ------------------------------------------------------------------
@@ -1233,7 +1233,7 @@ class Hyp:
         return None
 
     def __point_version__(self, i):
-        """A version of point *i*, as text, drawn under its label after its name, as ``v<version>``; or None: here, none."""
+        """A version of point *i*, as text, drawn under its label after its name, as `v<version>`; or None: here, none."""
         return None
 
     def __point_datetime__(self, i):
@@ -1247,7 +1247,7 @@ class Hyp:
         return f"{self.__point_label__(i)}\n{sub}" if sub else self.__point_label__(i)
 
     def __animating__(self):
-        """What of the specialization's layers asks to be redrawn: anything with an ``animating()`` that says so."""
+        """What of the specialization's layers asks to be redrawn: anything with an `animating()` that says so."""
         return []
 
     def __draw_layer__(self, layer, now):
@@ -1624,7 +1624,7 @@ class Hyp:
         return self.labels[key]
 
     def sublabel(self, i, full=False):
-        """What is drawn under point *i*'s label: its tag, then its name, ``v<version>`` and datetime, each as the settings say; None for none.
+        """What is drawn under point *i*'s label: its tag, then its name, `v<version>` and datetime, each as the settings say; None for none.
 
         The tag is a line of its own; the rest follows it on that line where
         both fit in SUBLABEL_CHARS, else on the next -- a long tag leaves the
@@ -2031,9 +2031,9 @@ def _connection_errors_():
     return (OSError, asyncssh.Error)
 
 
-#: The environment variable a hyp run in the background is told, by the one that started it, where to say it is up.
+# The environment variable a hyp run in the background is told, by the one that started it, where to say it is up.
 READY_FD = "HYP_READY_FD"
-#: How many logs of runs in the background are kept, the newest.
+# How many logs of runs in the background are kept, the newest.
 LOGS_KEPT = 20
 
 

@@ -85,7 +85,7 @@ def normalize_features(features: Any, mode: str | None) -> Any:
 
 
 def _pair_key_(pair: tuple[str, str]) -> str:
-    """The stable name a ``(slice, column)`` pair is stored under.
+    """The stable name a `(slice, column)` pair is stored under.
 
     The pair, not the bare column name: two slices may carry a column of the
     same name, and keying by the column alone would silently drop one of them
@@ -95,7 +95,7 @@ def _pair_key_(pair: tuple[str, str]) -> str:
 
 
 def _flat_parts_(parts) -> list:
-    """A pair or triple as its names in order, a key path spelled out: ``('s', 'c', ('a', 'b'))`` -> s, c, a, b."""
+    """A pair or triple as its names in order, a key path spelled out: `('s', 'c', ('a', 'b'))` -> s, c, a, b."""
     out = []
     for p in parts:
         out.extend(_flat_parts_(p) if isinstance(p, tuple) else [str(p)])
@@ -103,7 +103,7 @@ def _flat_parts_(parts) -> list:
 
 
 def _pair_array_(collator: Datacollator, data: dict, pair: tuple[str, str], *, allow_none: bool = False) -> np.ndarray | None:
-    """One ``(slice, column)`` of a ``{slice: {column: values}}`` mapping, as an array.
+    """One `(slice, column)` of a `{slice: {column: values}}` mapping, as an array.
 
     Addressed exactly, through the collator's own lookup, so a pair naming a
     column that is not there raises instead of resolving to whatever the
@@ -117,14 +117,14 @@ def signal_matrix(collator: Datacollator, data: dict, *,
                   reduction: str | None = None,
                   normalization: str | None = None,
                   allow_none: bool = False):
-    """Every signal pair flattened and concatenated into one ``(N, D)`` matrix.
+    """Every signal pair flattened and concatenated into one `(N, D)` matrix.
 
     This is what "treat all features as a single vector" means concretely: the
-    pairs are laid end to end along the feature axis, so column ``j`` of the
-    result -- and so coefficient ``j`` of a fitted classifier -- belongs to
+    pairs are laid end to end along the feature axis, so column `j` of the
+    result -- and so coefficient `j` of a fitted classifier -- belongs to
     exactly one pair.
 
-    Order is ``collator.signal_pairs``, which is the order they were declared.
+    Order is `collator.signal_pairs`, which is the order they were declared.
     That matters more here than anywhere else in the codebase: the layout is
     baked into the fitted coefficients, so a signal order that varied between
     processes would produce models whose coefficients could not be compared,
@@ -134,9 +134,9 @@ def signal_matrix(collator: Datacollator, data: dict, *,
     Returns
     -------
     (X, layout)
-        *X* is ``(N, D)`` float32.  *layout* is one
-        ``(slice, column, width)`` per pair, in the same order, with the
-        widths summing to ``D``.
+        *X* is `(N, D)` float32.  *layout* is one
+        `(slice, column, width)` per pair, in the same order, with the
+        widths summing to `D`.
     """
     if not collator.signal_pairs:
         raise ValueError("signal_matrix: the collator declares no signals")
@@ -181,9 +181,9 @@ def signal_matrix(collator: Datacollator, data: dict, *,
 def reduce_signal_np(arr: np.ndarray, reduction: str):
     """Collapse the axes between the row axis and the feature axis: within each row, never across rows.
 
-    For ``(N, T, D)`` token features this averages over ``T`` and leaves
-    ``(N, D)``; ``(N, H, W, D)`` over ``H`` and ``W`` together; for an
-    already-flat ``(N, D)`` it is the identity.  The point of reducing before
+    For `(N, T, D)` token features this averages over `T` and leaves
+    `(N, D)`; `(N, H, W, D)` over `H` and `W` together; for an
+    already-flat `(N, D)` it is the identity.  The point of reducing before
     the flatten in `signal_matrix` is that afterwards there is no token axis
     left to average over -- only one long vector, whose mean is a single number
     per row.
@@ -221,7 +221,7 @@ def label_vector(collator: Datacollator, data: dict, *, allow_none: bool = False
 
 
 def aggregateby_vector(collator: Datacollator, data: dict, *, allow_none: bool = False) -> np.ndarray | None:
-    """The ``aggregateby`` column as a 1-D object array of per-row values; None when the collator declares none.
+    """The `aggregateby` column as a 1-D object array of per-row values; None when the collator declares none.
 
     The rows sharing a value -- a slide's tiles, say -- are one aggregate,
     whichever tablets they lie in.
@@ -258,7 +258,7 @@ def check_probe_inputs(probe, table=None) -> None:
     A worker reading an invalid tablet fails far from the cause -- a missing shard
     index, one traceback per worker -- and says nothing of why. The tables
     asked are the ones the collator's slices are read from: *table*'s own
-    (the probe's ``feature_table`` by default), and the upstream ones its
+    (the probe's `feature_table` by default), and the upstream ones its
     slices route to.
     """
     table = probe.var.feature_table if table is None else table
@@ -398,37 +398,37 @@ class FeatureAffineLogisticProbe(Datablock):
     typically two parts of a `DatatablePartition` of a feature table, assigned by
     patient and stratified by label, so neither the patients nor the slides of
     one are in the other. They must share no tablet, no row of the table they were
-    partitioned from, and -- when the collator names an ``aggregateby`` column
+    partitioned from, and -- when the collator names an `aggregateby` column
     -- no value of it; a probe given two that do refuses to build, naming them.
 
     All signal pairs are treated as one vector per sample: each is flattened
     and they are laid end to end, in declaration order, so the fitted
-    ``coef_`` has one coefficient per (pair, position).  That layout is stored
-    as the ``columns`` topic, which is what makes a coefficient attributable
+    `coef_` has one coefficient per (pair, position).  That layout is stored
+    as the `columns` topic, which is what makes a coefficient attributable
     to a feature after the fact.
 
-    A sample is a row by default. With *aggregation* ``'mean'`` it is the mean
-    of the rows sharing a value of the collator's ``aggregateby`` column (a
+    A sample is a row by default. With *aggregation* `'mean'` it is the mean
+    of the rows sharing a value of the collator's `aggregateby` column (a
     slide's id, say) and a label, wherever they lie: each tablet sums its share of
     each, and the probe divides once every tablet's share is in. So an aggregate
     may span tablets -- the pieces and packed tablets of a partition, the core tablets
     of a core partition -- and the rows of one value carrying two labels are
-    two samples, one per label. Whenever the collator names an ``aggregateby``
+    two samples, one per label. Whenever the collator names an `aggregateby`
     column, the two tables must share no value of it, whatever *aggregation*
     is.
 
-    *signal_reduction* ``'mean'`` reduces within a row, never across rows: a
-    signal whose value per row has more than one axis -- ``(T, D)`` tokens --
-    is averaged over all but its last before it is flattened, so ``coef_`` has
+    *signal_reduction* `'mean'` reduces within a row, never across rows: a
+    signal whose value per row has more than one axis -- `(T, D)` tokens --
+    is averaged over all but its last before it is flattened, so `coef_` has
     one coefficient per feature rather than per (token, feature).
 
     *max_rows_per_tablet* reads at most that many of a tablet's rows, drawn with
     *seed* and the tablet's tag -- a size for a fit, which moves no tablet across the
     two tables.
 
-    Persists the fitted classifier's ``coef_``, ``intercept_`` and
-    ``classes_`` so the separating hyperplane can be inspected after building,
-    and each side's features and labels under ``fit`` and ``eval``.
+    Persists the fitted classifier's `coef_`, `intercept_` and
+    `classes_` so the separating hyperplane can be inspected after building,
+    and each side's features and labels under `fit` and `eval`.
     """
 
     VERSION = 4
@@ -589,10 +589,10 @@ class FeatureAffineLogisticProbe(Datablock):
     # 2. Declared API ------------------------------------------------------
 
     def feature_columns(self) -> list[tuple[str, str, int]]:
-        """One ``(slice, column, offset)`` per column of ``coef_``.
+        """One `(slice, column, offset)` per column of `coef_`.
 
         Expands the stored layout, so a coefficient index can be named:
-        ``feature_columns()[j]`` says which pair column ``j`` came from and
+        `feature_columns()[j]` says which pair column `j` came from and
         which position within it.
         """
         out = []
@@ -601,7 +601,7 @@ class FeatureAffineLogisticProbe(Datablock):
         return out
 
     def asphericity(self) -> dict[str, float]:
-        """Per-class ratio ``||intercept|| / ||coef||``."""
+        """Per-class ratio `||intercept|| / ||coef||`."""
         coef = self.read('coef')
         intercept = self.read('intercept')
         classes = self.read('classes')
@@ -621,7 +621,7 @@ class FeatureAffineLogisticProbe(Datablock):
         Tablets are compared by tag. That says nothing of two parts holding tablets
         the partitions made -- pieces, packed tablets, core tablets, tagged by where
         they are -- so two parts of different partitions of one table are also
-        compared row by row, by the rows of that table their ``source`` slices
+        compared row by row, by the rows of that table their `source` slices
         name. Two parts of one partition are disjoint by its partition, and are not.
         """
         fit, ev = self.var.fit_table, self.var.eval_table
@@ -686,27 +686,27 @@ class FeatureAffineLogisticProbe(Datablock):
         return executor.exec_callables([make_callable(i) for i in indices])
 
 
-#: The reductions over the sample axis -- each column independent of the others,
-#: which is what lets the whole-table ones be taken a band of columns at a time.
-#: Their names are the keys of `FeatureStatsProbe.PER_FEATURE_DATADICT`.
+# The reductions over the sample axis -- each column independent of the others,
+# which is what lets the whole-table ones be taken a band of columns at a time.
+# Their names are the keys of `FeatureStatsProbe.PER_FEATURE_DATADICT`.
 SAMPLE_REDUCTIONS = {
     'mean': np.mean, 'std': np.std, 'median': np.median, 'min': np.min, 'max': np.max,
 }
 
-#: Every statistic `column_stats` gives: the reductions, and ``norm`` -- one L2
-#: norm per row, which is not a reduction and so is stored apart from them.
+# Every statistic `column_stats` gives: the reductions, and `norm` -- one L2
+# norm per row, which is not a reduction and so is stored apart from them.
 COLUMN_STATS = (*SAMPLE_REDUCTIONS, 'norm')
 
-#: Bytes of one band of a whole-table column, concatenated across tablets.
+# Bytes of one band of a whole-table column, concatenated across tablets.
 TABLE_STATS_BAND_BYTES = 256 * 2**20
 
 
 def column_stats(arr: np.ndarray) -> dict[str, np.ndarray]:
-    """The `COLUMN_STATS` of one column's ``(N, ...)`` stack of values.
+    """The `COLUMN_STATS` of one column's `(N, ...)` stack of values.
 
     Reductions run over the sample axis and so keep the shape of a single
-    sample; ``norm`` is the exception, being one L2 norm per sample and so
-    ``(N,)``.
+    sample; `norm` is the exception, being one L2 norm per sample and so
+    `(N,)`.
     """
     if arr.ndim == 1:
         arr = arr.reshape(-1, 1)
@@ -723,14 +723,14 @@ def column_stats(arr: np.ndarray) -> dict[str, np.ndarray]:
 def _column_path_(pair) -> tuple[str, ...]:
     """The topic path a described pair is stored under: its names, one level each.
 
-    ``('features', 'final')`` -> ``('features', 'final')``; a triple's key goes
-    one level deeper, so ``('annotations', 'annotations', 'cohort')`` is three.
+    `('features', 'final')` -> `('features', 'final')`; a triple's key goes
+    one level deeper, so `('annotations', 'annotations', 'cohort')` is three.
     """
     return tuple(_flat_parts_(pair))
 
 
 def _nest_(paths, leaf) -> dict:
-    """``{path: leaf}`` for every path, as the nested dict a hierarchical TOPICS is.
+    """`{path: leaf}` for every path, as the nested dict a hierarchical TOPICS is.
 
     Refuses a path that is a prefix of another: one would be a file and the
     other a directory beneath it.
@@ -798,13 +798,13 @@ class FeatureStatsProbe(Datablock):
     """Per-column statistics for a Featuretable or Featuretablet.
 
     Every signal and label pair the collator declares is described, each under
-    its own path -- the pair's names, one level each -- in three topics::
+    its own path -- the pair's names, one level each -- in three topics:
 
         stats/<slice>/<column>/stats.npz          PER_FEATURE_DATADICT
         tablet_stats/<slice>/<column>/tablet_stats.npz  PER_TABLET_DATADICT
         norm/<slice>/<column>/norm.npz            NORM_DATADICT
 
-    A statistic is addressed the way the data it describes is::
+    A statistic is addressed the way the data it describes is:
 
         probe.read('stats', 'features', 'final')   -> {'mean': array(8,), 'median': ..., ...}
         probe.stat('median', ('features', 'final'))                -> array(8,)
@@ -815,7 +815,7 @@ class FeatureStatsProbe(Datablock):
     only when the tablets are equal-sized, and a median or a min never is.
 
     Signal columns are described after `normalize_features` with
-    ``VAR.normalization``, one column at a time; labels as they are. A block
+    `VAR.normalization`, one column at a time; labels as they are. A block
     that thresholds against these statistics (`BipolarFeaturetablet`) must
     normalize its values the same way, and reads the mode from here to do so.
 
@@ -826,22 +826,22 @@ class FeatureStatsProbe(Datablock):
 
     VERSION = 3
 
-    #: What is stored for each described column, over the whole table: one
-    #: array per statistic, each the shape of a single sample.
+    # What is stored for each described column, over the whole table: one
+    # array per statistic, each the shape of a single sample.
     PER_FEATURE_DATADICT = DATADICT(
         'stats.npz', mean='ndarray', std='ndarray', median='ndarray', min='ndarray', max='ndarray')
-    #: The same statistics per tablet, stacked in tablet order: ``(n_tablets, ...)``.
+    # The same statistics per tablet, stacked in tablet order: `(n_tablets, ...)`.
     PER_TABLET_DATADICT = DATADICT(
         'tab_stats.npz', mean='ndarray', std='ndarray', median='ndarray', min='ndarray', max='ndarray')
-    #: One L2 norm per row, concatenated in tablet order, and each tablet's row
-    #: count, which splits them back into tablets.
+    # One L2 norm per row, concatenated in tablet order, and each tablet's row
+    # count, which splits them back into tablets.
     NORM_DATADICT = DATADICT('norm.npz', norm='ndarray', tab_counts='ndarray')
 
     @forward_property({'count': DATADICT('count.npz', count='ndarray')})
     def TOPICS(self):
-        """``count``, and the three per-column topics under every described column's path.
+        """`count`, and the three per-column topics under every described column's path.
 
-        On the class, ``count`` alone: the columns are the collator's to say.
+        On the class, `count` alone: the columns are the collator's to say.
         """
         paths = self.column_paths
         return {
@@ -940,10 +940,10 @@ class FeatureStatsProbe(Datablock):
     def stat(self, name: str, column, *, per_tablet: bool = False) -> np.ndarray | list:
         """One statistic of one described column.
 
-        *column* is the pair as the collator declares it, ``('features',
-        'final')``. Whole-table by default; ``per_tablet=True`` gives the tablets'
-        values stacked, ``(n_tablets, ...)``. ``'norm'`` is per row: the whole
-        table's rows in tablet order, or with ``per_tablet=True`` one array per tablet.
+        *column* is the pair as the collator declares it, `('features',
+        'final')`. Whole-table by default; `per_tablet=True` gives the tablets'
+        values stacked, `(n_tablets, ...)`. `'norm'` is per row: the whole
+        table's rows in tablet order, or with `per_tablet=True` one array per tablet.
         Only the one array asked for is read from its file.
         """
         if not isinstance(column, (tuple, list)):
@@ -998,11 +998,11 @@ class FeatureStatsProbe(Datablock):
         """The whole-table `column_stats` of every column, a band of columns at a time.
 
         Concatenating a column across all tablets and reducing it is a full copy of
-        the table's features -- and ``np.median`` takes another to partition --
+        the table's features -- and `np.median` takes another to partition --
         which on a large table is tens of GB, and is where the build sat, with
         no progress bar, after the last tablet. Every reduction here runs over the
         sample axis, independently per column, so reducing one band of columns
-        at a time gives the same values holding only that band. ``norm`` is per
+        at a time gives the same values holding only that band. `norm` is per
         sample, so it is the tablets' own, joined.
         """
         plans = []

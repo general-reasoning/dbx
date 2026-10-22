@@ -5,9 +5,9 @@ both ways and zoomed by + and -. A document lays itself out for a width and a
 zoom (`layout`) and draws what of it is in view (`draw`); the window keeps the
 scroll, and asks again when its width or the zoom changes.
 
-Mermaid diagrams are rendered by the mermaid CLI, ``mmdc`` -- or the one
+Mermaid diagrams are rendered by the mermaid CLI, `mmdc` -- or the one
 HYP_MMDC names -- here, off the UI thread, and kept under ~/.hyp/mermaid; with
-no ``mmdc``, a diagram is shown as its source. Nothing is sent anywhere.
+no `mmdc`, a diagram is shown as its source. Nothing is sent anywhere.
 """
 
 import bisect
@@ -83,7 +83,7 @@ class Block:
 
 
 def spans_of(inline):
-    """An inline token's text as ``[(text, (bold, italic, code, link))]``."""
+    """An inline token's text as `[(text, (bold, italic, code, link))]`."""
     out, bold, italic, link = [], 0, 0, 0
     for c in inline.children or []:
         style = (bold > 0, italic > 0, False, link > 0)
@@ -113,7 +113,7 @@ def spans_of(inline):
 
 
 def front_matter(text):
-    """``(fields, body)``: *text*'s yaml front matter -- a dict, or None where it has none -- and the markdown after it."""
+    """`(fields, body)`: *text*'s yaml front matter -- a dict, or None where it has none -- and the markdown after it."""
     import yaml
 
     m = re.match(r"---[ \t]*\n(.*?\n)?---[ \t]*(\n|$)", text, re.S)
@@ -202,7 +202,7 @@ class Run:
 
 
 class Laid:
-    """What a document draws, as laid out: items sorted by top, each ``(top, bottom, draw)``; and its text, as `Run`s in reading order."""
+    """What a document draws, as laid out: items sorted by top, each `(top, bottom, draw)`; and its text, as `Run`s in reading order."""
 
     def __init__(self):
         self.items = []
@@ -234,7 +234,7 @@ class Laid:
         self.runs.append(Run(x, y, img.get_width(), img.get_height(), text, font, self.block, self.hard))
 
     def text_at(self, x, y, near=False):
-        """The text position -- ``(run, character)`` -- at content (*x*, *y*): on a run, or with *near* the nearest; None off them all."""
+        """The text position -- `(run, character)` -- at content (*x*, *y*): on a run, or with *near* the nearest; None off them all."""
         if not self.runs:
             return None
         on = [i for i, r in enumerate(self.runs) if r.y <= y < r.y + r.h and r.x - 4 <= x <= r.x + r.w + 4]
@@ -463,7 +463,7 @@ class MarkdownDoc:
 
 
 class Mermaid:
-    """Mermaid diagrams as images: rendered by ``mmdc`` off the UI thread, kept by their source's hash."""
+    """Mermaid diagrams as images: rendered by `mmdc` off the UI thread, kept by their source's hash."""
 
     CACHE = os.path.join(os.path.expanduser("~"), ".hyp", "mermaid")
     TIMEOUT_S = 90

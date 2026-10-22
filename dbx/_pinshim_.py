@@ -1,29 +1,29 @@
 """Pre-import pin bootstrap for dbx Ray workers. MUST NOT import dbx.
 
-This file is never imported as ``dbx._pinshim_``. :func:`dbx.datablocks.remote`
-copies it into a scratch directory as ``dbxpinshim.py``, ships that directory to
-the workers as ``runtime_env['working_dir']``, and points
-``runtime_env['worker_process_setup_hook']`` at :func:`setup`. Ray runs the hook
+This file is never imported as `dbx._pinshim_`. `dbx.datablocks.remote`
+copies it into a scratch directory as `dbxpinshim.py`, ships that directory to
+the workers as `runtime_env['working_dir']`, and points
+`runtime_env['worker_process_setup_hook']` at `setup`. Ray runs the hook
 in each worker process BEFORE it resolves any actor class -- which is to say
 before anything imports dbx.
 
 That ordering is the whole point. dbx cannot pin itself: reaching any dbx code
 means importing dbx first, and an imported module is never dislodged by a
 checkout. So the bootstrap has to live outside dbx and run before it, which also
-means it cannot use dbx's own ``gitclone``/``gitcheckout`` helpers -- hence plain
-``subprocess`` git and nothing but the standard library.
+means it cannot use dbx's own `gitclone`/`gitcheckout` helpers -- hence plain
+`subprocess` git and nothing but the standard library.
 
 Configured entirely through the environment, since the hook takes no arguments:
 
-``DBX_PIN_REVISION``
-    ``'dbx_rev:project_rev'``, matching the order of the sources.
-``DBX_PIN_SOURCE``
-    SPACE-separated clone sources, dbx first. Space rather than ``':'`` because
-    a git URL contains colons (``https://…``, ``git@host:path``), which is also
+`DBX_PIN_REVISION`
+    `'dbx_rev:project_rev'`, matching the order of the sources.
+`DBX_PIN_SOURCE`
+    SPACE-separated clone sources, dbx first. Space rather than `':'` because
+    a git URL contains colons (`https://…`, `git@host:path`), which is also
     what lets a worker pin itself with no shared filesystem at all.
-``DBX_PIN_NODE_ROOT``
+`DBX_PIN_NODE_ROOT`
     Where clones are cached, shared by every worker process on the node.
-    Defaults to ``<tmp>/dbx-pins``.
+    Defaults to `<tmp>/dbx-pins`.
 """
 import os
 import shutil
@@ -65,7 +65,7 @@ def _clone_(source, revision, root):
 
 
 def setup():
-    """Put the pinned checkouts at the head of ``sys.path``.
+    """Put the pinned checkouts at the head of `sys.path`.
 
     Raises rather than degrading if anything goes wrong: a worker that quietly
     came up unpinned would return confidently wrong hashes, which is the exact

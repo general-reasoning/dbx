@@ -53,7 +53,7 @@ def unit_rows(m):
 
 
 def neighbor_moves(units, neighbors):
-    """Every arrow the corpus's neighbors make: the pairs ``[(a, b)]``, and their unit differences, a row each (zero for none)."""
+    """Every arrow the corpus's neighbors make: the pairs `[(a, b)]`, and their unit differences, a row each (zero for none)."""
     pairs = [(a, int(b)) for a in range(len(units)) for b in neighbors[a]]
     if not pairs:
         return pairs, np.zeros((0, units.shape[1]))
@@ -89,7 +89,7 @@ def evidence(units, i, j, pairs, moves, labels):
 
 
 def prompt(arrows):
-    """What Claude is asked, of *arrows*: ``[(from label, to label, Evidence)]``."""
+    """What Claude is asked, of *arrows*: `[(from label, to label, Evidence)]`."""
     lines = [
         "Each item below is an arrow between two neighboring points of an embedding: the direction of the "
         "difference of their embeddings. Its two endpoints only say what differs between them. What the arrow "

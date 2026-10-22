@@ -43,7 +43,7 @@ def _align_(new, old):
     return best
 
 
-#: The radius the farthest of a few points is placed at, scaled by `_scaled_`: as far out as the ring they were on.
+# The radius the farthest of a few points is placed at, scaled by `_scaled_`: as far out as the ring they were on.
 FEW_RADIUS = 0.3
 
 

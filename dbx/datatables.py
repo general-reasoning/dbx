@@ -68,15 +68,15 @@ from .datastreams import (
     reader_from_json,
 )
 
-#: Topic marker indicating an MDS slice stream directory inside a block.
+# Topic marker indicating an MDS slice stream directory inside a block.
 SLICETOPIC = 'SLICETOPIC'
 
 
 def sample_rows(n: int, fraction: float, seed: int = 0) -> np.ndarray:
     """The rows a *fraction* of *n* samples, sorted: the same for the same *n*, *fraction* and *seed*.
 
-    ``round(n * fraction)`` of them, at least one of a non-empty *n*, drawn
-    without replacement. What `_Database_.data` reads with ``sample_fraction``:
+    `round(n * fraction)` of them, at least one of a non-empty *n*, drawn
+    without replacement. What `_Database_.data` reads with `sample_fraction`:
     every slice of one block has its *n* rows, so one draw picks the same rows
     of each, and a row's slices stay together.
     """
@@ -91,10 +91,10 @@ def sample_rows(n: int, fraction: float, seed: int = 0) -> np.ndarray:
 
 
 class _DataSliceMeta_(_NotedMarkerMeta_):
-    """Makes ``DATASLICE(idx='int')`` a marker carrying those columns.
+    """Makes `DATASLICE(idx='int')` a marker carrying those columns.
 
     A call returns a SUBCLASS rather than an instance, so everything a TOPICS
-    declaration holds is a class and one test -- :func:`is_topicmarker` --
+    declaration holds is a class and one test -- `is_topicmarker` --
     recognises the lot of them.
 
     Derived from `DATADIR`'s metaclass because `DATASLICE` is a `DATADIR`. A
@@ -119,50 +119,50 @@ class _DataSliceMeta_(_NotedMarkerMeta_):
 
 
 class DATASLICE(DATADIR, metaclass=_DataSliceMeta_):
-    """One independently-readable MDS stream directory.  ``SLICETOPIC`` as a marker.
+    """One independently-readable MDS stream directory.  `SLICETOPIC` as a marker.
 
-    A :class:`~dbx.datablocks.DATADIR`, because a slice IS a directory -- so every
+    A `DATADIR`, because a slice IS a directory -- so every
     test that asks whether a topic is one answers for a slice without knowing
     what a slice is.
 
-    Declared with its columns and their MDS types::
+    Declared with its columns and their MDS types:
 
         TOPICS = {'frames': DATASLICE(idx='int', image='jpeg')}
 
     which is the point of it.  The sentinel named a slice and said nothing about
-    its shape, so the columns lived in whatever dict ``__build__`` happened to
+    its shape, so the columns lived in whatever dict `__build__` happened to
     hand the writers, reached no hash, and could change under artifacts that
     went on claiming to be the same block.  The marker renders as
-    ``topic:frames=DATASLICE(idx='int', image='jpeg')``, so adding, dropping,
+    `topic:frames=DATASLICE(idx='int', image='jpeg')`, so adding, dropping,
     retyping or REORDERING a column re-keys the block.  Order counts because MDS
     rows are read back in the order they were written, and a projection that
     permuted an axis rather than failing is the bug this forecloses.
 
     The declaration is what `Datatablet.slice_writers` writes, so it takes no
-    argument when every slice declares its columns.  A bare ``DATASLICE`` declares
+    argument when every slice declares its columns.  A bare `DATASLICE` declares
     none, and is the sentinel's behaviour under the marker's spelling: the
     columns are then the writer's to supply.
 
     A column that holds a dict may be declared by the dict's structure instead
-    of by an MDS type, as a ``DATADICT`` declares its keys::
+    of by an MDS type, as a `DATADICT` declares its keys:
 
         DATASLICE(annotations=dict(cohort='str', recurrence='int'), idx='int')
 
-    It is written as MDS ``'json'`` -- what a dict column is -- and the
+    It is written as MDS `'json'` -- what a dict column is -- and the
     structure is what renders, so it is in the hash, and what a
-    ``(slice, column, key)`` read names the keys of. `slice_columns` gives
+    `(slice, column, key)` read names the keys of. `slice_columns` gives
     the writer's view, `slice_schema` the declaration.
     """
 
-    #: Empty on the bare marker, and set by the call that parameterises it.
+    # Empty on the bare marker, and set by the call that parameterises it.
     columns = {}
 
-    #: The MDS type a column declared by its dict structure is written as.
+    # The MDS type a column declared by its dict structure is written as.
     DICT_COLUMN_TYPE = 'json'
 
     @classmethod
     def writer_columns(cls, columns) -> dict:
-        """*columns* as an MDS writer takes them: a dict-structured column as ``'json'``."""
+        """*columns* as an MDS writer takes them: a dict-structured column as `'json'`."""
         return {name: cls.DICT_COLUMN_TYPE if isinstance(coltype, dict) else coltype
                 for name, coltype in columns.items()}
 
@@ -193,7 +193,7 @@ class _Database_(Datablock):
     Slices are declared via topics marked with `SLICETOPIC`.
 
     A subclass declaring TOPICS constructs its TOPICS dictionary explicitly if extending
-    its base class's topics::
+    its base class's topics:
 
         class BaseTablet(Datatablet):
             TOPICS = {'samples': SLICETOPIC, 'meta': 'meta.json'}
@@ -255,24 +255,24 @@ class _Database_(Datablock):
         block that has them (`Layered`); a block reading only its
         own has nothing to add.
 
-        A method rather than a property, mirroring :meth:`topics`, which it is
+        A method rather than a property, mirroring `topics`, which it is
         the slice-only filter of.
 
         Derived on each call rather than frozen at class creation, so a TOPICS
         assigned or amended after the class body still reports its slices, and
-        an instance overriding TOPICS -- as :class:`~dbx.dataparts.MappedDatatable` does -- is
+        an instance overriding TOPICS -- as `MappedDatatable` does -- is
         read through.
         """
         return _Database_._find_slice_topics_(getattr(self, 'TOPICS', None))
 
     def slice_columns(self, slice) -> 'dict | None':
-        """The columns *slice* declares, as ``{column: mds_type}``, or None.
+        """The columns *slice* declares, as `{column: mds_type}`, or None.
 
-        None when nothing was declared -- the :data:`SLICETOPIC` sentinel, or a
-        bare :class:`DATASLICE` -- so the columns are still the writer's to supply.
+        None when nothing was declared -- the `SLICETOPIC` sentinel, or a
+        bare `DATASLICE` -- so the columns are still the writer's to supply.
         A declaration, unlike what a writer is handed, is in the block's hash.
-        A column declared by its dict structure is its MDS type here, ``'json'``;
-        :meth:`slice_schema` has the structure.
+        A column declared by its dict structure is its MDS type here, `'json'`;
+        `slice_schema` has the structure.
         """
         schema = self.slice_schema(slice)
         return DATASLICE.writer_columns(schema) if schema else None
@@ -295,11 +295,11 @@ class _Database_(Datablock):
              columns=None, sample_fraction: float | None = None, sample_seed: int = 0, **kwargs):
         """Every row of the named slices -- or, with *sample_fraction*, a sample of them -- keyed exactly as `dataset()` keys one row.
 
-        The mirror of `dataset()`: same ``*slice_columns`` spec, same
-        ``nested`` keying, and the same guarantee that no two slices can
+        The mirror of `dataset()`: same `*slice_columns` spec, same
+        `nested` keying, and the same guarantee that no two slices can
         collide. Where `dataset()` gives one row at a time with a scalar at
         each leaf, this gives the whole slice at once with every row's value
-        stacked at that leaf::
+        stacked at that leaf:
 
             dataset(nested=True)[i]  ->  {slice: {column: value}}
             data(nested=True)        ->  {slice: {column: [value, ...]}}
@@ -308,17 +308,17 @@ class _Database_(Datablock):
 
         Column-major throughout, and with no special case for a single
         slice. Both of those were previously otherwise: one slice returned a
-        bare list rather than a mapping, so ``data(s)`` and ``data(s, t)``
+        bare list rather than a mapping, so `data(s)` and `data(s, t)`
         had different shapes and every consumer had to guess which it held.
 
         Parameters
         ----------
         *slice_columns
-            As `dataset()`: a slice name, a ``(slice, column)`` pair, or a
-            ``(slice, [columns])`` pair. No arguments means every slice.
+            As `dataset()`: a slice name, a `(slice, column)` pair, or a
+            `(slice, [columns])` pair. No arguments means every slice.
         nested : bool
-            True (the default) keys as ``{slice: {column: ...}}``; False
-            keys as ``{(slice, column): ...}``.
+            True (the default) keys as `{slice: {column: ...}}`; False
+            keys as `{(slice, column): ...}`.
         concat : bool, optional
             Stack each column's values into one array along a new leading
             axis.  Left False, a leaf is the plain list of per-row values.
@@ -398,10 +398,10 @@ class _Database_(Datablock):
             - `(slice, [col1, col2])` tuple: slice name and list of columns.
             - `(slice, column, key, ...)`: part of a column holding a dict --
               TUPLES go deeper and LISTS are several side by side, at every
-              level: ``(s, 'ann', 'site', 'code')`` (or ``(s, 'ann', ('site',
-              'code'))``) is ``value['site']['code']``; ``(s, 'ann', ['label',
-              ('site', 'code')])`` the dict pruned to those; ``(s, [('ann',
-              'label'), 'idx'])`` two columns, one narrowed. A tuple of columns
+              level: `(s, 'ann', 'site', 'code')` (or `(s, 'ann', ('site',
+              'code'))`) is `value['site']['code']`; `(s, 'ann', ['label',
+              ('site', 'code')])` the dict pruned to those; `(s, [('ann',
+              'label'), 'idx'])` two columns, one narrowed. A tuple of columns
               is therefore a path, not several columns -- several is a list.
               Taken as each row is assembled, so nothing else of the dict is
               passed on.
@@ -412,14 +412,14 @@ class _Database_(Datablock):
             How the slices are read.
         nested : bool
             Row keying, as `ZipBase`. True (the default) gives
-            ``{slice: {column: value}}``; False gives ``{(slice, column): value}``.
+            `{slice: {column: value}}`; False gives `{(slice, column): value}`.
             Both keep every column of every slice, including a column two
             slices happen to share.
         columns : legacy keyword parameter for backwards compatibility.
         shared : sequence, optional
             Columns two or more of the slices read here are expected to hold
             the same value of, row for row. Defaults to this block's
-            ``shared_slice_columns``, which is where it belongs: which columns
+            `shared_slice_columns`, which is where it belongs: which columns
             the slices share is a fact about how they were WRITTEN, and the
             caller is the wrong party to know it. A key that only one of the
             sources read carries is refused rather than passed vacuously.
@@ -428,10 +428,10 @@ class _Database_(Datablock):
             *shared* came from the block's own declaration, and no when a caller
             passed *shared* itself, which is how it behaved before.
 
-            Redundant under ``mode='map'``, where the zip pairs physical index
+            Redundant under `mode='map'`, where the zip pairs physical index
             *i* with index *i* and cannot drift. It is the only runtime guard
-            under ``mode='iter'``: there the shuffle seed is
-            ``shuffle_seed + epoch`` and ``next_epoch`` is per slice, so reading
+            under `mode='iter'`: there the shuffle seed is
+            `shuffle_seed + epoch` and `next_epoch` is per slice, so reading
             one slice out of band advances that slice alone into a different
             permutation, and every row after it pairs unrelated samples.
         cache_limit : float or str, optional
@@ -588,8 +588,8 @@ class _Database_(Datablock):
     def cacheroot(self) -> str:
         """Local scratch root for everything streaming: read caches, staged writes.
 
-        The block's ``cache=``; else ``$DBX_CACHE``; else ``cache/`` under
-        :attr:`localroot` -- which is ``DBX_LOCAL`` (or ``local=``) for a block
+        The block's `cache=`; else `$DBX_CACHE`; else `cache/` under
+        `localroot` -- which is `DBX_LOCAL` (or `local=`) for a block
         on remote storage, and the storage root itself for one already local.
         Resolved on every access, never stored, so no machine's path reaches a
         handle or a journal.
@@ -600,11 +600,11 @@ class _Database_(Datablock):
     # 4. Helpers -----------------------------------------------------------
 
     def _parse_slice_columns_(self, slice_columns, columns=None):
-        """Normalize a ``*slice_columns`` spec into ``(names, per_slice_columns)``.
+        """Normalize a `*slice_columns` spec into `(names, per_slice_columns)`.
 
         Shared by `dataset()` and `data()` so the two accept exactly the same
-        spec: a bare slice name, a ``(slice, column)`` pair, a
-        ``(slice, [columns])`` pair, or a ``(slice, column, key | [keys])``
+        spec: a bare slice name, a `(slice, column)` pair, a
+        `(slice, [columns])` pair, or a `(slice, column, key | [keys])`
         triple for part of a dict column, in any mixture. The two differ in
         what they do with a slice, never in how a caller names one.
 
@@ -669,10 +669,10 @@ class _Database_(Datablock):
         return names, per_slice_columns
 
     def _check_column_keys_(self, slice, cols):
-        """Refuse a ``(slice, column, key)`` the slice's declaration says cannot be read.
+        """Refuse a `(slice, column, key)` the slice's declaration says cannot be read.
 
         Only where the slice declares the column's structure: an undeclared
-        slice, or a column declared plain ``'json'``, has nothing to check
+        slice, or a column declared plain `'json'`, has nothing to check
         against, and its keys are found or not when the data is.
         """
         keyed = [column_spec(spec) for spec in cols or ()]
@@ -708,15 +708,15 @@ class _Database_(Datablock):
                     node = node[k]
 
     def readable_slices(self) -> dict:
-        """``{slice: {column: type or structure} | None}``: every slice this block reads, its own and upstream, as its owner declares it.
+        """`{slice: {column: type or structure} | None}`: every slice this block reads, its own and upstream, as its owner declares it.
 
-        What a journal entry records as ``slices``. A table's slices are its
+        What a journal entry records as `slices`. A table's slices are its
         tablets' topics, not its own -- not in its TOPICS, nor its hash, nor its
         paths -- and this is where one is told what can be read from it. A
         slice's columns are its owner's declaration (`_route_`, then
         `_slice_declaration_`, which asks a table's first tablet) as declared --
         a dict column by its structure, its keys and their types, not the
-        ``'json'`` a writer is handed -- None when
+        `'json'` a writer is handed -- None when
         none is declared, or when the owner cannot be asked yet -- a table
         whose partition is not built yet, say, journaled before its tree is built.
         Never raises for that: a journal entry must not break the build it records.
@@ -730,7 +730,7 @@ class _Database_(Datablock):
         return out
 
     def _dict_columns_(self, slice) -> dict:
-        """``{column: structure}``: *slice*'s columns declared by their dict structure, ``{}`` when it cannot be told."""
+        """`{column: structure}`: *slice*'s columns declared by their dict structure, `{}` when it cannot be told."""
         try:
             declared = self.slice_declaration(slice)
         except Exception:
@@ -738,14 +738,14 @@ class _Database_(Datablock):
         return {c: d for c, d in declared.items() if isinstance(d, dict)}
 
     def slice_declaration(self, slice) -> dict:
-        """*slice*'s columns as its owner declares them -- this block's own, or the upstream one it reads it from -- else ``{}``."""
+        """*slice*'s columns as its owner declares them -- this block's own, or the upstream one it reads it from -- else `{}`."""
         # A block reading nothing upstream owns every slice it has; one that does says whose each is.
         route = getattr(self, '_route_', None)
         owner = route([slice])[0][0] if route is not None else self
         return dict(owner._slice_declaration_(slice) or {})
 
     def _slice_declaration_(self, slice) -> dict:
-        """*slice*'s declared schema wherever it is declared -- here, or on a table's tablets -- else ``{}``.
+        """*slice*'s declared schema wherever it is declared -- here, or on a table's tablets -- else `{}`.
 
         A table's slices are its tablets' topics, not its own, and every tablet of
         one table is one TABLET class, so the first tablet speaks for them all.
@@ -764,9 +764,9 @@ class _Database_(Datablock):
 
     @staticmethod
     def _node_is_sentinel_(node):
-        """True when node is a sentinel the markers replace, :data:`SLICETOPIC` included.
+        """True when node is a sentinel the markers replace, `SLICETOPIC` included.
 
-        Which is what stops a :class:`DATASLICE` and a ``SLICETOPIC`` sharing one
+        Which is what stops a `DATASLICE` and a `SLICETOPIC` sharing one
         declaration: they are the same topic said two ways, and the two ways
         render differently.
         """
@@ -774,11 +774,11 @@ class _Database_(Datablock):
 
     @staticmethod
     def _node_is_dirtopic_(node):
-        """True when node is a directory topic, :data:`SLICETOPIC` included.
+        """True when node is a directory topic, `SLICETOPIC` included.
 
-        A :class:`DATASLICE` is a :class:`~dbx.datablocks.DATADIR`, so the base test
+        A `DATASLICE` is a `DATADIR`, so the base test
         already covers the marker.  What this adds is the sentinel, which is a
-        string and would otherwise read as a file named ``SLICETOPIC``.
+        string and would otherwise read as a file named `SLICETOPIC`.
         """
         return Datablock._node_is_dirtopic_(node) or node == SLICETOPIC
 
@@ -806,7 +806,7 @@ class _Database_(Datablock):
 
     @staticmethod
     def _norm_shared_columns_(shared):
-        """A ``shared`` declaration as a tuple, or None.  A bare str is one name."""
+        """A `shared` declaration as a tuple, or None.  A bare str is one name."""
         if shared is None:
             return None
         if isinstance(shared, str):
@@ -814,11 +814,11 @@ class _Database_(Datablock):
         return tuple(str(c) for c in shared)
 
     def _shared_defaults_(self, shared, validate_shared):
-        """``(shared, validate_shared)`` with this block's declaration applied.
+        """`(shared, validate_shared)` with this block's declaration applied.
 
         The declaration only fills in for a caller that said nothing. A caller
-        who passes ``shared=`` gets what it asked for, and gets it unvalidated
-        unless it says otherwise -- which is what ``validate_shared=False``
+        who passes `shared=` gets what it asked for, and gets it unvalidated
+        unless it says otherwise -- which is what `validate_shared=False`
         meant before this defaulting existed.
         """
         declared = getattr(self, 'shared_slice_columns', None)
@@ -899,15 +899,15 @@ class _Database_(Datablock):
 class Datatablet(_Database_):
     """One tablet of a `Datatable`: a Datablock writing MDS slices."""
 
-    #: Filed by its hash, as a block is: no tag in its path. Until 2026-10-17 a tablet was
-    #: filed under its tag, and one built so is read where it was filed -- see `_redirected_paths_`.
+    # Filed by its hash, as a block is: no tag in its path. Until 2026-10-17 a tablet was
+    # filed under its tag, and one built so is read where it was filed -- see `_redirected_paths_`.
     KEYBY = 'version_shorthash'
 
     @property
     def _redirected_paths_(self):
         """Its redirection, as a block's -- else, built where tablets were filed until 2026-10-17, there.
 
-        A tablet was filed under its tag, ``<anchor>/<tag>/[version=<v>/]<hash>``, until then, and
+        A tablet was filed under its tag, `<anchor>/<tag>/[version=<v>/]<hash>`, until then, and
         hundreds of thousands were built so, in tables valid as they stand and never built again --
         which is when a block adopts what it finds. So a tablet not built where it is filed now, nor
         redirected, reads the same tablet -- the same hash -- where its tag filed it: that
@@ -938,7 +938,7 @@ class Datatablet(_Database_):
         return [self._tag_] if self._tag_ else []
 
     def _tag_filed_paths_(self):
-        """``{topic: path}`` where a tag filed it -- `_redirected_paths_` -- or None: not filed by its hash, built here, or not there."""
+        """`{topic: path}` where a tag filed it -- `_redirected_paths_` -- or None: not filed by its hash, built here, or not there."""
         from .journals import BuildJournal, Pretty
         if self.keyby in BuildJournal._TAG_KEYBYS_ or self.fs.exists(self.anchorkeypath):
             return None
@@ -989,7 +989,7 @@ class Datatablet(_Database_):
         """As `Datablock.__validate__`, and the slices must agree on their length.
 
         The write-time count in `slice_writers` catches a tablet that wrote its
-        slices unequally. This reads the finished ``index.json`` files instead
+        slices unequally. This reads the finished `index.json` files instead
         of trusting the write path, so it also answers for a tablet that arrived by
         copy or redirection, or whose upload stopped half way -- and `TabletMaker`
         calls it after every build and refuses the tablet if it says no.
@@ -1171,13 +1171,13 @@ def DatatableTablet(table, idx, tag=None, **spec):
     return table(idx, tag=tag, **spec)
 
 
-#: The name `DatatableTablet` had until 2026-10-10. Speclines are recorded as written -- in
-#: identities, in journals -- and one written then, ``$dbx.datatables.DatatableTab(...)``, must
-#: still evaluate. For reading those only; write DatatableTablet.
+# The name `DatatableTablet` had until 2026-10-10. Speclines are recorded as written -- in
+# identities, in journals -- and one written then, `$dbx.datatables.DatatableTab(...)`, must
+# still evaluate. For reading those only; write DatatableTablet.
 DatatableTab = DatatableTablet
 
 
-#: What a table declared before tabs were tablets, on 2026-10-10: old name -> new.
+# What a table declared before tabs were tablets, on 2026-10-10: old name -> new.
 _RETIRED_TAB_NAMES_ = {
     'TAB': 'TABLET', '__tab__': '__tablet__', 'n_tabs': 'n_tablets',
     'TAB_SPECIALIZATIONS': 'TABLET_SPECIALIZATIONS', 'TAB_SPECIALIZATION': 'TABLET_SPECIALIZATION',
@@ -1188,21 +1188,21 @@ class Datatable(_Database_, Datastack):
     """A table of Datatablets, sliced the same way as its tablets.
 
     A table's TOPICS only contains what the table itself owns: the structural
-    topic ``done`` and any extra file topics the subclass
-    declares (such as ``bag_lens``). The tablet's slice topics are NOT merged into
+    topic `done` and any extra file topics the subclass
+    declares (such as `bag_lens`). The tablet's slice topics are NOT merged into
     the table's TOPICS -- they belong to the tablet, not the table.
 
-    The table's `slices()` is derived from ``TABLET``'s slice topics rather than
-    from ``TOPICS``, so slice routing (``data()``, ``dataset()``,
-    ``valid_slice()``) continues to work without polluting ``TOPICS``.
+    The table's `slices()` is derived from `TABLET`'s slice topics rather than
+    from `TOPICS`, so slice routing (`data()`, `dataset()`,
+    `valid_slice()`) continues to work without polluting `TOPICS`.
 
     The tablet's ordinary (non-slice) topics are written into each tablet under the
     tablet's own key; the table has nothing at those paths.
 
-    The TABLET is part of the table's identity: its type names it, ``TABLET=<fqcn>``,
-    after the spec -- so ``TABLET =`` another class is another table. See
-    `Datastack._type_entries_`; ``with_block=False`` gives the type under the
-    rules from before, as a ``Datatable.Specialization``'s ``TABLET=None`` does.
+    The TABLET is part of the table's identity: its type names it, `TABLET=<fqcn>`,
+    after the spec -- so `TABLET =` another class is another table. See
+    `Datastack._type_entries_`; `with_block=False` gives the type under the
+    rules from before, as a `Datatable.Specialization`'s `TABLET=None` does.
 
     KNOWN GAP -- THE TABLET IS NAMED BY ITS FQCN, NOT ITS CONTENTS
     -----------------------------------------------------------
@@ -1210,8 +1210,8 @@ class Datatable(_Database_, Datastack):
     a VAR field with a default -- and every tablet re-keys while the table does
     not:
 
-    * the table's old ``done`` marker still answers, so ``valid()`` is True;
-    * ``build()`` therefore skips the table -- after adopting, block by block,
+    * the table's old `done` marker still answers, so `valid()` is True;
+    * `build()` therefore skips the table -- after adopting, block by block,
       whatever the TABLET's SPECIALIZATIONS resolve to (see `Datastack.build`) --
       and builds none of the topics the re-keyed tablets still owe;
     * a tablet without a specialization back to its old identity reads as
@@ -1219,23 +1219,23 @@ class Datatable(_Database_, Datastack):
       cover, while the table reports itself built.
 
     After such an edit, rebuild the table's tablets explicitly -- build each tablet
-    (``table.tablet(i).build()``), or clear the table's ``done`` and build it.
+    (`table.tablet(i).build()`), or clear the table's `done` and build it.
     The ways out, not yet chosen: `valid()` requiring valid tablets (a check per
     tablet), or a stack's build running whenever a block owes topics.
     """
 
     TABLET = None
 
-    #: The topics the table machinery itself writes and reads: the sentinels
-    #: recording which tablets are built, and the marker that says the stack
-    #: completed. Subclasses extending TOPICS explicitly include
-    #: Datatable.TOPICS if desired.
-    #:
-    #: A ``tablets`` directory was declared here too, and nothing ever wrote into
-    #: it: a tablet is config-addressed on the table's own url and lands beside the
-    #: table rather than inside it. A subclass that wants its tablets nested still
-    #: declares ``tablets`` itself and roots them there -- which is what it always
-    #: was, an addressable location rather than something the machinery used.
+    # The topics the table machinery itself writes and reads: the sentinels
+    # recording which tablets are built, and the marker that says the stack
+    # completed. Subclasses extending TOPICS explicitly include
+    # Datatable.TOPICS if desired.
+    #
+    # A `tablets` directory was declared here too, and nothing ever wrote into
+    # it: a tablet is config-addressed on the table's own url and lands beside the
+    # table rather than inside it. A subclass that wants its tablets nested still
+    # declares `tablets` itself and roots them there -- which is what it always
+    # was, an addressable location rather than something the machinery used.
     TOPICS = {'done': DATAFILE('done')}
 
     @dataclass(frozen=True, repr=False, eq=False)   # the base's repr (note last) and equality
@@ -1260,9 +1260,9 @@ class Datatable(_Database_, Datastack):
         def _block_(self):
             return self.TABLET
 
-    #: None: a table's own topics are markers over its tablets, cheaply written
-    #: again; what is worth reaching are its tablets, each by the TABLET's own
-    #: specializations.
+    # None: a table's own topics are markers over its tablets, cheaply written
+    # again; what is worth reaching are its tablets, each by the TABLET's own
+    # specializations.
     SPECIALIZATIONS = []
 
     Tablet = staticmethod(DatatableTablet)
@@ -1346,7 +1346,7 @@ class Datatable(_Database_, Datastack):
             cls.BLOCK = tablet
 
     def _type_entries_(self, specialization=None, *, with_block: bool = True) -> dict:
-        """A stack's entries, its BLOCK named for what a table's is: ``TABLET=<fqcn>``."""
+        """A stack's entries, its BLOCK named for what a table's is: `TABLET=<fqcn>`."""
         entries = super()._type_entries_(specialization, with_block=with_block)
         return {('TAB' if k == 'BLOCK' else k): v for k, v in entries.items()}
 
@@ -1514,17 +1514,17 @@ class Datatable(_Database_, Datastack):
 
     # 2. Declared API ------------------------------------------------------
 
-    #: Slices come from TABLET, not from this table's own TOPICS.
+    # Slices come from TABLET, not from this table's own TOPICS.
     def slices(self, recursive: bool = False):
         """The TABLET's slices: a table declares none of its own.
 
-        Slice topics belong to the tablet, so a table reads them off ``TABLET``
+        Slice topics belong to the tablet, so a table reads them off `TABLET`
         rather than out of its own TOPICS -- which is what keeps them out of
         the table's TOPICS while leaving slice routing (`data()`, `dataset()`,
         `valid_slice()`) working.
 
         Falls back to its own TOPICS when TABLET is unset or is not a
-        `_Database_` -- as for :class:`~dbx.dataparts.MappedDatatable`, which overrides
+        `_Database_` -- as for `MappedDatatable`, which overrides
         TOPICS per instance and computes its TABLET dynamically.
         """
         tablet = getattr(self, 'TABLET', None)
@@ -1566,7 +1566,7 @@ class Datatable(_Database_, Datastack):
         """Whether each tablet is redirected: `Datastack.blocks_redirected`, by tablet."""
         return self.blocks_redirected(parallelization=parallelization, n_workers=n_workers, false_only=false_only, true_only=true_only, **kwargs)
 
-    #: The name `tablets_redirected` had first.
+    # The name `tablets_redirected` had first.
     redirected_tablets = tablets_redirected
 
     def get_tablet_redirections(self, parallelization: str | None = None, n_workers: int | None = None,
@@ -1692,7 +1692,7 @@ class Datatable(_Database_, Datastack):
         carries only its own.
 
         The accumulating form is kept for every table spelled the older way, and
-        byte-identically (slice topics rendered as ``topic:<name>=SLICETOPIC``),
+        byte-identically (slice topics rendered as `topic:<name>=SLICETOPIC`),
         so no existing hash moves.
         """
         # Own (non-slice) topics come first, in declaration order. *topics*
@@ -1735,27 +1735,27 @@ class Datacollator(Datablock):
 
     `Datacollator` has no `TOPICS` (it does not build or persist files).
 
-    ``columns`` maps a ROLE to the ``(slice, column)`` pairs that play it:
-    ``'signals'`` and ``'labels'`` for a model or a probe, ``'stratifyby'`` and
-    ``'partitionby'`` for a `DatatablePartition` -- whatever its consumer reads.
+    `columns` maps a ROLE to the `(slice, column)` pairs that play it:
+    `'signals'` and `'labels'` for a model or a probe, `'stratifyby'` and
+    `'partitionby'` for a `DatatablePartition` -- whatever its consumer reads.
     A role's value is a list of pairs, or one pair as a bare tuple of strings.
 
-    When invoked as `collator(datapoints)`, it extracts the ``signals`` pairs --
-    and the ``labels`` pairs, when declared -- from each datapoint dict,
+    When invoked as `collator(datapoints)`, it extracts the `signals` pairs --
+    and the `labels` pairs, when declared -- from each datapoint dict,
     stacking signal tensors along a new dimension 1 for each datapoint, and
     concatenating datapoints along dimension 0 (batch dimension). A collator
-    with no ``labels`` returns ``(signals,)``.
+    with no `labels` returns `(signals,)`.
 
     A pair may go deeper, into a column that holds a dict, read as `dataset()`
     reads a request -- TUPLES are depth, LISTS are several side by side:
-    ``('annotations', 'annotations', 'label')`` is ``value['label']``,
-    ``('annotations', 'annotations', 'site', 'code')`` -- or
-    ``(..., ('site', 'code'))`` -- is ``value['site']['code']``, and a list of
+    `('annotations', 'annotations', 'label')` is `value['label']`,
+    `('annotations', 'annotations', 'site', 'code')` -- or
+    `(..., ('site', 'code'))` -- is `value['site']['code']`, and a list of
     keys, paths or columns is one pair per item. The entry is taken where the
     value is picked, so it works on a row and on a stacked batch alike.
 
-    ``recursive`` says whether the slices may be the table's UPSTREAM ones --
-    a `Featuretablet`'s samples, say, rather than its ``features``. Off unless
+    `recursive` says whether the slices may be the table's UPSTREAM ones --
+    a `Featuretablet`'s samples, say, rather than its `features`. Off unless
     turned on: `slices(table)` refuses a slice the table only borrows, so
     reading across blocks is something a collator declares, not something it
     drifts into.
@@ -1796,7 +1796,7 @@ class Datacollator(Datablock):
             Either one row per sample -- what a `DataLoader` over
             `dataset()` yields -- or one already-stacked mapping per slice,
             which is what `data(*collator.slices(), concat=True)` hands back.
-            Both are keyed ``{slice: {column: ...}}``; they are told apart by
+            Both are keyed `{slice: {column: ...}}`; they are told apart by
             whether the outer object is a list, not by a flag, because the
             callers that pass a whole slice at a time (a feature build, a
             probe fit) are the same ones that pass batches elsewhere.
@@ -1807,7 +1807,7 @@ class Datacollator(Datablock):
         -------
         np.ndarray | tuple[np.ndarray, ...]
             The signal array alone when *signal_only*; otherwise
-            ``(signals, labels)``, or ``(signals,)`` when no labels are
+            `(signals, labels)`, or `(signals,)` when no labels are
             declared.
         """
         if not self.signal_pairs:
@@ -1834,12 +1834,12 @@ class Datacollator(Datablock):
     def slices(self, table=None) -> list[str]:
         """The slices these pairs name, deduplicated, in declaration order.
 
-        Order-preserving rather than ``set``-derived: this is splatted into
-        ``dataset(*collator.slices())`` and ``data(*collator.slices())``, where
+        Order-preserving rather than `set`-derived: this is splatted into
+        `dataset(*collator.slices())` and `data(*collator.slices())`, where
         position decides the order sources are zipped in.
 
         Given a *table*, each slice must be one it holds --
-        ``table.slices(recursive=self.var.recursive)`` -- or this raises.
+        `table.slices(recursive=self.var.recursive)` -- or this raises.
         """
         seen = {}
         for role in self.var.columns:
@@ -1862,7 +1862,7 @@ class Datacollator(Datablock):
 
         A pair may be declared as a bare name or a one-element sequence, both
         of which mean the column of the same name. A role's value may be one
-        pair as a bare tuple of strings -- a partition's ``stratifyby``, say.
+        pair as a bare tuple of strings -- a partition's `stratifyby`, say.
         """
         value = self.var.columns.get(role) or ()
         if isinstance(value, tuple) and value and all(isinstance(v, str) for v in value):
@@ -1877,12 +1877,12 @@ class Datacollator(Datablock):
 
     @property
     def signal_pairs(self) -> tuple[tuple[str, ...], ...]:
-        """The ``'signals'`` pairs, as :meth:`pairs` gives them."""
+        """The `'signals'` pairs, as `pairs` gives them."""
         return self.pairs('signals')
 
     @property
     def label_pairs(self) -> tuple[tuple[str, ...], ...]:
-        """The ``'labels'`` pairs, as :meth:`pairs` gives them; empty when there are none."""
+        """The `'labels'` pairs, as `pairs` gives them; empty when there are none."""
         return self.pairs('labels')
 
     # 4. Helpers -----------------------------------------------------------
@@ -1934,10 +1934,10 @@ class Datacollator(Datablock):
 
     @staticmethod
     def _pick_(row, s_name, c_name, what, key=None, allow_none: bool = False):
-        """The value at ``(s_name, c_name)`` in one nested row, or a clear error.
+        """The value at `(s_name, c_name)` in one nested row, or a clear error.
 
         Exact, with no fallbacks. The previous version walked the row with
-        ``next(iter(val.values()))`` when a name did not match, which meant a
+        `next(iter(val.values()))` when a name did not match, which meant a
         misspelled column, a renamed slice, or a row that had lost its slice
         level all silently produced *some* array -- an arbitrary one -- and
         the build wrote it as if it were the requested feature.
@@ -1963,9 +1963,9 @@ class Datacollator(Datablock):
         return project_column(value, key, where=f"{what}: slice {s_name!r} column {c_name!r}", allow_none=allow_none)
 
     def _collate_batch_(self, batch: dict, norm_pairs) -> np.ndarray:
-        """Collate a ``{slice: {column: values}}`` mapping already stacked over rows.
+        """Collate a `{slice: {column: values}}` mapping already stacked over rows.
 
-        This is what ``data(*collator.slices(), concat=True)`` hands back, as
+        This is what `data(*collator.slices(), concat=True)` hands back, as
         opposed to the list of per-row dicts a DataLoader yields.
 
         One pair passes its array through untouched, so a single-signal
@@ -2032,7 +2032,7 @@ class Layered:
     """Slice routing for a tablet or table that reads its own slices and an upstream one's.
 
     A mixin, ahead of `Datatablet` or `Datatable` in the bases. `Featuretablet` owns
-    ``features`` and borrows the sample slices of the `Datatablet` it was built
+    `features` and borrows the sample slices of the `Datatablet` it was built
     from; `Featuretable` does the same over a `Datatable`. Both answer
     `dataset()` and `data()` for either, so both need the same three things:
     work out which block owns a requested slice, keep the caller's order, and
@@ -2040,7 +2040,7 @@ class Layered:
 
     The upstream is `upstream`: a block of the same kind -- a tablet's a
     tablet, a table's a table -- that this one was built from. It is the VAR
-    field ``upstream``, or, for a mapped table or a part, whose identity its
+    field `upstream`, or, for a mapped table or a part, whose identity its
     map and source already fix, its source's upstream pulled back along the
     same map.
     """
@@ -2064,9 +2064,9 @@ class Layered:
         """The requested slices -- this block's and the upstream block's -- zipped.
 
         Keyed exactly as `_Database_.dataset()`, so a row is
-        ``{'features': {layer: value}, sample_slice: {column: value}, ...}``.
+        `{'features': {layer: value}, sample_slice: {column: value}, ...}`.
 
-        *shared* defaults to this block's ``shared_upstream_column``, and
+        *shared* defaults to this block's `shared_upstream_column`, and
         *validate_shared* to True when it does -- so whether the features are
         still paired with the samples they were computed from is settled by
         whoever built the block, once, rather than by every consumer of it. A
@@ -2141,7 +2141,7 @@ class Layered:
 
     @property
     def upstream(self):
-        """The block it reads upstream of: its VAR's ``upstream``, or, for a mapped table or a part, its source's upstream pulled back along the same map."""
+        """The block it reads upstream of: its VAR's `upstream`, or, for a mapped table or a part, its source's upstream pulled back along the same map."""
         return self._upstream_block_()
 
     def slices(self, recursive: bool = False):
@@ -2165,7 +2165,7 @@ class Layered:
 
     @staticmethod
     def _norm_items_(slice_columns):
-        """``*slice_columns`` as an ordered ``[(slice, columns | None)]`` list, as `slice_spec` reads each."""
+        """`*slice_columns` as an ordered `[(slice, columns | None)]` list, as `slice_spec` reads each."""
         items = list(slice_columns)
         if len(items) == 1 and isinstance(items[0], (list, tuple)):
             first = items[0]
@@ -2175,7 +2175,7 @@ class Layered:
         return [slice_spec(item) for item in items]
 
     def _route_(self, slice_columns, upstream=None):
-        """Resolve a request into an ordered ``[(block, slice, columns)]`` list.
+        """Resolve a request into an ordered `[(block, slice, columns)]` list.
 
         Raises when an upstream block declares a slice this block also owns.
         Rows are keyed by slice name, so two blocks claiming one name have no

@@ -2,19 +2,19 @@
 
 The **Claude** button opens a window in the middle of the disk -- a third
 of the window's area -- with the conversation above and a box to type in
-below. Each turn runs the Claude Code CLI, ``claude -p``, once, under the
+below. Each turn runs the Claude Code CLI, `claude -p`, once, under the
 user's own Claude login: a subscription covers it, and no API key or
 credits are needed. Claude Code keeps the conversation itself, by session
-id, so a turn after the first is ``claude -p --resume <id>``.
+id, so a turn after the first is `claude -p --resume <id>`.
 
-Claude runs in the directory hyp scans (``--dir``), with read-only tools
+Claude runs in the directory hyp scans (`--dir`), with read-only tools
 (`TOOLS`): it can read, list and search the documents on the disk, and
-change nothing. A ``--dir`` that is a url is not a directory Claude Code can
+change nothing. A `--dir` that is a url is not a directory Claude Code can
 work in, so there it has no tools at all.
 
-Every turn writes the session into ``--dir``, or a directory under it
-(``--claude-dir``), as one markdown, ``claude-session-<started>-<id>.md``: the
-transcript, with front matter saying what it is -- ``hyp: claude-session``
+Every turn writes the session into `--dir`, or a directory under it
+(`--claude-dir`), as one markdown, `claude-session-<started>-<id>.md`: the
+transcript, with front matter saying what it is -- `hyp: claude-session`
 and the session's id. The disk is brought up to date with it at once: the
 whole transcript embedded, the layout nudged, so the session moves among the
 documents as the conversation goes. Its point opens the session again, to go
@@ -270,7 +270,7 @@ class Session:
         """The turns made in this conversation elsewhere since *since* -- a time -- added to this time's: how many.
 
         Read from Claude Code's own record of the conversation, its
-        ``<id>.jsonl``: each prompt typed, and what Claude answered in text.
+        `<id>.jsonl`: each prompt typed, and what Claude answered in text.
         What Claude Code adds besides -- its commands' output, its notes,
         tool results -- is left out.
         """
@@ -298,7 +298,7 @@ class Session:
         return len(added)
 
     def saved_at(self):
-        """When the file was last written, as time.time() -- its front matter's ``updated``, local time -- or None for never."""
+        """When the file was last written, as time.time() -- its front matter's `updated`, local time -- or None for never."""
         try:
             return time.mktime(time.strptime(str(self.updated), "%Y-%m-%dT%H:%M:%S")) if self.updated else None
         except ValueError:
@@ -324,9 +324,9 @@ class Session:
 class Handoff:
     """A session handed off to a phone: Claude Code run interactively, with Remote Control, in a pseudo-terminal of hyp's own.
 
-    hyp drives a session through ``claude -p``, a run a turn, and Remote
+    hyp drives a session through `claude -p`, a run a turn, and Remote
     Control needs a session that stays: so to hand one off, the conversation
-    is resumed interactively -- ``claude --resume <id> --remote-control`` --
+    is resumed interactively -- `claude --resume <id> --remote-control` --
     in a terminal no one sees, whose screen is read for the session's url
     (`url`), shown as a QR code to open it on a phone. It goes on there, and
     `stop` ends it; `Session.take_back` brings in what was said meanwhile.
@@ -433,7 +433,7 @@ class Handoff:
 
 
 def conversation_path(session_id):
-    """Where Claude Code keeps the conversation *session_id*: ``<config>/projects/<directory>/<id>.jsonl``; None if nowhere."""
+    """Where Claude Code keeps the conversation *session_id*: `<config>/projects/<directory>/<id>.jsonl`; None if nowhere."""
     config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
     found = glob.glob(os.path.join(config, "projects", "*", f"{session_id}.jsonl"))
     return max(found, key=os.path.getmtime) if found else None
@@ -477,7 +477,7 @@ def ask(prompt, timeout=180, command=None):
 
 
 def account(command=None, timeout=20):
-    """The account Claude Code is logged in as, as the window shows it -- email, organization, plan -- from ``claude auth status``; None if not."""
+    """The account Claude Code is logged in as, as the window shows it -- email, organization, plan -- from `claude auth status`; None if not."""
     try:
         done = subprocess.run([command or claude_command(), "auth", "status", "--json"], capture_output=True, text=True,
                               timeout=timeout, cwd=os.path.expanduser("~"))
@@ -502,7 +502,7 @@ def _when_(epoch, now=None):
 
 
 def claude_command():
-    """The Claude Code CLI to run: $HYP_CLAUDE, else ``claude`` on the PATH, else the one VS Code's extension carries."""
+    """The Claude Code CLI to run: $HYP_CLAUDE, else `claude` on the PATH, else the one VS Code's extension carries."""
     named = os.environ.get("HYP_CLAUDE") or shutil.which("claude")
     if named:
         return named
@@ -749,7 +749,7 @@ class ClaudeWindow(EditableTitle, DocWindow):
 
 
 def said(body):
-    """A saved transcript's *body* as what was said: its markup -- the ``# Claude · <title>`` heading, the ``## You`` and ``## Claude`` lines -- left out."""
+    """A saved transcript's *body* as what was said: its markup -- the `# Claude · <title>` heading, the `## You` and `## Claude` lines -- left out."""
     body = re.sub(r"^# Claude · .*$", "", body, flags=re.M)
     body = re.sub(r"^## (You|Claude)[ \t]*$", "", body, flags=re.M)
     return re.sub(r"\n{3,}", "\n\n", body).strip()

@@ -1,7 +1,7 @@
 """The stored corpus: texts, their summaries, embeddings and disk positions.
 
 Under *root*, a local directory or any fsspec url -- a datalake's
-``{datalake}/.hyp`` over ssh, say:
+`{datalake}/.hyp` over ssh, say:
 
     <dir>/meta.json        {"embedder": name}
     <dir>/points.jsonl     one {"text", "summary", "added"} per line, with

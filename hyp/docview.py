@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 
 import pygame
 
-from .app import _copy_
+from . import app  # the module, not its _copy_: what a test patches there is what is called here
 from .fonts import Font
 
 SANS = "helveticaneue,helvetica,arial"
@@ -738,7 +738,7 @@ class TextEdit:
                 self._edit_(t[:c] + t[c + 1:], c)
         elif k in (pygame.K_c, pygame.K_x) and cmd and self.selection() is not None:
             a, b = self.selection()
-            _copy_(t[a:b])
+            app._copy_(t[a:b])
             if k == pygame.K_x:
                 self._edit_(*self._without_selection_())
         elif k == pygame.K_v and cmd:
@@ -864,7 +864,7 @@ class LineEdit(TextEdit):
             xa, xb = x + font.size(lead + t[first:a])[0], min(x + room, x + font.size(lead + t[first:b])[0])
             if xb > xa:
                 pygame.draw.rect(surf, SELECTION, pygame.Rect(xa, y, xb - xa, lh))
-        shown = _fit_(font, lead + t[first:], room)
+        shown = fit(font, lead + t[first:], room)
         rect = surf.blit(font.render(shown, True, color), (x, y))
         cx = x + font.size(lead + t[first:c])[0]
         if sel is None and time.time() % 1 < 0.6:
@@ -1137,7 +1137,7 @@ class DocWindow:
             if k == pygame.K_c and cmd:
                 text = self.selection_text()
                 if text:
-                    _copy_(text)
+                    app._copy_(text)
                 return None
             if k == pygame.K_a and cmd:
                 runs = self._laid_.runs if self._laid_ is not None else []
@@ -1207,11 +1207,11 @@ class DocWindow:
         zoom = small.render(f"{self.zoom:.0%}", True, DIM)
         surf.blit(zoom, (self.close.x - zoom.get_width() - 10, y + pad))
         room = self.close.x - zoom.get_width() - 24 - self.header_reserve - (x + pad)
-        title = font.render(_fit_(font, self.title, room), True, self.title_color() or EDGE)
+        title = font.render(fit(font, self.title, room), True, self.title_color() or EDGE)
         self.title_rect = surf.blit(title, (x + pad, y + pad - 2))  # where a click finds it
         top = y + pad + font.get_linesize()
         for line in self.sub.split("\n") if self.sub else ():  # a line each
-            surf.blit(small.render(_fit_(small, line, w - 2 * pad), True, DIM), (x + pad, top))
+            surf.blit(small.render(fit(small, line, w - 2 * pad), True, DIM), (x + pad, top))
             top += small.get_linesize()
         self.body = pygame.Rect(x + 1, top + 6, w - 2, y + h - 1 - (top + 6))
         if self.body.width < 40 or self.body.height < 20:
@@ -1300,7 +1300,7 @@ def _gap_(v, lo, hi):
     return lo - v if v < lo else v - hi + 1 if v >= hi else 0
 
 
-def _fit_(font, text, width):
+def fit(font, text, width):
     """*text*, cut with … to fit *width* as drawn with *font*."""
     if font.size(text)[0] <= width:
         return text

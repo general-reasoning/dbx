@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **hyp --docs: a Claude session handed to a phone, and back.** Remote
+  Control needs a session that stays, and hyp runs one turn at a time, so a
+  session handed off is resumed interactively -- `--resume <id>
+  --remote-control` -- in a pseudo-terminal of hyp's own (`claude.Handoff`),
+  its screen read for the session's url, shown as a QR code (segno). It is
+  saved first. **take back** ends it there and adds the turns made on the
+  phone, from Claude Code's own `<id>.jsonl`, to the session's markdown.
+  Closing a session's window hands it off (**hand off on close**), reopening
+  it takes it back; reopened after a quit, what was said since its save comes
+  in all the same.
 - **hyp gives the terminal back.** Run from one, it goes on in the
   background once its window is up -- a session of its own, its output in
   `~/.hyp/logs` -- and what goes wrong before then is said in the terminal,

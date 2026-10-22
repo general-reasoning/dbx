@@ -430,6 +430,9 @@ class HypDocs(Hyp):
         self.capture = None  # the window a drag began in
         self.controls = []  # a Claude session is opened by a right click: on empty disk, or on a document
         self.claude_account = None  # who Claude Code runs as, as last read: when a session's window opens, and after each turn
+        self.handoffs = {}  # session id -> its Handoff, while a session closed here goes on on the phone
+        # A session's window closed, the session handed off to the phone; reopened here, taken back.
+        self.settings = {**self.settings, "hand off on close": True}
 
     def __click_point__(self, i, now):
         """Left click on a document: open it in the center; on a saved Claude session, the session, to go on with."""
@@ -490,7 +493,8 @@ class HypDocs(Hyp):
         else:
             args = self.args
             session = session or claude.Session(self.root(args), self.claude_dir(args))
-            window = claude.ClaudeWindow(session, self._send_claude_, self._rename_claude_)
+            window = claude.ClaudeWindow(session, self._send_claude_, self._rename_claude_, self._hand_off_, self._take_back_)
+            self._reclaim_(window)
             window.account = self.claude_account  # as last read, until read again: an account switched to since is shown
             self.run_async(claude.account, lambda said: self._account_(window, said))
             for other in {id(w): w for w in (open_, self.center) if w is not None}.values():
@@ -610,6 +614,56 @@ class HypDocs(Hyp):
         """The Claude session's window open, wherever it is -- the center or a tile -- or None."""
         return next((w for w in self.windows() if isinstance(w, claude.ClaudeWindow)), None)
 
+    def _hand_off_(self, window):
+        """Hand *window*'s session off to a phone: Claude Code run with it, with Remote Control, its QR code in the window."""
+        if not window.session.resumable:
+            window.note = "nothing to hand off yet: send a first message, then hand it to the phone"
+            return
+        # Saved before it goes: the file holds everything said here, written now, not once a job gets to it.
+        window.session.save()
+        self._file_(window.session)  # embedded, in the background
+        window.note = None
+        window.handoff = claude.Handoff(window.session)
+        window.handoff.start()
+
+    def _take_back_(self, window, then=None):
+        """Bring *window*'s session back from the phone: Claude Code there ended, the turns made there added, and filed."""
+        handoff = window.handoff
+
+        def back():
+            handoff.stop()
+            return window.session.take_back(handoff.started)
+
+        def done(n):
+            window.handoff = None
+            window.note = f"{n} turn{'s' * (n != 1)} from the phone" if n else None
+            window._render_(follow=True)
+            if n:
+                self._file_(window.session)
+            if then is not None:
+                then()
+
+        self.run_async(back, done)
+
+    def _reclaim_(self, window):
+        """A session reopened here: taken back from the phone, if it is there; else what was said elsewhere since it was saved, added."""
+        handoff = self.handoffs.pop(window.session.id, None)
+        if handoff is not None:
+            window.handoff = handoff
+            self._take_back_(window)
+            return
+        since = window.session.saved_at()
+        if since is None:
+            return
+
+        def done(n):
+            if n:
+                window.note = f"{n} turn{'s' * (n != 1)} from elsewhere, since it was saved"
+                window._render_(follow=True)
+                self._file_(window.session)
+
+        self.run_async(lambda: window.session.take_back(since), done)
+
     def _type_new_(self, kind, pos):
         """The box of a right click on empty disk, for *kind* -- "claude" or "markdown" -- at *pos*."""
         self.box_kind = kind
@@ -646,9 +700,16 @@ class HypDocs(Hyp):
         if isinstance(window, notes.NoteWindow) and window.dirty():
             self._file_(window.note)  # what is not saved, saved as it closes
         if isinstance(window, claude.ClaudeWindow):
+            handing = window.handoff is None and self.settings.get("hand off on close") and window.session.resumable \
+                and not window.busy()
             window.close_input()
-            if window.session.dirty():  # a turn not yet filed: one cancelled as it was closed has none
+            if handing:
+                self._hand_off_(window)  # saved first, there and then
+            elif window.session.dirty():  # a turn not yet filed: one cancelled as it was closed has none
                 self._file_(window.session)
+            if window.handoff is not None and window.handoff.problem is None:
+                self.handoffs[window.session.id] = window.handoff  # goes on on the phone, the window gone
+                self.status = f"on the phone: {window.session.title()} -- reopen it here to take it back"
         if window is self.center:
             self.center = None
         self.tiles = {s: w for s, w in self.tiles.items() if w is not window}

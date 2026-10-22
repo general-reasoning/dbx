@@ -355,6 +355,32 @@ reports the quota, so until one has it says it is known after a turn. The choice
 the totals are kept in the front matter (`choice`, `tokens_in`,
 `tokens_out`, `cost_usd`), so a session reopened goes on from them.
 
+**Handing a session to a phone.** A session goes on on a phone -- the Claude
+app, or claude.ai/code -- through Claude Code's Remote Control, and comes back.
+hyp runs a turn at a time (`claude -p`), and Remote Control needs a session
+that stays, so a session handed off is resumed interactively --
+`claude --resume <id> --remote-control "hyp · <title>"` -- in a terminal of
+hyp's own that no one sees (`claude.Handoff`); its screen is read for the
+session's url. It is saved to its markdown first, there and then.
+
+- **phone**, at the window's title row, hands it off: its QR code covers the
+  transcript, to scan, and nothing is sent from the box while it is away.
+  **take back** brings it back: Claude Code there is ended, and the turns made
+  on the phone -- read from Claude Code's own record of the conversation,
+  `~/.claude/projects/<directory>/<id>.jsonl` (`$CLAUDE_CONFIG_DIR` where set)
+  -- are added, and the session saved and embedded.
+- **Closing** a session's window hands it off, with the setting **hand off on
+  close** (on by default) and a turn to hand off: it is in the phone's list of
+  sessions as `hyp · <title>`. **Reopening** it takes it back. A session closed
+  goes on only while hyp runs; quit, it goes offline, and reopened later, what
+  was said anywhere since it was saved -- the phone, a terminal -- comes in all
+  the same.
+- Claude Code asks some things once, interactively: a text style, whether to
+  trust the directory, whether to accept Remote Control. Asked in the terminal
+  no one sees, they are not answered: the window says to run
+  `claude --remote-control` once, in a terminal, in the directory, and answer
+  them.
+
 **Titling a session.** The window's title is the session's -- `Claude ·
 <title>`, its first line until it is given one. A click on it edits it, the
 cursor where it was clicked. Left and Right move the cursor, Option with

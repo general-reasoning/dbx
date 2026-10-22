@@ -92,6 +92,8 @@ hyp = [
     # python package: npm install -g @mermaid-js/mermaid-cli.
     "markdown-it-py>=3.0",
     "pypdfium2>=4.30",
+    # a Claude session handed off to a phone: its claude.ai url, as a QR code to scan.
+    "segno>=1.6",
 ]
 hyp-deepseek = [
     # hyp --embedder deepseek: DeepSeek publishes no embedding model and

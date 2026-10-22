@@ -25,15 +25,21 @@ import glob
 import json
 import os
 import posixpath
+import pty
 import re
+import select
 import shutil
+import signal
 import subprocess
+import threading
 import time
 import uuid
+from datetime import datetime
 
 import pygame
+import segno
 
-from .docview import DIM, EDGE, TEXT, AreaEdit, DocWindow, EditableTitle, MarkdownDoc, front_matter
+from .docview import DIM, EDGE, TEXT, AreaEdit, DocWindow, EditableTitle, MarkdownDoc, fit, front_matter
 
 KIND = "claude-session"
 PREFIX = "claude-session-"
@@ -49,6 +55,14 @@ SYSTEM_TOOLS = "You may read, list and search those documents, to answer from th
 SYSTEM_NO_TOOLS = "You cannot see the documents unless the user pastes them in."
 # The models a session's window switches among, by Claude Code's names for them; None is Claude Code's own default.
 MODELS = (None, "opus", "sonnet", "haiku")
+# The session's url on claude.ai, as a session handed off to a phone shows it: what its QR code is of.
+SESSION_URL = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
+# What Claude Code asks only once, interactively -- spaces gone, as its screen draws them -- and what to do instead.
+FIRST_RUN = {
+    "choosethetextstyle": "Claude Code has not been set up to run interactively",
+    "doyoutrustthefiles": "Claude Code does not yet trust this directory",
+    "enableremotecontrol": "Remote Control has not been accepted yet",
+}
 
 
 class Failed(Exception):
@@ -65,7 +79,7 @@ class Session:
     """
 
     def __init__(self, root, subdir="", storage_options=None, command=None, id=None, started=None, title=None,
-                 prior="", resumable=False, md_url=None, choice=None, usage=None):
+                 prior="", resumable=False, md_url=None, choice=None, usage=None, updated=None):
         self.root, self.subdir = str(root).rstrip("/") or "/", subdir
         self.storage_options = storage_options or {}
         self.command = command
@@ -77,6 +91,7 @@ class Session:
         self.turns = []  # this time's: (text you sent, Claude's reply)
         self.saved = 0  # how many of them the file has
         self.renamed = False  # a title given since the file was last written
+        self.updated = updated  # when the file was last written, as its front matter says: what was said elsewhere since is new
         self.model = None  # the model the last turn ran on, as Claude Code says
         self.choice = choice  # the model asked for, of MODELS: None, Claude Code's default
         # Over every turn, saved ones too: tokens in (cached or not) and out, and what they would cost at API rates.
@@ -101,7 +116,8 @@ class Session:
         usage = {k: fields[k] for k in ("tokens_in", "tokens_out", "cost_usd") if isinstance(fields.get(k), (int, float))}
         session = cls(root, subdir, storage_options, command, id=fields["session"], started=fields.get("started"),
                       title=fields.get("title"), prior=body.strip(), resumable=True, md_url=md_url,
-                      choice=fields.get("choice") if fields.get("choice") in MODELS else None, usage=usage)
+                      choice=fields.get("choice") if fields.get("choice") in MODELS else None, usage=usage,
+                      updated=fields.get("updated"))
         session.model = fields.get("model")
         return session
 
@@ -165,6 +181,7 @@ class Session:
             f.write(self.markdown())
         self.saved = max(self.saved, n)
         self.renamed = False
+        self.updated = time.strftime("%Y-%m-%dT%H:%M:%S")
         return self.md_url
 
     def dirty(self):
@@ -249,6 +266,52 @@ class Session:
         # Claude Code keeps a session by the directory it ran in: always the same one, so --resume finds it.
         return self.root if self._local_() else os.path.expanduser("~")
 
+    def take_back(self, since):
+        """The turns made in this conversation elsewhere since *since* -- a time -- added to this time's: how many.
+
+        Read from Claude Code's own record of the conversation, its
+        ``<id>.jsonl``: each prompt typed, and what Claude answered in text.
+        What Claude Code adds besides -- its commands' output, its notes,
+        tool results -- is left out.
+        """
+        path = conversation_path(self.id)
+        if path is None:
+            return 0
+        added, prompt, reply = [], None, []
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                e = _event_(line)
+                if not e or e.get("type") not in ("user", "assistant") or e.get("isMeta") or _at_(e) < since:
+                    continue
+                text = _text_(e.get("message", {}).get("content"))
+                if e["type"] == "user":
+                    if text and not text.lstrip().startswith("<"):  # a prompt, not a command's output or a reminder
+                        if prompt is not None:
+                            added.append((prompt, "\n\n".join(reply)))
+                        prompt, reply = text.strip(), []
+                elif prompt is not None and text.strip():
+                    reply.append(text.strip())
+                    self.model = e.get("message", {}).get("model") or self.model
+        if prompt is not None:
+            added.append((prompt, "\n\n".join(reply)))
+        self.turns += added
+        return len(added)
+
+    def saved_at(self):
+        """When the file was last written, as time.time() -- its front matter's ``updated``, local time -- or None for never."""
+        try:
+            return time.mktime(time.strptime(str(self.updated), "%Y-%m-%dT%H:%M:%S")) if self.updated else None
+        except ValueError:
+            return None
+
+    def handoff_args(self, name):
+        """The command Claude Code is run with to take the session elsewhere: interactive, with Remote Control, as *name*."""
+        tools = ",".join(TOOLS) if self._local_() else ""
+        system = SYSTEM.format(root=self.root, tools=SYSTEM_TOOLS if tools else SYSTEM_NO_TOOLS)
+        return [self.command or claude_command(), "--resume", self.id, "--remote-control", name,
+                f"--tools={tools}", f"--allowedTools={tools}", "--permission-mode", "dontAsk",
+                "--append-system-prompt", system, *(("--model", self.choice) if self.choice else ())]
+
     def _args_(self):
         tools = ",".join(TOOLS) if self._local_() else ""
         system = SYSTEM.format(root=self.root, tools=SYSTEM_TOOLS if tools else SYSTEM_NO_TOOLS)
@@ -256,6 +319,144 @@ class Session:
                 "--verbose", f"--tools={tools}", f"--allowedTools={tools}", "--permission-mode", "dontAsk",
                 "--append-system-prompt", system, *(("--model", self.choice) if self.choice else ()),
                 *(("--resume", self.id) if self.resumable else ("--session-id", self.id))]
+
+
+class Handoff:
+    """A session handed off to a phone: Claude Code run interactively, with Remote Control, in a pseudo-terminal of hyp's own.
+
+    hyp drives a session through ``claude -p``, a run a turn, and Remote
+    Control needs a session that stays: so to hand one off, the conversation
+    is resumed interactively -- ``claude --resume <id> --remote-control`` --
+    in a terminal no one sees, whose screen is read for the session's url
+    (`url`), shown as a QR code to open it on a phone. It goes on there, and
+    `stop` ends it; `Session.take_back` brings in what was said meanwhile.
+    Claude Code asks some things once, interactively -- a theme, whether to
+    trust the directory, whether to accept Remote Control -- and those it
+    asks here are not answered: `problem` says to run it once in a terminal.
+    """
+
+    SCREEN_CHARS = 20_000  # of the screen, the last, kept to read
+
+    def __init__(self, session):
+        self.session = session
+        self.url = None  # the session's on claude.ai, once Claude Code has said it
+        self.problem = None  # why it is not handed off, where it is not
+        self.started = None  # when it was, as time.time(): what was said since is the phone's
+        self.pid = self.fd = None
+        self._screen_ = ""
+
+    def start(self):
+        """Run Claude Code with the session, in the background; its url is read off its screen as it comes."""
+        args = self.session.handoff_args(f"hyp · {self.session.title()}")
+        self.started = time.time()
+        pid, fd = pty.fork()
+        if pid == 0:  # the child: Claude Code, where the session runs
+            try:
+                os.chdir(self.session._cwd_())
+                os.environ["TERM"] = "xterm-256color"
+                os.execv(args[0], args)
+            finally:
+                os._exit(127)
+        self.pid, self.fd = pid, fd
+        threading.Thread(target=self._read_, daemon=True).start()
+
+    def alive(self):
+        return self.pid is not None
+
+    def stop(self, timeout=10):
+        """End Claude Code there -- the session gone offline on the phone -- waiting for it to have written what it holds."""
+        if self.pid is None:
+            return
+        pid = self.pid
+        # Its terminal is read all the while: unread, Claude Code blocks writing to it, and ends at no signal.
+        for sig, seconds in ((signal.SIGTERM, timeout), (signal.SIGKILL, 2)):
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                break
+            if self._ended_(pid, seconds):
+                break
+        self.pid = None
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+
+    def qr(self):
+        """The url's QR code, as rows of 0 and 1 -- dark -- quiet zone included; None before the url is."""
+        if self.url is None:
+            return None
+        return [list(row) for row in segno.make(self.url, error="m").matrix_iter(border=2)]
+
+    # 4. Helpers ----------------------------------------------------------------
+
+    def _ended_(self, pid, seconds):
+        """Whether *pid* ended within *seconds*, reaped: its terminal drained meanwhile, so that it is never blocked on it."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            try:
+                if os.waitpid(pid, os.WNOHANG) != (0, 0):
+                    return True
+            except ChildProcessError:
+                return True
+            try:
+                if select.select([self.fd], [], [], 0.1)[0]:
+                    os.read(self.fd, 65536)
+            except OSError:
+                time.sleep(0.1)
+        return False
+
+    def _read_(self):
+        """Read its screen till it ends: the url as it appears, or what it asks that is not answered here."""
+        while self.pid is not None:
+            try:
+                ready, _, _ = select.select([self.fd], [], [], 0.5)
+                chunk = os.read(self.fd, 65536) if ready else b""
+            except OSError:
+                break
+            if ready and not chunk:
+                break
+            if not chunk:
+                continue
+            self._screen_ = (self._screen_ + _plain_(chunk.decode("utf-8", "replace")))[-self.SCREEN_CHARS:]
+            if self.url is None and (m := SESSION_URL.search(self._screen_)):
+                self.url = m[0]
+            squashed = re.sub(r"\s+", "", self._screen_).lower()
+            for asked, said in FIRST_RUN.items():
+                if self.url is None and asked in squashed:
+                    self.stop()  # stopped first: a problem said is one with nothing left running
+                    self.problem = f"{said}: run `claude --remote-control` once in a terminal, in {self.session._cwd_()}, and answer it"
+                    return
+        if self.url is None and self.problem is None:
+            tail = " ".join(self._screen_.split())[-200:]
+            self.problem = f"Claude Code ended before it connected{': ' + tail if tail else ''}"
+
+
+def conversation_path(session_id):
+    """Where Claude Code keeps the conversation *session_id*: ``<config>/projects/<directory>/<id>.jsonl``; None if nowhere."""
+    config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    found = glob.glob(os.path.join(config, "projects", "*", f"{session_id}.jsonl"))
+    return max(found, key=os.path.getmtime) if found else None
+
+
+def _at_(event):
+    """When a record of the conversation was written, as time.time(); 0 where it says not."""
+    try:
+        return datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _text_(content):
+    """A message's text: as it is, or its text blocks joined."""
+    if isinstance(content, str):
+        return content
+    return "\n\n".join(c.get("text", "") for c in content or () if isinstance(c, dict) and c.get("type") == "text")
+
+
+def _plain_(text):
+    """A terminal's output as text: its escape sequences and carriage returns gone."""
+    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]|\r", "", text)
 
 
 def ask(prompt, timeout=180, command=None):
@@ -334,14 +535,23 @@ class ClaudeWindow(EditableTitle, DocWindow):
     Claude Code is logged in as (*account*, once its owner has read it), the
     session's usage, and what is left of the plan's quota; at the right of
     the box, the model, which a click switches, from the next turn on.
+
+    **phone**, at the title row's right, hands the session off --
+    *on_hand_off(window)*, for its owner to start a `Handoff` -- and while it
+    is, its QR code covers the transcript, to open it on a phone, nothing is
+    sent from the box, and the button, **take back**, brings it back --
+    *on_take_back(window)*, the turns made there added.
     """
 
     INPUT_LINES = 8  # the box grows to this many lines, then scrolls
     TITLE_PREFIX = "Claude · "
 
-    def __init__(self, session, on_send, on_rename=lambda window: None):
+    def __init__(self, session, on_send, on_rename=lambda window: None, on_hand_off=None, on_take_back=None):
         super().__init__("Claude", posixpath.basename(session.md_url))
         self.session, self.on_send, self.on_rename = session, on_send, on_rename
+        self.on_hand_off, self.on_take_back = on_hand_off, on_take_back
+        self.handoff = None  # the Handoff, while the session is elsewhere
+        self.phone_button = pygame.Rect(0, 0, 0, 0)
         self.edit = AreaEdit()  # what is typed in the box
         self._box_selecting_ = False  # the mouse pressed in the box, and not yet let go: a drag selects
         self._init_title_()
@@ -401,7 +611,8 @@ class ClaudeWindow(EditableTitle, DocWindow):
         self.cancelled = True
 
     def animating(self):
-        return self.busy() or self.doc.pending()
+        waiting = self.handoff is not None and self.handoff.url is None and self.handoff.problem is None
+        return self.busy() or self.doc.pending() or waiting
 
     def handle(self, ev):
         """Returns "close" or None."""
@@ -410,6 +621,13 @@ class ClaudeWindow(EditableTitle, DocWindow):
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.chip.collidepoint(ev.pos):
             if not self.busy():
                 self.session.switch()
+            return None
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1 and self.phone_button.collidepoint(ev.pos):
+            self.keep_title()
+            if self.handoff is not None and self.on_take_back is not None:
+                self.on_take_back(self)
+            elif self.handoff is None and self.on_hand_off is not None and not self.busy():
+                self.on_hand_off(self)
             return None
         if self._title_event_(ev):  # a click off the title, while edited, keeps it and goes on: into the box, say
             return None
@@ -431,7 +649,9 @@ class ClaudeWindow(EditableTitle, DocWindow):
             if k == pygame.K_ESCAPE:
                 return "close"
             if k in (pygame.K_RETURN, pygame.K_KP_ENTER) and not mods & pygame.KMOD_SHIFT:
-                if self.text.strip() and not self.busy():
+                if self.handoff is not None:
+                    self.note = "the session is on the phone: take it back to go on here"
+                elif self.text.strip() and not self.busy():
                     text = self.text.strip()
                     self.edit.set_text("")
                     self.on_send(self, text)
@@ -455,16 +675,27 @@ class ClaudeWindow(EditableTitle, DocWindow):
         shown = min(len(self.edit.rows(font, width)), self.INPUT_LINES)
         if self.naming is not None:
             hint = "Enter: keep this title · Esc: put it back"
+        elif self.handoff is not None:
+            hint = "on the phone · take back: go on here, with what was said there"
         elif self.busy():
             hint = "Claude is answering …"
         else:
             hint = "Enter: send · Shift+Enter: new line · click the title: rename · Esc: close and save"
         box_h = 2 * pad + lh * shown + small.get_linesize() + 4
         self.title = "" if self.naming is not None else f"Claude · {self.session.title()}"  # being edited: drawn below
+        phone = small.render("take back" if self.handoff is not None else "phone", True, TEXT)
+        self.header_reserve = phone.get_width() + 22
         self.sub = "\n".join([f"{posixpath.basename(self.session.md_url)} · {self.account or 'account: reading …'}",
                               f"{self.session.usage_line()} · {self.quota_line()}"])
         super().draw(surf, pygame.Rect(rect.x, rect.y, rect.width, rect.height - box_h), font, small)
         self._draw_title_(surf, font, small)
+        zoom_w = small.size(f"{self.zoom:.0%}")[0]
+        self.phone_button = phone.get_rect(topright=(self.close.x - zoom_w - 22, self.rect.y + 12)).inflate(10, 4)
+        hot = self.phone_button.collidepoint(pygame.mouse.get_pos()) and (self.handoff is not None or not self.busy())
+        pygame.draw.rect(surf, (52, 60, 76) if hot or self.handoff else (36, 42, 54), self.phone_button, border_radius=4)
+        surf.blit(phone, phone.get_rect(center=self.phone_button.center))
+        if self.handoff is not None:
+            self._draw_handoff_(surf, font, small)
         self.rect = rect  # the box's too: a click on it is the window's, not the disk's
         self.input = pygame.Rect(rect.x, rect.bottom - box_h + 4, rect.width, box_h - 4)
         pygame.draw.rect(surf, (32, 38, 48), self.input, border_radius=8)
@@ -479,6 +710,32 @@ class ClaudeWindow(EditableTitle, DocWindow):
         note = small.render(self.note or hint, True, (240, 120, 110) if self.note else DIM)
         surf.blit(note, (self.input.x + pad, bottom))
         pygame.key.set_text_input_rect(self.input)
+
+    def _draw_handoff_(self, surf, font, small):
+        """Over the transcript, while the session is elsewhere: its QR code and url, or why it is not there."""
+        h, b = self.handoff, self.body
+        pygame.draw.rect(surf, (24, 28, 36), b)
+        lines = []
+        qr = h.qr()
+        if qr is not None:
+            n = len(qr)
+            cell = max(2, min(b.height - 4 * font.get_linesize(), b.width - 40) // n)
+            side = cell * n
+            x0, y0 = b.centerx - side // 2, b.y + 14
+            pygame.draw.rect(surf, (255, 255, 255), (x0, y0, side, side))
+            for r, row in enumerate(qr):
+                for c, dark in enumerate(row):
+                    if dark:
+                        pygame.draw.rect(surf, (0, 0, 0), (x0 + c * cell, y0 + r * cell, cell, cell))
+            top = y0 + side + 10
+            lines = [(font, h.url, TEXT), (small, "scan with the phone: the Claude app, or claude.ai/code -- the session goes on there", DIM)]
+        else:
+            top = b.y + 20
+            lines = [(small, h.problem, (240, 120, 110))] if h.problem else [(font, "handing off: connecting to Remote Control …", DIM)]
+        for f, text, color in lines:
+            img = f.render(fit(f, text, b.width - 20), True, color)
+            surf.blit(img, img.get_rect(midtop=(b.centerx, top)))
+            top += f.get_linesize() + 4
 
     def _render_(self, follow=False):
         at_end = self.sy >= self._size[1] - self.body.height - 4

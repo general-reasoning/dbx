@@ -24,6 +24,27 @@ if sys.argv[1:3] == ["auth", "status"]:  # FAKE_ACCOUNT, as `claude auth status 
     print(os.environ.get("FAKE_ACCOUNT", json.dumps({{"loggedIn": True, "email": "me@example.com", "orgName": "Example Org",
                                                       "subscriptionType": "team"}})))
     sys.exit(0)
+if "--remote-control" in sys.argv:  # a session handed off: run interactively, its screen read for its url, till stopped
+    import time
+    from datetime import datetime, timezone
+    with open(os.environ["FAKE_LOG"], "a") as f:
+        f.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "stdin": ""}}) + "\n")
+    if os.environ.get("FAKE_FIRST_RUN"):
+        print("Let's get started. Choose the text style that looks best with your terminal", flush=True)
+        time.sleep(30)
+    sid = sys.argv[sys.argv.index("--resume") + 1]
+    home = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "here")
+    os.makedirs(home, exist_ok=True)
+    now = lambda: datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    with open(os.path.join(home, sid + ".jsonl"), "a") as f:  # what is said on the phone, as Claude Code records it
+        for said, answer in json.loads(os.environ.get("FAKE_PHONE", "[]")):
+            f.write(json.dumps({{"type": "user", "timestamp": now(), "message": {{"role": "user", "content": said}}}}) + "\n")
+            f.write(json.dumps({{"type": "user", "timestamp": now(), "isMeta": True, "message": {{"role": "user", "content": "a note"}}}}) + "\n")
+            f.write(json.dumps({{"type": "assistant", "timestamp": now(),
+                                 "message": {{"role": "assistant", "model": "claude-sonnet-5-5", "content": [{{"type": "text", "text": answer}}]}}}}) + "\n")
+    print("\x1b[1m /rc connecting\u2026\x1b[0m https://claude.ai/code/session_01FAKEurl\u2714", flush=True)
+    while True:
+        time.sleep(0.2)
 text = sys.stdin.read()
 with open(os.environ["FAKE_LOG"], "a") as f:
     f.write(json.dumps({{"argv": sys.argv[1:], "cwd": os.getcwd(), "stdin": text}}) + "\n")
@@ -61,7 +82,8 @@ def cli(tmp_path, monkeypatch):
     log = tmp_path / "runs.jsonl"
     monkeypatch.setenv("HYP_CLAUDE", str(path))
     monkeypatch.setenv("FAKE_LOG", str(log))
-    for v in ("FAKE_REPLY", "FAKE_FAIL", "FAKE_STDERR", "FAKE_TOOL", "FAKE_ACCOUNT"):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))  # where the conversations handed off are recorded
+    for v in ("FAKE_REPLY", "FAKE_FAIL", "FAKE_STDERR", "FAKE_TOOL", "FAKE_ACCOUNT", "FAKE_PHONE", "FAKE_FIRST_RUN"):
         monkeypatch.delenv(v, raising=False)
     return NS(runs=lambda: [json.loads(ln) for ln in log.read_text().splitlines()] if log.exists() else [])
 
@@ -178,6 +200,7 @@ def app(saved, monkeypatch):
     a = docs.HypDocs(engine=None, worker=Worker(), args=NS(dir=str(tree), claude_dir="sessions"))
     a.run_async = lambda fn, then: then(fn())
     a.refreshed = 0
+    a.settings["hand off on close"] = False  # on, by default: the tests of handing off turn it on
 
     def refresh(progress):
         a.refreshed += 1
@@ -689,7 +712,6 @@ def test_a_title_is_selected_by_drag_shift_and_double_click_and_the_selection_re
 
     copied = []
     monkeypatch.setattr(app_mod, "_copy_", lambda text: copied.append(text) or True)
-    monkeypatch.setattr(docview, "_copy_", lambda text: copied.append(text) or True)  # where the editors and windows use it
     monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
     app.open_claude()
     window = app.center
@@ -756,7 +778,6 @@ def test_the_transcript_is_selected_by_a_drag_copied_and_pasted_into_the_box(app
 
     clipboard = []
     monkeypatch.setattr(app_mod, "_copy_", lambda text: clipboard.append(text) or True)
-    monkeypatch.setattr(docview, "_copy_", lambda text: clipboard.append(text) or True)  # where the editors and windows use it
     monkeypatch.setattr(pygame.scrap, "get_text", lambda: clipboard[-1] if clipboard else "")
     app.open_claude()
     window = app.center
@@ -866,7 +887,6 @@ def test_the_box_selects_by_the_mouse_and_undoes(app, monkeypatch):
 
     clipboard = []
     monkeypatch.setattr(app_mod, "_copy_", lambda text: clipboard.append(text) or True)
-    monkeypatch.setattr(docview, "_copy_", lambda text: clipboard.append(text) or True)  # where the editors and windows use it
     monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
     app.open_claude()
     window = app.center
@@ -1113,7 +1133,6 @@ def test_a_markdowns_text_selects_undoes_and_copies_as_the_claude_box_does(app, 
 
     clipboard = []
     monkeypatch.setattr(app_mod, "_copy_", lambda text: clipboard.append(text) or True)
-    monkeypatch.setattr(docview, "_copy_", lambda text: clipboard.append(text) or True)  # where the editors and windows use it
     monkeypatch.setattr(pygame.key, "get_mods", lambda: 0)
     app.open_note("alpha beta gamma\n")
     window = app.center
@@ -1170,3 +1189,109 @@ def test_the_preview_renders_mermaid(app, monkeypatch):
     window.toggle_preview()
     app.draw(0)
     assert "graph TD; A-->B" in asked and window.animating(), "drawn again till the diagram is in"
+
+
+def _until_(cond, timeout=10):
+    deadline = time.monotonic() + timeout
+    while not cond() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return cond()
+
+
+PHONE = json.dumps([["And on the phone?", "Answered there."]])
+
+
+def test_a_handoff_runs_the_session_with_remote_control_reads_its_url_and_the_phones_turns_come_back(cli, tree, monkeypatch):
+    monkeypatch.setenv("FAKE_PHONE", PHONE)
+    s = claude.Session(str(tree))
+    s.send("Here first")
+    h = claude.Handoff(s)
+    h.start()
+    assert _until_(lambda: h.url is not None), h.problem
+    assert h.url == "https://claude.ai/code/session_01FAKEurl" and h.problem is None
+    argv = cli.runs()[-1]["argv"]
+    assert argv[:4] == ["--resume", s.id, "--remote-control", "hyp · Here first"] and "-p" not in argv, "interactive"
+    qr = h.qr()
+    assert len(qr) == len(qr[0]) > 20 and any(any(row) for row in qr)
+    h.stop()
+    assert not h.alive()
+    assert s.take_back(h.started) == 1, "one turn there: its note left out"
+    assert s.turns[-1] == ("And on the phone?", "Answered there.") and s.model == "claude-sonnet-5-5"
+
+
+def test_what_claude_code_asks_only_once_is_said_not_answered(cli, tree, monkeypatch):
+    monkeypatch.setenv("FAKE_FIRST_RUN", "1")
+    s = claude.Session(str(tree))
+    s.send("Here first")
+    h = claude.Handoff(s)
+    h.start()
+    assert _until_(lambda: h.problem is not None)
+    assert "run `claude --remote-control` once in a terminal" in h.problem and h.url is None and not h.alive()
+
+
+def test_the_phone_button_saves_hands_off_shows_the_qr_and_take_back_writes_the_phones_turns_into_the_md(app, saved, monkeypatch):
+    _, url = saved
+    monkeypatch.setenv("FAKE_PHONE", PHONE)
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    app.__click_point__(i, 0.0)
+    window = app.center
+    _type_(window, "One more here")
+    app.drain(0)
+    window.session.turns.append(("typed, not yet saved", "nor this"))  # unsaved, as the button is clicked
+    app.draw(0)
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.phone_button.center))
+    assert "typed, not yet saved" in open(url).read(), "saved before it goes"
+    assert _until_(lambda: window.handoff.url is not None)
+    app.draw(0)  # the QR code over the transcript
+    window.handle(pygame.event.Event(pygame.TEXTINPUT, text="not now"))
+    _key_(window, pygame.K_RETURN)
+    assert "on the phone" in window.note and window.session.turns[-1][0] != "not now"
+    window.handle(pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=window.phone_button.center))
+    assert window.handoff is None and "1 turn from the phone" in window.note
+    assert "And on the phone?" in open(url).read() and "Answered there." in open(url).read(), "the .md brought up to date"
+
+
+def test_a_session_closed_goes_to_the_phone_and_reopened_comes_back(app, saved, monkeypatch):
+    _, url = saved
+    monkeypatch.setenv("FAKE_PHONE", PHONE)
+    app.settings["hand off on close"] = True
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    app.__click_point__(i, 0.0)
+    window = app.center
+    _type_(window, "Last word here")
+    app.drain(0)
+    app._close_(window)
+    handoff = app.handoffs[window.session.id]
+    assert "Last word here" in open(url).read(), "saved before it went"
+    assert _until_(lambda: handoff.url is not None) and "on the phone" in app.status
+    app.__click_point__(i, 0.0)
+    again = app.center
+    assert again.handoff is None and window.session.id not in app.handoffs and not handoff.alive()
+    assert again.session.turns[-1] == ("And on the phone?", "Answered there.")
+    assert "Answered there." in open(url).read()
+
+
+def test_a_session_with_no_turn_is_closed_not_handed_off(app):
+    app.settings["hand off on close"] = True
+    app.open_claude()
+    app._close_(app.center)
+    assert app.handoffs == {}
+
+
+def test_reopened_what_was_said_elsewhere_since_its_save_comes_in_without_a_handoff(app, saved, tmp_path):
+    _, url = saved
+    sid = docview.front_matter(open(url).read())[0]["session"]
+    home = tmp_path / "claude-config" / "projects" / "here"
+    home.mkdir(parents=True)
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 5))  # after the save
+    old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600))
+    (home / f"{sid}.jsonl").write_text("\n".join(json.dumps(e) for e in [
+        {"type": "user", "timestamp": old, "message": {"role": "user", "content": "What is alpha?"}},
+        {"type": "user", "timestamp": at, "message": {"role": "user", "content": "From a terminal, later"}},
+        {"type": "assistant", "timestamp": at, "message": {"role": "assistant", "content": [{"type": "text", "text": "Noted."}]}},
+    ]) + "\n")
+    i = next(k for k, p in enumerate(app.snap.points) if p["kind"] == claude.KIND)
+    app.__click_point__(i, 0.0)
+    window = app.center
+    assert window.session.turns == [("From a terminal, later", "Noted.")], "only what is newer than the save"
+    assert "From a terminal, later" in open(url).read()

@@ -21,6 +21,7 @@ identity to hold, and the TABLET is already part of the table.
 """
 import json
 import os
+import pathlib
 from dataclasses import dataclass
 
 import pytest
@@ -851,3 +852,82 @@ class TestTheNewMarkersArgumentsAreChecked:
             for bad in ('', 3):
                 with pytest.raises(TypeError, match="non-empty string"):
                     make(bad)
+
+
+# --- DATADIR(subdirs=...): a directory that declares what is under it -----
+
+def test_a_declared_subdir_tree_canonicalises(tmp_path):
+    """A sequence and a dict of the same tree reach one rendering, so one hash."""
+    assert repr(DATADIR(subdirs=('meta', 'data'))) == \
+        repr(DATADIR(subdirs={'meta': None, 'data': None}))
+    assert repr(DATADIR('a lerobot dataset', subdirs=('meta',))) == \
+        "DATADIR('a lerobot dataset', subdirs=(('meta', ()),))"
+
+
+def test_declaring_subdirs_keeps_it_one_directory_topic(tmp_path):
+    """Unlike a nested TOPICS dict, which makes a group whose root is no topic at all."""
+    class D(Datablock):
+        TOPICS = {'data': DATADIR('a lerobot dataset', subdirs=('meta', 'data', 'videos'))}
+
+    b = D(url=str(tmp_path))
+    assert b._is_dir_topic_('data') is True
+    assert b.is_topicgroup('data') is False
+    assert isinstance(b.path('data'), str)
+
+
+def test_validity_wants_every_declared_subdir(tmp_path):
+    """The point: a directory that exists says nothing about a build that died after
+    writing the first of three subtrees."""
+    class D(Datablock):
+        TOPICS = {'data': DATADIR(subdirs=('meta', 'data', 'videos'))}
+
+    b = D(url=str(tmp_path))
+    root = pathlib.Path(b.path('data', local=True))
+    root.mkdir(parents=True)
+    assert b.valid_topic('data') is False
+    (root / 'meta').mkdir()
+    assert b.valid_topic('data') is False
+    (root / 'data').mkdir(); (root / 'videos').mkdir()
+    assert b.valid_topic('data') is True
+
+
+def test_subdirs_nest(tmp_path):
+    class D(Datablock):
+        TOPICS = {'data': DATADIR(subdirs={'videos': ('chunk-000',)})}
+
+    b = D(url=str(tmp_path))
+    root = pathlib.Path(b.path('data', local=True))
+    (root / 'videos').mkdir(parents=True)
+    assert b.valid_topic('data') is False
+    (root / 'videos' / 'chunk-000').mkdir()
+    assert b.valid_topic('data') is True
+
+
+def test_only_a_directory_may_declare_subdirs():
+    with pytest.raises(TypeError, match="not a directory"):
+        SYNTHETIC('derived on read', subdirs=('a',))
+
+
+def test_a_subdir_name_may_not_be_a_path():
+    with pytest.raises(ValueError, match="may not contain"):
+        DATADIR(subdirs=('videos/chunk-000',))
+    with pytest.raises(TypeError, match="not a single string"):
+        DATADIR(subdirs='videos')
+
+
+@pytest.mark.pinned
+def test_declaring_subdirs_moves_the_hash_and_a_bare_marker_does_not(tmp_path):
+    """Subdirs render into the type string, so declaring them re-keys -- while every
+    declaration that does NOT use them renders exactly as before."""
+    class Bare(Datablock):
+        TOPICS = {'data': DATADIR}
+
+    class Noted(Datablock):
+        TOPICS = {'data': DATADIR('a lerobot dataset')}
+
+    class Declared(Datablock):
+        TOPICS = {'data': DATADIR('a lerobot dataset', subdirs=('meta',))}
+
+    hashes = {c.__name__: c(url=str(tmp_path)).hash for c in (Bare, Noted, Declared)}
+    assert len(set(hashes.values())) == 3, hashes
+    assert repr(DATADIR) == 'DATADIR' and repr(DATADIR()) == 'DATADIR'

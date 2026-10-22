@@ -319,6 +319,32 @@ class TOPICMARKER(metaclass=TopicMarkerMeta):
     """
 
 
+def _check_subdirs_(kind, subdirs):
+    """A declared subdirectory tree, canonicalised to ``((name, children), ...)``.
+
+    Accepts a sequence of names, or a dict mapping a name to its own children --
+    ``('meta', 'data')``, ``{'videos': ('chunk-000',)}`` -- and nests to any depth. The
+    canonical form is what renders into the type string, so two spellings of one tree
+    reach one hash.
+    """
+    if isinstance(subdirs, str):
+        raise TypeError(f"{kind} subdirs must be a sequence or dict of names, not a "
+                        f"single string {subdirs!r}")
+    items = subdirs.items() if isinstance(subdirs, dict) else ((n, None) for n in subdirs)
+    out = []
+    for name, children in items:
+        if not isinstance(name, str) or not name:
+            raise TypeError(f"{kind} subdir name must be a non-empty string, got {name!r}")
+        if '/' in name:
+            raise ValueError(
+                f"{kind} subdir {name!r} may not contain '/': declare the nesting -- "
+                f"subdirs={{{name.split('/')[0]!r}: ({name.split('/', 1)[1]!r},)}}")
+        out.append((name, () if children is None else _check_subdirs_(kind, children)))
+    if not out:
+        raise ValueError(f"{kind} subdirs is empty: omit it, or name the subdirectories")
+    return tuple(out)
+
+
 def _check_note_(kind, note):
     """Refuse a note that would render into an ambiguous type string."""
     if not isinstance(note, str) or not note:
@@ -343,15 +369,25 @@ class _NotedMarkerMeta_(TopicMarkerMeta):
     so ``DATADIR() is DATADIR`` and the two spell the same thing.
     """
 
-    def __call__(cls, note=None):
-        if note is None:
+    def __call__(cls, note=None, *, subdirs=None):
+        if note is None and subdirs is None:
             return cls
-        _check_note_(cls.__name__, note)
-        return _NotedMarkerMeta_(cls.__name__, (cls,), {'note': note})
+        if note is not None:
+            _check_note_(cls.__name__, note)
+        if subdirs is not None:
+            if not getattr(cls, 'SUBDIRS_OK', False):
+                raise TypeError(f"{cls.__name__} takes no subdirs: it is not a directory")
+            subdirs = _check_subdirs_(cls.__name__, subdirs)
+        return _NotedMarkerMeta_(cls.__name__, (cls,),
+                                 {'note': note, 'subdirs': subdirs})
 
     def __repr__(cls):
-        note = cls.__dict__.get('note')
-        return cls.__name__ if note is None else f"{cls.__name__}({note!r})"
+        note, subdirs = cls.__dict__.get('note'), cls.__dict__.get('subdirs')
+        if note is None and subdirs is None:
+            return cls.__name__
+        args = ([repr(note)] if note is not None else []) + \
+               ([f"subdirs={subdirs!r}"] if subdirs is not None else [])
+        return f"{cls.__name__}({', '.join(args)})"
 
     __str__ = __repr__
 
@@ -379,6 +415,17 @@ class DATADIR(TOPICMARKER, metaclass=_NotedMarkerMeta_):
 
         TOPICS = {'masks': DATADIR('one PNG per frame')}
 
+    It may also DECLARE its subdirectories, which makes the topic valid only when every
+    one of them is there -- not merely when the directory exists::
+
+        TOPICS = {'data': DATADIR('a lerobot dataset',
+                                  subdirs=('meta', 'data', 'videos'))}
+
+    Nest by giving a dict: ``subdirs={'videos': ('chunk-000',)}``. The topic stays ONE
+    topic -- one path, shipped and cleared whole -- unlike a nested dict in TOPICS,
+    which makes a group whose leaves are separate topics and whose root is no topic at
+    all. Declared subdirs render into the type string, so adding them re-keys.
+
     The base of every directory marker: ``DATASLICE`` is one, because a slice
     IS a directory, and so is the deprecated :class:`DIR`. Every test that asks
     whether a topic is a directory asks ``is_topicmarker(node, DATADIR)``.
@@ -386,6 +433,13 @@ class DATADIR(TOPICMARKER, metaclass=_NotedMarkerMeta_):
 
     #: Unset on the bare marker, and set by the call that parameterises it.
     note = None
+
+    #: Subdirectories this topic must contain, ``((name, children), ...)``; None when
+    #: undeclared, and then only the directory itself has to exist.
+    subdirs = None
+
+    #: Only a directory may declare what is inside it -- see `_NotedMarkerMeta_`.
+    SUBDIRS_OK = True
 
 
 class DIR(DATADIR):
@@ -2668,8 +2722,27 @@ class Datablock:
         topicpath = self._normtopic_(topicpath)
         path = self.path(*topicpath)
         valid = self.valid_path(path)
+        if valid and not self.is_topicgroup(*topicpath):
+            subdirs = getattr(self._topicnode_(*topicpath), 'subdirs', None)
+            if subdirs:
+                valid = self._valid_subdirs_(path, subdirs)
         self.log.detailed(f"{self.anchor}: topic {'/'.join(topicpath)} valid: {valid}")
         return valid
+
+    def _valid_subdirs_(self, root, subdirs) -> bool:
+        """Whether every subdirectory a DATADIR declares is under *root*.
+
+        What makes a declared structure worth declaring: the directory existing says
+        nothing about a combination that died after writing the first of three.
+        """
+        for name, children in subdirs:
+            path = os.path.join(str(root), name)
+            if not self.valid_path(path):
+                self.log.detailed(f"{self.anchor}: {root} is missing subdir {name!r}")
+                return False
+            if children and not self._valid_subdirs_(path, children):
+                return False
+        return True
 
     def validtopic(self, *topicpath):
         """Deprecated alias for valid_topic."""

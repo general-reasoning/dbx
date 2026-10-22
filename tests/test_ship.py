@@ -6,6 +6,7 @@ shipped copy is the single source of truth rather than a second one that can dri
 """
 import json
 import os
+import pathlib
 
 import pytest
 
@@ -46,8 +47,8 @@ def block(tmp_path):
 
 def test_ship_copies_a_file_topic_and_a_dir_topic(block, tmp_path):
     repo = tmp_path / 'repo'
-    shipped = block.UNSAFE_ship({'configs': str(repo / 'configs')},
-                                facts=str(repo / 'facts.json'),
+    shipped = block.UNSAFE_ship({'configs': str(repo / 'configs'),
+                                 'facts': str(repo / 'facts.json')},
                                 OVERRIDE=True, show_progress=False)
     assert shipped == {'configs': str(repo / 'configs'), 'facts': str(repo / 'facts.json')}
     assert (repo / 'configs' / 'data' / 'bc.yaml').is_file()
@@ -59,21 +60,23 @@ def test_an_unnamed_topic_is_not_shipped(block, tmp_path):
     """Shipping one topic must not drag the others along: a block ships its generated
     config and keeps its checkpoints to itself."""
     repo = tmp_path / 'repo'
-    block.UNSAFE_ship(facts=str(repo / 'facts.json'), OVERRIDE=True, show_progress=False)
+    block.UNSAFE_ship({'facts': str(repo / 'facts.json')}, OVERRIDE=True,
+                      show_progress=False)
     assert (repo / 'facts.json').is_file()
     assert not (repo / 'configs').exists()
 
 
 def test_a_syntopic_ships_nothing(block, tmp_path):
     repo = tmp_path / 'repo'
-    assert block.UNSAFE_ship(scratch=str(repo / 'scratch'),
+    assert block.UNSAFE_ship({'scratch': str(repo / 'scratch')},
                              OVERRIDE=True, show_progress=False) == {}
     assert not (repo / 'scratch').exists()
 
 
 def test_an_unknown_topic_is_refused(block, tmp_path):
     with pytest.raises(ValueError, match='not topics of this block'):
-        block.UNSAFE_ship(nope=str(tmp_path / 'x'), OVERRIDE=True, show_progress=False)
+        block.UNSAFE_ship({'nope': str(tmp_path / 'x')}, OVERRIDE=True,
+                          show_progress=False)
 
 
 def test_naming_no_topic_is_refused(block):
@@ -86,10 +89,11 @@ def test_an_existing_target_is_not_silently_replaced(block, tmp_path):
     """A target is somewhere else's data — a repo file, a shared directory. Replacing
     one is a thing to ask for, not a thing to discover afterwards."""
     target = str(tmp_path / 'repo' / 'facts.json')
-    block.UNSAFE_ship(facts=target, OVERRIDE=True, show_progress=False)
+    block.UNSAFE_ship({'facts': target}, OVERRIDE=True, show_progress=False)
     with pytest.raises(FileExistsError):
-        block.UNSAFE_ship(facts=target, OVERRIDE=True, show_progress=False)
-    block.UNSAFE_ship(facts=target, overwrite=True, OVERRIDE=True, show_progress=False)
+        block.UNSAFE_ship({'facts': target}, OVERRIDE=True, show_progress=False)
+    block.UNSAFE_ship({'facts': target}, overwrite=True, OVERRIDE=True,
+                      show_progress=False)
 
 
 @pytest.mark.pinned
@@ -97,7 +101,7 @@ def test_an_invalid_block_is_not_shipped(tmp_path):
     """Shipping sends data out. A block that has not built has none to send."""
     unbuilt = Cfg(url=str(tmp_path / 'store2'))
     with pytest.raises(AssertionError):
-        unbuilt.UNSAFE_ship(facts=str(tmp_path / 'repo' / 'f.json'),
+        unbuilt.UNSAFE_ship({'facts': str(tmp_path / 'repo' / 'f.json')},
                             OVERRIDE=True, show_progress=False)
 
 
@@ -106,7 +110,8 @@ def test_ship_redirect_makes_the_shipped_copy_the_one_that_is_read(block, tmp_pa
     """The point of shipping-with-redirect: one copy, not two that drift."""
     target = tmp_path / 'repo' / 'facts.json'
     own = block.path('facts')
-    block.UNSAFE_ship_redirect(facts=str(target), OVERRIDE=True, show_progress=False)
+    block.UNSAFE_ship_redirect({'facts': str(target)}, OVERRIDE=True,
+                               show_progress=False)
 
     assert block.redirected()
     assert block.path('facts') == str(target)
@@ -122,6 +127,66 @@ def test_ship_redirect_makes_the_shipped_copy_the_one_that_is_read(block, tmp_pa
 @pytest.mark.pinned
 def test_ship_redirect_leaves_unnamed_topics_reading_their_own_data(block, tmp_path):
     store = str(tmp_path / 'store')
-    block.UNSAFE_ship_redirect(facts=str(tmp_path / 'repo' / 'facts.json'),
+    block.UNSAFE_ship_redirect({'facts': str(tmp_path / 'repo' / 'facts.json')},
                                OVERRIDE=True, show_progress=False)
     assert block.path('configs').startswith(store)
+
+
+# --- __relocate_shipment__: sending bytes other than the stored ones ---
+
+class Rewriting(Cfg):
+    """Ships `facts` with a root rewritten to an env expression, as a portable config."""
+
+    def __relocate_shipment__(self, topic, target, workdir, root_env=None):
+        if topic != 'facts' or root_env is None:
+            return super().__relocate_shipment__(topic, target, workdir)
+        out = os.path.join(workdir(), 'facts.json')
+        with open(out, 'w') as f:
+            json.dump({'windows': 321337, 'root': '${oc.env:%s}' % root_env}, f)
+        return out
+
+
+def test_the_default_hook_ships_the_topic_itself(block, tmp_path):
+    """And stages nothing: a huge topic is copied where it lies."""
+    target = str(tmp_path / 'repo' / 'facts.json')
+    block.UNSAFE_ship({'facts': target}, OVERRIDE=True, show_progress=False)
+    assert json.loads(pathlib.Path(target).read_text()) == {'windows': 321337}
+
+
+def test_a_relocated_topic_ships_what_the_hook_wrote(tmp_path):
+    source = Rewriting(url=str(tmp_path / 'store')).build()
+    target = str(tmp_path / 'repo' / 'facts.json')
+    source.UNSAFE_ship({'facts': target}, relocate={'root_env': 'SOUNDCLONE_DATAROOT'},
+                       OVERRIDE=True, show_progress=False)
+
+    assert json.loads(pathlib.Path(target).read_text()) == {
+        'windows': 321337, 'root': '${oc.env:SOUNDCLONE_DATAROOT}'}
+    # The block's own copy is untouched -- relocation changes what is SENT.
+    assert source.read('facts') == {'windows': 321337}
+
+
+def test_the_hook_s_workdir_is_removed_afterwards(tmp_path):
+    seen = []
+
+    class Noting(Rewriting):
+        def __relocate_shipment__(self, topic, target, workdir, root_env=None):
+            out = super().__relocate_shipment__(topic, target, workdir, root_env=root_env)
+            if root_env is not None and topic == 'facts':
+                seen.append(os.path.dirname(out))
+            return out
+
+    source = Noting(url=str(tmp_path / 'store')).build()
+    source.UNSAFE_ship({'facts': str(tmp_path / 'repo' / 'facts.json')},
+                       relocate={'root_env': 'ROOT'}, OVERRIDE=True, show_progress=False)
+    assert seen and not os.path.exists(seen[0])
+
+
+@pytest.mark.pinned
+def test_ship_redirect_refuses_a_relocation(tmp_path):
+    """Redirecting onto a relocated shipment would make `read()` answer with bytes the
+    block never built -- the opposite of the guarantee ship_redirect exists for."""
+    source = Rewriting(url=str(tmp_path / 'store')).build()
+    with pytest.raises(ValueError, match="not this block's data"):
+        source.UNSAFE_ship_redirect({'facts': str(tmp_path / 'repo' / 'facts.json')},
+                                    relocate={'root_env': 'ROOT'}, OVERRIDE=True,
+                                    show_progress=False)

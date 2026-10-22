@@ -4046,8 +4046,36 @@ class Datablock:
         """
         return {}
 
-    def UNSAFE_ship(self, targets=None, /, *, OVERRIDE: bool = False, overwrite: bool = False,
-                    validate: bool = True, show_progress: bool = True, **topic_targets):
+    def __relocate_shipment__(self, topic, target, workdir, **kwargs):
+        """The path :meth:`UNSAFE_ship` should send for *topic*; by default its own.
+
+        The hook for shipping bytes that differ from the stored ones -- a config whose
+        absolute paths must become ``${oc.env:ROOT}/...`` before it is checked in
+        somewhere else, say. *kwargs* is whatever the caller passed as
+        ``UNSAFE_ship(relocate={...})``; *target* is where this is going, which the
+        caller usually does not spell out because :meth:`ship_targets` did.
+
+        *workdir* is a CALLABLE, not a directory: call it to get a temporary directory
+        to write into, and :meth:`UNSAFE_ship` removes that directory afterwards. A
+        hook that does not call it costs nothing, so returning ``self.path(topic)`` --
+        the default -- never stages a byte, however large the topic is.
+
+            def __relocate_shipment__(self, topic, target, workdir, root_env=None):
+                if topic != 'config':
+                    return self.path(topic)
+                out = os.path.join(workdir(), 'config.yaml')
+                write_yaml(self._portable_config_(root_env), out)
+                return out
+
+        A topic whose hook relocates it must NOT then be redirected onto what was
+        shipped: the shipped copy is deliberately not this block's data. See
+        :meth:`UNSAFE_ship_redirect`.
+        """
+        return self.path(*topic.split('/'))
+
+    def UNSAFE_ship(self, targets=None, /, *, relocate: dict | None = None,
+                    OVERRIDE: bool = False, overwrite: bool = False,
+                    validate: bool = True, show_progress: bool = True):
         """Copy named topics OUT, to locations a reader needs no dbx to find.
 
         The outbound mirror of :meth:`UNSAFE_copy_from`: that one takes one source
@@ -4055,10 +4083,14 @@ class Datablock:
         copies only the topics named. A topic left out is not shipped, which is how a
         block ships its generated config and keeps its checkpoints to itself.
 
-        Targets may be given positionally as a dict or as keywords --
-        ``UNSAFE_ship({'configs': path})`` or ``UNSAFE_ship(configs=path)`` -- so a
-        topic whose name collides with an option still has a spelling. Either side may
-        be local or an fsspec URL.
+        *targets* is ``{topic: target}``, a dict and not keywords: a keyword tail would
+        make every option name a topic nobody can ship. Omitted, it is
+        :meth:`ship_targets`. Either side of a pair may be local or an fsspec URL.
+
+        *relocate* is handed to :meth:`__relocate_shipment__`, the hook that may write
+        the bytes to send somewhere other than where the topic lives -- rewriting a
+        path a config carries, say. ``{}`` or None is the default no-op hook: the topic
+        ships from where it is, and nothing is staged however large it is.
 
         Unlike :meth:`UNSAFE_copy_from`, this asserts the block IS valid: shipping
         copies data out, and data that is not there is not what you meant to send.
@@ -4067,7 +4099,7 @@ class Datablock:
         yaml checked into another repo is otherwise anonymous, and nothing says which
         block's VAR produced it.
         """
-        targets = {**(dict(targets) if targets else {}), **topic_targets}
+        targets = dict(targets) if targets else {}
         if not targets:
             # The subclass's own defaults -- see `ship_targets`.
             targets = dict(self.ship_targets() or {})
@@ -4075,7 +4107,7 @@ class Datablock:
             raise ValueError(
                 f"{self.__class__.__name__}.UNSAFE_ship() names no topic to ship, and "
                 f"{self.__class__.__name__}.ship_targets() names none either; pass "
-                f"{{topic: target}} or topic=target"
+                f"{{topic: target}}"
             )
         known = set(self.topics())
         unknown = [t for t in targets if self._normtopic_((t,))[0] not in known]
@@ -4096,7 +4128,9 @@ class Datablock:
             items_iter = tqdm.tqdm(items, desc="UNSAFE_ship", unit="topic") if show_progress else items
             shipped = {}
             for topic, target in items_iter:
-                shipped.update(self._UNSAFE_ship_topic_(topic, target, overwrite=overwrite))
+                shipped.update(self._UNSAFE_ship_topic_(topic, target,
+                                                        overwrite=overwrite,
+                                                        relocate=relocate))
             self.log.verbose(f"Shipping topics: END ({note})")
             self.write_journal_entry(event="UNSAFE_ship:END", note=note, inline_note=True)
         except Exception as e:
@@ -4106,9 +4140,9 @@ class Datablock:
             raise e
         return shipped
 
-    def UNSAFE_ship_redirect(self, targets=None, /, *, OVERRIDE: bool = False,
-                             overwrite: bool = False, validate: bool = True,
-                             show_progress: bool = True, **topic_targets):
+    def UNSAFE_ship_redirect(self, targets=None, /, *, relocate: dict | None = None,
+                             OVERRIDE: bool = False, overwrite: bool = False,
+                             validate: bool = True, show_progress: bool = True):
         """Ship, then read the shipped topics from where they were shipped.
 
         After this the shipped location is the single source of truth: :meth:`read`
@@ -4119,10 +4153,22 @@ class Datablock:
 
         Shipping a topic that already reads from its target is a no-op rather than
         an error, so calling this twice is harmless.
+
+        *relocate* is REFUSED here. It asks :meth:`__relocate_shipment__` to send bytes
+        that differ from the stored ones, and redirecting onto those would make this
+        block read something it did not build -- the opposite of the one guarantee this
+        method exists for. Ship with :meth:`UNSAFE_ship` and leave the block reading its
+        own data. (A hook that relocates unasked is not caught here; only what the
+        caller declares is.)
         """
+        if relocate:
+            raise ValueError(
+                f"{self.__class__.__name__}.UNSAFE_ship_redirect(relocate={relocate!r}): "
+                f"a relocated shipment is not this block's data, so redirecting onto it "
+                f"would make read() answer with something it did not build. Use "
+                f"UNSAFE_ship() for a relocated shipment.")
         shipped = self.UNSAFE_ship(targets, OVERRIDE=OVERRIDE, overwrite=overwrite,
-                                   validate=validate, show_progress=show_progress,
-                                   **topic_targets)
+                                   validate=validate, show_progress=show_progress)
         if not shipped:
             return shipped
         # merge=True: shipping one topic now must not drop a redirection already in
@@ -6645,7 +6691,8 @@ class Datablock:
         else:
             self._UNSAFE_copy_fs_(src_path=src_path, dst_path=dst_path, recursive=True)
 
-    def _UNSAFE_ship_topic_(self, topic, target, *, overwrite: bool = False):
+    def _UNSAFE_ship_topic_(self, topic, target, *, overwrite: bool = False,
+                            relocate: dict | None = None):
         """Copy one topic OUT to *target*. Returns ``{topic: target}`` as shipped.
 
         The outbound counterpart of :meth:`_UNSAFE_copy_topic_`, and the same
@@ -6664,7 +6711,8 @@ class Datablock:
             for leaf in self._leaves_under_(*topic):
                 leaf = self._normtopic_((leaf,))
                 sub = self._UNSAFE_ship_topic_(
-                    leaf, os.path.join(str(target), *leaf[len(topic):]), overwrite=overwrite)
+                    leaf, os.path.join(str(target), *leaf[len(topic):]),
+                    overwrite=overwrite, relocate=relocate)
                 out.update(sub)
             return {topic[0]: out} if len(topic) == 1 else out
 
@@ -6680,15 +6728,42 @@ class Datablock:
                     f"UNSAFE_ship: {target!r} already holds data for topic "
                     f"{'/'.join(topic)!r}. Pass overwrite=True to replace it."
                 )
-        if self._same_location_(src_path, target):
-            # Already shipped and redirected onto this target: the data IS there, so
-            # re-shipping is a copy onto itself. Idempotent rather than SameFileError.
-            self.log.verbose(
-                f"Topic {'/'.join(topic)} already reads from {target}; nothing to ship")
+        # The hook decides WHAT to send; by default the topic's own data. `made` stays
+        # empty unless the hook calls workdir(), so a hook that relocates nothing --
+        # every default one -- never creates a directory, however large the topic.
+        made = []
+
+        def workdir():
+            if not made:
+                made.append(tempfile.mkdtemp(prefix='dbx-ship-'))
+            return made[0]
+
+        try:
+            src_path = self.__relocate_shipment__('/'.join(topic), target, workdir,
+                                                  **(relocate or {}))
+            relocated = not self._same_location_(src_path, self.path(*topic))
+            if relocated:
+                self.log.verbose(
+                    f"Topic {'/'.join(topic)} relocated for shipping: {src_path}")
+                is_dir = self._isdir_(src_path)
+
+            if self._same_location_(src_path, target):
+                # Already shipped and redirected onto this target: the data IS there, so
+                # re-shipping is a copy onto itself. Idempotent rather than SameFileError.
+                self.log.verbose(
+                    f"Topic {'/'.join(topic)} already reads from {target}; nothing to ship")
+                return self._nest_topic_path_(topic, target)
+            self.log.detailed(f"Shipping {'/'.join(topic)} from {src_path} to {target}")
+            self._UNSAFE_copy_fs_(src_path=src_path, dst_path=target, recursive=is_dir)
             return self._nest_topic_path_(topic, target)
-        self.log.detailed(f"Shipping {'/'.join(topic)} from {src_path} to {target}")
-        self._UNSAFE_copy_fs_(src_path=src_path, dst_path=target, recursive=is_dir)
-        return self._nest_topic_path_(topic, target)
+        finally:
+            if made:
+                shutil.rmtree(made[0], ignore_errors=True)
+
+    def _isdir_(self, path) -> bool:
+        """Whether *path* is a directory, on whichever filesystem holds it."""
+        fs, _ = self._url_to_fs_(str(path))
+        return bool(fs.isdir(str(path)))
 
     def _same_location_(self, left, right) -> bool:
         """Whether two paths name the same data. Compared as strings, and for local

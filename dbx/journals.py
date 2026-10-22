@@ -2397,7 +2397,7 @@ class BuildJournalEntry(pd.Series):
         project repo but never ``dbx``, which is already imported -- so a block
         whose hash depends on ``dbx`` rendering that has since changed comes back
         with a DIFFERENT hash, and therefore different paths, than the entry
-        records. :meth:`rinst` (aka :meth:`trueinst`) is the way around that.
+        records. :meth:`rinst` (aka :meth:`trueinst`, :meth:`originst`) is the way around that.
 
         ``remote=True`` instantiates on a Ray worker pinned to this entry's own
         revision and returns a proxy (see :meth:`rinst`). Pass an existing
@@ -2504,6 +2504,16 @@ class BuildJournalEntry(pd.Series):
         actually built.
         """
         return self.rinst(gitrepo=gitrepo, revision=revision, handle=handle, **remote_kwargs)
+
+    def originst(self, gitrepo=None, revision='journal_entry', *, handle=None, **remote_kwargs):
+        """Alias for :meth:`trueinst`, naming the same thing from the other side.
+
+        `trueinst` says which of the two instantiations is the true one; `originst`
+        says what it reconstructs -- the ORIGINAL block, as the entry recorded it,
+        under the rendering of its own revision.
+        """
+        return self.trueinst(gitrepo=gitrepo, revision=revision, handle=handle,
+                             **remote_kwargs)
 
     @staticmethod
     def column(entry, name):
